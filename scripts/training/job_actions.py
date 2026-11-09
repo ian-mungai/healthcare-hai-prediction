@@ -17,6 +17,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from orchestration import training_contract
 from scripts.training import dvc_baseline, job_inputs, run_tracking, step_records, targets
 from scripts.training.job_failure import EXIT_DEADLINE, JobFailure
 from scripts.training.job_inputs import InputError
@@ -110,9 +111,15 @@ def check_targets(root: Path) -> None:
 
 
 def fit_type(
-    context: Any, record: Mapping[str, Any], config: Mapping[str, Any], hai_type: str, mapping: Mapping[int, int], periods: Mapping[int, tuple[int, int]]
+    context: Any,
+    record: Mapping[str, Any],
+    config: Mapping[str, Any],
+    hai_type: str,
+    mapping: Mapping[int, int],
+    periods: Mapping[int, tuple[int, int]],
+    model: str,
 ) -> dict[str, bytes]:
-    """Fit the six-model suite on one type's verified extract and return the files of its bundle and of its validation-only predictions."""
+    """Fit the run's model on one type's verified extract and return the files of its bundle and of its validation-only predictions."""
     from scripts.training import bundle, hac_validation
     from scripts.training.models import suite
     from scripts.training.models.common import Deadline
@@ -122,7 +129,7 @@ def fit_type(
     manifest, rows = job_inputs.extract_of(extract, hai_type, context.run)
     plan = hac_validation.plan_validation(Counter(row["window_year"] for row in rows), mapping, periods)
     adjacency = job_inputs.auxiliary_of(extract, manifest, job_inputs.ADJACENCY)
-    request = job_inputs.model_request(hai_type, rows, adjacency, config, float(config["budgets"]["fit_seconds"]), job_inputs.ROOT)
+    request = job_inputs.model_request(hai_type, rows, adjacency, config, float(config["budgets"]["fit_seconds"]), job_inputs.ROOT, model)
     contract = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")
     inputs = {
         "hashes": {"extract_sha256": manifest["sha256"], "manifest_sha256": step_records.file_sha256(extract / f"manifest_{hai_type}.json")},
@@ -133,7 +140,7 @@ def fit_type(
             },
         },
     }
-    fitted = suite.fit_models(request)
+    fitted = suite.fit_model(request, model)
     files = bundle.build(fitted, hai_type, inputs, record, context.run, contract, job_inputs.ROOT, started)
     refit = replace(request, deadline=Deadline.after(float(config["budgets"]["fit_seconds"])))
     return files | {validation_name(hai_type): text(validation_predictions(refit, fitted.selected, plan, hai_type))}
@@ -177,7 +184,7 @@ def fit_allowed(hai_types: list[str]) -> Callable[[str], bool]:
 
 
 def run_fit(context: Any, record: Mapping[str, Any]) -> None:
-    """Fit the six-model suite and the validation-only refit for every requested type from the mounted extract, after the target-list check."""
+    """Fit the run's model and the validation-only refit for every requested type from the mounted extract, after the target-list check."""
     with guarded("fit"):
         parameters = job_inputs.parameters_of(context.parameters)
 
@@ -187,13 +194,13 @@ def run_fit(context: Any, record: Mapping[str, Any]) -> None:
             mapping, periods = year_mapping(job_inputs.ROOT), hac_periods(job_inputs.ROOT)
             outputs: dict[str, bytes] = {}
             for hai_type in parameters["hai_types"]:
-                outputs |= fit_type(context, record, config, hai_type, mapping, periods)
+                outputs |= fit_type(context, record, config, hai_type, mapping, periods, parameters["model"])
             return outputs
 
         run_step(context, record, "fit", fit_allowed(parameters["hai_types"]), plan)
 
 
-def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str) -> dict[str, bytes]:
+def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str, model: str) -> dict[str, bytes]:
     """Estimate the PSI-90 and PSI-13 mediation of one type from its verified extract and mediator table."""
     from scripts.training import mediation
 
@@ -201,7 +208,7 @@ def mediation_type(context: Any, config: Mapping[str, Any], hai_type: str) -> di
     manifest, rows = job_inputs.extract_of(extract, hai_type, context.run)
     mediators = job_inputs.auxiliary_of(extract, manifest, "mediator.parquet")
     budget = 2 * float(config["budgets"]["bootstrap_seconds"])
-    request = job_inputs.model_request(hai_type, rows, (), config, budget, job_inputs.ROOT)
+    request = job_inputs.model_request(hai_type, rows, (), config, budget, job_inputs.ROOT, model)
     result = mediation.analyze_mediation(request.data, mediators, request.process_references, (request.cmi_reference,), config, request.deadline)
     return {f"mediation_{hai_type}.json": text(result)}
 
@@ -210,13 +217,15 @@ def run_mediation(context: Any, record: Mapping[str, Any]) -> None:
     """Run the separate associational mediation analyses for every requested type."""
     with guarded("mediation"):
         parameters = job_inputs.parameters_of(context.parameters)
+        if parameters["model"] not in training_contract.MEDIATION_MODELS:
+            raise JobFailure("mediation_not_applicable", f"the mediation belongs to {', '.join(training_contract.MEDIATION_MODELS)}, not {parameters['model']}")
         names = {f"mediation_{hai_type}.json" for hai_type in parameters["hai_types"]}
 
         def plan() -> dict[str, bytes]:
             config = job_inputs.config_of(job_inputs.ROOT)
             outputs: dict[str, bytes] = {}
             for hai_type in parameters["hai_types"]:
-                outputs |= mediation_type(context, config, hai_type)
+                outputs |= mediation_type(context, config, hai_type, parameters["model"])
             return outputs
 
         run_step(context, record, "mediation", names.__contains__, plan)
@@ -329,11 +338,15 @@ def run_tags(
         "master_seed": config["master_seed"],
         "population": manifest["population"],
         "hai_types": parameters["hai_types"],
+        "model": parameters["model"],
+        "base_run": manifest["base_run"],
     }
     return {
         "run_id": context.run,
         "step_key": run_tracking.PARENT_STEP,
         "hai_type": hai_type,
+        "model": parameters["model"],
+        "base_run": manifest["base_run"],
         "target_control": next(entry["control"] for entry in listed if entry["hai_type"] == hai_type),
         "population": manifest["population"],
         "analysis_plan_sha256": guard["analysis_plan_sha256"],
@@ -371,7 +384,6 @@ def child_spec(
 
 RESEARCH = {
     "rq1_joint": ("joint_process", "process_vs_intercept_cmi"),
-    "rq4_nested": ("nested",),
     "rq5_moran": ("spatial",),
     "rq6_hausman": ("hospital_effects",),
 }
@@ -381,19 +393,25 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
     """Check every mounted output of one type against its completion records and the extract it came from, then describe its MLflow runs."""
     from scripts.training import bundle
     from scripts.training.models.common import SLOTS
+    from scripts.training.models.suite import NOT_IN_RUN
 
     inputs = job_inputs.input_root(context.parameters)
     manifest = job_inputs.manifest_of(inputs / "extract", hai_type, context.run)
     job_inputs.table_of(inputs / "extract", manifest, read=False)
-    folders = {step: verified_step(inputs, step, record) for step in ("version_extract", "fit", "mediation", "hac_validate")}
+    model = parameters["model"]
+    folders = {
+        step: verified_step(inputs, step, record)
+        for step in ("version_extract", "fit", "mediation", "hac_validate")
+        if step in training_contract.train_steps(model)
+    }
     base = bundle_files(folders["fit"], hai_type)
     result = job_inputs.read_json(base / "result.json", "fit_changed")
     if result["input_hashes"]["extract_sha256"] != manifest["sha256"]:
         raise JobFailure("fit_inputs_differ", f"the fit of {hai_type} read another extract than the one mounted")
     baseline = job_inputs.read_json(folders["version_extract"] / f"baseline_{hai_type}.json", "version_extract_changed")
     metafile = folders["version_extract"] / baseline["metafile"]
-    mediation_path, hac_path = folders["mediation"] / f"mediation_{hai_type}.json", folders["hac_validate"] / f"hac_{hai_type}.json"
-    mediation_result, hac_result = job_inputs.read_json(mediation_path, "mediation_changed"), job_inputs.read_json(hac_path, "hac_validate_changed")
+    hac_path = folders["hac_validate"] / f"hac_{hai_type}.json"
+    hac_result = job_inputs.read_json(hac_path, "hac_validate_changed")
     done = step_records.verify_done(folders["fit"], "fit", str(record["code_digest"]))
     manifest_hash = step_records.file_sha256(inputs / "extract" / f"manifest_{hai_type}.json")
     digests = {
@@ -410,6 +428,7 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
         "trigger": parameters["trigger"],
         "selected_model": chosen or "none",
         "registry_candidate": candidate or "none",
+        "model": parameters["model"],
         **{f"seed.{purpose}": seed for purpose, seed in result["seeds"].items()},
     }
     metrics: dict[str, float] = run_tracking.numbers("counts", result["counts"]) | run_tracking.numbers(
@@ -418,23 +437,29 @@ def run_plan(context: Any, record: Mapping[str, Any], config: Mapping[str, Any],
     metrics |= run_tracking.numbers("comparison_holdout_rows", result["selection"]["comparison_holdout_rows"])
     parent_files = [(base / name, "bundle") for name in ("result.json", "provenance.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")]
     parent_files.append((inputs / "extract" / f"manifest_{hai_type}.json", "extract"))
+    parent_files += [(base / name, "bundle") for name in ("rq4_side.json",) if (base / name).is_file()]
     model = base / "model"
     tags = run_tags(context, record, config, parameters, manifest, digests)
     parent = run_tracking.RunSpec(
         run_tracking.PARENT_STEP, tags, {key: str(value) for key, value in params.items()}, metrics, parent_files, [(model, "model")] if model.is_dir() else []
     )
     children = []
-    for slot in SLOTS:
+    for slot in (slot for slot in SLOTS if result["statuses"][slot]["reason"] != NOT_IN_RUN):
         details = {key: value for key, value in result["fitted_parameters"][slot].items() if isinstance(value, int | float) and not isinstance(value, bool)}
         slot_result = {**result["statuses"][slot], "metrics": result["holdout_metrics"][slot], "details": details, **details}
         spec = child_spec(context, manifest, slot, slot_result)
         extra = {"selected_parameters": json.dumps(result["fitted_parameters"][slot].get("selected_parameters", {}), sort_keys=True)}
         children.append(run_tracking.RunSpec(spec.step_key, spec.tags, {**spec.params, **extra}, spec.metrics))
     for step, names in RESEARCH.items():
-        merged = {name: result["test_statistics"].get(name, {}) for name in names}
+        if not any(name in result["test_statistics"] for name in names):
+            continue
+        merged = {name: result["test_statistics"][name] for name in names if name in result["test_statistics"]}
         statuses = {str(item.get("status", "")) for item in merged.values() if isinstance(item, Mapping)}
         children.append(child_spec(context, manifest, step, {"status": ",".join(sorted(statuses)) or "none", **merged}))
-    children.append(child_spec(context, manifest, "rq3_mediation", {"status": "fitted", **mediation_result["mediators"]}, [(mediation_path, "result")]))
+    if "mediation" in folders:
+        mediation_path = folders["mediation"] / f"mediation_{hai_type}.json"
+        mediation_result = job_inputs.read_json(mediation_path, "mediation_changed")
+        children.append(child_spec(context, manifest, "rq3_mediation", {"status": "fitted", **mediation_result["mediators"]}, [(mediation_path, "result")]))
     children.append(child_spec(context, manifest, "hac_validation", hac_result, [(hac_path, "result")]))
     snapshots = {table: str(snapshot) for table, snapshot in manifest["snapshot_set"].items()}
     experiment = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")["experiments"][hai_type]

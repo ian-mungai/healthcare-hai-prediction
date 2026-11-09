@@ -1,7 +1,7 @@
 """The promote action: move the ``production`` alias of one registered model to the requested version, or back to an earlier one.
 
-The approval of the owner is checked before the job starts (the broker reads the staged record), so this action changes the registry only for the one version
-the request names. A forward promotion needs a version whose promotion check passed. A rollback needs a version that was in production before, which the version
+No approval record is read: the rule and the canary checks decide (``auto_promotion``). This action changes the registry only for the one version the
+request names. A forward promotion needs a version whose promotion check passed. A rollback needs a version that was in production before, which the version
 tag ``promoted_run`` shows. Setting the alias to the version it already names changes nothing, so a repeat in a new task is safe.
 
 One run at a time moves a model. The action takes the lease of the model (``promote_lease``) before it stores the intent, keeps it through the alias move and

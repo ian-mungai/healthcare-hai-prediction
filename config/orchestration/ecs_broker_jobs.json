@@ -221,7 +221,6 @@
       "log_container": "promote",
       "network": "training",
       "needs_training_parameters": true,
-      "approval": "promotion",
       "containers": {
         "fetch": [
           "RUN_ID",

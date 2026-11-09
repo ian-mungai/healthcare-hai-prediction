@@ -22,7 +22,8 @@
         "rq5_moran",
         "rq6_hausman",
         "hac_validation",
-        "promotion"
+        "promotion",
+        "research"
       ]
     },
     "completion_tag": {
@@ -80,6 +81,8 @@
         "hai_type",
         "target_control",
         "population",
+        "model",
+        "base_run",
         "analysis_plan_sha256",
         "targets_sha256",
         "training_config_sha256",
@@ -170,6 +173,8 @@
     "version_tags": {
       "const": [
         "hai_type",
+        "model",
+        "base_run",
         "target_control",
         "feature_schema_sha256",
         "feature_list_sha256",

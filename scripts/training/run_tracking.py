@@ -219,8 +219,8 @@ def log_all(store: TrackingStore, plans: Sequence[TypePlan], run: str) -> dict[s
     return {plan.hai_type: log_type(store, plan, run) for plan in plans}
 
 
-def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSpec, run: str, bundle_sha256: str) -> str:
-    """Log one more child run of a finished parent, once: a complete run of the same key is kept, an incomplete one is adopted and finished."""
+def log_child(store: TrackingStore, experiment: str, parent_id: str | None, spec: RunSpec, run: str, bundle_sha256: str) -> str:
+    """Log one more run once, as a child of a finished parent or alone: a complete run of the same key is kept, an incomplete one is adopted."""
     found = store.get_experiment_by_name(experiment)
     if found is None:
         raise TrackingError("mlflow_experiment_missing", f"the experiment {experiment} does not exist")
@@ -238,7 +238,7 @@ def log_child(store: TrackingStore, experiment: str, parent_id: str, spec: RunSp
     child_id = (
         str(kept.info.run_id)
         if kept is not None
-        else create_run_once(store, experiment_id, run, spec.step_key, {**spec.tags, PARENT_LINK: parent_id}, spec.step_key)
+        else create_run_once(store, experiment_id, run, spec.step_key, spec.tags | ({} if parent_id is None else {PARENT_LINK: parent_id}), spec.step_key)
     )
     populate(store, child_id, spec, kept)
     store.set_terminated(child_id, "FINISHED")

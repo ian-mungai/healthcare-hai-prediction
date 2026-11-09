@@ -232,7 +232,7 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
         if len(requests) != 1:
             return [f"expected one trigger request, got {len(requests)}"]
         request = requests[0]
-        training = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": f"drift:{DRIFT_RUN}", "mlflow": "aws"}
+        training = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": f"drift:{DRIFT_RUN}", "mlflow": "aws", "model": "m2"}
         problems = []
         if request["trigger_run_id"] != f"drift__{DRIFT_RUN}":
             problems.append(f"the trigger run id is {request['trigger_run_id']}")

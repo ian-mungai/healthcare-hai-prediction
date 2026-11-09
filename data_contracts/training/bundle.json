@@ -16,7 +16,8 @@
   "model_directory": "model",
   "optional_files": [
     "shap.json",
-    "diagnostics.json"
+    "diagnostics.json",
+    "rq4_side.json"
   ],
   "provenance_fields": [
     "run_id",

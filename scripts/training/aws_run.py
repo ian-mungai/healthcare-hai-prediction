@@ -1,6 +1,6 @@
 """Run one phase of a training run inside an AWS task.
 
-    python -m scripts.training.aws_run prepare|extract|train|promote --run <run ID> [--mode real|fixture] [--work /workspace]
+    python -m scripts.training.aws_run prepare|extract|train|promote|research --run <run ID> [--mode real|fixture] [--work /workspace]
 
 The task definition chains three containers on one shared ``/workspace``. A fetch container has already downloaded ``code.tar.gz`` of the run, checked
 ``CODE_SHA256`` and unpacked it to ``<work>/code``. Every phase runs from that folder, so the modules it imports are the bytes the record names.
@@ -9,9 +9,13 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
   ``training_parameters.json``, then runs the ``guard`` action.
 - ``extract`` (feature store image): runs the extraction against the catalog and the Feast registry of the data bucket.
 - ``train`` (training image): logs in to MLflow with MLFLOW_TRACKING_USERNAME and MLFLOW_TRACKING_PASSWORD, because the server grants nothing without a login.
-  It then runs ``version_extract``, ``fit``, ``mediation``, ``hac_validate``, ``log_run`` and ``promotion_check``.
+  It then runs the actions of the run's model (``training_contract.train_steps``): ``version_extract``, ``fit``, ``hac_validate`` and ``log_run``, the
+  ``mediation`` for m2 and the ``promotion_check`` for m1, m2 and m4.
+- ``research`` (training image, a separate task): checks the research parameters (``research_dag``), records the code identity and runs the ``research`` action,
+  which reads the finished MLflow runs of m1, m2 and m4 on one ``base_run``, runs RQ1 and RQ4 and sets the one ``challenger`` alias of each type. It stores
+  ``research/<run>/research_<type>.json`` once. It moves no production alias.
 - ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
-  ``production`` alias of one registered model to the version the parameters name. The broker checks the owner's approval before the task starts. Before the
+  ``production`` alias of one registered model to the version the parameters name. The rule and the canary decide first (``auto_promotion``). Before the
   alias moves, the action takes the lease of the model (``promote/models/<model>/lease-<generation>.json``, one run at a time, create-only) and stores the
   intent ``promote/<run>/intent.json`` in the data bucket, once, with the version production held. Before the phase reports success it copies the receipt
   ``promote.json`` to ``promote/<run>/promote.json``, once, because the workspace ends with the task, and only then closes the lease. A retry in a new task
@@ -49,8 +53,7 @@ from scripts.training import job, promote_lease, promote_receipt
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
-PHASES = ("prepare", "extract", "train", "promote")
-TRAIN_STEPS = ("version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check")
+PHASES = ("prepare", "extract", "train", "promote", "research")
 ARCHIVE = "code.tar.gz"
 COMMIT = re.compile(r"[a-f0-9]{40}")
 TRACKING_URI = re.compile(rf"http://(?:10\.[0-9]{{1,3}}|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]{{1,3}}\.[0-9]{{1,3}}:{mlflow_service.PORT}")
@@ -123,7 +126,10 @@ def recorded_digest(work: Path, run: str) -> str:
 def check_prerequisites(work: Path, run: str, action: str) -> None:
     """Require the completion record of every step the action needs."""
     digest = recorded_digest(work, run)
-    for step in training_contract.PREREQUISITES[action]:
+    needed = training_contract.PREREQUISITES[action]
+    if needed:
+        needed = training_contract.prerequisites_for(action, str(recorded_parameters(work)["model"]))
+    for step in needed:
         try:
             verify_done(work / "in" / step, step, digest)
         except (OSError, ValueError, KeyError) as error:
@@ -232,6 +238,43 @@ def promote(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
     return [step]
 
 
+def research(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
+    """Record the code identity and the research parameters, run the research action and store each type's record once in the data bucket."""
+    raw = parse_json("TRAINING_PARAMETERS")
+    try:
+        parameters = training_contract.parameters_for("research_dag", raw, ("aws",))
+    except ValueError as error:
+        raise RunRefused(f"an AWS research needs the parameters of a research run with mlflow=aws: {error}") from None
+    uri = os.environ.get("MLFLOW_TRACKING_URI", "")
+    if not TRACKING_URI.fullmatch(uri):
+        raise RunRefused(f"MLFLOW_TRACKING_URI must be http://<private IPv4 address>:{mlflow_service.PORT}. It is {uri or 'not set'}")
+    for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
+        required(name)
+    destination = bucket()
+    task_environment(work)
+    record_code(work, run)
+    write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
+    step = run_action(work, run, mode, "research")
+    publish_research(work, run, destination, parameters["hai_types"])
+    sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
+    return [step]
+
+
+def publish_research(work: Path, run: str, destination: str, hai_types: Sequence[str]) -> None:
+    """Store the research record of each type under ``research/<run>/`` once; a second store accepts the same bytes and refuses other bytes."""
+    client = promote_receipt.s3_client()
+    for hai_type in hai_types:
+        name = f"research_{hai_type}.json"
+        key, body = f"research/{run}/{name}", (work / "in" / "research" / name).read_bytes()
+        try:
+            created = promote_receipt.put_once(client, destination, key, body)
+            stored = body if created else promote_receipt.read(client, destination, key)
+        except promote_receipt.ReceiptError as error:
+            raise StepFailed("research", EXIT_FAILED, "record_upload_failed", str(error)) from None
+        if stored != body:
+            raise StepFailed("research", EXIT_FAILED, "record_conflict", f"{key} already holds another record")
+
+
 def publish_receipt(work: Path, run: str, destination: str) -> None:
     """Store the receipt of the promote step in the data bucket, so it outlives the task, then close the lease of the model.
 
@@ -318,9 +361,10 @@ def train(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
         required(name)
     os.environ.setdefault("DVC_REMOTE_URL", f"s3://{bucket()}/dvc/")
     task_environment(work)
-    check_prerequisites(work, run, TRAIN_STEPS[0])
+    steps_of_model = training_contract.train_steps(str(recorded_parameters(work)["model"]))
+    check_prerequisites(work, run, steps_of_model[0])
     steps = []
-    for action in TRAIN_STEPS:
+    for action in steps_of_model:
         step = run_action(work, run, mode, action)
         sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
         steps.append(step)
@@ -338,7 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not re.fullmatch(training_contract.RUN_ID, values.run):
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": "the run ID has another form"}) + "\n")
         return EXIT_FAILED
-    handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote}[values.phase]
+    handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote, "research": research}[values.phase]
     try:
         startup_check.check_phase("promote" if values.phase == "promote" else "train", values.phase)
     except startup_check.StartupCheckError as refusal:
@@ -357,7 +401,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except StepFailed as failure:
         sys.stderr.write(json.dumps({"phase": values.phase, "step": failure.step, "failure": failure.failure, "detail": failure.detail}, sort_keys=True) + "\n")
         return failure.code
-    if values.phase not in ("train", "promote"):
+    if values.phase not in ("train", "promote", "research"):
         for step in steps:
             sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return 0

@@ -17,7 +17,10 @@ from typing import Any, Literal, TypedDict
 import numpy as np
 from numpy.typing import NDArray
 
+from orchestration.training_contract import MODEL_LISTS
+
 SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects")
+MODEL_SLOT = {model: lists[0] for model, lists in MODEL_LISTS.items()}
 REGISTRABLE = ("m1_ols", "m2_elastic_net", "m4_boosting")
 GROUP_FIELDS = frozenset(("control_type_code", "provider_subtype_code", "state_code", "bed_count", "county_fips"))
 Array = NDArray[np.float64]

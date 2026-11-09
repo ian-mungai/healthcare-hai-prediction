@@ -37,7 +37,7 @@ from scripts.training.lane_b_cases import RUN
 from scripts.training.mlflow_service_stand_in import CLUSTER, PROFILE, REGION, SERVICE, MlflowService
 from scripts.training.step_records import verify_done, write_done
 
-PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": [HAI_TYPE], "trigger": "manual", "mlflow": "aws"}
+PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": [HAI_TYPE], "trigger": "manual", "mlflow": "aws", "model": "m2"}
 TRACKING = "http://10.0.1.20:5100"
 BUCKET = "example-project-data-dev"
 LOGIN = "-".join(("synthetic", "login", "value", "0123456789"))
@@ -177,10 +177,10 @@ def prepare_cases(cases: Any, folder: Path) -> None:
     refuses("prepare_refuses_archive_with_no_commit", "commit")
 
 
-def staged_train(folder: Path) -> Fixture:
+def staged_train(folder: Path, model: str = "m2") -> Fixture:
     """A fixture of the AWS lane with the guard and the extract complete, the state the train phase starts from."""
-    fixture = Fixture(folder)
-    (fixture.folder / "training_parameters.json").write_text(json.dumps(PARAMETERS) + "\n")
+    fixture = Fixture(folder, model=model)
+    (fixture.folder / "training_parameters.json").write_text(json.dumps({**PARAMETERS, "model": model}) + "\n")
     (fixture.folder / "in/guard").mkdir(parents=True)
     (fixture.folder / "in/guard/guard.json").write_text(json.dumps(GUARD, sort_keys=True) + "\n")
     for step, directory in (("guard", fixture.folder / "in/guard"), ("extract", fixture.extract)):
@@ -213,6 +213,19 @@ def train_cases(cases: Any, folder: Path) -> None:
         require(len(fixture.tracking.parents()) == 1, f"parent runs: {len(fixture.tracking.parents())}")
         require(any(path.is_file() for path in (fixture.folder / "dvc_remote").rglob("*")), "nothing reached the DVC remote")
         require(LOGIN not in out + error, "the MLflow login reached the output")
+
+    def steps_of_the_model() -> None:
+        expected = {
+            "m1": ["version_extract", "fit", "hac_validate", "log_run", "promotion_check"],
+            "m3": ["version_extract", "fit", "hac_validate", "log_run"],
+            "m4": ["version_extract", "fit", "hac_validate", "log_run", "promotion_check"],
+        }
+        for model, steps in expected.items():
+            fixture = staged_train(folder / f"steps_{model}", model)
+            code, out, error = train(fixture)
+            require(code == 0, f"train of {model} failed: {error}")
+            require([item["step"] for item in lines_of(out) if "step" in item] == steps, f"steps of {model}: {out}")
+            require(not (fixture.folder / "in/mediation").exists(), f"{model} ran the mediation, which belongs to m2")
 
     def resumed() -> None:
         fixture = staged_train(folder / "resumed")
@@ -270,6 +283,7 @@ def train_cases(cases: Any, folder: Path) -> None:
         cases.check(f"aws_run_train_refuses_{name}", case)
 
     cases.check("aws_run_train_runs_six_actions_in_order", ran)
+    cases.check("aws_run_train_runs_the_steps_of_its_model", steps_of_the_model)
     cases.check("aws_run_train_rerun_resumes_every_step", resumed)
     cases.check("aws_run_train_retry_in_a_new_task_resumes_the_logged_run", retry_in_a_new_task)
     cases.check("aws_run_train_refuses_changed_extract_output", refuses_changed_extract)

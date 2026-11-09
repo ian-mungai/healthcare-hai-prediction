@@ -776,6 +776,16 @@
                     "promote",
                     "rollback"
                   ]
+                },
+                "model": {
+                  "enum": [
+                    "m1",
+                    "m2",
+                    "m3",
+                    "m4",
+                    "m5",
+                    "m6"
+                  ]
                 }
               }
             }
@@ -844,9 +854,10 @@
                       "population",
                       "hai_types",
                       "trigger",
-                      "mlflow"
+                      "mlflow",
+                      "model"
                     ],
-                    "maxProperties": 5
+                    "maxProperties": 6
                   }
                 }
               }
@@ -1286,6 +1297,16 @@
                     "promote",
                     "rollback"
                   ]
+                },
+                "model": {
+                  "enum": [
+                    "m1",
+                    "m2",
+                    "m3",
+                    "m4",
+                    "m5",
+                    "m6"
+                  ]
                 }
               }
             }
@@ -1354,9 +1375,10 @@
                       "population",
                       "hai_types",
                       "trigger",
-                      "mlflow"
+                      "mlflow",
+                      "model"
                     ],
-                    "maxProperties": 5
+                    "maxProperties": 6
                   }
                 }
               }

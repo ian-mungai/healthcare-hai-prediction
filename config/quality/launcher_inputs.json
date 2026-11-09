@@ -193,11 +193,6 @@
       "why": "reviewed: versions globs v*.metadata.json in the metadata folder of a table (scripts/features/fixture_catalog.py:63; warehouse / namespace / table / \"metadata\", :58), a Hadoop-catalog warehouse the run creates"
     },
     {
-      "module": "scripts/features/training_extract.py",
-      "pattern": "^config/training/feature_lists/[^/]+\\.json$",
-      "why": "reviewed: the selected-predictor check globs *.json in (config / \"feature_lists\") with config = root / \"config/training\" (scripts/features/training_extract.py:229)"
-    },
-    {
       "module": "scripts/infrastructure/sts_stand_in.py",
       "pattern": null,
       "why": "reviewed: history_bytes lists home / \".aws\" / \"cli\" / \"history\" with rglob (scripts/infrastructure/sts_stand_in.py:249), the AWS command history of a temporary home folder"
@@ -404,7 +399,6 @@
     "scripts/features/features_input.py": 2,
     "scripts/features/features_publish_cases.py": 2,
     "scripts/features/fixture_catalog.py": 1,
-    "scripts/features/training_extract.py": 1,
     "scripts/infrastructure/sts_stand_in.py": 1,
     "scripts/lakehouse/catalog_journal.py": 2,
     "scripts/lakehouse/dbt_package_archive.py": 3,
@@ -1413,6 +1407,7 @@
     "scripts/training/promotion.py",
     "scripts/training/promotion_check.py",
     "scripts/training/registry.py",
+    "scripts/training/research.py",
     "scripts/training/research_tests.py",
     "scripts/training/run_tracking.py",
     "scripts/training/step_records.py",

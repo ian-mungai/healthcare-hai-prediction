@@ -1110,7 +1110,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
     def model_action_budgets() -> None:
         from orchestration.training_contract import ACTION_SECONDS, PROMOTION_STEPS, TRAINING_STEPS, action_environment, parameters_for
 
-        parameters = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
+        parameters = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local", "model": "m2"}
         require(parameters_for("training_dag", parameters) == parameters, "local analysis parameters changed at the action boundary")
         for action in ("mediation", "hac_validate"):
             require(action in TRAINING_STEPS and action not in PROMOTION_STEPS, "analysis action belongs to another workflow")

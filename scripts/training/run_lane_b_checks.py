@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -90,7 +91,7 @@ def run_checks(output: Path) -> int:
 
         for dag in training_contract.DAGS:
             case(f"graph_{dag}", not graph.validate_transform_graph(graph.reference_graph(dag), dag))
-        raw = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
+        raw = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local", "model": "m2"}
         params = training_contract.parameters_for("training_dag", raw)
         first = SubmissionRequest("guard", "20261024T000000Z-1234abcd", "fixture", 1, "training_dag", "guard", "manual", training=params)
         second = SubmissionRequest(
@@ -105,6 +106,24 @@ def run_checks(output: Path) -> int:
         else:
             case("aws_route_refused", False)
         case("job_lanes_accept_aws", training_contract.parameters_for("training_dag", {**raw, "mlflow": "aws"}, training_contract.JOB_LANES)["mlflow"] == "aws")
+        for chosen in training_contract.MODELS:
+            case(f"model_{chosen}_accepted", training_contract.parameters_for("training_dag", {**raw, "model": chosen})["model"] == chosen)
+        for name, changed in (
+            ("missing", {key: value for key, value in raw.items() if key != "model"}),
+            ("unknown", {**raw, "model": "m7"}),
+            ("not_text", {**raw, "model": 2}),
+        ):
+            try:
+                training_contract.parameters_for("training_dag", changed)
+            except ValueError as error:
+                case(f"model_{name}_refused", "model" in str(error))
+            else:
+                case(f"model_{name}_refused", False)
+        drift = "20261109T010000Z-1234abcd"
+        ids = {chosen: training_contract.model_training_run_id(drift, chosen) for chosen in training_contract.MODELS}
+        case("model_run_ids_differ_per_model", len(set(ids.values())) == len(ids))
+        case("model_run_id_is_stable_for_a_retry", ids["m3"] == training_contract.model_training_run_id(drift, "m3"))
+        case("model_run_id_has_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in ids.values()))
         case("service_port", mlflow_service.PORT == 5100)
         with tempfile.TemporaryDirectory(prefix="hai_training_contract_") as temporary:
             source = Path(temporary) / "source"

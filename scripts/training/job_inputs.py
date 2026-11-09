@@ -12,11 +12,11 @@ from typing import Any, Literal
 from jsonschema import Draft202012Validator
 
 from orchestration import training_contract
-from scripts.training.models.common import SLOTS, Dataset, Deadline, Feature, ModelError, ModelRequest
+from scripts.training.models.common import Dataset, Deadline, Feature, ModelError, ModelRequest
 from scripts.training.step_records import file_sha256
 
 ROOT = Path(__file__).resolve().parents[2]
-LIST_SLOTS = (*SLOTS, "rq4_reduced")
+REQUEST_LISTS = {**training_contract.MODEL_LISTS, "m2": ("m2_elastic_net", "rq4_reduced")}
 PROCESS_FAMILY = "care_compare"
 ADJACENCY = "adjacency.parquet"
 
@@ -137,16 +137,16 @@ def catalog(root: Path) -> dict[str, Feature]:
     return found
 
 
-def feature_lists(root: Path) -> dict[str, tuple[str, ...]]:
-    """Return the reviewed predictor references of each slot and the reduced RQ4 model."""
-    return {slot: tuple(read_json(root / f"config/training/feature_lists/{slot}.json", "feature_list")["references"]) for slot in LIST_SLOTS}
+def feature_lists(root: Path, model: str) -> dict[str, tuple[str, ...]]:
+    """Return the reviewed predictor references of the model's slot, and of the reduced RQ4 model for m1 and m2."""
+    return {slot: tuple(read_json(root / f"config/training/feature_lists/{slot}.json", "feature_list")["references"]) for slot in REQUEST_LISTS[model]}
 
 
 def model_request(
-    hai_type: str, rows: Sequence[Mapping[str, Any]], adjacency: Sequence[Mapping[str, Any]], config: Mapping[str, Any], seconds: float, root: Path
+    hai_type: str, rows: Sequence[Mapping[str, Any]], adjacency: Sequence[Mapping[str, Any]], config: Mapping[str, Any], seconds: float, root: Path, model: str
 ) -> ModelRequest:
-    """Build the six-model request from verified rows, the feature lists and the schema's registered predictors."""
-    lists = feature_lists(root)
+    """Build one model's request from verified rows, its feature lists and the schema's registered predictors."""
+    lists = feature_lists(root, model)
     known = catalog(root)
     references = sorted({reference for items in lists.values() for reference in items})
     unknown = [reference for reference in references if reference not in known]
@@ -155,7 +155,8 @@ def model_request(
     forced = config["slots"]["m2_elastic_net"]["forced_references"]
     if len(forced) != 1 or forced[0] not in known:
         raise InputError("feature_lists", "the Elastic Net slot must force exactly one registered covariate")
-    processes = tuple(reference for reference in lists["m1_ols"] if known[reference].family == PROCESS_FAMILY)
+    process_list = read_json(root / "config/training/feature_lists/m1_ols.json", "feature_list")["references"]
+    processes = tuple(reference for reference in process_list if reference in references and known[reference].family == PROCESS_FAMILY)
     try:
         data = Dataset(tuple(rows), tuple(known[reference] for reference in references), hai_type)
         return ModelRequest(data, lists, config, tuple(adjacency), processes, forced[0], threads(), Deadline.after(seconds))

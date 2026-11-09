@@ -28,7 +28,8 @@
     "optional_files": {
       "const": [
         "shap.json",
-        "diagnostics.json"
+        "diagnostics.json",
+        "rq4_side.json"
       ]
     },
     "provenance_fields": {

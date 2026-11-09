@@ -56,6 +56,13 @@ Every training run follows this plan. The plan changes during development, so ea
 
 For Moran's I, two hospitals are neighbours when their counties are the same or adjacent in the county adjacency table. The weights are row-standardized. Hospitals with no neighbour are counted and left out of the test.
 
+## Model runs
+
+- A training run fits one model, m1 to m6 in the order of the list above. It reads the Feast feature service `model_<id>` of its feature set and runs only the tests that model owns. A run logs the tags `model` and `base_run`, the identity of the base publication that its feature set was built from.
+- m1 runs the joint F test of RQ1 and fits the reduced model of RQ4 (the CMS-only list). m2 runs the Elastic Net comparison with the intercept and CMI model (RQ1), fits the full model of RQ4 on its own list and runs the mediation (RQ3). m3 reports the ownership test (RQ2), m4 the SHAP values, m5 the RQ5 test and m6 the RQ6 test. HAC validation refits each model's own specification.
+- m5 has no other model's residuals, so its Moran's I test uses the residuals of an OLS fit on the m5 list.
+- The research job runs the tests that need two models, once the models have finished runs with the same `base_run`: RQ4 compares the reduced and the full fit on the same rows and holdout windows.
+
 ## Research question tests
 
 - **RQ1 (H1):** the joint significance of the process and structure measures in the OLS and Elastic Net models: an F test on OLS and the holdout RMSE against a model with only an intercept and CMI.

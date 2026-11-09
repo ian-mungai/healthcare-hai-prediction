@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import importlib
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -176,6 +176,87 @@ def nested_comparison(request: ModelRequest) -> dict[str, Any]:
         "dependent_columns": list(transform.dependent_records_),
         "dependent_column_count": len(transform.dependent_records_),
         "cmi_in_reduced": False,
+        "reduced_rmse": left_metrics["rmse"],
+        "full_rmse": right_metrics["rmse"],
+        "rmse_improvement": float(left_metrics["rmse"]) - float(right_metrics["rmse"]),
+        **interval,
+    }
+
+
+def rq4_side(request: ModelRequest, side: str) -> dict[str, Any]:
+    """Fit one side of the nested RQ4 comparison as an OLS on the training years and keep what the research job needs to compare it with the other side.
+
+    The reduced side takes the CMS-only list. The full side takes the Elastic Net list with CMI forced in and the reduced columns protected from the
+    dependent-column drop. Both fit the same training rows, so the two sides run in different model runs and still compare.
+    """
+    request.deadline.check()
+    reduced = request.feature_lists["rq4_reduced"]
+    if side == "reduced":
+        transform = FoldPreprocessor(request.features_for("rq4_reduced"), drop_dependent=True)
+    elif side == "full":
+        full = request.feature_lists["m2_elastic_net"]
+        if not set(reduced).issubset(full) or request.cmi_reference not in full:
+            raise ModelError("the full list must contain the reduced list and CMI")
+        transform = FoldPreprocessor(request.features_for("m2_elastic_net"), forced=(request.cmi_reference,), drop_dependent=True, protected=tuple(reduced))
+    else:
+        raise ModelError("unknown RQ4 side")
+    training, holdout = request.data.split()
+    design = transform.fit_transform(training.rows)
+    fitted = OLSRegressor().fit(design, training.y)
+    request.deadline.check()
+    prediction = np.asarray(fitted.predict(transform.transform(holdout.rows)), dtype=np.float64)
+    return {
+        "status": "fitted",
+        "side": side,
+        "training_rows": len(training.rows),
+        "holdout_rows": len(holdout.rows),
+        "columns": len(design.names),
+        "ssr": fitted.ssr_,
+        "residual_degrees_of_freedom": fitted.residual_df_,
+        "log_likelihood": fitted.log_likelihood_,
+        "references_fitted": sorted(set(design.references)),
+        "dependent_column_count": len(transform.dependent_records_),
+        "holdout": [
+            {"spine_key": key, "ccn": row["ccn"], "observed": float(observed), "predicted": float(value)}
+            for key, row, observed, value in zip(holdout.keys, holdout.rows, holdout.y, prediction, strict=True)
+        ],
+    }
+
+
+def rq4_compare(reduced: Mapping[str, Any], full: Mapping[str, Any], settings: Mapping[str, Any], seed: int, deadline: Deadline) -> dict[str, Any]:
+    """Compare the reduced and the full RQ4 fit of two model runs: in-sample F and likelihood-ratio tests and the holdout RMSE difference with its interval.
+
+    Both sides must hold the same training rows and the same holdout windows, and the reduced columns must be among the full columns.
+    """
+    deadline.check()
+    if reduced.get("status") != "fitted" or full.get("status") != "fitted":
+        return {"status": "not_estimable", "reason": f"reduced side {reduced.get('status')}, full side {full.get('status')}"}
+    keys = [row["spine_key"] for row in reduced["holdout"]]
+    if reduced["training_rows"] != full["training_rows"] or keys != [row["spine_key"] for row in full["holdout"]]:
+        raise ModelError("the two sides of RQ4 hold other training rows or other holdout windows")
+    if not set(reduced["references_fitted"]).issubset(full["references_fitted"]):
+        return {"status": "not_estimable", "reason": "the reduced columns are not among the full columns"}
+    difference = full["columns"] - reduced["columns"]
+    if difference <= 0 or full["ssr"] <= 0:
+        return {"status": "not_estimable", "reason": "nested models have no extra estimable coefficients or positive residual variance"}
+    f_statistic = max(0.0, float((reduced["ssr"] - full["ssr"]) / difference / (full["ssr"] / full["residual_degrees_of_freedom"])))
+    lr_statistic = max(0.0, 2 * float(full["log_likelihood"] - reduced["log_likelihood"]))
+    distribution = importlib.import_module("scipy.stats")
+    observed = np.asarray([row["observed"] for row in reduced["holdout"]], dtype=np.float64)
+    left, right = (np.asarray([row["predicted"] for row in side["holdout"]], dtype=np.float64) for side in (reduced, full))
+    left_metrics, right_metrics = metrics(observed, left), metrics(observed, right)
+    interval = improvement_interval(
+        observed, left, right, tuple(row["ccn"] for row in reduced["holdout"]), settings["draws"], seed, settings["confidence_level"], deadline
+    )
+    return {
+        "status": "fitted",
+        "f_statistic": f_statistic,
+        "f_p_value": float(distribution.f.sf(f_statistic, difference, full["residual_degrees_of_freedom"])),
+        "likelihood_ratio": lr_statistic,
+        "likelihood_ratio_p_value": float(distribution.chi2.sf(lr_statistic, difference)),
+        "extra_degrees_of_freedom": difference,
+        "training_rows": reduced["training_rows"],
+        "holdout_rows": len(keys),
         "reduced_rmse": left_metrics["rmse"],
         "full_rmse": right_metrics["rmse"],
         "rmse_improvement": float(left_metrics["rmse"]) - float(right_metrics["rmse"]),

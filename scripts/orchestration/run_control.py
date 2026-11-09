@@ -177,16 +177,13 @@ def acquire(broker: Broker, request: SubmissionRequest, action: str, params: dic
     if request.training is not None:
         from orchestration import training_approvals
 
-        approval = None
-        if request.mode == "real" or request.dag_id == "model_promotion_dag":
+        if request.mode == "real" and request.dag_id == "training_dag":
             try:
-                approval = training_approvals.read_approval(broker.paths.state, request)
+                training_approvals.read_approval(broker.paths.state, request)
             except ValueError as error:
                 raise ControlRefused(str(error)) from None
         for name in ("extract", "bundles", "mlflow"):
             (folder / name).mkdir(exist_ok=True)
-        if approval is not None:
-            write_private(folder / "promotion_approval.json", json.dumps(approval, sort_keys=True) + "\n", folder)
         broker.call("training_prepare", {"dag_id": request.dag_id, "parameters": request.training}, broker.principal(request.run_id))
     seeded = False
     if seed is not None and not (folder / SEEDED_MARKER).exists():

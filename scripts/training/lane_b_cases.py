@@ -30,7 +30,15 @@ ROOT = Path(__file__).resolve().parents[2]
 RUN = "20261024T000000Z-1234abcd"
 PUBLICATION = "20261023T000000Z-1234abcd"
 GOLD = "20261022T000000Z-1234abcd"
-PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": list(training_contract.HAI_TYPES), "trigger": "manual", "mlflow": "local"}
+BASE = "20261023T000000Z-5678abcd"
+PARAMETERS = {
+    "features_run": "latest",
+    "population": "primary",
+    "hai_types": list(training_contract.HAI_TYPES),
+    "trigger": "manual",
+    "mlflow": "local",
+    "model": "m1",
+}
 REGISTRY_ID = "12345678-1234-4234-8234-123456789abc"
 
 
@@ -115,6 +123,13 @@ def fixture(root: Path) -> dict[str, Any]:
         "view": "feature_matrix_hospital",
         "pivot": {"match": {"measure_control": "C001"}},
     }
+    second: dict[str, Any] = {
+        "name": "c002__score__number",
+        "type": "double",
+        "role": "predictor",
+        "view": "feature_matrix_hospital",
+        "pivot": {"match": {"measure_control": "C002"}},
+    }
     labels = [
         {
             "name": f"hai_{number}__{field}",
@@ -129,14 +144,18 @@ def fixture(root: Path) -> dict[str, Any]:
         "schema": 1,
         "tables": {
             "feature_matrix_hospital_window": {"role": "predictor", "columns": groups},
-            "feature_matrix_hospital": {"role": "predictor", "columns": [predictor]},
+            "feature_matrix_hospital": {"role": "predictor", "columns": [predictor, second]},
             "label_matrix_hai_outcomes": {"role": "label", "columns": labels},
         },
-        "servable": sorted(f"{column['view']}:{column['name']}" for column in [*groups, predictor]),
+        "servable": sorted(f"{column['view']}:{column['name']}" for column in [*groups, predictor, second]),
     }
     (root / "data_contracts/features/feature_schema.json").write_bytes(extract.canonical(schema) + b"\n")
     refs = [f"{predictor['view']}:{predictor['name']}"]
     (root / "config/training/feature_lists/m1_ols.json").write_bytes(extract.canonical({"references": refs}) + b"\n")
+    (root / "config/training/feature_lists/rq4_reduced.json").write_bytes(extract.canonical({"references": refs}) + b"\n")
+    (root / "config/training/feature_lists/m2_elastic_net.json").write_bytes(
+        extract.canonical({"references": [*refs, f"{second['view']}:{second['name']}"]}) + b"\n"
+    )
     seed = "measure_control,hai_type,field\n" + "".join(f"C{268 + number},HAI_{number},sir\n" for number in range(1, 7))
     (root / "dbt/seeds/features/frozen_hai_outcome_controls.csv").write_text(seed)
     return schema
@@ -154,6 +173,7 @@ class Publication:
     namespace: str
     run_id: str
     snapshot_set: dict[str, int]
+    base_run: str | None = BASE
 
     @property
     def snapshot_set_sha256(self) -> str:
@@ -165,6 +185,11 @@ class SyntheticReader:
     """Stand in for the accepted helper and pinned scans using no Feast or catalog service."""
 
     def __init__(self, root: Path) -> None:
+        self.root = root
+        self.services_read: list[str] = []
+        self.unrequested: dict[str, Any] = {}
+        self.service_extra: tuple[str, ...] = ()
+        self.service_dropped: tuple[str, ...] = ()
         self.schema = json.loads((root / "data_contracts/features/feature_schema.json").read_bytes())
         self.schema_sha256 = hashlib.sha256((root / "data_contracts/features/feature_schema.json").read_bytes()).hexdigest()
         self.selected = Publication(
@@ -184,6 +209,7 @@ class SyntheticReader:
                 row = {
                     "spine_key": key,
                     "c001__score__number": float(hospital),
+                    "c002__score__number": float(hospital) * 2,
                     "control_type_code": "1",
                     "provider_subtype_code": "01",
                     "state_code": "WA",
@@ -256,12 +282,32 @@ class SyntheticReader:
         require(run == PUBLICATION, "historical helper did not receive the selected publication")
         self.historical_calls += 1
         self.references = tuple(references)
+        wanted = {reference.split(":", 1)[1] for reference in references} | {"spine_key", "event_timestamp"}
         return SimpleNamespace(
-            frame=SimpleNamespace(to_pylist=lambda: copy.deepcopy(self.rows)),
+            frame=SimpleNamespace(to_pylist=lambda: self.projected(wanted)),
             publication=self.selected,
             feature_schema_sha256=self.schema_sha256,
             entity_count=len(self.rows),
         )
+
+    def projected(self, wanted: set[str]) -> list[dict[str, Any]]:
+        """Return the rows with only the requested columns, as the Feast helper does, plus any column a case makes the helper return unasked."""
+        rows = [{name: value for name, value in row.items() if name in wanted} for row in copy.deepcopy(self.rows)]
+        rows[0].update(self.unrequested)
+        return rows
+
+    def service_references(self, name: str) -> tuple[str, ...]:
+        """Return what the stand-in Feast service of a model serves: the lists of the model, the group attributes and the label of every type."""
+        self.services_read.append(name)
+        model = name.removeprefix("model_")
+        listed = {
+            ref
+            for slot in training_contract.MODEL_LISTS[model]
+            for ref in json.loads((self.root / f"config/training/feature_lists/{slot}.json").read_bytes())["references"]
+        }
+        groups = {f"feature_matrix_hospital_window:{column}" for column in extract.GROUP_COLUMNS}
+        labels = {f"label_hai_{n}:hai_{n}__{field}" for n in range(1, 7) for field in ("sir__number", "alignment_status__category", "predicted__number")}
+        return tuple(sorted(({*listed, *groups, *labels, *self.service_extra}) - set(self.service_dropped)))
 
     def consistent(self, publication: Any, operation: Callable[[], Any]) -> Any:
         """Reject support-head movement around the consumed scans."""
@@ -338,6 +384,16 @@ def extract_command_case(source: Path, folder: Path) -> None:
         require(kwargs["environ"] is os.environ and kwargs["catalog"] is reader and not kwargs["register"], "the helper lost its catalog environment")
         return reader.historical(references, kwargs["publication_run"])
 
+    def feature_service(name: str) -> Any:
+        require(name == "model_m1", "the command read another feature service")
+        views: dict[str, list[Any]] = {}
+        for reference in reader.service_references(name):
+            view, column = reference.split(":", 1)
+            views.setdefault(view, []).append(SimpleNamespace(name=column))
+        return SimpleNamespace(
+            feature_view_projections=[SimpleNamespace(name_to_use=lambda view=view: view, features=features) for view, features in views.items()]
+        )
+
     modules = {
         "scripts.features.publication_reads": SimpleNamespace(
             catalog_settings=settings,
@@ -346,7 +402,9 @@ def extract_command_case(source: Path, folder: Path) -> None:
             consistent_read=lambda selected, publication, operation: selected.consistent(publication, operation),
             load_table=load_table,
         ),
-        "scripts.features.historical": SimpleNamespace(default_catalog=catalog, historical_features=historical),
+        "scripts.features.historical": SimpleNamespace(
+            default_catalog=catalog, historical_features=historical, default_store=lambda environ: SimpleNamespace(get_feature_service=feature_service)
+        ),
     }
     arguments = [
         "extract",
@@ -437,7 +495,7 @@ def weight_reference_cases(cases: Cases, source: Path, folder: Path, schema: dic
     """The weight in the reference union: asked for beside the label, never a predictor, refused when the schema does not register it as a weight."""
     column = "hai_1__predicted__number"
     reference = f"label_hai_1:{column}"
-    union = extract.reference_union(source, schema)
+    union = extract.model_references(source, schema, "m1")
     cases.check(
         "extract_weight_never_a_predictor",
         lambda: require(reference in union[0] and column not in union[1], "the weight was read as a predictor or left out of the references"),
@@ -447,14 +505,14 @@ def weight_reference_cases(cases: Cases, source: Path, folder: Path, schema: dic
     (listed / "config/training/feature_lists/m1_ols.json").write_bytes(
         extract.canonical({"references": [reference, "feature_matrix_hospital:c001__score__number"]}) + b"\n"
     )
-    cases.refuses("extract_weight_in_feature_list_refused", lambda: extract.reference_union(listed, schema), "predictor")
+    cases.refuses("extract_weight_in_feature_list_refused", lambda: extract.model_references(listed, schema, "m1"), "predictor")
     for name, change in (
         ("registered_as_predictor", lambda item: item["tables"]["label_matrix_hai_outcomes"]["columns"][2].update(role="predictor")),
         ("unregistered", lambda item: item["tables"]["label_matrix_hai_outcomes"]["columns"].pop(2)),
     ):
         poisoned = copy.deepcopy(schema)
         change(poisoned)
-        cases.refuses(f"extract_weight_{name}_refused", partial(extract.reference_union, source, poisoned), "weight")
+        cases.refuses(f"extract_weight_{name}_refused", partial(extract.model_references, source, poisoned, "m1"), "weight")
 
 
 def extraction_cases(cases: Cases, folder: Path) -> None:
@@ -517,6 +575,45 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             "manifest input identities changed",
         ),
     )
+    cases.check(
+        "extract_reads_the_feature_service_of_the_model",
+        lambda: require(
+            reader.services_read == ["model_m1"] and manifest["model"] == "m1" and manifest["feature_service"] == "model_m1",
+            f"the extract read {reader.services_read} and recorded {manifest.get('model')} and {manifest.get('feature_service')}",
+        ),
+    )
+    cases.check(
+        "extract_manifest_carries_the_base_run_of_the_publication",
+        lambda: require(manifest["base_run"] == BASE, f"the manifest base_run is {manifest.get('base_run')}"),
+    )
+    cases.check(
+        "extract_holds_only_the_features_of_the_model",
+        lambda: require(
+            "c002__score__number" not in writer.rows["extract_HAI_1.parquet"][0] and "c001__score__number" in writer.rows["extract_HAI_1.parquet"][0],
+            "a feature outside the model's lists reached its extract",
+        ),
+    )
+    wider = SyntheticReader(source)
+    cases.check(
+        "extract_of_another_model_reads_its_own_service_and_lists",
+        lambda: require(
+            run(folder / "second_model", wider, JsonTableStandIn(), {**PARAMETERS, "model": "m2"})
+            and wider.services_read == ["model_m2"]
+            and json.loads((folder / "second_model/manifest_HAI_1.json").read_bytes())["feature_list_sha256"] != manifest["feature_list_sha256"],
+            "the second model did not read its own service and lists",
+        ),
+    )
+    for name, change, reason in (
+        ("extract_service_with_an_extra_feature_refused", {"service_extra": ("feature_matrix_hospital:c002__score__number",)}, "feature service"),
+        ("extract_service_missing_a_feature_refused", {"service_dropped": ("feature_matrix_hospital:c001__score__number",)}, "feature service"),
+    ):
+        serving = SyntheticReader(source)
+        for attribute, value in change.items():
+            setattr(serving, attribute, value)
+        cases.refuses(name, partial(run, folder / name, serving, JsonTableStandIn()), reason)
+    unbased = SyntheticReader(source)
+    unbased.selected = Publication("features_e2e", PUBLICATION, dict(unbased.selected.snapshot_set), None)
+    cases.refuses("extract_publication_without_base_run_refused", partial(run, folder / "unbased", unbased, JsonTableStandIn()), "base_run")
     cases.check(
         "extract_retry_skips_reader", lambda: require(run(output)["resumed"] and reader.historical_calls == 1, "a completed extract read the publication again")
     )
@@ -589,7 +686,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             lambda item: item.tables["int_spine_validation_measures"][0].update(period_end=date(2024, 1, 1)),
             "mediator period",
         ),
-        ("extract_unexpected_real_column_refused", lambda item: item.rows[0].update(psi_90=1.0), "unexpected columns"),
+        ("extract_unexpected_real_column_refused", lambda item: item.unrequested.update(psi_90=1.0), "unexpected columns"),
     ):
         selected = SyntheticReader(source)
         mutate(selected)
@@ -616,7 +713,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     poisoned = copy.deepcopy(reader.schema)
     column = poisoned["tables"]["feature_matrix_hospital"]["columns"][0]
     column["pivot"]["match"]["measure_control"] = "E038"
-    cases.refuses("extract_mediator_reference_refused", lambda: extract.reference_union(source, poisoned), "excluded")
+    cases.refuses("extract_mediator_reference_refused", lambda: extract.model_references(source, poisoned, "m1"), "excluded")
     (output / "extract_HAI_1.parquet").write_text("changed synthetic bytes")
     cases.refuses("extract_changed_done_output_refused", lambda: run(output), "differs")
 
@@ -800,39 +897,25 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
             require(graph.validate_transform_graph(broken, dag_id), "missing snapshot was accepted")
 
         cases.check(f"graph_{dag_id}_missing_snapshot_refused", graph_refuses)
-    promotion = {"hai_type": "HAI_1", "model_version": "2", "promotion_mode": "promote", "mlflow": "local"}
-    approved_request = SubmissionRequest("acquire_run", RUN, "real", 1, "model_promotion_dag", "acquire_run", "manual", training=promotion)
+    approved_request = SubmissionRequest("acquire_run", RUN, "real", 1, "training_dag", "acquire_run", "manual", training=PARAMETERS)
     state_folder = folder / "approval_state"
-    path = state_folder / "approvals/model_promotion_dag" / f"{RUN}.json"
+    path = state_folder / "approvals/training_dag" / f"{RUN}.json"
     path.parent.mkdir(parents=True)
-    approval = {"run_id": RUN, "dag_id": "model_promotion_dag", "scope": "promote", "approved_on": "2026-10-23", "hai_type": "HAI_1", "model_version": "2"}
+    approval = {"run_id": RUN, "dag_id": "training_dag", "scope": "real_training", "approved_on": "2026-10-23"}
 
     def read(body: dict[str, Any], selected: SubmissionRequest = approved_request) -> dict[str, Any]:
         path.write_text(json.dumps(body))
         path.chmod(0o600)
         return training_approvals.read_approval(state_folder, selected, today=date(2026, 10, 23))
 
-    cases.check("promotion_approval_exact", lambda: read(approval))
-    for field, value in (
-        ("run_id", GOLD),
-        ("dag_id", "training_dag"),
-        ("scope", "rollback"),
-        ("hai_type", "HAI_2"),
-        ("model_version", "3"),
-        ("approved_on", "2027-01-01"),
-    ):
-        reason = (
-            "date is invalid"
-            if field == "approved_on"
-            else "another HAI type or model version"
-            if field in ("hai_type", "model_version")
-            else "another run, DAG or scope"
-        )
+    cases.check("training_approval_exact", lambda: read(approval))
+    for field, value in (("run_id", GOLD), ("dag_id", "model_promotion_dag"), ("scope", "promote"), ("approved_on", "2027-01-01")):
+        reason = "date is invalid" if field == "approved_on" else "another run, DAG or scope"
         cases.refuses(f"approval_wrong_{field}_refused", partial(read, {**approval, field: value}), reason)
     cases.refuses("approval_extra_key_refused", lambda: read({**approval, "extra": True}), "fields")
-    rollback_request = replace(approved_request, training={**promotion, "promotion_mode": "rollback"})
-    cases.check("rollback_uses_its_own_scope", lambda: read({**approval, "scope": "rollback"}, rollback_request))
-    cases.refuses("rollback_cannot_use_promote_scope", lambda: read(approval, rollback_request), "scope")
+    promotion = {"hai_type": "HAI_1", "model_version": "2", "promotion_mode": "promote", "mlflow": "local"}
+    promoted = replace(approved_request, dag_id="model_promotion_dag", training=promotion)
+    cases.refuses("promotion_has_no_approval_record_to_read", lambda: training_approvals.read_approval(state_folder, promoted), "only a real training run")
     service_config = replace(config, root=ROOT)
     renderer = launcher.Renderer(service_config, launcher.ComposeModel(ROOT / mlflow_service.COMPOSE), ROOT, ROOT, b"synthetic-key" * 3)
     service_input = replace(

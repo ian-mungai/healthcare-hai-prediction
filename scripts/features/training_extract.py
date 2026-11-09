@@ -21,7 +21,7 @@ from typing import Any, Protocol
 
 from jsonschema import Draft202012Validator
 
-from orchestration.training_contract import HAI_TYPES, JOB_LANES, parameters_for
+from orchestration.training_contract import HAI_TYPES, JOB_LANES, MODEL_LISTS, parameters_for
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -59,6 +59,8 @@ class Reader(Protocol):
     schema_sha256: str
 
     def publication(self, run: str | None) -> Any: ...
+
+    def service_references(self, name: str) -> tuple[str, ...]: ...
 
     def historical(self, references: Sequence[str], run: str) -> Any: ...
 
@@ -143,6 +145,15 @@ class FeatureReader:
         """Select the committed publication once."""
         return self.reads.read_publication(self.catalog, self.namespace, run)
 
+    def service_references(self, name: str) -> tuple[str, ...]:
+        """Return the sorted view and column references that the named Feast feature service serves."""
+        store = self.history.default_store(self.environ)
+        try:
+            service = store.get_feature_service(name)
+        except Exception as error:
+            raise ExtractError(f"the Feast registry has no feature service {name} ({type(error).__name__})") from None
+        return tuple(sorted(f"{projection.name_to_use()}:{feature.name}" for projection in service.feature_view_projections for feature in projection.features))
+
     def historical(self, references: Sequence[str], run: str) -> Any:
         """Call the accepted helper once with the selected publication ID."""
         return self.history.historical_features(
@@ -218,19 +229,18 @@ def live_reader(root: Path, environ: MutableMapping[str, str], features_run: str
         yield FeatureReader(catalog, environ["FEAST_NAMESPACE"], environ, schema_path, reads, history, schema, digest)
 
 
-def reference_union(root: Path, schema: dict[str, Any]) -> tuple[tuple[str, ...], dict[str, dict[str, Any]], str]:
-    """Check every selected predictor against roles and exclusions, then add labels and masked group attributes."""
+def model_references(root: Path, schema: dict[str, Any], model: str) -> tuple[tuple[str, ...], dict[str, dict[str, Any]], str]:
+    """Check every predictor of the model's lists against roles and exclusions, then add the labels and the masked group attributes."""
     columns = {f"{column['view']}:{column['name']}": column for table in schema["tables"].values() for column in table["columns"] if column.get("view")}
     config = root / "config/training"
     targets = json.loads((config / "targets.json").read_bytes())
     excluded = set(json.loads((config / "excluded_controls.json").read_bytes())["controls"])
     excluded.update(row["control"] for family in ("target_candidates", "earlier_outcome_candidates") for row in targets[family])
     references: set[str] = set()
-    for path in sorted((config / "feature_lists").glob("*.json")):
-        document = json.loads(path.read_bytes())
-        references.update(document["references"])
+    for slot in MODEL_LISTS[model]:
+        references.update(json.loads((config / "feature_lists" / f"{slot}.json").read_bytes())["references"])
     if not references:
-        raise ExtractError("no predictor references were configured")
+        raise ExtractError(f"no predictor references were configured for {model}")
     for name in GROUP_COLUMNS:
         found = [reference for reference, column in columns.items() if column["name"] == name and column["role"] == "predictor"]
         if len(found) != 1:
@@ -325,7 +335,9 @@ def extract(
             raise TimeoutError("training extraction exceeded its absolute deadline")
 
     check()
-    references, predictors, feature_list_sha = reference_union(root, reader.schema)
+    model = params["model"]
+    service = f"model_{model}"
+    references, predictors, feature_list_sha = model_references(root, reader.schema, model)
     parameters_sha = hashlib.sha256(canonical(params)).hexdigest()
     output.mkdir(parents=True, exist_ok=True)
     if output.is_symlink():
@@ -343,6 +355,15 @@ def extract(
         raise ExtractError("the feature reader selected another publication")
     if any(name not in publication.snapshot_set for name in SUPPORT_TABLES):
         raise ExtractError("the publication lacks a required training support snapshot")
+    base_run = getattr(publication, "base_run", None)
+    if not isinstance(base_run, str) or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", base_run):
+        raise ExtractError(f"the {model} publication {publication.run_id} carries no base_run")
+    served = reader.service_references(service)
+    if set(served) != set(references) or len(served) != len(references):
+        gap = sorted(set(served) ^ set(references))
+        raise ExtractError(
+            f"the Feast feature service {service} differs from the reviewed lists of {model} and the labels: {len(gap)} references, first {gap[0]}"
+        )
     check()
     history = reader.historical(references, publication.run_id)
     if history.publication != publication or history.feature_schema_sha256 != reader.schema_sha256:
@@ -515,6 +536,9 @@ def extract(
                 "feature_schema_sha256": reader.schema_sha256,
                 "hai_outcome_controls_sha256": build["hai_outcome_controls_sha256"],
                 "feature_list_sha256": feature_list_sha,
+                "model": model,
+                "feature_service": service,
+                "base_run": base_run,
                 "writer_lock_sha256": writer_lock_sha256,
                 **file_info,
                 "label_column": label,

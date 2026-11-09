@@ -50,11 +50,15 @@ def build(root: Path, reader: Any, *, features_run: str, population: str, hai_ty
         raise CheckError("hai_type_invalid", f"{hai_type} is not one of {', '.join(HAI_TYPES)}")
     if population not in POPULATIONS:
         raise CheckError("population_invalid", f"{population} is not one of {', '.join(POPULATIONS)}")
-    try:
-        references, predictors, _ = training_extract.reference_union(root, reader.schema)
-    except training_extract.ExtractError as error:
-        raise CheckError("schema_invalid", str(error)) from None
-    reference_of = {reference.split(":", 1)[1]: reference for reference in references}
+    served = set(reader.schema.get("servable", []))
+    registered = {
+        f"{column['view']}:{column['name']}": column
+        for table in reader.schema["tables"].values()
+        for column in table["columns"]
+        if column.get("view") and column.get("role") == "predictor"
+    }
+    predictors = {reference.split(":", 1)[1]: column for reference, column in registered.items() if reference in served}
+    reference_of = {reference.split(":", 1)[1]: reference for reference in registered if reference in served}
     for name in features:
         if name not in predictors:
             raise CheckError("feature_unknown", f"{name} is not a predictor the feature schema serves")

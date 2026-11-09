@@ -26,7 +26,7 @@ import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -36,8 +36,6 @@ from jsonschema import Draft202012Validator
 
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable, client_config
 from orchestration.ecs_preflight import (
-    APPROVAL_BYTES,
-    APPROVAL_DAY,
     BRONZE_VARIABLES,
     CHAIN_LAYERS,
     CLOSED,
@@ -50,12 +48,10 @@ from orchestration.ecs_preflight import (
     bronze_request_reader,
     derived_run_id,
     s3_digest_reader,
-    s3_object_reader,
     serving_request_reader,
     ssm_signed_reader,
 )
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
-from orchestration.training_approvals import PROMOTION_KEYS
 from orchestration.training_contract import JOB_LANES, parameters_for, training_run_id
 from scripts.orchestration.ledger import Ledger, schema_validator
 
@@ -143,7 +139,6 @@ class EcsBroker:
         settings: BrokerSettings,
         code_digest: Callable[[str], str],
         signed_reader: Callable[[], str | None],
-        approval_reader: Callable[[str], str | None],
         clock: Callable[[], float],
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
@@ -156,7 +151,6 @@ class EcsBroker:
         self.settings = settings
         self.code_digest = code_digest
         self.signed_reader = signed_reader
-        self.approval_reader = approval_reader
         self.clock = clock
         self.bronze_request = bronze_request
         self.serving_request = serving_request
@@ -191,8 +185,6 @@ class EcsBroker:
                 parameters_for(request.dag_id, request.training or {}, JOB_LANES)
             except ValueError as error:
                 raise SubmissionRefused(str(error)) from None
-        if self.jobs[job].get("approval") == "promotion":
-            self.require_promotion_approval(request)
         return job
 
     def require_bound(self, request: SubmissionRequest, job: str, fixed: Mapping[str, str]) -> None:
@@ -236,38 +228,6 @@ class EcsBroker:
         if DEADLINE_VARIABLE in names:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(self.jobs[job]["deadline_seconds"]))
         return values
-
-    def require_promotion_approval(self, request: SubmissionRequest) -> None:
-        """Refuse a promotion unless the owner staged a closed approval record for exactly this run, model, version and operation."""
-        try:
-            raw = self.approval_reader(request.run_id)
-        except TaskUnavailable as error:
-            raise Unavailable(str(error)) from None
-        if raw is None:
-            raise SubmissionRefused("a promotion needs the owner's approval record in the run's staged inputs")
-        parameters = parameters_for(request.dag_id, request.training or {}, JOB_LANES)
-        try:
-            body = json.loads(raw) if len(raw) <= APPROVAL_BYTES else None
-        except ValueError:
-            body = None
-        today = datetime.fromtimestamp(self.clock(), UTC).date()
-        problem = None
-        if not isinstance(body, dict) or set(body) != PROMOTION_KEYS:
-            problem = "the approval is not a closed JSON object"
-        elif body["run_id"] != request.run_id or body["dag_id"] != request.dag_id or body["scope"] != parameters["promotion_mode"]:
-            problem = "the approval names another run, DAG or operation"
-        elif body["hai_type"] != parameters["hai_type"] or body["model_version"] != parameters["model_version"]:
-            problem = "the approval names another HAI type or model version"
-        else:
-            day = body["approved_on"]
-            try:
-                valid = isinstance(day, str) and APPROVAL_DAY.fullmatch(day) is not None and date.fromisoformat(day) <= today
-            except ValueError:
-                valid = False
-            if not valid:
-                problem = "the approval date is invalid or in the future"
-        if problem is not None:
-            raise SubmissionRefused(problem)
 
     def require_signed(self) -> None:
         """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
@@ -783,7 +743,6 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     adapter = EcsAdapter.from_session(session, settings)
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
     signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
-    approvals = s3_object_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), "promotion_approval.json")
     collections = {entry["table"]: entry["collection"] for entry in json.loads((root / TABLE_MAP_FILE).read_text())["tables"]}
     bronze_request = bronze_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), collections)
     serving_request = serving_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
@@ -794,7 +753,6 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         BrokerSettings(required(env, "BROKER_POLARIS_URI"), required(env, "BROKER_MLFLOW_URI")),
         digest,
         signed,
-        approvals,
         lambda: datetime.now(UTC).timestamp(),
         bronze_request,
         serving_request,

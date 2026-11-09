@@ -1,10 +1,10 @@
-"""The promotion_check action: register each type's candidate, score it against the champion on the same holdout and record the verdict.
+"""The promotion_check action: register the run's candidate, score it against the champion on the same holdout and record the verdict.
 
 With no champion, the candidate is scored against the intercept + CMI baseline instead, fitted on the same training years as the fit step's RQ1 test; a pass
-is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias. A pass sets the alias ``challenger`` on the
-new version. Promotion to production is the ``promote`` action, which needs
-the owner's approval record. The comparison files are written and checked before any version tag or alias. The check reads the written Parquet file back and
-repeats the rule on it.
+is ``pass_baseline``. The comparison record names the reference it used. It never moves the ``production`` alias and sets no alias: the research action
+chooses the one challenger of a type among the versions of m1, m2 and m4 that passed. A champion whose columns this run's extract lacks cannot be scored, and
+the version gets the verdict ``not_comparable``. The comparison files are written and checked before any version tag. The check reads the written Parquet
+file back and repeats the rule on it.
 """
 
 from __future__ import annotations
@@ -69,13 +69,15 @@ def champion_predictions(
     return predict(pipeline, rows)
 
 
-def baseline_predictions(hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path) -> tuple[dict[str, float] | None, dict[str, Any]]:
+def baseline_predictions(
+    hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str
+) -> tuple[dict[str, float] | None, dict[str, Any]]:
     """With no champion, fit the intercept + CMI baseline the fit step's RQ1 test fits, on the same training years, and predict the holdout.
 
     A baseline that cannot be fitted leaves the type without a reference, so its verdict stays no_champion and nothing becomes promotable.
     """
     try:
-        request = job_inputs.model_request(hai_type, rows, (), config, PROMOTION_SECONDS, root)
+        request = job_inputs.model_request(hai_type, rows, (), config, PROMOTION_SECONDS, root, model)
         values = research_tests.intercept_cmi_predictions(request)
     except (job_inputs.InputError, ModelError) as error:
         return None, {"model": "intercept_cmi", "status": "not_estimable", "reason": str(error)}
@@ -85,6 +87,21 @@ def baseline_predictions(hai_type: str, rows: list[dict[str, Any]], config: Mapp
         "status": "fitted",
         "cmi_reference": request.cmi_reference,
     }
+
+
+def not_comparable(store: Any, name: str, version: Any, current: Any, hai_type: str, reason: str, json_name: str) -> dict[str, bytes]:
+    """Record that this run's data cannot score the champion, so the version is not promotable on this base, and tag the version."""
+    store.set_model_version_tag(name, str(version.version), "promotion_verdict", "not_comparable")
+    document = {
+        "schema": 1,
+        "hai_type": hai_type,
+        "registered_model": name,
+        "champion_version": str(current.version),
+        "challenger_version": str(version.version),
+        "verdict": {"verdict": "not_comparable", "failed": ["champion_features"]},
+        "reason": reason,
+    }
+    return {json_name: job_actions.text(document)}
 
 
 def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[str, Any], hai_type: str, store: Any, scratch: Path) -> dict[str, bytes]:
@@ -123,7 +140,7 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
         name,
         parent,
         f"{context.run}:{hai_type}:promotion",
-        {key: run_tags[key] for key in ("hai_type", "target_control", "feature_schema_sha256", "feature_list_sha256")}
+        {key: run_tags[key] for key in ("hai_type", "model", "base_run", "target_control", "feature_schema_sha256", "feature_list_sha256")}
         | {"source_run_id": parent, "bundle_sha256": bundle_hash},
     )
     year = max(row["window_year"] for row in extract_rows)
@@ -133,9 +150,14 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     config = job_inputs.config_of(root)
     baseline: dict[str, Any] | None = None
     if current is None:
-        rival, baseline = baseline_predictions(hai_type, extract_rows, config, root)
+        rival, baseline = baseline_predictions(hai_type, extract_rows, config, root, parameters["model"])
     else:
-        rival = champion_predictions(store, current, name, manifest, holdout, year, scratch)
+        try:
+            rival = champion_predictions(store, current, name, manifest, holdout, year, scratch)
+        except JobFailure as failure:
+            if failure.name != "champion_features":
+                raise
+            return not_comparable(store, name, version, current, hai_type, failure.detail, json_name)
     reference = "baseline" if current is None and rival is not None else "champion"
     regions = job_inputs.read_json(root / "config/training/census_regions.json", "promotion_config")["states"]
     seed = seed_for(config["master_seed"], hai_type, "promotion_bootstrap")
@@ -182,8 +204,6 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     run_tracking.log_child(store, experiment, parent, spec, context.run, bundle_hash)
     store.set_model_version_tag(name, str(version.version), "promotion_verdict", label)
     store.set_model_version_tag(name, str(version.version), "comparison_sha256", hashlib.sha256(document).hexdigest())
-    if label in promotion.REFERENCES.values():
-        store.set_registered_model_alias(name, registry.CHALLENGER_ALIAS, str(version.version))
     return {parquet_name: table.read_bytes(), json_name: document}
 
 

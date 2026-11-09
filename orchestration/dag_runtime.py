@@ -57,7 +57,9 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
     mode = str(params["mode"])
     if instance.dag_id in DAGS:
         names = (
-            ("features_run", "population", "hai_types", "trigger", "mlflow") if instance.dag_id == "training_dag" else ("hai_type", "model_version", "mlflow")
+            ("features_run", "population", "hai_types", "trigger", "mlflow", "model")
+            if instance.dag_id == "training_dag"
+            else ("hai_type", "model_version", "mlflow")
         )
         raw = {name: params[name] for name in names}
         if instance.dag_id == "model_promotion_dag":

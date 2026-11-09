@@ -1,0 +1,182 @@
+"""Synthetic E2E cases for the research action: the tests that need two models and the one challenger of a type, driven through the job entry point."""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from typing import Any
+from unittest import mock
+
+from scripts.training import aws_run_cases, job, promote_receipt
+from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
+from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
+
+RESEARCH_RUN = "20261024T000009Z-1234abcd"
+RUNS = {"m1": "20261024T000001Z-1234abcd", "m2": "20261024T000002Z-1234abcd", "m4": "20261024T000004Z-1234abcd"}
+NAME = f"hai_model_{HAI_TYPE}"
+PARAMETERS = {"base_run": BASE_RUN, "population": "primary", "hai_types": [HAI_TYPE], "mlflow": "local"}
+
+
+def finished_models(
+    folder: Path,
+    models: tuple[str, ...] = ("m1", "m2", "m4"),
+    tracking: FileTracking | None = None,
+    runs: dict[str, str] = RUNS,
+    **options: dict[str, Any],
+) -> tuple[FileTracking, dict[str, Fixture]]:
+    """Run log_run and the promotion check of each model into one shared tracking store, the way separate model runs leave it."""
+    tracking = tracking if tracking is not None else FileTracking(folder / "tracking")
+    fixtures: dict[str, Fixture] = {}
+    for position, model in enumerate(models):
+        fixture = promoted(folder / model, run=runs[model], model=model, tracking=tracking, **options.get(model, {}))
+        fixture.candidate = Predictor(LABEL, offset=0.01 * position)
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"the promotion check of {model} failed: {error}")
+        fixtures[model] = fixture
+    return tracking, fixtures
+
+
+def research(folder: Path, anchor: Fixture, **changes: Any) -> tuple[int, str, str, Path]:
+    """Run the research action on the shared store through the job entry point and return its result and output folder."""
+    work = prepare(folder, run_id=RESEARCH_RUN)
+    (work / "training_parameters.json").write_text(json.dumps(PARAMETERS | changes) + "\n")
+    arguments = arguments_for("research", work)
+    arguments[arguments.index("--run") + 1] = RESEARCH_RUN
+    with standins(anchor):
+        code, out, error = call(arguments)
+    return code, out, error, work / "out"
+
+
+def parent_of(tracking: FileTracking, model: str) -> dict[str, Any]:
+    """Return the parent run a model logged."""
+    return next(run for run in tracking.parents().values() if run["tags"]["model"] == model)
+
+
+def research_cases(cases: Any, folder: Path) -> None:
+    """The research action compares two models, chooses one challenger per type and refuses by name when the models are not all there."""
+
+    def compares_and_chooses() -> None:
+        tracking, fixtures = finished_models(folder / "all")
+        code, out, error, output = research(folder / "all_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
+        require(document["base_run"] == BASE_RUN and document["runs"] == RUNS, f"runs: {document['runs']}")
+        require(document["rq1"]["joint_process"]["status"] == "fitted" and "p_value" in document["rq1"]["joint_process"], f"rq1: {document['rq1']}")
+        require(
+            document["rq1"]["process_vs_intercept_cmi"]["status"] == "fitted" and "rmse_improvement" in document["rq1"]["process_vs_intercept_cmi"],
+            f"rq1 baseline: {document['rq1']}",
+        )
+        rq4 = document["rq4"]
+        require(rq4["status"] == "fitted" and rq4["extra_degrees_of_freedom"] > 0 and 0 <= rq4["f_p_value"] <= 1 and len(rq4["interval"]) == 2, f"rq4: {rq4}")
+        by_model = {item["model"]: item for item in document["promotion"]["candidates"]}
+        require(set(by_model) == {"m1", "m2", "m4"}, f"candidates: {sorted(by_model)}")
+        require(by_model["m1"]["verdict"] == "no_champion" and not by_model["m1"]["eligible"], f"m1 has no baseline: {by_model['m1']}")
+        eligible = [item for item in by_model.values() if item["eligible"]]
+        require(len(eligible) == 2, f"m2 and m4 pass the baseline: {by_model}")
+        best = min(eligible, key=lambda item: item["rmse"])
+        require(document["promotion"]["challenger"]["model"] == best["model"], f"challenger: {document['promotion']['challenger']}, best {best}")
+        aliases = tracking.models[NAME]["aliases"]
+        require(aliases == {"challenger": best["version"]}, f"aliases: {aliases}")
+        logged = [run for run in tracking.active().values() if run["tags"].get("step_key") == "research"]
+        require(
+            len(logged) == 1 and logged[0]["tags"]["base_run"] == BASE_RUN and "rq4.f_statistic" in logged[0]["metrics"],
+            "the research run is missing or incomplete",
+        )
+
+    def never_moves_production() -> None:
+        tracking, fixtures = finished_models(folder / "production")
+        tracking.models[NAME]["aliases"]["production"] = "1"
+        require(research(folder / "production_research", fixtures["m2"])[0] == 0, "research failed")
+        require(tracking.models[NAME]["aliases"]["production"] == "1", "research moved the production alias")
+
+    def refuses_a_missing_model() -> None:
+        tracking, fixtures = finished_models(folder / "missing", models=("m1", "m2"))
+        code, _, error, output = research(folder / "missing_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_models_missing" and "m4" in error, f"{code} {error}")
+        require(listing(output) == [] and not tracking.models[NAME]["aliases"], "a refused research wrote output or an alias")
+
+    def refuses_runs_of_another_base() -> None:
+        tracking, fixtures = finished_models(folder / "other_base", m4={"base_run": "20261022T000000Z-9999abcd"})
+        code, _, error, _ = research(folder / "other_base_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_models_missing" and "m4" in error, f"{code} {error}")
+        require(not tracking.models[NAME]["aliases"], "a challenger was chosen across two bases")
+
+    def refuses_other_windows() -> None:
+        tracking, fixtures = finished_models(folder / "windows", m1={"years": range(2018, 2023)})
+        code, _, error, _ = research(folder / "windows_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_rows_differ", f"{code} {error}")
+        require(not tracking.models[NAME]["aliases"], "a challenger was chosen from runs on other windows")
+
+    def refuses_an_unfinished_run() -> None:
+        tracking, fixtures = finished_models(folder / "unfinished")
+        run = parent_of(tracking, "m4")
+        del run["tags"]["bundle_sha256"]
+        code, _, error, _ = research(folder / "unfinished_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_models_missing" and "m4" in error, f"{code} {error}")
+
+    def retry_changes_nothing() -> None:
+        tracking, fixtures = finished_models(folder / "retry")
+        first = research(folder / "retry_research", fixtures["m2"])
+        require(first[0] == 0, f"research failed: {first[2]}")
+        runs, aliases = len(tracking.active()), dict(tracking.models[NAME]["aliases"])
+        require(research(folder / "retry_again", fixtures["m2"])[0] == 0, "the retry in a new task failed")
+        require(len(tracking.active()) == runs and tracking.models[NAME]["aliases"] == aliases, "a retry added a run or moved an alias")
+
+    def sets_no_challenger_when_none_passes() -> None:
+        tracking, fixtures = finished_models(folder / "none")
+        for version in tracking.models[NAME]["versions"]:
+            version["tags"]["promotion_verdict"] = "fail:minimum_improvement"
+        code, _, error, output = research(folder / "none_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
+        require(document["promotion"]["challenger"] is None and not tracking.models[NAME]["aliases"], f"challenger: {document['promotion']['challenger']}")
+
+    def later_run_of_a_model_counts() -> None:
+        tracking, fixtures = finished_models(folder / "later")
+        later = "20261024T000012Z-1234abcd"
+        finished_models(folder / "later_m2", models=("m2",), tracking=tracking, runs={"m2": later})
+        code, _, error, output = research(folder / "later_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
+        require(document["runs"]["m2"] == later, f"runs: {document['runs']}")
+
+    def phase_publishes_each_record_once() -> None:
+        tracking, fixtures = finished_models(folder / "phase")
+        bucket = aws_run_cases.ListingBucket(aws_run_cases.BUCKET, "research/")
+        work = folder / "phase_work"
+        work.mkdir(parents=True)
+        _, sha = aws_run_cases.code_archive(work)
+
+        def phase() -> tuple[int, str, str]:
+            with (
+                standins(fixtures["m2"]),
+                mock.patch.object(promote_receipt, "s3_client", return_value=bucket),
+                aws_run_cases.environment(CODE_SHA256=sha, TRAINING_PARAMETERS=json.dumps(PARAMETERS | {"mlflow": "aws"})),
+            ):
+                return aws_run_cases.call("research", "--run", RESEARCH_RUN, "--mode", "real", "--work", str(work))
+
+        code, _, error = phase()
+        require(code == 0, f"the research phase failed: {error}")
+        key = f"research/{RESEARCH_RUN}/research_{HAI_TYPE}.json"
+        stored = bucket.objects.get(key)
+        require(stored is not None and json.loads(stored)["promotion"]["challenger"] is not None, f"stored records: {sorted(bucket.objects)}")
+        again = phase()
+        require(again[0] == 0 and bucket.objects[key] == stored, f"a rerun changed the record: {again[2]}")
+        bucket.objects[key] = b"another record\n"
+        shutil.rmtree(work / "in/research")
+        (work / "in").mkdir(exist_ok=True)
+        conflict = phase()
+        require(conflict[0] != 0 and "record_conflict" in conflict[2], f"another stored record was accepted: {conflict}")
+        require(len(tracking.parents()) == 3, "the phase changed the model runs")
+
+    cases.check("research_compares_two_models_and_chooses_one_challenger_per_type", compares_and_chooses)
+    cases.check("research_phase_stores_each_record_once_and_refuses_another_record", phase_publishes_each_record_once)
+    cases.check("research_never_moves_the_production_alias", never_moves_production)
+    cases.check("research_refuses_when_a_model_has_no_finished_run", refuses_a_missing_model)
+    cases.check("research_refuses_runs_of_another_base_run", refuses_runs_of_another_base)
+    cases.check("research_refuses_runs_on_other_holdout_windows", refuses_other_windows)
+    cases.check("research_refuses_a_run_without_its_completion_mark", refuses_an_unfinished_run)
+    cases.check("research_retry_adds_no_run_and_moves_no_alias", retry_changes_nothing)
+    cases.check("research_sets_no_challenger_when_no_version_passed", sets_no_challenger_when_none_passes)
+    cases.check("research_takes_the_later_run_of_a_model", later_run_of_a_model_counts)

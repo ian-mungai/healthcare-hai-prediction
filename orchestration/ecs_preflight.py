@@ -1,7 +1,7 @@
 """The gates of the job broker, as a library for the Airflow launch mode, and the staged-input readers both share.
 
 ``Preflight.prepare`` turns the request of one DAG step into the ``JobSpec`` of the direct ECS launch library (``orchestration/ecs_launch.py``). It ports the
-broker's gates: real mode, the previous job's success (``after``), the training parameters, the promotion approval, the staged
+broker's gates: real mode, the previous job's success (``after``), the training parameters, the staged
 bronze and serving requests, the staged code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the
 code digest, the request hash and the input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
 The readers at the top are the broker's own: ``scripts/orchestration/ecs_broker.py`` imports them from here, so one reading of the staged inputs serves both.
@@ -22,7 +22,6 @@ import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any, Protocol
@@ -34,7 +33,6 @@ from orchestration import serving_contract
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
-from orchestration.training_approvals import PROMOTION_KEYS
 from orchestration.training_contract import LAUNCH_LANES, parameters_for, training_run_id
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
@@ -47,7 +45,6 @@ BRONZE_REQUEST_BYTES = 4096
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
 SERVING_REQUEST_BYTES = 4096
 APPROVAL_BYTES = 4096
-APPROVAL_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
@@ -497,7 +494,6 @@ class Preflight:
         host: Mapping[str, Any],
         settings: PreflightSettings,
         code_digest: Callable[[str], str],
-        approvals: Callable[[str], str | None],
         store: LaunchStore,
         code_runs: CodeRuns,
         clock: Callable[[], float],
@@ -514,7 +510,6 @@ class Preflight:
         self.host = host
         self.settings = settings
         self.code_digest = code_digest
-        self.approvals = approvals
         self.store = store
         self.code_runs = code_runs
         self.clock = clock
@@ -562,8 +557,6 @@ class Preflight:
                 parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
-        if row.get("approval") == "promotion":
-            self.require_promotion_approval(request)
         spec = self.spec(request, job)
         revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
@@ -591,35 +584,6 @@ class Preflight:
             end = {record["event"]: record for record in self.store.records(input_run, after, [claim["attempt"]])}.get("end")
         if end is None or end.get("outcome") != "succeeded":
             raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed")
-
-    def require_promotion_approval(self, request: SubmissionRequest) -> None:
-        """Refuse a promotion unless the owner staged a closed approval record for exactly this run, model, version and operation."""
-        raw = self.read(self.approvals, request.run_id)
-        if raw is None:
-            raise LaunchRefused("a promotion needs the owner's approval record in the run's staged inputs")
-        parameters = parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
-        try:
-            body = json.loads(raw) if len(raw) <= APPROVAL_BYTES else None
-        except ValueError:
-            body = None
-        today = datetime.fromtimestamp(self.clock(), UTC).date()
-        problem = None
-        if not isinstance(body, dict) or set(body) != PROMOTION_KEYS:
-            problem = "the approval is not a closed JSON object"
-        elif body["run_id"] != request.run_id or body["dag_id"] != request.dag_id or body["scope"] != parameters["promotion_mode"]:
-            problem = "the approval names another run, DAG or operation"
-        elif body["hai_type"] != parameters["hai_type"] or body["model_version"] != parameters["model_version"]:
-            problem = "the approval names another HAI type or model version"
-        else:
-            day = body["approved_on"]
-            try:
-                valid = isinstance(day, str) and APPROVAL_DAY.fullmatch(day) is not None and date.fromisoformat(day) <= today
-            except ValueError:
-                valid = False
-            if not valid:
-                problem = "the approval date is invalid or in the future"
-        if problem is not None:
-            raise LaunchRefused(problem)
 
     def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
         """The values fixed once for a launch: the checked bronze, serving and publisher requests, read once, and the absolute deadline of the task."""

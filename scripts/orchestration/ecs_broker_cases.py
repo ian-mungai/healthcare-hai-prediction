@@ -30,7 +30,6 @@ from scripts.orchestration.ecs_broker import (
     derived_run_id,
     load_jobs,
     s3_digest_reader,
-    s3_object_reader,
     serving_request_reader,
 )
 from scripts.orchestration.ecs_broker_fake import FakeEcs, FakeLogs, FakeS3, client_error
@@ -46,7 +45,7 @@ PROMOTE_RUN = "20261030T110000Z-9a9a9a9a"
 DRIFT_RUN = "20261030T120000Z-d71f70a1"
 SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
-PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local"}
+PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local", "model": "m2"}
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
 BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
 BRONZE_RUN_2 = "20261030T090000Z-b1b1b1b1"
@@ -92,7 +91,6 @@ class Rig:
         settings = dataclasses.replace(SETTINGS, families=self.families)
         settings_broker = BrokerSettings(polaris_uri="http://10.0.0.5:8181/api/catalog", mlflow_uri="http://10.0.0.5:5100")
         digest = s3_digest_reader(self.s3, "example-bucket")
-        approvals = s3_object_reader(self.s3, "example-bucket", "promotion_approval.json")
         return EcsBroker(
             self.folder / "state",
             load_jobs(ROOT),
@@ -100,7 +98,6 @@ class Rig:
             settings_broker,
             digest,
             lambda: self.signed,
-            approvals,
             lambda: self.clock[0],
             bronze_request=bronze_request_reader(self.s3, "example-bucket", collections_of_table_map()),
             serving_request=serving_request_reader(self.s3, "example-bucket"),
@@ -553,26 +550,10 @@ def promotion_request(template: str = "promote", run: str = PROMOTE_RUN, **chang
     return SubmissionRequest(template, run, "real", 1, "model_promotion_dag", template, "manual__test", None, None, {**PROMOTION, **changes})
 
 
-def approve(current: Rig, run: str = PROMOTE_RUN, **changes: Any) -> None:
-    body = {
-        "run_id": run,
-        "dag_id": "model_promotion_dag",
-        "scope": "promote",
-        "approved_on": "2026-10-30",
-        "hai_type": "HAI_1",
-        "model_version": "3",
-        **changes,
-    }
-    current.s3.objects[f"lakehouse/run_stage/{run}/inputs/promotion_approval.json"] = json.dumps(body).encode()
-
-
-def promotion_needs_the_owners_approval() -> None:
+def promotion_needs_no_approval() -> None:
     with rig() as current:
-        raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
-        require(not current.ecs.calls, "a promotion started without approval")
-        approve(current)
         status = wait_for(current, current.client.submit(promotion_request()))
-        require(status.state == State.SUCCEEDED and len(current.ecs.tasks) == 1, f"an approved promotion did not run: {status}")
+        require(status.state == State.SUCCEEDED and len(current.ecs.tasks) == 1, f"a promotion did not run: {status}")
         sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
         values = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
         require(
@@ -582,30 +563,12 @@ def promotion_needs_the_owners_approval() -> None:
         require(values["promote"]["MLFLOW_TRACKING_URI"] == "http://10.0.0.5:5100", "the promote container has no MLflow address")
 
 
-def another_promotion_is_not_approved() -> None:
-    wrong = (
-        {"model_version": "4"},
-        {"hai_type": "HAI_2"},
-        {"scope": "rollback"},
-        {"run_id": GOLD_RUN},
-        {"dag_id": "training_dag"},
-        {"approved_on": "2999-01-01"},
-        {"approved_on": "yesterday"},
-        {"extra": "field"},
-    )
+def a_promotion_of_another_version_is_a_new_run() -> None:
     with rig() as current:
-        for changes in wrong:
-            approve(current, **changes)
-            raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
-        current.s3.objects[f"lakehouse/run_stage/{PROMOTE_RUN}/inputs/promotion_approval.json"] = b"not json"
-        raises(SubmissionRefused, partial(current.client.submit, promotion_request()))
-        approve(current)
+        require(wait_for(current, current.client.submit(promotion_request())).state == State.SUCCEEDED, "a promotion did not run")
         raises(SubmissionRefused, partial(current.client.submit, promotion_request(model_version="4")))
-        raises(SubmissionRefused, partial(current.client.submit, promotion_request(promotion_mode="rollback")))
-        require(not current.ecs.calls, "a promotion with another approval reached the cloud")
-        approve(current, scope="rollback")
         rollback = promotion_request(promotion_mode="rollback")
-        require(wait_for(current, current.client.submit(rollback)).state == State.SUCCEEDED, "an approved rollback did not run")
+        raises(SubmissionRefused, partial(current.client.submit, rollback))
 
 
 def training_needs_no_promotion_approval() -> None:
@@ -1030,8 +993,8 @@ CASES: dict[str, Callable[[], None]] = {
     "cancel_waits_for_the_task_to_stop": cancel_waits_for_the_task_to_stop,
     "stop_that_never_completes_blocks_the_retry": stop_that_never_completes_blocks_the_retry,
     "deadline_stop_waits_for_the_task_to_stop": deadline_stop_waits_for_the_task_to_stop,
-    "promotion_needs_the_owners_approval": promotion_needs_the_owners_approval,
-    "another_promotion_is_not_approved": another_promotion_is_not_approved,
+    "promotion_needs_no_approval": promotion_needs_no_approval,
+    "a_promotion_of_another_version_is_a_new_run": a_promotion_of_another_version_is_a_new_run,
     "training_needs_no_promotion_approval": training_needs_no_promotion_approval,
     "logs_hide_the_token": logs_hide_the_token,
     "bronze_job_gets_its_checked_dispatch_values": bronze_job_gets_its_checked_dispatch_values,

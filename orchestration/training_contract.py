@@ -16,9 +16,25 @@ def training_run_id(drift_run: str) -> str:
     return f"{drift_run[:16]}-{hashlib.sha256(f'training:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
+def model_training_run_id(drift_run: str, model: str) -> str:
+    """The run ID of one model's training run for a drift run: the same for a retry of that model, another for every other model."""
+    return f"{drift_run[:16]}-{hashlib.sha256(f'training:{model}:{drift_run}'.encode()).hexdigest()[:8]}"
+
+
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
+MODEL_LISTS = {
+    "m1": ("m1_ols", "rq4_reduced"),
+    "m2": ("m2_elastic_net",),
+    "m3": ("m3_mixed",),
+    "m4": ("m4_boosting",),
+    "m5": ("m5_spatial",),
+    "m6": ("m6_fixed_effects",),
+}
+MODELS = tuple(MODEL_LISTS)
+PROMOTION_MODELS = ("m1", "m2", "m4")
+MEDIATION_MODELS = ("m2",)
 OFFLINE_ACTIONS = ("guard", "fit", "mediation", "hac_validate", "smoke")
-WRITER_ACTIONS = ("log_run", "promotion_check", "promote")
+WRITER_ACTIONS = ("log_run", "promotion_check", "promote", "research")
 TEMPLATES = ("training_job", "training_mlflow", "training_extract")
 ACTION_SECONDS = {
     "extract": 1800,
@@ -29,6 +45,7 @@ ACTION_SECONDS = {
     "log_run": 900,
     "promotion_check": 900,
     "promote": 900,
+    "research": 1800,
 }
 TRAINING_STEPS = (
     "acquire_run",
@@ -55,36 +72,58 @@ PREREQUISITES = {
     "log_run": ("extract", "version_extract", "fit", "mediation", "hac_validate"),
     "promotion_check": ("extract", "version_extract", "fit", "log_run"),
     "promote": (),
+    "research": (),
     "smoke": (),
 }
 
 INPUT_STEPS = {**PREREQUISITES, "mediation": ("extract",), "hac_validate": ("extract", "fit")}
+
+
+def train_steps(model: str) -> tuple[str, ...]:
+    """The data actions of one model's training phase, in order: the mediation belongs to m2 and the promotion check to the promotion-eligible models."""
+    steps = ("version_extract", "fit", *(("mediation",) if model in MEDIATION_MODELS else ()), "hac_validate", "log_run")
+    return (*steps, *(("promotion_check",) if model in PROMOTION_MODELS else ()))
+
+
+def prerequisites_for(action: str, model: str) -> tuple[str, ...]:
+    """The steps an action needs, without the mediation for a model that has none."""
+    return tuple(step for step in PREREQUISITES[action] if step in ("guard", "extract") or step in train_steps(model))
+
+
 MAC_LANES = ("local",)
 JOB_LANES = ("local", "aws")
 # A DAG step launches its job on AWS through the direct ECS launch library, where the MLflow lane is aws. mlflow=local is refused by name, never converted.
 LAUNCH_LANES = ("aws",)
 
 
+def _population_and_types(raw: Mapping[str, Any]) -> None:
+    """Require the population and the distinct HAI types that training and research parameters share."""
+    if raw["population"] not in ("primary", "sensitivity"):
+        raise ValueError("population must be primary or sensitivity")
+    types = raw["hai_types"]
+    if not isinstance(types, list) or not types or any(not isinstance(item, str) or item not in HAI_TYPES for item in types) or len(set(types)) != len(types):
+        raise ValueError("hai_types must contain distinct supported HAI types")
+
+
 def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] = MAC_LANES) -> dict[str, Any]:
     """Validate a complete closed parameter set. The Mac route accepts the local MLflow lane only, a job accepts the lanes its caller names (``JOB_LANES``)."""
     if dag_id == "training_dag":
-        expected = {"features_run", "population", "hai_types", "trigger", "mlflow"}
+        expected = {"features_run", "population", "hai_types", "trigger", "mlflow", "model"}
         if set(raw) != expected:
-            raise ValueError("training parameters must name the publication, population, HAI types, trigger and MLflow lane")
+            raise ValueError("training parameters must name the publication, population, HAI types, trigger, MLflow lane and model")
+        if not isinstance(raw["model"], str) or raw["model"] not in MODELS:
+            raise ValueError(f"model must be one of {', '.join(MODELS)}")
         if raw["features_run"] != "latest" and not isinstance(raw["features_run"], str) or not re.fullmatch(f"latest|{RUN_ID}", str(raw["features_run"])):
             raise ValueError("features_run must be latest or a publication run ID")
-        if raw["population"] not in ("primary", "sensitivity"):
-            raise ValueError("population must be primary or sensitivity")
-        types = raw["hai_types"]
-        if (
-            not isinstance(types, list)
-            or not types
-            or any(not isinstance(item, str) or item not in HAI_TYPES for item in types)
-            or len(set(types)) != len(types)
-        ):
-            raise ValueError("hai_types must contain distinct supported HAI types")
+        _population_and_types(raw)
         if not isinstance(raw["trigger"], str) or not re.fullmatch(f"manual|drift:{RUN_ID}", raw["trigger"]):
             raise ValueError("trigger must be manual or name a drift run")
+    elif dag_id == "research_dag":
+        if set(raw) != {"base_run", "population", "hai_types", "mlflow"}:
+            raise ValueError("research parameters must name the base run, population, HAI types and MLflow lane")
+        if not isinstance(raw["base_run"], str) or not re.fullmatch(RUN_ID, raw["base_run"]):
+            raise ValueError("base_run must be a base publication run ID")
+        _population_and_types(raw)
     elif dag_id == "model_promotion_dag":
         if set(raw) != {"hai_type", "model_version", "promotion_mode", "mlflow"}:
             raise ValueError("promotion parameters must name the HAI type, version, mode and MLflow lane")

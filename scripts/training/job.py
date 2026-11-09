@@ -18,7 +18,7 @@ from scripts.training.job_failure import EXIT_DEADLINE, EXIT_NOT_IMPLEMENTED, Jo
 from scripts.training.job_failure import EXIT_FAILED as EXIT_FAILED
 
 ROOT = Path(__file__).resolve().parents[2]
-ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check", "promote", "smoke")
+ACTIONS = ("guard", "version_extract", "fit", "mediation", "hac_validate", "log_run", "promotion_check", "promote", "research", "smoke")
 MODULES: dict[str, tuple[str, ...]] = {
     "guard": ("scripts.training.guards", "scripts.training.targets", "scripts.training.step_records"),
     "version_extract": ("scripts.training.dvc_baseline", "scripts.training.step_records", "scripts.training.job_actions", "scripts.training.job_inputs"),
@@ -47,12 +47,21 @@ MODULES: dict[str, tuple[str, ...]] = {
         "scripts.training.job_actions",
         "scripts.training.job_inputs",
     ),
+    "research": (
+        "scripts.training.research",
+        "scripts.training.research_tests",
+        "scripts.training.promotion",
+        "scripts.training.registry",
+        "scripts.training.run_tracking",
+        "scripts.training.job_actions",
+        "scripts.training.job_inputs",
+    ),
     "smoke": (),
 }
 SNAPSHOT_PACKAGES = ("scripts", "orchestration", "feature_store")
 STATIC_SECONDS = {"guard": 300.0, "smoke": 120.0}
 REQUIRED = ("run", "mode", "run_dir", "parameters", "snapshot_record")
-OPTIONS = {name: "--" + name.replace("_", "-") for name in (*REQUIRED, "approval")}
+OPTIONS = {name: "--" + name.replace("_", "-") for name in REQUIRED}
 
 
 @dataclass(frozen=True)
@@ -65,7 +74,6 @@ class Context:
     run_dir: Path
     parameters: Path
     snapshot_record: Path
-    approval: Path | None
 
 
 def parser() -> argparse.ArgumentParser:
@@ -74,7 +82,7 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("action", choices=ACTIONS)
     result.add_argument(OPTIONS["run"])
     result.add_argument(OPTIONS["mode"], choices=("fixture", "real"))
-    for name in ("run_dir", "parameters", "snapshot_record", "approval"):
+    for name in ("run_dir", "parameters", "snapshot_record"):
         result.add_argument(OPTIONS[name], type=Path)
     return result
 
@@ -84,7 +92,7 @@ def context_of(values: argparse.Namespace) -> Context:
     missing = [OPTIONS[name] for name in REQUIRED if getattr(values, name) is None]
     if missing:
         raise JobFailure("missing_argument", f"{values.action} needs {', '.join(missing)}")
-    return Context(values.action, values.run, values.mode, values.run_dir, values.parameters, values.snapshot_record, values.approval)
+    return Context(values.action, values.run, values.mode, values.run_dir, values.parameters, values.snapshot_record)
 
 
 def read_record(context: Context) -> dict[str, Any]:
@@ -149,6 +157,8 @@ def action_modules() -> tuple[ModuleType, ...]:
     import scripts.training.promotion as promotion
     import scripts.training.promotion_check as promotion_check
     import scripts.training.registry as registry
+    import scripts.training.research as research
+    import scripts.training.research_tests as research_tests
     import scripts.training.run_tracking as run_tracking
     import scripts.training.step_records as step_records
     import scripts.training.targets as targets
@@ -169,6 +179,8 @@ def action_modules() -> tuple[ModuleType, ...]:
         promotion_check,
         promote,
         registry,
+        research,
+        research_tests,
     )
 
 
@@ -228,6 +240,13 @@ def run_promote(context: Context) -> None:
     promote.run(context, read_record(context))
 
 
+def run_research(context: Context) -> None:
+    """Run the tests that need two models and choose the one challenger of each type, from the finished runs of one base publication."""
+    from scripts.training import research
+
+    research.run(context, read_record(context))
+
+
 def run_log_run(context: Context) -> None:
     """Log one MLflow run per requested HAI type from the mounted outputs of the earlier steps."""
     from scripts.training import job_actions
@@ -244,6 +263,7 @@ HANDLERS: dict[str, Callable[[Context], None]] = {
     "log_run": run_log_run,
     "promotion_check": run_promotion_check,
     "promote": run_promote,
+    "research": run_research,
     "smoke": run_smoke,
 }
 
@@ -280,10 +300,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run one action and report a failure as one JSON line on standard error."""
     values = parser().parse_args(argv)
     try:
-        if values.action == "smoke":
-            context = Context("smoke", values.run or "", values.mode or "", Path("."), Path("."), Path("."), None)
-        else:
-            context = context_of(values)
+        context = Context("smoke", values.run or "", values.mode or "", Path("."), Path("."), Path(".")) if values.action == "smoke" else context_of(values)
         execute(context)
     except JobFailure as failure:
         sys.stderr.write(json.dumps({"action": values.action, "failure": failure.name, "detail": failure.detail}, sort_keys=True) + "\n")

@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.training_contract import DAGS as TRAINING_DAGS
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, parameters_for
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, MODELS, parameters_for
 from scripts.infrastructure import secret_store
 from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, AirflowApiError
 
@@ -218,6 +218,7 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
     cli.add_argument("--mlflow", choices=("local", "aws"), default="aws")
+    cli.add_argument("--model", choices=MODELS, help="the model a training run fits (required for training_dag)")
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
@@ -245,7 +246,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         training = None
         if args.dag == "training_dag":
-            training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}
+            training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow", "model")}
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
         conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training, args.gold_snapshot_run)

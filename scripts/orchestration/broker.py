@@ -549,7 +549,7 @@ class Broker:
 
     def require_training_approval(self, request: SubmissionRequest, row: dict[str, Any]) -> None:
         """Admit an exact owner approval while retaining the cleanup path of an already admitted run."""
-        if request.dag_id not in training_contract.DAGS or request.dag_id == "training_dag" and request.mode != "real":
+        if request.dag_id != "training_dag" or request.mode != "real":
             return
         try:
             training_approvals.read_approval(self.paths.state, request)

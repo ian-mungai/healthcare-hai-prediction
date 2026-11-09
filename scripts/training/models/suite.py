@@ -8,13 +8,14 @@ import itertools
 import json
 import math
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 import numpy as np
 
 from scripts.training import research_tests
 from scripts.training.models.common import (
+    MODEL_SLOT,
     REGISTRABLE,
     SLOTS,
     Array,
@@ -343,6 +344,7 @@ class ModelSuite:
     candidate: str | None
     research: Mapping[str, Any]
     shap: Mapping[str, Any]
+    sides: Mapping[str, Any] = field(default_factory=dict)
 
     def to_result(self) -> dict[str, Any]:
         """Return stable bundle fields without pipelines, run IDs, timing or source row values."""
@@ -469,3 +471,88 @@ def fit_models(request: ModelRequest) -> ModelSuite:
         )
     request.deadline.check()
     return ModelSuite(request, result, select(result, observed=holdout.y), select(result, registrable=True, observed=holdout.y), research, shap)
+
+
+NOT_IN_RUN = "not part of this model's run"
+
+
+def _spatial(request: ModelRequest) -> tuple[SlotResult, dict[str, Any]]:
+    """Test the holdout residuals of a non-spatial fit for spatial autocorrelation, then fit the spatial model if it is significant.
+
+    The reference fit is an OLS on the spatial list, because a model run holds no other model's residuals.
+    """
+    _, holdout = request.data.split()
+    reference = fit_slot(replace(request, feature_lists={**request.feature_lists, "m1_ols": request.feature_lists["m5_spatial"]}), "m1_ols")
+    if reference.status != "fitted":
+        reason = f"the non-spatial reference fit ended {reference.status}: {reference.reason}"
+        return SlotResult("m5_spatial", "not_run", reason), {"status": "not_run", "reason": reason}
+    sample = holdout.subset(reference.holdout_positions)
+    graph = build_weights(sample.rows, request.adjacency)
+    test = moran_test(
+        sample.y - np.asarray(reference.predictions),
+        sample.keys,
+        graph,
+        seed_for(request.config["master_seed"], request.data.hai_type, "moran"),
+        request.config["moran"]["permutations"],
+        request.deadline,
+    )
+    result = {**test, "residual_model": "ols_on_the_spatial_list"}
+    if test["status"] == "fitted" and test["p_value"] < 0.05:
+        return fit_slot(request, "m5_spatial"), result
+    return SlotResult("m5_spatial", "not_run", "Moran's I not significant" if test["status"] == "fitted" else test["reason"]), result
+
+
+def fit_model(request: ModelRequest, model: str) -> ModelSuite:
+    """Fit one model of the per-model design and run only the tests it owns.
+
+    m1 runs the joint test of the process measures and fits the reduced side of RQ4. m2 compares itself with the intercept and CMI model and fits the full
+    side of RQ4. m3 reports its ownership test, m4 its SHAP values, m5 the RQ5 test and m6 the RQ6 test. Every other slot stays ``not_run``.
+    """
+    if model not in MODEL_SLOT:
+        raise ModelError("unknown model")
+    request.deadline.check()
+    training, holdout = request.data.split()
+    minimum = request.config["minimum_rows"]
+    if len(training.rows) < minimum["training"] or len(holdout.rows) < minimum["holdout"]:
+        raise ModelError(f"insufficient split rows: training={len(training.rows)}, holdout={len(holdout.rows)}")
+    if request.threads < 1:
+        raise ModelError("training thread count must be positive")
+    slot = MODEL_SLOT[model]
+    slots = {name: SlotResult(name, "not_run", NOT_IN_RUN) for name in SLOTS}
+    research: dict[str, Any] = {}
+    sides: dict[str, Any] = {}
+    shap: dict[str, Any] = {"status": "not_run", "reason": NOT_IN_RUN}
+    if model == "m5":
+        slots[slot], research["spatial"] = _spatial(request)
+    else:
+        slots[slot] = fit_slot(request, slot)
+    fitted = slots[slot]
+    unfitted = {"status": "not_estimable", "reason": fitted.reason}
+    if model == "m1":
+        research["joint_process"] = (
+            _optional_analysis(lambda: research_tests.joint_significance(fitted.pipeline, request.process_references))
+            if fitted.status == "fitted"
+            else unfitted
+        )
+        sides["rq4_reduced"] = _optional_analysis(lambda: research_tests.rq4_side(request, "reduced"))
+    elif model == "m2":
+        research["process_vs_intercept_cmi"] = (
+            _optional_analysis(lambda: research_tests.intercept_cmi_comparison(request, fitted.predictions)) if fitted.status == "fitted" else unfitted
+        )
+        sides["rq4_full"] = _optional_analysis(lambda: research_tests.rq4_side(request, "full"))
+    elif model == "m3":
+        research["ownership"] = {"status": fitted.status, "reason": fitted.reason, **fitted.details}
+    elif model == "m4" and fitted.status == "fitted":
+        shap = _optional_analysis(
+            lambda: shap_values(
+                fitted.pipeline,
+                holdout.rows,
+                seed_for(request.config["master_seed"], request.data.hai_type, "shap"),
+                request.config["shap"]["sample_cap"],
+                request.deadline.within(request.config["budgets"]["shap_seconds"]),
+            )
+        )
+    elif model == "m6":
+        research["hospital_effects"] = fitted.details.get("hausman", {"status": fitted.status, "reason": fitted.reason})
+    request.deadline.check()
+    return ModelSuite(request, slots, select(slots, observed=holdout.y), select(slots, registrable=True, observed=holdout.y), research, shap, sides)

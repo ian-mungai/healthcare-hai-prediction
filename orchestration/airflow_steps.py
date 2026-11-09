@@ -38,7 +38,6 @@ from orchestration.ecs_preflight import (
     load_tables,
     publisher_request_reader,
     s3_digest_reader,
-    s3_object_reader,
     serving_request_reader,
     ssm_launch_hold_reader,
 )
@@ -134,7 +133,6 @@ def services() -> LaunchServices:
         host=host,
         settings=PreflightSettings(polaris_uri=values["HAI_LAUNCH_POLARIS_URI"], mlflow_uri=values["HAI_LAUNCH_MLFLOW_URI"]),
         code_digest=s3_digest_reader(s3, bucket),
-        approvals=s3_object_reader(s3, bucket, "promotion_approval.json"),
         store=store,
         code_runs=S3CodeRuns(s3, bucket),
         clock=clock.wall,

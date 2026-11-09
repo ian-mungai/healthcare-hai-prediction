@@ -20,6 +20,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from orchestration import training_contract
 from scripts.features.training_extract import canonical, content_sha256
 from scripts.training import (
     bundle,
@@ -48,8 +49,9 @@ from scripts.training.step_records import file_sha256, verify_done, write_done
 REAL = Path(__file__).resolve().parents[2]
 GUARD = {"analysis_plan_sha256": "7" * 64, "targets_sha256": "8" * 64, "training_config_sha256": "9" * 64}
 SAVED: dict[str, Any] = {}
-CHILDREN = {*SLOTS, "rq1_joint", "rq3_mediation", "rq4_nested", "rq5_moran", "rq6_hausman", "hac_validation"}
+CHILDREN = {"m2_elastic_net", "rq1_joint", "rq3_mediation", "hac_validation"}
 HAI_TYPE = "HAI_1"
+BASE_RUN = "20261023T000000Z-5678abcd"
 BUNDLE = f"bundles/bundle_{HAI_TYPE}"
 LABEL = "hai_1__sir__number"
 SQL_TYPES = {"varchar": "VARCHAR", "double": "DOUBLE", "bigint": "BIGINT", "boolean": "BOOLEAN", "date": "DATE"}
@@ -154,6 +156,10 @@ class Fixture:
         folder: Path,
         *,
         hai_types: tuple[str, ...] = (HAI_TYPE,),
+        model: str = "m2",
+        run: str = RUN,
+        base_run: str = BASE_RUN,
+        tracking: FileTracking | None = None,
         mediator: bool = True,
         hac: bool = True,
         late_mediator: bool = False,
@@ -163,21 +169,31 @@ class Fixture:
         adjust: Callable[[list[dict[str, Any]]], None] | None = None,
         flags: dict[str, float] | None = None,
     ) -> None:
-        self.folder = prepare(folder)
+        self.run = run
+        self.folder = prepare(folder, run_id=run)
         self.extract = folder / "in/extract"
         self.extract.mkdir(parents=True)
         self.out = folder / "out"
         self.hai_types = hai_types
+        self.model = model
         self.root = folder / "code"
         self.rows = [dict(row) for row in request(years, hospitals).data.rows]
         if adjust is not None:
             adjust(self.rows)
         self.newest, self.period_years, self.flag_values = max(row["window_year"] for row in self.rows), period_years, flags
-        self.parameters = {"features_run": "latest", "population": "primary", "hai_types": list(hai_types), "trigger": "manual", "mlflow": "local"}
+        self.parameters = {
+            "features_run": "latest",
+            "population": "primary",
+            "hai_types": list(hai_types),
+            "trigger": "manual",
+            "mlflow": "local",
+            "model": model,
+        }
         (folder / "training_parameters.json").write_text(json.dumps(self.parameters) + "\n")
         self.code_root()
         self.late_mediator = late_mediator
-        self.tracking = FileTracking(folder / "tracking")
+        self.base_run = base_run
+        self.tracking = tracking if tracking is not None else FileTracking(folder / "tracking")
         self.champion: Predictor | None = None
         self.candidate: Any = None
         self.write_extract(mediator=mediator, hac=hac)
@@ -260,15 +276,17 @@ class Fixture:
             name = f"extract_{hai_type}.parquet"
             label = f"hai_{hai_type.split('_')[1]}__sir__number"
             weight = f"hai_{hai_type.split('_')[1]}__predicted__number"
+            listed = {reference.split(":", 1)[1] for slot in job_inputs.REQUEST_LISTS[self.model] for reference in SLOT_LISTS[slot]}
+            kept = listed | {"spine_key", "ccn", "window_year", "control_type_code", "county_fips"}
             rows = [
-                {key: value for key, value in row.items() if key != LABEL} | {label: row[LABEL], weight: 1.0 + index % 5} for index, row in enumerate(self.rows)
+                {key: value for key, value in row.items() if key in kept} | {label: row[LABEL], weight: 1.0 + index % 5} for index, row in enumerate(self.rows)
             ]
-            columns = {key: kind for key, kind in FIXTURE_COLUMNS.items() if key != LABEL} | {label: "double", weight: "double"}
+            columns = {key: kind for key, kind in FIXTURE_COLUMNS.items() if key in kept} | {label: "double", weight: "double"}
             years = [row["window_year"] for row in self.rows]
             manifest = {
                 "schema_version": 1,
                 "kind": "training_extract",
-                "run_id": RUN,
+                "run_id": self.run,
                 "hai_type": hai_type,
                 "population": "primary",
                 "parameters_sha256": hashlib.sha256(canonical(self.parameters)).hexdigest(),
@@ -282,6 +300,9 @@ class Fixture:
                 "feature_schema_sha256": "3" * 64,
                 "hai_outcome_controls_sha256": "4" * 64,
                 "feature_list_sha256": "5" * 64,
+                "model": self.model,
+                "feature_service": f"model_{self.model}",
+                "base_run": self.base_run,
                 "writer_lock_sha256": "6" * 64,
                 **table_entry(self.extract, name, rows, columns),
                 "label_column": label,
@@ -296,6 +317,7 @@ class Fixture:
     def arguments(self, action: str, out: Path | None = None) -> list[str]:
         """Return the rendered option set for one action of this run, writing to the action folder or to a mounted input folder."""
         arguments = arguments_for(action, self.folder)
+        arguments[arguments.index("--run") + 1] = self.run
         if out is not None:
             arguments[arguments.index("--run-dir") + 1] = str(out)
         return arguments
@@ -605,7 +627,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         result = output_of(fixture, f"{BUNDLE}/result.json")
         contract = json.loads((REAL / "data_contracts/training/bundle.json").read_text())
         require(set(result) == set(contract["result_fields"]), f"result.json fields differ from the bundle contract: {sorted(result)}")
-        require(set(result["statuses"]) == set(SLOTS) and result["statuses"]["m1_ols"]["status"] == "fitted", f"statuses: {result['statuses']}")
+        require(set(result["statuses"]) == set(SLOTS) and result["statuses"]["m2_elastic_net"]["status"] == "fitted", f"statuses: {result['statuses']}")
         manifest = fixture.manifest()
         require(result["input_hashes"]["extract_sha256"] == manifest["sha256"], "result.json does not record the extract it read")
         provenance = output_of(fixture, f"{BUNDLE}/provenance.json")
@@ -634,7 +656,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
         fixture = Fixture(folder / "retried")
         require(run_action(fixture, "fit")[0] == 0, "the first fit failed")
         before = {name: (fixture.out / name).read_bytes() for name in listing(fixture.out)}
-        with mock.patch.object(suite, "fit_models", side_effect=AssertionError("a completed fit must not run again")):
+        with mock.patch.object(suite, "fit_model", side_effect=AssertionError("a completed fit must not run again")):
             code, out, error = run_action(fixture, "fit")
         require(code == 0 and json.loads(out)["resumed"] is True, f"the retry did not resume: {code} {error}")
         require(before == {name: (fixture.out / name).read_bytes() for name in listing(fixture.out)}, "a retry changed a completed output")
@@ -719,7 +741,7 @@ def fit_cases(cases: Any, folder: Path) -> None:
 
     def deadline() -> None:
         fixture = Fixture(folder / "deadline")
-        with mock.patch.object(job, "budget", return_value=0.3), mock.patch.object(suite, "fit_models", side_effect=lambda *_: time.sleep(5)):
+        with mock.patch.object(job, "budget", return_value=0.3), mock.patch.object(suite, "fit_model", side_effect=lambda *_: time.sleep(5)):
             code, _, error = run_action(fixture, "fit")
         require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline", f"{code} {error}")
         require(listing(fixture.out) == [], "a deadline left output")
@@ -747,24 +769,26 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(listing(fixture.out) == [], "a failed type left partial output")
 
     def trust_list_covers_candidates() -> None:
-        fixture = Fixture(folder / "trust_list")
-        seen: list[Any] = []
-        build = bundle.build
+        held: set[str] = set()
+        for model in training_contract.PROMOTION_MODELS:
+            fixture = Fixture(folder / f"trust_list_{model}", model=model)
+            seen: list[Any] = []
+            build = bundle.build
 
-        def spy(model_suite: Any, *rest: Any) -> Any:
-            seen.append(model_suite)
-            return build(model_suite, *rest)
+            def spy(model_suite: Any, *rest: Any, build: Any = build, seen: list[Any] = seen) -> Any:
+                seen.append(model_suite)
+                return build(model_suite, *rest)
 
-        with mock.patch.object(bundle, "build", side_effect=spy):
-            code, _, error = run_action(fixture, "fit")
-        require(code == 0 and seen, f"fit failed: {error}")
-        held = {
-            name
-            for slot in REGISTRABLE
-            if seen[0].slots[slot].status == "fitted"
-            for name in bundle.pipeline_types(seen[0].slots[slot].pipeline)
-            if name.startswith("scripts.training.models.")
-        }
+            with mock.patch.object(bundle, "build", side_effect=spy):
+                code, _, error = run_action(fixture, "fit")
+            require(code == 0 and seen, f"fit of {model} failed: {error}")
+            held |= {
+                name
+                for slot in REGISTRABLE
+                if seen[0].slots[slot].status == "fitted"
+                for name in bundle.pipeline_types(seen[0].slots[slot].pipeline)
+                if name.startswith("scripts.training.models.")
+            }
         contract = json.loads((REAL / "data_contracts/training/model_contract.json").read_text())
         listed = {name for name in contract["serialization"]["trusted_types"] if name.startswith("scripts.")}
         require(
@@ -809,7 +833,38 @@ def fit_cases(cases: Any, folder: Path) -> None:
         require(not any(name.endswith("NativeHandle") for name in held), f"the trust check read an attribute the saved state replaces: {sorted(held)}")
         require(any(name.endswith("HandleBooster") for name in held), f"the trust check did not reach the object the saved state holds: {sorted(held)}")
 
+    OWN_TESTS = {"m1": {"joint_process"}, "m2": {"process_vs_intercept_cmi"}, "m3": {"ownership"}, "m4": set(), "m5": {"spatial"}, "m6": {"hospital_effects"}}
+    OWN_SIDES = {"m1": {"rq4_reduced"}, "m2": {"rq4_full"}}
+
+    def one_model_per_run() -> None:
+        for model in training_contract.MODELS:
+            fixture = Fixture(folder / f"one_{model}", model=model)
+            code, _, error = run_action(fixture, "fit")
+            require(code == 0, f"fit of {model} failed: {error}")
+            result = output_of(fixture, f"{BUNDLE}/result.json")
+            own = training_contract.MODEL_LISTS[model][0]
+            others = {slot: status for slot, status in result["statuses"].items() if slot != own}
+            require(
+                all(status == {"reason": suite.NOT_IN_RUN, "status": "not_run"} for status in others.values()),
+                f"{model} ran or reported another model: {others}",
+            )
+            require(result["statuses"][own]["reason"] != suite.NOT_IN_RUN, f"{model} did not run its own model: {result['statuses'][own]}")
+            require(set(result["test_statistics"]) == OWN_TESTS[model], f"{model} ran tests it does not own: {sorted(result['test_statistics'])}")
+            sides = fixture.out / f"{BUNDLE}/rq4_side.json"
+            require(sides.is_file() == (model in OWN_SIDES), f"{model} wrote the RQ4 side file wrongly")
+            if model in OWN_SIDES:
+                require(set(json.loads(sides.read_text())) == OWN_SIDES[model], f"{model} wrote the wrong RQ4 side")
+
+    def candidate_only_for_promotion_models() -> None:
+        for model in ("m1", "m3"):
+            fixture = Fixture(folder / f"candidate_{model}", model=model)
+            require(run_action(fixture, "fit")[0] == 0, f"fit of {model} failed")
+            candidate = output_of(fixture, f"{BUNDLE}/result.json")["selection"]["registry_candidate"]
+            require((candidate is not None) == (model in training_contract.PROMOTION_MODELS), f"{model} registry candidate is {candidate}")
+
     cases.check("job_fit_writes_results_and_done", fitted)
+    cases.check("job_fit_each_model_fits_only_its_own_model_and_tests", one_model_per_run)
+    cases.check("job_fit_only_promotion_models_have_a_registry_candidate", candidate_only_for_promotion_models)
     cases.check("job_fit_trust_check_reads_saved_state", serialized_state_trusted)
     cases.check("job_fit_trust_list_covers_candidates", trust_list_covers_candidates)
     cases.check("job_fit_refuses_untrusted_candidate_type", untrusted_type_refused)
@@ -882,7 +937,14 @@ def mediation_cases(cases: Any, folder: Path) -> None:
             code, _, error = run_action(fixture, "mediation")
         require(code == job.EXIT_DEADLINE and failure_of(error) == "deadline" and listing(fixture.out) == [], f"{code} {error}")
 
+    def other_model_refused() -> None:
+        fixture = Fixture(folder / "mediation_m1", model="m1")
+        code, _, error = run_action(fixture, "mediation")
+        require(code == job.EXIT_FAILED and failure_of(error) == "mediation_not_applicable", f"{code} {error}")
+        require(listing(fixture.out) == [], "a refused mediation left output")
+
     cases.check("job_mediation_writes_result_and_done", written)
+    cases.check("job_mediation_belongs_to_m2", other_model_refused)
     cases.check("job_mediation_retry_resumes_completed", retried)
     cases.check("job_mediation_refuses_changed_table", changed_table)
     cases.check("job_mediation_refuses_mediator_inside_window", late_period)
@@ -1293,7 +1355,7 @@ class Mapped:
 def baseline_of(fixture: Fixture) -> tuple[dict[str, float], dict[str, float]]:
     """The intercept + CMI baseline's holdout predictions and the observed SIRs, keyed by hospital-window, fitted the way the fit step fits it."""
     config = job_inputs.config_of(fixture.root)
-    built = job_inputs.model_request(HAI_TYPE, fixture.rows, (), config, 60.0, fixture.root)
+    built = job_inputs.model_request(HAI_TYPE, fixture.rows, (), config, 60.0, fixture.root, "m2")
     holdout = built.data.split()[1]
     with libraries():
         predictions = research_tests.intercept_cmi_predictions(built)
@@ -1359,8 +1421,8 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         version = store.models[name]["versions"][0]
         require(version["version"] == "1" and version["tags"]["promotion_verdict"] == "pass_baseline", f"version: {version}")
         require(
-            store.models[name]["aliases"] == {"challenger": "1"},
-            f"a first version that beat the baseline must be the challenger only: {store.models[name]['aliases']}",
+            store.models[name]["aliases"] == {},
+            f"the promotion check set an alias; the research action chooses the challenger: {store.models[name]['aliases']}",
         )
         require(
             set(version["tags"])
@@ -1415,7 +1477,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_promotion(fixture)
         require(code == 0, f"promotion_check failed: {error}")
         store = fixture.tracking
-        require(store.models[name]["aliases"] == {"production": "1", "challenger": "2"}, f"aliases: {store.models[name]['aliases']}")
+        require(store.models[name]["aliases"] == {"production": "1"}, f"aliases: {store.models[name]['aliases']}")
         require(store.models[name]["versions"][1]["tags"]["promotion_verdict"] == "pass", f"tags: {store.models[name]['versions'][1]['tags']}")
         document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
         require(document["champion_version"] == "1" and document["challenger_version"] == "2", f"comparison: {document}")
@@ -1432,8 +1494,8 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     def production_untouched() -> None:
         fixture = promoted(folder / "production", Predictor(LABEL, constant=3.0))
         require(run_promotion(fixture)[0] == 0, "promotion_check failed")
-        require("set_registered_model_alias" in fixture.tracking.calls, "the case did not reach the alias step")
-        require(fixture.tracking.models[name]["aliases"]["production"] == "1", "the production alias moved")
+        require("set_model_version_tag" in fixture.tracking.calls, "the case did not reach the verdict step")
+        require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, f"an alias moved or was set: {fixture.tracking.models[name]['aliases']}")
 
     def holdout_leak() -> None:
         fixture = promoted(folder / "leak", Predictor(LABEL, constant=3.0))
@@ -1448,7 +1510,16 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         feature_list = next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
         feature_list.write_text(json.dumps({"slot": "m1_ols", "references": [], "columns": ["process", "unknown_column"]}) + "\n")
         code, _, error = run_promotion(fixture)
-        require(code == job.EXIT_FAILED and failure_of(error) == "champion_features", f"{code} {error}")
+        require(code == 0, f"a champion this extract cannot score failed the run: {error}")
+        require(
+            fixture.tracking.models[name]["versions"][1]["tags"]["promotion_verdict"] == "not_comparable", "the version did not get the verdict not_comparable"
+        )
+        document = output_of(fixture, f"comparison_{HAI_TYPE}.json")
+        require(
+            document["verdict"] == {"verdict": "not_comparable", "failed": ["champion_features"]} and "unknown_column" in document["reason"],
+            f"comparison: {document}",
+        )
+        require(fixture.tracking.models[name]["aliases"] == {"production": "1"}, "an alias changed")
 
     def champion_unloadable() -> None:
         fixture = promoted(folder / "unloadable")
@@ -1673,13 +1744,13 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_first_version_interval_touching_zero_refused", first_interval)
     cases.check("job_promotion_check_champion_rule_unchanged", champion_rule_unchanged)
     cases.check("job_promotion_check_unfitted_baseline_keeps_no_champion", baseline_not_estimable)
-    cases.check("job_promotion_check_sets_challenger_on_pass", better_challenger)
+    cases.check("job_promotion_check_tags_a_passing_version_and_sets_no_alias", better_challenger)
     cases.check("job_promotion_check_fails_worse_challenger_without_alias", worse_challenger)
     cases.check("job_promotion_check_never_moves_production", production_untouched)
     cases.check("job_promotion_check_refuses_sensitivity_population", sensitivity_population)
     cases.check("job_promotion_check_retry_adopts_run_whose_response_was_lost", lost_child_response)
     cases.check("job_promotion_check_refuses_holdout_leak", holdout_leak)
-    cases.check("job_promotion_check_refuses_champion_columns_outside_extract", champion_columns)
+    cases.check("job_promotion_check_records_not_comparable_for_champion_columns_outside_extract", champion_columns)
     cases.check("job_promotion_check_refuses_unloadable_champion", champion_unloadable)
     cases.check("job_promotion_check_fails_dirty_code", dirty_code)
     cases.check("job_promotion_check_retry_resumes_completed", retried)
@@ -1699,7 +1770,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
 def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:
     """Return a fixture whose earlier steps (version_extract, fit, mediation, hac_validate) are complete and mounted."""
     fixture = Fixture(folder, **options)
-    stage(fixture, "fit", "mediation", "hac_validate")
+    stage(fixture, *(step for step in ("fit", "mediation", "hac_validate") if step in training_contract.train_steps(fixture.model)))
     if baseline:
         stage_baseline(fixture)
     return fixture
@@ -1740,7 +1811,7 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require(
             all(item["status"] == "FINISHED" and item["tags"]["run_id"] == RUN for item in children.values()), "a child was not finished or lacks its run ID"
         )
-        require("m1_ols.metrics.rmse" in children["m1_ols"]["metrics"], f"m1: {sorted(children['m1_ols']['metrics'])}")
+        require("m2_elastic_net.metrics.rmse" in children["m2_elastic_net"]["metrics"], f"m2: {sorted(children['m2_elastic_net']['metrics'])}")
         require(any(name.startswith("rq3_mediation.PSI_90.") for name in children["rq3_mediation"]["metrics"]), "mediation metrics are missing")
         require("hac_validation.matched_hospitals" in children["hac_validation"]["metrics"], "HAC metrics are missing")
         require(all(len(values) == 1 for item in store.active().values() for values in item["metrics"].values()), "a metric was logged twice")
@@ -1924,7 +1995,36 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         )
         require(len(run_tracking.metric_name("a" * 400)) == 250, "a metric name was not shortened")
 
+    def tags_model_and_base_run() -> None:
+        for model in ("m1", "m4"):
+            fixture = staged(folder / f"tags_{model}", model=model)
+            code, _, error = run_action(fixture, "log_run")
+            require(code == 0, f"log_run of {model} failed: {error}")
+            run = next(iter(fixture.tracking.parents().values()))
+            require(run["tags"]["model"] == model and run["tags"]["base_run"] == BASE_RUN, f"tags: {run['tags'].get('model')} {run['tags'].get('base_run')}")
+            require(run["params"]["model"] == model, f"parameters: {run['params']}")
+
+    def logs_only_the_tests_of_its_model() -> None:
+        expected = {"m1": {"m1_ols", "rq1_joint", "hac_validation"}, "m3": {"m3_mixed", "hac_validation"}}
+        for model, names in expected.items():
+            fixture = staged(folder / f"children_{model}", model=model)
+            require(run_action(fixture, "log_run")[0] == 0, f"log_run of {model} failed")
+            run_id = next(iter(fixture.tracking.parents()))
+            children = {item["tags"]["step_key"] for item in fixture.tracking.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
+            require(children == names, f"{model} children: {sorted(children)}")
+
+    def training_key_differs_per_model() -> None:
+        keys = set()
+        for model in ("m1", "m4"):
+            fixture = staged(folder / f"key_{model}", model=model)
+            require(run_action(fixture, "log_run")[0] == 0, "log_run failed")
+            keys.add(next(iter(fixture.tracking.parents().values()))["tags"]["training_key"])
+        require(len(keys) == 2, "two models of one publication share a training key")
+
     cases.check("job_log_run_logs_runs_tags_metrics_artifacts_and_metafile", logged)
+    cases.check("job_log_run_tags_the_model_and_the_base_run", tags_model_and_base_run)
+    cases.check("job_log_run_logs_only_the_tests_of_its_model", logs_only_the_tests_of_its_model)
+    cases.check("job_log_run_training_key_differs_per_model", training_key_differs_per_model)
     cases.check("job_log_run_retry_resumes_completed", retried)
     cases.check("job_log_run_retry_after_interrupt_keeps_complete_runs", interrupted)
     cases.check("job_log_run_resumes_unfinished_runs", unfinished)
@@ -2104,8 +2204,10 @@ def scenarios(cases: Any, folder: Path) -> None:
     log_run_cases(cases, folder / "log_run")
     promotion_cases.gate_cases(cases)
     promotion_check_cases(cases, folder / "promotion")
-    from scripts.training import aws_run_cases
+    from scripts.training import auto_promotion_cases, aws_run_cases, research_cases
 
+    research_cases.research_cases(cases, folder / "research")
+    auto_promotion_cases.auto_promotion_cases(cases, folder / "auto_promotion")
     aws_run_cases.scenarios(cases, folder / "aws_run")
     resource_peak_cases(cases, folder / "resource_peaks")
 

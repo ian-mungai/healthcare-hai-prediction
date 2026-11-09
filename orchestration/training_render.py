@@ -115,9 +115,6 @@ def build(inp: PipelineInput, values: dict[str, str], session: RoleSession | Non
             raise ValueError("the run's isolated MLflow network is not ready")
         spec.network, spec.network_class = str(network["name"]), "mlflow"
         environment.update({"MLFLOW_TRACKING_URI": "http://mlflow:5100", "MLFLOW_HTTP_REQUEST_TIMEOUT": "20", "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "0"})
-        if action == "promote":
-            mounts.append((str(folder / "promotion_approval.json"), "/workspace/approval.json", True))
-            arguments += ["--approval", "/workspace/approval.json"]
     elif kind in ("lakehouse_read", "dvc_write"):
         network = state.get("network", {})
         selected = "lakehouse_read" if kind == "lakehouse_read" else "lakehouse_write"

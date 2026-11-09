@@ -161,10 +161,12 @@ def build(
                 if path.is_file():
                     files[f"{base}/model/{path.relative_to(model).as_posix()}"] = path.read_bytes()
     files[f"{base}/shap.json"] = canonical(dict(suite.shap))
+    if suite.sides:
+        files[f"{base}/rq4_side.json"] = canonical(dict(suite.sides))
     return files
 
 
-IDENTITY_FILES = ("result.json", "holdout_predictions.parquet", "feature_list.json", "shap.json")
+IDENTITY_FILES = ("result.json", "holdout_predictions.parquet", "feature_list.json", "shap.json", "rq4_side.json")
 
 
 def sha256_of(files: Mapping[str, str], hai_type: str) -> str:

@@ -33,7 +33,10 @@
     "oldest_window_year",
     "newest_window_year",
     "counts",
-    "auxiliary_files"
+    "auxiliary_files",
+    "model",
+    "feature_service",
+    "base_run"
   ],
   "properties": {
     "schema_version": {
@@ -383,6 +386,24 @@
           }
         }
       }
+    },
+    "model": {
+      "enum": [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m6"
+      ]
+    },
+    "feature_service": {
+      "type": "string",
+      "pattern": "^model_m[1-6]$"
+    },
+    "base_run": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
     }
   }
 }

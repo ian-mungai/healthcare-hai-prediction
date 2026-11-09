@@ -225,7 +225,7 @@ def approval_cases(cases: Cases, folder: Path) -> None:
 
     def call(method: str, params: dict[str, Any], *arguments: Any, **keywords: Any) -> dict[str, Any]:
         calls.append((method, params))
-        if method == "status" and params == {"what": "run", "id": RUN}:
+        if method == "status" and params.get("what") == "run":
             return {"state": "held"}
         if method == "training_prepare":
             return {"prepared": True}
@@ -252,13 +252,23 @@ def approval_cases(cases: Cases, folder: Path) -> None:
             require(
                 ("training_prepare", {"dag_id": "training_dag", "parameters": PARAMETERS}) in calls, "approved acquire did not bind its training parameters"
             )
-            require(json.loads((broker.runs_root / RUN / "promotion_approval.json").read_bytes()) == approval, "acquire did not persist its exact approval")
 
         cases.check("real_training_exact_approval_admitted", admitted)
         path.unlink()
         release = replace(request, template="release_rejected", task_id="release_run")
         with mock.patch.object(broker, "perform_control", side_effect=lambda request, row: broker.finish(request, 0)):
             cases.check("admitted_training_can_release_without_approval", lambda: broker.submit(release))
+        promotion = SubmissionRequest(
+            "acquire_run",
+            GOLD,
+            "real",
+            1,
+            "model_promotion_dag",
+            "acquire_run",
+            "manual",
+            training={"hai_type": "HAI_1", "model_version": "2", "promotion_mode": "promote", "mlflow": "local"},
+        )
+        cases.check("promotion_runs_without_an_approval_record", lambda: broker.submit(promotion))
         changed = replace(release, attempt=2, training={**PARAMETERS, "population": "sensitivity"})
         cases.refuses("training_cleanup_requires_admitted_parameters", lambda: broker.submit(changed), "training approval required: approval is missing")
 

@@ -1,4 +1,4 @@
-"""Read owner-only approval records for training, forward promotion and rollback."""
+"""Read owner-only approval records for a real training run. A promotion needs none: the promotion rule and the canary checks decide."""
 
 from __future__ import annotations
 
@@ -13,9 +13,8 @@ from typing import Any
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import parameters_for
 
-APPROVAL_SCOPES = {"training_dag": "real_training", "model_promotion_dag": ("promote", "rollback")}
+SCOPE = "real_training"
 APPROVAL_KEYS = frozenset({"run_id", "dag_id", "scope", "approved_on"})
-PROMOTION_KEYS = APPROVAL_KEYS | {"hai_type", "model_version"}
 RELEASE_ACTIONS = frozenset({"catalog_release", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected"})
 
 
@@ -23,9 +22,9 @@ def read_approval(state: Path, request: SubmissionRequest, *, today: date | None
     """Require a closed, owner-only approval for the exact run, operation, type and model version."""
     if request.training is None:
         raise ValueError("training approval has no request parameters")
-    parameters = parameters_for(request.dag_id, request.training)
-    promotion = request.dag_id == "model_promotion_dag"
-    expected_scope = parameters["promotion_mode"] if promotion else "real_training"
+    if request.dag_id != "training_dag":
+        raise ValueError("only a real training run needs an approval record")
+    parameters_for(request.dag_id, request.training)
     descriptors = []
     try:
         descriptors.append(os.open(state, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
@@ -47,12 +46,10 @@ def read_approval(state: Path, request: SubmissionRequest, *, today: date | None
         body = json.loads(raw)
     except ValueError:
         raise ValueError("approval is not valid JSON") from None
-    if not isinstance(body, dict) or set(body) != (PROMOTION_KEYS if promotion else APPROVAL_KEYS):
+    if not isinstance(body, dict) or set(body) != APPROVAL_KEYS:
         raise ValueError("approval fields do not match the closed scope")
-    if body["run_id"] != request.run_id or body["dag_id"] != request.dag_id or body["scope"] != expected_scope:
+    if body["run_id"] != request.run_id or body["dag_id"] != request.dag_id or body["scope"] != SCOPE:
         raise ValueError("approval names another run, DAG or scope")
-    if promotion and any(body[name] != parameters[name] for name in ("hai_type", "model_version")):
-        raise ValueError("approval names another HAI type or model version")
     approved = body["approved_on"]
     try:
         day = date.fromisoformat(approved) if isinstance(approved, str) and re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", approved) else None

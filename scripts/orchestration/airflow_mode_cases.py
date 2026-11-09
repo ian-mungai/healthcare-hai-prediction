@@ -211,7 +211,6 @@ class Rig:
             host=host,
             settings=preflight.PreflightSettings(polaris_uri=POLARIS, mlflow_uri=MLFLOW),
             code_digest=preflight.s3_digest_reader(self.stage, BUCKET),
-            approvals=preflight.s3_object_reader(self.stage, BUCKET, "promotion_approval.json"),
             store=store,
             code_runs=preflight.S3CodeRuns(self.stage, BUCKET),
             clock=lambda: self.time.now,
@@ -553,11 +552,6 @@ def aws_mlflow_lane_reaches_the_jobs() -> None:
     with world(rig, "training_dag", {**TRAIN_PARAMS, "mlflow": "aws"}) as current:
         require(current.step("guard") == "succeeded", "a training run with mlflow=aws did not launch")
     require(json.loads(rig.environment()["prepare"]["TRAINING_PARAMETERS"])["mlflow"] == "aws", "the training lane is not the AWS one")
-    rig.stage.stage(
-        PROMOTE_RUN,
-        "promotion_approval.json",
-        {"run_id": PROMOTE_RUN, "dag_id": "model_promotion_dag", "scope": "promote", "approved_on": "2026-10-30", "hai_type": "HAI_1", "model_version": "3"},
-    )
     params = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"}
     with world(rig, "model_promotion_dag", params) as current:
         require(current.step("promote") == "succeeded", "a promotion with mlflow=aws did not launch")
@@ -624,25 +618,14 @@ def fresh_run_settles_the_unfinished_launch_itself() -> None:
     require((rig.end(FRESH_SILVER_RUN, "silver") or {}).get("outcome") == "succeeded", "the fresh run has no success record")
 
 
-def promotion_needs_the_approval() -> None:
+def promotion_needs_no_approval() -> None:
+    """A promotion launches with no owner approval staged: a challenger that passes the promotion rule goes to the canary automatically and the owner is
+    notified (owner decision "Per-model feature DAGs", Q10, Nov 9 2026). The launch reads no promotion_approval.json."""
     rig = Rig()
     params = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"}
     with world(rig, "model_promotion_dag", params) as current:
-        error = refuses(LaunchRefused, lambda: current.step("promote"))
-        require("approval" in str(error) and not rig.ecs.calls, f"a promotion ran without approval: {error}")
-        body = {
-            "run_id": PROMOTE_RUN,
-            "dag_id": "model_promotion_dag",
-            "scope": "promote",
-            "approved_on": "2026-10-30",
-            "hai_type": "HAI_1",
-            "model_version": "3",
-        }
-        for wrong in ({"run_id": SILVER_RUN}, {"model_version": "4"}, {"approved_on": "2999-01-01"}, {"extra": 1}):
-            rig.stage.stage(PROMOTE_RUN, "promotion_approval.json", {**body, **wrong})
-            refuses(LaunchRefused, lambda: current.step("promote"))
-        rig.stage.stage(PROMOTE_RUN, "promotion_approval.json", body)
-        require(current.step("promote") == "succeeded", "an approved promotion did not run")
+        require(current.step("promote") == "succeeded", "a promotion without a staged approval did not launch")
+    require(not any("promotion_approval.json" in str(key) for key in rig.stage.reads), f"the launch read a promotion approval: {rig.stage.reads}")
 
 
 def bronze_request_is_checked_and_bound() -> None:
@@ -1433,14 +1416,6 @@ def dags_run_with_their_form_defaults() -> None:
 COLLAPSED_FILES = ("silver_transform_dag.py", "gold_transform_dag.py", "model_promotion_dag.py", "serving_deploy_dag.py")
 COLLAPSED_TASKS = ["preflight", "job", "evidence", "gate"]
 PROMOTE_PARAMS = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"}
-PROMOTE_APPROVAL = {
-    "run_id": PROMOTE_RUN,
-    "dag_id": "model_promotion_dag",
-    "scope": "promote",
-    "approved_on": "2026-10-30",
-    "hai_type": "HAI_1",
-    "model_version": "3",
-}
 
 
 def task_graph(world_: World) -> dict[str, Any]:
@@ -1457,7 +1432,6 @@ def collapsed_job_dags_are_one_chain() -> None:
     evidence (the launch record says the job passed) and gate (runs after a failure, fails the DAG run unless the three passed, carries the asset)."""
     graph = importlib.import_module("orchestration.graph")
     rig = Rig()
-    rig.stage.stage(PROMOTE_RUN, "promotion_approval.json", PROMOTE_APPROVAL)
     rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
     plan: tuple[tuple[str, dict[str, Any], str, str, list[str]], ...] = (
         ("silver_transform_dag", SILVER, "silver", SILVER_RUN, []),
@@ -1567,15 +1541,6 @@ def feature_store_takes_its_gold_run() -> None:
 
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
-    approval = {
-        "run_id": PROMOTE_RUN,
-        "dag_id": "model_promotion_dag",
-        "scope": "promote",
-        "approved_on": "2026-10-30",
-        "hai_type": "HAI_1",
-        "model_version": "3",
-    }
-    rig.stage.stage(PROMOTE_RUN, "promotion_approval.json", approval)
     rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
     plan = (
         (
@@ -1948,7 +1913,7 @@ CASES: dict[str, Callable[[], None]] = {
     "training_parameters_are_checked": training_parameters_are_checked,
     "aws_mlflow_lane_reaches_the_jobs": aws_mlflow_lane_reaches_the_jobs,
     "local_mlflow_is_refused_visibly": local_mlflow_is_refused_visibly,
-    "promotion_needs_the_approval": promotion_needs_the_approval,
+    "promotion_needs_no_approval": promotion_needs_no_approval,
     "fresh_run_settles_the_unfinished_launch_itself": fresh_run_settles_the_unfinished_launch_itself,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
