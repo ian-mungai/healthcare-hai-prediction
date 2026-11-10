@@ -25,6 +25,13 @@
       "Action": ["s3:ListBucket"],
       "Resource": "${BUCKET_ARN}",
       "Condition": { "StringLike": { "s3:prefix": ${PRODUCTION_LIST_PREFIXES} } }
+    },
+    {
+      "Sid": "ListPromotionLeases",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": { "StringLike": { "s3:prefix": ${LEASE_LIST_PREFIXES} } }
     }
   ]
 }

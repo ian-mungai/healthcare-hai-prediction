@@ -234,6 +234,9 @@ resource "aws_iam_role_policy" "job_writer_features_feast" {
     BUCKET_ARN               = local.bronze_bucket_arn
     PRODUCTION_OBJECT_ARNS   = jsonencode(["${local.bronze_bucket_arn}/promote/production/*"])
     PRODUCTION_LIST_PREFIXES = jsonencode(["promote/production/*"])
+    # Before it loads or releases an online set, the phase lists the promotion lease generations of each model and refuses an unresolved promotion
+    # (scripts/features/feast_sets.py unresolved_promotion). It lists promote/models/<model>/ and reads no lease record.
+    LEASE_LIST_PREFIXES = jsonencode(["promote/models/*/"])
   })
 }
 

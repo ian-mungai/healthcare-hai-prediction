@@ -228,6 +228,7 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "BUCKET_ARN": f"arn:aws:s3:::{bucket}",
             "PRODUCTION_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/promote/production/*"]),
             "PRODUCTION_LIST_PREFIXES": json.dumps(["promote/production/*"]),
+            "LEASE_LIST_PREFIXES": json.dumps(["promote/models/*/"]),
         }
     if policy.endswith("job_writer_execution.json"):
         pairs = [names[f"AWS_POLARIS_{layer}_CLIENT_{part}_NAME"] for layer in ("SILVER", "GOLD", "FEATURES") for part in ("ID", "SECRET")]
