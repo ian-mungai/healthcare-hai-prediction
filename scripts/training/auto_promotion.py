@@ -115,7 +115,9 @@ def same_within_rounding(canary: float, offline: float) -> bool:
 def canary_checks(report: Mapping[str, Any], offline: Mapping[str, float], candidate_version: str) -> dict[str, Any]:
     """Judge the replay report of a canary against the owner's pass rule.
 
-    Every request answered 200, each within the API's time limit (``replay.REQUEST_SECONDS``). Both sides hold at least ``compare.MIN_ROWS`` rows. The canary
+    Every request answered 200 on every attempt, so a request that met a rate limit or an error first fails (``requests_answered``), and each request's
+    total time from its first send to its answer, retries and waits included, is within the API's time limit (``replay.REQUEST_SECONDS``). This reads the
+    owner's rule as the lead recorded it for the owner. Both sides hold at least ``compare.MIN_ROWS`` rows. The canary
     side was served by the candidate version, and each canary prediction matches the one the research job scored offline for the same version and
     hospital-window (``offline`` maps ``<CCN>:<year>`` to it) within ``MAX_RELATIVE_DIFFERENCE``. A canary row with no offline prediction fails.
     """
@@ -124,9 +126,16 @@ def canary_checks(report: Mapping[str, Any], offline: Mapping[str, float], candi
     rows = [row for row in report.get("rows", []) if isinstance(row, Mapping)]
     canary = [row for row in rows if row.get("served_by") == "canary"]
     stable = [row for row in rows if row.get("served_by") == "stable"]
-    if not report.get("requests") or statuses != {"200": report["requests"]}:
+    answered = {"200": report.get("requests")}
+    if (
+        not report.get("requests")
+        or statuses != answered
+        or report.get("attempt_statuses") != answered
+        or len(rows) != report["requests"]
+        or any(not row.get("attempts") or any(attempt.get("status") != 200 for attempt in row["attempts"]) for row in rows)
+    ):
         failed.append("requests_answered")
-    if not rows or any(not isinstance(row.get("seconds"), int | float) or not 0 <= row["seconds"] <= replay.REQUEST_SECONDS for row in rows):
+    if not rows or any(not isinstance(row.get("elapsed_seconds"), int | float) or not 0 <= row["elapsed_seconds"] <= replay.REQUEST_SECONDS for row in rows):
         failed.append("within_time_limit")
     comparison = report.get("comparison", {})
     counts = (comparison.get("stable", {}).get("count", 0), comparison.get("canary", {}).get("count", 0), len(stable), len(canary))

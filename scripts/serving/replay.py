@@ -60,7 +60,12 @@ def parse_corpus(text: str) -> list[tuple[str, int]]:
 def run(
     send: Send, corpus: Sequence[tuple[str, int]], hai_type: str, *, clock: Callable[[], float], sleep: Callable[[float], None], deadline_seconds: float
 ) -> dict[str, Any]:
-    """Send every hospital-window once, waiting out rate limit answers, and return the status counts, the split and the comparison."""
+    """Send every hospital-window once, waiting out rate limit answers, and return the status counts, the split and the comparison.
+
+    Each request keeps every attempt's status and time (``attempts``) and its total time from the first send to the last answer, waits included
+    (``elapsed_seconds``). ``statuses`` counts the last answer of each request and ``attempt_statuses`` every attempt. An answered request is a row; a
+    request whose last answer is not 200 is listed under ``unanswered`` with its attempts.
+    """
     deadline = clock() + deadline_seconds
 
     def remaining() -> float:
@@ -70,18 +75,24 @@ def run(
         return left
 
     statuses: Counter[str] = Counter()
+    attempt_statuses: Counter[str] = Counter()
     rows: list[dict[str, Any]] = []
+    unanswered: list[dict[str, Any]] = []
     for ccn, year in corpus:
         payload = {"hai_type": hai_type, "ccn": ccn, "window_year": year}
+        attempts: list[dict[str, Any]] = []
+        first = clock()
         for attempt in range(MAX_RETRIES + 1):
             started = clock()
             status, headers, body = send(payload, min(REQUEST_SECONDS, remaining()))
-            seconds = clock() - started
+            attempts.append({"status": status, "seconds": clock() - started})
+            attempt_statuses[str(status)] += 1
             if clock() > deadline:
                 raise ReplayDeadline(f"the replay did not finish within {deadline_seconds:g} s")
             if status != 429 or attempt == MAX_RETRIES:
                 break
             sleep(min(retry_after(headers), remaining()))
+        elapsed = clock() - first
         statuses[str(status)] += 1
         if status == 200:
             rows.append(
@@ -91,13 +102,18 @@ def run(
                     "served_by": body["served_by"],
                     "prediction": body["prediction"],
                     "model_version": body["model_version"],
-                    "seconds": seconds,
+                    "attempts": attempts,
+                    "elapsed_seconds": elapsed,
                 }
             )
+        else:
+            unanswered.append({"ccn": ccn, "window_year": year, "attempts": attempts, "elapsed_seconds": elapsed})
     return {
         "hai_type": hai_type,
         "requests": len(corpus),
         "statuses": dict(statuses),
+        "attempt_statuses": dict(attempt_statuses),
+        "unanswered": unanswered,
         "served_by": dict(Counter(row["served_by"] for row in rows)),
         "model_versions": dict(Counter(row["model_version"] for row in rows)),
         "comparison": compare.compare(rows),

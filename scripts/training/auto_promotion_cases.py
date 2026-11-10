@@ -28,13 +28,33 @@ RESEARCH = {
 VERSION = "4"
 OFFLINE = {f"{index:06d}:2023": 0.5 + index / 100 for index in range(40)}
 ROWS = [
-    {"ccn": f"{index:06d}", "window_year": 2023, "served_by": "canary", "model_version": VERSION, "prediction": OFFLINE[f"{index:06d}:2023"], "seconds": 0.05}
+    {
+        "ccn": f"{index:06d}",
+        "window_year": 2023,
+        "served_by": "canary",
+        "model_version": VERSION,
+        "prediction": OFFLINE[f"{index:06d}:2023"],
+        "attempts": [{"status": 200, "seconds": 0.05}],
+        "elapsed_seconds": 0.05,
+    }
     for index in range(40)
-] + [{"ccn": f"9{index:05d}", "window_year": 2023, "served_by": "stable", "model_version": "3", "prediction": 0.9, "seconds": 0.05} for index in range(60)]
+] + [
+    {
+        "ccn": f"9{index:05d}",
+        "window_year": 2023,
+        "served_by": "stable",
+        "model_version": "3",
+        "prediction": 0.9,
+        "attempts": [{"status": 200, "seconds": 0.05}],
+        "elapsed_seconds": 0.05,
+    }
+    for index in range(60)
+]
 REPORT = {
     "hai_type": "HAI_1",
     "requests": 100,
     "statuses": {"200": 100},
+    "attempt_statuses": {"200": 100},
     "served_by": {"stable": 60, "canary": 40},
     "comparison": {"status": "ok", "stable": {"count": 60}, "canary": {"count": 40}},
     "rows": ROWS,
@@ -64,23 +84,33 @@ def command(arguments: list[str]) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-def replayed(record: dict[str, Any], hai_type: str | None = None) -> dict[str, Any]:
+def replayed(record: dict[str, Any], hai_type: str | None = None, limited: dict[str, float] | None = None) -> dict[str, Any]:
     """Replay a 60-row corpus through ``replay.run`` against a stand-in API: 30 of the record's holdout rows go to the canary, which answers with the
-    record's offline predictions under the challenger's version, and 30 other hospital-windows go to the stable model."""
+    record's offline predictions under the challenger's version, and 30 other hospital-windows go to the stable model.
+
+    Every answer takes 0.01 s. A key in ``limited`` first answers 429 after the seconds it maps to, with ``Retry-After: 1``, and then 200."""
     from scripts.serving import replay
 
     offline = record["promotion"]["challenger_predictions"]
     canary_keys = sorted(offline)[:30]
     corpus = [(key.split(":")[0], int(key.split(":")[1])) for key in canary_keys] + [(f"8{index:05d}", 2023) for index in range(30)]
-    ticks = iter(range(10_000))
+    now = [0.0]
+    pending = dict(limited or {})
+
+    def sleep(seconds: float) -> None:
+        now[0] += seconds
 
     def send(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
         key = f"{payload['ccn']}:{payload['window_year']}"
+        if key in pending:
+            now[0] += pending.pop(key)
+            return 429, {"Retry-After": "1"}, {"error": "rate_limited"}
+        now[0] += 0.01
         if key in offline:
             return 200, {}, {"served_by": "canary", "prediction": offline[key], "model_version": record["promotion"]["challenger"]["version"]}
         return 200, {}, {"served_by": "stable", "prediction": 0.9, "model_version": "1"}
 
-    return replay.run(send, corpus, hai_type or record["hai_type"], clock=lambda: next(ticks) * 0.001, sleep=lambda seconds: None, deadline_seconds=900.0)
+    return replay.run(send, corpus, hai_type or record["hai_type"], clock=lambda: now[0], sleep=sleep, deadline_seconds=900.0)
 
 
 def auto_promotion_cases(cases: Cases, folder: Path) -> None:
@@ -112,15 +142,16 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     def canary_holds() -> None:
         failed_request = {**REPORT, "statuses": {"200": 99, "500": 1}}
         thin_rows = [row for row in ROWS if row["served_by"] == "stable" or int(row["ccn"]) < 29]
-        thin = {**REPORT, "rows": thin_rows, "comparison": {"status": "insufficient", "stable": {"count": 60}, "canary": {"count": 29}}}
-        slow = {**REPORT, "rows": [{**ROWS[0], "seconds": 5.5}, *ROWS[1:]]}
+        answered = {"requests": len(thin_rows), "statuses": {"200": len(thin_rows)}, "attempt_statuses": {"200": len(thin_rows)}}
+        thin = {**REPORT, **answered, "rows": thin_rows, "comparison": {"status": "insufficient", "stable": {"count": 60}, "canary": {"count": 29}}}
+        slow = {**REPORT, "rows": [{**ROWS[0], "elapsed_seconds": 5.5}, *ROWS[1:]]}
         other_version = {**REPORT, "rows": [{**ROWS[0], "model_version": "5"}, *ROWS[1:]]}
         off = {**REPORT, "rows": [{**ROWS[0], "prediction": ROWS[0]["prediction"] * (1 + 2e-6)}, *ROWS[1:]]}
         within = {**REPORT, "rows": [{**ROWS[1], "prediction": ROWS[1]["prediction"] * (1 + 5e-7)}, *ROWS[:1], *ROWS[2:]]}
         unscored = {**REPORT, "rows": [{**ROWS[0], "ccn": "777777"}, *ROWS[1:]]}
         require(judged(failed_request) == {"decision": "hold", "failed": ["requests_answered"]}, "a failed request did not hold the canary")
         require(judged(thin) == {"decision": "hold", "failed": ["both_sides_compared"]}, f"too few canary rows did not hold the canary: {judged(thin)}")
-        few_rows = {**REPORT, "rows": thin_rows}
+        few_rows = {**REPORT, **answered, "rows": thin_rows}
         require(
             judged(few_rows) == {"decision": "hold", "failed": ["both_sides_compared"]}, f"29 canary rows passed on a report that says ok: {judged(few_rows)}"
         )
@@ -283,7 +314,45 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     cases.check("auto_promotion_canary_checks_pass_a_clean_canary", canary_passes)
     cases.check("auto_promotion_canary_checks_hold_a_failed_or_thin_canary", canary_holds)
     cases.check("auto_promotion_canary_result_is_bound_to_the_version_and_its_run", record_binds_the_result_to_the_candidate)
+
+    def canary_holds_a_request_that_needed_a_retry() -> None:
+        """The reviewer's scenario: a canary request answers 429 after 4 s, waits 1 s and then answers 200 in 0.01 s. The lead's reading of the pass rule
+        (an assumption for the owner): a request passes only when every attempt answered 200 and its total time, retries included, is within the limit."""
+        record = {
+            **RESEARCH,
+            "promotion": {**RESEARCH["promotion"], "challenger_predictions": {f"{index:06d}:2023": 0.5 + index / 100 for index in range(40)}},
+        }
+        record["promotion"]["challenger"] = {**record["promotion"]["challenger"], "version": VERSION}
+        first = sorted(record["promotion"]["challenger_predictions"])[0]
+        clean = replayed(record)
+        require(judged(clean, record["promotion"]["challenger_predictions"])["decision"] == "promote", f"the clean replay was held: {judged(clean)}")
+        retried_slowly = replayed(record, limited={first: 4.0})
+        attempts = [row.get("attempts") for row in retried_slowly["rows"] if f"{row['ccn']}:{row['window_year']}" == first]
+        statuses = [[attempt.get("status") for attempt in item] for item in attempts if isinstance(item, list)]
+        elapsed = [row.get("elapsed_seconds") for row in retried_slowly["rows"] if f"{row['ccn']}:{row['window_year']}" == first]
+        require(
+            statuses == [[429, 200]] and len(elapsed) == 1 and isinstance(elapsed[0], float) and abs(elapsed[0] - 5.01) < 1e-9,
+            f"the report does not keep both attempts and the total time of the retried request: attempts {attempts}, elapsed {elapsed}",
+        )
+        require(
+            judged(retried_slowly, record["promotion"]["challenger_predictions"]) == {"decision": "hold", "failed": ["requests_answered", "within_time_limit"]},
+            f"a request that answered 429 and took 5.01 s in all passed the canary: {judged(retried_slowly, record['promotion']['challenger_predictions'])}",
+        )
+        retried_quickly = replayed(record, limited={first: 0.01})
+        require(
+            judged(retried_quickly, record["promotion"]["challenger_predictions"]) == {"decision": "hold", "failed": ["requests_answered"]},
+            f"a request whose first attempt answered 429 passed the canary: {judged(retried_quickly, record['promotion']['challenger_predictions'])}",
+        )
+        research_file, report_file = folder / "retry_research.json", folder / "retry_report.json"
+        research_file.write_text(json.dumps(record))
+        report_file.write_text(json.dumps(retried_slowly))
+        code, out, error = command(["verdict", "--report", str(report_file), "--research", str(research_file)])
+        require(
+            code == 0 and json.loads(out)["decision"] == "hold", f"the verdict command passed the retried canary: exit {code}, {out.strip()} {error.strip()}"
+        )
+
     cases.check("auto_promotion_record_refuses_a_candidate_of_another_identity", record_refuses_a_candidate_of_another_identity)
+    cases.check("auto_promotion_canary_holds_a_request_that_needed_a_retry", canary_holds_a_request_that_needed_a_retry)
     cases.check("auto_promotion_compares_the_feature_schema_with_the_online_one", schema_comparison)
     cases.check("auto_promotion_release_calls_the_feast_release_command", release_calls_the_feast_command)
     cases.check("auto_promotion_release_failure_is_visible", release_failure_is_visible)
