@@ -222,13 +222,14 @@ BOOT_INTERRUPT_STALL_CAP = 8
 # local CI, and a job still running at the end of the wait raises its own error, which would hide the planted dropped worker error.
 BOOT_SURVIVOR_CANCEL_WAIT = 8.0
 # Runs boot_host in its own process and interrupts it with SIGINT once the stalled step runs. Arguments: repository root, case folder, mode ("interrupt", or
-# "survivor": a session stop that is never confirmed), plant ("" or the name of a planted defect), the real bash and the GNU timeout. It writes result.json.
+# "survivor": a session stop that is never confirmed), plant ("" or the name of a planted defect), the real bash, the GNU timeout and the stalled mount
+# stand-in (BOOT_STALL_WITH_PID). It writes result.json.
 BOOT_INTERRUPT_RUNNER = """
 import json, os, signal, sys, threading, time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
-repo, folder, mode, plant, bash, gnu_timeout = sys.argv[1:7]
+repo, folder, mode, plant, bash, gnu_timeout, stall_command = sys.argv[1:8]
 repo, folder = Path(repo), Path(folder)
 sys.path.insert(0, str(repo))
 signal.signal(signal.SIGINT, signal.default_int_handler)
@@ -273,7 +274,7 @@ template = (run_e2e.REPO_ROOT / run_e2e.BOOT_TEMPLATE).read_text(encoding="utf-8
 for patch in patches:
     patch.start()
 threading.Thread(target=interrupt_when_stalled, daemon=True).start()
-stall = {"mount": run_e2e.BOOT_STALL_WITH_PID}
+stall = {"mount": stall_command}
 cap = {"BOOT_TIMEOUT_CAP": str(run_e2e.BOOT_INTERRUPT_STALL_CAP)}
 try:
     run_e2e.boot_host(evidence, bash, "boot_interrupted", template, stall, cap, gnu_timeout)
@@ -2265,7 +2266,7 @@ def boot_interrupt_result(evidence: Evidence, bash: str, gnu_timeout: str, mode:
     folder.mkdir()
     runner = folder / "runner.py"
     runner.write_text(BOOT_INTERRUPT_RUNNER, encoding="utf-8")
-    arguments = ["-B", str(runner), str(REPO_ROOT), str(folder), mode, plant, bash, gnu_timeout]
+    arguments = ["-B", str(runner), str(REPO_ROOT), str(folder), mode, plant, bash, gnu_timeout, BOOT_STALL_WITH_PID]
     # A runner that never comes back (the defect) is stopped, with its session and everything in it, when this deadline passes.
     with contextlib.suppress(TimeoutExpired):
         run_command(sys.executable, arguments, cwd=REPO_ROOT, env=evidence.environment, timeout=BOOT_INTERRUPT_STALL_CAP + BOOT_SURVIVOR_CANCEL_WAIT + 12)
