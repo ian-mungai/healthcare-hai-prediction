@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA27 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA28 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -1631,6 +1631,42 @@ def case_fa26(c: Checker) -> None:
         c.check("no output holds the reader secret", SENTINEL not in out + err)
 
 
+def case_fa28(c: Checker) -> None:
+    """FA28: ``feast_materialize --release m1 <RUN_ID>`` on the AWS profile is refused, by name, while a Production model of m1 is on another schema than the
+    held run (owner decision "Shared online set release", Nov 10 2026): nothing is loaded, no release is recorded and the hold stays. Once every Production
+    model of the set is on the run's schema, the same command releases the run."""
+    schema, _ = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    same = {"feature_set": "m1", "feature_set_schema_sha256": mine}
+    other = {"feature_set": "m1", "feature_set_schema_sha256": "0" * 64}
+    hold = {
+        "schema": 1,
+        "feature_set": "m1",
+        "run_id": SET_RUN,
+        "base_run": SET_BASE_RUN,
+        "set_schema_sha256": mine,
+        "production_set_schema_sha256": ["0" * 64],
+    }
+    with tempfile.TemporaryDirectory(prefix="feast_aws_release_guard_") as raw:
+        world = Deployed(
+            Path(raw), ProductionBucket({"HAI_1": [same], "HAI_4": [other], "HAI_5": [{"feature_set": "m2", "feature_set_schema_sha256": "0" * 64}]})
+        )
+        (world.folder / "online_hold.json").write_text(json.dumps(hold))
+        with world.running(deployed_environment(world.folder, FEATURE_SET=None)):
+            code, out, err = entry_point(lambda: feast_materialize.main(["--release", "m1", SET_RUN, "--mode", "publish_fixture"]))
+        c.check("the release is refused (exit 1)", code == 1)
+        c.check("the refusal names the set and the infection type on another schema", "m1" in err and "HAI_4" in err and "HAI_1" not in err.split("HAI_4")[0])
+        c.check("the refusal leaves a model of another set out", "HAI_5" not in err)
+        c.check("nothing was loaded and no release was recorded", world.loaded == [] and not (world.folder / "online_release.json").is_file())
+        c.check("the hold stays", json.loads((world.folder / "online_hold.json").read_text()) == hold)
+        c.check("no output holds the reader secret", SENTINEL not in out + err)
+        world.bucket = ProductionBucket({"HAI_1": [same], "HAI_4": [other, same]})
+        with world.running(deployed_environment(world.folder, FEATURE_SET=None)):
+            code, _, err = entry_point(lambda: feast_materialize.main(["--release", "m1", SET_RUN, "--mode", "publish_fixture"]))
+        c.check("once every Production model of the set is on the run's schema the release loads the run", code == 0 and err == "")
+        c.check("the held run was loaded once into the set's own database", world.loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
+
+
 def case_fa27(c: Checker) -> None:
     """FA27: ``FEATURE_SET=all``, the value the broker and the override generator give a run of the single path, reaches ``feast_job`` from the environment
     (the layer driver passes no flag for it) and runs the single path on the AWS profile."""
@@ -1688,4 +1724,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA25": (case_fa25, "FA25"),
     "FA26": (case_fa26, "FA26"),
     "FA27": (case_fa27, "FA27"),
+    "FA28": (case_fa28, "FA28"),
 }

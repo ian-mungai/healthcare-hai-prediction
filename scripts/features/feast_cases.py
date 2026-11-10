@@ -800,8 +800,19 @@ def case_e32_release(c: Checker) -> None:
             calls.append(f"{request.feature_set}:{request.run}:{request.base_run}")
             return "load-2"
 
+        production: dict[str, str | None] = {}
+
         def release(feature_set: str = "m1", run: str = held_run, newest: str = held_run) -> dict[str, Any]:
-            return feast_sets.release(feature_set, run, schema=schema, schema_sha256=sha, holds=holds, loader=loader, newest_run=lambda name: newest)
+            return feast_sets.release(
+                feature_set,
+                run,
+                schema=schema,
+                schema_sha256=sha,
+                holds=holds,
+                loader=loader,
+                newest_run=lambda name: newest,
+                production=lambda: dict(production),
+            )
 
         c.refused("a run without a hold record is refused", release, "no online hold")
         holds.write_new(
@@ -811,6 +822,14 @@ def case_e32_release(c: Checker) -> None:
         )
         c.refused("a hold of another set is refused", lambda: release("m2"), "m1")
         c.refused("a run that is not the newest of its set is refused and both are named", lambda: release(newest=newer_run), newer_run)
+        production.update({"HAI_2": mine, "HAI_3": "0" * 64, "HAI_6": None})
+        c.refused("a Production model of the set on another schema refuses the release by name", release, "HAI_3")
+        c.refused("a Production model of the set without a schema hash refuses the release by name", release, "HAI_6 (no schema hash)")
+        c.check(
+            "the refused release keeps the hold and records no release",
+            holds.read(feast_sets.RELEASE_NAME, held_run) is None and holds.read(feast_sets.HOLD_NAME, held_run) is not None,
+        )
+        production.update({"HAI_3": mine, "HAI_6": mine})
         c.check("nothing was loaded by the refusals", calls == [])
         record = release()
         c.check("the release loads the held run online once, with its base run", calls == [f"m1:{held_run}:{base_run}"])
@@ -846,17 +865,23 @@ def case_e32_release_command(c: Checker) -> None:
             return "load-4"
 
         record = feast_materialize.release_set(
-            ["--release", "m4", run, "--mode", "publish_fixture"], {}, schema=(schema, sha), holds=holds, loader=loader, newest_run=lambda name: run
+            ["--release", "m4", run, "--mode", "publish_fixture"],
+            {},
+            schema=(schema, sha),
+            holds=holds,
+            loader=loader,
+            newest_run=lambda name: run,
+            production=lambda: {"HAI_1": mine},
         )
         c.check("the command releases the held run of m4 through the loader", calls == [run] and record["load_id"] == "load-4")
         c.refused(
             "a set that is not a model set is refused",
-            lambda: feast_materialize.release_set(["--release", "base", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run),
+            lambda: feast_materialize.release_set(["--release", "base", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run, production=dict),
             "not a model set",
         )
         c.refused(
             "a set that is not online is refused",
-            lambda: feast_materialize.release_set(["--release", "m3", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run),
+            lambda: feast_materialize.release_set(["--release", "m3", run], {}, schema=(schema, sha), holds=holds, newest_run=lambda n: run, production=dict),
             "not an online model set",
         )
         try:

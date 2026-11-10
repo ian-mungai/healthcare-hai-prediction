@@ -404,10 +404,14 @@ def release(
     holds: HoldStore,
     loader: OnlineLoader,
     newest_run: Callable[[str], str],
+    production: Callable[[], Mapping[str, str | None]],
 ) -> dict[str, Any]:
     """Load the held run of a set online and record the release. A run that was released returns its release record and loads nothing again.
 
-    ``newest_run`` returns the newest committed run of the set: an older held run is refused, because its table is no longer the set's data."""
+    ``newest_run`` returns the newest committed run of the set: an older held run is refused, because its table is no longer the set's data.
+    ``production`` returns the schema hash of each Production model of the set by infection type (``production_reader``). While any of them differs from the
+    run's schema hash the release is refused by name and the hold stays, so no model is served online features of another schema: a new schema waits until
+    every consumer of the set has promoted a model trained on it (owner decision "Shared online set release", Nov 10 2026)."""
     if feature_sets.checked(feature_set) not in feature_sets.MODEL_SETS or not schema["model_sets"][feature_set]["online"]:
         raise ReadError(f"set {feature_set} is not an online model set: only m1, m2 and m4 have a held online load")
     hold = holds.read(HOLD_NAME, run)
@@ -424,6 +428,13 @@ def release(
     set_hash = feature_schema.set_schema_sha256(feature_set, schema=schema)
     if hold.get("set_schema_sha256") != set_hash:
         raise ReadError(f"the schema of set {feature_set} changed since run {run} was held")
+    differing = {hai_type: value for hai_type, value in sorted(production().items()) if value != set_hash}
+    if differing:
+        named = ", ".join(f"{hai_type} ({value or 'no schema hash'})" for hai_type, value in differing.items())
+        raise ReadError(
+            f"set {feature_set} stays held: the Production models of {named} are on another schema than run {run} ({set_hash}); "
+            "release it once every Production model of the set is trained on this schema"
+        )
     load_id = loader(LoadRequest(feature_set, run, str(hold["base_run"]), set_hash))
     record = {
         "schema": 1,

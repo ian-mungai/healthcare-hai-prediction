@@ -1273,7 +1273,13 @@ def case_e35(c: Checker, make: Callable[[], Any]) -> None:
     )
     server.restart()
     record = feast_materialize.release_set(
-        ["--release", "m1", run, "--mode", "publish_fixture"], {}, schema=(schema, sha), holds=holds, loader=loader(), newest_run=lambda name: run
+        ["--release", "m1", run, "--mode", "publish_fixture"],
+        {},
+        schema=(schema, sha),
+        holds=holds,
+        loader=loader(),
+        newest_run=lambda name: run,
+        production=lambda: {"HAI_1": set_hash},
     )
     c.check(
         "a release loads the held run through the same load",

@@ -17,7 +17,7 @@ import importlib.metadata
 import json
 import os
 import sys
-from collections.abc import Callable, MutableMapping, Sequence
+from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -180,8 +180,11 @@ def release_set(
     holds: feast_sets.HoldStore | None = None,
     loader: feast_sets.OnlineLoader | None = None,
     newest_run: Callable[[str], str] | None = None,
+    production: Callable[[], Mapping[str, str | None]] | None = None,
 ) -> dict[str, Any]:
-    """Release the held online load of a run: ``--release <SET> <RUN_ID> [--mode real|publish_fixture]``. A repeat returns the first release record."""
+    """Release the held online load of a run: ``--release <SET> <RUN_ID> [--mode real|publish_fixture]``. A repeat returns the first release record.
+
+    The release is refused while a Production model of the set is on another schema (``feast_sets.release``); the Production records are read from S3."""
     parser = argparse.ArgumentParser(description="Load a held model set run online and record the release.", prog="feast_materialize")
     parser.add_argument("--release", nargs=2, metavar=("SET", "RUN_ID"), required=True)
     parser.add_argument("--mode", choices=reads.MODES, default="real")
@@ -191,9 +194,16 @@ def release_set(
     if feature_set not in feature_sets.MODEL_SETS:
         raise ReadError(f"set {feature_set!r} is not a model set (m1 to m6)")
     document, sha = schema if schema is not None else reads.read_schema()
-    if holds is not None and newest_run is not None:
+    if holds is not None and newest_run is not None and production is not None:
         return feast_sets.release(
-            feature_set, run, schema=document, schema_sha256=sha, holds=holds, loader=loader or feast_sets.refusing_loader, newest_run=newest_run
+            feature_set,
+            run,
+            schema=document,
+            schema_sha256=sha,
+            holds=holds,
+            loader=loader or feast_sets.refusing_loader,
+            newest_run=newest_run,
+            production=production,
         )
     from scripts.features import feast_aws
 
@@ -218,6 +228,7 @@ def release_set(
             holds=holds if holds is not None else feast_sets.hold_store(settings, live),
             loader=loader if loader is not None else set_loader,
             newest_run=newest_run if newest_run is not None else (lambda name: feast_sets.newest_set_run(catalog, reads.NAMESPACES[args.mode], name, document)),
+            production=production if production is not None else feast_sets.production_reader(settings, feature_set),
         )
 
 
