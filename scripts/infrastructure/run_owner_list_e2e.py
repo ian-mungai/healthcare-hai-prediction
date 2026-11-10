@@ -160,6 +160,11 @@ def structure_checks(text: str) -> dict[str, bool]:
     checks["the gold section is a numbered list and takes the signed silver run as input"] = bool(steps_of(gold)) and "--input-run <SILVER_RUN_ID>" in gold
     features = owner_commands.section(text, FEATURES)
     checks |= features_checks(features)
+    # The host has a second, persistent interface: describe-instances shows the primary interface's changing address, which MLflow refuses as a Host header.
+    host_starts = [steps_of(owner_commands.section(text, name)) for name in (SILVER, FEATURES)]
+    checks["every host address comes from the platform output host_private_ip, never from describe-instances"] = "PrivateIpAddress" not in text and all(
+        any("describe-instances" in step and "terraform -chdir=infra/platform output -raw host_private_ip" in step for step in steps) for steps in host_starts
+    )
     variables = {name for names in (variables_of(directory) for directory in STACKS.values()) for name in names}
     named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", body + gold + features) if name in variables}
     rows = {row.name for row in ROWS}
