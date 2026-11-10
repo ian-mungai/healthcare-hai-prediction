@@ -50,6 +50,19 @@ class Paginator:
         return [{self.key: items[:2]}, {self.key: items[2:]}]
 
 
+class MarkerPaginator:
+    """Follow IsTruncated and Marker as botocore's IAM paginators do, calling the fake's own list method for each page."""
+
+    def __init__(self, call: Callable[..., dict[str, Any]]) -> None:
+        self.call = call
+
+    def paginate(self, **arguments: Any) -> list[dict[str, Any]]:
+        pages = [self.call(**arguments)]
+        while pages[-1]["IsTruncated"]:
+            pages.append(self.call(**arguments, Marker=pages[-1]["Marker"]))
+        return pages
+
+
 class FakeIam:
     """A small in-memory IAM: policies with versions, groups with attachments and one user."""
 
@@ -66,6 +79,9 @@ class FakeIam:
         self.role_policies: dict[str, set[str]] = {}
         self.calls: list[str] = []
         self.fail_on: set[str] = set()
+        # The items per page of list_policy_versions and list_entities_for_policy. IAM may truncate these below MaxItems, so None (one page) is
+        # only the default; a test sets a size to put items on later pages.
+        self.page_size: int | None = None
 
     def arn(self, name: str) -> str:
         return f"arn:aws:iam::{ACCOUNT}:policy/{name}"
@@ -100,8 +116,16 @@ class FakeIam:
             "list_attached_user_policies": ("AttachedPolicies", lambda UserName: [self.attachment(n) for n in sorted(self.user_policies[UserName])]),
             "list_user_policies": ("PolicyNames", lambda UserName: sorted(self.user_inline[UserName])),
         }
+        if name in ("list_policy_versions", "list_entities_for_policy"):
+            return MarkerPaginator(getattr(self, name))
         key, fetch = listing[name]
         return Paginator(fetch, key)
+
+    def page(self, items: list[Any], marker: str | None) -> tuple[list[Any], dict[str, Any]]:
+        """One page of ``items`` from ``marker`` on, and IAM's truncation fields for it."""
+        start = int(marker or 0)
+        end = len(items) if self.page_size is None else min(start + self.page_size, len(items))
+        return items[start:end], ({"IsTruncated": True, "Marker": str(end)} if end < len(items) else {"IsTruncated": False})
 
     def attachment(self, name: str) -> dict[str, str]:
         return {"PolicyName": name, "PolicyArn": f"arn:aws:iam::aws:policy/{name}" if name in self.aws_managed else self.arn(name)}
@@ -125,16 +149,19 @@ class FakeIam:
     def get_policy_version(self, PolicyArn: str, VersionId: str) -> dict[str, Any]:
         return {"PolicyVersion": {"Document": self.policies[self.name_of(PolicyArn)]["document"]}}
 
-    def list_policy_versions(self, PolicyArn: str) -> dict[str, Any]:
-        return {"Versions": list(self.policies[self.name_of(PolicyArn)]["versions"])}
+    def list_policy_versions(self, PolicyArn: str, Marker: str | None = None) -> dict[str, Any]:
+        versions, truncation = self.page(list(self.policies[self.name_of(PolicyArn)]["versions"]), Marker)
+        return {"Versions": versions, **truncation}
 
-    def list_entities_for_policy(self, PolicyArn: str) -> dict[str, Any]:
+    def list_entities_for_policy(self, PolicyArn: str, Marker: str | None = None) -> dict[str, Any]:
         name = self.name_of(PolicyArn)
-        return {
-            "PolicyUsers": [{"UserName": USER} for held in [self.user_policies[USER]] if name in held],
-            "PolicyGroups": [{"GroupName": g} for g, held in sorted(self.groups.items()) if name in held],
-            "PolicyRoles": [{"RoleName": r} for r, held in sorted(self.role_policies.items()) if name in held],
-        }
+        entities = (
+            [("PolicyUsers", {"UserName": USER}) for held in [self.user_policies[USER]] if name in held]
+            + [("PolicyGroups", {"GroupName": g}) for g, held in sorted(self.groups.items()) if name in held]
+            + [("PolicyRoles", {"RoleName": r}) for r, held in sorted(self.role_policies.items()) if name in held]
+        )
+        listed, truncation = self.page(entities, Marker)
+        return {key: [item for kind, item in listed if kind == key] for key in ("PolicyUsers", "PolicyGroups", "PolicyRoles")} | truncation
 
     def record(self, operation: str, name: str) -> None:
         self.calls.append(f"{operation} {name}")
@@ -583,6 +610,29 @@ def test_apply_checks_the_version_inventory_again_before_the_first_write(env_fil
     check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
 
 
+def test_the_plan_and_the_recheck_read_every_page_of_the_version_inventory(
+    env_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # IAM may truncate a version listing below MaxItems. With four versions per page, the fifth is on page two.
+    iam = applied_iam(env_file)
+    iam.page_size = 4
+    name = f"{PROJECT}_sns_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=5)
+    capsys.readouterr()
+    check(manage_policies.run(arguments(env_file, "plan", policies=["sns"]), {}, FakeSession(iam)) == 0, "the plan must succeed")
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("UPDATE POLICY")]
+    check(lines == [f"UPDATE POLICY    {name} (deletes version v1)"], f"the plan must see the fifth version on page two: {lines}")
+    # Four versions when the plan is read; a fifth arrives on page two after the new plan and before the first write.
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=4)
+    digest = planned_digest(env_file, iam, policies=["sns"])
+    iam.calls.clear()
+    stale_after_replan(monkeypatch, lambda: iam.add_version(name, datetime(2026, 3, 1, tzinfo=UTC)))
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", policies=["sns"], digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [], f"a version on page two must stop the apply before any write: {iam.writes()}")
+    check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
+
+
 def test_a_failed_step_is_reported_and_the_others_still_run(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     iam.fail_on = {f"create_policy {PROJECT}_ecr_policy"}
@@ -648,6 +698,26 @@ def test_a_retired_policy_holder_added_after_the_new_plan_stops_apply_before_any
     with pytest.raises(RuntimeError) as error:
         manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam))
     check(iam.writes() == [] and iam.policies.keys() == {name}, f"a new holder must stop the apply before any write: {iam.writes()}")
+    check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
+
+
+def test_the_plan_and_the_recheck_read_every_page_of_a_retired_policy_holders(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # IAM may truncate a holder listing below MaxItems. With one holder per page, the project user is on page one and a role on page two.
+    iam = FakeIam()
+    iam.page_size = 1
+    name = f"{PROJECT}_secrets_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []})
+    iam.user_policies[USER].add(name)
+    iam.role_policies["example_other_role"] = {name}
+    message = refused_plan(env_file, iam)
+    check("example_other_role" in message and name in message, f"the plan must see the role on page two: {message}")
+    # Only the project user when the plan is read; the role arrives on page two after the new plan and before the first write.
+    iam.role_policies.clear()
+    digest = planned_digest(env_file, iam)
+    stale_after_replan(monkeypatch, lambda: iam.role_policies.update({"example_other_role": {name}}))
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [] and iam.policies.keys() == {name}, f"a holder on page two must stop the apply before any write: {iam.writes()}")
     check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
 
 

@@ -8,6 +8,7 @@ carries its whole version inventory, and each step names the versions it deletes
 version that is not the default, and the plan names that version. Before the first write, apply reads the live state again and stops if it differs
 from the plan. A retired policy's holders are in the digest too, and a holder other than the project user and its groups refuses the plan before any
 step, so a run never writes the new policies and then stops at a retirement.
+IAM may truncate a list below its page size, so every list call reads every page.
 
 Policies are customer-managed, one per service. They attach to two IAM groups (the managed policy quota per user is 10), and the project user joins
 both. The retired grouped policies are detached and deleted.
@@ -209,8 +210,8 @@ Compared = dict[str, dict[str, Any] | None]
 
 
 def version_inventory(iam: Any, arn: str) -> list[dict[str, Any]]:
-    """Every version of a policy, oldest first."""
-    versions: list[dict[str, Any]] = iam.list_policy_versions(PolicyArn=arn)["Versions"]
+    """Every version of a policy on every page, oldest first. IAM may truncate this listing below MaxItems."""
+    versions: list[dict[str, Any]] = paged(iam, "list_policy_versions", "Versions", PolicyArn=arn)
     return sorted(versions, key=lambda version: (version["CreateDate"], version["VersionId"]))
 
 
@@ -242,12 +243,12 @@ def live_state(iam: Any, names: Names, documents: Mapping[str, Mapping[str, Any]
 
 
 def policy_holders(iam: Any, arn: str) -> dict[str, list[str]]:
-    """The users, groups and roles a policy is attached to, each sorted. Read-only."""
-    holders = iam.list_entities_for_policy(PolicyArn=arn)
+    """The users, groups and roles a policy is attached to on every page, each sorted. IAM may truncate this listing below MaxItems. Read-only."""
+    pages = list(iam.get_paginator("list_entities_for_policy").paginate(PolicyArn=arn))
     return {
-        "users": sorted(item["UserName"] for item in holders.get("PolicyUsers", [])),
-        "groups": sorted(item["GroupName"] for item in holders.get("PolicyGroups", [])),
-        "roles": sorted(item["RoleName"] for item in holders.get("PolicyRoles", [])),
+        "users": sorted(item["UserName"] for page in pages for item in page.get("PolicyUsers", [])),
+        "groups": sorted(item["GroupName"] for page in pages for item in page.get("PolicyGroups", [])),
+        "roles": sorted(item["RoleName"] for page in pages for item in page.get("PolicyRoles", [])),
     }
 
 

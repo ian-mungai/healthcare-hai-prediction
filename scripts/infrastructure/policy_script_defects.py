@@ -160,6 +160,20 @@ DEFECTS = (
         "test_apply_refuses_a_digest_made_stale_by_a_new_policy_version",
     ),
     ScriptDefect(
+        "the version inventory reads one page only",
+        MANAGE,
+        'paged(iam, "list_policy_versions", "Versions", PolicyArn=arn)',
+        'iam.list_policy_versions(PolicyArn=arn)["Versions"]',
+        "test_the_plan_and_the_recheck_read_every_page_of_the_version_inventory",
+    ),
+    ScriptDefect(
+        "a retired policy's holders are read from one page only",
+        MANAGE,
+        'pages = list(iam.get_paginator("list_entities_for_policy").paginate(PolicyArn=arn))',
+        "pages = [iam.list_entities_for_policy(PolicyArn=arn)]",
+        "test_the_plan_and_the_recheck_read_every_page_of_a_retired_policy_holders",
+    ),
+    ScriptDefect(
         "apply writes without reading the live state again",
         MANAGE,
         "    check_unchanged(iam, names, documents, compared, full)\n",
