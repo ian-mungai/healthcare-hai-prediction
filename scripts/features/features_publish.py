@@ -44,10 +44,11 @@ def publish_plan(mode: str, contract: Path = CONTRACT, feature_set: str = "") ->
     plan = load_plan(contract)
     if mode not in MODES or dict(plan.namespaces) != NAMESPACES or json.loads(contract.read_text())["publish"].get("writer_principal") != WRITER:
         raise PublishError("the features publish mode, namespace or writer principal is invalid")
-    plan = replace(plan, backup_prefix=f"lakehouse/{plan.namespaces[mode]}/catalog_backups/")
+    schema = feature_schema.load_schema(contract.parents[2])
+    plan = replace(plan, backup_prefix=f"lakehouse/{plan.namespaces[mode]}/catalog_backups/", column_change_notes=feature_sets.column_change_notes(schema))
     if not feature_sets.checked(feature_set):
         return plan
-    return feature_sets.scoped_plan(plan, feature_set, feature_schema.load_schema(contract.parents[2]))
+    return feature_sets.scoped_plan(plan, feature_set, schema)
 
 
 def record_committed(ctx: Context, path: Path, feature_set: str = "", base_run: str | None = None) -> dict[str, Any]:

@@ -1705,6 +1705,70 @@ def feature_set_cases(report: Report) -> None:
         all(decide(name, {"HAI_1": {"feature_set": name, "feature_set_schema_sha256": "0" * 64}}) == "offline" for name in ("m3", "m5", "m6")),
     )
     single_path_value_cases(report, layer_run)
+    column_change_cases(report, schema)
+
+
+class ColumnSpark:
+    """The one Spark call ``gold_publish.column_changes`` makes: ``spark.table(name).schema.fields``, answered from a table of name to column types."""
+
+    def __init__(self, tables: dict[str, dict[str, str]]) -> None:
+        self.tables = tables
+
+    def table(self, name: str) -> Any:
+        fields = [Field(column, kind) for column, kind in self.tables[name].items()]
+        return type("Frame", (), {"schema": type("Schema", (), {"fields": fields})()})()
+
+
+class Field:
+    """A Spark struct field: its name and a type whose simple string is ``kind``."""
+
+    def __init__(self, name: str, kind: str) -> None:
+        self.name = name
+        self.dataType = type("DataType", (), {"simpleString": staticmethod(lambda: kind)})()
+
+
+def column_change_cases(report: Report, schema: dict[str, Any]) -> None:
+    """F17: the features publish refuses a removed or retyped committed column of a model set table by table and column, and says the change waits for the
+    new-table path (owner decision "Removed or retyped predictors in a published set", Nov 10 2026). Another table keeps the plain refusal, and an added
+    column still evolves the table. The publish engine's own column check runs against a stand-in of its one Spark call."""
+    table = schema["model_sets"]["m1"]["table"]
+    plain = sorted(name for name in features_publish.publish_plan("publish_fixture").tables if not name.startswith("feature_matrix_m"))[0]
+    committed = {"spine_key": "string", "beds": "double", "rate": "double"}
+
+    def refusal(name: str, export: dict[str, str], feature_set: str) -> str:
+        spark = ColumnSpark({f"ns.{name}": committed, "export": export})
+        plan = features_publish.publish_plan("publish_fixture", feature_set=feature_set)
+        ctx = type("Ctx", (), {"spark": spark, "plan": plan, "fq": staticmethod(lambda item: f"ns.{item}")})()
+        try:
+            gold_publish.column_changes(ctx, name, "export")
+        except PublishError as error:
+            return str(error)
+        return ""
+
+    removed = refusal(table, {"spine_key": "string", "rate": "double"}, "m1")
+    retyped = refusal(table, {"spine_key": "string", "beds": "bigint", "rate": "double"}, "m1")
+    single = refusal(table, {"spine_key": "string", "rate": "double"}, "")
+    other = refusal(plain, {"spine_key": "string", "rate": "double"}, "")
+    spark = ColumnSpark({f"ns.{table}": committed, "export": {**committed, "added": "double"}})
+    ctx = type(
+        "Ctx", (), {"spark": spark, "plan": features_publish.publish_plan("publish_fixture", feature_set="m1"), "fq": staticmethod(lambda item: f"ns.{item}")}
+    )()
+    added = gold_publish.column_changes(ctx, table, "export")[0]
+    table_view = {
+        "a removed predictor names the table and the column": table in removed and "removes column beds" in removed,
+        "a removed predictor says the change waits for the new-table path": "new-table path" in removed,
+        "a retyped predictor names the column and both types and the new-table path": "beds from double to bigint" in retyped and "new-table path" in retyped,
+        "the single path names the same limit for a model set table": "new-table path" in single,
+        "a table that is not a model set table keeps the plain refusal": "removes column beds" in other and "new-table path" not in other,
+        "an added predictor still evolves the table": added == ["added"],
+    }
+    report.case(
+        "F17",
+        "FS2",
+        "a removed or retyped predictor of a model set table is refused by name and waits for the new-table path",
+        all(table_view.values()),
+        table=table_view,
+    )
 
 
 def single_path_value_cases(report: Report, layer_run: Any) -> None:

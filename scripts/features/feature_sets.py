@@ -69,6 +69,18 @@ def scoped_plan(plan: Plan, feature_set: str, schema: Mapping[str, Any]) -> Plan
     return replace(plan, tables={name: keys[name] for name in set_tables(feature_set, plan.tables, schema)})
 
 
+# The owner keeps this refusal as a documented limit until the new-table path is built (project standard: removed or retyped predictors in a published set).
+COLUMN_CHANGE_NOTE = (
+    ". By owner decision a model set table can only gain predictors: a removed or retyped predictor waits for the new-table path, which publishes a"
+    " changed schema to a new table under the same set"
+)
+
+
+def column_change_notes(schema: Mapping[str, Any]) -> dict[str, str]:
+    """The note the publish adds when it refuses a removed or retyped column of a model set table, by table."""
+    return {entry["table"]: COLUMN_CHANGE_NOTE for entry in schema["model_sets"].values()}
+
+
 def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str]) -> Mapping[str, Any] | None:
     """The newest committed row whose snapshot set names every base table. ``rows`` are in commit order, oldest first. A run of the single path counts."""
     wanted = set(base_tables)

@@ -168,6 +168,8 @@ class Plan:
     retain_sets: int
     expire_after_days: int
     orphan_after_days: int
+    # A note per table that a refused column change adds to its message (the features plan names the model set tables).
+    column_change_notes: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def writable(self) -> frozenset[str]:
@@ -423,7 +425,8 @@ def column_changes(ctx: Context, name: str, view: str) -> tuple[list[str], dict[
         details = [f"removes column {column}" for column in removed] + [
             f"changes the type of column {column} from {current[column]} to {wanted[column]}" for column in retyped
         ]
-        raise PublishError(f"{name}: the export {'; '.join(details)}; a committed column is never removed or retyped by a publish")
+        note = ctx.plan.column_change_notes.get(name, "")
+        raise PublishError(f"{name}: the export {'; '.join(details)}; a committed column is never removed or retyped by a publish{note}")
     return [column for column in wanted if column not in current], wanted
 
 
