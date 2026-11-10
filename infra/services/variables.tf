@@ -442,6 +442,18 @@ variable "host_launch_hold_parameter_name" {
   }
 }
 
+variable "services_apply_lock_parameter_name" {
+  description = "Parameter Store name of the services apply lock that scripts/infrastructure/services_apply.py creates before each services apply and deletes after it settles (the IAM variable of the same name). The launch preflight and the send boundary refuse every host launch while it exists or cannot be read."
+  type        = string
+  default     = "/healthcare_hai_prediction/services_apply_lock"
+  nullable    = false
+
+  validation {
+    condition     = length(var.services_apply_lock_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.services_apply_lock_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.services_apply_lock_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "host_system_reserve_mib" {
   description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The job room (output host_job_memory_mib) is the usable memory less this margin and the always-on service reservations."
   type        = number

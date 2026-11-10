@@ -1029,6 +1029,8 @@ def a_constant_cap_reader_is_caught() -> None:
 
 
 HOLD_PARAMETER = "/healthcare_hai_prediction/host_launch_hold"
+LOCK_PARAMETER = "/healthcare_hai_prediction/services_apply_lock"
+APPLY_LOCK_VALUE = "apply-host:4242:20261110T230000Z:0badc0de"  # an apply lock value in its token shape, not a credential
 CLEAR = "clear"
 HELD = "held by services_apply at 2026-11-10T20:00:00Z"
 
@@ -1060,11 +1062,16 @@ class LaunchSsm:
         return sum(1 for item in self.requests if item == {"Name": name})
 
 
-def held_rig(hold: list[str | Exception], cap: list[str | Exception]) -> tuple[Rig, LaunchSsm]:
+def no_lock() -> list[str | Exception]:
+    """The apply lock answers of a stack with no services apply running: the parameter does not exist."""
+    return [client_error("ParameterNotFound", "GetParameter")]
+
+
+def held_rig(hold: list[str | Exception], cap: list[str | Exception], lock: list[str | Exception] | None = None) -> tuple[Rig, LaunchSsm]:
     """A rig whose preflight hold and cap readers and whose fit probe wrapper are the production ones from ``airflow_steps.services()``, wired to a
     stand-in SSM client. Before the launch hold exists the production pieces are missing and the case fails on that, not on a type error."""
     steps = importlib.import_module("orchestration.airflow_steps")
-    ssm = LaunchSsm({HOLD_PARAMETER: hold, CAP_PARAMETER: cap})
+    ssm = LaunchSsm({HOLD_PARAMETER: hold, CAP_PARAMETER: cap, LOCK_PARAMETER: no_lock() if lock is None else lock})
 
     class Session:
         def __init__(self, region_name: str) -> None:
@@ -1075,7 +1082,12 @@ def held_rig(hold: list[str | Exception], cap: list[str | Exception]) -> tuple[R
 
     with tempfile.TemporaryDirectory() as scratch:
         environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
-        environment |= {"HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER, "HAI_LAUNCH_HOST_HOLD_PARAMETER": HOLD_PARAMETER, "HAI_LAUNCH_HOST_CAPACITY": CAPACITY}
+        environment |= {
+            "HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER,
+            "HAI_LAUNCH_HOST_HOLD_PARAMETER": HOLD_PARAMETER,
+            "HAI_LAUNCH_APPLY_LOCK_PARAMETER": LOCK_PARAMETER,
+            "HAI_LAUNCH_HOST_CAPACITY": CAPACITY,
+        }
         provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
         with (
             mock.patch.dict("os.environ", environment, clear=True),
@@ -1174,6 +1186,34 @@ def a_slow_authorization_withholds_runtask() -> None:
     with world(rig, "silver_transform_dag", SILVER) as current:
         refuses(Exception, lambda: current.step("pin_bronze"))
     require(rig.ecs.count("run_task") == 0, "RunTask was sent although the authorization reads took longer than the window")
+
+
+def a_present_or_unreadable_apply_lock_refuses_launch() -> None:
+    """Apply lock in the launch authorization (round 4, owner A): a services apply that crashed between taking the lock and setting the hold
+    (the hold still reads clear), or between settle's clear and the lock delete, leaves the lock present; an unreadable lock is not known to be
+    absent. Each refuses every host launch at the preflight, by name, with zero tasks."""
+    for label, lock in (
+        ("crash between lock and hold", [APPLY_LOCK_VALUE]),
+        ("crash between the hold clear and the lock delete", [APPLY_LOCK_VALUE]),
+        ("lock unreadable", [client_error("AccessDeniedException", "GetParameter")]),
+    ):
+        rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)], lock)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(Exception, lambda: current.step("pin_bronze"))
+        require(ssm.reads(LOCK_PARAMETER) >= 1, f"{label}: the apply lock was not read: {ssm.requests}")
+        require("apply lock" in str(error) or "launch_hold_unreadable" in str(error), f"{label}: the refusal does not name the lock: {error}")
+        require(rig.tasks_started() == 0 and not rig.ecs.count("run_task"), f"{label}: a launch went ahead")
+
+
+def an_apply_lock_taken_after_the_probe_withholds_runtask() -> None:
+    """Forced order: the preflight and the fit probe find no apply lock, then a services apply takes the lock before the send. The send
+    boundary rereads the lock, so no RunTask is sent."""
+    missing = client_error("ParameterNotFound", "GetParameter")
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)], [missing, missing, APPLY_LOCK_VALUE])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(ssm.reads(LOCK_PARAMETER) >= 3, f"the send boundary did not reread the apply lock: {ssm.requests}")
+    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent after a services apply took the lock")
 
 
 def a_padded_clear_value_holds_launches() -> None:
@@ -1822,6 +1862,8 @@ CASES: dict[str, Callable[[], None]] = {
     "a_cap_lowered_after_the_probe_withholds_runtask": a_cap_lowered_after_the_probe_withholds_runtask,
     "a_slow_authorization_withholds_runtask": a_slow_authorization_withholds_runtask,
     "a_padded_clear_value_holds_launches": a_padded_clear_value_holds_launches,
+    "a_present_or_unreadable_apply_lock_refuses_launch": a_present_or_unreadable_apply_lock_refuses_launch,
+    "an_apply_lock_taken_after_the_probe_withholds_runtask": an_apply_lock_taken_after_the_probe_withholds_runtask,
     "a_cap_raised_by_the_apply_lets_the_next_launch_run": a_cap_raised_by_the_apply_lets_the_next_launch_run,
     "a_cleared_hold_lets_the_launch_run": a_cleared_hold_lets_the_launch_run,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,

@@ -396,11 +396,11 @@ run "launch_role_reads_only_the_host_job_cap_parameter" {
   assert {
     condition = (
       length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadHostJobCap"]) == 1 &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_job_cap", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_launch_hold"] &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_job_cap", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_launch_hold", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/services_apply_lock"] &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadHostJobCap"][0] == "ssm:GetParameter" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadHostJobCap"][0] == "Allow"
     )
-    error_message = "The launch role reads exactly the host job cap and launch hold parameters, with ssm:GetParameter only."
+    error_message = "The launch role reads exactly the host job cap, launch hold and apply lock parameters, with ssm:GetParameter only."
   }
 }
 

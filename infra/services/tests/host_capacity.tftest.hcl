@@ -346,7 +346,8 @@ run "the_host_job_cap_is_written_to_one_standard_parameter" {
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
         contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAP_PARAMETER=/healthcare_hai_prediction/host_job_cap") &&
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_HOLD_PARAMETER=/healthcare_hai_prediction/host_launch_hold") if startswith(container.name, "airflow")
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_HOLD_PARAMETER=/healthcare_hai_prediction/host_launch_hold") &&
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_APPLY_LOCK_PARAMETER=/healthcare_hai_prediction/services_apply_lock") if startswith(container.name, "airflow")
       ])
     ])
     error_message = "Every Airflow container names the host job cap parameter and the launch hold parameter, so the launch preflight reads the cap the services stack wrote and the hold the services apply command sets."

@@ -102,7 +102,7 @@ locals {
     DATA_BUCKET_NAME                = var.data_bucket_name
     HOST_JOB_CAP_PARAMETER_NAME     = var.host_job_cap_parameter_name
     HOST_LAUNCH_HOLD_PARAMETER_NAME = var.host_launch_hold_parameter_name
-    # Not named by a launch policy: the project user's ssmcap policy (rendered from this default) grants it; declared here once for both.
+    # The launch role reads the services apply lock (ReadHostJobCap); the project user's ssmcap policy grants its create, read and delete.
     SERVICES_APPLY_LOCK_PARAMETER_NAME = var.services_apply_lock_parameter_name
     RECORD_PREFIX                      = var.airflow_launch_record_prefix
     REQUEST_OBJECT_ARNS                = jsonencode(local.airflow_launch_request_arns)

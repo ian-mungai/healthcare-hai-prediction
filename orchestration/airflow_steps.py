@@ -62,6 +62,7 @@ SETTINGS = (
     "HAI_LAUNCH_HOST_CAPACITY",
     "HAI_LAUNCH_HOST_CAP_PARAMETER",
     "HAI_LAUNCH_HOST_HOLD_PARAMETER",
+    "HAI_LAUNCH_APPLY_LOCK_PARAMETER",
 )
 # The usable-memory inputs the services stack always renders (host_usable_memory_mib defaults to the current host size), checked by the preflight
 # against the binding of every host revision.
@@ -114,7 +115,7 @@ def services() -> LaunchServices:
         ),
     )
     scratch = Path(values["HAI_LAUNCH_SCRATCH_PATH"])
-    hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"])
+    hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"], values["HAI_LAUNCH_APPLY_LOCK_PARAMETER"])
     cap = ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"])
     clock = Clock()
     probe = host_fit_probe(EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free), hold, cap)

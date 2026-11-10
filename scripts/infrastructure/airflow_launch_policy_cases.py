@@ -101,6 +101,8 @@ def container_instance(cluster: str = CLUSTER, identifier: str = "0123456789abcd
 HOST_CAP = "/healthcare_hai_prediction/host_job_cap"
 # The launch hold the services apply command sets and clears (infra/iam/airflow_launch.tf host_launch_hold_parameter_name).
 HOLD = "/healthcare_hai_prediction/host_launch_hold"
+# The services apply lock: a present lock refuses every host launch, so the launch role reads it (infra/iam/airflow_launch.tf).
+APPLY_LOCK = "/healthcare_hai_prediction/services_apply_lock"
 
 
 def values(families: list[str]) -> dict[str, str]:
@@ -117,6 +119,7 @@ def values(families: list[str]) -> dict[str, str]:
         "DATA_BUCKET_NAME": BUCKET,
         "HOST_JOB_CAP_PARAMETER_NAME": HOST_CAP,
         "HOST_LAUNCH_HOLD_PARAMETER_NAME": HOLD,
+        "SERVICES_APPLY_LOCK_PARAMETER_NAME": APPLY_LOCK,
         "RECORD_PREFIX": RECORD_PREFIX,
         "REQUEST_OBJECT_ARNS": json.dumps(requests),
         "FAMILIES": json.dumps(sorted(families)),
@@ -267,6 +270,11 @@ def job_cases() -> list[Case]:
     add("delete the launch hold", "ssm:DeleteParameter", hold, False)
     add("read the launch hold by the plural call", "ssm:GetParameters", hold, False)
     add("read a sibling of the launch hold", "ssm:GetParameter", f"{hold}_extra", False)
+    apply_lock = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{APPLY_LOCK}"
+    add("read the apply lock", "ssm:GetParameter", apply_lock, True)
+    add("create the apply lock", "ssm:PutParameter", apply_lock, False)
+    add("delete the apply lock", "ssm:DeleteParameter", apply_lock, False)
+    add("read a sibling of the apply lock", "ssm:GetParameter", f"{apply_lock}_extra", False)
     add("read the broker token", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/broker_token", False)
     add("read the MLflow password", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/mlflow_admin_password", False)
     for action in ("ecs:UpdateService", "ecs:DeleteService", "ecs:CreateService", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"):
@@ -503,6 +511,7 @@ RESOURCES = (
     Resource("signed publish record", SIGNED_ARN, NONE, NONE),
     Resource("host job cap", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("launch hold", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
+    Resource("apply lock", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{APPLY_LOCK}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
     Resource("a KMS key", KMS_KEY, NONE, NONE),
     Resource("another KMS key", KMS_OTHER_KEY, NONE, NONE),
@@ -931,7 +940,11 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
-        Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}"), {}),
+        Grant(
+            "ssm:GetParameter",
+            tuple(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}" for name in (HOST_CAP, HOLD, APPLY_LOCK)),
+            {},
+        ),
     ]
 
 

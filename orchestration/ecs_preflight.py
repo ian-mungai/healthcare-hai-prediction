@@ -234,11 +234,23 @@ LAUNCH_HOLD_CLEAR = "clear"
 SEND_AUTHORIZATION_SECONDS = 10.0
 
 
-def ssm_launch_hold_reader(ssm: Any, name: str) -> Callable[[], str | None]:
-    """Read the launch hold that the services apply command writes to Parameter Store, or None while the parameter does not exist."""
+def ssm_launch_hold_reader(ssm: Any, name: str, lock_name: str | None = None) -> Callable[[], str | None]:
+    """Read the launch hold that the services apply command writes to Parameter Store, or None while the parameter does not exist.
+
+    With ``lock_name`` it first reads the services apply lock: while the lock exists a services apply runs or stopped part way (after taking the
+    lock and before setting the hold, or after clearing the hold and before deleting the lock), so the value read is a held value naming the lock,
+    whatever the hold says. An unreadable lock is not known to be absent and raises like an unreadable hold."""
 
     def read() -> str | None:
         try:
+            if lock_name is not None:
+                try:
+                    token = str(ssm.get_parameter(Name=lock_name)["Parameter"]["Value"])
+                except ClientError as error:
+                    if error.response.get("Error", {}).get("Code") != "ParameterNotFound":
+                        raise
+                else:
+                    return f"the services apply lock is held by {token[:120]}"
             return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
