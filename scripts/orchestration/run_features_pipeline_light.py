@@ -783,13 +783,23 @@ def case_features_publish_job(fixture: Fixture, scratch: Path) -> Checks:
     mounts = {(mount.source, mount.target, mount.read_only) for mount in renderer.spark_mounts("features_publish_e2e", SimpleNamespace(run_folder=None))}
     checks["mounts"] = mounts == {
         (str(ROOT / "scripts"), "/workspace/scripts", True),
+        (str(ROOT / "orchestration"), "/workspace/orchestration", True),
         (str(ROOT / "config"), "/workspace/config", True),
         (str(ROOT / "data_contracts/lakehouse/gold_contract.json"), "/workspace/data_contracts/lakehouse/gold_contract.json", True),
         (str(ROOT / "data_contracts/lakehouse/features_publish.json"), "/workspace/data_contracts/lakehouse/features_publish.json", True),
         (str(ROOT / "data/e2e/feature_store"), "/workspace/data/e2e/feature_store", False),
     }
     gold = {(mount.source, mount.target, mount.read_only) for mount in renderer.spark_mounts("gold_publish_e2e", SimpleNamespace(run_folder=None))}
-    checks["gold_suite_mounts_unchanged"] = not any("features_publish.json" in source for source, _, _ in gold) and len(gold) == 4
+    # The gold suite's base pin case builds the features plan and reads the feature schema, all read-only.
+    checks["gold_suite_mounts"] = gold == {
+        (str(ROOT / "scripts"), "/workspace/scripts", True),
+        (str(ROOT / "orchestration"), "/workspace/orchestration", True),
+        (str(ROOT / "config"), "/workspace/config", True),
+        (str(ROOT / "data_contracts/lakehouse/gold_contract.json"), "/workspace/data_contracts/lakehouse/gold_contract.json", True),
+        (str(ROOT / "data_contracts/lakehouse/features_publish.json"), "/workspace/data_contracts/lakehouse/features_publish.json", True),
+        (str(ROOT / "data_contracts/features"), "/workspace/data_contracts/features", True),
+        (str(ROOT / "data/e2e/gold_publish"), "/workspace/data/e2e/gold_publish", False),
+    }
     return checks
 
 

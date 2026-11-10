@@ -1385,6 +1385,8 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "writes": ("data/e2e/gold_publish",),
         "aws": False,
         "contract": True,
+        # The base pin case builds the features plan and reads the domain matrices of the feature schema.
+        "contract_files": ("data_contracts/lakehouse/features_publish.json", "data_contracts/features"),
         "grammar": {"--case": "values", "--stamp": "value"},
     },
     # The offline features publish (lane A's case suite): the gold publish engine with the features contract on a local file-based Iceberg catalog.
@@ -2376,7 +2378,13 @@ class Renderer:
     def spark_mounts(self, job: str, inp: RenderInput) -> list[Mount]:
         """The narrowed Spark mounts: code and configuration read-only, only the folders the job writes writable (D1 section 7 item 3)."""
         spec = SPARK_JOBS[job]
-        mounts = [Mount(str(self.checkout / "scripts"), "/workspace/scripts", True), Mount(str(self.checkout / "config"), "/workspace/config", True)]
+        # The orchestration package is mounted read-only for every Spark job: the features input code that the publish cases run imports its pipeline
+        # protocol, and the container-mounts check refuses a conditional Python source mount.
+        mounts = [
+            Mount(str(self.checkout / "scripts"), "/workspace/scripts", True),
+            Mount(str(self.checkout / "orchestration"), "/workspace/orchestration", True),
+            Mount(str(self.checkout / "config"), "/workspace/config", True),
+        ]
         if spec.get("aws"):
             mounts.append(Mount(str(account_home() / ".aws"), "/aws", True))
         if spec.get("deployment"):
