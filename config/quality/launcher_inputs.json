@@ -803,7 +803,6 @@
     "dbt/models/silver/intermediate/int_vbp_program_years.sql",
     "dbt/models/silver/intermediate/int_wonder_county_deaths.sql",
     "dbt/models/silver/staging/_bronze__sources.yml",
-    "dbt/models/silver/staging/_file_metadata__models.yml",
     "dbt/models/silver/staging/_staging__models.yml",
     "dbt/models/silver/staging/stg_acs_b16005.sql",
     "dbt/models/silver/staging/stg_acs_b19013.sql",

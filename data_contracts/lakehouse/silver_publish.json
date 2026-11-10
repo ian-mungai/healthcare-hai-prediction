@@ -3,7 +3,7 @@
   "classification": "Public",
   "key_sources_sha256": {
     "dbt/models/silver/intermediate/_intermediate__models.yml": "98397a68c27723c882fd5518791d8a31c76d1e3d2a6610fee1e6be959e3976a8",
-    "dbt/models/silver/staging/_staging__models.yml": "26105f231ff9db96582e16b3e4ed38c2977fa4a8676824efb2a3f23044175e3b"
+    "dbt/models/silver/staging/_staging__models.yml": "ce35e3eb111f66dcf45f1420fbb47637cfe905ff7338853818a029527d373590"
   },
   "publish": {
     "backup_prefix": "lakehouse/silver/catalog_backups/",
