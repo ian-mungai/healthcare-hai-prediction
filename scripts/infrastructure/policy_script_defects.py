@@ -181,11 +181,25 @@ DEFECTS = (
         "test_stored_documents_in_the_form_iam_returns_count_as_unchanged",
     ),
     ScriptDefect(
-        "a retired policy is deleted while a role holds it",
+        "a retired policy held by a role is planned for deletion",
         MANAGE,
-        "    if others:\n",
+        "    if held:\n",
         "    if False:\n",
-        "test_a_retired_policy_held_by_a_role_is_kept_and_reported",
+        "test_a_retired_policy_held_by_a_role_is_refused_before_any_write",
+    ),
+    ScriptDefect(
+        "a role holding a retired policy counts as the project's own",
+        MANAGE,
+        '    return sorted(others + holders["roles"])\n',
+        "    return sorted(others)\n",
+        "test_a_retired_policy_held_by_a_role_is_refused_before_any_write",
+    ),
+    ScriptDefect(
+        "the digest leaves out the retired policy's holders",
+        MANAGE,
+        '                "holders": policy_holders(iam, arn),\n',
+        "",
+        "test_apply_refuses_a_digest_made_stale_by_a_retired_policy_holder_or_version",
     ),
     ScriptDefect(
         "thirteen policies go into one group",

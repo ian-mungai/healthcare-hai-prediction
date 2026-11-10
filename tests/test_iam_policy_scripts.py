@@ -611,14 +611,44 @@ def test_old_grouped_policies_are_detached_and_deleted_and_direct_attachments_mo
     check(f"{PROJECT}_s3_policy" in iam.groups[f"{PROJECT}_data_dev"], "the S3 policy must reach the user through the data group")
 
 
-def test_a_retired_policy_held_by_a_role_is_kept_and_reported(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+@pytest.mark.parametrize("action", ["plan", "apply"])
+def test_a_retired_policy_held_by_a_role_is_refused_before_any_write(env_file: Path, action: str) -> None:
+    # The new policies come first in the steps, so a refusal inside the retirement would come after they were written.
     iam = FakeIam()
     name = f"{PROJECT}_secrets_policy"
     iam.add_policy(name, {"Version": "2012-10-17", "Statement": []})
     iam.role_policies["example_other_role"] = {name}
-    code = plan_and_apply(env_file, iam)
-    check(code == 1 and name in iam.policies, "a policy that a role holds must not be deleted")
-    check("example_other_role" in capsys.readouterr().out, "the other holder must be named")
+    message = refused_plan(env_file, iam, action)
+    check(name in iam.policies and iam.policies.keys() == {name}, "nothing may be created and the held policy must stay")
+    check("example_other_role" in message and name in message, f"the policy and its other holder must be named: {message}")
+
+
+def test_apply_refuses_a_digest_made_stale_by_a_retired_policy_holder_or_version(env_file: Path) -> None:
+    iam = applied_iam(env_file)
+    name = f"{PROJECT}_secrets_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=2)
+    digest = planned_digest(env_file, iam)
+    # The project user gets the retired policy after the plan: the retirement would detach a holder the reviewed plan did not show.
+    iam.user_policies[USER].add(name)
+    refused_digest(env_file, iam, digest)
+    check(name in iam.policies and name in iam.user_policies[USER], "the retired policy and its holder must stay")
+    digest = planned_digest(env_file, iam)
+    # A version the reviewed plan did not show: the retirement would delete it.
+    iam.add_version(name, datetime(2026, 3, 1, tzinfo=UTC))
+    refused_digest(env_file, iam, digest)
+    check(len(iam.policies[name]["versions"]) == 3, "no version of the retired policy may be deleted")
+
+
+def test_a_retired_policy_holder_added_after_the_new_plan_stops_apply_before_any_write(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    iam = FakeIam()
+    name = f"{PROJECT}_secrets_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []})
+    digest = planned_digest(env_file, iam)
+    stale_after_replan(monkeypatch, lambda: iam.role_policies.update({"example_other_role": {name}}))
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [] and iam.policies.keys() == {name}, f"a new holder must stop the apply before any write: {iam.writes()}")
+    check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
 
 
 def test_a_selected_policy_limits_the_run_and_skips_the_retirements(env_file: Path) -> None:

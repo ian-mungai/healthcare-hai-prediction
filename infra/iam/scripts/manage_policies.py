@@ -6,7 +6,8 @@ covers the steps, the rendered documents and the live policy versions they were 
 call. It then plans again and changes nothing unless the new digest matches, so it applies only what the owner reviewed. Each live policy in the digest
 carries its whole version inventory, and each step names the versions it deletes: IAM keeps five versions, so an update first deletes the oldest
 version that is not the default, and the plan names that version. Before the first write, apply reads the live state again and stops if it differs
-from the plan.
+from the plan. A retired policy's holders are in the digest too, and a holder other than the project user and its groups refuses the plan before any
+step, so a run never writes the new policies and then stops at a retirement.
 
 Policies are customer-managed, one per service. They attach to two IAM groups (the managed policy quota per user is 10), and the project user joins
 both. The retired grouped policies are detached and deleted.
@@ -203,7 +204,7 @@ def user_other_grants(iam: Any, names: Names) -> list[str]:
 
 
 # The live state a plan compared with, by policy name, or None when the policy does not exist: the default version, the version inventory and, for
-# a rendered policy, the SHA-256 of its stored document.
+# a rendered policy, the SHA-256 of its stored document or, for a retired policy, its ARN and holders.
 Compared = dict[str, dict[str, Any] | None]
 
 
@@ -229,8 +230,32 @@ def live_state(iam: Any, names: Names, documents: Mapping[str, Mapping[str, Any]
         }
     if full:
         retired = {names.policy(service) for service in RETIRED_SERVICES}
-        state |= {name: {"version": existing[name]["DefaultVersionId"]} for name in sorted(existing) if name in retired}
+        for name in sorted(name for name in existing if name in retired):
+            arn = existing[name]["Arn"]
+            state[name] = {
+                "arn": arn,
+                "version": existing[name]["DefaultVersionId"],
+                "versions": [version["VersionId"] for version in version_inventory(iam, arn)],
+                "holders": policy_holders(iam, arn),
+            }
     return state
+
+
+def policy_holders(iam: Any, arn: str) -> dict[str, list[str]]:
+    """The users, groups and roles a policy is attached to, each sorted. Read-only."""
+    holders = iam.list_entities_for_policy(PolicyArn=arn)
+    return {
+        "users": sorted(item["UserName"] for item in holders.get("PolicyUsers", [])),
+        "groups": sorted(item["GroupName"] for item in holders.get("PolicyGroups", [])),
+        "roles": sorted(item["RoleName"] for item in holders.get("PolicyRoles", [])),
+    }
+
+
+def other_holders(names: Names, holders: Mapping[str, list[str]]) -> list[str]:
+    """The holders a retirement must not detach: users besides the project user, groups besides its own and every role."""
+    own_groups = {names.group(suffix) for suffix in GROUP_SERVICES}
+    others = [user for user in holders["users"] if user != names.user] + [group for group in holders["groups"] if group not in own_groups]
+    return sorted(others + holders["roles"])
 
 
 def pruned_version(iam: Any, policy: Mapping[str, Any]) -> tuple[str, ...]:
@@ -247,8 +272,8 @@ def pruned_version(iam: Any, policy: Mapping[str, Any]) -> tuple[str, ...]:
 def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], full: bool) -> tuple[list[Step], Compared]:
     """Compare the rendered policies with IAM and list the changes in the order ``apply`` runs them, with the live state compared. Read-only.
 
-    It stops before listing any change when a group holds a member, a managed policy or an inline policy beyond the intended ones, or when an update
-    has no version it can delete.
+    It stops before listing any change when a group holds a member, a managed policy or an inline policy beyond the intended ones, when an update
+    has no version it can delete, or when a retired policy has a holder besides the project user and its groups.
     """
     try:
         iam.get_user(UserName=names.user)
@@ -262,6 +287,13 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
         raise RuntimeError("a group of the project user holds more than intended; nothing was changed:\n  - " + "\n  - ".join(problems))
     existing = local_policies(iam)
     compared = live_state(iam, names, documents, existing, full)
+    held = []
+    for name, live in compared.items():
+        others = other_holders(names, live["holders"]) if live and "holders" in live else []
+        if others:
+            held.append(f"{name} is still attached to {', '.join(others)}")
+    if held:
+        raise RuntimeError("a retired policy has other holders; detach it there first. Nothing was changed:\n  - " + "\n  - ".join(held))
     steps: list[Step] = []
     for name in sorted(documents):
         policy, live = existing.get(name), compared[name]
@@ -290,7 +322,9 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
         direct = {item["PolicyName"] for item in paged(iam, "list_attached_user_policies", "AttachedPolicies", UserName=names.user)}
         steps += [Step("detach_user", name, names.user) for name in sorted(direct & set(documents))]
         retired = {names.policy(service) for service in RETIRED_SERVICES}
-        steps += [Step("retire_policy", name) for name in sorted(existing) if name in retired]
+        for name in sorted(name for name in existing if name in retired):
+            versions = version_inventory(iam, existing[name]["Arn"])
+            steps.append(Step("retire_policy", name, removes=tuple(version["VersionId"] for version in versions if not version["IsDefaultVersion"])))
     return steps, compared
 
 
@@ -317,28 +351,19 @@ def check_unchanged(iam: Any, names: Names, documents: Mapping[str, Mapping[str,
         raise RuntimeError(f"these policies changed after the plan was read: {', '.join(changed)}; nothing was changed. Run plan again, review it and apply.")
 
 
-def retire(iam: Any, names: Names, policy: Mapping[str, Any]) -> str:
-    """Detach a retired policy from the project user and its groups, delete its old versions and the policy. Any other holder stops the delete."""
-    arn = policy["Arn"]
-    holders = iam.list_entities_for_policy(PolicyArn=arn)
-    own_groups = {names.group(suffix) for suffix in GROUP_SERVICES}
-    others = [item["UserName"] for item in holders.get("PolicyUsers", []) if item["UserName"] != names.user]
-    others += [item["GroupName"] for item in holders.get("PolicyGroups", []) if item["GroupName"] not in own_groups]
-    others += [item["RoleName"] for item in holders.get("PolicyRoles", [])]
-    if others:
-        raise RuntimeError(f"still attached to {', '.join(sorted(others))}; detach it there first")
-    for item in holders.get("PolicyUsers", []):
-        iam.detach_user_policy(UserName=item["UserName"], PolicyArn=arn)
-    for item in holders.get("PolicyGroups", []):
-        iam.detach_group_policy(GroupName=item["GroupName"], PolicyArn=arn)
-    for version in iam.list_policy_versions(PolicyArn=arn)["Versions"]:
-        if not version["IsDefaultVersion"]:
-            iam.delete_policy_version(PolicyArn=arn, VersionId=version["VersionId"])
+def retire(iam: Any, arn: str, holders: Mapping[str, list[str]], step: Step) -> str:
+    """Detach a retired policy from the planned holders, delete the planned versions and the policy. The plan refused any other holder."""
+    for user in holders["users"]:
+        iam.detach_user_policy(UserName=user, PolicyArn=arn)
+    for group in holders["groups"]:
+        iam.detach_group_policy(GroupName=group, PolicyArn=arn)
+    for version in step.removes:
+        iam.delete_policy_version(PolicyArn=arn, VersionId=version)
     iam.delete_policy(PolicyArn=arn)
     return "detached and deleted"
 
 
-def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], step: Step, existing: Mapping[str, Mapping[str, Any]]) -> str:
+def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], step: Step, compared: Compared) -> str:
     """Run one step; every step is safe to run again."""
     arn = policy_arn(account, step.name)
     if step.kind == "create_policy":
@@ -360,7 +385,10 @@ def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Map
     elif step.kind == "detach_user":
         iam.detach_user_policy(UserName=step.target, PolicyArn=arn)
     elif step.kind == "retire_policy":
-        return retire(iam, names, existing[step.name])
+        live = compared[step.name]
+        if live is None:
+            raise ValueError(f"the plan holds no live state for {step.name}")
+        return retire(iam, live["arn"], live["holders"], step)
     else:
         raise ValueError(f"unsupported step: {step.kind}")
     return "completed"
@@ -371,14 +399,13 @@ def apply_steps(
 ) -> list[StepResult]:
     """Check that the live state still matches the plan, then run the steps in order; a failed step is recorded and the others still run."""
     check_unchanged(iam, names, documents, compared, full)
-    existing = local_policies(iam)
     results = []
     for step in steps:
         if step.kind == "keep_policy":
             results.append(StepResult(step, "unchanged", "the policy matches the template"))
             continue
         try:
-            results.append(StepResult(step, "applied", apply_step(iam, names, account, documents, step, existing)))
+            results.append(StepResult(step, "applied", apply_step(iam, names, account, documents, step, compared)))
         except (ClientError, RuntimeError, ValueError) as error:
             results.append(StepResult(step, "failed", f"{type(error).__name__}: {error}"))
     return results
