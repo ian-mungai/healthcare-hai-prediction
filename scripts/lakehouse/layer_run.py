@@ -207,6 +207,8 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
         kill_descendants()
 
     child = {**os.environ, **(environment or {})}
+    if job.layer == "features":
+        child[feature_sets.VARIABLE] = job.feature_set  # the set main checked: the task's all becomes the single path's empty value
     watchdog = threading.Timer(STEP_SECONDS, stop_tree)
     watchdog.daemon = True
     watchdog.start()

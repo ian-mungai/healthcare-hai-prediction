@@ -40,6 +40,7 @@ from scripts.features import feature_sets, fixture_catalog
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
+from scripts.lakehouse.gold_publish_record import PublishError
 
 REPO = reads.REPO_ROOT / "feature_store"
 SETTINGS_FILE = REPO / "feature_store.yaml"
@@ -376,7 +377,7 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("step", choices=STEPS)
     parser.add_argument("--run", required=True)
     parser.add_argument("--mode", required=True, choices=reads.MODES)
-    parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="the set whose run is applied (empty: the single path)")
+    parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="the set whose run is applied (empty or all: the single path)")
     return parser.parse_args(list(argv))
 
 
@@ -390,9 +391,10 @@ def main(argv: Sequence[str] | None = None, environ: MutableMapping[str, str] | 
     try:
         from scripts.features import feast_aws
 
-        if args.feature_set and args.feature_set not in feature_sets.SETS:
-            raise ReadError(f"{feature_sets.VARIABLE} {args.feature_set!r} is not one of {', '.join(feature_sets.SETS)}")
-        feature_set = args.feature_set
+        try:
+            feature_set = feature_sets.checked(args.feature_set)  # all (the single path's value in the task) is the single path, like empty
+        except PublishError as error:
+            raise ReadError(str(error)) from None
         if feast_aws.selected_profile(live) == "aws":
             record = feast_aws.run_job(args.step, args.run, args.mode, live, feature_set=feature_set)
             sys.stdout.write(json.dumps({key: record[key] for key in record if key in SUMMARY_KEYS}, sort_keys=True) + "\n")

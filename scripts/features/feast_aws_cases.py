@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24 and FA26 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24, FA26 and FA27 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -1560,6 +1560,35 @@ def case_fa26(c: Checker) -> None:
         c.check("no output holds the reader secret", SENTINEL not in out + err)
 
 
+def case_fa27(c: Checker) -> None:
+    """FA27: ``FEATURE_SET=all``, the value the broker and the override generator give a run of the single path, reaches ``feast_job`` from the environment
+    (the layer driver passes no flag for it) and runs the single path on the AWS profile."""
+    schema = feast_cases.synthetic_schema()
+    catalog, _ = feast_cases.stub_features(schema)
+    with tempfile.TemporaryDirectory(prefix="feast_aws_all_") as raw:
+        world = Deployed(Path(raw), RegistryStandIn())
+        world.guarded = GuardedCatalog(catalog)
+        log: list[str] = []
+        environment = aws_environment(FEAST_RUN_FOLDER=raw, FEATURE_SET=feature_sets_module().SINGLE_PATH)
+        with world.running(environment):
+            backend = PathBackend(schema, log, os.environ)
+            with (
+                mock.patch.object(reads, "read_schema", lambda *arguments, **options: (schema, "c" * 64)),
+                mock.patch.object(feast_job, "FeastRepository", lambda settings_file=None: backend),
+            ):
+                code, out, err = entry_point(lambda: feast_job.main(["apply", "--run", RUN, "--mode", "publish_fixture"]))
+        record = json.loads((Path(raw) / feast_job.RECORD_NAME).read_text()) if (Path(raw) / feast_job.RECORD_NAME).is_file() else {}
+        c.check("the apply exits 0", code == 0)
+        c.check("no refusal of the set value was written", "FEATURE_SET" not in err and err == "")
+        c.check("the single path applied once and read the registry back", log.count("apply") == 1 and "read_back" in log)
+        c.check("the record is the single path's (no feature set)", bool(record) and "feature_set" not in record)
+        del out
+
+
+def feature_sets_module() -> Any:
+    return importlib.import_module("scripts.features.feature_sets")
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1586,4 +1615,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA23": (case_fa23, "FA23"),
     "FA24": (case_fa24, "FA24"),
     "FA26": (case_fa26, "FA26"),
+    "FA27": (case_fa27, "FA27"),
 }

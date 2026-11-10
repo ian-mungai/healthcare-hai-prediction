@@ -29,11 +29,14 @@ code lives in another lane), counts, hashes and timings; never a row value.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import copy
 import hashlib
 import importlib
 import importlib.util
+import io
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -60,6 +63,8 @@ RUN = "20261023T000000Z-00000001"
 RUN_B = "20261023T000100Z-00000002"
 RUN_2 = "20261023T000200Z-00000003"
 GOLD_RUN = "20261014T040000Z-0000ab01"
+# The values a case puts into an owner command list in place of its placeholders.
+OWNER_PLACEHOLDERS = {"<RUN_ID>": RUN, "<CODE_SHA256>": "ab" * 32, "<HOST_PRIVATE_IP>": "10.0.1.20", "<GOLD_RUN_ID>": GOLD_RUN}
 SUITE_FOLDER = "data_contracts/great_expectations/features"
 # The launcher jobs the publish_offline mode needs from the launcher lane (see the report): none of these exist before lane B adds them.
 Step = dict[str, Any]
@@ -1714,6 +1719,49 @@ def feature_set_cases(report: Report) -> None:
         "FS6",
         "a model set whose online flag is false never reaches the hold path, whatever its model hash",
         all(decide(name, {"HAI_1": {"feature_set": name, "feature_set_schema_sha256": "0" * 64}}) == "offline" for name in ("m3", "m5", "m6")),
+    )
+    single_path_value_cases(report, layer_run)
+
+
+def single_path_value_cases(report: Report, layer_run: Any) -> None:
+    """F14 and F15: the single path's value ``all`` through the callers that give it. The owner command lists start a features task with the override
+    generator and no set argument, and the layer driver runs every phase module with the task's environment, where ``FEATURE_SET`` is ``all``."""
+    lists = json.loads((ROOT / "config/aws/owner_command_lists.json").read_text())
+    texts = [value for value in lists.values() if isinstance(value, str)] if isinstance(lists, dict) else []
+    command = [found for text in texts for found in re.findall(r"-m scripts\.orchestration\.job_overrides (--job features [^\n]*?) > ", text)]
+    filled = [re.sub(r"<[A-Z0-9_]+>", lambda found: OWNER_PLACEHOLDERS.get(found.group(0), found.group(0)), text) for text in command]
+    job_overrides: Any = importlib.import_module("scripts.orchestration.job_overrides")
+    outcomes = []
+    for text in filled:
+        printed, refused = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(refused):
+            code = job_overrides.main(text.split())
+        containers = json.loads(printed.getvalue())["containerOverrides"] if code == 0 else []
+        values = {item["value"] for entry in containers for item in entry["environment"] if item["name"] == "FEATURE_SET"}
+        outcomes.append(code == 0 and values == {"all"} and len(containers) == 8 and "<" not in text)
+    report.case(
+        "F14",
+        "FS2",
+        "the owner command lists' features override commands (no set argument, dry run and real) give every features container FEATURE_SET=all",
+        len(outcomes) == 2 and all(outcomes),
+        commands=len(outcomes),
+        passed=sum(outcomes),
+    )
+    with tempfile.TemporaryDirectory(prefix="layer_set_environment_") as folder:
+        code = Path(folder)
+        (code / "set_probe.py").write_text("import os, sys\nopen(sys.argv[1], 'w').write(os.environ.get('FEATURE_SET', '<unset>'))\n")
+        seen = {}
+        for given, chosen in (("all", ""), ("m1", "m1"), ("base", "base")):
+            job = layer_run.Job("features", RUN, "publish_fixture", code, None, input_run=GOLD_RUN, feature_set=chosen, code_run=RUN)
+            with mock.patch.dict("os.environ", {"FEATURE_SET": given}):
+                layer_run.run_module(job, "set_probe", [code / f"seen_{given}"])
+            seen[given] = (code / f"seen_{given}").read_text()
+    report.case(
+        "F15",
+        "FS2",
+        "the layer driver gives each phase module the set it checked: all becomes the single path's empty value, a set stays itself",
+        seen == {"all": "", "m1": "m1", "base": "base"},
+        seen=seen,
     )
 
 
