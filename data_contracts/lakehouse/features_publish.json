@@ -1,6 +1,6 @@
 {
   "classification": "Public",
-  "note": "Publication contract of the features layer (design p3c/design.md section 1.1). Same shape as the publish entry of silver_publish.json. The static case E02 of scripts/features/run_feature_store_e2e.py compares this table list with data_contracts/features/feature_schema.json, the feature models and the Great Expectations suite data_contracts/great_expectations/features.",
+  "note": "Publication contract of the features layer (design p3c/design.md section 1.1): every feature model and feature_build_inputs. Same shape as the publish entry of silver_publish.json; nullable_key_columns names the key columns that may be null (the bridge filters' vintage range). The static case E02 of scripts/features/run_feature_store_e2e.py compares this table list with data_contracts/features/feature_schema.json, the feature models and the Great Expectations suite data_contracts/great_expectations/features.",
   "publish": {
     "backup_prefix": "lakehouse/features/catalog_backups/",
     "branch_prefix": "features_publish_",
@@ -15,6 +15,186 @@
     },
     "runs_table": "publish_runs",
     "tables": {
+      "feature_bridge_acs_svi_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_cost_report_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_county_health_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_geography_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_hai_outcome_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_hhs_onc_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_impact_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_income_labor_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_mmd_conditions": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_mup_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_occmix_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_ownership_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_registry_measure_sources": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_shortage_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
+      "feature_bridge_validation_measures": {
+        "merge_key": [
+          "measure_sk",
+          "registry_control_sk",
+          "vintage_start",
+          "vintage_end"
+        ],
+        "nullable_key_columns": [
+          "vintage_start",
+          "vintage_end"
+        ]
+      },
       "feature_build_inputs": {
         "merge_key": [
           "build_key"
@@ -50,14 +230,74 @@
           "spine_key"
         ]
       },
+      "int_cmi_holds": {
+        "merge_key": [
+          "year_key"
+        ]
+      },
+      "int_cmi_hospital_data_years": {
+        "merge_key": [
+          "year_key"
+        ]
+      },
+      "int_cmi_hospital_years": {
+        "merge_key": [
+          "year_key"
+        ]
+      },
+      "int_cost_report_measures": {
+        "merge_key": [
+          "measure_key"
+        ]
+      },
       "int_county_adjacency": {
         "merge_key": [
           "edge_key"
         ]
       },
+      "int_hai_outcome_values": {
+        "merge_key": [
+          "outcome_value_key"
+        ]
+      },
+      "int_hospital_hgi_history": {
+        "merge_key": [
+          "history_key"
+        ]
+      },
+      "int_hospital_ownership_history": {
+        "merge_key": [
+          "history_key"
+        ]
+      },
+      "int_hospital_pos_history": {
+        "merge_key": [
+          "history_key"
+        ]
+      },
       "int_hospital_spine": {
         "merge_key": [
           "spine_key"
+        ]
+      },
+      "int_impact_measures": {
+        "merge_key": [
+          "measure_key"
+        ]
+      },
+      "int_mup_measures": {
+        "merge_key": [
+          "measure_key"
+        ]
+      },
+      "int_occmix_measures": {
+        "merge_key": [
+          "measure_key"
+        ]
+      },
+      "int_registry_measure_windows": {
+        "merge_key": [
+          "registry_window_key"
         ]
       },
       "int_spine_care_compare_measures": {
@@ -98,6 +338,16 @@
       "int_spine_validation_measures": {
         "merge_key": [
           "alignment_key"
+        ]
+      },
+      "int_validation_measure_windows": {
+        "merge_key": [
+          "validation_key"
+        ]
+      },
+      "int_validation_program_values": {
+        "merge_key": [
+          "program_value_key"
         ]
       },
       "label_matrix_hai_outcomes": {

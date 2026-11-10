@@ -421,12 +421,28 @@ def contract_cases(report: Report) -> None:
     wide = set(schema["tables"])
     longs = {table["long_table"] for table in schema["tables"].values()}
     support = {"int_spine_validation_measures", "int_county_adjacency"}
-    expected = wide | longs | {"int_spine_linkage", "feature_build_inputs"} | support
+    models = {path.stem for path in (ROOT / columns.MODELS).rglob("*.sql")}
     report.case(
         "E02",
         "H1",
         "the contract names the wide, long, linkage, inputs and two non-Feast support tables",
-        set(contract) == expected,
+        wide | longs | {"int_spine_linkage", "feature_build_inputs"} | support <= set(contract),
+    )
+    report.case(
+        "E02",
+        "H1",
+        "the contract names every feature model and the inputs table: no model stays only in the build file",
+        set(contract) == models | {"feature_build_inputs"},
+        unpublished=sorted(models - set(contract)),
+    )
+    bridge_key = json.loads((ROOT / "data_contracts/lakehouse/gold_contract.json").read_text())["publish"]["tables"]["bridge_measure_control"]["merge_key"]
+    bridges = sorted(name for name in models if columns.FILTER_NAME.fullmatch(name))
+    report.case(
+        "E02",
+        "H1",
+        "every bridge filter model is keyed by the gold control bridge's tested grain, of which its rows are a subset",
+        bool(bridges) and all(contract.get(name, {}).get("merge_key") == bridge_key for name in bridges),
+        bridges=len(bridges),
     )
     report.case(
         "E02",
@@ -434,7 +450,6 @@ def contract_cases(report: Report) -> None:
         "neither support table is a Feast schema table or reference",
         not (support & wide) and not any(ref.split(":")[0] in support for ref in schema["servable"]),
     )
-    models = {path.stem for path in (ROOT / columns.MODELS).rglob("*.sql")}
     report.case("E02", "H1", "every contract table is a model except the inputs table", (set(contract) - {"feature_build_inputs"}) <= models)
     yaml: Any = importlib.import_module("yaml")
     tested: dict[str, dict[str, list[str]]] = {}
@@ -444,9 +459,20 @@ def contract_cases(report: Report) -> None:
     missing = [
         name
         for name, entry in contract.items()
-        if name != "feature_build_inputs" and any({"unique", "not_null"} - set(tested[name].get(key, [])) for key in entry["merge_key"])
+        if name != "feature_build_inputs"
+        and name not in bridges
+        and any({"unique", "not_null"} - set(tested.get(name, {}).get(key, [])) for key in entry["merge_key"])
     ]
-    report.case("E02", "H1", "every merge key has a unique and a not_null test in the model YAML", not missing, tables_without_tests=missing)
+    report.case(
+        "E02", "H1", "every merge key outside the bridge filters has a unique and a not_null test in the model YAML", not missing, tables_without_tests=missing
+    )
+    nullable = {name: entry.get("nullable_key_columns", []) for name, entry in contract.items() if entry.get("nullable_key_columns")}
+    report.case(
+        "E02",
+        "H1",
+        "only the bridge filters allow nulls in a key, and only in the two vintage columns that are null when open",
+        set(nullable) == set(bridges) and all(listed == ["vintage_start", "vintage_end"] for listed in nullable.values()),
+    )
     suite = json.loads((ROOT / SUITE_FOLDER / "features_keys.json").read_text())
     covered = {entry["table"] for entry in suite["expectations"]}
     report.case(

@@ -1,7 +1,142 @@
 {
   "name": "features_keys",
-  "description": "Every published features table has a unique, non-null merge key (the key the MERGE INTO of the publish uses)",
+  "description": "Every published features table has a unique merge key (the key the MERGE INTO of the publish uses), not null except the vintage columns of the bridge filters",
   "expectations": [
+    {
+      "id": "feature_bridge_acs_svi_measures.grain",
+      "table": "feature_bridge_acs_svi_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_cost_report_measures.grain",
+      "table": "feature_bridge_cost_report_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_county_health_measures.grain",
+      "table": "feature_bridge_county_health_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_geography_measures.grain",
+      "table": "feature_bridge_geography_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_hai_outcome_measures.grain",
+      "table": "feature_bridge_hai_outcome_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_hhs_onc_measures.grain",
+      "table": "feature_bridge_hhs_onc_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_impact_measures.grain",
+      "table": "feature_bridge_impact_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_income_labor_measures.grain",
+      "table": "feature_bridge_income_labor_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_mmd_conditions.grain",
+      "table": "feature_bridge_mmd_conditions",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_mup_measures.grain",
+      "table": "feature_bridge_mup_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_occmix_measures.grain",
+      "table": "feature_bridge_occmix_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_ownership_measures.grain",
+      "table": "feature_bridge_ownership_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_registry_measure_sources.grain",
+      "table": "feature_bridge_registry_measure_sources",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_shortage_measures.grain",
+      "table": "feature_bridge_shortage_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "feature_bridge_validation_measures.grain",
+      "table": "feature_bridge_validation_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" FROM {batch} GROUP BY \"measure_sk\", \"registry_control_sk\", \"vintage_start\", \"vintage_end\" HAVING count(*) > 1 OR \"measure_sk\" IS NULL OR \"registry_control_sk\" IS NULL"
+      },
+      "severity": "structural"
+    },
     {
       "id": "feature_build_inputs.grain",
       "table": "feature_build_inputs",
@@ -66,6 +201,42 @@
       "severity": "structural"
     },
     {
+      "id": "int_cmi_holds.grain",
+      "table": "int_cmi_holds",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"year_key\" FROM {batch} GROUP BY \"year_key\" HAVING count(*) > 1 OR \"year_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_cmi_hospital_data_years.grain",
+      "table": "int_cmi_hospital_data_years",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"year_key\" FROM {batch} GROUP BY \"year_key\" HAVING count(*) > 1 OR \"year_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_cmi_hospital_years.grain",
+      "table": "int_cmi_hospital_years",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"year_key\" FROM {batch} GROUP BY \"year_key\" HAVING count(*) > 1 OR \"year_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_cost_report_measures.grain",
+      "table": "int_cost_report_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_key\" FROM {batch} GROUP BY \"measure_key\" HAVING count(*) > 1 OR \"measure_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "int_county_adjacency.grain",
       "table": "int_county_adjacency",
       "type": "UnexpectedRowsExpectation",
@@ -75,11 +246,83 @@
       "severity": "structural"
     },
     {
+      "id": "int_hai_outcome_values.grain",
+      "table": "int_hai_outcome_values",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"outcome_value_key\" FROM {batch} GROUP BY \"outcome_value_key\" HAVING count(*) > 1 OR \"outcome_value_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_hgi_history.grain",
+      "table": "int_hospital_hgi_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"history_key\" FROM {batch} GROUP BY \"history_key\" HAVING count(*) > 1 OR \"history_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_ownership_history.grain",
+      "table": "int_hospital_ownership_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"history_key\" FROM {batch} GROUP BY \"history_key\" HAVING count(*) > 1 OR \"history_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_hospital_pos_history.grain",
+      "table": "int_hospital_pos_history",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"history_key\" FROM {batch} GROUP BY \"history_key\" HAVING count(*) > 1 OR \"history_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
       "id": "int_hospital_spine.grain",
       "table": "int_hospital_spine",
       "type": "UnexpectedRowsExpectation",
       "kwargs": {
         "unexpected_rows_query": "SELECT \"spine_key\" FROM {batch} GROUP BY \"spine_key\" HAVING count(*) > 1 OR \"spine_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_impact_measures.grain",
+      "table": "int_impact_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_key\" FROM {batch} GROUP BY \"measure_key\" HAVING count(*) > 1 OR \"measure_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_mup_measures.grain",
+      "table": "int_mup_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_key\" FROM {batch} GROUP BY \"measure_key\" HAVING count(*) > 1 OR \"measure_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_occmix_measures.grain",
+      "table": "int_occmix_measures",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"measure_key\" FROM {batch} GROUP BY \"measure_key\" HAVING count(*) > 1 OR \"measure_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_registry_measure_windows.grain",
+      "table": "int_registry_measure_windows",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"registry_window_key\" FROM {batch} GROUP BY \"registry_window_key\" HAVING count(*) > 1 OR \"registry_window_key\" IS NULL"
       },
       "severity": "structural"
     },
@@ -152,6 +395,24 @@
       "type": "UnexpectedRowsExpectation",
       "kwargs": {
         "unexpected_rows_query": "SELECT \"alignment_key\" FROM {batch} GROUP BY \"alignment_key\" HAVING count(*) > 1 OR \"alignment_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_validation_measure_windows.grain",
+      "table": "int_validation_measure_windows",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"validation_key\" FROM {batch} GROUP BY \"validation_key\" HAVING count(*) > 1 OR \"validation_key\" IS NULL"
+      },
+      "severity": "structural"
+    },
+    {
+      "id": "int_validation_program_values.grain",
+      "table": "int_validation_program_values",
+      "type": "UnexpectedRowsExpectation",
+      "kwargs": {
+        "unexpected_rows_query": "SELECT \"program_value_key\" FROM {batch} GROUP BY \"program_value_key\" HAVING count(*) > 1 OR \"program_value_key\" IS NULL"
       },
       "severity": "structural"
     },

@@ -229,18 +229,20 @@ class Checker:
         self.expect("inputs_one_row_with_schema_digest", INPUTS, rows == 1 and same == 1, rows=rows, schema_digest_equal=same)
 
     def merge_keys(self) -> None:
-        """Every published table has its merge key columns, not null and unique."""
+        """Every published table has its merge key columns, unique, and not null except the key columns the contract names as nullable (the publish merge
+        compares keys null-safe, and ``select distinct`` counts a null as one value)."""
         for name, entry in sorted(self.contract["publish"]["tables"].items()):
             if name not in self.tables:
                 self.expect("merge_key", name, False, reason="table missing")
                 continue
             key = entry["merge_key"]
-            if not set(key) <= {column for column, _ in self.columns_of(name)}:
+            required = [column for column in key if column not in entry.get("nullable_key_columns", [])]
+            if not set(key) <= {column for column, _ in self.columns_of(name)} or not required:
                 self.expect("merge_key", name, False, reason="key column missing")
                 continue
             table = quote(name)
             rows = self.count(COUNT_ROWS, table=table)
-            nulls = self.count(COUNT_NULL_KEYS, table=table, nulls=" or ".join(f"{quote(column)} is null" for column in key))
+            nulls = self.count(COUNT_NULL_KEYS, table=table, nulls=" or ".join(f"{quote(column)} is null" for column in required))
             distinct = self.count(COUNT_DISTINCT, table=table, keys=", ".join(quote(column) for column in key))
             self.expect("merge_key", name, nulls == 0 and distinct == rows, rows=rows, null_keys=nulls, repeated=rows - distinct)
 
