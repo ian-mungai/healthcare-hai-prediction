@@ -179,8 +179,7 @@
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
-          "FEATURE_SET",
-          "MLFLOW_TRACKING_URI"
+          "FEATURE_SET"
         ]
       },
       "chain": true,

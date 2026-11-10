@@ -55,7 +55,6 @@ def job_overrides_for(layer: str, run: str, code_sha256: str, input_run: str) ->
     """The container overrides that ``scripts.orchestration.job_overrides`` writes for a real task of the layer."""
     arguments = ["-m", "scripts.orchestration.job_overrides", "--job", layer, "--run", run, "--code-run", run, "--code-sha256", code_sha256]
     arguments += ["--polaris-uri", "http://10.0.1.20:8181/api/catalog"] + (["--input-run", input_run] if input_run else [])
-    arguments += ["--mlflow-uri", "http://10.0.1.20:5100"] * (layer == "features")
     result = run_command(sys.executable, arguments, cwd=ROOT, env={**os.environ, "PYTHONPATH": str(ROOT)}, timeout=60)
     if result.returncode != 0:
         raise RuntimeError("the override generator failed")

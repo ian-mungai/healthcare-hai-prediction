@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
@@ -1380,7 +1381,6 @@ def case_fa23(c: Checker) -> None:
 SET_BASE_RUN = "20261109T010000Z-0000b001"
 SET_RUN = "20261109T020000Z-0000a001"
 SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
-MLFLOW_URI = "http://10.0.1.20:5100"
 FEATURE_BUCKET = "example-feature-bucket"
 # The fixed variables and the secrets that infra/jobs/layers.tf gives the feast container of the features job (layers.tftest.hcl checks the same list).
 DEPLOYED_FEAST_FIXED = {
@@ -1558,10 +1558,23 @@ def case_fa25(c: Checker) -> None:
         "POLARIS_URI": PORT_OF_NOTHING,
         "INPUT_RUN_ID": SET_BASE_RUN,
         "FEATURE_SET": "m1",
-        "MLFLOW_TRACKING_URI": MLFLOW_URI,
     }
     document = job_overrides.build("features", values)
     variables = {item["name"]: item["value"] for entry in document["containerOverrides"] if entry["name"] == "feast" for item in entry["environment"]}
+    jobs = json.loads((feast_job.REPO.parent / "config/orchestration/ecs_broker_jobs.json").read_text())
+    c.check(
+        "the job table gives the feast container no MLflow variable",
+        not any(name.startswith("MLFLOW") for name in variables) and "MLFLOW" not in json.dumps(jobs["jobs"]["features"]),
+    )
+    owner_lists = json.loads((feast_job.REPO.parent / "config/aws/owner_command_lists.json").read_text())
+    c.check("the owner command lists give the features overrides no MLflow address", "--mlflow-uri" not in owner_lists["Features after gold"])
+    group = tomllib.loads((feast_job.REPO.parent / "pyproject.toml").read_text())["dependency-groups"]["feature_store"]
+    c.check("the feature store image pins no MLflow client", not any(str(line).startswith("mlflow") for line in group))
+    runtime = json.loads((feast_job.REPO.parent / "config/quality/dependency_runtimes.json").read_text())["runtimes"]["feature_store"]["code"]
+    c.check(
+        "the dependency check reads no MLflow registry reader as feature store code",
+        not {"scripts/training/registry.py", "scripts/training/mlflow_alias_read.py", "scripts/training/run_tracking.py"} & set(runtime),
+    )
     schema, _ = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
     same = {"feature_set": "m1", "feature_set_schema_sha256": mine}
