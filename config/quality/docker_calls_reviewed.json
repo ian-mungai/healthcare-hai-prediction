@@ -293,11 +293,11 @@
     },
     {
       "path": "scripts/infrastructure/run_e2e.py",
-      "line": 627,
+      "line": 628,
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "d19e628b9af339d67e09b6e0d08f7818c36c0d8ba2176e20133d4d922ff222d4",
+      "file_sha256": "507c3754742e4e882947dc7acea91b2f1407b16684f30efa05893e383163cedc",
       "dependencies": {
         "scripts/infrastructure/systemd_model.py": "sha256:9c806638a7026db2ae1c4082ed22e5022c3fa96845889009ae92f84f7e3323fb",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1380,7 +1380,7 @@
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/render_platform_config.py": "sha256:22347b27c8463106ea61905607a38d33add5d0eb49dcd42a021f351f69f334a8",
+        "scripts/infrastructure/render_platform_config.py": "sha256:141cd6c81f601b8f99cee974ec5185b5a3ffbba928f3015c0c18eed315c49b97",
         "scripts/infrastructure/render_project_config.py": "sha256:44c6e37f5b5d07e8daae01c19fe14a2d0cfc86118ac87103be08a6750f6e297b",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },

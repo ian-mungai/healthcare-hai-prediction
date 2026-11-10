@@ -35,6 +35,7 @@ docs-path scripts/quality/run_lint_tools_e2e.py -- the scratch copy of the tree 
 docs-path scripts/training/lane_b_cases.py -- the case renames the plan in a scratch copy to plan_original.md -- permanent
 unused-code scripts/quality/install_tools.py -- urllib's opener dispatches http_open and https_open of the guarded handlers by method name -- permanent
 unused-code scripts/quality/run_e2e.py -- http.server dispatches do_GET of the scripted download stand-in by method name -- permanent
+config tests/test_services_preparation.py -- the case types the removed mlflow_host_ip into the reviewed file to prove the renderer refuses the old name as well as host_private_ip -- permanent
 airflow config/orchestration/broker_templates.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow config/orchestration/broker_templates.schema.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow config/orchestration/ecs_broker_jobs.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30

@@ -1,4 +1,4 @@
-"""Reviewed services inputs: the MLflow switch and its addresses reach the saved-plan check only through a file with a reviewed digest."""
+"""Reviewed services inputs: the MLflow switch and its role and bucket reach the saved-plan check only through a file with a reviewed digest."""
 
 import hashlib
 import json
@@ -15,7 +15,6 @@ ROLE = "arn:aws:iam::111111111111:role/example_project_mlflow_task_dev"
 VARIABLES: dict[str, Any] = {
     "mlflow_enabled": True,
     "mlflow_task_role_arn": ROLE,
-    "mlflow_host_ip": "10.0.1.20",
     "mlflow_artifact_bucket": "example-project-data-dev",
 }
 
@@ -55,8 +54,9 @@ def test_changed_bytes_are_refused(tmp_path: Path) -> None:
         {"image_digests": {}},
         {"cluster_name": "example"},
         {"mlflow_enabled": "true"},
-        {"mlflow_host_ip": "203.0.113.9"},
-        {"mlflow_host_ip": "mlflow.example.com"},
+        # The host address is the platform output host_private_ip that the renderer reads; the reviewed file may not type it under either name.
+        {"mlflow_host_ip": "10.0.1.20"},
+        {"host_private_ip": "10.0.1.20"},
         {"mlflow_task_role_arn": "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev"},
         {"mlflow_artifact_bucket": "Not_A_Bucket"},
         {"host_usable_memory_mib": 0},
@@ -85,7 +85,7 @@ def test_other_root_is_refused(tmp_path: Path) -> None:
 
 
 def plan(**values: Any) -> dict[str, Any]:
-    declared = {"mlflow_enabled": {"default": False}, "mlflow_host_ip": {"default": None}, "aws_region": {}}
+    declared = {"mlflow_enabled": {"default": False}, "host_private_ip": {"default": None}, "aws_region": {}}
     return {
         "complete": True,
         "errored": False,
@@ -95,7 +95,7 @@ def plan(**values: Any) -> dict[str, Any]:
 
 
 def test_saved_plan_with_the_reviewed_switch_is_accepted_only_with_the_reviewed_file() -> None:
-    expected = {"aws_region": "us-west-2", "mlflow_enabled": True, "mlflow_host_ip": "10.0.1.20"}
-    renderer.verify_platform_plan(plan(aws_region="us-west-2", mlflow_enabled=True, mlflow_host_ip="10.0.1.20"), expected, "services")
+    expected = {"aws_region": "us-west-2", "mlflow_enabled": True, "host_private_ip": "10.0.1.20"}
+    renderer.verify_platform_plan(plan(aws_region="us-west-2", mlflow_enabled=True, host_private_ip="10.0.1.20"), expected, "services")
     with pytest.raises(ConfigurationError):
-        renderer.verify_platform_plan(plan(aws_region="us-west-2", mlflow_enabled=True, mlflow_host_ip="10.0.1.20"), {"aws_region": "us-west-2"}, "services")
+        renderer.verify_platform_plan(plan(aws_region="us-west-2", mlflow_enabled=True, host_private_ip="10.0.1.20"), {"aws_region": "us-west-2"}, "services")

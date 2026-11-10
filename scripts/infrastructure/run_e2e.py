@@ -103,6 +103,7 @@ SERVICES_FOUNDATION = {
         name: f"111111111111.dkr.ecr.eu-west-1.amazonaws.com/example_platform/{name}" for name in ("postgres", "redis", "polaris", "polaris_admin", "airflow")
     },
     "data_mount_path": "/example_platform_data",
+    "host_private_ip": "10.40.0.20",
 }
 SERVICES_DIGESTS = {name: "sha256:" + digit * 64 for name, digit in zip(("postgres", "redis", "polaris", "polaris_admin", "airflow"), "12345", strict=True)}
 # The Terraform stand-in records which profile and credentials reach terraform output.

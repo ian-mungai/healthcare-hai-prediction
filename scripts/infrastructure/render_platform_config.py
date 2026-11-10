@@ -36,6 +36,7 @@ SERVICES_PLATFORM_KEYS = (
     "log_group_names",
     "ecr_repository_urls",
     "data_mount_path",
+    "host_private_ip",
 )
 
 
@@ -75,7 +76,7 @@ def terraform_document(directory: Path, arguments: list[str], storage: dict[str,
 
 
 def services_values(storage: dict[str, str]) -> dict[str, Any]:
-    """Combine project inputs with the nine required platform outputs, preserving map values."""
+    """Combine project inputs with the ten required platform outputs, preserving map values; the host address is one of them, never typed by hand."""
     outputs = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], storage, "The platform outputs could not be read. Apply the platform stack first.")
     values: dict[str, Any] = dict(platform_values(storage))
     for name in SERVICES_PLATFORM_KEYS:
