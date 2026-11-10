@@ -293,11 +293,11 @@
     },
     {
       "path": "scripts/infrastructure/run_e2e.py",
-      "line": 628,
+      "line": 644,
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "507c3754742e4e882947dc7acea91b2f1407b16684f30efa05893e383163cedc",
+      "file_sha256": "b149b7ad9ecf8f8f455cb14b7601a32a8f920cdeb513d8271a1b373da7a68f34",
       "dependencies": {
         "scripts/infrastructure/systemd_model.py": "sha256:9c806638a7026db2ae1c4082ed22e5022c3fa96845889009ae92f84f7e3323fb",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"

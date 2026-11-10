@@ -190,6 +190,9 @@ BOOT_IDS = {
 # The host finds its network interface by tag too: the stand-in answers with the interface ID and its address. The metadata stand-in names this instance.
 BOOT_INTERFACE_ADDRESS = "10.40.0.20"
 BOOT_INSTANCE_ID = "i-0123456789abcdef0"
+# The instance's own (primary) network interface, which the metadata stand-in names by the instance's MAC address; the Elastic IP goes to it.
+BOOT_PRIMARY_MAC = "0e:00:00:00:00:01"
+BOOT_PRIMARY_INTERFACE = "eni-0aaaaaaaaaaaaaaa1"
 # The metadata stand-in returns this value for the token request; it must reach neither the log nor the console.
 BOOT_METADATA_SENTINEL = "example_metadata_token_do_not_print"
 # Each console line starts with this prefix; the console is a file in the temporary root, so the runner can read what the script copied.
@@ -333,6 +336,11 @@ elif arguments[:2] == ["ec2", "describe-addresses"]:
     wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_ADDRESS_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
     print(os.environ.get("BOOT_ALLOCATION_RESULT", ids["allocation"]) if filters == wanted else "", end="")
 elif arguments[:2] == ["ec2", "associate-address"]:
+    # EC2 refuses an association by instance once the instance holds a second network interface: the request must then name the interface.
+    holder = state / "interface_holder"
+    held = holder.read_text(encoding="utf-8") if holder.exists() else os.environ.get("BOOT_INTERFACE_HOLDER", "None")
+    if "--instance-id" in arguments and held == arguments[arguments.index("--instance-id") + 1]:
+        sys.exit("aws stand-in: An error occurred (InvalidInstanceID) when calling the AssociateAddress operation: multiple interfaces, name one")
     print(json.dumps({"AssociationId": "eipassoc-0123456789abcdef0"}))
 elif arguments[:2] == ["ec2", "describe-network-interfaces"]:
     holder = state / "interface_holder"
@@ -449,6 +457,14 @@ if url:
         sys.exit(22)
     if url.endswith("/latest/api/token"):
         print(os.environ.get("BOOT_TOKEN", ""), end="")
+        sys.exit(0)
+    if url.endswith("/meta-data/mac"):
+        print(os.environ["BOOT_PRIMARY_MAC"], end="")
+        sys.exit(0)
+    if url.endswith("/meta-data/network/interfaces/macs/" + os.environ["BOOT_PRIMARY_MAC"] + "/interface-id"):
+        if os.environ.get("BOOT_PRIMARY_INTERFACE_FAIL"):
+            sys.exit(22)
+        print(os.environ["BOOT_PRIMARY_INTERFACE"], end="")
         sys.exit(0)
 print("i-0123456789abcdef0", end="")
 """,
@@ -2099,6 +2115,8 @@ def boot_host(
         "BOOT_ADDRESS_NAME": BOOT_VALUES["address_name"],
         "BOOT_INTERFACE_NAME": BOOT_VALUES["interface_name"],
         "BOOT_INTERFACE_ADDRESS": BOOT_INTERFACE_ADDRESS,
+        "BOOT_PRIMARY_MAC": BOOT_PRIMARY_MAC,
+        "BOOT_PRIMARY_INTERFACE": BOOT_PRIMARY_INTERFACE,
         "BOOT_PROJECT_TAG": BOOT_VALUES["project_tag"],
         "BOOT_NFTABLES_CONFIG": str(root / BOOT_PATHS["nftables_config"]),
         "BOOT_STATE_INITIAL": "nftables.service",
@@ -2512,6 +2530,7 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             "The host network interface did not attach within 6 seconds.",
         ),
         "boot_host_address_never_up": ({}, {"BOOT_ADDRESS_NEVER_UP": "1"}, "The host address did not come up within 6 seconds."),
+        "boot_primary_interface_unreadable": ({}, {"BOOT_PRIMARY_INTERFACE_FAIL": "1"}, "The primary network interface ID could not be read."),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2678,6 +2697,12 @@ def interface_attachment_problems(name: str, calls: list[str], deadlines: list[s
         problems.append("the attach call ran without a deadline")
     if not any(line.startswith(f"--kill-after=10 30 ip -o -4 addr show to {BOOT_INTERFACE_ADDRESS}") for line in deadlines):
         problems.append("the address was not checked on the host")
+    associations = [line for line in calls if "associate-address" in line]
+    if not associations or any(
+        f"--network-interface-id {BOOT_PRIMARY_INTERFACE}" not in line or "--allow-reassociation" not in line or "--instance-id" in line
+        for line in associations
+    ):
+        problems.append("the Elastic IP was not associated with the primary network interface")
     steps = [log.find(text) for text in ("Waiting for the host address", "Writing the ECS agent configuration")]
     if min(steps) < 0 or steps[0] > steps[1]:
         problems.append("the address was not up before ECS joined")

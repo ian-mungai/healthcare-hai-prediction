@@ -273,6 +273,12 @@ token=$(curl -sf --max-time 10 -X PUT -H "X-aws-ec2-metadata-token-ttl-seconds: 
   exit 1
 }
 instance=$(metadata_get instance-id) || { echo "The instance ID could not be read."; exit 1; }
+# The Elastic IP goes to the instance's own (primary) network interface by its ID. Once the tagged address interface is attached the instance has two
+# interfaces, and EC2 refuses an association that names only the instance, so a boot that runs again on the same host must name the interface.
+mac=$(metadata_get mac) || { echo "The instance MAC address could not be read."; exit 1; }
+[[ "$mac" =~ ^[0-9a-f]{2}(:[0-9a-f]{2}){5}$ ]] || { echo "The instance MAC address could not be read."; exit 1; }
+primary_interface=$(metadata_get "network/interfaces/macs/$mac/interface-id") || { echo "The primary network interface ID could not be read."; exit 1; }
+[[ "$primary_interface" =~ ^eni-[0-9a-f]{8,17}$ ]] || { echo "The primary network interface ID could not be read."; exit 1; }
 command -v aws >/dev/null || run_within 300 "Installing the AWS CLI" dnf install -y -q awscli-2
 current_step="Finding the data volume"
 volume=$(run_within 60 "$current_step" aws ec2 describe-volumes --region "$region" --filters "Name=tag:Name,Values=$data_volume_name" "Name=tag:Project,Values=$project_tag" --query "Volumes[].VolumeId" --output text) || {
@@ -301,7 +307,7 @@ interface=$(run_within 60 "$current_step" aws ec2 describe-network-interfaces --
 read -r interface_id interface_ip <<<"$interface"
 run_within 60 "Checking the Session Manager agent" rpm -q amazon-ssm-agent >/dev/null || run_within 300 "Installing the Session Manager agent" dnf install -y -q amazon-ssm-agent
 run_within 120 "Starting the Session Manager agent" systemctl enable --now amazon-ssm-agent
-run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --instance-id "$instance" --allow-reassociation >/dev/null
+run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --network-interface-id "$primary_interface" --allow-reassociation >/dev/null
 # The host keeps one private address: the tagged network interface of the IAM stack, attached as the second interface before the volumes and before
 # ECS joins. An interface that is already attached to this instance counts as attached. One that is free is attached; one that an instance that is
 # going away still holds is waited for. The operating system then shows the address on the new interface (amazon-ec2-net-utils configures a
