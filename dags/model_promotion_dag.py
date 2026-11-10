@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_tasks
-from orchestration.training_contract import HAI_TYPES, PROMOTION_STEPS
+from orchestration.dag_runtime import build_job_chain
+from orchestration.training_contract import HAI_TYPES
 
 with DAG(
     dag_id="model_promotion_dag",
@@ -22,4 +22,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_tasks(PROMOTION_STEPS, "promotion")
+    build_job_chain("promote")

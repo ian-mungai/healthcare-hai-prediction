@@ -14,8 +14,10 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 4. A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
 5. A control step launches nothing (``control_step_launches_nothing``). A job launches once, later steps of its DAG join it, a failure fails every step,
    and a retry launches nothing (``job_runs_once_and_steps_join``, ``failed_job_fails_every_step``).
-6. The five DAGs of the chain run end to end (``five_dags_run_end_to_end``), and every DAG triggered with only its required values runs with its form's
-   defaults: no form defaults to a mode the direct path refuses (``dags_run_with_their_form_defaults``).
+6. The silver, gold, promotion and serving DAGs are one task per job: preflight, job, evidence and gate, and a refused preflight or a failed job fails
+   the gate with nothing launched again (``collapsed_job_dags_are_one_chain``). The five DAGs of the chain run end to end (``five_dags_run_end_to_end``),
+   and every DAG triggered with only its required values runs with its form's defaults: no form defaults to a mode the direct path refuses
+   (``dags_run_with_their_form_defaults``).
 7. The modules, the mount list and the host table agree, and a container without the launch module names it (``launch_modules_are_in_the_mount_list``,
    ``host_table_matches_the_job_table``, ``missing_launch_module_is_named``).
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
@@ -206,6 +208,7 @@ class World:
         self.context: dict[str, Any] = {}
         self.states: dict[str, str] = {}
         self.results: dict[str, Any] = {}
+        self.built: list[Operator] = []
 
     def enter(self, task_id: str, attempt: int = 1) -> None:
         def get_task_states(dag_id: str, task_ids: list[str], run_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -231,7 +234,8 @@ class World:
 
     def run_dag(self, dag_file: str) -> dict[str, str]:
         """Run the tasks of a shipped DAG file in order, as the scheduler would: a task runs when its upstream tasks passed, or always for ``all_done``."""
-        built: list[Operator] = []
+        built = self.built
+        built.clear()
 
         def task(**settings: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
             def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
@@ -346,10 +350,20 @@ def pool_only_when_configured() -> None:
             mock.patch.object(sys.modules["airflow.sdk"], "task", task),
             mock.patch.object(runtime, "task", task),
         ):
-            runpy.run_path(str(ROOT / "dags/silver_transform_dag.py"))
+            runpy.run_path(str(ROOT / "dags/features_transform_dag.py"))
         pools = {node.task_id: node.settings.get("pool") for node in built}
-        require(pools["silver_build"] == "host_jobs" and pools["catalog_release"] == "host_jobs", f"the work steps are not in the pool: {pools}")
+        require(pools["features_build"] == "host_jobs" and pools["catalog_release"] == "host_jobs", f"the work steps are not in the pool: {pools}")
         require(pools["final_gate"] is None and pools["release_run"] is None, f"the gate and release take a pool slot: {pools}")
+        for dag_file in COLLAPSED_FILES:
+            built.clear()
+            with (
+                mock.patch.dict("os.environ", {"HAI_LAUNCH_POOL": "host_jobs"}, clear=True),
+                mock.patch.object(sys.modules["airflow.sdk"], "task", task),
+                mock.patch.object(runtime, "task", task),
+            ):
+                runpy.run_path(str(ROOT / "dags" / dag_file))
+            pools = {node.task_id: node.settings.get("pool") for node in built}
+            require(pools == {"preflight": None, "job": "host_jobs", "evidence": None, "gate": None}, f"{dag_file}: only the job task takes the pool: {pools}")
         trigger = ModuleType("airflow.providers.standard.operators.trigger_dagrun")
         trigger.__dict__["TriggerDagRunOperator"] = SimpleNamespace(partial=lambda **_: SimpleNamespace(expand_kwargs=lambda *_: None))
         providers = {name: ModuleType(name) for name in ("airflow.providers", "airflow.providers.standard", "airflow.providers.standard.operators")}
@@ -694,7 +708,8 @@ def five_dags_run_end_to_end() -> None:
         with world(rig, dag_id, params) as current:
             states = current.run_dag(file)
             failed = {name: state for name, state in states.items() if state != "success"}
-            require(not failed and current.results["release_run"] == "released", f"{dag_id} did not finish: {failed} {current.results}")
+            last = ("gate", "accepted") if f"{dag_id}.py" in COLLAPSED_FILES else ("release_run", "released")
+            require(not failed and current.results[last[0]] == last[1], f"{dag_id} did not finish: {failed} {current.results}")
         end = rig.end(run, job)
         require(end is not None and end["outcome"] == "succeeded", f"{job} has no success record")
     with world(rig, "drift_monitoring_dag", {"run_id": drift, "mode": "real", "mlflow": "aws"}) as current:
@@ -765,6 +780,79 @@ def dags_run_with_their_form_defaults() -> None:
     require(not refused, f"feature_store_dag with its form defaults was refused for its mode: {refused}")
 
 
+COLLAPSED_FILES = ("silver_transform_dag.py", "gold_transform_dag.py", "model_promotion_dag.py", "serving_deploy_dag.py")
+COLLAPSED_TASKS = ["preflight", "job", "evidence", "gate"]
+PROMOTE_PARAMS = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"}
+PROMOTE_APPROVAL = {
+    "run_id": PROMOTE_RUN,
+    "dag_id": "model_promotion_dag",
+    "scope": "promote",
+    "approved_on": "2026-10-30",
+    "hai_type": "HAI_1",
+    "model_version": "3",
+}
+
+
+def task_graph(world_: World) -> dict[str, Any]:
+    """The graph rules' view of the tasks the last ``run_dag`` built."""
+    graph = importlib.import_module("orchestration.graph")
+    return {
+        node.task_id: graph.TaskNode(frozenset(before.task_id for before in node.upstream), str(node.settings.get("trigger_rule", graph.ALL_SUCCESS)))
+        for node in world_.built
+    }
+
+
+def collapsed_job_dags_are_one_chain() -> None:
+    """The silver, gold, promotion and serving DAGs are one task per job: preflight (the gates, no launch), job (the one ECS task, in the pool),
+    evidence (the launch record says the job passed) and gate (runs after a failure, fails the DAG run unless the three passed, carries the asset)."""
+    graph = importlib.import_module("orchestration.graph")
+    rig = Rig()
+    rig.stage.stage(PROMOTE_RUN, "promotion_approval.json", PROMOTE_APPROVAL)
+    rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
+    plan: tuple[tuple[str, dict[str, Any], str, str, list[str]], ...] = (
+        ("silver_transform_dag", SILVER, "silver", SILVER_RUN, []),
+        ("gold_transform_dag", GOLD, "gold", GOLD_RUN, ["gold"]),
+        ("model_promotion_dag", PROMOTE_PARAMS, "promote", PROMOTE_RUN, []),
+        ("serving_deploy_dag", {"run_id": SERVE_RUN, "mode": "real"}, "serve", SERVE_RUN, []),
+    )
+    for dag_id, params, job, run, assets in plan:
+        before = rig.tasks_started()
+        with world(rig, dag_id, dict(params)) as current:
+            states = current.run_dag(f"{dag_id}.py")
+            nodes = {node.task_id: node for node in current.built}
+            require(list(nodes) == COLLAPSED_TASKS, f"{dag_id} is not preflight, job, evidence and gate: {list(nodes)}")
+            violations = graph.validate_transform_graph(task_graph(current), dag_id)
+            require(not violations, f"{dag_id} breaks the graph rules: {violations}")
+            require(nodes["gate"].settings.get("outlets") == assets, f"{dag_id}'s gate carries {nodes['gate'].settings.get('outlets')}, not {assets}")
+            require(all(not nodes[name].settings.get("outlets") for name in COLLAPSED_TASKS[:3]), f"{dag_id}: only the gate carries the asset")
+            failed = {name: current.results[name] for name, state in states.items() if state != "success"}
+            require(not failed and current.results["gate"] == "accepted", f"{dag_id} did not pass: {failed}")
+            require(current.results["preflight"] == job, f"{dag_id}'s preflight named {current.results['preflight']}, not {job}")
+            evidence = current.results["evidence"]
+            require(evidence["job"] == job and evidence["run_id"] == run and evidence["task_arn"], f"{dag_id}'s evidence is {evidence}")
+        require(rig.tasks_started() == before + 1, f"{dag_id} started {rig.tasks_started() - before} tasks, not one")
+        require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
+    rig = Rig()
+    with world(rig, "silver_transform_dag", {**SILVER, "mode": "publish_fixture"}) as current:
+        states = current.run_dag("silver_transform_dag.py")
+        expected = {"preflight": "failed", "job": "upstream_failed", "evidence": "upstream_failed", "gate": "failed"}
+        require(states == expected, f"a refused preflight did not stop the job and fail the gate: {states}")
+        require("real mode only" in current.results["preflight"] and "preflight failed" in current.results["gate"], f"causes: {current.results}")
+    require(not rig.ecs.calls and not rig.records.calls, "a refused preflight reached ECS or the launch records")
+    rig = Rig()
+    rig.ecs.plan = {"validate": 3}
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        states = current.run_dag("silver_transform_dag.py")
+        expected = {"preflight": "success", "job": "failed", "evidence": "upstream_failed", "gate": "failed"}
+        require(states == expected and "job failed" in current.results["gate"], f"a failed job did not fail the gate: {states} {current.results}")
+    require(rig.tasks_started() == 1, "a failed job was launched again")
+    rig = Rig()
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        current.enter("evidence")
+        error = refuses(LaunchRefused, lambda: current.runtime.collapsed_step("evidence", "pin_bronze"))
+    require("no successful launch" in str(error) and not rig.ecs.calls, f"evidence without a launch was not refused: {error}")
+
+
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
     approval = {
@@ -789,7 +877,7 @@ def promotion_and_serving_dags_run_end_to_end() -> None:
         with world(rig, dag_id, params) as current:
             states = current.run_dag(file)
             failed = {name: state for name, state in states.items() if state != "success"}
-            require(bool(states) and not failed and current.results["release_run"] == "released", f"{dag_id} did not finish: {failed} {current.results}")
+            require(bool(states) and not failed and current.results["gate"] == "accepted", f"{dag_id} did not finish: {failed} {current.results}")
     require(rig.tasks_started() == 2, f"one task per job was expected: {rig.tasks_started()} tasks")
     for run, job in ((PROMOTE_RUN, "promote"), (SERVE_RUN, "serve")):
         require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
@@ -1042,6 +1130,7 @@ CASES: dict[str, Callable[[], None]] = {
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
     "dags_run_with_their_form_defaults": dags_run_with_their_form_defaults,
+    "collapsed_job_dags_are_one_chain": collapsed_job_dags_are_one_chain,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,

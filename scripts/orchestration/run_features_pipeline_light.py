@@ -1650,6 +1650,9 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         if dag in RETIRED_DAGS:  # retired on purpose: it must be gone, not unchanged
             checks[f"{dag}_retired"] = dag not in graph.PIPELINE_CHAINS
             continue
+        if dag in graph.COLLAPSED_DAGS:  # one task per job now: preflight, job, evidence and gate
+            checks[f"{dag}_collapsed"] = dag not in graph.PIPELINE_CHAINS and graph.requirements(dag)[0] == graph.COLLAPSED_UPSTREAM
+            continue
         checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS.get(dag) == chain
     checks["transform_dag_unchanged"] = graph.requirements("transform_dag") == base.requirements("transform_dag")
     features_dag = (ROOT / "dags" / f"{FEATURES_DAG}.py").read_text() if (ROOT / "dags" / f"{FEATURES_DAG}.py").is_file() else ""
@@ -1667,7 +1670,10 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     checks["runtime_gold_selection"] = (
         re.search(r'"pin_gold": "gold_snapshot_run"', runtime) is not None and re.search(r'"pin_silver": "silver_snapshot_run"', runtime) is not None
     )
-    checks["runtime_assets"] = re.search(r'ASSETS = \{"commit_publish": "gold", "features_commit": "features"\}', runtime) is not None
+    gold_dag = (ROOT / "dags/gold_transform_dag.py").read_text()
+    checks["runtime_assets"] = (
+        re.search(r'ASSETS = \{"features_commit": "features"\}', runtime) is not None and 'build_job_chain("pin_silver", asset="gold")' in gold_dag
+    )
     supervisor = (ROOT / "scripts/orchestration/supervisor.py").read_text()
     match = re.search(r"PIPELINE_DAGS = \(([^)]*)\)", supervisor)
     names = set(re.findall(r'"([a-z_]+)"', match.group(1))) if match else set()

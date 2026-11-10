@@ -1,7 +1,10 @@
 """Build manual pipeline tasks that launch their jobs through the direct ECS launch library and retain failed runs.
 
-``run_step`` runs a task's fixed template through ``orchestration/airflow_steps.py``: a job step launches or joins its job's one ECS task, and a control step
-(acquire, seal, release, the gates) launches nothing. There is no other path: the DAGs hold no broker client.
+A DAG of one job is one chain of four tasks (``build_job_chain``): ``preflight`` (the gates, no launch), ``job`` (the one ECS task of the job, in the
+launch pool), ``evidence`` (the durable launch record says the job and its acceptance checks passed) and ``gate`` (runs after a failure too, fails the DAG
+run unless the three passed and carries the asset event). The features and training DAGs still have one task per step (``build_tasks``): ``run_step`` runs
+a task's fixed template through ``orchestration/airflow_steps.py``, where a job step launches or joins its job's one ECS task and a control step (acquire,
+seal, release, the gates) launches nothing. There is no other path: the DAGs hold no broker client.
 """
 
 from __future__ import annotations
@@ -22,7 +25,11 @@ LOG = logging.getLogger(__name__)
 STEP_TIMEOUT = timedelta(hours=26)
 # The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
 SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
-ASSETS = {"commit_publish": "gold", "features_commit": "features"}
+ASSETS = {"features_commit": "features"}
+# The time limits of the one-job chain's tasks that start no job.
+PREFLIGHT_TIMEOUT = timedelta(minutes=30)
+CHECK_TIMEOUT = timedelta(minutes=15)
+CHAIN_TASKS = ("preflight", "job", "evidence")
 # The module that launches a step, and the environment setting that names the pool of host jobs.
 LAUNCH_MODULE = "orchestration.airflow_steps"
 POOL_SETTING = "HAI_LAUNCH_POOL"
@@ -82,6 +89,42 @@ def run_step(template: str) -> str:
     """Run the current task's fixed template through the direct ECS launch library and return its successful state."""
     context = get_current_context()
     return str(launch_module().launch_step(step_request(template, context), context, SELECTIONS))
+
+
+def collapsed_step(kind: str, template: str) -> Any:
+    """Run one task of the one-job chain whose job ``template`` names: its preflight, its launch or its evidence."""
+    context = get_current_context()
+    steps = launch_module()
+    run = {"preflight": steps.preflight_step, "job": steps.job_step, "evidence": steps.evidence_step}[kind]
+    return run(step_request(template, context), context, SELECTIONS)
+
+
+def build_job_chain(template: str, asset: str | None = None) -> Any:
+    """Create preflight, job, evidence and gate for the job that ``template`` names and return the gate operator. The gate carries ``asset``."""
+
+    @task(task_id="preflight", retries=0, execution_timeout=PREFLIGHT_TIMEOUT)
+    def preflight() -> str:
+        return str(collapsed_step("preflight", template))
+
+    @task(task_id="job", retries=0, execution_timeout=STEP_TIMEOUT, pool=launch_pool())
+    def job() -> str:
+        return str(collapsed_step("job", template))
+
+    @task(task_id="evidence", retries=0, execution_timeout=CHECK_TIMEOUT)
+    def evidence() -> Any:
+        return collapsed_step("evidence", template)
+
+    @task(task_id="gate", trigger_rule=TriggerRule.ALL_DONE, retries=0, execution_timeout=CHECK_TIMEOUT, outlets=[Asset(asset)] if asset else [])
+    def gate() -> str:
+        states = task_states(CHAIN_TASKS)
+        failures = [name for name, state in states.items() if state != "success"]
+        if failures:
+            raise RuntimeError(f"the job gate rejected the run: {', '.join(f'{name} {states[name]}' for name in failures)}")
+        return "accepted"
+
+    first, launched, found, last = preflight().operator, job().operator, evidence().operator, gate().operator
+    first >> launched >> found >> last
+    return last
 
 
 def task_states(task_ids: tuple[str, ...]) -> dict[str, str | None]:

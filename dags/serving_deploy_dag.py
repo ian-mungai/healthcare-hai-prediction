@@ -4,9 +4,7 @@ from __future__ import annotations
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_tasks
-
-WORK_STEPS = ("acquire_run", "snapshot_serving", "serve_deploy", "run_record")
+from orchestration.dag_runtime import build_job_chain
 
 with DAG(
     dag_id="serving_deploy_dag",
@@ -20,4 +18,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_tasks(WORK_STEPS, "serving")
+    build_job_chain("serve_deploy")

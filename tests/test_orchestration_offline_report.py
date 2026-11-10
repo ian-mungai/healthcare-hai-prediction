@@ -220,11 +220,15 @@ def test_literal_inventory_matches_the_declared_producers() -> None:
         for node in graph.body
         if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "PIPELINE_CHAINS" for target in node.targets)
     )
-    if not isinstance(chains, ast.Dict) or any(key is None for key in chains.keys):
-        raise AssertionError("the producer declares split DAG names without importing Airflow")
-    check(
-        {ast.literal_eval(key) for key in chains.keys if key is not None} == set(PIPELINE_DAGS), "the independent eight-DAG inventory matches PIPELINE_CHAINS"
+    collapsed = next(
+        node.value
+        for node in graph.body
+        if isinstance(node, ast.Assign) and any(isinstance(target, ast.Name) and target.id == "COLLAPSED_DAGS" for target in node.targets)
     )
+    if not isinstance(chains, ast.Dict) or any(key is None for key in chains.keys) or not isinstance(collapsed, ast.Call) or len(collapsed.args) != 1:
+        raise AssertionError("the producer declares split DAG names without importing Airflow")
+    declared = {ast.literal_eval(key) for key in chains.keys if key is not None} | set(ast.literal_eval(collapsed.args[0]))
+    check(declared == set(PIPELINE_DAGS), "the independent seven-DAG inventory matches PIPELINE_CHAINS and COLLAPSED_DAGS")
 
 
 @pytest.mark.parametrize("transform_present", [False, True], ids=["split", "transform"])

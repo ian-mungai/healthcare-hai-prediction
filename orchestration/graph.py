@@ -5,7 +5,8 @@ per task ``upstream_task_ids``, ``trigger_rule``, ``is_setup`` and ``is_teardown
 against plain graphs and inside the pinned Airflow image against real DAG objects (failure modes 761, 766 and 823).
 Rules: no setup or teardown task; ``release_run`` is the only leaf; no cycle; exactly the section 5 tasks; each work
 task's upstream set follows the section 5 order with the default ``all_success`` rule; ``run_record``,
-``catalog_release``, ``final_gate`` and ``release_run`` have the section 5 trigger rules and upstream sets.
+``catalog_release``, ``final_gate`` and ``release_run`` have the section 5 trigger rules and upstream sets. The DAGs of one job (``COLLAPSED_DAGS``) are
+the four tasks preflight, job, evidence and gate, the gate is the only leaf and it runs after a failure.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orchestration.training_contract import PROMOTION_STEPS, TRAINING_STEPS
+from orchestration.training_contract import TRAINING_STEPS
 
 WORK_CHAIN = (
     "acquire_run",
@@ -43,45 +44,17 @@ EXPECTED_UPSTREAM: dict[str, frozenset[str]] = {
     "release_run": frozenset({"final_gate"}),
 }
 EXPECTED_RULES = {"run_record": "none_failed_min_one_success", "catalog_release": "all_done", "final_gate": "all_done", "release_run": "all_done"}
+# The DAGs that are one chain of a job's own tasks, launched through the direct ECS launch library (``dag_runtime.build_job_chain``). The DAGs of
+# ``PIPELINE_CHAINS`` still have one task per step.
+COLLAPSED_DAGS = frozenset({"silver_transform_dag", "gold_transform_dag", "serving_deploy_dag", "model_promotion_dag"})
+COLLAPSED_UPSTREAM = {
+    "preflight": frozenset(),
+    "job": frozenset({"preflight"}),
+    "evidence": frozenset({"job"}),
+    "gate": frozenset({"evidence"}),
+}
 PIPELINE_CHAINS = {
     "training_dag": TRAINING_STEPS,
-    "model_promotion_dag": PROMOTION_STEPS,
-    "serving_deploy_dag": ("acquire_run", "snapshot_serving", "serve_deploy", "run_record"),
-    "silver_transform_dag": (
-        "acquire_run",
-        "catalog_up",
-        "snapshot_project",
-        "pin_bronze",
-        "silver_build",
-        "silver_validate",
-        "verify_bronze",
-        "seal_silver",
-        "silver_export",
-        "silver_candidates",
-        "silver_reconcile",
-        "silver_backup",
-        "silver_commit",
-        "record_silver_snapshot",
-        "run_record",
-    ),
-    "gold_transform_dag": (
-        "acquire_run",
-        "catalog_up",
-        "snapshot_project",
-        "reserve_silver",
-        "pin_silver",
-        "read_silver",
-        "gold_build",
-        "gold_validate",
-        "cross_layer_checks",
-        "seal_gold",
-        "gold_export",
-        "publish_candidates",
-        "reconcile_candidates",
-        "catalog_backup",
-        "commit_publish",
-        "run_record",
-    ),
     "features_transform_dag": (
         "acquire_run",
         "catalog_up",
@@ -105,12 +78,16 @@ PIPELINE_CHAINS = {
     ),
     "feature_store_dag": ("acquire_run", "catalog_up", "online_store_up", "feast_apply", "feast_materialize", "run_record"),
 }
+# Every shipped DAG that the graph rules cover: the step chains, then the one-job chains.
+GRAPH_DAGS = (*PIPELINE_CHAINS, *sorted(COLLAPSED_DAGS))
 
 
 def requirements(dag_id: str) -> tuple[dict[str, frozenset[str]], dict[str, str]]:
     """Return the fixed task dependencies and trigger rules for a supported pipeline."""
     if dag_id == "transform_dag":
         return EXPECTED_UPSTREAM, EXPECTED_RULES
+    if dag_id in COLLAPSED_DAGS:
+        return dict(COLLAPSED_UPSTREAM), {"gate": "all_done"}
     chain = PIPELINE_CHAINS[dag_id]
     upstream = {chain[0]: frozenset(), **{name: frozenset({chain[index - 1]}) for index, name in enumerate(chain) if index}}
     upstream.update({"catalog_release": frozenset(chain), "final_gate": frozenset((*chain, "catalog_release")), "release_run": frozenset({"final_gate"})})
@@ -187,8 +164,9 @@ def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transfor
         violations.append(Violation("cycle", cycle[0], f"tasks in or after a cycle: {', '.join(cycle)}"))
     downstream = {upstream for node in graph.values() for upstream in node.upstream}
     leaves = sorted(set(graph) - downstream)
-    if leaves != ["release_run"]:
-        violations.append(Violation("leaf", ",".join(leaves) or "-", "release_run must be the only leaf"))
+    last = "gate" if dag_id in COLLAPSED_DAGS else "release_run"
+    if leaves != [last]:
+        violations.append(Violation("leaf", ",".join(leaves) or "-", f"{last} must be the only leaf"))
     violations += [Violation("missing_task", task, "required pipeline task absent") for task in expected_upstream if task not in graph]
     violations += [Violation("unexpected_task", task, "not a pipeline task") for task in sorted(set(graph) - set(expected_upstream))]
     for task, expected in expected_upstream.items():

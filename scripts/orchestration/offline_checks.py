@@ -39,7 +39,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import launcher
-from orchestration.graph import ALL_SUCCESS, PIPELINE_CHAINS, TaskNode, reference_graph, validate_transform_graph
+from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
 from scripts.orchestration.broker import BrokerError, load_templates
 from scripts.process import run_command
 from scripts.quality import lock_env
@@ -400,8 +400,8 @@ def image_report_problem(report: dict[str, Any]) -> str:
         return "transform graph report is incomplete"
     if not transform["present"]:
         pipelines = report.get("pipeline_graphs")
-        if not isinstance(pipelines, dict) or set(pipelines) != set(PIPELINE_CHAINS):
-            missing = ", ".join(sorted(set(PIPELINE_CHAINS) - set(pipelines or {}))) if isinstance(pipelines, dict) else ", ".join(PIPELINE_CHAINS)
+        if not isinstance(pipelines, dict) or set(pipelines) != set(GRAPH_DAGS):
+            missing = ", ".join(sorted(set(GRAPH_DAGS) - set(pipelines or {}))) if isinstance(pipelines, dict) else ", ".join(GRAPH_DAGS)
             return f"pipeline_graphs inventory differs; missing {missing or 'none'}"
         if any(not isinstance(row, dict) or type(row.get("present")) is not bool or not isinstance(row.get("violations"), list) for row in pipelines.values()):
             return "pipeline_graphs report is incomplete"

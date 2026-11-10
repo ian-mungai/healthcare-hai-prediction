@@ -429,7 +429,7 @@
         "scripts/lakehouse/silver.py": "sha256:bc4240ba4aa26c8e679d4a76d280ccfb7df63490e4207d3562d851acbcd1f563",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
         "scripts/quality/docker_calls.py": "sha256:1fd945eba023c5f1ceae05f3535127041aa19b33e8983341191bbd7fde5a2230",
-        "scripts/training/lane_b_cases.py": "sha256:4f829dd78eab3ae8a3d4ec9fbc97395a7f2f4c3cfe3274d3291ca28d9f32671b",
+        "scripts/training/lane_b_cases.py": "sha256:ec5eaeed9b7eded48d237fca3319525216601354afcb64cad808a005124712c1",
         "scripts/training/step_records.py": "sha256:ebf3160636fefcd3584ed3dc3a9d9eea39cef87e325e1e14e409bfa954544c4d"
       },
       "reason": "detached_python runs a Python snippet given by a launcher E2E case (sys.executable -c); both callers' snippets call orchestration.launcher client methods only",
@@ -1589,11 +1589,11 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 75,
+      "line": 82,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "6a835378a763aa60180a30552b3be867def2f18b8eb53f9d7b5403ea55169cc2",
+      "file_sha256": "9295dbb31c455cee3a4fa4b987e221d284af7aba3914c8aa48dca62589ce8efb",
       "dependencies": {
         "orchestration/interface.py": "sha256:a9016a92def1590400ae67524574cf5836177a0ec5b787cc04f39bc3f0876f3d",
         "orchestration/training_contract.py": "sha256:3237f1ac8c5ef6d41de8b445e1efba352bce79090fd30f542c18c095dafbd4ee"

@@ -703,7 +703,7 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
     for dag_id in training_contract.DAGS:
         original = graph.reference_graph(dag_id)
         broken = dict(original)
-        broken.pop("snapshot_training")
+        broken.pop("evidence" if dag_id in graph.COLLAPSED_DAGS else "snapshot_training")
 
         def graph_refuses(broken: dict[str, graph.TaskNode] = broken, dag_id: str = dag_id) -> None:
             require(graph.validate_transform_graph(broken, dag_id), "missing snapshot was accepted")

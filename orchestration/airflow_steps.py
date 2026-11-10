@@ -6,6 +6,8 @@ launch. A failed job fails each step, and trying again needs a new run. A contro
 gate launch nothing: the gate checks the signed first publishes and binds the code runs of the chain. A staged input that is not there yet (``InputNotReady``)
 is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause. A ``LaunchUnavailable`` from the launch library means the launch is not
 finished: the step fails with it at once and nothing repeats it, because only the library's own evidence or its manual owner path resolves the launch.
+A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
+(the launch's end record says the job passed).
 The owner ends an unresolved launch with ``python -m orchestration.airflow_steps settle`` in the scheduler container (``Launcher.owner_settle``).
 """
 
@@ -23,8 +25,9 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings, client_config
-from orchestration.ecs_launch import Clock, EcsFitProbe, Launcher, LaunchRefused, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_preflight import (
+    GATE,
     TABLE_MAP_FILE,
     InputNotReady,
     Preflight,
@@ -152,28 +155,86 @@ def selected_input(preflight: Preflight, request: SubmissionRequest, params: Map
     return None if selected == "latest" else str(selected)
 
 
-def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
-    """Run the step through the launch library and return its successful state."""
-    launch = services()
-    request = replace(request, input_run_id=selected_input(launch.preflight, request, context["params"], selections))
+def with_input(launch: LaunchServices, request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> SubmissionRequest:
+    """The request with the producer run its job publishes from."""
+    return replace(request, input_run_id=selected_input(launch.preflight, request, context["params"], selections))
+
+
+def prepared(launch: LaunchServices, request: SubmissionRequest) -> JobSpec | None:
+    """The launch request that the preflight gates produce, or None for a step with no job. A staged input that is not there yet is retried within
+    ``UNAVAILABLE_SECONDS``."""
     end = launch.clock.monotonic() + UNAVAILABLE_SECONDS
     while True:
         try:
-            spec = launch.preflight.prepare(request)
-            if spec is not None:
-                launch.operator_class(
-                    task_id=context["ti"].task_id,
-                    job=spec,
-                    launcher=lambda: launch.launcher,
-                    task_definition=launch.definition(spec.job),
-                    cluster=launch.cluster,
-                    overrides={},
-                ).execute(context)
-            return "succeeded"
+            return launch.preflight.prepare(request)
         except InputNotReady as error:
             if launch.clock.monotonic() + UNAVAILABLE_POLL_SECONDS > end:
                 raise InputNotReady(f"{error} (still not ready after {UNAVAILABLE_SECONDS:g} seconds)") from None
             launch.clock.sleep(UNAVAILABLE_POLL_SECONDS)
+
+
+def launch(services_: LaunchServices, spec: JobSpec, context: Mapping[str, Any]) -> None:
+    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job."""
+    services_.operator_class(
+        task_id=context["ti"].task_id,
+        job=spec,
+        launcher=lambda: services_.launcher,
+        task_definition=services_.definition(spec.job),
+        cluster=services_.cluster,
+        overrides={},
+    ).execute(context)
+
+
+def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
+    """Run the step through the launch library and return its successful state."""
+    found = services()
+    spec = prepared(found, with_input(found, request, context, selections))
+    if spec is not None:
+        launch(found, spec, context)
+    return "succeeded"
+
+
+def job_of(template: str) -> str:
+    """The job a step belongs to. A one-task-per-job DAG names its job by a step of that job."""
+    table, _ = load_tables(ROOT)
+    job = table["steps"].get(template)
+    if job is None or job == GATE:
+        raise LaunchRefused(f"{template} starts no ECS job, so it cannot name the job of a DAG")
+    return str(job)
+
+
+def job_spec(found: LaunchServices, request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> JobSpec:
+    """The launch request of the job that ``request.template`` names, after every gate passed."""
+    spec = prepared(found, with_input(found, request, context, selections))
+    if spec is None:
+        raise LaunchRefused(f"{request.template} starts no ECS job")
+    return spec
+
+
+def preflight_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
+    """Pass every gate of the job and return its name, or raise. Nothing is launched and no launch record is written."""
+    return job_spec(services(), request, context, selections).job
+
+
+def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
+    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job."""
+    found = services()
+    launch(found, job_spec(found, request, context, selections), context)
+    return "succeeded"
+
+
+def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> dict[str, Any]:
+    """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed."""
+    store = services().preflight.store
+    job = job_of(request.template)
+    claim = store.run_record(request.run_id, job, "claim")
+    end = None
+    if claim is not None:
+        end = {record["event"]: record for record in store.records(request.run_id, job, [claim["attempt"]])}.get("end")
+    if end is None or end.get("outcome") != "succeeded":
+        found = end.get("outcome") if end is not None else "no end record"
+        raise LaunchRefused(f"no successful launch of {job} is recorded for run {request.run_id}: {found}")
+    return {"job": job, "run_id": request.run_id, "attempt": claim["attempt"] if claim else None, "task_arn": end.get("task_arn", "")}
 
 
 def settle_launch(run_id: str, job: str, statement: str) -> str:

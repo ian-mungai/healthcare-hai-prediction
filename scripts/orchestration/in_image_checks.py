@@ -34,7 +34,7 @@ from airflow.providers.standard.operators.empty import EmptyOperator
 from airflow.sdk import DAG
 from airflow.sdk.bases.operator import BaseOperator
 
-from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, PIPELINE_CHAINS, graph_from_dag, validate_transform_graph
+from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, GRAPH_DAGS, graph_from_dag, validate_transform_graph
 
 DAG_FOLDER = Path("/opt/hai/dags")
 CONSTRAINTS = Path("/opt/hai/constraints.txt")
@@ -66,7 +66,7 @@ def pipeline_graphs() -> dict[str, Any]:
     """Validate each shipped split DAG's actual task objects, including failed-work cleanup edges."""
     bag = DagBag(dag_folder=str(DAG_FOLDER))
     results = {}
-    for name in PIPELINE_CHAINS:
+    for name in GRAPH_DAGS:
         dag = bag.dags.get(name)
         violations = validate_transform_graph(graph_from_dag(dag), name) if dag is not None else []
         results[name] = {"present": dag is not None, "violations": [{"rule": item.rule, "task": item.task, "detail": item.detail} for item in violations]}

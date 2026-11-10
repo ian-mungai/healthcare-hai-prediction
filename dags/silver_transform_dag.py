@@ -4,25 +4,7 @@ from __future__ import annotations
 
 from airflow.sdk import DAG, Param
 
-from orchestration.dag_runtime import build_tasks
-
-WORK_STEPS = (
-    "acquire_run",
-    "catalog_up",
-    "snapshot_project",
-    "pin_bronze",
-    "silver_build",
-    "silver_validate",
-    "verify_bronze",
-    "seal_silver",
-    "silver_export",
-    "silver_candidates",
-    "silver_reconcile",
-    "silver_backup",
-    "silver_commit",
-    "record_silver_snapshot",
-    "run_record",
-)
+from orchestration.dag_runtime import build_job_chain
 
 with DAG(
     dag_id="silver_transform_dag",
@@ -35,4 +17,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_tasks(WORK_STEPS, "silver")
+    build_job_chain("pin_bronze")

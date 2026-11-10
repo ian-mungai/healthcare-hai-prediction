@@ -1290,7 +1290,7 @@ def refused_row() -> bool:
 
 
 def case_dag(c: Checker) -> None:
-    """serving_deploy_dag: a closed parameter set, the broker chain and no way to ask for the AWS route or a promotion."""
+    """serving_deploy_dag: a closed parameter set, one job chain and no way to ask for the AWS route or a promotion."""
     from orchestration import graph, serving_contract
 
     ok = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary"}
@@ -1318,10 +1318,16 @@ def case_dag(c: Checker) -> None:
         "the chain runs the deploy between the run and its record",
         serving_contract.SERVING_STEPS == ("acquire_run", "snapshot_serving", "serve_deploy", "run_record"),
     )
-    c.check("the graph rules know the chain", graph.PIPELINE_CHAINS.get("serving_deploy_dag") == serving_contract.SERVING_STEPS)
+    c.check(
+        "the graph rules know the DAG as one job chain",
+        "serving_deploy_dag" in graph.COLLAPSED_DAGS and "serving_deploy_dag" not in graph.PIPELINE_CHAINS,
+    )
     source = ast.parse((ROOT / "dags/serving_deploy_dag.py").read_text())
     calls = [node for node in ast.walk(source) if isinstance(node, ast.Call)]
-    c.check("the DAG file builds its tasks through the shared broker runtime", any(getattr(call.func, "id", "") == "build_tasks" for call in calls))
+    c.check(
+        "the DAG file builds one job chain of the serve job through the shared runtime",
+        [ast.unparse(call) for call in calls if getattr(call.func, "id", "") in ("build_tasks", "build_job_chain")] == ["build_job_chain('serve_deploy')"],
+    )
     dag_ids = [kw.value.value for call in calls for kw in call.keywords if kw.arg == "dag_id" and isinstance(kw.value, ast.Constant)]
     c.check(
         "the DAG has the contract's id, no schedule and one active run",
