@@ -12,8 +12,8 @@ variable "airflow_launch_families" {
   nullable    = false
 
   validation {
-    condition     = alltrue([for family in var.airflow_launch_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata"], family)]) && length(var.airflow_launch_families) == length(distinct(var.airflow_launch_families))
-    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote, serve and metadata."
+    condition     = alltrue([for family in var.airflow_launch_families : contains(["train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata", "publisher"], family)]) && length(var.airflow_launch_families) == length(distinct(var.airflow_launch_families))
+    error_message = "Name distinct job families from train, bronze, silver, gold, features, drift, promote, serve, metadata and publisher."
   }
 
   validation {
@@ -73,20 +73,23 @@ variable "services_apply_lock_parameter_name" {
 locals {
   # The task role each family runs with, as the host definitions of infra/jobs take them. Promote reuses the training role.
   airflow_launch_family_roles = {
-    train    = "job_train_task"
-    bronze   = "job_write_bronze_task"
-    silver   = "job_write_silver_task"
-    gold     = "job_write_gold_task"
-    features = "job_write_features_task"
-    drift    = "job_drift_task"
-    promote  = "job_train_task"
-    serve    = "job_serve_task"
-    metadata = "job_openmetadata_task"
+    train     = "job_train_task"
+    bronze    = "job_write_bronze_task"
+    silver    = "job_write_silver_task"
+    gold      = "job_write_gold_task"
+    features  = "job_write_features_task"
+    drift     = "job_drift_task"
+    promote   = "job_train_task"
+    serve     = "job_serve_task"
+    metadata  = "job_openmetadata_task"
+    publisher = "job_publisher_task"
   }
-  # The staged request a family's run reads before it starts. Only these two families stage one.
+  # The staged request a family's run reads before it starts. Only these three families stage one; the launch reads the publisher's
+  # (orchestration/publisher_launch.py) and binds every attempt to its digest.
   airflow_launch_request_files = {
-    bronze = "bronze_request.json"
-    serve  = "serving_request.json"
+    bronze    = "bronze_request.json"
+    serve     = "serving_request.json"
+    publisher = "publisher_request.json"
   }
   airflow_launch_families_sorted = sort(var.airflow_launch_families)
   airflow_launch_request_arns = [
@@ -141,7 +144,7 @@ resource "aws_iam_role_policy" "airflow_launch_records" {
   policy = templatefile("${path.module}/owner_policies/airflow_launch_records.json", local.airflow_launch_policy_values)
 }
 
-# The staged request of a bronze run holds its tables, target and dry run flag, and that of a serving deployment names the HAI type, the mode and the candidate. Only a launch role that may start the bronze or serve family can read them.
+# The staged request of a bronze run holds its tables, target and dry run flag, that of a serving deployment names the HAI type, the mode and the candidate, and that of a Run 3 publisher run names its inputs, queue, resumed sources and prior state. Only a launch role that may start the bronze, serve or publisher family can read them.
 resource "aws_iam_role_policy" "airflow_launch_requests" {
   count = var.airflow_launch_prepared && length(local.airflow_launch_request_arns) > 0 ? 1 : 0
 

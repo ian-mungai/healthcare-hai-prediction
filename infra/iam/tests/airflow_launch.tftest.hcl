@@ -544,6 +544,26 @@ run "the_bronze_family_alone_adds_the_bronze_request_only" {
   }
 }
 
+run "the_publisher_family_starts_its_host_task_and_reads_its_staged_request" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["publisher", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_publisher_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train_host:*",
+      ] &&
+      contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0], "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev") &&
+      jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/publisher_request.json"]
+    )
+    error_message = "The publisher family runs only the publisher host definition, passes the publisher task role and reads the staged publisher_request.json, which orchestration/publisher_launch.py checks before the launch. No broker grant is involved."
+  }
+}
+
 run "no_bronze_record_grant_without_the_bronze_family" {
   command = plan
 
