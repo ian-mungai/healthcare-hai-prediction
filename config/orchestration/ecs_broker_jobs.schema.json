@@ -33,7 +33,8 @@
           "network": {
             "enum": [
               "lakehouse",
-              "training"
+              "training",
+              "publisher"
             ]
           },
           "deadline_seconds": {
@@ -68,7 +69,12 @@
                   "BRONZE_REQUEST_SHA256",
                   "BRONZE_INVENTORY_SHA256",
                   "HAI_DEADLINE_UTC",
-                  "SERVING_REQUEST"
+                  "SERVING_REQUEST",
+                  "PUBLISHER_INPUTS_SHA256",
+                  "PUBLISHER_QUEUE_SHA256",
+                  "PUBLISHER_RESUME_SOURCES",
+                  "PUBLISHER_PRIOR_STATE",
+                  "PUBLISHER_REQUEST_SHA256"
                 ]
               }
             }
@@ -96,6 +102,10 @@
           "needs_bronze_request": {
             "const": true,
             "description": "The run stages bronze_request.json beside its code archive. The broker reads and checks it before it starts the task and passes its values to the containers"
+          },
+          "needs_publisher_request": {
+            "const": true,
+            "description": "The run stages publisher_request.json beside its code archive. The direct launch preflight reads and checks it before it starts the Run 3 publisher task, binds every attempt to its digest and passes its values to the run container"
           },
           "needs_serving_request": {
             "const": true,

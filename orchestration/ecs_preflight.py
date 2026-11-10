@@ -40,6 +40,8 @@ from orchestration.training_contract import LAUNCH_LANES, parameters_for, traini
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
 HOST_FILE = Path("config/orchestration/host_jobs.json")
+# Jobs only the direct launch runs, in the same schema: the job broker also reads JOBS_FILE, and the Run 3 publisher has no broker family.
+DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 BRONZE_REQUEST_BYTES = 4096
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
@@ -50,6 +52,11 @@ DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
 SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
+PUBLISHER_VARIABLES = ("PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256")
+PUBLISHER_REQUEST_BYTES = 4096
+PUBLISHER_REQUEST_KEYS = {"inputs_sha256", "queue_sha256", "resume_sources", "prior_state"}
+PUBLISHER_PRIOR_KEYS = {"key", "version_id", "sha256"}
+PUBLISHER_SOURCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 GATE = "@gate"
 CHAIN = "chain"
@@ -152,6 +159,61 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
             raise TaskRefused(f"bronze_request_refused: {error}") from None
         values = {"BRONZE_TABLES": ",".join(names), "BRONZE_TARGET": target, "BRONZE_DRY_RUN": "1" if dry_run else ""}
         return values | {"BRONZE_REQUEST_SHA256": hashlib.sha256(body).hexdigest(), "BRONZE_INVENTORY_SHA256": inventory}
+
+    return read
+
+
+def publisher_request_reader(s3: S3Reader, bucket: str) -> Callable[[str], dict[str, str]]:
+    """Read and check the run's staged ``publisher_request.json`` (written by ``scripts.acquisition.stage_publisher`` on feat/run3-route-direct) and
+    return the values of the Run 3 publisher's ``run`` container, with ``PUBLISHER_REQUEST_SHA256`` the digest of the whole file, which binds every attempt.
+
+    The file holds exactly ``inputs_sha256`` (the staged inputs archive), ``queue_sha256`` (the queue whose state the task restores), ``resume_sources``
+    (the paused sources the owner resumes) and ``prior_state`` (the key, version and digest of the state the owner approved, or null). The checks are
+    those of the Run 3 branch's ``orchestration/publisher_launch.py``. A file that is not staged yet is retryable, a file that fails a check is refused.
+    """
+
+    def read(run_id: str) -> dict[str, str]:
+        try:
+            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/publisher_request.json")["Body"].read(PUBLISHER_REQUEST_BYTES + 1)
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
+                raise TaskUnavailable("publisher_request_not_staged") from None
+            raise TaskUnavailable("publisher_request_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("publisher_request_unreadable") from None
+        if len(body) > PUBLISHER_REQUEST_BYTES:
+            raise TaskRefused("publisher_request_too_large")
+        try:
+            document = json.loads(body)
+        except ValueError:
+            raise TaskRefused("publisher_request_malformed") from None
+        if not isinstance(document, dict) or set(document) != PUBLISHER_REQUEST_KEYS:
+            raise TaskRefused("publisher_request_needs_exactly_inputs_queue_resume_sources_and_prior_state")
+        inputs, queue, sources, prior = document["inputs_sha256"], document["queue_sha256"], document["resume_sources"], document["prior_state"]
+        if prior is not None and (
+            not isinstance(prior, dict)
+            or set(prior) != PUBLISHER_PRIOR_KEYS
+            or not all(isinstance(value, str) and value for value in prior.values())
+            or not DIGEST.fullmatch(prior["sha256"])
+            or not prior["key"].startswith("raw/run3_state/")
+        ):
+            raise TaskRefused("publisher_request_has_wrong_prior_state")
+        if (
+            not isinstance(inputs, str)
+            or not DIGEST.fullmatch(inputs)
+            or not isinstance(queue, str)
+            or not DIGEST.fullmatch(queue)
+            or not isinstance(sources, list)
+            or not all(isinstance(name, str) and PUBLISHER_SOURCE.fullmatch(name) for name in sources)
+        ):
+            raise TaskRefused("publisher_request_has_wrong_values")
+        return {
+            "PUBLISHER_INPUTS_SHA256": inputs,
+            "PUBLISHER_QUEUE_SHA256": queue,
+            "PUBLISHER_RESUME_SOURCES": ",".join(sources),
+            "PUBLISHER_PRIOR_STATE": "" if prior is None else json.dumps(prior, sort_keys=True, separators=(",", ":")),
+            "PUBLISHER_REQUEST_SHA256": hashlib.sha256(body).hexdigest(),
+        }
 
     return read
 
@@ -388,11 +450,19 @@ class PreflightSettings:
 
 
 def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The closed job table (checked against its schema) and the host table: what each job needs of the host and the family of each DAG."""
+    """The closed job table (the broker's table and the direct launch's own jobs, each checked against the schema) and the host table: what each job
+    needs of the host and the family of each DAG."""
+    validator = Draft202012Validator(json.loads((root / JOBS_SCHEMA).read_text()))
     document: dict[str, Any] = json.loads((root / JOBS_FILE).read_text())
-    errors = sorted(Draft202012Validator(json.loads((root / JOBS_SCHEMA).read_text())).iter_errors(document), key=str)
-    if errors:
-        raise LaunchRefused(f"{JOBS_FILE.name}: {errors[0].message}")
+    direct: dict[str, Any] = json.loads((root / DIRECT_JOBS_FILE).read_text())
+    for name, found in ((JOBS_FILE.name, document), (DIRECT_JOBS_FILE.name, direct)):
+        errors = sorted(validator.iter_errors(found), key=str)
+        if errors:
+            raise LaunchRefused(f"{name}: {errors[0].message}")
+    overlap = sorted((set(document["jobs"]) & set(direct["jobs"])) | (set(document["steps"]) & set(direct["steps"])))
+    if overlap:
+        raise LaunchRefused(f"{DIRECT_JOBS_FILE.name} repeats {overlap} of {JOBS_FILE.name}")
+    document = {**document, "jobs": {**document["jobs"], **direct["jobs"]}, "steps": {**document["steps"], **direct["steps"]}}
     jobs = document["jobs"]
     unknown = sorted({job for job in document["steps"].values() if job not in (None, GATE) and job not in jobs})
     unknown += sorted(row["after"] for row in jobs.values() if "after" in row and row["after"] not in jobs)
@@ -442,6 +512,7 @@ class Preflight:
         host_launch_hold: Callable[[], str | None] | None = None,
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
+        publisher_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
         self.jobs: Mapping[str, Any] = table["jobs"]
         self.steps: Mapping[str, str | None] = table["steps"]
@@ -458,6 +529,7 @@ class Preflight:
         self.task_definition = task_definition
         self.host_job_cap = host_job_cap
         self.host_launch_hold = host_launch_hold
+        self.publisher_request = publisher_request
 
     def containers(self, job: str) -> tuple[dict[str, list[str]], str]:
         """The containers of the job's host task definition and the one whose log is read: the host table's where it names them, else the job table's."""
@@ -554,11 +626,16 @@ class Preflight:
             raise LaunchRefused(problem)
 
     def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
-        """The values fixed once for a launch: the checked bronze and serving requests, read once, and the absolute deadline of the task."""
+        """The values fixed once for a launch: the checked bronze, serving and publisher requests, read once, and the absolute deadline of the task."""
         row = self.jobs[job]
         names = {name for variables in self.containers(job)[0].values() for name in variables}
         values: dict[str, str] = {}
-        for needed, reader, label in (("needs_bronze_request", self.bronze_request, "bronze"), ("needs_serving_request", self.serving_request, "serving")):
+        readers = (
+            ("needs_bronze_request", self.bronze_request, "bronze"),
+            ("needs_serving_request", self.serving_request, "serving"),
+            ("needs_publisher_request", self.publisher_request, "publisher"),
+        )
+        for needed, reader, label in readers:
             if row.get(needed):
                 if reader is None:
                     raise LaunchRefused(f"{label}_request_not_configured")
@@ -665,12 +742,12 @@ class Preflight:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
-            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, DEADLINE_VARIABLE)},
+            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},
         }
         containers, log_container = self.containers(job)
         environment = {container: {name: values[name]() for name in names} for container, names in containers.items()}
         uses_code = any("CODE_SHA256" in names for names in containers.values())
-        request_hash = fixed.get("BRONZE_REQUEST_SHA256") or fixed.get("SERVING_REQUEST_SHA256")
+        request_hash = fixed.get("BRONZE_REQUEST_SHA256") or fixed.get("SERVING_REQUEST_SHA256") or fixed.get("PUBLISHER_REQUEST_SHA256")
         if not request_hash:
             request_hash = hashlib.sha256((training if row.get("needs_training_parameters") else "").encode()).hexdigest()
         need = self.host["jobs"][job]

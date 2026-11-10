@@ -1,0 +1,6 @@
+{
+  "publisher": {
+    "containers": ["init", "fetch", "run"],
+    "start_with_scratch_wipe": ["init"]
+  }
+}

@@ -53,6 +53,11 @@
         ]
       },
       "log_container": "ingest"
+    },
+    "publisher": {
+      "cpu_units": 2048,
+      "memory_mib": 8192,
+      "scratch_gib": 30
     }
   },
   "dags": {
@@ -66,6 +71,7 @@
     "serving_deploy_dag": "serve",
     "metadata_ingest_dag": "metadata",
     "bronze_chain_dag": "chain",
-    "launch_settle_dag": "owner"
+    "launch_settle_dag": "owner",
+    "ingestion_dag": "publisher"
   }
 }

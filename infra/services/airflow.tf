@@ -13,6 +13,7 @@ locals {
     code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
     code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"
     code_host_jobs           = "config/orchestration/host_jobs.json"
+    code_direct_jobs         = "config/orchestration/direct_jobs.json"
     code_launch_config       = "config/orchestration/ecs_launch.json"
     code_bronze_tables       = "config/lakehouse/bronze_tables.json"
     code_lakehouse_init      = "scripts/lakehouse/__init__.py"

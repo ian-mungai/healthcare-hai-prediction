@@ -1,0 +1,34 @@
+{
+  "version": 1,
+  "jobs": {
+    "publisher": {
+      "deadline_seconds": 86400,
+      "network": "publisher",
+      "log_container": "run",
+      "needs_publisher_request": true,
+      "containers": {
+        "fetch": [
+          "RUN_ID",
+          "CODE_RUN_ID",
+          "CODE_SHA256",
+          "HAI_DEADLINE_UTC"
+        ],
+        "run": [
+          "RUN_ID",
+          "PUBLISHER_INPUTS_SHA256",
+          "PUBLISHER_QUEUE_SHA256",
+          "PUBLISHER_RESUME_SOURCES",
+          "PUBLISHER_PRIOR_STATE",
+          "PUBLISHER_REQUEST_SHA256",
+          "HAI_DEADLINE_UTC"
+        ]
+      },
+      "acceptance": [
+        "run"
+      ]
+    }
+  },
+  "steps": {
+    "publisher_run": "publisher"
+  }
+}

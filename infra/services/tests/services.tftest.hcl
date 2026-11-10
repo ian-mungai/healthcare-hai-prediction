@@ -1202,11 +1202,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "e9a1270929e5616de2c34d0768e25f30e79521407644273d861645a388261034"
+      "airflow_apiserver/airflow_apiserver"         = "ec138288e0dae247f3ad1f26331c0a90ea68329508f2e43e0868bfaf93b11703"
       "airflow_apiserver/airflow_migrate"           = "eb5376c30ad62a23ece6caabb5bbb40c625c7241fed2056e64eca3f4479226b3"
-      "airflow_dag_processor/airflow_dag_processor" = "2797e106ad92556d65283a3fe8c9ce596244e9b3fed720ce9c2f3737aca6085e"
-      "airflow_scheduler/airflow_scheduler"         = "6a7d088c5feb2e49c24056f4db75cb636b9c8d40f4fa0ae4b01f0f9b1105801a"
-      "airflow_triggerer/airflow_triggerer"         = "ebdf9a4005c0842d40f37bd4aa661b68c2dc0eef02cc9ac7fe11210efaba1b57"
+      "airflow_dag_processor/airflow_dag_processor" = "977754372c89c9f0826a4545e69a2686b16aa2934f248357537c66970633bdab"
+      "airflow_scheduler/airflow_scheduler"         = "434d2eac83bcf1cd718d0a641bc93f576a5a1d81127a96fc2a4c874fae7e9f79"
+      "airflow_triggerer/airflow_triggerer"         = "956ff20e5716328c38da977a6a8d6d1933943528306a1617f63b2a3c9603dc1c"
       "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
@@ -2891,6 +2891,7 @@ run "launch_mounts_are_always_present" {
           "/opt/hai/orchestration/ecs_launch_provider.py",
           "/opt/hai/config/orchestration/host_jobs.json",
           "/opt/hai/config/orchestration/ecs_broker_jobs.json",
+          "/opt/hai/config/orchestration/direct_jobs.json",
           "/opt/hai/scripts/lakehouse/bronze_dispatch.py",
           "/opt/hai/job_scratch",
         ] : strcontains(aws_ecs_task_definition.service[key].container_definitions, path)

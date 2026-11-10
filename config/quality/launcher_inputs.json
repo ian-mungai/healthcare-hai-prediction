@@ -512,6 +512,7 @@
     "config/lakehouse/retired_objects.json",
     "config/orchestration/broker_templates.json",
     "config/orchestration/broker_templates.schema.json",
+    "config/orchestration/direct_jobs.json",
     "config/orchestration/ecs_broker_jobs.json",
     "config/orchestration/ecs_broker_jobs.schema.json",
     "config/orchestration/ecs_jobs.json",

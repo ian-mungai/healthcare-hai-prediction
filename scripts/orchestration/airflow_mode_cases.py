@@ -53,6 +53,7 @@ from __future__ import annotations
 
 import ast
 import contextlib
+import hashlib
 import importlib
 import inspect
 import io
@@ -113,6 +114,11 @@ LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
 DAG_ID = re.compile(r'dag_id="([a-z_]+)"')
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
 HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
+# The publisher host definition is planned on feat/run3-route-direct (infra/jobs/publisher.tf, publisher_host); its containers are pinned here until the
+# two branches stack and a Terraform test keeps this file equal to that plan.
+PUBLISHER_HOST_DEFINITION = ROOT / "infra/jobs/tests/publisher_host_definition.json"
+PUBLISHER_RUN = "20261110T120000Z-ab12cd34"
+PUBLISHER_REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api"], "prior_state": None}
 LAYER_JOBS = frozenset({"silver", "gold", "features"})
 POLARIS = "http://10.0.0.5:8181/api/catalog"
 MLFLOW = "http://10.0.0.5:5100"
@@ -157,7 +163,7 @@ class StageBucket(FakeS3):
 def host_planned_containers() -> dict[str, dict[str, list[str]]]:
     """The containers of each host family as Terraform plans them: ``containers`` in order and ``start_with_scratch_wipe``, the containers whose first command
     starts with the scratch wipe (``infra/jobs/tests/host_definitions.json``, written by ``host_definitions_fixture`` from the plan)."""
-    return dict(json.loads(HOST_DEFINITIONS.read_text()))
+    return {**json.loads(HOST_DEFINITIONS.read_text()), **json.loads(PUBLISHER_HOST_DEFINITION.read_text())}
 
 
 def host_definitions() -> dict[str, frozenset[str]]:
@@ -207,6 +213,7 @@ class Rig:
             host_capacity=capacity,
             task_definition=self.adapter.task_definition,
             host_job_cap=self.read_host_cap,
+            publisher_request=preflight.publisher_request_reader(self.stage, BUCKET),
         )
         self.preflight.host_launch_hold = lambda: "clear"  # no services apply is running; held_rig puts the production hold reader here
         self.services = steps.LaunchServices(
@@ -217,7 +224,7 @@ class Rig:
             definition=lambda job: self.adapter.definition(job, HOST),
             clock=self.time.clock(),
         )
-        self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, str(TRAIN_PARAMS["run_id"]))
+        self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"]))
 
     def read_host_cap(self) -> str | None:
         """The stand-in of the SSM GetParameter call that reads the current host job cap the services stack writes."""
@@ -1628,6 +1635,7 @@ def launch_modules_are_in_the_mount_list() -> None:
         "config/orchestration/ecs_broker_jobs.json",
         "config/orchestration/ecs_broker_jobs.schema.json",
         "config/orchestration/host_jobs.json",
+        "config/orchestration/direct_jobs.json",
         "config/orchestration/ecs_launch.json",
         "config/lakehouse/bronze_tables.json",
         "scripts/lakehouse/bronze_dispatch.py",
@@ -1812,7 +1820,8 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
     folders, then the containers of the table row (the host table's where it names them), then the guard for the three layer jobs only."""
     table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
     planned = host_planned_containers()
-    require(set(planned) == set(table["jobs"]) and len(planned) == 9, f"nine host families were expected: {sorted(planned)}")
+    # Nine host twins planned by infra/jobs/host.tf, and the publisher's own host definition (pinned from feat/run3-route-direct's plan).
+    require(set(planned) == set(table["jobs"]) and len(planned) == 10, f"ten host families were expected: {sorted(planned)}")
     for job, row in table["jobs"].items():
         expected = ["init", *(host["jobs"].get(job, {}).get("containers") or row["containers"]), *(["guard"] if job in LAYER_JOBS else [])]
         require(planned[job]["containers"] == expected, f"the {job} host definition holds {planned[job]['containers']}, expected {expected}")
@@ -1824,6 +1833,79 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
         host_definitions()["example_dev_job_metadata_host"] == frozenset({"init", "ingest"}),
         "the metadata host definition is not the init step and its one client",
     )
+
+
+def publisher_body(document: object) -> bytes:
+    return json.dumps(document, sort_keys=True).encode()
+
+
+def ingestion_dag_runs_the_publisher_on_the_host() -> None:
+    """ingestion_dag is one chain of four tasks: the Run 3 publisher job launches once on its host definition, bound to its staged request."""
+    rig = Rig()
+    body = publisher_body(PUBLISHER_REQUEST)
+    rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", body)
+    with world(rig, "ingestion_dag", {"run_id": PUBLISHER_RUN, "mode": "real"}) as current:
+        states = current.run_dag("ingestion_dag.py")
+    require(states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}, f"the ingestion chain did not pass: {states}")
+    sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
+    require(len(sent) == 1 and sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the publisher did not run once on the host: {sent}")
+    run = rig.environment()["run"]
+    require(
+        run["PUBLISHER_INPUTS_SHA256"] == "a" * 64
+        and run["PUBLISHER_RESUME_SOURCES"] == "bls_api"
+        and run["PUBLISHER_PRIOR_STATE"] == ""
+        and run["PUBLISHER_REQUEST_SHA256"] == hashlib.sha256(body).hexdigest(),
+        f"the run container did not get the checked request: {run}",
+    )
+    require(rig.environment()["fetch"]["CODE_SHA256"] == DIGEST, "the fetch container did not get the staged code digest")
+    end = rig.end(PUBLISHER_RUN, "publisher")
+    require(end is not None and end["outcome"] == "succeeded", f"the launch record does not say the publisher passed: {end}")
+
+
+def ingestion_dag_without_a_request_launches_nothing() -> None:
+    rig = Rig()
+    with world(rig, "ingestion_dag", {"run_id": PUBLISHER_RUN, "mode": "real"}) as current:
+        states = current.run_dag("ingestion_dag.py")
+    require(states["preflight"] == "failed" and states["job"] == "upstream_failed" and states["gate"] == "failed", f"a missing request did not stop: {states}")
+    require(rig.tasks_started() == 0 and not rig.records.objects, "a run without its staged request launched or recorded something")
+
+
+def publisher_request_is_checked_and_bound() -> None:
+    params = {"run_id": PUBLISHER_RUN, "mode": "real"}
+    rig = Rig()
+    with world(rig, "ingestion_dag", params) as current:
+        raised = refuses(LaunchUnavailable, lambda: current.step("publisher_run"))
+        require("not_staged" in str(raised) and rig.time.now - 1_800_000_000.0 <= 700, f"a missing request was not retried within a bound: {raised}")
+        prior = {"key": "raw/run3_state/" + "b" * 64 + "/state.json", "version_id": "v1", "sha256": "d" * 64}
+        for bad in (
+            b"not json",
+            b"x" * 5000,
+            {**PUBLISHER_REQUEST, "hosts": "all"},
+            {**PUBLISHER_REQUEST, "inputs_sha256": "A" * 64},
+            {**PUBLISHER_REQUEST, "resume_sources": ["../bls"]},
+            {**PUBLISHER_REQUEST, "prior_state": {**prior, "key": "raw/other/state.json"}},
+        ):
+            rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", bad)
+            refuses(LaunchRefused, lambda: current.step("publisher_run"))
+        require(not rig.ecs.calls, "a bad publisher request reached the cloud")
+        rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body({**PUBLISHER_REQUEST, "prior_state": prior}))
+        require(current.step("publisher_run") == "succeeded", "a good publisher request did not run")
+        require(json.loads(rig.environment()["run"]["PUBLISHER_PRIOR_STATE"]) == prior, "the approved prior state did not reach the task")
+        rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body(PUBLISHER_REQUEST))
+        error = refuses(LaunchRefused, lambda: current.step("publisher_run", 2))
+        require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
+
+
+def publisher_host_definition_matches_the_job_table() -> None:
+    """The host table, the job table and the pinned publisher host definition name the same containers and variables as the launch request sets."""
+    table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
+    planned = json.loads(PUBLISHER_HOST_DEFINITION.read_text())["publisher"]
+    job = table["jobs"]["publisher"]
+    require(
+        planned["containers"] == ["init", "fetch", "run"] and set(job["containers"]) == {"fetch", "run"}, f"the publisher containers differ: {planned}, {job}"
+    )
+    require(job["log_container"] == "run" and job["acceptance"] == ["run"] and job["deadline_seconds"] == 86_400, f"the publisher job row is wrong: {job}")
+    require(table["steps"]["publisher_run"] == "publisher" and "publisher" in host["jobs"], "the publisher step or its host row is missing")
 
 
 CASES: dict[str, Callable[[], None]] = {
@@ -1840,6 +1922,10 @@ CASES: dict[str, Callable[[], None]] = {
     "launch_settle_dag_frees_the_family": launch_settle_dag_frees_the_family,
     "launch_settle_dag_refuses_without_evidence": launch_settle_dag_refuses_without_evidence,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
+    "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
+    "ingestion_dag_without_a_request_launches_nothing": ingestion_dag_without_a_request_launches_nothing,
+    "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,
+    "publisher_host_definition_matches_the_job_table": publisher_host_definition_matches_the_job_table,
     "serving_request_is_checked": serving_request_is_checked,
     "code_digest_is_checked": code_digest_is_checked,
     "code_run_is_bound_once": code_run_is_bound_once,
