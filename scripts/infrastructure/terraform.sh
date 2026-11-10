@@ -169,8 +169,8 @@ if [[ "$stack" == services && "$action" == apply ]]; then
     printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s --token %s\n' "$python_bin" "'<what you checked>'" "'$token'" >&2
   }
   "$python_bin" -m scripts.infrastructure.services_apply hold --reason "$reason" || {
-    printf 'The launch hold could not be set, so the services apply did not start.\n' >&2
-    resolve_hint
+    printf 'The launch hold could not be set, so the services apply did not start. The apply lock stays set, so no host job launches and no other services apply starts. Check the hold, then run:\n' >&2
+    printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s --token %s\n' "$python_bin" "'<what you checked>'" "'$token'" >&2
     exit 1
   }
   if ! terraform -chdir="$directory" apply -input=false "$@"; then

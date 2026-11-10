@@ -56,6 +56,7 @@ class Store:
     def __init__(self, clock: Clock, value: str | None = None, fail_put: bool = False) -> None:
         self.clock, self.value, self.fail_put = clock, value, fail_put
         self.log: list[tuple[float, str, str | None]] = []
+        self.lock: Any = None  # the apply lock the steps use, set by steps()
 
     def put(self, value: str) -> None:
         self.log.append((self.clock.now, "put", value))
@@ -68,11 +69,34 @@ class Store:
         return self.value
 
 
-def steps(store: Store, clock: Clock, stable: Callable[[], bool]) -> Any:
+class MemoryLock:
+    """The apply lock in memory: create fails while it exists, as AWS answers ParameterAlreadyExists."""
+
+    def __init__(self, value: str | None = None) -> None:
+        self.value = value
+
+    def create(self, value: str) -> None:
+        module = importlib.import_module("scripts.infrastructure.services_apply")
+        if self.value is not None:
+            raise module.LockHeld
+        self.value = value
+
+    def get(self) -> str | None:
+        return self.value
+
+    def delete(self) -> None:
+        self.value = None
+
+
+def steps(store: Store, clock: Clock, stable: Callable[[], bool], lock: MemoryLock | None = None) -> Any:
+    """Steps over the stand-in hold and an apply lock held by this apply's token (``OWN_LOCK``) unless another lock is given."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
     require(hasattr(module, "Steps"), "services_apply has no Steps that a later GitHub Actions apply can reuse")
     lines: list[str] = []
-    return module.Steps(put=store.put, get=store.get, stable=stable, clock=clock, report=lines.append), module
+    held = MemoryLock(OWN_LOCK) if lock is None else lock
+    store.lock = held
+    store_lock = module.LockStore(create=held.create, get=held.get, delete=held.delete)
+    return module.Steps(put=store.put, get=store.get, stable=stable, clock=clock, report=lines.append, lock=store_lock), module
 
 
 def hold_is_written_and_settles_before_the_apply() -> None:
@@ -95,7 +119,7 @@ def settle_clears_only_after_steady_state() -> None:
     store = Store(clock, "held by services_apply")
     answers = iter([False, False, True])
     current, _ = steps(store, clock, lambda: next(answers))
-    current.settle()
+    current.settle(OWN_LOCK)
     puts = [entry for entry in store.log if entry[1] == "put"]
     require([entry[2] for entry in puts] == ["clear"] and store.value == "clear", f"settle did not clear the hold once: {store.log}")
     require(puts[0][0] > 1000.0, "settle cleared the hold before polling the services")
@@ -108,7 +132,7 @@ def settle_that_never_reaches_steady_state_keeps_the_hold() -> None:
         store = Store(clock, "held by services_apply")
         current, module = steps(store, clock, stable)
         try:
-            current.settle()
+            current.settle(OWN_LOCK)
         except module.ServicesApplyError as error:
             require("launch hold stays" in str(error), f"the failure does not say the hold stays: {error}")
         else:
@@ -124,20 +148,20 @@ def resolve_needs_a_statement_and_steady_state() -> None:
     current, module = steps(store, clock, lambda: False)
     for statement in ("", "   "):
         try:
-            current.resolve(statement)
+            current.resolve(statement, OWN_LOCK)
         except module.ServicesApplyError:
             pass
         else:
             raise AssertionError("resolve cleared the hold without a statement")
     try:
-        current.resolve("checked the failed apply and the services")
+        current.resolve("checked the failed apply and the services", OWN_LOCK)
     except module.ServicesApplyError:
         pass
     else:
         raise AssertionError("resolve cleared the hold while the services were not stable")
     require(store.value == "held by services_apply", f"resolve changed the hold before it was allowed: {store.log}")
     current, _ = steps(store, clock, lambda: True)
-    current.resolve("checked the failed apply and the services")
+    current.resolve("checked the failed apply and the services", OWN_LOCK)
     require(store.value == "clear", f"resolve did not clear the hold: {store.log}")
 
 
@@ -360,7 +384,83 @@ def the_lock_name_is_the_terraform_default() -> None:
     require(getattr(module, "lock_parameter_name", lambda: None)() == LOCK, "the command does not create the lock the IAM stack grants")
 
 
+def settle_requires_and_checks_its_token() -> None:
+    """settle needs this apply's token in the method itself: none, an empty one, a malformed one or another apply's token changes nothing."""
+    for token in (None, "", "not a token", "other-host:2:20261110T221000Z:87654321"):
+        clock = Clock()
+        store = Store(clock, "held by services_apply")
+        current, module = steps(store, clock, lambda: True)
+        try:
+            current.settle(token)
+        except module.ServicesApplyError:
+            pass
+        else:
+            raise AssertionError(f"settle accepted the token {token!r}")
+        require(store.value == "held by services_apply" and store.lock.value == OWN_LOCK, f"settle with {token!r} changed the hold or the lock")
+
+
+def resolve_without_a_token_takes_the_lock_first() -> None:
+    """resolve without a token takes the apply lock itself (create without overwrite) before anything else, clears the hold, then deletes its own
+    lock. While another apply holds the lock it changes nothing."""
+    clock = Clock()
+    store = Store(clock, "held by services_apply")
+    created: list[str] = []
+
+    class Recording(MemoryLock):
+        def create(self, value: str) -> None:
+            created.append(value)
+            require(store.value == "held by services_apply", "resolve wrote the hold before it took the lock")
+            super().create(value)
+
+    lock = Recording()
+    current, module = steps(store, clock, lambda: True, lock)
+    current.resolve("checked the failed apply and the services")
+    require(len(created) == 1 and TOKEN.fullmatch(created[0]) is not None, f"resolve did not take the lock with a new token: {created}")
+    require(store.value == "clear" and lock.value is None, f"resolve did not clear the hold and delete its own lock: {store.value!r} {lock.value!r}")
+    clock = Clock()
+    store = Store(clock, "held by another apply")
+    other = MemoryLock("other-host:2:20261110T221000Z:87654321")
+    current, module = steps(store, clock, lambda: True, other)
+    try:
+        current.resolve("checked")
+    except module.ServicesApplyError:
+        pass
+    else:
+        raise AssertionError("resolve without a token cleared a hold while another apply holds the lock")
+    require(store.value == "held by another apply" and other.value == "other-host:2:20261110T221000Z:87654321", "resolve changed another apply's state")
+
+
+def resolve_cannot_clear_a_hold_another_machine_just_set() -> None:
+    """Forced order on the real module: resolve without a token starts while no lock exists; another machine then takes the lock and sets its
+    hold. resolve must not write clear over that hold."""
+    other = "other-host:2:20261110T221000Z:87654321"
+
+    class Racing(AwsStandIn):
+        raced = False
+
+        def lock_call(self, command: list[str], operation: list[str]) -> CompletedProcess[str]:
+            answer = super().lock_call(command, operation)
+            if not self.raced:
+                self.raced = True
+                if self.lock is None:  # the other machine's create succeeds only while no lock exists
+                    self.lock, self.value = other, "held by services_apply on other-host"
+            return answer
+
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    aws = Racing(value="held by services_apply")
+    with mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
+        run_real_output(["resolve", "--statement", "checked"], aws)
+    if aws.lock == other:
+        require(aws.value == "held by services_apply on other-host", f"resolve cleared the hold another machine set: {aws.value!r}")
+    hold_puts = [command for command in aws.commands if command[1:3] == ["ssm", "put-parameter"] and HOLD in command]
+    lock_ops = [i for i, command in enumerate(aws.commands) if LOCK in command]
+    require(not hold_puts or (lock_ops and lock_ops[0] < aws.commands.index(hold_puts[0])), "resolve wrote the hold before touching the lock")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "settle_requires_and_checks_its_token": settle_requires_and_checks_its_token,
+    "resolve_without_a_token_takes_the_lock_first": resolve_without_a_token_takes_the_lock_first,
+    "resolve_cannot_clear_a_hold_another_machine_just_set": resolve_cannot_clear_a_hold_another_machine_just_set,
     "lock_is_created_once_with_a_unique_token": lock_is_created_once_with_a_unique_token,
     "a_second_apply_is_refused_while_the_lock_exists": a_second_apply_is_refused_while_the_lock_exists,
     "settle_never_deletes_another_token": settle_never_deletes_another_token,

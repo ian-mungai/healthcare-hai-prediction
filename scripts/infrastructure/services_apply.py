@@ -45,6 +45,7 @@ HOLD_SETTLE_SECONDS = 30
 STABLE_SECONDS = 1200
 POLL_SECONDS = 15
 CALL_SECONDS = 60
+TOKEN = re.compile(r"[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}")
 RESOLVE_COMMAND = "python -m scripts.infrastructure.services_apply resolve --statement '<what you checked>'"
 
 
@@ -157,21 +158,23 @@ class Steps:
             raise ServicesApplyError(f"the apply lock could not be taken ({type(error).__name__}: {str(error)[:200]})") from None
         return token
 
-    def require_lock(self, token: str) -> None:
-        """Refuse unless the apply lock holds exactly this token."""
+    def require_lock(self, token: str | None) -> tuple[LockStore, str]:
+        """Refuse unless an apply lock store is configured and the lock holds exactly this well-formed token; return the store and the token."""
         if self.lock_store is None:
-            return
+            raise ServicesApplyError("no apply lock store is configured, so the launch hold is not changed")
+        if not token or TOKEN.fullmatch(token) is None:
+            raise ServicesApplyError(f"{token!r} is not an apply lock token. Nothing was changed")
         found = self.lock_store.get()
         if found != token:
             raise ServicesApplyError(f"the apply lock is held by {found or 'no apply'}, not by {token}. Nothing was changed")
+        return self.lock_store, token
 
     def release(self, token: str) -> None:
-        """Delete the apply lock only while it still holds this token. No other apply can take the lock while it holds this token, so the read and
-        the delete cannot remove another apply's lock."""
-        if self.lock_store is None:
-            return
-        self.require_lock(token)
-        self.lock_store.delete()
+        """Delete the apply lock only while it still holds this token. While it holds this token no other apply can create it (the create has no
+        overwrite), so the read and the delete cannot remove another apply's lock. The one window left: someone deletes the lock by hand (outside
+        this command) and another apply creates it between this read and this delete; then this delete removes that apply's lock."""
+        store, _ = self.require_lock(token)
+        store.delete()
         self.report("apply lock: released")
 
     def services_settled(self) -> bool:
@@ -205,31 +208,40 @@ class Steps:
                 )
             self.clock.sleep(POLL_SECONDS)
 
-    def settle(self, token: str | None = None) -> None:
-        """After a successful apply: check that this apply still holds the apply lock, wait for steady state, clear the hold, then delete the lock.
-        A lock held by another token changes nothing."""
-        if token is not None:
-            self.require_lock(token)
+    def settle(self, token: str | None) -> None:
+        """After a successful apply: require this apply's own token on the apply lock, wait for steady state, clear the hold, then delete the lock.
+        No token, a malformed one or a lock held by another token changes nothing."""
+        _, token = self.require_lock(token)
         self.wait_stable()
         self.write(LAUNCH_HOLD_CLEAR)
         self.report("launch hold: cleared after the services reached steady state")
-        if token is not None:
-            self.release(token)
+        self.release(token)
 
     def resolve(self, statement: str, token: str | None = None) -> None:
-        """After a failed apply or settle: with the owner's statement of what was checked, the token of the apply lock when one is held, and only
-        while every service is settled now, clear the hold, then delete the lock."""
+        """After a failed apply or settle, with the owner's statement of what was checked. No path writes "clear" without owning the apply lock:
+        with ``token`` the lock must hold it (the failed apply's lock); without one, resolve takes the lock itself first (create without
+        overwrite), so while another apply holds it nothing changes. Then, only while every service is settled, it clears the hold and deletes the
+        lock it owns. A lock resolve took itself is deleted again when the services are not settled; the failed apply's lock stays."""
         if not statement.strip():
             raise ServicesApplyError("resolve needs --statement with what you checked. The launch hold stays set")
-        held = self.lock_store.get() if self.lock_store is not None else None
-        if held is not None and held != token:
-            raise ServicesApplyError(f"the apply lock is held by {held}. Give that token with --token to resolve it. Nothing was changed")
-        if not self.services_settled():
+        if token is not None:
+            self.require_lock(token)
+            owned, taken = token, False
+        else:
+            owned, taken = self.lock(), True
+        try:
+            settled = self.services_settled()
+        except BaseException:
+            if taken:
+                self.release(owned)
+            raise
+        if not settled:
+            if taken:
+                self.release(owned)
             raise ServicesApplyError("the services are not stable yet. The launch hold stays set; run resolve again once they are")
         self.write(LAUNCH_HOLD_CLEAR)
         self.report(f"launch hold: cleared by the owner ({statement.strip()[:200]})")
-        if held is not None and token is not None:
-            self.release(token)
+        self.release(owned)
 
 
 def open_steps() -> Steps:

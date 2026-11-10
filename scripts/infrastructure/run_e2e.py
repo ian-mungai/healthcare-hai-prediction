@@ -1606,6 +1606,12 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
             evidence.check(step, "hold_and_lock_stay", "launch hold" in result.stderr and "apply lock" in result.stderr)
         elif marker == "hold_fails":
             evidence.check(step, "no_apply_without_the_hold", result.returncode == 1 and holds == ["lock", "hold"] and not applied)
+            # The hold may not be set, so the message must not claim it; the lock alone keeps launches and other applies out.
+            evidence.check(
+                step,
+                "message_true_without_the_hold",
+                "launch hold and the apply lock stay set" not in result.stderr and "apply lock stays set" in result.stderr,
+            )
         else:
             evidence.check(step, "no_hold_and_no_apply_without_the_lock", result.returncode == 1 and holds == ["lock"] and not applied)
     (workspace / "identity").write_text("example_other_user", encoding="utf-8")
