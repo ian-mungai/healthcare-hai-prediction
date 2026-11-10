@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24, FA26 and FA27 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA27 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -26,6 +26,7 @@ import sys
 import tempfile
 import threading
 import time
+import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
@@ -1380,6 +1381,16 @@ SET_RUN = "20261109T020000Z-0000a001"
 SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
 MLFLOW_URI = "http://10.0.1.20:5100"
 REGISTRY_PHRASE = "registry-phrase-4c1e"
+# The fixed variables and the secrets that infra/jobs/layers.tf gives the feast container of the features job (layers.tftest.hcl checks the same list).
+DEPLOYED_FEAST_FIXED = {
+    "FEAST_PROFILE": "aws",
+    "FEAST_REGISTRY_BUCKET": "example-feature-bucket",
+    "AWS_REGION": "us-east-2",
+    "MLFLOW_TRACKING_USERNAME": "admin",
+    "MLFLOW_HTTP_REQUEST_TIMEOUT": "10",
+    "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "2",
+}
+DEPLOYED_FEAST_SECRETS = {"POLARIS_CLIENT_ID": "reader-id-1", "POLARIS_CLIENT_SECRET": SENTINEL, "MLFLOW_TRACKING_PASSWORD": REGISTRY_PHRASE}
 
 
 class RegistryMissing(Exception):
@@ -1538,6 +1549,53 @@ def case_fa24(c: Checker) -> None:
         c.check("no failure text holds the reader secret", SENTINEL not in out + err)
 
 
+def case_fa25(c: Checker) -> None:
+    """FA25: the deployed feast container reaches the MLflow registry. Its environment is built as the task gets it: the empty variables of the job table
+    filled by the override generator (as the broker and the direct ECS launch fill them) plus the fixed variables and secrets of layers.tf. An online set
+    whose Production model was trained on another schema then holds its load, and the registry client got the address and the login. The feature store
+    image pins the MLflow client the registry reader imports."""
+    job_overrides = importlib.import_module("scripts.orchestration.job_overrides")
+    values = {
+        "RUN_ID": SET_RUN,
+        "CODE_RUN_ID": SET_RUN,
+        "CODE_SHA256": "ab" * 32,
+        "POLARIS_URI": PORT_OF_NOTHING,
+        "INPUT_RUN_ID": SET_BASE_RUN,
+        "FEATURE_SET": "m1",
+        "MLFLOW_TRACKING_URI": MLFLOW_URI,
+    }
+    document = job_overrides.build("features", values)
+    variables = {item["name"]: item["value"] for entry in document["containerOverrides"] if entry["name"] == "feast" for item in entry["environment"]}
+    c.check("the job table gives the feast container the MLflow address", variables.get("MLFLOW_TRACKING_URI") == MLFLOW_URI)
+    names = json.loads(importlib.import_module("scripts.features.feature_sets").MODEL_CONTRACT.read_text())["registered_models"]
+    other = {"feature_set": "m1", "feature_set_schema_sha256": "0" * 64}
+    registry = RegistryStandIn({names[sorted(names)[0]]: other})
+    with tempfile.TemporaryDirectory(prefix="feast_aws_deployed_") as raw:
+        world = Deployed(Path(raw), registry)
+        environment = {**DEPLOYED_FEAST_FIXED, **DEPLOYED_FEAST_SECRETS, **variables, "FEAST_RUN_FOLDER": str(world.folder)}
+        with world.running(environment):
+            code, out, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
+        record = json.loads((world.folder / "feast_materialize.json").read_text()) if (world.folder / "feast_materialize.json").is_file() else {}
+        c.check("the step exits 0", code == 0)
+        c.check("no failure was written", err == "")
+        c.check("the registry client got the address of the job table", [client["uri"] for client in registry.clients] == [MLFLOW_URI])
+        c.check(
+            "the registry client got the login of the task (user admin, the password secret)",
+            [(client["MLFLOW_TRACKING_USERNAME"], client["MLFLOW_TRACKING_PASSWORD"]) for client in registry.clients] == [("admin", REGISTRY_PHRASE)],
+        )
+        c.check("the differing Production model holds the load and nothing is loaded", record.get("online") == "hold" and world.loaded == [])
+        c.check("the hold record is in the run folder for the upload", (world.folder / "online_hold.json").is_file())
+        c.check("no output holds the registry password", REGISTRY_PHRASE not in out + err)
+    group = tomllib.loads((feast_job.REPO.parent / "pyproject.toml").read_text())["dependency-groups"]
+    pins = {str(line).split(";")[0].strip() for line in group["feature_store"]}
+    c.check("the feature store image pins the MLflow client of the server version", "mlflow-skinny==3.17.0" in pins)
+    runtime = json.loads((feast_job.REPO.parent / "config/quality/dependency_runtimes.json").read_text())["runtimes"]["feature_store"]["code"]
+    c.check(
+        "the dependency check reads the registry reader as code of the feature store image",
+        {"scripts/features/feast_sets.py", "scripts/features/feature_sets.py", "scripts/training/registry.py"} <= set(runtime),
+    )
+
+
 def case_fa26(c: Checker) -> None:
     """FA26: ``feast_materialize --release m1 <RUN_ID>`` on the AWS profile opens one catalog session, releases the held run through it and the AWS settings
     file, and records the release."""
@@ -1614,6 +1672,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA22": (case_fa22, "FA22"),
     "FA23": (case_fa23, "FA23"),
     "FA24": (case_fa24, "FA24"),
+    "FA25": (case_fa25, "FA25"),
     "FA26": (case_fa26, "FA26"),
     "FA27": (case_fa27, "FA27"),
 }

@@ -30,6 +30,7 @@ variables {
   aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   log_group_name                        = "example_project_jobs_dev"
+  mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
 }
 
 run "default_plan_creates_no_layer_task" {
@@ -180,9 +181,13 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
       jsondecode(output.layer_phase_containers["features"])[8].image == var.train_images.feature_store &&
       contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
       !anytrue([for entry in jsondecode(output.layer_phase_containers["features"])[8].environment : entry.name == "FEAST_REDIS_HOST"]) &&
-      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" })
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "MLFLOW_HTTP_REQUEST_TIMEOUT", value = "10" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "MLFLOW_HTTP_REQUEST_MAX_RETRIES", value = "2" }) &&
+      contains(jsondecode(output.layer_phase_containers["features"])[8].environment, { name = "MLFLOW_TRACKING_URI", value = "" })
     )
-    error_message = "The features job applies Feast from the feature store image on the AWS profile."
+    error_message = "The features job applies Feast from the feature store image on the AWS profile and reaches the MLflow registry as the admin user with bounded waits; the job table fills the MLflow address."
   }
 
   assert {
@@ -259,19 +264,21 @@ run "secrets_reach_only_the_phases_that_need_them" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
       for container in jsondecode(output.layer_phase_containers[layer]) : jsonencode(container.secrets) == jsonencode(
-        contains(["pin", "verify", "feast"], container.name) ? [
+        contains(["pin", "verify", "feast"], container.name) ? concat([
           { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
           { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
-          ] : (layer == "silver" && container.name == "build" ? [
-            { name = "DBT_ENV_SECRET_POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
-            { name = "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
-            ] : container.name == "publish" || (layer == "gold" && container.name == "maintain") ? [
-            { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_id" },
-            { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_secret" },
+          ], container.name == "feast" ? [
+          { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/mlflow_admin_password" },
+          ] : []) : (layer == "silver" && container.name == "build" ? [
+          { name = "DBT_ENV_SECRET_POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
+          { name = "DBT_ENV_SECRET_POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
+          ] : container.name == "publish" || (layer == "gold" && container.name == "maintain") ? [
+          { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_id" },
+          { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_${layer}_client_secret" },
         ] : [])
       )
     ])])
-    error_message = "The reader pair reaches the pin, verify and feast phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and gold maintenance, and no other phase holds a credential."
+    error_message = "The reader pair reaches the pin, verify and feast phases, the MLflow administrator password only the feast phase and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and gold maintenance, and no other phase holds a credential."
   }
 
   assert {
@@ -382,7 +389,7 @@ run "run_task_contract" {
       output.layer_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
       output.layer_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"] &&
       output.layer_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET"] &&
-      output.layer_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      output.layer_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "MLFLOW_TRACKING_URI"]
     )
     error_message = "The output names the on-demand private placement, the layer's role key and the variables each container needs."
   }

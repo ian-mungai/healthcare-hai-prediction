@@ -46,13 +46,13 @@ variable "train_roles" {
 }
 
 variable "mlflow_admin_password_name" {
-  description = "Parameter Store SecureString name of the MLflow administrator password. The train container logs in with it. Terraform references the name and never reads the value."
+  description = "Parameter Store SecureString name of the MLflow administrator password. The train container and the feast phase of the features job log in with it. Terraform references the name and never reads the value."
   type        = string
   default     = "/healthcare_hai_prediction/mlflow_admin_password"
   nullable    = false
 
   validation {
-    condition     = !var.train_enabled || var.mlflow_admin_password_name == "/${var.project_name}/mlflow_admin_password"
+    condition     = !(var.train_enabled || (var.layer_jobs_enabled && contains(var.layer_jobs, "features"))) || var.mlflow_admin_password_name == "/${var.project_name}/mlflow_admin_password"
     error_message = "Inject only the project MLflow administrator password parameter."
   }
 }

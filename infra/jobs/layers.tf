@@ -93,7 +93,7 @@ locals {
       export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
       publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
       upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
-      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "MLFLOW_TRACKING_URI"]
     }
   }
   layer_driver = "cd /workspace/code && python -m scripts.lakehouse.layer_run %s --layer %s --run \"$RUN_ID\""
@@ -105,6 +105,8 @@ locals {
   layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store" }
   # The silver build reads the catalog through dbt, whose profile names the pair DBT_ENV_SECRET_POLARIS_CLIENT_ID and _SECRET so that dbt scrubs them from its logs.
   layer_build_secrets = [for item in local.reader_parameters : { name = "DBT_ENV_SECRET_${item.name}", valueFrom = item.valueFrom }]
+  # The feast phase holds the reader pair and the MLflow administrator password, the secret the train container logs in with.
+  layer_feast_secrets = concat(local.reader_parameters, [{ name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_admin_password_name}" }])
   # Gold maintenance commits snapshot removal to the catalog, so it holds the gold writer pair; it is a gold phase only.
   layer_phase_secrets = {
     pin      = "reader"
@@ -158,12 +160,16 @@ locals {
             { name = "HAI_DUCKDB_TEMP_DIRECTORY", value = "/workspace/duckdb_spill" },
           ],
           [for name in lookup(local.layer_run_variables[layer], step.name, []) : { name = name, value = "" }],
+          # The feast phase of an online model set reads the Production models from the MLflow registry, logged in as the training job is.
           step.name == "feast" ? [
             { name = "FEAST_PROFILE", value = "aws" },
             { name = "FEAST_REGISTRY_BUCKET", value = var.data_bucket_name },
+            { name = "MLFLOW_TRACKING_USERNAME", value = "admin" },
+            { name = "MLFLOW_HTTP_REQUEST_TIMEOUT", value = "10" },
+            { name = "MLFLOW_HTTP_REQUEST_MAX_RETRIES", value = "2" },
           ] : []
         )
-        secrets = layer == "silver" && step.name == "build" ? local.layer_build_secrets : (lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : []))
+        secrets = step.name == "feast" ? local.layer_feast_secrets : layer == "silver" && step.name == "build" ? local.layer_build_secrets : (lookup(local.layer_phase_secrets, step.name, "") == "reader" ? local.reader_parameters : (lookup(local.layer_phase_secrets, step.name, "") == "writer" ? lookup(local.writer_parameters, local.layer_roles[layer], []) : []))
         mountPoints = [
           { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
           { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }

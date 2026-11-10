@@ -30,6 +30,7 @@ variables {
   aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   log_group_name                        = "example_project_jobs_dev"
+  mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
 }
 
 # A phase that exits with an error does not stop a layer task: the phases after it wait for its success and never start, and the only essential container never
