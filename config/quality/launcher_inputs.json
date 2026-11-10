@@ -36,6 +36,7 @@
       "why": "the text is a bind-mount source that the suite compares with the launcher's rendered mounts as a string; the suite reads no file through it",
       "lines": [
         "(str(ROOT / \"orchestration\"), \"/workspace/orchestration\", True),",
+        "(str(ROOT / \"orchestration\"), \"/workspace/orchestration\", True),",
         "and (str(ROOT / \"orchestration\"), \"/workspace/orchestration\", True) in f[\"mounts\"]"
       ]
     },
@@ -284,7 +285,7 @@
     {
       "module": "scripts/lakehouse/run_gold_publish_cases.py",
       "pattern": null,
-      "why": "reviewed: the cases list a scratch parquet folder (scripts/lakehouse/run_gold_publish_cases.py:119), the warehouse of the harness (:609) and private copies below self.root / work (:209); the harness root is a temporary folder"
+      "why": "reviewed: the cases list a scratch parquet folder (scripts/lakehouse/run_gold_publish_cases.py:119), the warehouse of the harness (:609) and private copies below self.root / work (:209) and the Parquet files of the base pin case's extract under its case folder (:1313); the harness root is a temporary folder"
     },
     {
       "module": "scripts/lakehouse/run_launcher_e2e.py",
@@ -421,7 +422,7 @@
     "scripts/lakehouse/run_bronze_e2e.py": 1,
     "scripts/lakehouse/run_duckdb_spill_cases.py": 1,
     "scripts/lakehouse/run_gold_e2e.py": 2,
-    "scripts/lakehouse/run_gold_publish_cases.py": 3,
+    "scripts/lakehouse/run_gold_publish_cases.py": 4,
     "scripts/lakehouse/run_launcher_e2e.py": 22,
     "scripts/lakehouse/run_launcher_real_fixture.py": 1,
     "scripts/lakehouse/run_lock_e2e.py": 2,
@@ -684,6 +685,12 @@
     "dbt/models/features/matrix/feature_matrix_county_measures.sql",
     "dbt/models/features/matrix/feature_matrix_hospital.sql",
     "dbt/models/features/matrix/feature_matrix_hospital_window.sql",
+    "dbt/models/features/matrix/feature_matrix_m1.sql",
+    "dbt/models/features/matrix/feature_matrix_m2.sql",
+    "dbt/models/features/matrix/feature_matrix_m3.sql",
+    "dbt/models/features/matrix/feature_matrix_m4.sql",
+    "dbt/models/features/matrix/feature_matrix_m5.sql",
+    "dbt/models/features/matrix/feature_matrix_m6.sql",
     "dbt/models/features/matrix/feature_matrix_operations.sql",
     "dbt/models/features/matrix/label_matrix_hai_outcomes.sql",
     "dbt/models/gold/dimensions/_dimensions__models.yml",
@@ -1209,7 +1216,9 @@
     "scripts/features/feast_aws.py",
     "scripts/features/feast_job.py",
     "scripts/features/feast_materialize.py",
+    "scripts/features/feast_sets.py",
     "scripts/features/feature_schema.py",
+    "scripts/features/feature_sets.py",
     "scripts/features/feature_validation.py",
     "scripts/features/features_build.py",
     "scripts/features/features_export.py",
@@ -1397,6 +1406,7 @@
     "scripts/training/models/spatial.py",
     "scripts/training/models/suite.py",
     "scripts/training/models/trees.py",
+    "scripts/training/production_record.py",
     "scripts/training/promote.py",
     "scripts/training/promote_lease.py",
     "scripts/training/promote_receipt.py",
