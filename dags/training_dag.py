@@ -15,7 +15,7 @@ with DAG(
     tags=["training"],
     params={
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
-        "mode": Param("fixture", type="string", enum=["fixture", "real"]),
+        "mode": Param("real", type="string", enum=["real"]),
         "features_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
         "population": Param("primary", type="string", enum=["primary", "sensitivity"]),
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),

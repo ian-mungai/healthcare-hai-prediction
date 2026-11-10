@@ -32,7 +32,7 @@ with DAG(
     tags=["orchestration", "gold"],
     params={
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
-        "mode": Param("publish_fixture", type="string", enum=["publish_fixture", "real"]),
+        "mode": Param("real", type="string", enum=["real"]),
         "silver_snapshot_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
     },
     default_args={"retries": 0},

@@ -31,7 +31,7 @@ with DAG(
     tags=["orchestration", "silver"],
     params={
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
-        "mode": Param("publish_fixture", type="string", enum=["publish_fixture", "real"]),
+        "mode": Param("real", type="string", enum=["real"]),
     },
     default_args={"retries": 0},
 ) as dag:

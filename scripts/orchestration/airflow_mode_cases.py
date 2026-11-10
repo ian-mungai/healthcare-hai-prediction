@@ -14,7 +14,8 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 4. A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
 5. A control step launches nothing (``control_step_launches_nothing``). A job launches once, later steps of its DAG join it, a failure fails every step,
    and a retry launches nothing (``job_runs_once_and_steps_join``, ``failed_job_fails_every_step``).
-6. The five DAGs of the chain run end to end (``five_dags_run_end_to_end``).
+6. The five DAGs of the chain run end to end (``five_dags_run_end_to_end``), and every DAG triggered with only its required values runs with its form's
+   defaults: no form defaults to a mode the direct path refuses (``dags_run_with_their_form_defaults``).
 7. The modules, the mount list and the host table agree, and a container without the launch module names it (``launch_modules_are_in_the_mount_list``,
    ``host_table_matches_the_job_table``, ``missing_launch_module_is_named``).
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
@@ -244,8 +245,23 @@ class World:
 
             return decorate
 
-        with mock.patch.object(sys.modules["airflow.sdk"], "task", task), mock.patch.object(self.runtime, "task", task):
+        forms: list[dict[str, Any]] = []
+
+        class FormDag(Dag):
+            def __init__(self, **settings: Any) -> None:
+                super().__init__(**settings)
+                forms.append(settings.get("params", {}))
+
+        with (
+            mock.patch.object(sys.modules["airflow.sdk"], "task", task),
+            mock.patch.object(sys.modules["airflow.sdk"], "DAG", FormDag),
+            mock.patch.object(self.runtime, "task", task),
+        ):
             runpy.run_path(str(ROOT / "dags" / dag_file))
+        for form in forms:  # Airflow fills a parameter the trigger leaves out with the form's default.
+            for name, (arguments, _) in form.items():
+                if arguments and name not in self.params:
+                    self.params[name] = arguments[0]
         for node in built:
             self.enter(node.task_id)
             upstream_ok = all(self.states.get(before.task_id) == "success" for before in node.upstream)
@@ -701,6 +717,54 @@ def five_dags_run_end_to_end() -> None:
     require(rig.tasks_started() == again, "a second run of the same DAG run launched again")
 
 
+MODE_REFUSAL = "runs on AWS in real mode only"
+
+
+def form_mode_defaults() -> dict[str, Any]:
+    """The default of the ``mode`` parameter in each shipped DAG file's trigger form, read from the file's ``Param`` call."""
+    found: dict[str, Any] = {}
+    for path in sorted((ROOT / "dags").glob("*.py")):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, ast.Dict):
+                for key, value in zip(node.keys, node.values, strict=True):
+                    if isinstance(key, ast.Constant) and key.value == "mode" and isinstance(value, ast.Call) and value.args:
+                        found[path.stem] = ast.literal_eval(value.args[0])
+    return found
+
+
+def dags_run_with_their_form_defaults() -> None:
+    """A DAG triggered with only its required values runs on the direct path: no form default is a mode the preflight refuses (failure mode 3)."""
+    defaults = form_mode_defaults()
+    accepted = {"model_promotion_dag": "promote"}  # the promotion form's mode is the operation; the step maps it to real
+    wrong = {dag: mode for dag, mode in defaults.items() if mode != accepted.get(dag, "real")}
+    require(len(defaults) >= 10 and not wrong, f"DAG forms default to a mode the direct path refuses: {wrong}")
+    rig = Rig()
+    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    silver = layers(BRONZE_RUN, "silver")
+    gold = layers(silver, "gold")
+    features = layers(gold, "features")
+    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    training = {key: value for key, value in TRAIN_PARAMS.items() if key != "mode"}
+    plan = (
+        ("silver_transform_dag", {"run_id": silver}, "silver", silver),
+        ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver}, "gold", gold),
+        ("features_transform_dag", {"run_id": features, "gold_snapshot_run": gold}, "features", features),
+        ("training_dag", training, "train", str(TRAIN_PARAMS["run_id"])),
+    )
+    for dag_id, params, job, run in plan:
+        rig.stage_runs(run)
+        with world(rig, dag_id, params) as current:
+            states = current.run_dag(f"{dag_id}.py")
+            failed = {name: current.results[name] for name, state in states.items() if state != "success"}
+            require(bool(states) and not failed, f"{dag_id} with its form defaults did not finish: {failed}")
+        require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
+    with world(rig, "feature_store_dag", {"run_id": FEATURES_RUN}) as current:
+        current.run_dag("feature_store_dag.py")
+        refused = {name: result for name, result in current.results.items() if MODE_REFUSAL in str(result)}
+    require(not refused, f"feature_store_dag with its form defaults was refused for its mode: {refused}")
+
+
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
     approval = {
@@ -977,6 +1041,7 @@ CASES: dict[str, Callable[[], None]] = {
     "unavailable_is_bounded": unavailable_is_bounded,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
+    "dags_run_with_their_form_defaults": dags_run_with_their_form_defaults,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,
