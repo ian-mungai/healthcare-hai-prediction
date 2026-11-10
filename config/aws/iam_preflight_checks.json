@@ -745,6 +745,21 @@
     },
     {
       "role": "project_user",
+      "action": "ssm:PutParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${SERVICES_APPLY_LOCK_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${SERVICES_APPLY_LOCK_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:DeleteParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${SERVICES_APPLY_LOCK_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
       "action": "ssm:DescribeParameters",
       "resource": "*",
       "context": {

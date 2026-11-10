@@ -297,7 +297,7 @@
       "code_sha256": "6528e3517932d758564fcd8f1945878372a41b8c0340ba088741c4e3fefb5996",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "3cc7d8e2510a7f0840006feaf39bea58ff9aab55496d947e838f5c16ac3b5d8b",
+      "file_sha256": "dec2ad22d86180e167e954e2fbee54fa593cc7401e912fc85a0ac026c26c2f46",
       "dependencies": {
         "scripts/infrastructure/systemd_model.py": "sha256:9c806638a7026db2ae1c4082ed22e5022c3fa96845889009ae92f84f7e3323fb",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -320,7 +320,7 @@
         "orchestration/launcher.py": "sha256:3eb92e105799ad12739f5dc77458f13f57c724484d7c16f59456a7f9b1d930f1",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
-        "scripts/infrastructure/secret_store.py": "sha256:530407338a52ed3c8f30d770434f31b6dd2eb326c528ccd2189e06d541c8a82f",
+        "scripts/infrastructure/secret_store.py": "sha256:0f355e2a67b00c981a10fb44a1436a4876abbf568edbcbe1f6fef05fa0a57805",
         "scripts/lakehouse/bronze_cutover.py": "sha256:8c2283eb3baf8d8fa6e7fb6b6f7b411f37b5cf9ac759494874f5f8b6569f6827",
         "scripts/lakehouse/bronze_inventory.py": "sha256:6a7507d5855c4f24a20ab22c8c39d99020626e38c66648d05179126cd4470fa8",
         "scripts/lakehouse/bronze_scan.py": "sha256:044793d737982ea35c29802849a6ac4b052691297a7b6ad12a748fca8a7b9380",
@@ -344,7 +344,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:3eb92e105799ad12739f5dc77458f13f57c724484d7c16f59456a7f9b1d930f1",
-        "scripts/infrastructure/secret_store.py": "sha256:530407338a52ed3c8f30d770434f31b6dd2eb326c528ccd2189e06d541c8a82f",
+        "scripts/infrastructure/secret_store.py": "sha256:0f355e2a67b00c981a10fb44a1436a4876abbf568edbcbe1f6fef05fa0a57805",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
@@ -365,7 +365,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:3eb92e105799ad12739f5dc77458f13f57c724484d7c16f59456a7f9b1d930f1",
-        "scripts/infrastructure/secret_store.py": "sha256:530407338a52ed3c8f30d770434f31b6dd2eb326c528ccd2189e06d541c8a82f",
+        "scripts/infrastructure/secret_store.py": "sha256:0f355e2a67b00c981a10fb44a1436a4876abbf568edbcbe1f6fef05fa0a57805",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
@@ -386,7 +386,7 @@
       "file_sha256": "880ae60c8f999d5f90b7b287fe527e492ec46200747d13716ad6e9b54275d401",
       "dependencies": {
         "orchestration/launcher.py": "sha256:3eb92e105799ad12739f5dc77458f13f57c724484d7c16f59456a7f9b1d930f1",
-        "scripts/infrastructure/secret_store.py": "sha256:530407338a52ed3c8f30d770434f31b6dd2eb326c528ccd2189e06d541c8a82f",
+        "scripts/infrastructure/secret_store.py": "sha256:0f355e2a67b00c981a10fb44a1436a4876abbf568edbcbe1f6fef05fa0a57805",
         "scripts/lakehouse/bronze.py": "sha256:a21c298e639cb20a5758ffcaa4507df81a1253e8546ec4a7266538259ee9f851",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
         "scripts/lakehouse/checksums.py": "sha256:1e5bdfb59c775a2f9990e80990b3b4fb762a099b2a98ac0f9f6f21509aea87ae",
@@ -413,7 +413,7 @@
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
         "orchestration/training_contract.py": "sha256:3237f1ac8c5ef6d41de8b445e1efba352bce79090fd30f542c18c095dafbd4ee",
-        "scripts/infrastructure/secret_store.py": "sha256:530407338a52ed3c8f30d770434f31b6dd2eb326c528ccd2189e06d541c8a82f",
+        "scripts/infrastructure/secret_store.py": "sha256:0f355e2a67b00c981a10fb44a1436a4876abbf568edbcbe1f6fef05fa0a57805",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:df5fe9499fb37c716ec09ec24e84ca20a62588b0aae8c68fad52db1d171c3246",
         "scripts/infrastructure/sts_stand_in.py": "sha256:bb2056c3f1ae31fe80cf91d1a58e3241e3afdee3bcaf0fd4e3fca19b3e8939cb",
         "scripts/lakehouse/catalog.py": "sha256:81bc6077c0de0b0f81ec6f9206e328e2c7bd5ff92ad2468239d878ac8803561d",
@@ -1605,11 +1605,11 @@
     },
     {
       "path": "scripts/infrastructure/services_apply.py",
-      "line": 152,
+      "line": 240,
       "code_sha256": "3ceba3be999ca17624a8a9c35ccc676a22da14148dbb37ceaaf8f6b46ffa3bf5",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "773370699ed1cfbd88ff90109d054d5d7216fcc4d6c13916085292d6604232e6",
+      "file_sha256": "635ca39e172749855bcb6aa1e1385fee2b4eccfb719adfe6e992878e1aeb622e",
       "dependencies": {
         "orchestration/ecs_preflight.py": "sha256:6fa80459dffd5933eee924f1b34259c308920e1071f72628bdb257ac9c99c01a",
         "scripts/acquisition/s3_store.py": "sha256:dcb5b1e01539c9847aedfb78a62670b161dde1d07abdbb2f78659ff097d1a0f3",
@@ -1618,7 +1618,7 @@
       },
       "reason": "tolerant_runner (imported from host_session) is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",
       "lines": [
-        152
+        240
       ]
     }
   ]

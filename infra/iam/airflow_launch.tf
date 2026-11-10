@@ -58,6 +58,18 @@ variable "host_launch_hold_parameter_name" {
   }
 }
 
+variable "services_apply_lock_parameter_name" {
+  description = "Parameter Store name of the services apply lock. scripts/infrastructure/services_apply.py creates it without overwrite before each services apply (so a second apply anywhere is refused) and deletes it after the apply settles. The project user may create, read and delete this one name."
+  type        = string
+  default     = "/healthcare_hai_prediction/services_apply_lock"
+  nullable    = false
+
+  validation {
+    condition     = length(var.services_apply_lock_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.services_apply_lock_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.services_apply_lock_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 locals {
   # The task role each family runs with, as the host definitions of infra/jobs take them. Promote reuses the training role.
   airflow_launch_family_roles = {
@@ -90,10 +102,12 @@ locals {
     DATA_BUCKET_NAME                = var.data_bucket_name
     HOST_JOB_CAP_PARAMETER_NAME     = var.host_job_cap_parameter_name
     HOST_LAUNCH_HOLD_PARAMETER_NAME = var.host_launch_hold_parameter_name
-    RECORD_PREFIX                   = var.airflow_launch_record_prefix
-    REQUEST_OBJECT_ARNS             = jsonencode(local.airflow_launch_request_arns)
-    FAMILIES                        = jsonencode(local.airflow_launch_families_sorted)
-    TASK_DEFINITION_ARNS            = jsonencode([for family in local.airflow_launch_families_sorted : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}_host:*"])
+    # Not named by a launch policy: the project user's ssmcap policy (rendered from this default) grants it; declared here once for both.
+    SERVICES_APPLY_LOCK_PARAMETER_NAME = var.services_apply_lock_parameter_name
+    RECORD_PREFIX                      = var.airflow_launch_record_prefix
+    REQUEST_OBJECT_ARNS                = jsonencode(local.airflow_launch_request_arns)
+    FAMILIES                           = jsonencode(local.airflow_launch_families_sorted)
+    TASK_DEFINITION_ARNS               = jsonencode([for family in local.airflow_launch_families_sorted : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}_host:*"])
     ROLE_ARNS = jsonencode(sort(distinct(concat(
       ["arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_execution")}"],
       [for family in local.airflow_launch_families_sorted : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, local.airflow_launch_family_roles[family])}"]

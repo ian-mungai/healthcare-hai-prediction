@@ -381,6 +381,8 @@ HOST_JOB_CAP_PLACEHOLDER = "HOST_JOB_CAP_PARAMETER_NAME"
 HOST_JOB_CAP = ("ssmcap", policy_cases.HOST_JOB_CAP_STATEMENT)
 HOST_LAUNCH_HOLD_PLACEHOLDER = "HOST_LAUNCH_HOLD_PARAMETER_NAME"
 HOST_LAUNCH_HOLD = ("ssmcap", policy_cases.HOST_LAUNCH_HOLD_STATEMENT)
+SERVICES_APPLY_LOCK_PLACEHOLDER = "SERVICES_APPLY_LOCK_PARAMETER_NAME"
+SERVICES_APPLY_LOCK = ("ssmcap", policy_cases.SERVICES_APPLY_LOCK_STATEMENT)
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
@@ -403,6 +405,7 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         OPENMETADATA_DENY: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
         HOST_JOB_CAP: {parameter_arn(names[HOST_JOB_CAP_PLACEHOLDER])},
         HOST_LAUNCH_HOLD: {parameter_arn(names[HOST_LAUNCH_HOLD_PLACEHOLDER])},
+        SERVICES_APPLY_LOCK: {parameter_arn(names[SERVICES_APPLY_LOCK_PLACEHOLDER])},
     }
 
 
@@ -484,6 +487,7 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
         approved[placeholder] = {folder + name}
     approved[HOST_JOB_CAP_PLACEHOLDER] = {folder + policy_cases.HOST_JOB_CAP}
     approved[HOST_LAUNCH_HOLD_PLACEHOLDER] = {folder + policy_cases.HOST_LAUNCH_HOLD}
+    approved[SERVICES_APPLY_LOCK_PLACEHOLDER] = {folder + policy_cases.SERVICES_APPLY_LOCK}
     for placeholder, expected_names in approved.items():
         problems += difference(
             f"{placeholder} variable defaults against the approved list", {str(item) for item in as_list(names[placeholder])}, expected_names
@@ -527,6 +531,7 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         | expected[OPENMETADATA_PASSWORDS]
         | expected[HOST_JOB_CAP]
         | expected[HOST_LAUNCH_HOLD]
+        | expected[SERVICES_APPLY_LOCK]
     )
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {

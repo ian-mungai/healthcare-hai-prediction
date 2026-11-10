@@ -13,7 +13,9 @@ fails.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib
+import io
 import json
 import re
 import sys
@@ -27,6 +29,9 @@ from scripts.process import CompletedProcess
 
 ROOT = Path(__file__).resolve().parents[2]
 HOLD = "/healthcare_hai_prediction/host_launch_hold"
+LOCK = "/healthcare_hai_prediction/services_apply_lock"
+OWN_LOCK = "this-host:1:20261110T221000Z:12345678"  # an apply lock value in the token shape, not a credential
+TOKEN = re.compile(r"[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}")
 
 
 def require(condition: bool, message: str) -> None:
@@ -171,14 +176,17 @@ class AwsStandIn:
     """The AWS command line the real module runs through ``AwsCli``: Parameter Store put and get of one value, every command recorded, any other
     command refused."""
 
-    def __init__(self, value: str | None = None) -> None:
+    def __init__(self, value: str | None = None, lock: str | None = None) -> None:
         self.value = value
+        self.lock = lock
         self.commands: list[list[str]] = []
 
     def __call__(self, command: list[str], **_: Any) -> CompletedProcess[str]:
         self.commands.append(list(command))
         operation = command[1:3]
         name = command[command.index("--name") + 1] if "--name" in command else ""
+        if name == LOCK:
+            return self.lock_call(command, operation)
         if operation == ["ssm", "put-parameter"] and name == HOLD:
             self.value = command[command.index("--value") + 1]
             return CompletedProcess(command, 0, json.dumps({"Version": 1}), "")
@@ -186,6 +194,27 @@ class AwsStandIn:
             if self.value is None:
                 return CompletedProcess(command, 254, "", "An error occurred (ParameterNotFound) when calling the GetParameter operation")
             return CompletedProcess(command, 0, json.dumps({"Parameter": {"Name": HOLD, "Value": self.value}}), "")
+        return CompletedProcess(command, 1, "", "An error occurred (AccessDenied) when calling an unexpected operation")
+
+    def lock_call(self, command: list[str], operation: list[str]) -> CompletedProcess[str]:
+        """The apply lock as AWS keeps it: a put without --overwrite creates it or fails with ParameterAlreadyExists, and an overwrite is refused
+        here so a lock is never replaced."""
+        if operation == ["ssm", "put-parameter"]:
+            if "--overwrite" in command:
+                return CompletedProcess(command, 1, "", "An error occurred (AccessDenied) when calling the PutParameter operation")
+            if self.lock is not None:
+                return CompletedProcess(command, 254, "", "An error occurred (ParameterAlreadyExists) when calling the PutParameter operation")
+            self.lock = command[command.index("--value") + 1]
+            return CompletedProcess(command, 0, json.dumps({"Version": 1}), "")
+        if operation == ["ssm", "get-parameter"]:
+            if self.lock is None:
+                return CompletedProcess(command, 254, "", "An error occurred (ParameterNotFound) when calling the GetParameter operation")
+            return CompletedProcess(command, 0, json.dumps({"Parameter": {"Name": LOCK, "Value": self.lock}}), "")
+        if operation == ["ssm", "delete-parameter"]:
+            if self.lock is None:
+                return CompletedProcess(command, 254, "", "An error occurred (ParameterNotFound) when calling the DeleteParameter operation")
+            self.lock = None
+            return CompletedProcess(command, 0, "", "")
         return CompletedProcess(command, 1, "", "An error occurred (AccessDenied) when calling an unexpected operation")
 
 
@@ -204,16 +233,19 @@ def run_real(arguments: list[str], aws: AwsStandIn) -> tuple[int, list[str]]:
     patches = [
         mock.patch.object(session, "load_names", no_outputs),
         mock.patch.object(session, "load_configuration", lambda *_, **__: (dict(SETTINGS), {})),
-        mock.patch.object(session, "tolerant_runner", aws),
+        mock.patch.object(session, "run_argv", aws),  # under the real tolerant_runner, as the AWS command line answers
         mock.patch.object(module.Clock, "sleep", staticmethod(lambda _seconds: None)),
     ]
-    for name, value in (("load_configuration", lambda *_, **__: (dict(SETTINGS), {})), ("tolerant_runner", aws)):
+    for name, value in (("load_configuration", lambda *_, **__: (dict(SETTINGS), {})),):
         if hasattr(module, name):
             patches.append(mock.patch.object(module, name, value))
     for patch in patches:
         patch.start()
     try:
-        return module.main(arguments), output_reads
+        try:
+            return module.main(arguments), output_reads
+        except SystemExit as error:  # argparse refuses an unknown command or option with exit 2
+            return int(error.code or 0), output_reads
     finally:
         for patch in reversed(patches):
             patch.stop()
@@ -240,8 +272,8 @@ def hold_on_a_fresh_stack_needs_no_services_outputs() -> None:
 def settle_on_a_fresh_stack_keeps_the_hold() -> None:
     """settle and resolve need the services outputs to check steady state. Without them they fail as a configuration error and write nothing, so
     the hold stays."""
-    for arguments in (["settle"], ["resolve", "--statement", "checked"]):
-        aws = AwsStandIn("held by services_apply")
+    for arguments in (["settle", "--token", OWN_LOCK], ["resolve", "--statement", "checked", "--token", OWN_LOCK]):
+        aws = AwsStandIn("held by services_apply", lock=OWN_LOCK)
         code, output_reads = run_real(arguments, aws)
         require(code == 2 and output_reads, f"{arguments[0]} did not fail on the missing services outputs: exit {code}, reads {output_reads}")
         require(
@@ -250,7 +282,91 @@ def settle_on_a_fresh_stack_keeps_the_hold() -> None:
         )
 
 
+def run_real_output(arguments: list[str], aws: AwsStandIn) -> tuple[int, str, str]:
+    """``run_real`` with the printed output and error text."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code, _ = run_real(arguments, aws)
+    return code, out.getvalue(), err.getvalue()
+
+
+def lock_is_created_once_with_a_unique_token() -> None:
+    """Apply lock (owner A, Nov 10 2026): ``lock`` creates the lock parameter without overwrite, its value a unique token (host, process ID, UTC
+    time, random part), and prints only the token."""
+    aws = AwsStandIn()
+    code, out, err = run_real_output(["lock", "--reason", "terraform.sh --services apply reviewed.tfplan"], aws)
+    require(code == 0, f"lock failed on a free lock: exit {code} {err}")
+    require(TOKEN.fullmatch(out.strip() or "") is not None and aws.lock == out.strip(), f"the token is not printed or stored: {out!r} {aws.lock!r}")
+    puts = [command for command in aws.commands if command[1:3] == ["ssm", "put-parameter"]]
+    require(len(puts) == 1 and "--overwrite" not in puts[0], f"the lock was not created once without overwrite: {puts}")
+
+
+def a_second_apply_is_refused_while_the_lock_exists() -> None:
+    """While another apply holds the lock, ``lock`` exits 1, names the holder's token and changes nothing."""
+    holder = "other-host:4242:20261110T220000Z:0badc0de"
+    aws = AwsStandIn(lock=holder)
+    code, out, err = run_real_output(["lock", "--reason", "terraform.sh --services apply reviewed.tfplan"], aws)
+    require(code == 1 and not out.strip(), f"a second apply was not refused: exit {code} {out!r}")
+    require(holder in err, f"the refusal does not name the holder: {err}")
+    require(aws.lock == holder and aws.value is None, "the refused lock changed the lock or the hold")
+
+
+def settle_never_deletes_another_token() -> None:
+    """settle with a token that does not hold the lock changes nothing: the hold stays set and the other lock stays."""
+    holder = "other-host:4242:20261110T220000Z:0badc0de"
+    aws = AwsStandIn(value="held by services_apply", lock=holder)
+    code, _, err = run_real_output(["settle", "--token", "this-host:1:20261110T221000Z:12345678"], aws)
+    require(code == 1, f"settle with another token did not fail: exit {code} {err}")
+    require(aws.lock == holder and aws.value == "held by services_apply", "settle changed another apply's lock or the hold")
+    require(not any(command[1:3] == ["ssm", "delete-parameter"] for command in aws.commands), "settle sent a delete for another token")
+
+
+def settle_deletes_its_own_lock_after_clearing_the_hold() -> None:
+    """settle with the lock's own token clears the hold after steady state, then deletes the lock."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    mine = OWN_LOCK
+    aws = AwsStandIn(value="held by services_apply", lock=mine)
+    with mock.patch.object(module.Steps, "wait_stable", lambda self: None):
+        code, _, err = run_real_output(["settle", "--token", mine], aws)
+    require(code == 0, f"settle with its own token failed: exit {code} {err}")
+    require(aws.value == "clear" and aws.lock is None, f"settle did not clear the hold and delete its lock: {aws.value!r} {aws.lock!r}")
+    order = [command[2] for command in aws.commands if command[1:3] in (["ssm", "put-parameter"], ["ssm", "delete-parameter"])]
+    require(order == ["put-parameter", "delete-parameter"], f"the lock was not deleted after the hold was cleared: {order}")
+
+
+def resolve_clears_the_hold_and_the_lock_with_its_token() -> None:
+    """After a failed apply both stay. resolve without the token, or with another one, changes nothing; with the lock's token and stable
+    services it clears the hold and deletes the lock."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    mine = OWN_LOCK
+    for extra in ([], ["--token", "other-host:2:20261110T221000Z:87654321"]):
+        aws = AwsStandIn(value="held by services_apply", lock=mine)
+        with mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
+            code, _, _ = run_real_output(["resolve", "--statement", "checked", *extra], aws)
+        require(code != 0 and aws.lock == mine and aws.value == "held by services_apply", f"resolve {extra} changed the hold or the lock")
+    aws = AwsStandIn(value="held by services_apply", lock=mine)
+    with mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
+        code, _, err = run_real_output(["resolve", "--statement", "checked the failed apply", "--token", mine], aws)
+    require(code == 0 and aws.value == "clear" and aws.lock is None, f"resolve with the token did not clear both: exit {code} {err}")
+
+
+def the_lock_name_is_the_terraform_default() -> None:
+    """The command creates the parameter the IAM stack grants (infra/iam/airflow_launch.tf services_apply_lock_parameter_name)."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    match = re.search(
+        r'variable "services_apply_lock_parameter_name" \{.*?default\s*=\s*"([^"]+)"', (ROOT / "infra/iam/airflow_launch.tf").read_text(), re.DOTALL
+    )
+    require(match is not None and match.group(1) == LOCK, f"infra/iam/airflow_launch.tf does not default the lock name to {LOCK}")
+    require(getattr(module, "lock_parameter_name", lambda: None)() == LOCK, "the command does not create the lock the IAM stack grants")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "lock_is_created_once_with_a_unique_token": lock_is_created_once_with_a_unique_token,
+    "a_second_apply_is_refused_while_the_lock_exists": a_second_apply_is_refused_while_the_lock_exists,
+    "settle_never_deletes_another_token": settle_never_deletes_another_token,
+    "settle_deletes_its_own_lock_after_clearing_the_hold": settle_deletes_its_own_lock_after_clearing_the_hold,
+    "resolve_clears_the_hold_and_the_lock_with_its_token": resolve_clears_the_hold_and_the_lock_with_its_token,
+    "the_lock_name_is_the_terraform_default": the_lock_name_is_the_terraform_default,
     "hold_on_a_fresh_stack_needs_no_services_outputs": hold_on_a_fresh_stack_needs_no_services_outputs,
     "settle_on_a_fresh_stack_keeps_the_hold": settle_on_a_fresh_stack_keeps_the_hold,
     "hold_is_written_and_settles_before_the_apply": hold_is_written_and_settles_before_the_apply,

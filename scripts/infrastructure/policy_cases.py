@@ -139,6 +139,10 @@ HOST_JOB_CAP_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter", "AddT
 HOST_LAUNCH_HOLD = "host_launch_hold"
 HOST_LAUNCH_HOLD_STATEMENT = "SetHostLaunchHold"
 HOST_LAUNCH_HOLD_ACTIONS = ("PutParameter", "GetParameter")
+# Apply lock (owner A, Nov 10 2026): the services apply command creates the lock without overwrite, reads its holder and deletes its own lock.
+SERVICES_APPLY_LOCK = "services_apply_lock"
+SERVICES_APPLY_LOCK_STATEMENT = "ManageServicesApplyLock"
+SERVICES_APPLY_LOCK_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter")
 HOST_JOB_CAP_NEIGHBORS = ("host_job_cap_extra", "host_job_cap/child", "host_job_capacity", "host_job")
 OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
 OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
@@ -293,6 +297,8 @@ def approved_requests() -> dict[str, list[Request]]:
         ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None))
     for action in HOST_LAUNCH_HOLD_ACTIONS:
         ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_LAUNCH_HOLD), region=None))
+    for action in SERVICES_APPLY_LOCK_ACTIONS:
+        ops["ssmcap"].append(request(f"ssm:{action}", parameter(SERVICES_APPLY_LOCK), region=None))
     ops["ssmcap"].append(request("ssm:DescribeParameters", "*"))
     add(
         "ssm",
@@ -1188,6 +1194,25 @@ def host_job_cap_cases() -> Iterator[Case]:
     for name in ("host_launch_hold_extra", "host_launch_hold/child", "host_launch"):
         for action in HOST_LAUNCH_HOLD_ACTIONS:
             yield Case(f"launch hold: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    for action in PARAMETER_ACTIONS:
+        allowed = action in SERVICES_APPLY_LOCK_ACTIONS
+        yield Case(
+            f"apply lock: {action} {SERVICES_APPLY_LOCK}",
+            request(f"ssm:{action}", parameter(SERVICES_APPLY_LOCK), region=None),
+            allowed,
+            SERVICES_APPLY_LOCK_STATEMENT if allowed else None,
+        )
+    yield Case("apply lock: delete the launch hold", request("ssm:DeleteParameter", parameter(HOST_LAUNCH_HOLD), region=None), False)
+    for name in ("services_apply_lock_extra", "services_apply_lock/child", "services_apply"):
+        for action in SERVICES_APPLY_LOCK_ACTIONS:
+            yield Case(f"apply lock: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    for label, resource in (
+        ("another region", parameter(SERVICES_APPLY_LOCK).replace(f":{R}:", ":eu-west-2:")),
+        ("another account", parameter(SERVICES_APPLY_LOCK).replace(f":{A}:", ":222222222222:")),
+        ("another folder", parameter(SERVICES_APPLY_LOCK).replace(f"/{PARAMETER_FOLDER}/", "/another_project/")),
+    ):
+        for action in SERVICES_APPLY_LOCK_ACTIONS:
+            yield Case(f"apply lock: refuse {action} in {label}", request(f"ssm:{action}", resource, region=None), False)
     yield Case("host job cap: no parameter listing in another region", request("ssm:DescribeParameters", "*", region="eu-west-2"), False)
     key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
     for action in ("Decrypt", "Encrypt", "GenerateDataKey"):

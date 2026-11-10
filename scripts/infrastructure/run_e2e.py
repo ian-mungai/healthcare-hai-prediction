@@ -1401,7 +1401,9 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     (workspace / "scripts/infrastructure/services_apply.py").write_text(
         "import json, sys\nfrom pathlib import Path\n"
         "with Path('services_apply_calls.jsonl').open('a') as calls:\n    calls.write(json.dumps(sys.argv[1:]) + '\\n')\n"
-        "sys.exit(1 if Path(sys.argv[1] + '_fails').is_file() else 0)\n",
+        "failed = Path(sys.argv[1] + '_fails').is_file()\n"
+        "if sys.argv[1] == 'lock' and not failed:\n    print('standin-host:1:20261110T220000Z:0123abcd')\n"
+        "sys.exit(1 if failed else 0)\n",
         encoding="utf-8",
     )
     tools = workspace / "tools"
@@ -1579,12 +1581,17 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/services'}", "apply", "-input=false", "reviewed.tfplan"],
     )
     holds = [json.loads(line) for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()]
-    evidence.check(step, "launch_hold_set_then_settled", [item[0] for item in holds] == ["hold", "settle"])
-    evidence.check(step, "launch_hold_names_the_plan", "--reason" in holds[0] and "reviewed.tfplan" in " ".join(holds[0]))
+    evidence.check(step, "lock_then_hold_then_settle_with_the_token", [item[0] for item in holds] == ["lock", "hold", "settle"])
+    evidence.check(step, "settle_gets_the_lock_token", holds[-1][-2:] == ["--token", "standin-host:1:20261110T220000Z:0123abcd"])
+    evidence.check(step, "launch_hold_names_the_plan", "--reason" in holds[1] and "reviewed.tfplan" in " ".join(holds[1]))
     evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
     evidence.check(step, "image_record_unchanged", sha256(images.read_bytes()) == images_before)
     # Launch hold during services applies (owner A, Nov 10 2026): a failed apply keeps the hold, and a hold that cannot be set stops the apply.
-    for marker, label in (("apply_fails", "failed_services_apply_keeps_the_hold"), ("hold_fails", "unset_hold_stops_the_services_apply")):
+    for marker, label in (
+        ("apply_fails", "failed_services_apply_keeps_the_hold"),
+        ("hold_fails", "unset_hold_stops_the_services_apply"),
+        ("lock_fails", "held_apply_lock_stops_the_services_apply"),
+    ):
         (workspace / marker).write_text("stand-in failure", encoding="utf-8")
         before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
         before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
@@ -1594,10 +1601,13 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         applied = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
         applied = [call for call in applied if call["arguments"][1:2] == ["apply"]]
         if marker == "apply_fails":
-            evidence.check(step, "hold_set_apply_run_and_no_settle", result.returncode == 1 and holds == ["hold"] and len(applied) == 1)
-            evidence.check(step, "resolve_command_named", "services_apply resolve" in result.stderr and "launch hold stays set" in result.stderr)
+            evidence.check(step, "lock_hold_apply_and_no_settle", result.returncode == 1 and holds == ["lock", "hold"] and len(applied) == 1)
+            evidence.check(step, "resolve_command_names_the_token", "services_apply resolve" in result.stderr and "standin-host:1:" in result.stderr)
+            evidence.check(step, "hold_and_lock_stay", "launch hold" in result.stderr and "apply lock" in result.stderr)
+        elif marker == "hold_fails":
+            evidence.check(step, "no_apply_without_the_hold", result.returncode == 1 and holds == ["lock", "hold"] and not applied)
         else:
-            evidence.check(step, "no_apply_without_the_hold", result.returncode == 1 and holds == ["hold"] and not applied)
+            evidence.check(step, "no_hold_and_no_apply_without_the_lock", result.returncode == 1 and holds == ["lock"] and not applied)
     (workspace / "identity").write_text("example_other_user", encoding="utf-8")
     step, result = evidence.run("reject_services_identity", [*wrapper, "plan"], workspace, environment)
     evidence.check(step, "wrong_identity_refused", result.returncode == 2 and "same-named IAM user" in result.stderr)

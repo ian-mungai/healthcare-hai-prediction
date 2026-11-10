@@ -156,17 +156,28 @@ if [[ "$stack" == iam && "$action" == plan ]]; then
   exec terraform -chdir="$directory" plan -input=false "-var=admin_profile=$admin_profile" "$@"
 fi
 if [[ "$stack" == services && "$action" == apply ]]; then
-  # Launch hold during services applies (owner A, Nov 10 2026): set the hold before the apply changes anything and clear it only after the ECS
-  # services reach steady state. A failed apply or settle leaves the hold set until the owner resolves it.
-  "$python_bin" -m scripts.infrastructure.services_apply hold --reason "terraform.sh --services apply ${plan_path##*/}" || {
+  # Launch hold during services applies (owner A, Nov 10 2026): take the apply lock (one services apply at a time, across machines), set the
+  # hold before the apply changes anything, and clear the hold and release the lock only after the ECS services reach steady state. A failed
+  # apply or settle leaves both until the owner resolves them with the lock's token.
+  reason="terraform.sh --services apply ${plan_path##*/}"
+  token="$("$python_bin" -m scripts.infrastructure.services_apply lock --reason "$reason")" || {
+    printf 'The apply lock was not taken, so the services apply did not start.\n' >&2
+    exit 1
+  }
+  resolve_hint() {
+    printf 'The launch hold and the apply lock stay set, so no host job launches and no other services apply starts. Check the apply and the services, then run:\n' >&2
+    printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s --token %s\n' "$python_bin" "'<what you checked>'" "'$token'" >&2
+  }
+  "$python_bin" -m scripts.infrastructure.services_apply hold --reason "$reason" || {
     printf 'The launch hold could not be set, so the services apply did not start.\n' >&2
+    resolve_hint
     exit 1
   }
   if ! terraform -chdir="$directory" apply -input=false "$@"; then
-    printf 'The services apply failed. The launch hold stays set, so no host job launches. Check the apply and the services, then run:\n' >&2
-    printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s\n' "$python_bin" "'<what you checked>'" >&2
+    printf 'The services apply failed.\n' >&2
+    resolve_hint
     exit 1
   fi
-  exec "$python_bin" -m scripts.infrastructure.services_apply settle
+  exec "$python_bin" -m scripts.infrastructure.services_apply settle --token "$token"
 fi
 exec terraform -chdir="$directory" "$action" -input=false "$@"
