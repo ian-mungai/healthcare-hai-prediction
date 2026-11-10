@@ -6,8 +6,8 @@ against its parser.
 The commands come from the "Silver first run", "Gold after silver" and "Features after gold" lists of that file (the text moved out of the tracked
 documents). Each runs through the parser of its real program with synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing
 argument or a wrong option fails here and not on the owner's first run. The reviewed jobs file that each list describes passes the real renderer
-through the real wrapper. The cases of the list "Gold through Airflow on the host" are in ``scripts.infrastructure.owner_list_host_cases``. Nothing calls
-AWS or Docker."""
+through the real wrapper. The cases of the list "Silver and gold through Airflow on the host" are in
+``scripts.infrastructure.owner_list_host_cases``. Nothing calls AWS or Docker."""
 
 from __future__ import annotations
 

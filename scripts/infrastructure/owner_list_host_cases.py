@@ -1,25 +1,32 @@
-"""Cases of the owner list "Gold through Airflow on the host": a DAG run on the AWS host's Airflow, reached through a Session Manager port forward.
+"""Cases of the owner list "Silver and gold through Airflow on the host": DAG runs on the AWS host's Airflow, reached through a Session Manager port forward.
 
-``scripts/infrastructure/run_owner_list_e2e.py`` runs them. The list must start no Fargate task: the job runs on the host through the direct ECS launch
-that the DAG step calls. The forward must join the local port that ``scripts.orchestration.trigger_dag`` calls (``config/orchestration/platform.json``)
-to the port of the host's API server (``infra/services/airflow.tf``). Every printed command runs through its real parser with synthetic values
-(``scripts.infrastructure.owner_commands``), and each planted typo must fail that check. Nothing calls AWS or Airflow.
+``scripts/infrastructure/run_owner_list_e2e.py`` runs them. The list must start no Fargate task: each job runs on the host through the direct ECS launch
+that its DAG step calls. Silver runs first, because the gold preflight needs the silver launch record. Each run has its code staged under its own run ID
+before its trigger, because the launch reads ``lakehouse/run_stage/<run>/inputs/code.sha256`` of the run. The owner approves each run ID before it starts
+and signs each first publish by hand; the signed publishes are not a code gate (owner, Nov 10 2026), so the list names no closed chain. Every stop
+condition leads to one bounded failure path that reads the run's records and tasks, closes the forward and stops and verifies the host.
+The forward must join the local port that ``scripts.orchestration.trigger_dag`` calls (``config/orchestration/platform.json``) to the port of the host's
+API server (``infra/services/airflow.tf``). Every printed command runs through its real parser with synthetic values
+(``scripts.infrastructure.owner_commands``), and each planted typo or planted omission must fail its check. Nothing calls AWS or Airflow.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 from scripts.infrastructure import owner_commands
 
 ROOT = Path(__file__).resolve().parents[2]
-HOST_DAG = "Gold through Airflow on the host"
+HOST_DAG = "Silver and gold through Airflow on the host"
 PLATFORM_FILE = ROOT / "config/orchestration/platform.json"
 AIRFLOW_FILE = ROOT / "infra/services/airflow.tf"
 # The wait limit of trigger_dag, read from its source: the infrastructure scripts may not import the orchestration scripts.
 TRIGGER_FILE = ROOT / "scripts/orchestration/trigger_dag.py"
+RUNS = {"silver": "SILVER_RUN_ID", "gold": "GOLD_RUN_ID"}
+FAILURE_PATH = "If a step fails"
 MUTANTS = (
     (
         "a broken port forward parameter",
@@ -29,13 +36,15 @@ MUTANTS = (
     ("a mistyped Session Manager call", "ssm start-session", "ssm start-sessions"),
     ("an unknown workflow", "--dag gold_transform_dag", "--dag gold_dag"),
     ("a mistyped trigger option", "--silver-snapshot-run <SILVER_RUN_ID>", "--silver-snapshot-runs <SILVER_RUN_ID>"),
-    ("a trigger without its wait deadline", " --wait-seconds 7200", ""),
-    ("an unknown task command", "aws_tasks list", "aws_tasks lst"),
+    ("a trigger without its wait deadline", "--mode real --run-id <SILVER_RUN_ID> --wait-seconds 14400", "--mode real --run-id <SILVER_RUN_ID>"),
+    ("an unknown task command", "aws_tasks list", "aws_tasks lists"),
     (
         "a mistyped describe-tasks option",
         "describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster",
-        "describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --clustr",
+        "describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --clusters",
     ),
+    ("an approval without its code digest", "--run <GOLD_RUN_ID> --code-sha256 <CODE_SHA256> --out", "--run <GOLD_RUN_ID> --out"),
+    ("a gold report without its output path", " --out <RECORD_DIR>/qualification_gold.json", ""),
 )
 
 
@@ -62,43 +71,92 @@ def max_wait_seconds() -> float:
     return product
 
 
-def structure_checks(body: str) -> dict[str, bool]:
-    steps = [step for step in re.split(r"(?m)^(?=\d+\. )", body) if re.match(r"\d+\. ", step)]
-    numbers = [int(step.split(".", 1)[0]) for step in steps]
-    checks = {"the host DAG section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 6}
+def steps_of(body: str) -> list[str]:
+    return [step for step in re.split(r"(?m)^(?=\d+\. )", body) if re.match(r"\d+\. ", step)]
 
+
+def finder(steps: list[str]) -> Callable[..., int]:
     def index(*needles: str) -> int:
         return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
 
+    return index
+
+
+def trigger_of(layer: str) -> tuple[str, ...]:
+    return (f"trigger_dag --dag {layer}_transform_dag", f"--run-id <{RUNS[layer]}>")
+
+
+def staged_before_trigger(body: str, layer: str) -> bool:
+    """The archive and the digest of the run are copied to its run_stage inputs in a step before the step that triggers the run."""
+    index = finder(steps_of(body))
+    run = RUNS[layer]
+    staged = max(index(f"run_stage/<{run}>/inputs/code.tar.gz"), index(f"run_stage/<{run}>/inputs/code.sha256"))
+    archive = index("code_archive build")
+    trigger = index(*trigger_of(layer))
+    return min(staged, archive) >= 0 and trigger >= 0 and max(staged, archive) < trigger
+
+
+def structure_checks(body: str) -> dict[str, bool]:
+    steps = steps_of(body)
+    numbers = [int(step.split(".", 1)[0]) for step in steps]
+    checks = {"the host DAG section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 12}
+    index = finder(steps)
     checks["the host DAG list starts no Fargate task and no hand-started task"] = bool(body) and "FARGATE" not in body and "run-task" not in body
     order = [
-        ("host and twin", index("host_session status", "describe-instances", "_job_gold_host", "requiresCompatibilities")),
+        ("host and twins", index("host_session status", "describe-instances", "_job_silver_host", "_job_gold_host", "requiresCompatibilities")),
         ("port forward", index("ssm start-session", "AWS-StartPortForwardingSession")),
-        ("trigger", index("trigger_dag --dag gold_transform_dag", "--silver-snapshot-run <SILVER_RUN_ID>", "--run-id <RUN_ID>")),
-        ("launch records", index("lakehouse/launch_records/<RUN_ID>/")),
-        ("task evidence", index("describe-tasks", "capacityProviderName")),
+        ("silver staging and approval", index("code_archive build", "run_stage/<SILVER_RUN_ID>/inputs/code.sha256", "approve --layer silver")),
+        ("silver trigger", index(*trigger_of("silver"), "before_silver.json")),
+        ("silver evidence", index("lakehouse/launch_records/<SILVER_RUN_ID>/", "describe-tasks", "after_silver.json", "_job_silver_host")),
+        ("silver sign", index("host_session stop", "layer_acceptance report --layer silver", "layer_acceptance sign")),
+        ("host restart", index("host_session start", "ssm start-session")),
+        ("gold staging and approval", index("run_stage/<GOLD_RUN_ID>/inputs/code.sha256", "approve --layer gold")),
+        ("gold trigger", index(*trigger_of("gold"), "--silver-snapshot-run <SILVER_RUN_ID>", "before_gold.json")),
+        ("gold evidence", index("lakehouse/launch_records/<GOLD_RUN_ID>/", "describe-tasks", "after_gold.json", "_job_gold_host")),
         ("drain", index("aws_tasks list", "host_jobs")),
-        ("host stop", index("host_session stop", "host_session status")),
+        ("gold sign", index("host_session stop", "layer_acceptance report --layer gold", "--input-report", "layer_acceptance sign")),
+        ("failure path", index(FAILURE_PATH, "aws_tasks list", "aws_tasks stop", "host_session stop", "host_session status")),
     ]
     positions = [position for _, position in order]
-    checks[f"the host DAG steps come in the order the run depends on ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(
+    checks[f"the host DAG steps come in the order the runs depend on ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(
         positions
+    )
+    for layer in RUNS:
+        checks[f"the {layer} run has its code staged under its own run ID before its trigger"] = staged_before_trigger(body, layer)
+    planted = re.sub(r"(?m)^.*run_stage/<GOLD_RUN_ID>/inputs/code\.(tar\.gz|sha256).*\n", "", body)
+    checks["planted: a list without the gold code staging fails the staging case"] = planted != body and not staged_before_trigger(planted, "gold")
+    checks["the code is staged before the version listing that the report compares"] = all(
+        0 <= index(f"run_stage/<{run}>/inputs/code.sha256") <= index(f"before_{layer}.json") for layer, run in RUNS.items()
+    )
+    checks["the list names no closed chain: the signed publishes are a manual step"] = (
+        bool(body) and "first_publishes_signed" not in body and "chain is closed" not in body
+    )
+    checks["the owner signs each first publish by hand"] = (
+        all(f"layer_acceptance report --layer {layer}" in body for layer in RUNS) and body.count("layer_acceptance sign") >= 2 and "by hand" in body
+    )
+    checks["the gold step says it needs the silver launch record of step 5"] = index(*trigger_of("gold")) >= 0 and (
+        "lakehouse/launch_records/<SILVER_RUN_ID>/silver/" in steps[index(*trigger_of("gold"))]
     )
     local, remote = ports()
     checks[f"the forward joins local port {local} (trigger_dag) to the API server's port {remote}"] = (
-        remote > 0 and f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}' in body
+        remote > 0 and body.count(f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}') >= 2
     )
     waits = [float(value) for value in re.findall(r"--wait-seconds ([0-9]+)", body)]
     limit = max_wait_seconds()
     checks[f"every trigger wait is within trigger_dag's limit of {limit:g} s ({waits})"] = (
-        limit > 0 and bool(waits) and all(0 < wait <= limit for wait in waits)
+        limit > 0 and len(waits) == 2 and all(0 < wait <= limit for wait in waits)
     )
-    trigger = order[2][1]
-    checks["the trigger step names the chain refusal and the token secret that a local start rotates"] = trigger >= 0 and all(
-        word in steps[trigger] for word in ("the chain is closed", "first_publishes_signed", "HTTP 401", "local Airflow")
+    failure = order[-1][1]
+    stops = [position for position, step in enumerate(steps) if re.search(r"\bStop (if|on)\b", step) and position != failure]
+    checks[f"every step with a stop condition sends the owner to the failure path ({stops})"] = (
+        failure >= 0 and bool(stops) and all(f"step {failure + 1}" in steps[position] for position in stops)
     )
-    checks["the trigger step names the silver launch record that the gold preflight needs"] = (
-        trigger >= 0 and "lakehouse/launch_records/<SILVER_RUN_ID>/silver/" in steps[trigger]
+    checks["the failure path is bounded and names what it establishes"] = failure >= 0 and all(
+        word in steps[failure] for word in ("at most", "launch_records", "Ctrl-C", "no instance", "new run ID")
+    )
+    trigger = index(*trigger_of("silver"))
+    checks["the silver trigger step names the token secret that a local start rotates"] = trigger >= 0 and all(
+        word in steps[trigger] for word in ("HTTP 401", "local Airflow")
     )
     checks["the list says the pool host_jobs has one slot after each start and no command changes it"] = all(
         word in body for word in ("`host_jobs`", "one slot", "no repository command")
@@ -112,7 +170,7 @@ def structure_checks(body: str) -> dict[str, bool]:
 
 def command_checks(body: str, folder: Path) -> dict[str, bool]:
     problems = owner_commands.check_section(body, folder / "host_dag", no_refusal)
-    checks = {f"{HOST_DAG}: {len(problems)} printed commands were found": len(problems) >= 8}
+    checks = {f"{HOST_DAG}: {len(problems)} printed commands were found": len(problems) >= 20}
     for number, (line, found) in enumerate(problems.items(), 1):
         checks[f"{HOST_DAG}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
     return checks
