@@ -68,6 +68,10 @@ def reserve(root: Path, identity: str, limit: int, now: datetime, *, state_backe
 def request_live(plan: dict, batch: dict, client: AwsCli) -> bytes:
     """Read the key from Secrets Manager only inside this runtime boundary, after the identity check; return public data bytes."""
     require_approved(plan["endpoint"])
+    # A task shares this budget with every other task. Its entry is stored before the key is read and before the request.
+    reserver = getattr(client, "reserve_request", None)
+    if reserver is not None:
+        reserver(batch["id"], plan["request_limit_24h"])
     credential = api_keys.checked_read(client, plan["credential_reference"], "BLS")
     require(len(credential) >= 16 and credential.strip() == credential and not credential.startswith(("{", "[", '"')), "BLS credential structure invalid")
     parsed = urlsplit(plan["endpoint"])

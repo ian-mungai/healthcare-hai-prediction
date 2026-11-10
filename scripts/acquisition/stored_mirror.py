@@ -29,7 +29,7 @@ ACTIVE = ("api", "direct_download", "approved_manual")
 INVENTORY_COLUMNS = ("source_id", "snapshot_id", "s3_key", "s3_version_id", "sha256")
 MIRROR_VARIABLE = "HAI_STORED_MIRROR"
 INDEX_VARIABLE = "HAI_STORED_INDEX"
-REQUIRED_ENVIRONMENT = (MIRROR_VARIABLE, INDEX_VARIABLE, "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "AWS_REGION")
+REQUIRED_ENVIRONMENT = (MIRROR_VARIABLE, INDEX_VARIABLE, "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "AWS_REGION", "DATA_BUCKET_NAME")
 CHUNK = 1024 * 1024
 PLAN_INPUTS_NAME = "plan_inputs.json"
 # The collectors the task runs whose locked plans read reference and registry files from the data folder while they load.
@@ -134,6 +134,9 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
         if sha256_of(body) != unit["receipt_sha256"]:
             raise CaptureError(f"The stored receipt of {unit['snapshot_id']} differs from the queue's digest.")
         copy_once(receipt_path, mirror / relative)
+        reconciliation = receipt_path.parent / "s3_collections_reconciliation.json"
+        if reconciliation.is_file():
+            copy_once(reconciliation, mirror / Path(relative).parent / reconciliation.name)
         job = next((parent / "job.json" for parent in receipt_path.parents if (parent / "job.json").is_file()), None)
         if job is not None and job.is_relative_to(base):
             copy_once(job, mirror / job.relative_to(base))

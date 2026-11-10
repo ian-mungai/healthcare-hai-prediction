@@ -9,6 +9,7 @@ capture is never replaced: each unit ends with one write-once outcome.
 from __future__ import annotations
 
 import argparse
+import copy
 import fcntl
 import hashlib
 import importlib
@@ -18,6 +19,7 @@ import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import traceback
 import urllib.error
@@ -25,7 +27,7 @@ import urllib.parse
 import zipfile
 from collections import Counter
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
@@ -38,10 +40,12 @@ from scripts.acquisition import bls_api_transport, data_paths, stored_mirror, ta
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
-from scripts.acquisition.collection_layout import capture_root
+from scripts.acquisition.capture import artifact_record, receipt_validator, validate_receipt
+from scripts.acquisition.collection_layout import RAW_ROOT, capture_root, load_routes
 from scripts.acquisition.data_paths import current
-from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
-from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, read_json, require
+from scripts.acquisition.mapped_archives import expand_tree
+from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, upload_snapshot, verify_version, write_once
+from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, CaptureError, Limits, download, known_failure, on_raw_route
 
 ACTIVE = ("api", "direct_download", "approved_manual")
@@ -82,6 +86,7 @@ class Run:
     lane_approval: Path | None = None
     task_keys: Callable[[str], Any] | None = None
     task_storage: Any = None
+    task_filtered: bool = False
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -93,7 +98,9 @@ class Run:
     def client(self, mode: str = "") -> Any:
         """What a keyed collector reads its key through: on the task a reader of that collector's key only, otherwise the project AWS client, made once."""
         if self.task_keys is not None:
-            return self.task_keys(mode)
+            reader = self.task_keys(mode)
+            reader.storage = self.task_storage
+            return reader
         if "client" not in self.cache:
             if self.client_factory is not None:
                 self.cache["client"] = self.client_factory()
@@ -350,7 +357,7 @@ def may_attempt(run: Run, lane: str) -> bool:
     if run.person_lane:
         return lane in route.PERSON_CLASSES
     if run.stored_root is not None:
-        return lane == TASK or (lane == TASK_KEYED and run.task_keys is not None) or (lane == TASK_FILTERED and run.task_storage is not None)
+        return lane == TASK or (lane == TASK_KEYED and run.task_keys is not None) or (lane == TASK_FILTERED and run.task_filtered)
     if lane == TASK_FILTERED:
         return False
     return not (on_raw_route() and (lane == TASK_KEYED or lane in route.PERSON_CLASSES))
@@ -562,7 +569,173 @@ def file_unit(unit: dict, run: Run) -> dict:
         install_redirect(unit["url"], redirect)
     folder = run.state_root / "files" / unit["snapshot_id"]
     result, attempts = fetch(unit["url"], artifact["stored_file_name"], expected_format, artifact["role"], unit["bytes"], folder, run)
-    return compare_download(result, attempts, artifact["sha256"], run, receipt_file(unit, run).parent / artifact["storage_path"])
+    fields = compare_download(result, attempts, artifact["sha256"], run, receipt_file(unit, run).parent / artifact["storage_path"])
+    return stored_outcome(unit, run, fields, [result]) if result.complete else fields
+
+
+def queue_route_id(unit: dict) -> str:
+    return f"frozen_queue_{digest(unit['url'].encode())[:16]}"
+
+
+def queue_approved_registry(unit: dict, registry: dict) -> dict:
+    """The registry the storage check reads for a queue unit. Most stored captures came from routes the current registry no longer names, and their old
+    registries are not catalogued, so the frozen queue is the approval: the owner reviewed it, its digest binds the run and the hosts file limits its hosts."""
+    view = copy.deepcopy(registry)
+    source = next((item for item in view["sources"] if item["source_id"] == unit["source_id"]), None)
+    require(source is not None, "The queue unit's source is not in the registry")
+    source["file_routes"] = [*source.get("file_routes", []), {"route_id": queue_route_id(unit), "url": unit["url"]}]
+    return view
+
+
+def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict) -> Path:
+    """Write the receipt of a fresh download beside its bytes. It keeps the stored capture's reviewed scope and states this download's own facts."""
+    stored = copy.deepcopy(stored_receipt(unit, run))
+    validator = receipt_validator()
+    first = results[0]
+    stamp = re.sub(r"[-:]", "", first.retrieved_at_utc)[:15] + "Z"
+    tag = digest(encoded_json([unit["snapshot_id"], first.retrieved_at_utc, [item.sha256 for item in results]]))[:32]
+    snapshot_id = f"{unit['source_id']}__{stamp}__{tag}"
+    root = run.state_root / "captures" / snapshot_id
+    (root / "raw").mkdir(parents=True, exist_ok=True)
+    artifacts = []
+    for index, (result, earlier) in enumerate(zip(results, [item for item in stored["artifacts"] if item["role"] in {"data", "api_page"}], strict=True), 1):
+        target = root / "raw" / result.path.name
+        os.link(result.path, target)
+        record = artifact_record(replace(result, path=target), root, earlier["role"], index)
+        artifacts.append(record | {"compression": earlier.get("compression"), "hash_scope": earlier.get("hash_scope", record["hash_scope"])})
+    lineage = json.loads(stored["lineage"]["extraction_or_query"])
+    requests = [
+        {
+            "requested_url": first.requested_url if len(results) == 1 else old.get("requested_url"),
+            "resolved_url": item.resolved_url,
+            "retrieved_at_utc": item.retrieved_at_utc,
+            "http_status": item.http_status,
+            "sha256": item.sha256,
+            "byte_count": item.byte_count,
+        }
+        for item, old in zip(results, lineage.get("requests") or [{}] * len(results), strict=True)
+    ]
+    stored["lineage"]["extraction_or_query"] = json.dumps(
+        lineage
+        | {
+            "mode": "file",
+            "route_id": queue_route_id(unit),
+            "requests": requests,
+            "expected_sha256": None,
+            "registry_sha256": canonical_hash(registry),
+            "schema_sha256": canonical_hash(validator.schema),
+            "fresh_of": unit["snapshot_id"],
+        }
+    )
+    stored |= {"snapshot_id": snapshot_id, "artifacts": artifacts}
+    stored["acquisition"] |= {
+        "requested_url": unit["url"],
+        "resolved_url": first.resolved_url,
+        "retrieved_at_utc": first.retrieved_at_utc,
+        "http_status": first.http_status,
+    }
+    validate_receipt(stored, validator, root)
+    path = root / "receipt.json"
+    write_once(path, encoded_json(stored))
+    return path
+
+
+def stored_evidence(receipt: Path) -> dict:
+    """What an outcome names so a later task can check it: the exact stored receipt and manifests, read back when they were stored."""
+    record = read_json(receipt.parent / "s3_collections_reconciliation.json")
+    # With several datasets the one receipt is listed once for each, under one key.
+    receipts = list({item["object"]["key"]: item["object"] for item in record["objects"] if item["storage_path"] == receipt.name}.values())
+    manifests = [item["object"] for item in record["manifests"]]
+    require(len(receipts) == 1 and bool(manifests), "The stored capture has no receipt or no manifest")
+    return {"receipt": receipts[0], "manifests": manifests}
+
+
+def reviewed_archive_mapping(unit: dict, run: Run, receipt: Path, registry: dict) -> dict | None:
+    """The archive map of a fresh capture, from the stored capture's storage record. Each member keeps its reviewed dataset and role, with the fresh digests.
+
+    A member the review never saw or a lost one fails the storage check, so it blocks the unit. None means the stored capture had no members.
+    """
+    record = receipt_file(unit, run).parent / "s3_collections_reconciliation.json"
+    if not record.is_file():
+        return None
+    members: dict[tuple[str, ...], dict] = {}
+    for item in read_json(record)["objects"]:
+        if "archive_member" in item:
+            text = item["archive_member"]
+            chain = tuple(json.loads(text)) if text.startswith("[") else (text,)
+            earlier = members.get(chain)
+            if earlier is None or item["role"] == "data":
+                members[chain] = {"role": "data" if item["role"] == "data" else "reference", "dataset_id": item["dataset_id"]}
+    if not members:
+        return None
+    fresh = read_json(receipt)
+    artifact = fresh["artifacts"][0]
+    lineage = json.loads(fresh["lineage"]["extraction_or_query"])
+    route_record = load_routes(registry)[unit["source_id"]]
+    with tempfile.TemporaryDirectory(dir=receipt.parent) as scratch:
+        leaves = expand_tree(receipt.parent / artifact["storage_path"], Path(scratch) / "leaves", artifact["sha256"])
+        require(set(members) <= set(leaves), "A reviewed archive member is missing from the fresh archive")
+        selected = [
+            {"member_chain": list(chain), "sha256": leaves[chain]["sha256"], "bytes": leaves[chain]["byte_count"], **fields}
+            for chain, fields in members.items()
+        ]
+    return {
+        "registry_sha256": canonical_hash(registry),
+        "source_ids": [unit["source_id"]],
+        "route_ids": [lineage["route_id"]],
+        "url": unit["url"],
+        "release_date": fresh["release"]["release_date"],
+        "collection_root": f"{route_record['publisher']}/{route_record['collection']}",
+        "sha256": artifact["sha256"],
+        "bytes": artifact["byte_count"],
+        "members": selected,
+    }
+
+
+def store_fresh(unit: dict, run: Run, results: list[Any]) -> dict:
+    """Store one fresh capture through the project's storage path and return its evidence."""
+    registry = queue_approved_registry(unit, load_registry())
+    receipt = fresh_capture(unit, run, results, registry)
+    mapping = reviewed_archive_mapping(unit, run, receipt, registry)
+    upload_snapshot(receipt, [], run.task_storage, {}, registry, receipt_validator(), archive_mapping=mapping)
+    return stored_evidence(receipt)
+
+
+def stored_outcome(unit: dict, run: Run, fields: dict, results: list[Any]) -> dict:
+    """Store a task's fresh capture under the raw root and read it back. Without that the unit is blocked, whatever the comparison found."""
+    if run.task_storage is None or fields["outcome"] not in STORED_OUTCOMES:
+        return fields
+    try:
+        return fields | {"stored": store_fresh(unit, run, results)}
+    except (Pause, Pending, controls.BudgetExceeded):
+        raise
+    except Exception as error:
+        record_diagnostic(run, unit["snapshot_id"], error)
+        return fields | {"outcome": "blocked", "reason": "raw_store_failed", "error_category": error_category(error)}
+
+
+def validate_restored(run: Run) -> None:
+    """A restored outcome counts only for a unit of this queue. When it claims a capture, its stored receipt and manifests must read back by version."""
+    units = {unit["snapshot_id"]: unit for unit in accepted(run).units() if unit["disposition"] in ACTIVE}
+    for path in sorted((run.state_root / "outcomes").glob("*.json")):
+        record = read_json(path)
+        unit = units.get(path.stem)
+        require(
+            unit is not None and record.get("snapshot_id") == path.stem and record.get("source_id") == unit["source_id"],
+            "Restored outcome does not belong to this queue",
+        )
+        if record.get("outcome") not in STORED_OUTCOMES:
+            continue
+        stored = record.get("stored")
+        require(
+            isinstance(stored, dict) and isinstance(stored.get("manifests"), list) and bool(stored["manifests"]), "Restored outcome names no stored capture"
+        )
+        for item in [stored.get("receipt"), *stored["manifests"]]:
+            require(isinstance(item, dict) and str(item.get("key", "")).startswith(RAW_ROOT), "Restored outcome names a capture outside the raw root")
+            try:
+                verify_version(run.task_storage, item["key"], item["version_id"], item["sha256"], item["byte_count"])
+            except (ValueError, OSError, KeyError, TypeError):
+                raise RegistryError("Restored outcome names a stored capture that does not verify") from None
 
 
 def page_unit(unit: dict, run: Run) -> dict:
@@ -571,17 +744,18 @@ def page_unit(unit: dict, run: Run) -> dict:
     requests = json.loads(receipt["lineage"]["extraction_or_query"])["requests"]
     pages = [item for item in receipt["artifacts"] if item["role"] == "api_page"]
     require(len(requests) == len(pages) and bool(pages), "Recorded pages differ from the recorded requests")
-    differing, attempts, total = [], 0, 0
+    differing, attempts, total, results = [], 0, 0, []
     for index, (request, page) in enumerate(zip(requests, pages, strict=True), 1):
         folder = run.state_root / "files" / unit["snapshot_id"] / f"page_{index:04}"
         result, used = fetch(request["requested_url"], page["stored_file_name"], "json", "api_page", page["byte_count"], folder, run)
         attempts, total = max(attempts, used), total + result.byte_count
+        results.append(result)
         if not result.complete:
             return compare_download(result, used, page["sha256"], run)
         if result.sha256 != page["sha256"]:
             differing.append(page["stored_file_name"])
     fields = {"attempts": attempts, "fresh_bytes": total, "differing_data_files": differing}
-    return fields | {"outcome": "changed_needs_review" if differing else "exact_match"}
+    return stored_outcome(unit, run, fields | {"outcome": "changed_needs_review" if differing else "exact_match"}, results)
 
 
 def archive_members(path: Path, expanded_cap: int = 2**30) -> dict[str, str] | None:
@@ -900,7 +1074,9 @@ def adapt_bls(unit: dict, run: Run) -> Path:
     plan, batch = planned(unit, run)
     require_bls_budget([collection_root(receipt_file(unit, run)), fresh_root(unit, run)], datetime.now(UTC))
     try:
-        result = collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, run.api_request or transport.request_live)
+        result = collector.execute(
+            plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, run.api_request or transport.request_live
+        )
     except transport.QuotaPause as pause:
         raise Pause(str(pause)) from None
     return Path(result["receipt_path"])
@@ -912,7 +1088,9 @@ def adapt_census_api(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or transport.request_live
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
+    return Path(
+        collector.execute(plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, request)["receipt_path"]
+    )
 
 
 def adapt_census_detailed(unit: dict, run: Run) -> Path:
@@ -920,7 +1098,9 @@ def adapt_census_detailed(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or collector.live_request
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
+    return Path(
+        collector.execute(plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, request)["receipt_path"]
+    )
 
 
 def adapt_hud_api(unit: dict, run: Run) -> Path:
@@ -929,7 +1109,9 @@ def adapt_hud_api(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     request = run.api_request or transport.request_live
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), True, False, run.client(unit["mode"]), {}, request)["receipt_path"])
+    return Path(
+        collector.execute(plan, batch, fresh_root(unit, run), True, run.task_storage is not None, run.client(unit["mode"]), {}, request)["receipt_path"]
+    )
 
 
 def adapt_mmd(unit: dict, run: Run) -> Path:
@@ -1029,6 +1211,7 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
 SECRET_MODES = frozenset(task_role.KEY_OF_MODE)
 TASK, TASK_KEYED, TASK_FILTERED, PRIVATE, NOT_REVIEWED = "task", "task_keyed", "task_filtered", "private_local", "not_reviewed"
 # These collectors keep their originals only in the task's workspace and store a filtered copy under raw/, by owner decisions 132, 133 and 142.
+STORED_OUTCOMES = frozenset({"exact_match", "changed_needs_review"})
 FILTERED_MODES = frozenset({"cms_owners_org", "onc_mu_hospital"})
 NEVER_IN_THE_TOOL = unit_classification.PERSONAL_COLLECTORS - FILTERED_MODES
 MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
@@ -1185,7 +1368,14 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
         differing.append(key[1])
     same = not differing and set(identities) == set(stored) and len(identities) == len(fresh) and bool(stored)
     fields = {"attempts": 1, "fresh_receipt": str(receipt_path.absolute().relative_to(run.state_root.absolute())), "differing_data_files": differing}
-    return fields | {"outcome": "exact_match" if same else "changed_needs_review", "excluded_parts": sorted(excluded)}
+    fields |= {"outcome": "exact_match" if same else "changed_needs_review", "excluded_parts": sorted(excluded)}
+    if run.task_storage is None:
+        return fields
+    try:
+        return fields | {"stored": stored_evidence(receipt_path)}
+    except (ValueError, OSError, KeyError) as error:
+        record_diagnostic(run, unit["snapshot_id"], error)
+        return fields | {"outcome": "blocked", "reason": "raw_store_failed", "error_category": error_category(error)}
 
 
 def handle(unit: dict, run: Run) -> dict:
@@ -1258,13 +1448,16 @@ def execute(
         require_readable_root(run)
         return execute_locked(run, pilot, False, selected_sources(preview_scope(run), sources), max_units, log)
     validate_root(run)
-    resolve_context(json.loads(run.queue_path.read_bytes()).get("run"), person=run.person_lane, mirror=run.stored_root is not None)
+    context = resolve_context(json.loads(run.queue_path.read_bytes()).get("run"), person=run.person_lane, mirror=run.stored_root is not None)
     route_gate(run)
+    require(context != "task" or run.task_storage is not None, "The task needs its storage client, because no unit counts until it is stored")
     run.cache["controls_sha256"] = review_gate(run)
     # The scope comes only from the controls the gate just accepted, never from a separate file read (failure mode 56).
     chosen = selected_sources(run.cache["controls"].get("scope_sources"), sources)
     # Bind ownership before opening the lock; a valid resume carries exactly the same review snapshot.
     run.cache["started_at"] = started_at(run)
+    if context == "task":
+        validate_restored(run)
     with (run.state_root / ".run.lock").open("a") as handle:
         try:
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -1439,6 +1632,7 @@ def run_from(
     files = route.RouteFiles(*paths) if all(paths) else None
     mirror = stored_mirror.from_environment(environment, factory) if environment.get(stored_mirror.MIRROR_VARIABLE) else None
     switched = {name: mirror is not None and environment.get(name) == "1" for name in (task_role.KEYS_VARIABLE, task_role.FILTERED_VARIABLE)}
+    storage = task_role.storage_from_environment(environment, factory) if mirror is not None else None
     return Run(
         queue_path=args.queue,
         state_root=state_root,
@@ -1451,7 +1645,8 @@ def run_from(
         person_lane=bool(getattr(args, "person_lane", False)),
         lane_approval=getattr(args, "lane_approval", None),
         task_keys=partial(task_role.TaskKeys, environment=environment) if switched[task_role.KEYS_VARIABLE] else None,
-        task_storage=task_role.storage_from_environment(environment, factory) if switched[task_role.FILTERED_VARIABLE] else None,
+        task_storage=storage,
+        task_filtered=switched[task_role.FILTERED_VARIABLE],
     )
 
 

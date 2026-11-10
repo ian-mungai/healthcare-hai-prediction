@@ -110,7 +110,7 @@ def synthetic_run(folder: Path, number: int, context: str, damage: str = "none")
                 target = mirror / source.relative_to(folder)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read_bytes())
-        fields |= {"stored_root": mirror}
+        fields |= {"stored_root": mirror, "task_storage": object()}
     if context == "person":
         fields |= {"person_lane": True}
     run = harness.Run(queue, folder / "state", base=folder, **fields)
@@ -265,7 +265,7 @@ def test_the_units_a_run_dispatches_cannot_be_changed_through_the_list_it_was_gi
 
 
 def test_no_context_may_attempt_the_private_lane(tmp_path: Path) -> None:
-    for fields in ({}, {"stored_root": tmp_path}, {"stored_root": tmp_path, "task_keys": object(), "task_storage": object()}, {"person_lane": True}):
+    for fields in ({}, {"stored_root": tmp_path}, {"stored_root": tmp_path, "task_keys": object(), "task_filtered": True}, {"person_lane": True}):
         run = harness.Run(queue_path=tmp_path / "q.json", state_root=tmp_path / "s", base=tmp_path, **fields)
         check(harness.may_attempt(run, "private_local") is False, f"{fields} may not attempt it")
         check(harness.may_attempt(run, "not_reviewed") is False, f"{fields} may not attempt an unreviewed unit")
@@ -309,7 +309,7 @@ def test_a_private_collector_unit_reviewed_non_personal_is_never_dispatched(monk
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
     fields = {key: tmp_path / value if isinstance(value, str) else value for key, value in fields.items()}
     if fields.pop("keys", False):
-        fields |= {"task_keys": object(), "task_storage": object()}
+        fields |= {"task_keys": object(), "task_filtered": True}
     run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, **fields)
     held.hold(run, units)
     run.state_root.mkdir()
@@ -323,9 +323,7 @@ def test_a_unit_reviewed_personal_runs_in_no_context_with_every_flag_on(monkeypa
     unit = make_unit("file", 0) | {"snapshot_id": "P__0", "source_id": "P", "mode": mode}
     monkeypatch.setattr(harness, "handle", lambda unit, run: pytest.fail("a personal unit was dispatched"))
     monkeypatch.setattr(harness, "in_reviewed_scope", lambda run, source: True)
-    run = harness.Run(
-        queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path, task_keys=str, task_storage=object()
-    )
+    run = harness.Run(queue_path=tmp_path / "queue.json", state_root=tmp_path / "run", base=tmp_path, stored_root=tmp_path, task_keys=str, task_filtered=True)
     held.hold(run, [unit], {"P__0": "personal"})
     run.state_root.mkdir()
     summary = harness.execute_locked(run, False, True, None, None, None)

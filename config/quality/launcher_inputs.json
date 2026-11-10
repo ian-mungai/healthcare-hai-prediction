@@ -1318,6 +1318,8 @@
     "scripts/acquisition/tests/test_stored_mirror.py",
     "scripts/acquisition/tests/test_task_keys.py",
     "scripts/acquisition/tests/test_task_owners.py",
+    "scripts/acquisition/tests/test_task_raw_store.py",
+    "scripts/acquisition/tests/test_task_state.py",
     "scripts/acquisition/tests/test_unit_classification.py",
     "scripts/acquisition/tests/test_unused_files.py",
     "scripts/acquisition/transport.py",

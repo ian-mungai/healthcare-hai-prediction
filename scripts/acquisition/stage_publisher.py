@@ -5,7 +5,8 @@ beside the run's code archive. The archive holds the stored mirror, its index, t
 settings file or anything that is not a plain file, because everything in it reaches the task.
 
     .venv/bin/python -m scripts.acquisition.stage_publisher --mirror-output <folder> --queue <path inside the mirror> --removal-plan <file> \\
-        --removal-confirmation <file> --hosts <file> --hosts-approval <file> --output <new folder> [--resume-source <source>]
+        --removal-confirmation <file> --hosts <file> --hosts-approval <file> --output <new folder> [--resume-source <source>] \\
+        [--prior-state-key <key> --prior-state-version <id> --prior-state-sha256 <digest>]
 """
 
 from __future__ import annotations
@@ -51,7 +52,17 @@ def archive_bytes(entries: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-def build(mirror_output: Path, queue: str, plan: Path, confirmation: Path, hosts: Path, hosts_approval: Path, output: Path, resume: Sequence[str]) -> Path:
+def build(
+    mirror_output: Path,
+    queue: str,
+    plan: Path,
+    confirmation: Path,
+    hosts: Path,
+    hosts_approval: Path,
+    output: Path,
+    resume: Sequence[str],
+    prior_state: dict[str, str] | None = None,
+) -> Path:
     """Write the archive and the request into a new folder and return it."""
     relative = PurePosixPath(queue)
     if relative.is_absolute() or ".." in relative.parts or not (mirror_output / "mirror" / relative).is_file():
@@ -75,6 +86,7 @@ def build(mirror_output: Path, queue: str, plan: Path, confirmation: Path, hosts
         "inputs_sha256": hashlib.sha256(body).hexdigest(),
         "queue_sha256": hashlib.sha256((mirror_output / "mirror" / relative).read_bytes()).hexdigest(),
         "resume_sources": list(resume),
+        "prior_state": prior_state,
     }
     write_once(output / INPUTS_NAME, body)
     write_once(output / REQUEST_NAME, encoded_json(request))
@@ -88,10 +100,24 @@ def main(argv: Sequence[str] | None = None) -> None:
     for name in ("removal-plan", "removal-confirmation", "hosts", "hosts-approval", "output"):
         parser.add_argument(f"--{name}", required=True, type=Path)
     parser.add_argument("--resume-source", action="append", default=[])
+    for name in ("prior-state-key", "prior-state-version", "prior-state-sha256"):
+        parser.add_argument(f"--{name}", help="the state line of the last task, which the owner approves for the next one")
     args = parser.parse_args(argv)
+    named = {"key": args.prior_state_key, "version_id": args.prior_state_version, "sha256": args.prior_state_sha256}
+    if any(named.values()) and not all(named.values()):
+        parser.error("Name the prior state's key, version and digest together.")
+    prior = named if all(named.values()) else None
     try:
         folder = build(
-            args.mirror_output, args.queue, args.removal_plan, args.removal_confirmation, args.hosts, args.hosts_approval, args.output, args.resume_source
+            args.mirror_output,
+            args.queue,
+            args.removal_plan,
+            args.removal_confirmation,
+            args.hosts,
+            args.hosts_approval,
+            args.output,
+            args.resume_source,
+            prior,
         )
     except (StageError, OSError) as error:
         parser.error(str(error))

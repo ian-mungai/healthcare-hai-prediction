@@ -157,7 +157,7 @@ def stored_unit(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, bodie
 def run_task(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, bodies: dict, bucket: TaskS3, web: Web | None = None) -> tuple[harness.Run, dict, dict]:
     fixture = Fixture(folder)
     entry, release = stored_unit(monkeypatch, folder, plan, bodies, fixture)
-    run = task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket))
+    run = task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket), task_filtered=True)
     return run, entry, release
 
 
@@ -244,7 +244,7 @@ def test_the_task_without_the_flag_lists_the_owners_unit_and_fetches_nothing(mon
     web = Web(bodies)
     fixture = Fixture(tmp_path)
     entry, _ = stored_unit(monkeypatch, tmp_path, plan, bodies, fixture)
-    run = task_run(tmp_path, fixture, opener=opener(web))
+    run = task_run(tmp_path, fixture, opener=opener(web), task_storage=storage(TaskS3()))
     summary = harness.execute(run)
     check(summary["attempted"] == 0 and summary["not_attempted"]["task_filtered"] == [entry["snapshot_id"]], f"the unit is named: {summary}")
     check(web.requests == 0, "nothing was fetched")
@@ -299,7 +299,7 @@ def onc_task(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, data: by
         "flags": [],
     }
     fixture.entries.append(entry)
-    return task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket)), entry
+    return task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket), task_filtered=True), entry
 
 
 def clean_of_clinicians(root: Path, channels: dict[str, bytes | str]) -> None:
@@ -365,6 +365,6 @@ def test_the_task_without_the_flag_lists_the_onc_unit(monkeypatch: pytest.Monkey
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
     plan, data = onc
     run, entry = onc_task(monkeypatch, tmp_path, plan, data, TaskS3())
-    run.task_storage = None
+    run.task_filtered = False
     summary = harness.execute(run)
     check(summary["attempted"] == 0 and summary["not_attempted"]["task_filtered"] == [entry["snapshot_id"]], f"the unit is named: {summary}")

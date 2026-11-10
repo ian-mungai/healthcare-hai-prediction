@@ -81,7 +81,7 @@ def test_an_approved_person_lane_passes_both_gates_and_stops_at_the_next_gate(mo
 
 def test_the_person_lane_and_the_task_partition_the_queue_with_no_unit_in_two(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    full_task = {"stored_root": tmp_path / "mirror", "task_keys": object(), "task_storage": object()}
+    full_task = {"stored_root": tmp_path / "mirror", "task_keys": object(), "task_filtered": True}
     runs: dict[str, dict[str, Any]] = {"person": {"person_lane": True}, "task": full_task, "mac": {}}
     attempted: dict[str, list[str]] = {}
     for name, fields in runs.items():

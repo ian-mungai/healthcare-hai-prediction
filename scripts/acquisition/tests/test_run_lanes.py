@@ -179,7 +179,7 @@ def test_with_both_flags_the_task_takes_the_keyed_and_filtered_units_and_still_n
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror", task_keys=object(), task_storage=object())
+    seen, summary = dispatch(monkeypatch, tmp_path, stored_root=tmp_path / "mirror", task_keys=object(), task_filtered=True)
     served = sorted(unit_id for unit_id, lane in LANES.items() if lane in {"task", "task_keyed", "task_filtered"})
     check(sorted(seen) == served, f"the task attempted {sorted(seen)}")
     check(

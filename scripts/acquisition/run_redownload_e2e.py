@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from botocore.exceptions import ClientError
+
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import run_redownload_controls_e2e as control_e2e
@@ -31,6 +33,7 @@ from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 from scripts.acquisition.store_wonder_export import execute as wonder_execute
 from scripts.acquisition.tests.test_s3_store import FakeS3
+from scripts.acquisition.transport import APPROVED_HOSTS_APPROVAL_VARIABLE, APPROVED_HOSTS_VARIABLE, hosts_digest
 
 SENSITIVE_TEXT = "synthetic-registration-value"
 
@@ -483,6 +486,32 @@ def exercise(root: Path) -> list[dict]:
     return scenarios
 
 
+class MemoryBucket:
+    """A versioned bucket with the boto3 call shape the task storage client uses."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.fields: dict[str, dict] = {}
+
+    def head_object(self, **arguments: Any) -> dict:
+        if arguments["Key"] not in self.objects:
+            raise ClientError({"Error": {"Code": "404", "Message": "absent"}}, "HeadObject")
+        return {"VersionId": "v1", "ContentLength": len(self.objects[arguments["Key"]]), **self.fields[arguments["Key"]]}
+
+    def put_object(self, **arguments: Any) -> dict:
+        self.objects[arguments["Key"]] = arguments["Body"].read()
+        self.fields[arguments["Key"]] = {"ChecksumSHA256": arguments["ChecksumSHA256"], "ServerSideEncryption": arguments["ServerSideEncryption"]}
+        return {"VersionId": "v1", **self.fields[arguments["Key"]]}
+
+    def get_object(self, **arguments: Any) -> dict:
+        return {
+            "VersionId": "v1",
+            "ContentLength": len(self.objects[arguments["Key"]]),
+            "Body": io.BytesIO(self.objects[arguments["Key"]]),
+            **self.fields[arguments["Key"]],
+        }
+
+
 def real_bls_adapter(scenario: Any, root: Path) -> None:
     """The real BLS adapter runs the real collector into a fresh root with storage off and a request cap."""
     batch: dict = {"series_ids": ["LAUCN010010000000003"], "start_year": 2000, "end_year": 2000}
@@ -551,6 +580,7 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
             account = "1" * 12
             reads: list[str] = []
             sent: list[bytes] = []
+            ledger: list[str] = []
 
             class Cloud:
                 def get_caller_identity(self) -> dict:
@@ -559,6 +589,13 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
                 def get_secret_value(self, SecretId: str) -> dict:
                     reads.append(SecretId)
                     return {"SecretString": key}
+
+                def list_objects_v2(self, **arguments: Any) -> dict:
+                    return {"Contents": [], "IsTruncated": False}
+
+                def put_object(self, **arguments: Any) -> dict:
+                    ledger.append(arguments["Key"])
+                    return {"VersionId": "v1"}
 
             class Reply:
                 status = 200
@@ -582,20 +619,35 @@ def real_bls_adapter(scenario: Any, root: Path) -> None:
                 def close(self) -> None:
                     pass
 
-            environment = {"AWS_REGION": "us-west-2", "EXPECTED_ACCOUNT_ID": account, "TASK_ROLE_NAME": "example_publisher_task"}
+            environment = {"AWS_REGION": "us-west-2", "EXPECTED_ACCOUNT_ID": account, "TASK_ROLE_NAME": "example_publisher_task", "DATA_BUCKET_NAME": "bucket"}
+            bucket = MemoryBucket()
             state = root / "bls_task_state"
             task = harness.Run(
                 queue_path=queue,
                 state_root=state,
                 base=base,
+                stored_root=base,
                 task_keys=partial(task_role.TaskKeys, environment=environment, factory=lambda _service, _region: Cloud()),
+                task_storage=task_role.TaskStorage(bucket, {"data_bucket_name": "bucket", "expected_account_id": account, "aws_region": "us-west-2"}),
                 sleep=lambda _s: None,
             )
             control_e2e.approve_fixture(task)
-            with patch.object(http.client, "HTTPSConnection", Connection):
+            hosts = ["api.bls.gov"]
+            (root / "bls_hosts.json").write_text(json.dumps({"hosts": hosts, "hosts_sha256": hosts_digest(hosts)}))
+            (root / "bls_hosts_approval.json").write_text(json.dumps({"hosts_sha256": hosts_digest(hosts), "approved_by": "synthetic owner"}))
+            route = {
+                "HAI_CAPTURE_ROOT": "raw/",
+                APPROVED_HOSTS_VARIABLE: str(root / "bls_hosts.json"),
+                APPROVED_HOSTS_APPROVAL_VARIABLE: str(root / "bls_hosts_approval.json"),
+            }
+            with patch.object(http.client, "HTTPSConnection", Connection), patch.dict(os.environ, route):
                 harness.execute(task)
             result = recorded(task, entry["snapshot_id"])
             require(result["outcome"] == "exact_match", f"The task's BLS outcome differs: {result}")
+            require(len(ledger) == 1 and ledger[0].startswith(task_role.BLS_LEDGER_PREFIX), f"The request was not reserved first: {ledger}")
+            require(bool(bucket.objects) and all(name.startswith("raw/") for name in bucket.objects), f"The capture is outside raw/: {sorted(bucket.objects)}")
+            require(result["stored"]["receipt"]["key"] in bucket.objects, "The outcome does not name the stored receipt")
+            require(not any(key.encode() in name.encode() or key.encode() in body for name, body in bucket.objects.items()), "A stored object holds the key")
             require(reads == ["bls_api_key"] and len(sent) == 1 and key.encode() in sent[0], "The task read another secret or did not send its key")
             kept = [str(path) for path in state.rglob("*") if key.encode() in path.name.encode() or (path.is_file() and key.encode() in path.read_bytes())]
             require(not kept, f"The key reached {kept}")

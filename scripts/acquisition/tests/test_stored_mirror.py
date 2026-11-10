@@ -178,6 +178,7 @@ def test_the_mirror_is_built_from_the_task_environment_only_after_the_identity_c
         "HAI_STORED_INDEX": str(built["index"]),
         "EXPECTED_ACCOUNT_ID": ACCOUNT,
         "TASK_ROLE_NAME": ROLE,
+        "DATA_BUCKET_NAME": BUCKET,
         "AWS_REGION": "us-west-2",
     }
     made: list[str] = []
@@ -245,6 +246,7 @@ def environment_for(built: dict[str, Path]) -> dict[str, str]:
         "HAI_STORED_INDEX": str(built["index"]),
         "EXPECTED_ACCOUNT_ID": ACCOUNT,
         "TASK_ROLE_NAME": ROLE,
+        "DATA_BUCKET_NAME": BUCKET,
         "AWS_REGION": "us-west-2",
     }
 
@@ -411,3 +413,11 @@ def test_a_plan_input_under_an_original_folder_stops_the_build(monkeypatch: pyte
     monkeypatch.setattr(harness, "PLANNED", {"file": ("fake_plan_contract", "load_plan", None, "id")})
     with pytest.raises(CaptureError, match="original"):
         stored.build(tmp_path / "out")
+
+
+def test_the_mirror_carries_the_reconciliation_that_names_each_archive_members_dataset(tmp_path: Path) -> None:
+    stored = Stored(tmp_path / "src")
+    receipt = stored.base / stored.unit["receipt"]
+    (receipt.parent / "s3_collections_reconciliation.json").write_text('{"objects": []}')
+    built = stored.build(tmp_path / "out")
+    check((built["mirror"] / stored.unit["receipt"]).parent.joinpath("s3_collections_reconciliation.json").is_file(), "it travels beside the receipt")

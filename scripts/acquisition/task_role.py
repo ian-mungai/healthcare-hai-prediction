@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.api_keys import ApiKeyError, number_shaped
+from scripts.acquisition.bls_api_transport import QuotaPause
 from scripts.acquisition.collection_layout import RAW_ROOT
-from scripts.acquisition.s3_store import StorageError
+from scripts.acquisition.s3_store import StorageError, encoded_json
 from scripts.acquisition.stored_mirror import require_task_identity
 
 KEYS_VARIABLE = "HAI_TASK_KEYS"
@@ -24,6 +27,12 @@ BUCKET_VARIABLE = "DATA_BUCKET_NAME"
 KEY_OF_MODE = {"bls_api_v2": "bls_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key", "hud_api": "hud_api_key"}
 ORIGINAL_FOLDER = "private_original"
 CHUNK = 1024 * 1024
+# One create-once object per counted BLS request, shared by every task on the one key. The role cannot delete, so a task can never hand a request back.
+BLS_LEDGER_PREFIX = f"{RAW_ROOT}run3_ledger/bls/"
+BLS_ENTRY = re.compile(rf"{re.escape(BLS_LEDGER_PREFIX)}([0-9]{{10}})\.json")
+BLS_WINDOW = timedelta(hours=24)
+RESERVE_ATTEMPTS = 5
+CONFLICT_CODES = {"PreconditionFailed", "412", "ConditionalRequestConflict", "409"}
 ClientFactory = Callable[[str, str], Any]
 
 
@@ -46,10 +55,83 @@ def default_client(service: str, region: str) -> Any:
 class TaskKeys:
     """Reads the one key of one collector mode, after checking that the caller is the publisher task role."""
 
-    def __init__(self, mode: str, environment: Mapping[str, str], factory: ClientFactory = default_client) -> None:
+    def __init__(
+        self, mode: str, environment: Mapping[str, str], factory: ClientFactory = default_client, clock: Callable[[], datetime] = lambda: datetime.now(UTC)
+    ) -> None:
         if mode not in KEY_OF_MODE:
             raise ApiKeyError("this collector mode reads no key")
-        self.name, self.environment, self.factory = KEY_OF_MODE[mode], environment, factory
+        self.name, self.environment, self.factory, self.clock = KEY_OF_MODE[mode], environment, factory, clock
+        self.storage: TaskStorage | None = None
+
+    @property
+    def checked_by_task_identity(self) -> bool:
+        return True
+
+    @property
+    def configuration(self) -> dict[str, str]:
+        return self._storage().configuration
+
+    @property
+    def storage_policy(self) -> Mapping[str, Any]:
+        return self._storage().storage_policy
+
+    def _storage(self) -> TaskStorage:
+        if self.storage is None:
+            raise StorageError("storage", "no_task_storage")
+        return self.storage
+
+    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        return self._storage().call(service, operation, arguments)
+
+    def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+        return self._storage().call_bounded(service, operation, arguments, timeout=timeout)
+
+    def reserve_request(self, identity: str, limit: int) -> None:
+        """Store one ledger entry before a BLS request. The next number after a full listing proves this task counted every earlier entry.
+
+        Two tasks that read the same count race for one number and S3 lets one create it. The other reads again. Any failure means no request.
+        """
+        if self.name != "bls_api_key":
+            raise ValueError("Only BLS has a shared request budget")
+        try:
+            s3 = self.factory("s3", self.environment["AWS_REGION"])
+            for _attempt in range(RESERVE_ATTEMPTS):
+                if self._reserve_once(s3, identity, limit):
+                    return
+        except QuotaPause:
+            raise
+        except Exception:
+            raise QuotaPause("BLS request ledger is unavailable; no request was made") from None
+        raise QuotaPause("BLS request ledger stayed contended; no request was made")
+
+    def _reserve_once(self, s3: Any, identity: str, limit: int) -> bool:
+        named = {"Bucket": self.environment["DATA_BUCKET_NAME"], "ExpectedBucketOwner": self.environment["EXPECTED_ACCOUNT_ID"]}
+        found: list[dict] = []
+        options: dict[str, str] = {}
+        while True:
+            page = s3.list_objects_v2(**named, Prefix=BLS_LEDGER_PREFIX, **options)
+            found.extend(page.get("Contents", []))
+            if not page.get("IsTruncated"):
+                break
+            options = {"ContinuationToken": page["NextContinuationToken"]}
+        numbers = []
+        for item in found:
+            match = BLS_ENTRY.fullmatch(item["Key"])
+            if match is None:
+                raise ValueError("Unexpected ledger entry")
+            numbers.append(int(match[1]))
+        # The store's own time decides the window, so a record's text cannot move an entry out of it.
+        recent = sum(self.clock() - item["LastModified"] < BLS_WINDOW for item in found)
+        if recent >= limit:
+            raise QuotaPause("BLS rolling-24-hour request budget reached; resume after the oldest reservation expires")
+        body = encoded_json({"batch_id": identity})
+        try:
+            s3.put_object(**named, Key=f"{BLS_LEDGER_PREFIX}{max(numbers, default=0) + 1:010d}.json", Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+        except Exception as error:
+            if _error_code(error) in CONFLICT_CODES:
+                return False
+            raise
+        return True
 
     def read_api_key(self, name: str) -> str:
         """The plain text of this collector's key. Another name is refused before any AWS call."""

@@ -33,7 +33,7 @@ from tests.support import check
 
 ACCOUNT = "1" * 12
 ROLE = "example_project_job_publisher_task_dev"
-ENVIRONMENT = {"AWS_REGION": "us-west-2", "EXPECTED_ACCOUNT_ID": ACCOUNT, "TASK_ROLE_NAME": ROLE}
+ENVIRONMENT = {"AWS_REGION": "us-west-2", "EXPECTED_ACCOUNT_ID": ACCOUNT, "TASK_ROLE_NAME": ROLE, "DATA_BUCKET_NAME": "example-bucket"}
 PLANTED = {name: f"planted{name.split('_')[0].upper()}value{'0123456789' * 2}" for name in ("bls_api_key", "census_api_key", "hud_api_key")}
 KEY_OF_MODE = {"bls_api_v2": "bls_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key", "hud_api": "hud_api_key"}
 TASK_IDENTITY = {"Account": ACCOUNT, "Arn": f"arn:aws:sts::{ACCOUNT}:assumed-role/{ROLE}/session"}
@@ -55,11 +55,17 @@ class Cloud:
         self.reads: list[str] = []
 
     def factory(self, service: str, region: str) -> Any:
-        check(service in {"sts", "secretsmanager"} and region == "us-west-2", f"unexpected client {service} {region}")
+        check(service in {"sts", "secretsmanager", "s3"} and region == "us-west-2", f"unexpected client {service} {region}")
         return self
 
     def get_caller_identity(self) -> dict:
         return self.identity
+
+    def list_objects_v2(self, **_arguments: Any) -> dict:
+        return {"Contents": [], "IsTruncated": False}
+
+    def put_object(self, **_arguments: Any) -> dict:
+        return {"VersionId": "v1"}
 
     def get_secret_value(self, SecretId: str) -> dict:
         self.reads.append(SecretId)
@@ -154,8 +160,8 @@ DETAILED_BATCH = {"year": 2020, "table": sorted(census_acs_detailed_contract.UNI
 TRANSPORTS: dict[str, tuple[Any, dict, dict, bytes]] = {
     "bls_api_v2": (
         bls.request_live,
-        {"endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data/", "credential_reference": "bls_api_key"},
-        {"series_ids": ["S1"], "start_year": 2020, "end_year": 2020},
+        {"endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data/", "credential_reference": "bls_api_key", "request_limit_24h": 450},
+        {"id": "batch", "series_ids": ["S1"], "start_year": 2020, "end_year": 2020},
         b'{"status": "REQUEST_SUCCEEDED", "Results": {}}',
     ),
     "census_acs_api": (
@@ -245,7 +251,11 @@ def test_the_task_runs_a_keyed_unit_and_a_failure_with_the_key_in_its_text_leave
         raise ValueError(f"the publisher refused {key}")
 
     run = task_run(
-        tmp_path, keyed_fixture(tmp_path, mode), adapters={mode: adapter}, task_keys=partial(task_role.TaskKeys, environment=ENVIRONMENT, factory=cloud.factory)
+        tmp_path,
+        keyed_fixture(tmp_path, mode),
+        adapters={mode: adapter},
+        task_keys=partial(task_role.TaskKeys, environment=ENVIRONMENT, factory=cloud.factory),
+        task_storage=object(),
     )
     summary = harness.execute(run)
     check(used == [mode] and summary["attempted"] == 1 and summary["outcomes"] == {"blocked": 1}, f"the task ran the unit: {summary}")
@@ -259,7 +269,7 @@ def test_the_task_runs_a_keyed_unit_and_a_failure_with_the_key_in_its_text_leave
 def test_the_task_without_the_keys_flag_lists_a_keyed_unit_and_reads_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
     fixture = keyed_fixture(tmp_path, "hud_api")
-    run = task_run(tmp_path, fixture, adapters={"hud_api": lambda unit, run: pytest.fail("a keyed unit ran with the flag off")})
+    run = task_run(tmp_path, fixture, adapters={"hud_api": lambda unit, run: pytest.fail("a keyed unit ran with the flag off")}, task_storage=object())
     summary = harness.execute(run)
     check(summary["attempted"] == 0 and summary["not_attempted"]["task_keyed"] == [fixture.entries[0]["snapshot_id"]], f"the unit is named: {summary}")
 
@@ -283,13 +293,20 @@ def mirror_factory(service: str, region: str) -> Any:
     return Cloud()
 
 
-def test_the_command_line_gives_the_task_a_key_reader_only_when_the_flag_is_on(tmp_path: Path) -> None:
+def test_the_command_line_gives_the_task_its_storage_always_and_a_key_reader_only_when_the_flag_is_on(tmp_path: Path) -> None:
     off = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path), mirror_factory)
-    check(off.task_keys is None, "the keys flag is off by default")
+    check(off.task_keys is None and off.task_filtered is False, "the keys and filtered flags are off by default")
+    check(isinstance(off.task_storage, task_role.TaskStorage), "the task always stores through its storage client")
     on = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path, HAI_TASK_KEYS="1"), mirror_factory)
-    check(on.task_keys is not None and isinstance(on.client("hud_api"), task_role.TaskKeys), "the flag gives the task a key reader")
+    keyed = on.client("hud_api")
+    check(
+        on.task_keys is not None and isinstance(keyed, task_role.TaskKeys) and keyed.storage is on.task_storage,
+        "the flag gives the task a key reader on its storage client",
+    )
+    filtered = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path, HAI_TASK_FILTERED="1"), mirror_factory)
+    check(filtered.task_filtered is True, "the flag opens the filtered units")
     mac = harness.run_from(cast(Any, Arguments), {"HAI_TASK_KEYS": "1"}, mirror_factory)
-    check(mac.task_keys is None, "without a mirror the flag means nothing")
+    check(mac.task_keys is None and mac.task_storage is None, "without a mirror the flag means nothing")
 
 
 @pytest.mark.parametrize("channel", ["summary", "stdout", "stderr", "log", "error"])

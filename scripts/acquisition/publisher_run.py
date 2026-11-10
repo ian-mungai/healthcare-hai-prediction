@@ -27,6 +27,8 @@ from scripts.acquisition.collection_layout import RAW_ROOT
 REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
 SAVED = re.compile(r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json)")
 INPUTS_NAME = "publisher_inputs.tar.gz"
+SAVE_EVERY = 25
+PRIOR_KEYS = {"key", "version_id", "sha256"}
 WORKSPACE = "/workspace"
 MANIFEST_FILE = "publisher_manifest.json"
 ClientFactory = Callable[[str, str], Any]
@@ -80,16 +82,19 @@ def install_plan_inputs(mirror: Path, code_root: Path) -> None:
     for name in listed:
         target = code_root / name
         target.parent.mkdir(parents=True, exist_ok=True)
-        if not target.exists():
-            target.write_bytes((mirror / name).read_bytes())
+        if target.exists():
+            if target.is_symlink() or hashlib.sha256(target.read_bytes()).hexdigest() != listed[name]:
+                raise PublisherError("A plan input already in the code root differs from its digest.")
+            continue
+        target.write_bytes((mirror / name).read_bytes())
 
 
 def state_prefix(environment: Mapping[str, str]) -> str:
     return f"{RAW_ROOT}run3_state/{environment['PUBLISHER_QUEUE_SHA256']}/"
 
 
-def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str:
-    """Create a new state object from the records of the state root. Only the names the pattern allows enter it."""
+def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> dict[str, str]:
+    """Create a new state object from the records of the state root and name it for the owner's approval. Only the names the pattern allows enter it."""
     buffer = io.BytesIO()
     with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
         for path in sorted(state_root.rglob("*")):
@@ -97,9 +102,10 @@ def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str
             if path.is_file() and not path.is_symlink() and SAVED.fullmatch(relative):
                 archive.add(path, arcname=relative, recursive=False)
     body = buffer.getvalue()
+    digest = hashlib.sha256(body).hexdigest()
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    key = f"{state_prefix(environment)}{stamp}_{hashlib.sha256(body).hexdigest()}.tar.gz"
-    s3.put_object(
+    key = f"{state_prefix(environment)}{stamp}_{digest}.tar.gz"
+    reply = s3.put_object(
         Bucket=environment["DATA_BUCKET_NAME"],
         ExpectedBucketOwner=environment["EXPECTED_ACCOUNT_ID"],
         Key=key,
@@ -107,31 +113,52 @@ def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str
         IfNoneMatch="*",
         ServerSideEncryption="AES256",
     )
-    return key
+    return {"key": key, "version_id": str(reply.get("VersionId", "")), "sha256": digest}
+
+
+def approved_prior(environment: Mapping[str, str]) -> dict[str, str] | None:
+    """The one prior state the broker bound from the request, or None for a first task. The task never lists the prefix, because any task can write there."""
+    text = environment.get("PUBLISHER_PRIOR_STATE", "")
+    if not text:
+        return None
+    try:
+        reference = json.loads(text)
+    except ValueError:
+        raise PublisherError("The prior state reference is not usable.") from None
+    if (
+        not isinstance(reference, dict)
+        or set(reference) != PRIOR_KEYS
+        or not all(isinstance(value, str) and value for value in reference.values())
+        or not str(reference["key"]).startswith(state_prefix(environment))
+        or not re.fullmatch(r"[a-f0-9]{64}", reference["sha256"])
+    ):
+        raise PublisherError("The prior state reference is not usable.")
+    return reference
 
 
 def restore_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> str | None:
-    """Unpack the latest saved state of this queue into an empty state root. A first task finds none and starts empty."""
-    bucket, owner = environment["DATA_BUCKET_NAME"], environment["EXPECTED_ACCOUNT_ID"]
-    keys: list[str] = []
-    options: dict[str, str] = {}
-    while True:
-        page = s3.list_objects_v2(Bucket=bucket, ExpectedBucketOwner=owner, Prefix=state_prefix(environment), **options)
-        keys.extend(item["Key"] for item in page.get("Contents", []))
-        if not page.get("IsTruncated"):
-            break
-        options = {"ContinuationToken": page["NextContinuationToken"]}
-    if not keys:
+    """Unpack exactly the approved prior state into an empty state root, or nothing. A digest that differs or a member that is not a record stops the job."""
+    reference = approved_prior(environment)
+    if reference is None:
         return None
-    latest = max(keys)
-    body = s3.get_object(Bucket=bucket, ExpectedBucketOwner=owner, Key=latest)["Body"].read()
-    state_root.mkdir(parents=True, mode=0o700, exist_ok=True)
+    reply = s3.get_object(
+        Bucket=environment["DATA_BUCKET_NAME"], ExpectedBucketOwner=environment["EXPECTED_ACCOUNT_ID"], Key=reference["key"], VersionId=reference["version_id"]
+    )
+    body = reply["Body"].read()
+    if hashlib.sha256(body).hexdigest() != reference["sha256"]:
+        raise PublisherError("The prior state differs from its approved digest.")
     with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as archive:
-        names = archive.getnames()
-        if not all(SAVED.fullmatch(name) for name in names):
+        if not all(member.isfile() and SAVED.fullmatch(member.name) for member in archive.getmembers()):
             raise PublisherError("The saved state holds a file that is not a record.")
+        state_root.mkdir(parents=True, mode=0o700, exist_ok=True)
         archive.extractall(state_root, filter="data")
-    return latest
+    return reference["key"]
+
+
+def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
+    """The unpacked queue must be the one the broker bound, because that digest names the state the job restores and saves."""
+    if hashlib.sha256(queue.read_bytes()).hexdigest() != environment["PUBLISHER_QUEUE_SHA256"]:
+        raise PublisherError("The staged queue differs from the digest the broker bound.")
 
 
 def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client) -> None:
@@ -144,12 +171,14 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     stored_mirror.require_task_identity(factory("sts", region), env["EXPECTED_ACCOUNT_ID"], env["TASK_ROLE_NAME"])
     s3 = factory("s3", region)
     inputs = fetch_inputs(s3, env)
+    queue = queue_of(inputs)
+    require_bound_queue(queue, env)
     install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
     state_parent = workspace_of(env) / "state"
     state_root = state_parent / "run"
     restore_state(s3, state_root, env)
     arguments = argparse.Namespace(
-        queue=queue_of(inputs),
+        queue=queue,
         state_root=state_root,
         state_parent=state_parent,
         manual_folder=None,
@@ -164,11 +193,19 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
         sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")
         sys.stdout.flush()
 
+    finished = [0]
+
+    def progress(item: dict) -> None:
+        emit(item)
+        finished[0] += 1
+        if finished[0] % SAVE_EVERY == 0:
+            emit({"state": save_state(s3, state_root, env)})
+
     try:
         for source in filter(None, env.get("PUBLISHER_RESUME_SOURCES", "").split(",")):
             harness.load_queue(run)
             harness.resume_source(run, source, "resumed by the staged publisher request")
-        emit(harness.execute(run, allow_network=True, log=emit))
+        emit(harness.execute(run, allow_network=True, log=progress))
     finally:
         emit({"state": save_state(s3, state_root, env)})
 

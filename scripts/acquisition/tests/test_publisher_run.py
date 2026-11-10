@@ -76,6 +76,7 @@ def environment(workspace: Path, digest: str, **extra: str) -> dict[str, str]:
         "DATA_BUCKET_NAME": BUCKET,
         "PUBLISHER_INPUTS_SHA256": digest,
         "PUBLISHER_QUEUE_SHA256": QUEUE_SHA256,
+        "PUBLISHER_PRIOR_STATE": "",
         "PUBLISHER_WORKSPACE": str(workspace),
     } | extra
 
@@ -110,24 +111,30 @@ def fill_state(root: Path, names: list[str]) -> None:
     (root / "private/diagnostics/unit__01.json").write_text(names[0])
 
 
-def test_the_saved_state_holds_only_the_records_and_a_new_task_restores_it(tmp_path: Path) -> None:
+def saved_reference(cloud: Cloud, key: str) -> str:
+    body = cloud.objects[key]
+    return json.dumps({"key": key, "version_id": "v1", "sha256": hashlib.sha256(body).hexdigest()})
+
+
+def test_the_saved_state_holds_only_the_records_and_a_new_task_restores_the_approved_one(tmp_path: Path) -> None:
     secret = next(iter(PLANTED.values()))
     root = tmp_path / "state"
     fill_state(root, [secret])
     cloud = Cloud({})
     environ = environment(tmp_path, "0" * 64)
-    key = publisher_run.save_state(cloud, root, environ)
+    saved = publisher_run.save_state(cloud, root, environ)
+    key = saved["key"]
     check(key.startswith(f"raw/run3_state/{QUEUE_SHA256}/") and cloud.puts == [key], f"the state goes under raw/: {key}")
-    with tarfile.open(fileobj=io.BytesIO(cloud.objects[key]), mode="r:gz") as saved:
-        names = sorted(saved.getnames())
-        bodies = b"".join(reader.read() for member in saved.getmembers() if (reader := saved.extractfile(member)) is not None)
+    check(saved["sha256"] == hashlib.sha256(cloud.objects[key]).hexdigest() and saved["version_id"] == "v1", "the save names what the owner approves next")
+    with tarfile.open(fileobj=io.BytesIO(cloud.objects[key]), mode="r:gz") as stored:
+        names = sorted(stored.getnames())
+        bodies = b"".join(reader.read() for member in stored.getmembers() if (reader := stored.extractfile(member)) is not None)
     check(names == ["collectors/bls_api_v2/requests/000001.json", "outcomes/unit.json", "run.json"], f"only the records are saved: {names}")
     check(secret.encode() not in bodies, "nothing else reached the saved state")
     fresh = tmp_path / "next"
-    check(publisher_run.restore_state(cloud, fresh, environ) == key, "a new task finds the latest state")
+    environ |= {"PUBLISHER_PRIOR_STATE": saved_reference(cloud, key)}
+    check(publisher_run.restore_state(cloud, fresh, environ) == key, "a new task restores the approved state")
     check(json.loads((fresh / "outcomes/unit.json").read_text())["outcome"] == "exact_match", "the outcomes come back")
-    check(len(list((fresh / "collectors/bls_api_v2/requests").glob("*.json"))) == 1, "the BLS ledger comes back, so the request budget holds across tasks")
-    check(publisher_run.restore_state(Cloud({}), tmp_path / "empty", environ) is None, "a first task starts empty")
 
 
 def test_a_second_save_never_replaces_the_first(tmp_path: Path) -> None:
@@ -135,16 +142,16 @@ def test_a_second_save_never_replaces_the_first(tmp_path: Path) -> None:
     fill_state(root, ["x"])
     cloud = Cloud({})
     environ = environment(tmp_path, "0" * 64)
-    first = publisher_run.save_state(cloud, root, environ)
+    first = publisher_run.save_state(cloud, root, environ)["key"]
     (root / "outcomes/other.json").write_text("{}")
-    second = publisher_run.save_state(cloud, root, environ)
+    second = publisher_run.save_state(cloud, root, environ)["key"]
     check(first != second and first in cloud.objects and second in cloud.objects, "each save creates its own object")
-    check(publisher_run.restore_state(cloud, tmp_path / "next", environ) == second, "the latest save wins")
 
 
 def test_the_state_is_saved_even_when_the_harness_stops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     stage, digest = staged()
     cloud = Cloud(stage)
+    bound = hashlib.sha256(b"{}").hexdigest()
 
     def stops(*_args: Any, **_kwargs: Any) -> dict:
         raise ValueError("stopped")
@@ -156,7 +163,7 @@ def test_the_state_is_saved_even_when_the_harness_stops(monkeypatch: pytest.Monk
     monkeypatch.setattr(harness, "run_from", saved_run)
     monkeypatch.setattr(harness, "execute", stops)
     with pytest.raises(ValueError, match="stopped"):
-        publisher_run.main(environment(tmp_path, digest), cloud.factory)
+        publisher_run.main(environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound}, cloud.factory)
     check(any(key.startswith("raw/run3_state/") for key in cloud.puts), "the records of a stopped run are kept for the next task")
 
 
@@ -215,6 +222,7 @@ def test_the_stage_is_deterministic_and_the_request_binds_the_archive_and_queue(
             "inputs_sha256": hashlib.sha256(body).hexdigest(),
             "queue_sha256": hashlib.sha256(b'{"run": 3, "queue": []}').hexdigest(),
             "resume_sources": ["BLS"],
+            "prior_state": None,
         },
         str(request),
     )
@@ -298,3 +306,41 @@ def test_a_mirror_without_a_plan_list_installs_nothing(tmp_path: Path) -> None:
     (tmp_path / "mirror").mkdir()
     publisher_run.install_plan_inputs(tmp_path / "mirror", code)
     check(list(code.iterdir()) == [], "nothing is installed")
+
+
+def test_the_stage_names_the_approved_prior_state(tmp_path: Path) -> None:
+    files = stage_files(tmp_path)
+    reference = {"key": "raw/run3_state/q/state.tar.gz", "version_id": "v1", "sha256": "a" * 64}
+    folder = stage_publisher.build(
+        files["mirror_output"],
+        "data/q/queue.json",
+        files["removal_plan"],
+        files["removal_confirmation"],
+        files["hosts"],
+        files["hosts_approval"],
+        tmp_path / "stage",
+        (),
+        reference,
+    )
+    check(json.loads((folder / "publisher_request.json").read_text())["prior_state"] == reference, "the request names it")
+
+
+def test_the_job_saves_its_state_as_it_goes_so_a_kill_loses_little(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stage, digest = staged()
+    cloud = Cloud(stage)
+    environ = environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(b"{}").hexdigest()}
+
+    def saved_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
+        fill_state(args.state_root, ["x"])
+        return harness.Run(args.queue, args.state_root)
+
+    def execute(_run: Any, allow_network: bool, log: Any) -> dict:
+        for _ in range(publisher_run.SAVE_EVERY * 2):
+            log({"snapshot_id": "u", "source_id": "s", "outcome": "exact_match"})
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(harness, "run_from", saved_run)
+    monkeypatch.setattr(harness, "execute", execute)
+    with pytest.raises(KeyboardInterrupt):
+        publisher_run.main(environ, cloud.factory)
+    check(len(cloud.puts) >= 3, f"two saves ran during the work and one at the end: {cloud.puts}")
