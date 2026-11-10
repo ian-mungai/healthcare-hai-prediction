@@ -388,6 +388,8 @@ FEATURES_RUN_PREFIX = "lakehouse/layer_runs/features/example_run/"
 # The files of a features run beside the evidence list that every layer has: what the owner's report reads and what shows the build and the checks passed.
 FEATURES_RUN_FILES = (
     "gold_pins.json",
+    "base_pins.json",
+    "online_hold.json",
     "features_snapshot.json",
     "feast_apply.json",
     "feast_materialize.json",
@@ -423,6 +425,8 @@ NOT_UPLOADED = {
     "run_results.json": "the gold dbt copy to metadata/dbt",
     "silver_pins.json": "gold layer",
     "gold_pins.json": "features layer",
+    "base_pins.json": "features layer (the pin of a model set run)",
+    "online_hold.json": "features layer (the held online load of a model set run)",
     "features_snapshot.json": "features layer",
     "feast_apply.json": "features layer",
     "feast_materialize.json": "features layer",
