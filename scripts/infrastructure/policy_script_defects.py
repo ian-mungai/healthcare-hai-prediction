@@ -19,7 +19,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 COPIED = (
     "infra/iam/scripts/render_policy.py",
     "infra/iam/scripts/manage_policies.py",
-    "infra/iam/scripts/export_policies.py",
     "scripts/process.py",
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/secret_store.py",
@@ -32,8 +31,8 @@ COPIED = (
     "tests/support.py",
     "pyproject.toml",
 )
-MANAGE, RENDER, EXPORT = COPIED[1], COPIED[0], COPIED[2]
-SECRET_STORE, VARIABLES = COPIED[5], COPIED[6]
+MANAGE, RENDER = COPIED[1], COPIED[0]
+SECRET_STORE, VARIABLES = COPIED[4], COPIED[5]
 CONFIRMATION_CHECK = 'if arguments.action == "apply" and environment.get(CONFIRMATION_VARIABLE) != CONFIRMATION:'
 CONFIRMATION_REFUSAL = 'raise ConfigurationError(f"Set {CONFIRMATION_VARIABLE}={CONFIRMATION} to apply; nothing was read or changed.")'
 REFUSE_UNCONFIRMED = "test_apply_refuses_without_the_confirmation_word_before_any_aws_call"
@@ -287,8 +286,22 @@ DEFECTS = (
         RENDERER_REFUSALS,
     ),
     ScriptDefect(
+        "the export skips a policy missing from IAM",
+        MANAGE,
+        "        if name not in existing:\n",
+        "        if False:\n",
+        "test_export_writes_one_template_per_service_and_stops_on_a_missing_policy",
+    ),
+    ScriptDefect(
+        "export runs the plan instead of exporting",
+        MANAGE,
+        '    if arguments.action == "export":\n',
+        '    if arguments.action == "export" and False:\n',
+        "test_export_writes_one_template_per_service_and_stops_on_a_missing_policy",
+    ),
+    ScriptDefect(
         "the exporter writes the account ID",
-        EXPORT,
+        MANAGE,
         'for name in ("DATA_BUCKET_NAME", "AWS_ACCOUNT_ID", "AWS_REGION", "PROJECT_NAME"):',
         'for name in ("DATA_BUCKET_NAME", "AWS_REGION", "PROJECT_NAME"):',
         "test_the_exporter_replaces_deployment_values_with_placeholders",

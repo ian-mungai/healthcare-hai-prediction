@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError
 
-from infra.iam.scripts import export_policies, manage_policies, render_policy
+from infra.iam.scripts import manage_policies, render_policy
 from scripts.infrastructure.render_project_config import ConfigurationError
 from scripts.process import run_command
 from tests.support import check
@@ -574,7 +574,7 @@ def test_the_exporter_replaces_deployment_values_with_placeholders() -> None:
     resources = [f"arn:aws:ecs:eu-west-1:{ACCOUNT}:cluster/{PROJECT}_cluster_dev", "arn:aws:s3:::example-project-ci-bucket/lakehouse/*"]
     resources.append(f"arn:aws:ssm:eu-west-1:{ACCOUNT}:session/${{aws:username}}-*")
     document = {"Resource": resources, "Condition": {"StringEquals": {"aws:RequestedRegion": "eu-west-1", "aws:RequestTag/Project": PROJECT}}}
-    exported = json.dumps(export_policies.sanitize(document, values))
+    exported = json.dumps(manage_policies.sanitize(document, values))
     for private in (ACCOUNT, "eu-west-1", PROJECT, "example-project-ci-bucket", "_dev"):
         check(private not in exported, f"{private} must not survive the export")
     check(
@@ -583,18 +583,35 @@ def test_the_exporter_replaces_deployment_values_with_placeholders() -> None:
     )
 
 
-def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(env_file: Path, tmp_path: Path) -> None:
+def export(env_file: Path, iam: FakeIam, output: Path, admin: str = "example_administrator") -> int:
+    """The export command, as the owner runs it: no confirmation word and no digest."""
+    namespace = argparse.Namespace(action="export", admin_profile=admin, env_file=env_file, output_directory=output, policies=None, digest=None)
+    return manage_policies.run(namespace, {}, FakeSession(iam))
+
+
+def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(env_file: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     plan_and_apply(env_file, iam)
-    exported = export_policies.run(
-        argparse.Namespace(admin_profile="example_administrator", env_file=env_file, output_directory=tmp_path / "out"), FakeSession(iam)
-    )
+    iam.calls.clear()
+    capsys.readouterr()
+    check(export(env_file, iam, tmp_path / "out") == 0, "the export must succeed")
+    exported = sorted((tmp_path / "out").glob("*.json"))
     check(len(exported) == 14 and all(path.read_text(encoding="utf-8").endswith("}\n") for path in exported), "one template per service must be written")
+    check(sorted(path.name for path in exported) == sorted(path.name for path in (REPO_ROOT / "infra/iam/policies").glob("*_policy.json")), "names must match")
+    check(capsys.readouterr().out.count("Exported ") == 14, "each exported file must be named")
     check(ACCOUNT not in "".join(path.read_text(encoding="utf-8") for path in exported), "the account must not appear in an exported template")
+    check(iam.writes() == [], f"an export must not write to IAM: {iam.writes()}")
+    with pytest.raises(ConfigurationError):
+        export(env_file, iam, tmp_path / "project", admin=USER)
     del iam.policies[f"{PROJECT}_ssm_policy"]
     with pytest.raises(RuntimeError) as error:
-        export_policies.run(argparse.Namespace(admin_profile="example_administrator", env_file=env_file, output_directory=tmp_path / "again"), FakeSession(iam))
+        export(env_file, iam, tmp_path / "again")
     check(f"{PROJECT}_ssm_policy" in str(error.value), "the missing policy must be named")
+
+
+def test_export_is_a_command_of_manage_policies(env_file: Path) -> None:
+    shown = run_cli("infra.iam.scripts.manage_policies", env_file, "export", "--help")
+    check(shown.returncode == 0 and "--output-directory" in shown.stdout and "--digest" not in shown.stdout, f"export must be a command: {shown.stderr}")
 
 
 def test_plan_prints_one_digest_and_apply_with_it_applies_the_plan(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:

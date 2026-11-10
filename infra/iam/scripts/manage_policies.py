@@ -1,4 +1,4 @@
-"""Plan or apply the per-service IAM policies of the project profile with the administrator profile.
+"""Plan, apply or export the per-service IAM policies of the project profile with the administrator profile.
 
 ``plan`` is the dry run: it renders the templates, reads IAM and prints what ``apply`` would do and one digest of it, and changes nothing. The digest
 covers the steps, the rendered documents and the live policy versions they were compared with. ``apply`` needs
@@ -7,6 +7,10 @@ call. It then plans again and changes nothing unless the new digest matches, so 
 
 Policies are customer-managed, one per service. They attach to two IAM groups (the managed policy quota per user is 10), and the project user joins
 both. The retired grouped policies are detached and deleted.
+
+``export`` is read-only: it writes the live policies as templates with placeholders, so drift from the tracked templates shows in a comparison. It
+replaces the account, region, bucket, project and environment values with ``${AWS_ACCOUNT_ID}``, ``${AWS_REGION}``, ``${DATA_BUCKET_NAME}``,
+``${PROJECT_NAME}`` and ``${ENVIRONMENT}``. Export to a scratch directory and compare.
 """
 
 from __future__ import annotations
@@ -25,7 +29,7 @@ from typing import Any
 import boto3
 from botocore.exceptions import ClientError
 
-from infra.iam.scripts.render_policy import PolicyRenderError, load_documents, placeholder_values
+from infra.iam.scripts.render_policy import POLICIES_DIRECTORY, TEMPLATE_PREFIX, PolicyRenderError, load_documents, placeholder_values
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 
 CONFIRMATION = "apply-healthcare-hai-prediction-policies"
@@ -332,6 +336,37 @@ def apply_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Ma
     return results
 
 
+def sanitize_string(value: str, values: Mapping[str, str]) -> str:
+    """Replace the deployment values in one string with their placeholders, longest and most specific first."""
+    for name in ("DATA_BUCKET_NAME", "AWS_ACCOUNT_ID", "AWS_REGION", "PROJECT_NAME"):
+        value = value.replace(values[name], f"${{{name}}}")
+    return re.sub(rf"(?<=[_}}])({re.escape(values['ENVIRONMENT'])})(?![A-Za-z0-9])", "${ENVIRONMENT}", value)
+
+
+def sanitize(value: Any, values: Mapping[str, str]) -> Any:
+    if isinstance(value, dict):
+        return {key: sanitize(item, values) for key, item in value.items()}
+    if isinstance(value, list):
+        return [sanitize(item, values) for item in value]
+    if isinstance(value, str):
+        return sanitize_string(value, values)
+    return value
+
+
+def export_templates(iam: Any, names: Names, values: Mapping[str, str], output: Path) -> list[Path]:
+    """Write one template per service from the live default versions; a missing policy stops the export. Read-only against IAM."""
+    existing = local_policies(iam)
+    written = []
+    for service in sorted(service for services in GROUP_SERVICES.values() for service in services):
+        name = names.policy(service)
+        if name not in existing:
+            raise RuntimeError(f"IAM holds no customer-managed policy named {name}")
+        target = output / f"{TEMPLATE_PREFIX}{service}_policy.json"
+        target.write_text(json.dumps(sanitize(stored_document(iam, existing[name]), values), indent=2) + "\n", encoding="utf-8")
+        written.append(target)
+    return written
+
+
 def connect(session_factory: SessionFactory, admin_profile: str, region: str, account: str, names: Names) -> tuple[Any, Any]:
     """The administrator's IAM client, after checking the profile is in the configured account and is not the project user."""
     session = session_factory(profile_name=admin_profile, region_name=region)
@@ -344,7 +379,7 @@ def connect(session_factory: SessionFactory, admin_profile: str, region: str, ac
 
 
 def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_factory: SessionFactory = boto3.Session) -> int:
-    """Plan or apply. The confirmation word and the form of the digest are checked before any AWS client exists."""
+    """Plan, apply or export. The confirmation word and the form of the digest are checked before any AWS client exists."""
     storage, _ = load_configuration(arguments.env_file)
     if arguments.admin_profile == storage["aws_profile"] or not arguments.admin_profile.strip():
         raise ConfigurationError("Pass an administrator profile that is not the project profile.")
@@ -353,6 +388,12 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
     if arguments.action == "apply" and not DIGEST_PATTERN.fullmatch(arguments.digest or ""):
         raise ConfigurationError("Pass --digest with the 64-character digest that the reviewed plan printed; nothing was read or changed.")
     names = Names(storage["project_name"], storage["environment"])
+    if arguments.action == "export":
+        iam, _ = connect(session_factory, arguments.admin_profile, storage["aws_region"], storage["expected_account_id"], names)
+        arguments.output_directory.mkdir(parents=True, exist_ok=True)
+        for path in export_templates(iam, names, placeholder_values(storage), arguments.output_directory):
+            sys.stdout.write(f"Exported {path.name}\n")
+        return 0
     selected = set(arguments.policies) if arguments.policies else None
     rendered = load_documents(placeholder_values(storage), selected)
     documents = {names.policy(service): document for service, document in rendered.items()}
@@ -387,15 +428,19 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
 
 
 def main() -> None:
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--admin-profile", required=True, help="The administrator AWS profile; it is never read from .env.")
-    common.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
+    profile = argparse.ArgumentParser(add_help=False)
+    profile.add_argument("--admin-profile", required=True, help="The administrator AWS profile; it is never read from .env.")
+    profile.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
+    common = argparse.ArgumentParser(add_help=False, parents=[profile])
     common.add_argument("--policy", action="append", dest="policies", help="Limit the run to one service, for example sns. Repeat as needed.")
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="action", required=True)
     commands.add_parser("plan", parents=[common], help="Print the steps and their digest; changes nothing.").set_defaults(digest=None)
     apply = commands.add_parser("apply", parents=[common], help="Plan again and run the steps if the digest matches the reviewed plan.")
     apply.add_argument("--digest", required=True, help="The digest that the reviewed plan printed; apply changes nothing unless the new plan has it.")
+    export = commands.add_parser("export", parents=[profile], help="Write the live policies as templates with placeholders; read-only.")
+    export.add_argument("--output-directory", type=Path, default=POLICIES_DIRECTORY, help="Where to write the templates; use a scratch directory to compare.")
+    export.set_defaults(policies=None, digest=None)
     arguments = parser.parse_args()
     try:
         raise SystemExit(run(arguments, os.environ))
