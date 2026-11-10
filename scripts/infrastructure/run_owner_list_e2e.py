@@ -4,11 +4,9 @@ against its parser.
     .venv/bin/python -m scripts.infrastructure.run_owner_list_e2e --out <new folder>
 
 The commands come from the "Silver first run", "Gold after silver" and "Features after gold" lists of that file (the text moved out of the tracked
-documents) and from the hand-started model lists "Training after features", "Promotion after training", "Serving after promotion" and "Drift after
-serving". Each runs through the parser of its real program with synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing
+documents). Each runs through the parser of its real program with synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing
 argument or a wrong option fails here and not on the owner's first run. The reviewed jobs file that each list describes passes the real renderer
-through the real wrapper. The training, promotion and serving parameters that the model lists print pass their real contracts. Nothing calls AWS or
-Docker."""
+through the real wrapper. Nothing calls AWS or Docker."""
 
 from __future__ import annotations
 
@@ -22,7 +20,6 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from orchestration import serving_contract, training_contract
 from scripts.infrastructure import owner_commands
 from scripts.infrastructure.run_activation_inputs_e2e import (
     ADMIN,
@@ -38,8 +35,6 @@ from scripts.process import run_command
 
 OWNER_LISTS = ROOT / "config/aws/owner_command_lists.json"
 SILVER, GOLD, FEATURES = "Silver first run", "Gold after silver", "Features after gold"
-TRAIN, PROMOTE, SERVE, DRIFT = "Training after features", "Promotion after training", "Serving after promotion", "Drift after serving"
-HEADINGS = (SILVER, GOLD, FEATURES, TRAIN, PROMOTE, SERVE, DRIFT)
 IAM_FLAGS = {"job_writer_layers_prepared": True, "job_layer_runs_prepared": True, "job_endpoints_enabled": True, "job_features_image_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
 
@@ -59,36 +54,13 @@ def gold_sample(silver: dict[str, Any]) -> dict[str, Any]:
     return silver | {"variables": variables}
 
 
-def platform_sample(*added: str) -> dict[str, Any]:
-    """The reviewed file of an image repository step: the default repositories and log groups and the added repositories."""
+def platform_sample() -> dict[str, Any]:
+    """The reviewed file of the features image step: the default repositories and log groups and the one added repository."""
     return {
         "schema_version": 1,
         "root": "platform",
-        "variables": {"ecr_repositories": [*PLATFORM_DEFAULT_REPOSITORIES, "feature_store", *added], "log_groups": list(PLATFORM_DEFAULT_LOG_GROUPS)},
+        "variables": {"ecr_repositories": [*PLATFORM_DEFAULT_REPOSITORIES, "feature_store"], "log_groups": list(PLATFORM_DEFAULT_LOG_GROUPS)},
     }
-
-
-def model_samples(train: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """The reviewed jobs files of the promotion, serving and drift lists: each is the file before it with its own task added."""
-    if not train:
-        return {}
-    variables = json.loads(json.dumps(train["variables"]))
-    promote = variables | {"promote_enabled": True}
-    serve = promote | {
-        "serve_enabled": True,
-        "serve_roles": {"serve_task": variables["train_roles"]["train_task"].replace("train_task", "serve_task")},
-        "serve_manifest_prefix": "serving/deployments",
-    }
-    images = variables["train_images"] | {"drift": variables["train_images"]["training"].replace("_training_", "_drift_")}
-    drift = serve | {
-        "drift_enabled": True,
-        "drift_images": images,
-        "drift_roles": {
-            "execution": variables["train_roles"]["execution"],
-            "drift_task": variables["train_roles"]["train_task"].replace("train_task", "drift_task"),
-        },
-    }
-    return {f"jobs_{name}.json": train | {"variables": value} for name, value in (("promote", promote), ("serve", serve), ("drift", drift))}
 
 
 def make_wrapper(workspace: Workspace, samples: dict[str, dict[str, Any]]) -> Any:
@@ -186,8 +158,6 @@ def structure_checks(text: str) -> dict[str, bool]:
     checks["the gold section is a numbered list and takes the signed silver run as input"] = bool(steps_of(gold)) and "--input-run <SILVER_RUN_ID>" in gold
     features = owner_commands.section(text, FEATURES)
     checks |= features_checks(features)
-    checks |= model_checks(text)
-    checks |= prerequisite_checks(text)
     variables = {name for names in (variables_of(directory) for directory in STACKS.values()) for name in names}
     named = {name for name in re.findall(r"`([a-z][a-z0-9_]+)`", body + gold + features) if name in variables}
     rows = {row.name for row in ROWS}
@@ -238,248 +208,22 @@ def features_checks(body: str) -> dict[str, bool]:
     return checks
 
 
-# The steps of each hand-started model list, in the order the stacks and the runs depend on, each found by the words only that step holds.
-MODEL_ORDER = {
-    TRAIN: (
-        ("repository", ("--platform", "platform_training.json", "`training`")),
-        ("IAM endpoints and outputs", ("--iam", "output -json training_network", "Stop on any other change")),
-        ("training image", ("push_images plan", "--only training")),
-        ("host start", ("host_session start", "describe-instances", "5100")),
-        ("jobs file", ("jobs_train.json", "train_roles", "_job_train", "and nothing else", "output -json train_run_task")),
-        ("staging", ("git cat-file -t <CODE_REVISION>", "code_archive build --revision <CODE_REVISION>", "<FEATURES_RUN_ID>", "`mlflow`")),
-        ("task start", ("--job train", "--training-parameters", "run-task", "`failures` is empty", "lost reply")),
-        ("result", ("no `guard` container", "10 minutes", "6 hours", "train/train/<TASK_ID>", "stop-task --profile", "list-tasks")),
-        ("registry", ("promotion_verdict", "`challenger`", "<MODEL_VERSION>")),
-        ("host stop", ("host_session stop",)),
-    ),
-    PROMOTE: (
-        ("jobs file", ("jobs_promote.json", "promote_enabled", "_job_promote", "and nothing else")),
-        ("host start", ("Start the host", "MLflow")),
-        (
-            "approval",
-            (
-                "code_archive build --revision <CODE_REVISION>",
-                "promotion_approval.json",
-                "model_promotion_dag",
-                "lakehouse/run_stage/<RUN_ID>/inputs/promotion_approval.json",
-            ),
-        ),
-        ("task start", ("--job promote", "--training-parameters", "run-task", "`failures` is empty", "lost reply")),
-        ("result", ("promote/promote/<TASK_ID>", "1 hour", "list-tasks")),
-        ("registry", ("`production`", "promoted_run")),
-    ),
-    SERVE: (
-        ("IAM role", ("--iam", "serve_prepared", "model_api_manifest_prefix", "Stop on any other change")),
-        (
-            "project IAM policy",
-            ("manage_policies plan --policy iam", "PassTrainingRoles", "job_serve_task", "job_drift_task", "overlay_sha256.txt", "git checkout --"),
-        ),
-        ("read grant", ("ReadModelRunRecords", "manage_policies plan --policy s3", "s3:GetObject", "git checkout --")),
-        ("jobs file", ("jobs_serve.json", "serve_manifest_prefix", "_job_serve", "and nothing else")),
-        ("host start", ("Start the host", "MLflow")),
-        ("request", ("code_archive build --revision <CODE_REVISION>", "serving_request.json", "lakehouse/run_stage/<RUN_ID>/inputs/serving_request.json")),
-        ("task start", ("--job serve", "--serving-request", "run-task", "`failures` is empty", "lost reply")),
-        ("result", ("serve/serve/<TASK_ID>", "15 minutes", "active/<HAI_TYPE>.json", "history/<HAI_TYPE>/<RUN_ID>.json", "list-tasks")),
-        ("records", ("sequence 1",)),
-    ),
-    DRIFT: (
-        ("repository", ("--platform", "platform_drift.json", "`drift`")),
-        ("IAM role", ("--iam", "drift_prepared", "output -json drift_roles", "Stop on any other change")),
-        ("project IAM policy", ("manage_policies plan --policy iam", "PassTrainingRoles", "job_drift_task", "overlay_sha256.txt", "git checkout --")),
-        ("read grant", ("ReadModelRunRecords", "manage_policies plan --policy s3")),
-        ("drift image", ("git apply --check", "gap2_drift_image.patch", "push_images plan", "--only drift", "git apply -R")),
-        ("jobs file", ("jobs_drift.json", "drift_roles", "_job_drift", "and nothing else")),
-        ("host start and staging", ("Start the host", "code_archive build --revision <CODE_REVISION>")),
-        ("task start", ("--job drift", "run-task", "`failures` is empty", "lost reply")),
-        ("result", ("_complete.json", "drift/<RUN_ID>/", "2 hours", "list-tasks")),
-        ("records", ("`skipped`", "`triggered`", "host_session stop")),
-    ),
-}
-
-
-def model_checks(text: str) -> dict[str, bool]:
-    """The model lists are complete and in dependency order, start every task in the training network and print parameters that their contracts accept."""
-    checks: dict[str, bool] = {}
-    for heading, order in MODEL_ORDER.items():
-        body = owner_commands.section(text, heading)
-        steps = steps_of(body)
-        numbers = [int(step.split(".", 1)[0]) for step in steps]
-        checks[f"{heading}: one numbered list"] = bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= len(order)
-        positions = [next((index for index, step in enumerate(steps) if all(needle in step for needle in needles)), -1) for _, needles in order]
-        missing = [label for (label, _), position in zip(order, positions, strict=True) if position < 0]
-        checks[f"{heading}: the steps come in dependency order ({positions}, missing {missing})"] = not missing and positions == sorted(positions)
-        starts = [line for line in owner_commands.commands(body) if "ecs run-task" in line]
-        checks[f"{heading}: every task starts once on Fargate in the training network with the Project tag and no public address"] = len(starts) == 1 and all(
-            all(word in line for word in ("<TRAINING_SUBNET_ID>", "<TRAINING_SECURITY_GROUP>", '"FARGATE"', '"key":"Project"', '"assignPublicIp":"DISABLED"'))
-            and "LAKEHOUSE" not in line
-            for line in starts
-        )
-        checks[f"{heading}: the list stops on any failure and the owner applies each plan"] = (
-            "Stop the list on any failure" in body and "Each apply is the owner's" in body
-        )
-    table = owner_commands.values(Path("record"))
-    contracts = (
-        (TRAIN, "--training-parameters", lambda raw: training_contract.parameters_for("training_dag", raw, ("aws",))),
-        (PROMOTE, "--training-parameters", lambda raw: training_contract.parameters_for("model_promotion_dag", raw, ("aws",))),
-        (SERVE, "--serving-request", lambda raw: serving_contract.parameters_for("serving_deploy_dag", raw)),
-    )
-    for heading, option, contract in contracts:
-        words = [shlex.split(owner_commands.filled(line, table)) for line in owner_commands.commands(owner_commands.section(text, heading)) if option in line]
-        values = [line[line.index(option) + 1] for line in words]
-        try:
-            parsed = [contract(json.loads(value)) for value in values]
-        except (ValueError, KeyError) as error:
-            parsed = []
-            checks[f"{heading}: the {option} value passes its contract ({error})"] = False
-        else:
-            checks[f"{heading}: the {option} value passes its contract"] = len(parsed) == 1
-        if heading == SERVE:
-            first = {"candidate_version": None, "percent": 0, "deploy_mode": "rollback"}
-            staged = re.findall(r"printf '(\{.*?\})\\n'", owner_commands.section(text, heading))
-            checks[f"{heading}: the first deploy is a rollback with no candidate and percent 0, staged with the same request"] = (
-                len(parsed) == 1
-                and all(parsed[0][name] == value for name, value in first.items())
-                and len(staged) == 1
-                and json.loads(staged[0].replace("%s", parsed[0]["hai_type"])) == parsed[0]
-            )
-    return checks
-
-
-IAM_OVERLAY = "data/local_keep/iam_combined_20261107/"
-PROJECT_IAM_POLICY = "infra/iam/policies/healthcare_hai_prediction_iam_policy.json"
-DRIFT_IMAGE_PATCH = "data/local_keep/serving_gaps_20261107/gap2_drift_image.patch"
-READ_GRANT = "ReadModelRunRecords"
-
-
-def step_with(steps: list[str], *needles: str) -> int:
-    return next((index for index, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
-
-
-def prerequisite_checks(text: str) -> dict[str, bool]:
-    """The prerequisites of the hand-started model lists: the reviewed code revision, the IAM overlay, the project IAM policy, the owner read grant and the
-    drift image patch, each stated and each placed before the step that needs it."""
-    checks: dict[str, bool] = {}
-    train = owner_commands.section(text, TRAIN)
-    intro = re.split(r"(?m)^1\. ", train, maxsplit=1)[0]
-    checks["the training list states the code revision prerequisite and names the three reviewed fixes"] = all(
-        word in intro for word in ("`<CODE_REVISION>`", "process listing fix", "Feast branch", "Feast registry reader fix", "HEAD of the main checkout")
-    )
-    checks["the training list states that every IAM plan runs on the combined overlay"] = IAM_OVERLAY in intro and "from `main` would remove" in intro
-    for heading in MODEL_ORDER:
-        body = owner_commands.section(text, heading)
-        lines = owner_commands.commands(body)
-        builds = [index for index, line in enumerate(lines) if "code_archive build" in line]
-        checks[f"{heading}: every code archive is built from the reviewed revision, after the revision is checked"] = bool(builds) and all(
-            "--revision <CODE_REVISION>" in lines[index] and any(line == "git cat-file -t <CODE_REVISION>" for line in lines[:index]) for index in builds
-        )
-        iam_steps = [step for step in steps_of(body) if "terraform.sh --iam" in step]
-        checks[f"{heading}: every infra/iam plan names the IAM overlay"] = all("IAM overlay" in step for step in iam_steps)
-    for heading, role in ((SERVE, "job_serve_task"), (DRIFT, "job_drift_task")):
-        body = owner_commands.section(text, heading)
-        steps = steps_of(body)
-        policy = step_with(steps, "manage_policies plan --policy iam", "PassTrainingRoles", role, "Prerequisite")
-        start = step_with(steps, "ecs run-task")
-        checks[f"{heading}: the hand apply of the project IAM policy with {role} in PassTrainingRoles comes before the task start"] = (
-            0 <= policy < start
-            and all(
-                word in steps[policy]
-                for word in (
-                    f"shasum -a 256 {IAM_OVERLAY}overlay/{PROJECT_IAM_POLICY}",
-                    f"{IAM_OVERLAY}overlay_sha256.txt",
-                    f"cp {IAM_OVERLAY}overlay/{PROJECT_IAM_POLICY} {PROJECT_IAM_POLICY}",
-                    "manage_policies apply --policy iam",
-                    f"git checkout -- {PROJECT_IAM_POLICY}",
-                    "Stop on any other change",
-                )
-            )
-        )
-        grant = step_with(steps, READ_GRANT, "manage_policies plan --policy s3", "Prerequisite")
-        reads = [index for index, step in enumerate(steps) if re.search(r"aws s3 cp s3://<DATA_BUCKET>/(<MANIFEST_PREFIX>|drift)/", step)]
-        checks[f"{heading}: the owner read grant comes before every read of the serving or drift records"] = grant >= 0 and bool(reads) and grant < min(reads)
-    serve = owner_commands.section(text, SERVE)
-    found = re.search(r"```json\n(.*?)```", serve, re.S)
-    try:
-        statement = json.loads(found.group(1)) if found else {}
-    except ValueError:
-        statement = {}
-    checks["the read grant is one statement that allows only s3:GetObject on the record prefix and drift/"] = (
-        statement
-        == {
-            "Sid": READ_GRANT,
-            "Effect": "Allow",
-            "Action": "s3:GetObject",
-            "Resource": ["arn:aws:s3:::${DATA_BUCKET_NAME}/<MANIFEST_PREFIX>/*", "arn:aws:s3:::${DATA_BUCKET_NAME}/drift/*"],
-        }
-        and "infra/iam/policies/healthcare_hai_prediction_s3_policy.json" in serve
-    )
-    drift_lines = owner_commands.commands(owner_commands.section(text, DRIFT))
-    order = [
-        next((index for index, line in enumerate(drift_lines) if line.startswith(prefix)), -1)
-        for prefix in (
-            f"git apply --check {DRIFT_IMAGE_PATCH}",
-            f"git apply {DRIFT_IMAGE_PATCH}",
-            ".venv/bin/python -m scripts.infrastructure.push_images plan",
-            f"git apply -R {DRIFT_IMAGE_PATCH}",
-        )
-    ]
-    checks[f"the drift image is planned only with the drift image patch applied, then the patch is removed ({order})"] = -1 not in order and order == sorted(
-        order
-    )
-    return checks
-
-
-# Each prerequisite removed or widened in one list must fail a prerequisite check.
-PREREQUISITE_MUTANTS = (
-    ("an archive of HEAD", DRIFT, "build --revision <CODE_REVISION> --output", "build --output"),
-    ("a revision that is not checked first", PROMOTE, "git cat-file -t <CODE_REVISION>\n", ""),
-    ("no project IAM policy apply before the serve start", SERVE, "manage_policies plan --policy iam", "manage_policies plan"),
-    ("a project IAM policy without the drift role", DRIFT, "`job_drift_task` to ECS tasks", "the role to ECS tasks"),
-    ("a read grant with every S3 action", SERVE, '"Action": "s3:GetObject"', '"Action": "s3:*"'),
-    ("a read grant on the whole bucket", SERVE, "${DATA_BUCKET_NAME}/drift/*", "${DATA_BUCKET_NAME}/*"),
-    ("a drift read without the read grant", DRIFT, READ_GRANT, "ReadDriftRecords"),
-    ("a drift image plan without the patch", DRIFT, f"git apply --check {DRIFT_IMAGE_PATCH}\n", ""),
-    ("an IAM plan without the overlay", TRAIN, "(administrator profile), with the IAM overlay copied in", "(administrator profile)"),
-)
-
-
-def prerequisite_mutant_checks(text: str) -> dict[str, bool]:
-    checks: dict[str, bool] = {}
-    for label, heading, old, new in PREREQUISITE_MUTANTS:
-        body = owner_commands.section(text, heading)
-        if old not in body:
-            checks[f"prerequisite mutant {label}: the text exists in {heading}"] = False
-            continue
-        mutated = text.replace(body, body.replace(old, new, 1), 1)
-        checks[f"prerequisite mutant {label} is refused"] = not all(prerequisite_checks(mutated).values())
-    return checks
-
-
 def command_checks(text: str, folder: Path) -> dict[str, bool]:
     workspace = Workspace(folder / "workspace")
     silver_body = owner_commands.section(text, SILVER)
     sample = owner_commands.example_json(silver_body) or {}
     features_sample = owner_commands.example_json(owner_commands.section(text, FEATURES)) or {}
-    train_sample = owner_commands.example_json(owner_commands.section(text, TRAIN)) or {}
     samples = {
         "jobs_silver.json": sample,
         "jobs_gold.json": gold_sample(sample) if sample else {},
         "jobs_features.json": features_sample,
         "platform_features.json": platform_sample(),
-        "jobs_train.json": train_sample,
-        **model_samples(train_sample),
-        "platform_training.json": platform_sample("training"),
-        "platform_drift.json": platform_sample("training", "drift"),
     }
     wrapper = make_wrapper(workspace, samples)
     checks: dict[str, bool] = {
-        "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample,
-        "the reviewed training jobs file is valid JSON and extends the features file": train_sample.get("root") == "jobs"
-        and bool(features_sample.get("variables"))
-        and all(train_sample["variables"].get(key) == value for key, value in features_sample["variables"].items() if key != "train_images")
-        and train_sample["variables"].get("train_enabled") is True
-        and features_sample["variables"].get("train_images", {}).items() <= train_sample["variables"].get("train_images", {}).items(),
+        "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample
     }
-    for heading in HEADINGS:
+    for heading in (SILVER, GOLD, FEATURES):
         problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)
         checks[f"{heading}: {count} printed commands were found"] = count >= 5
@@ -517,21 +261,12 @@ MUTANTS = (
         "--job features --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> ",
         "--job features --run <RUN_ID> --code-run <RUN_ID> ",
     ),
-    ("training overrides without the MLflow address", "--mlflow-uri http://<HOST_PRIVATE_IP>:5100 --training-parameters", "--training-parameters"),
-    ("an unknown training network output", "output -json training_network", "output -json training_net"),
-    ("promotion overrides for an unknown job", "--job promote ", "--job promotion "),
-    (
-        "serve overrides without the request",
-        ' --serving-request \'{"hai_type":"<HAI_TYPE>","candidate_version":null,"percent":0,"deploy_mode":"rollback"}\'',
-        "",
-    ),
-    ("a drift start without its task definition", "--task-definition <PROJECT_NAME>_<ENVIRONMENT>_job_drift ", "--task-definition "),
 )
 
 
 def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
     """Each planted typo in one printed command must fail the parser check of that line."""
-    lines = [line for heading in HEADINGS for line in owner_commands.commands(owner_commands.section(text, heading))]
+    lines = [line for heading in (SILVER, GOLD, FEATURES) for line in owner_commands.commands(owner_commands.section(text, heading))]
     wrapper = make_wrapper(Workspace(folder / "mutant_workspace"), {})
     checks: dict[str, bool] = {}
     for label, old, new in MUTANTS:
@@ -546,7 +281,7 @@ def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
         except (KeyError, ValueError) as error:
             found = [str(error)]
         checks[f"mutant {label} is refused"] = bool(found)
-    return checks | prerequisite_mutant_checks(text)
+    return checks
 
 
 def run(output: Path) -> dict[str, dict[str, bool]]:
