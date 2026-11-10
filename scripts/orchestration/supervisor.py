@@ -15,7 +15,10 @@ the JSON Web Token secret and the API secret key anew each session), starts the 
 service under the deadline entrypoint and starts the four Airflow services, each after the one before is healthy. The supervisor then waits until
 the API reports every component healthy. Any failure on the way asks the launcher for ``orchestration_down`` and removes the session token. The
 supervisor makes no Docker call and never stops the catalog or restarts Docker. ``down`` and the teardown at the end of ``up`` return 3 until the
-launcher confirms that the stack is down: a failed request or wait, or any other phase, is listed as an error. Tests pass
+launcher confirms that the stack is down: a failed request or wait, or any other phase, is listed as an error. Standard error carries only the
+command's own reports; the warnings of the launcher client (a slow or failed exchange) and of the lineage worker go to ``supervisor.log`` beside the
+broker log, in the owner-only ``broker/`` folder of the state, one redacted line each. Like the broker log it is a local record under the ignored
+``data/`` tree; nothing rotates or removes it, so delete it with the session state. Tests pass
 ``--test-registry <folder>/registry`` with their own ports; the session E2Es are ``run_supervisor_e2e`` (fake daemon) and ``run_real_e2e`` (real Docker).
 """
 
@@ -24,6 +27,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import logging
 import os
 import secrets
 import signal
@@ -52,6 +56,7 @@ from scripts.orchestration.broker import (
     resolve_paths,
     write_private,
 )
+from scripts.orchestration.ledger import now
 
 ROOT = Path(__file__).resolve().parents[2]
 OPENMETADATA_CREDENTIAL_VARIABLE = "HAI_OPENMETADATA_LINEAGE_TOKEN"
@@ -75,8 +80,42 @@ SNAPSHOT_SECONDS = 20.0
 SNAPSHOT_TOTAL_SECONDS = 60.0
 
 
+DIAGNOSTIC_LOGGERS = ("launcher.client", "orchestration.lineage")
+
+
 class SupervisorError(Exception):
     """The session cannot start or stop safely; the message names the step."""
+
+
+class OperatorLog(logging.Handler):
+    """The supervisor's diagnostic log ``supervisor.log`` beside the broker log: one line per warning of the launcher client or the lineage worker,
+    written as the broker log is (owner-only folder, append, redacted by the session's broker when there is one). Standard error keeps only the
+    command's own reports."""
+
+    def __init__(self, supervisor: Supervisor) -> None:
+        super().__init__(logging.WARNING)
+        self.supervisor = supervisor
+        self.path = supervisor.paths.private / "supervisor.log"
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            line = f"{now()} {record.levelname} {record.name} {record.getMessage()}"
+            broker = self.supervisor.broker
+            self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with self.path.open("a") as handle:
+                handle.write((broker.redact(line) if broker is not None else line) + "\n")
+        except Exception:
+            self.handleError(record)
+
+    def __enter__(self) -> OperatorLog:
+        for name in DIAGNOSTIC_LOGGERS:
+            logging.getLogger(name).addHandler(self)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        for name in DIAGNOSTIC_LOGGERS:
+            logging.getLogger(name).removeHandler(self)
+        self.close()
 
 
 class Supervisor:
@@ -454,22 +493,23 @@ def main() -> int:
     args = cli.parse_args()
     try:
         supervisor = build(args.test_registry, args.lineage_api_port)
-        if args.command == "status":
-            result: Any = supervisor.stack()
-        elif args.command == "down":
-            result = supervisor.teardown()
-        else:
-            stop = threading.Event()
-            for signum in (signal.SIGINT, signal.SIGTERM):
-                signal.signal(signum, lambda *_: stop.set())
-            evidence = supervisor.start()
-            sys.stdout.write(json.dumps({"ready": True, "api": f"http://127.0.0.1:{supervisor.api_port}", **evidence}, indent=2, default=str) + "\n")
-            sys.stdout.flush()
-            try:
-                while not stop.wait(RECONCILE_SECONDS):
-                    reconcile(supervisor)
-            finally:
+        with OperatorLog(supervisor):
+            if args.command == "status":
+                result: Any = supervisor.stack()
+            elif args.command == "down":
                 result = supervisor.teardown()
+            else:
+                stop = threading.Event()
+                for signum in (signal.SIGINT, signal.SIGTERM):
+                    signal.signal(signum, lambda *_: stop.set())
+                evidence = supervisor.start()
+                sys.stdout.write(json.dumps({"ready": True, "api": f"http://127.0.0.1:{supervisor.api_port}", **evidence}, indent=2, default=str) + "\n")
+                sys.stdout.flush()
+                try:
+                    while not stop.wait(RECONCILE_SECONDS):
+                        reconcile(supervisor)
+                finally:
+                    result = supervisor.teardown()
     except (SupervisorError, BrokerError, LauncherUnavailable, run_lock.RegistryError) as exc:
         sys.stderr.write(f"supervisor: {exc}\n")
         return 3

@@ -14,7 +14,6 @@ import contextlib
 import fcntl
 import io
 import json
-import re
 import socket
 import stat
 import sys
@@ -308,15 +307,8 @@ def supervisor_teardown_independent(env: SessionEnv) -> dict[str, bool]:
     }
 
 
-# The launcher client's slow-exchange diagnostic (``LauncherClient.note_exchange``): a WARNING that Python's last-resort handler writes to stderr when
-# one exchange takes more than ``slow_exchange`` (0.5 s) beyond its asked wait. Machine load alone makes a teardown exchange that slow, so the line
-# reports load, not an error of the command.
-SLOW_EXCHANGE_LINE = re.compile(r"launcher exchange [a-z_]+ took \d+\.\d+ s( \(asked to wait \d+\.\d+ s\))?")
-
-
 def run_down(env: SessionEnv, supervisor: Supervisor) -> tuple[int | None, dict[str, Any], str]:
-    """The command line's ``down`` on a supervisor: its exit code (None when it raised), the JSON it printed and what it wrote to stderr, without the
-    launcher client's slow-exchange lines; any other line, an exchange that timed out included, is kept."""
+    """The command line's ``down`` on a supervisor: its exit code (None when it raised), the JSON it printed and what it wrote to stderr."""
     output, errors = io.StringIO(), io.StringIO()
     argv = ["supervisor", "--test-registry", str(env.registry), "down"]
     code: int | None = None
@@ -329,8 +321,7 @@ def run_down(env: SessionEnv, supervisor: Supervisor) -> tuple[int | None, dict[
     ):
         code = supervisor_module.main()
     printed = output.getvalue()
-    kept = "".join(line for line in errors.getvalue().splitlines(keepends=True) if not SLOW_EXCHANGE_LINE.fullmatch(line.rstrip("\n")))
-    return code, json.loads(printed) if printed.strip().startswith("{") else {}, kept
+    return code, json.loads(printed) if printed.strip().startswith("{") else {}, errors.getvalue()
 
 
 def stack_is_down(env: SessionEnv) -> bool:
