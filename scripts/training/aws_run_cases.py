@@ -30,6 +30,7 @@ from scripts.orchestration.ecs_broker_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
 from scripts.training import guards, mlflow_alias_stand_in, promote_receipt, promotion_check
+from scripts.training import production_record as production_record_module
 from scripts.training.job_action_cases import GUARD, HAI_TYPE, REAL, SAVED, Fixture, require, standins
 from scripts.training.job_cases import COMMIT, DIGEST
 from scripts.training.lane_b_cases import RUN
@@ -776,6 +777,8 @@ RUN_B = "20261024T000001Z-5678abcd"
 INTENT_KEY = f"promote/{RUN}/intent.json"
 ATTEMPT_KEY = f"promote/{RUN}/attempt.json"
 LEASE_PREFIX = f"promote/models/{MODEL}/"
+PRODUCTION_PREFIX = f"promote/production/{HAI_TYPE}/"
+SET_HASH = "ab" * 32
 REGISTRY_WRITES = ("set_registered_model_alias", "set_model_version_tag")
 
 
@@ -997,7 +1000,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(stored == (work / "in/promote/promote.json").read_bytes(), "the durable receipt differs from the workspace receipt")
         require(json.loads(stored or b"{}")["previous_version"] == "1", "the durable receipt lost the previous version")
         puts = [arguments for operation, arguments in bucket.calls if operation == "put_object"]
-        require(len(puts) == 5 and all(item.get("IfNoneMatch") == "*" for item in puts), f"a write is not create-only: {puts}")
+        require(len(puts) == 6 and all(item.get("IfNoneMatch") == "*" for item in puts), f"a write is not create-only: {puts}")
         require(any(item.get("step") == "promote" for item in lines_of(out)), "success was not reported")
 
     def receipt_rerun_is_idempotent() -> None:
@@ -1039,6 +1042,71 @@ def promote_cases(cases: Any, folder: Path) -> None:
     def stored_receipt(bucket: ListingBucket) -> dict[str, Any]:
         return dict(json.loads(bucket.objects[promote_receipt.key_of(RUN)]))
 
+    def production_record(bucket: ListingBucket, generation: int = 1) -> dict[str, Any]:
+        stored = bucket.objects.get(f"{PRODUCTION_PREFIX}{generation:010d}.json")
+        require(stored is not None, f"no Production record of generation {generation}: {sorted(bucket.objects)}")
+        return dict(json.loads(stored or b"{}"))
+
+    def tagged_fixture(name: str) -> Fixture:
+        fixture = registry_fixture(folder / name)
+        fixture.tracking.find_version(MODEL, "2")["tags"].update({"feature_set": "m1", "feature_set_schema_sha256": SET_HASH})
+        return fixture
+
+    def writes_the_production_record() -> None:
+        fixture, bucket = tagged_fixture("production_record"), receipt_bucket()
+        code, _, error = promote_in(fixture, folder / "production_record_work", bucket)
+        require(code == 0 and alias(fixture) == "2", f"promote failed: {code} {error}")
+        record = production_record(bucket)
+        expected = {
+            "schema": 1,
+            "hai_type": HAI_TYPE,
+            "model": MODEL,
+            "version": "2",
+            "run_id": RUN,
+            "mode": "promote",
+            "generation": 1,
+            "feature_set": "m1",
+            "feature_set_schema_sha256": SET_HASH,
+        }
+        require({name: record.get(name) for name in expected} == expected, f"the Production record is not the promotion: {record}")
+        require(set(record) == {*expected, "promoted_at"} and str(record["promoted_at"]).endswith("+00:00"), f"the record fields: {record}")
+
+    def production_record_retry_keeps_the_first() -> None:
+        fixture, bucket = tagged_fixture("production_retry"), receipt_bucket()
+        bucket.put_faults["promote.json"] = [client_error("AccessDenied", "put_object")]
+        code, _, error = promote_in(fixture, folder / "production_retry_first", bucket)
+        require(code != 0 and "receipt_upload_failed" in error, f"the receipt fault did not fail the first attempt: {code} {error}")
+        first = bucket.objects.get(f"{PRODUCTION_PREFIX}0000000001.json")
+        require(first is not None, f"the first attempt wrote no Production record: {sorted(bucket.objects)}")
+        code, _, error = promote_in(fixture, folder / "production_retry_second", bucket)
+        require(code == 0, f"the retry failed: {error}")
+        records = sorted(key for key in bucket.objects if key.startswith(PRODUCTION_PREFIX))
+        require(records == [f"{PRODUCTION_PREFIX}0000000001.json"], f"the retry wrote another Production record: {records}")
+        require(bucket.objects[records[0]] == first, "the retry replaced the first Production record")
+
+    def production_record_follows_a_rollback() -> None:
+        fixture, bucket = tagged_fixture("production_rollback"), receipt_bucket()
+        require(promote_in(fixture, folder / "production_rollback_first", bucket)[0] == 0, "the forward promotion failed")
+        code, _, error = promote_in(
+            fixture, folder / "production_rollback_back", bucket, {**PROMOTION, "model_version": "1", "promotion_mode": "rollback"}, run=RUN_B
+        )
+        require(code == 0 and alias(fixture) == "1", f"the rollback failed: {code} {error}")
+        back = production_record(bucket, 2)
+        require(
+            (back["version"], back["mode"], back["run_id"], back["feature_set"], back["feature_set_schema_sha256"]) == ("1", "rollback", RUN_B, None, None),
+            f"the rollback record does not name version 1 without set tags: {back}",
+        )
+        newest = production_record_module.newest(bucket, BUCKET, HAI_TYPE, MODEL)
+        require(newest == back, f"the newest record is not the rollback: {newest}")
+
+    def production_record_conflict_fails_the_job() -> None:
+        fixture, bucket = tagged_fixture("production_conflict"), receipt_bucket()
+        bucket.objects[f"{PRODUCTION_PREFIX}0000000001.json"] = b'{"schema":1,"run_id":"other"}\n'
+        code, out, error = promote_in(fixture, folder / "production_conflict_work", bucket)
+        require(code != 0 and "production_record_failed" in error, f"another Production record under the key did not fail the job: {code} {error}")
+        require(promote_receipt.key_of(RUN) not in bucket.objects, "a receipt was stored although the Production record is another one")
+        require(not any(item.get("step") == "promote" for item in lines_of(out)), "success was reported with a conflicting Production record")
+
     def records_the_intent_first() -> None:
         fixture, bucket = registry_fixture(folder / "intent_first"), receipt_bucket()
         seen: list[tuple[str, str]] = []
@@ -1047,8 +1115,16 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code == 0, f"promote failed: {error}")
         lease, closing = f"{LEASE_PREFIX}lease-0000000001.json", f"{LEASE_PREFIX}lease-0000000001.done.json"
         require(
-            seen == [(lease, "1"), (INTENT_KEY, "1"), (ATTEMPT_KEY, "1"), (promote_receipt.key_of(RUN), "2"), (closing, "2")],
-            f"writes and the alias they saw (lease, intent, attempt, receipt, then the lease closes): {seen}",
+            seen
+            == [
+                (lease, "1"),
+                (INTENT_KEY, "1"),
+                (ATTEMPT_KEY, "1"),
+                (f"{PRODUCTION_PREFIX}0000000001.json", "2"),
+                (promote_receipt.key_of(RUN), "2"),
+                (closing, "2"),
+            ],
+            f"writes and the alias they saw (lease, intent, attempt, Production record, receipt, then the lease closes): {seen}",
         )
         intent = json.loads(bucket.objects[INTENT_KEY])
         require(intent["previous_version"] == "1" and intent["version"] == "2" and intent["run_id"] == RUN, f"intent: {intent}")
@@ -1617,6 +1693,10 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_first_run_needs_no_list_grant", first_promotion_needs_no_list_grant)
     cases.check("promote_adopts_an_intent_whose_reply_was_lost", intent_lost_reply_is_adopted)
 
+    cases.check("promote_writes_the_production_record_of_the_type", writes_the_production_record)
+    cases.check("promote_production_record_retry_keeps_the_first", production_record_retry_keeps_the_first)
+    cases.check("promote_production_record_follows_a_rollback", production_record_follows_a_rollback)
+    cases.check("promote_production_record_conflict_fails_the_job", production_record_conflict_fails_the_job)
     cases.check("promote_moves_production", moved)
     cases.check("promote_stores_a_durable_receipt_before_success", stores_a_durable_receipt)
     cases.check("promote_receipt_rerun_changes_nothing", receipt_rerun_is_idempotent)

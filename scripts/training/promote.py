@@ -18,6 +18,10 @@ was sent and not seen to commit may still move production later, after the lease
 before the request, and only the call that created it sends. A retry that finds the record while production still names the version before the promotion cannot
 tell a request that never arrived from a pending one. It sends nothing, keeps the lease and fails with ``promotion_needs_resolution`` until the owner resolves
 the run, which restarts the MLflow service first. Automatic promotions of that model stay blocked until then.
+
+Once production names the version, and before the receipt, the action writes the Production record of the infection type (``production_record``): the
+version's feature set and schema hash, the model, the version, the run, its lease generation and the time, create-only under ``promote/production/``. The
+features job reads it to decide whether an online set loads or holds, without MLflow access. A retry keeps the record the run wrote first.
 """
 
 from __future__ import annotations
@@ -25,10 +29,11 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime
 from typing import Any
 
 from orchestration import training_contract
-from scripts.training import job_actions, job_inputs, promote_lease, promote_receipt, registry, run_tracking
+from scripts.training import job_actions, job_inputs, production_record, promote_lease, promote_receipt, registry, run_tracking
 from scripts.training.job_failure import JobFailure
 
 PROMOTED_TAG = "promoted_run"
@@ -164,6 +169,17 @@ def reconcile(client: Any, bucket: str, store: Any, request: Mapping[str, Any], 
     return promote_receipt.canonical({**request, "previous_version": previous})
 
 
+def record_production(client: Any, bucket: str, store: Any, hai_type: str, request: Mapping[str, Any], lease: promote_lease.Lease) -> None:
+    """Write the Production record of the infection type for the version production now names, or keep the one this run wrote before."""
+    version = next((item for item in registry.versions_of(store, request["model"]) if str(item.version) == request["version"]), None)
+    tags = dict(getattr(version, "tags", {}) or {})
+    document = production_record.build(hai_type, request, lease.generation, tags, datetime.now(UTC).isoformat(timespec="seconds"))
+    try:
+        production_record.store(client, bucket, document)
+    except promote_receipt.ReceiptError as error:
+        raise JobFailure("production_record_failed", f"{error}. Production names version {request['version']}; retry the run to write its record") from None
+
+
 def run(context: Any, record: Mapping[str, Any]) -> None:
     """Move the alias for the version the parameters name and record what changed."""
     with job_actions.guarded("promote"):
@@ -184,9 +200,10 @@ def run(context: Any, record: Mapping[str, Any]) -> None:
             try:
                 store: Any = run_tracking.open_store(uri)
                 inspect(store, request)
-                hold(client, bucket, request)
+                lease = hold(client, bucket, request)
                 observed = inspect(store, request)
                 receipt = reconcile(client, bucket, store, request, settle(client, bucket, request, observed), observed)
+                record_production(client, bucket, store, parameters["hai_type"], request, lease)
             except (JobFailure, ImportError):
                 raise
             except run_tracking.TrackingError as error:

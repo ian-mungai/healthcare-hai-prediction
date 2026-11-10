@@ -26,7 +26,6 @@ import sys
 import tempfile
 import threading
 import time
-import tomllib
 import urllib.parse
 from collections.abc import Callable, Iterator, Mapping
 from datetime import timedelta
@@ -41,6 +40,8 @@ from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker, fake_module, stop_worker
 from scripts.features.publication_reads import ReadError
+from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
+from scripts.training import promote_receipt
 
 SENTINEL = "sentinel-secret-9f31c2"
 STORE_VALUE = "pw-from-store-7d2e41"
@@ -1373,61 +1374,62 @@ def case_fa23(c: Checker) -> None:
 # ----------------------------------------------------------------------------------------------------
 # The deployed entry points: ``feast_job.main`` and ``feast_materialize.main`` on the AWS profile, as the features job's feast container runs them, with no
 # injected loader, session or hook. Only the outside world is a stand-in: the secret store (``open_ssm``), the token exchange, the catalog
-# (``open_catalog``), the redis and feast modules, the Feast store (``historical.default_store``), the Feast side of a set load (``SetHooks``) and the MLflow
-# registry (the mlflow module).
+# (``open_catalog``), the redis and feast modules, the Feast store (``historical.default_store``), the Feast side of a set load (``SetHooks``) and the data
+# bucket that holds the Production records (``promote_receipt.s3_client``).
 
 SET_BASE_RUN = "20261109T010000Z-0000b001"
 SET_RUN = "20261109T020000Z-0000a001"
 SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
 MLFLOW_URI = "http://10.0.1.20:5100"
-REGISTRY_PHRASE = "registry-phrase-4c1e"
+FEATURE_BUCKET = "example-feature-bucket"
 # The fixed variables and the secrets that infra/jobs/layers.tf gives the feast container of the features job (layers.tftest.hcl checks the same list).
 DEPLOYED_FEAST_FIXED = {
     "FEAST_PROFILE": "aws",
-    "FEAST_REGISTRY_BUCKET": "example-feature-bucket",
+    "FEAST_REGISTRY_BUCKET": FEATURE_BUCKET,
     "AWS_REGION": "us-east-2",
-    "MLFLOW_TRACKING_USERNAME": "admin",
-    "MLFLOW_HTTP_REQUEST_TIMEOUT": "10",
-    "MLFLOW_HTTP_REQUEST_MAX_RETRIES": "2",
 }
-DEPLOYED_FEAST_SECRETS = {"POLARIS_CLIENT_ID": "reader-id-1", "POLARIS_CLIENT_SECRET": SENTINEL, "MLFLOW_TRACKING_PASSWORD": REGISTRY_PHRASE}
+DEPLOYED_FEAST_SECRETS = {"POLARIS_CLIENT_ID": "reader-id-1", "POLARIS_CLIENT_SECRET": SENTINEL}
 
 
-class RegistryMissing(Exception):
-    """MLflow's answer for a registered model that does not exist."""
+class ProductionBucket(FakeLaunchBucket):
+    """The data bucket as the features task role sees it: list and read under ``promote/production/`` only (infra/iam job_writer_features_feast.json).
 
-    error_code = "RESOURCE_DOES_NOT_EXIST"
+    ``production`` maps an infection type to the Production records the promote action wrote for it, oldest generation first."""
 
+    def __init__(self, production: Mapping[str, list[Mapping[str, Any]]] | None = None) -> None:
+        super().__init__(FEATURE_BUCKET, "promote/production/")
+        names = json.loads(feature_sets_module().MODEL_CONTRACT.read_text())["registered_models"]
+        for hai_type, records in (production or {}).items():
+            for generation, tags in enumerate(records, start=1):
+                record = {
+                    "schema": 1,
+                    "hai_type": hai_type,
+                    "model": names[hai_type],
+                    "version": str(generation),
+                    "run_id": f"20261109T00000{generation}Z-0000c00{generation}",
+                    "mode": "promote",
+                    "generation": generation,
+                    "feature_set": tags.get("feature_set"),
+                    "feature_set_schema_sha256": tags.get("feature_set_schema_sha256"),
+                    "promoted_at": "2026-11-09T00:00:00+00:00",
+                }
+                self.objects[f"promote/production/{hai_type}/{generation:010d}.json"] = json.dumps(record).encode()
 
-class RegistryStandIn:
-    """The MLflow registry as the mlflow module: each client records the address it was given and the login of the process environment, as MlflowClient
-    reads them, and the ``production`` alias of a model answers with the tags of its version."""
+    def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
+        self._enter("list_objects_v2", arguments, str(arguments.get("Prefix", "")))
+        keys = sorted(key for key in self.objects if key.startswith(str(arguments["Prefix"])))
+        return {"Contents": [{"Key": key} for key in keys], "KeyCount": len(keys), "IsTruncated": False}
 
-    def __init__(self, tags: Mapping[str, Mapping[str, str]] | None = None) -> None:
-        self.tags = dict(tags or {})
-        self.clients: list[dict[str, str | None]] = []
-
-    def module(self) -> Any:
-        registry = self
-
-        class MlflowClient:
-            def __init__(self, tracking_uri: str | None = None) -> None:
-                login = {name: os.environ.get(name) for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")}
-                registry.clients.append({"uri": tracking_uri, **login})
-
-            def get_model_version_by_alias(self, name: str, alias: str) -> Any:
-                if name not in registry.tags:
-                    raise RegistryMissing(name)
-                return SimpleNamespace(version="1", tags=dict(registry.tags[name]))
-
-        return fake_module("mlflow", MlflowClient=MlflowClient)
+    def reads(self) -> list[str]:
+        """The prefix or key of every call, in order."""
+        return [str(arguments.get("Key", arguments.get("Prefix", ""))) for _, arguments in self.calls]
 
 
 class Deployed:
     """The stand-in world of one deployed run: the catalog of a base run and a model set run, the fake Redis, the secret store and the registry."""
 
-    def __init__(self, folder: Path, registry: RegistryStandIn) -> None:
-        self.folder, self.registry = folder, registry
+    def __init__(self, folder: Path, bucket: ProductionBucket) -> None:
+        self.folder, self.bucket = folder, bucket
         self.catalog, self.schema, _, _ = feast_cases.set_catalog("m1")
         entry = self.schema["model_sets"]["m1"]
         self.catalog.tables[entry["table"]].rows = [{"spine_key": key, "event_timestamp": online_cases.T0} for key in SET_KEYS]
@@ -1485,7 +1487,7 @@ class Deployed:
             "redis.retry": fake_module("redis.retry", Retry=lambda backoff, retries: None),
             "redis.backoff": fake_module("redis.backoff", NoBackoff=lambda: None),
             "feast.infra.online_stores.redis": fake_module("feast.infra.online_stores.redis", RedisOnlineStore=type("RedisOnlineStore", (), {})),
-            "mlflow": self.registry.module(),
+            "mlflow": None,  # the feature store image has no MLflow client: an import fails
         }
         kept = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
         with contextlib.ExitStack() as stack:
@@ -1495,20 +1497,15 @@ class Deployed:
             stack.enter_context(mock.patch.object(reads, "polaris_token", exchange_stand_in()))
             stack.enter_context(mock.patch.object(reads, "open_catalog", lambda settings, loader=None: self.guarded))
             stack.enter_context(mock.patch.object(feast_sets, "SetHooks", self.hooks_class()))
+            stack.enter_context(mock.patch.object(promote_receipt, "s3_client", lambda: self.bucket))
             stack.enter_context(mock.patch.object(historical, "default_store", lambda environ, settings_file: SimpleNamespace(settings_file=settings_file)))
             stack.enter_context(mock.patch("importlib.metadata.version", lambda name: "0.67.0" if name == "feast" else real_version(name)))
             yield
 
 
 def deployed_environment(folder: Path, **changes: str | None) -> dict[str, str]:
-    """The feast container's environment of a model set run: the variables of ``aws_environment`` with the run folder, the set and a registry login."""
-    environment = aws_environment(
-        FEAST_RUN_FOLDER=str(folder),
-        FEATURE_SET="m1",
-        MLFLOW_TRACKING_URI=MLFLOW_URI,
-        MLFLOW_TRACKING_USERNAME="admin",
-        MLFLOW_TRACKING_PASSWORD=REGISTRY_PHRASE,
-    )
+    """The feast container's environment of a model set run: the variables of ``aws_environment`` with the run folder, the set and the data bucket."""
+    environment = aws_environment(FEAST_RUN_FOLDER=str(folder), FEATURE_SET="m1", FEAST_REGISTRY_BUCKET=FEATURE_BUCKET)
     for name, value in changes.items():
         if value is None:
             environment.pop(name, None)
@@ -1531,16 +1528,16 @@ def entry_point(call: Callable[[], int]) -> tuple[int, str, str]:
 def case_fa24(c: Checker) -> None:
     """FA24: the Feast phase of an online model set (m1) through ``feast_job materialize`` on the AWS profile loads the set through the AWS session (the secret
     store's password, the AWS catalog) and the AWS settings file, into the set's own database."""
-    registry = RegistryStandIn()
+    bucket = ProductionBucket()
     with tempfile.TemporaryDirectory(prefix="feast_aws_deployed_") as raw:
-        world = Deployed(Path(raw), registry)
+        world = Deployed(Path(raw), bucket)
         with world.running(deployed_environment(world.folder)):
             code, out, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
         record = json.loads((world.folder / "feast_materialize.json").read_text()) if (world.folder / "feast_materialize.json").is_file() else {}
         c.check("the step exits 0", code == 0)
         c.check("no failure was written", err == "")
         c.check("the record says the set was loaded online", record.get("online") == "load" and bool(record.get("load_id")))
-        c.check("the registry was asked for the Production models of the set", len(registry.clients) == 1)
+        c.check("the Production records of every infection type were listed", sorted(bucket.reads()) == [f"promote/production/HAI_{n}/" for n in range(1, 7)])
         c.check("the load ran once, for the set run, into the set's own database", world.loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
         c.check("the load opened the Feast store with the AWS settings file", world.settings_files == [feast_aws.AWS_SETTINGS_FILE])
         c.check("the load read the AWS catalog (the stand-in of open_catalog)", f"features_e2e.{reads.RUNS_TABLE}" in world.guarded.loads)
@@ -1550,10 +1547,9 @@ def case_fa24(c: Checker) -> None:
 
 
 def case_fa25(c: Checker) -> None:
-    """FA25: the deployed feast container reaches the MLflow registry. Its environment is built as the task gets it: the empty variables of the job table
-    filled by the override generator (as the broker and the direct ECS launch fill them) plus the fixed variables and secrets of layers.tf. An online set
-    whose Production model was trained on another schema then holds its load, and the registry client got the address and the login. The feature store
-    image pins the MLflow client the registry reader imports."""
+    """FA25: the deployed feast container decides load or hold from the Production records in the data bucket, with no MLflow address, login or client.
+    Its environment is built as the task gets it: the variables of the job table filled by the override generator plus the fixed variables and secrets of
+    layers.tf. An online set whose newest Production record of a type names another schema holds its load; an older record of that type does not count."""
     job_overrides = importlib.import_module("scripts.orchestration.job_overrides")
     values = {
         "RUN_ID": SET_RUN,
@@ -1566,34 +1562,38 @@ def case_fa25(c: Checker) -> None:
     }
     document = job_overrides.build("features", values)
     variables = {item["name"]: item["value"] for entry in document["containerOverrides"] if entry["name"] == "feast" for item in entry["environment"]}
-    c.check("the job table gives the feast container the MLflow address", variables.get("MLFLOW_TRACKING_URI") == MLFLOW_URI)
-    names = json.loads(importlib.import_module("scripts.features.feature_sets").MODEL_CONTRACT.read_text())["registered_models"]
+    schema, _ = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    same = {"feature_set": "m1", "feature_set_schema_sha256": mine}
     other = {"feature_set": "m1", "feature_set_schema_sha256": "0" * 64}
-    registry = RegistryStandIn({names[sorted(names)[0]]: other})
+    bucket = ProductionBucket({"HAI_1": [same, other], "HAI_2": [other, same], "HAI_3": [{"feature_set": "m2", "feature_set_schema_sha256": "0" * 64}]})
     with tempfile.TemporaryDirectory(prefix="feast_aws_deployed_") as raw:
-        world = Deployed(Path(raw), registry)
+        world = Deployed(Path(raw), bucket)
         environment = {**DEPLOYED_FEAST_FIXED, **DEPLOYED_FEAST_SECRETS, **variables, "FEAST_RUN_FOLDER": str(world.folder)}
         with world.running(environment):
             code, out, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
         record = json.loads((world.folder / "feast_materialize.json").read_text()) if (world.folder / "feast_materialize.json").is_file() else {}
+        hold_path = world.folder / "online_hold.json"
+        hold = json.loads(hold_path.read_text()) if hold_path.is_file() else {}
         c.check("the step exits 0", code == 0)
         c.check("no failure was written", err == "")
-        c.check("the registry client got the address of the job table", [client["uri"] for client in registry.clients] == [MLFLOW_URI])
+        c.check("the newest record of HAI_1 (another schema) holds the load and nothing is loaded", record.get("online") == "hold" and world.loaded == [])
+        c.check("the hold names the Production schemas of the set (HAI_1 and HAI_2)", hold.get("production_set_schema_sha256") == sorted([mine, "0" * 64]))
+        c.check("every read stayed under promote/production/ of the data bucket", all(key.startswith("promote/production/") for key in bucket.reads()))
         c.check(
-            "the registry client got the login of the task (user admin, the password secret)",
-            [(client["MLFLOW_TRACKING_USERNAME"], client["MLFLOW_TRACKING_PASSWORD"]) for client in registry.clients] == [("admin", REGISTRY_PHRASE)],
+            "only the newest record of each type was read",
+            sorted(key for key in bucket.reads() if key.endswith(".json"))
+            == ["promote/production/HAI_1/0000000002.json", "promote/production/HAI_2/0000000002.json", "promote/production/HAI_3/0000000001.json"],
         )
-        c.check("the differing Production model holds the load and nothing is loaded", record.get("online") == "hold" and world.loaded == [])
-        c.check("the hold record is in the run folder for the upload", (world.folder / "online_hold.json").is_file())
-        c.check("no output holds the registry password", REGISTRY_PHRASE not in out + err)
-    group = tomllib.loads((feast_job.REPO.parent / "pyproject.toml").read_text())["dependency-groups"]
-    pins = {str(line).split(";")[0].strip() for line in group["feature_store"]}
-    c.check("the feature store image pins the MLflow client of the server version", "mlflow-skinny==3.17.0" in pins)
-    runtime = json.loads((feast_job.REPO.parent / "config/quality/dependency_runtimes.json").read_text())["runtimes"]["feature_store"]["code"]
-    c.check(
-        "the dependency check reads the registry reader as code of the feature store image",
-        {"scripts/features/feast_sets.py", "scripts/features/feature_sets.py", "scripts/training/registry.py"} <= set(runtime),
-    )
+        c.check("no output holds the reader secret", SENTINEL not in out + err)
+    damaged = ProductionBucket({"HAI_1": [same]})
+    damaged.objects["promote/production/HAI_1/latest.json"] = b"{}"
+    with tempfile.TemporaryDirectory(prefix="feast_aws_deployed_") as raw:
+        world = Deployed(Path(raw), damaged)
+        environment = {**DEPLOYED_FEAST_FIXED, **DEPLOYED_FEAST_SECRETS, **variables, "FEAST_RUN_FOLDER": str(world.folder)}
+        with world.running(environment):
+            code, _, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
+        c.check("a key the promote action does not write fails the step by name", code == 1 and "latest.json" in err and world.loaded == [])
 
 
 def case_fa26(c: Checker) -> None:
@@ -1602,7 +1602,7 @@ def case_fa26(c: Checker) -> None:
     schema, _ = reads.read_schema()
     mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
     with tempfile.TemporaryDirectory(prefix="feast_aws_release_") as raw:
-        world = Deployed(Path(raw), RegistryStandIn())
+        world = Deployed(Path(raw), ProductionBucket())
         hold = {"schema": 1, "feature_set": "m1", "run_id": SET_RUN, "base_run": SET_BASE_RUN, "set_schema_sha256": mine, "production_set_schema_sha256": []}
         (world.folder / "online_hold.json").write_text(json.dumps(hold))
         with world.running(deployed_environment(world.folder, FEATURE_SET=None)):
@@ -1624,7 +1624,7 @@ def case_fa27(c: Checker) -> None:
     schema = feast_cases.synthetic_schema()
     catalog, _ = feast_cases.stub_features(schema)
     with tempfile.TemporaryDirectory(prefix="feast_aws_all_") as raw:
-        world = Deployed(Path(raw), RegistryStandIn())
+        world = Deployed(Path(raw), ProductionBucket())
         world.guarded = GuardedCatalog(catalog)
         log: list[str] = []
         environment = aws_environment(FEAST_RUN_FOLDER=raw, FEATURE_SET=feature_sets_module().SINGLE_PATH)

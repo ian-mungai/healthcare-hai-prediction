@@ -1559,24 +1559,6 @@ def refs_name(reference: str) -> str:
     return reference.split(":", 1)[1]
 
 
-class RegistryAbsent(RuntimeError):
-    """What MLflow raises for a registered model that does not exist: the code the champion reader recognises."""
-
-    error_code = "RESOURCE_DOES_NOT_EXIST"
-
-
-class ChampionStore:
-    """The registry call the champion reader makes, answered from a table of registered model name to version tags (a name without an entry has no alias)."""
-
-    def __init__(self, tags: dict[str, dict[str, str]]) -> None:
-        self.tags = tags
-
-    def get_model_version_by_alias(self, name: str, alias: str) -> Any:
-        if name not in self.tags:
-            raise RegistryAbsent(f"Registered Model with name={name} not found")
-        return type("Version", (), {"tags": self.tags[name], "version": "1", "run_id": "run"})()
-
-
 def feature_set_cases(report: Report) -> None:
     """F01 to F10: the set ids, the tables each set publishes, the newest base run and the online decision (nothing, offline, load or hold)."""
     feature_sets: Any = importlib.import_module("scripts.features.feature_sets")
@@ -1658,8 +1640,10 @@ def feature_set_cases(report: Report) -> None:
     hashes = {name: schema_module.set_schema_sha256(name, schema=schema) for name in feature_sets.MODEL_SETS}
 
     def decide(feature_set: str, models: dict[str, dict[str, str]]) -> str:
-        store = ChampionStore({names[hai_type]: tags for hai_type, tags in models.items()})
-        return str(feature_sets.online_action(feature_set, schema, hashes.get(feature_set, ""), feature_sets.production_hashes(store, feature_set)))
+        # The newest Production record of each infection type (None for a type no promotion wrote a record for), as feast_sets.stored_production reads them.
+        records = {hai_type: (dict(models[hai_type]) if hai_type in models else None) for hai_type in names}
+        production = list(feature_sets.production_models(records, feature_set).values())
+        return str(feature_sets.online_action(feature_set, schema, hashes.get(feature_set, ""), production))
 
     same = {"feature_set": "m1", "feature_set_schema_sha256": hashes["m1"]}
     other = {"feature_set": "m1", "feature_set_schema_sha256": "0" * 64}

@@ -9,14 +9,14 @@
   (``newest_base_row``). The run records the base run it read as ``base_run`` in its publish record.
 
 ``online_action`` decides what the Feast phase does with a set: nothing for base, offline only for a set the rules keep offline, a held online load when the
-set's schema hash differs from the hash of a Production model of that set, otherwise the online load. The Production models are read through the registry
-reader of the promotion check (``scripts.training.registry.champion``): a champion version belongs to a set when its tag ``feature_set`` names it, and its
-tag ``feature_set_schema_sha256`` is the hash it was trained on (``feature_schema.set_schema_sha256``).
+set's schema hash differs from the hash of a Production model of that set, otherwise the online load. The Production models are the newest Production
+record of each infection type that the promote action writes to the data bucket (``scripts.training.production_record``), so the features job needs no MLflow
+access: a model belongs to a set when its record's ``feature_set`` names it, and its ``feature_set_schema_sha256`` is the hash it was trained on
+(``feature_schema.set_schema_sha256``).
 """
 
 from __future__ import annotations
 
-import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -75,18 +75,11 @@ def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str
     return next((row for row in reversed(rows) if wanted <= set(row["snapshot_set"])), None)
 
 
-def production_hashes(store: Any, feature_set: str) -> list[str | None]:
-    """The schema hash tag of the Production model of each HAI type that belongs to the set (None for a model without the tag), in type order."""
-    from scripts.training import registry
+def production_models(records: Mapping[str, Mapping[str, Any] | None], feature_set: str) -> dict[str, str | None]:
+    """The schema hash of each Production model that belongs to the set (None for a record without the hash), by infection type.
 
-    names = json.loads(MODEL_CONTRACT.read_text())["registered_models"]
-    found: list[str | None] = []
-    for hai_type in sorted(names):
-        version = registry.champion(store, names[hai_type])
-        tags = dict(getattr(version, "tags", None) or {}) if version is not None else {}
-        if tags.get(SET_TAG) == feature_set:
-            found.append(tags.get(HASH_TAG))
-    return found
+    ``records`` maps each infection type to its newest Production record, or None when no promotion wrote one."""
+    return {hai_type: record.get(HASH_TAG) for hai_type, record in sorted(records.items()) if record is not None and record.get(SET_TAG) == feature_set}
 
 
 def online_action(feature_set: str, schema: Mapping[str, Any], set_hash: str, production: Sequence[str | None]) -> str:

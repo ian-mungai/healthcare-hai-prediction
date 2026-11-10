@@ -12,6 +12,19 @@
       "Effect": "Allow",
       "Action": ["ssm:GetParameter"],
       "Resource": ${REDIS_PARAMETER_ARNS}
+    },
+    {
+      "Sid": "ReadProductionRecords",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${PRODUCTION_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListProductionRecords",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": { "StringLike": { "s3:prefix": ${PRODUCTION_LIST_PREFIXES} } }
     }
   ]
 }

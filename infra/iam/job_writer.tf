@@ -230,6 +230,10 @@ resource "aws_iam_role_policy" "job_writer_features_feast" {
   policy = templatefile("${path.module}/owner_policies/job_writer_features_feast.json", {
     REGISTRY_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/${local.job_layer_run_registry_key}"])
     REDIS_PARAMETER_ARNS = jsonencode(["arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.redis_password_name}"])
+    # The Feast phase of an online model set reads the Production record of each infection type, which the promote job writes (scripts/training/production_record.py).
+    BUCKET_ARN               = local.bronze_bucket_arn
+    PRODUCTION_OBJECT_ARNS   = jsonencode(["${local.bronze_bucket_arn}/promote/production/*"])
+    PRODUCTION_LIST_PREFIXES = jsonencode(["promote/production/*"])
   })
 }
 

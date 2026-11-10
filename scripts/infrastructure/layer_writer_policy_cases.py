@@ -28,6 +28,7 @@ PAYLOADS = "bronze_objects/sha256"
 LARGEST_BUCKET = f"arn:aws:s3:::{LARGEST_BUCKET_NAME}"
 MANAGED_PREFIX = "storage_bronze_"
 EXTRAS = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_activation")
+PRODUCTION_PREFIX = "promote/production/"
 POLICIES = (
     "job_writer_layer_storage",
     "job_writer_execution",
@@ -143,6 +144,44 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
         add(f"{layer} registry store gets no unprefixed bucket list", layer, "s3:ListBucket", BUCKET, False)
         add(f"{layer} registry bucket check is not a list of the whole bucket", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": ("",)})
         add(f"{layer} registry bucket check is not a list of another bucket", layer, "s3:ListBucket", OTHER_BUCKET, False)
+        # The Feast phase reads the Production record of each infection type (promote/production/<HAI_TYPE>/<generation>.json) and nothing else of promote/.
+        for hai_type in ("HAI_1", "HAI_6"):
+            record = f"{BUCKET}/{PRODUCTION_PREFIX}{hai_type}/0000000001.json"
+            add(f"{layer} production record get {hai_type}", layer, "s3:GetObject", record, layer == "features")
+            add(
+                f"{layer} production records list {hai_type}",
+                layer,
+                "s3:ListBucket",
+                BUCKET,
+                layer == "features",
+                {"s3:prefix": (f"{PRODUCTION_PREFIX}{hai_type}/",)},
+            )
+            for action in ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:PutObjectAcl"):
+                add(f"{layer} production record excludes {hai_type} {action}", layer, action, record, False)
+            add(
+                f"{layer} production record other bucket {hai_type}",
+                layer,
+                "s3:GetObject",
+                f"{OTHER_BUCKET}/{PRODUCTION_PREFIX}{hai_type}/0000000001.json",
+                False,
+            )
+            add(
+                f"{layer} production records list other bucket {hai_type}",
+                layer,
+                "s3:ListBucket",
+                OTHER_BUCKET,
+                False,
+                {"s3:prefix": (f"{PRODUCTION_PREFIX}{hai_type}/",)},
+            )
+        for key in (
+            "promote/20261024T000000Z-1234abcd/intent.json",
+            "promote/models/hai_model_HAI_1/lease-0000000001.json",
+            "promote/production",
+            "promote/productions/x.json",
+        ):
+            add(f"{layer} promotion record outside production {key}", layer, "s3:GetObject", f"{BUCKET}/{key}", False)
+        for prefix in ("promote/", "promote/models/", "promote/production", "promote/productions/", "production/"):
+            add(f"{layer} promotion list outside production {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
         for action in ("ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter"):
             add(f"{layer} redis password excludes {action}", layer, action, REDIS_PARAMETER, False)
@@ -312,7 +351,13 @@ def render_documents(root: Path, base: dict[str, dict[str, Any]], bucket: str, c
     documents["layer_state_features"] = load(
         directory / "job_writer_layer_upload.json", {"UPLOAD_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/layer_runs/features/*/state/*"])}
     )
-    feast = {"REGISTRY_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/feast/registry.pb"]), "REDIS_PARAMETER_ARNS": json.dumps([REDIS_PARAMETER])}
+    feast = {
+        "REGISTRY_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/feast/registry.pb"]),
+        "REDIS_PARAMETER_ARNS": json.dumps([REDIS_PARAMETER]),
+        "BUCKET_ARN": bucket,
+        "PRODUCTION_OBJECT_ARNS": json.dumps([f"{bucket}/{PRODUCTION_PREFIX}*"]),
+        "PRODUCTION_LIST_PREFIXES": json.dumps([f"{PRODUCTION_PREFIX}*"]),
+    }
     documents["layer_feast_features"] = load(directory / "job_writer_features_feast.json", feast)
     activation = {"BUCKET_ARN": bucket, "RUN_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/layer_runs/features/*"])}
     documents["layer_activation_features"] = load(directory / "job_writer_features_activation.json", activation)

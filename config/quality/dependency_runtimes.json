@@ -121,6 +121,7 @@
         "scripts/training/job_failure.py",
         "scripts/training/promote_lease.py",
         "scripts/training/promote_receipt.py",
+        "scripts/training/production_record.py",
         "scripts/training/step_records.py",
         "orchestration/code_digest.py",
         "orchestration/mlflow_service.py",

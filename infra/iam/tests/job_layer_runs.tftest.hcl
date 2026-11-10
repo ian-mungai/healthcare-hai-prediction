@@ -155,13 +155,18 @@ run "only_features_may_apply_feast" {
     condition = (
       toset(keys(aws_iam_role_policy.job_writer_features_feast)) == toset(["features"]) &&
       aws_iam_role_policy.job_writer_features_feast["features"].role == aws_iam_role.job_write_layer_task["features"].name &&
-      length(jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement) == 2 &&
+      length(jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement) == 4 &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[0].Action == ["s3:GetObject", "s3:PutObject"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/feast/registry.pb"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[1].Action == ["ssm:GetParameter"] &&
-      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[1].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/redis_password"]
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[1].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/redis_password"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[2].Action == ["s3:GetObject"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[2].Resource == ["arn:aws:s3:::example-project-ci-bucket/promote/production/*"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[3].Action == ["s3:ListBucket"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[3].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[3].Condition.StringLike["s3:prefix"] == ["promote/production/*"]
     )
-    error_message = "The features role reads and writes the one Feast registry object and reads the one Redis password parameter. No other layer receives either."
+    error_message = "The features role reads and writes the one Feast registry object, reads the one Redis password parameter and reads and lists the Production records under promote/production/ only. No other layer receives any of them."
   }
 }
 

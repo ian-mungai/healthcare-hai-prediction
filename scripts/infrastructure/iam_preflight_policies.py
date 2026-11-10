@@ -225,6 +225,9 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
         return {
             "REGISTRY_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/{layer_registry_key(infra)}"]),
             "REDIS_PARAMETER_ARNS": json.dumps([f"arn:aws:ssm:{region}:{account}:parameter{names['REDIS_PASSWORD_NAME']}"]),
+            "BUCKET_ARN": f"arn:aws:s3:::{bucket}",
+            "PRODUCTION_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/promote/production/*"]),
+            "PRODUCTION_LIST_PREFIXES": json.dumps(["promote/production/*"]),
         }
     if policy.endswith("job_writer_execution.json"):
         pairs = [names[f"AWS_POLARIS_{layer}_CLIENT_{part}_NAME"] for layer in ("SILVER", "GOLD", "FEATURES") for part in ("ID", "SECRET")]

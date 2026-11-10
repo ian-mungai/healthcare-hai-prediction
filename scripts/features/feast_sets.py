@@ -6,7 +6,8 @@ A model set run publishes one table, ``feature_matrix_<set>``. Its Feast phase
    read (``base_run`` of ``features_snapshot.json``) with the schema's label table. The publication of the set run and the base publication are both
    verified before and after the apply.
 2. ``set_materialize`` decides what happens online (``scripts.features.feature_sets.online_action``): nothing for base, offline only for a set that is not
-   online, a held load when the set's schema hash differs from the hash of a Production model of that set, otherwise the load. A held load writes
+   online, a held load when the set's schema hash differs from the hash of a Production model of that set (the newest Production record of each infection
+   type in the data bucket, ``production_reader``), otherwise the load. A held load writes
    ``online_hold.json`` in the run's prefix and loads nothing; the set's table is published and registered offline either way.
 3. ``release`` loads a held run online. The training side calls it after the model trained on the new schema is promoted:
    ``python -m scripts.features.feast_materialize --release <SET> <RUN_ID>``. A repeat changes nothing.
@@ -24,6 +25,7 @@ import importlib.metadata
 import json
 import os
 import tempfile
+import urllib.parse
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC
@@ -34,6 +36,7 @@ from scripts.features import feast_job, feature_schema, feature_sets, historical
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
+from scripts.training import production_record, promote_receipt
 
 HOLD_NAME = "online_hold.json"
 RELEASE_NAME = "online_release.json"
@@ -452,13 +455,25 @@ def newest_set_run(catalog: reads.IcebergCatalog, namespace: str, feature_set: s
     return max(mine)[1]
 
 
-def mlflow_production(environ: Mapping[str, str], feature_set: str) -> list[str | None]:
-    """The schema hash tag of each Production model of the set, read through the registry reader of the promotion check."""
-    uri = environ.get("MLFLOW_TRACKING_URI", "")
-    if not uri:
-        raise ReadError("MLFLOW_TRACKING_URI is not set: the Feast phase of an online set reads the Production models of the set")
-    client = importlib.import_module("mlflow").MlflowClient(tracking_uri=uri)
-    return feature_sets.production_hashes(client, feature_set)
+def records_bucket(settings: feast_job.JobSettings) -> str:
+    """The data bucket that holds the Production records: the bucket of an S3 registry (the AWS profile), else the deployment file's bucket."""
+    location = urllib.parse.urlparse(settings.registry_path)
+    return location.netloc if location.scheme == "s3" and location.netloc else reads.deployment_bucket()
+
+
+def stored_production(client: Any, bucket: str, feature_set: str) -> dict[str, str | None]:
+    """The schema hash of each Production model of the set by infection type, from the newest Production record of each type in the data bucket."""
+    names = json.loads(feature_sets.MODEL_CONTRACT.read_text())["registered_models"]
+    try:
+        records = production_record.current(client, bucket, names)
+    except promote_receipt.ReceiptError as error:
+        raise ReadError(f"the Production records cannot be read: {error}") from None
+    return feature_sets.production_models(records, feature_set)
+
+
+def production_reader(settings: feast_job.JobSettings, feature_set: str) -> Callable[[], dict[str, str | None]]:
+    """Read the Production models of the set from the records in the data bucket when called (the task role reads ``promote/production/`` only)."""
+    return lambda: stored_production(promote_receipt.s3_client(), records_bucket(settings), feature_set)
 
 
 def hold_store(settings: feast_job.JobSettings, environ: Mapping[str, str]) -> HoldStore:
@@ -517,7 +532,7 @@ def run_set_materialize(
         schema=document,
         schema_sha256=schema_sha256,
         base_run=base_run,
-        production=production if production is not None else (lambda: mlflow_production(environ, feature_set)),
+        production=production if production is not None else (lambda: list(production_reader(settings, feature_set)().values())),
         loader=loader if loader is not None else online_loader(settings, environ, schema=(document, schema_sha256)),
         holds=holds if holds is not None else RunFolderStore(settings.folder, settings.run),
     )
