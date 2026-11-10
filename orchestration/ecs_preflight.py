@@ -380,6 +380,7 @@ class Preflight:
             return None
         if request.mode != JOB_MODE:
             raise LaunchRefused(f"{request.template} runs on AWS in real mode only")
+        self.require_capacity(job)  # before every gate that reads the cloud, so an empty capacity is never masked by a read
         row = self.jobs[job]
         if row.get("after"):
             self.require_passed(job, row["after"], request.input_run_id)
@@ -390,11 +391,11 @@ class Preflight:
                 raise LaunchRefused(str(error)) from None
         if row.get("approval") == "promotion":
             self.require_promotion_approval(request)
-        self.require_capacity(job)
-        if request.template == "drift_run":
-            self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
         spec = self.spec(request, job)
-        return replace(spec, task_definition=self.checked_revision(job))
+        revision = self.checked_revision(job)
+        if request.template == "drift_run":  # the only write of a job step, after every refusal
+            self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
+        return replace(spec, task_definition=revision)
 
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and the training run of the last one, to the bronze run's staged code."""
@@ -459,7 +460,7 @@ class Preflight:
         return values
 
     def require_capacity(self, job: str) -> str:
-        """The current usable-memory inputs (``HAI_LAUNCH_HOST_CAPACITY``), checked with the other gates before any record or cloud call."""
+        """The current usable-memory inputs (``HAI_LAUNCH_HOST_CAPACITY``), checked before every other job gate, so before any record or cloud call."""
         capacity = self.host_capacity
         if not capacity:
             raise LaunchRefused(

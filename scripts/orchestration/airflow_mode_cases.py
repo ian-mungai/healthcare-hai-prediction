@@ -30,7 +30,10 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 10. Host launch capacity binding (owner A, Nov 10 2026): a host job runs only the revision whose binding the preflight checked against the current host
    capacity. A latest active revision without a binding (registered before ``host_usable_memory_mib`` set the job memory) is refused
    (``unbound_revision_is_refused``), so is one bound to another capacity or sized to other memory (``revision_bound_to_another_capacity_is_refused``),
-   and so is every host job while the services stack leaves the capacity empty (``unset_usable_memory_refuses``). A bound revision runs by its exact ARN,
+   and so is every host job while the services stack leaves the capacity empty (``unset_usable_memory_refuses``). Every refusal comes before any write,
+   and the empty capacity before any AWS call: no staged-input or record read and no ECS call masks it
+   (``unset_usable_memory_refuses``), and a drift job refused for its unbound revision writes no training code-run binding
+   (``unbound_revision_is_refused``). A bound revision runs by its exact ARN,
    so a revision registered after the check never runs in its place (``bound_revision_runs_by_its_exact_arn``).
 """
 
@@ -112,17 +115,20 @@ NOMINAL_BINDING = "job_memory_mib=25600 usable_memory_mib=32768 system_reserve_m
 class StageBucket(FakeS3):
     """The staged inputs of a run: reads that can be denied and write-once puts, as the launch role would see them."""
 
-    def __init__(self) -> None:
+    def __init__(self, log: list[str] | None = None) -> None:
         super().__init__()
         self.denied: set[str] = set()
         self.puts: list[str] = []
+        self.log = [] if log is None else log
 
     def get_object(self, **arguments: Any) -> dict[str, Any]:
+        self.log.append(f"s3:GetObject {arguments['Key']}")
         if arguments["Key"] in self.denied:
             raise client_error("AccessDenied", "GetObject")
         return super().get_object(**arguments)
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
+        self.log.append(f"s3:PutObject {arguments['Key']}")
         self.puts.append(arguments["Key"])
         if arguments.get("IfNoneMatch") != "*":
             raise client_error("AccessDenied", "PutObject", "an unconditional write is not allowed")
@@ -152,7 +158,8 @@ class Rig:
 
     def __init__(self, capacity: str = CAPACITY) -> None:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
-        self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket()
+        self.cloud: list[str] = []  # the staged-input S3 reads and writes, in order
+        self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket(self.cloud)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
@@ -195,6 +202,15 @@ class Rig:
             clock=self.time.clock(),
         )
         self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, str(TRAIN_PARAMS["run_id"]))
+
+    def aws_calls(self) -> list[str]:
+        """Every AWS call of the case so far: the staged-input S3 reads and writes, the launch-record S3 calls, ECS and CloudWatch Logs."""
+        return [
+            *self.cloud,
+            *(f"s3:{name} {arguments.get('Key', '')}" for name, arguments in self.records.calls),
+            *(f"ecs:{name}" for name, _ in self.ecs.calls),
+            *("logs:GetLogEvents" for _ in self.logs.calls),
+        ]
 
     def stage_runs(self, *runs: str) -> None:
         for run in runs:
@@ -795,6 +811,14 @@ def unbound_revision_is_refused() -> None:
         )
         require("000000000000" not in str(error) and "arn:" not in str(error), f"the refusal shows an ARN or an account: {error}")
         require(rig.tasks_started() == 0 and not rig.records.calls, "an unbound revision launched or wrote a record")
+    rig = Rig()
+    rig.ecs.register("example_dev_job_drift_host", 25600, None)
+    with world(rig, "drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require("carries no host capacity binding" in str(error), f"the unbound drift revision is not named: {error}")
+    writes = [call for call in rig.aws_calls() if call.startswith("s3:Put")]
+    require(not writes, f"a drift job refused for its unbound revision wrote before the refusal: {writes}")
+    require(rig.tasks_started() == 0, "an unbound drift revision launched")
 
 
 def revision_bound_to_another_capacity_is_refused() -> None:
@@ -821,7 +845,17 @@ def unset_usable_memory_refuses() -> None:
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
         require(named in str(error), f"the unset capacity is not named: {error}")
-        require(not rig.ecs.calls and not rig.records.calls, f"an unset capacity reached ECS or wrote a record: {rig.ecs.calls}")
+        require(not rig.aws_calls(), f"an unset capacity made an AWS call before the refusal: {rig.aws_calls()}")
+    for dag_id, params, template in (
+        ("silver_transform_dag", SILVER, "pin_bronze"),
+        ("gold_transform_dag", GOLD, "pin_silver"),
+        ("drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}, "drift_run"),
+    ):
+        rig = Rig(capacity="")
+        with world(rig, dag_id, params) as current:
+            error = refuses(LaunchRefused, partial(current.step, template))
+        require("host_usable_memory_mib" in str(error), f"{template}: a cloud-reading gate masked the unset capacity: {error}")
+        require(not rig.aws_calls(), f"{template}: an unset capacity made an AWS call before the refusal: {rig.aws_calls()}")
 
 
 def bound_revision_runs_by_its_exact_arn() -> None:
