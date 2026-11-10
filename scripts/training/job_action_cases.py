@@ -2180,6 +2180,57 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
         require(code == 0, f"a failing scratch sampler changed the job's exit code to {code}")
         require(record["peak_scratch_bytes"] is None and record["scratch_measure"].startswith("unavailable"), f"{record}")
 
+    def sampler_start_failure_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import resource_peaks
+
+        ran: list[bool] = []
+
+        def job() -> int:
+            ran.append(True)
+            return 3
+
+        try:
+            with mock.patch.object(resource_peaks._Sampler, "start", side_effect=RuntimeError("can't start new thread")):
+                code, record = _recorded(job, scratch)
+        except RuntimeError as error:
+            raise AssertionError(f"a sampler thread that could not start stopped the job: {error}") from error
+        require(ran == [True], "the job did not run when the sampler thread could not start")
+        require(code == 3 and record["exit_code"] == 3, f"exit {code} {record['exit_code']}")
+        require(record["peak_scratch_bytes"] is None and "did not start" in record["scratch_measure"], f"{record}")
+
+    def broken_stderr_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import resource_peaks
+
+        def closed() -> io.StringIO:
+            stream = io.StringIO()
+            stream.close()
+            return stream
+
+        try:
+            with contextlib.redirect_stderr(closed()):
+                resource_peaks.recorded(lambda: 0, scratch=(scratch,), interval=0.02)
+        except SystemExit as stop:
+            require(stop.code == 0, f"a closed stderr changed the exit code to {stop.code}")
+        except Exception as error:
+            raise AssertionError(f"a closed stderr replaced a successful result with {type(error).__name__}: {error}") from error
+        else:
+            raise AssertionError("recorded returned without the job's exit")
+
+        def raises() -> int:
+            raise RuntimeError("job failed")
+
+        try:
+            with contextlib.redirect_stderr(closed()):
+                resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
+        except RuntimeError as error:
+            require(str(error) == "job failed", f"a closed stderr replaced the job's exception: {error}")
+        except Exception as error:
+            raise AssertionError(f"a closed stderr masked the job's exception with {type(error).__name__}: {error}") from error
+        else:
+            raise AssertionError("the job's exception was swallowed")
+
     def unreadable_subfolder() -> None:
         root = folder / "locked_scratch"
         locked = root / "other_owner"
@@ -2209,6 +2260,8 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
     cases.check("resource_peaks_cgroup_counter_preferred", cgroup_preferred)
     cases.check("resource_peaks_job_result_kept", failures_kept)
     cases.check("resource_peaks_broken_sampler_kept", broken_sampler_kept)
+    cases.check("resource_peaks_sampler_start_failure_kept", sampler_start_failure_kept)
+    cases.check("resource_peaks_broken_stderr_kept", broken_stderr_kept)
     cases.check("resource_peaks_unreadable_subfolder_skipped", unreadable_subfolder)
     cases.check("resource_peaks_every_job_entry_point", entry_points)
 

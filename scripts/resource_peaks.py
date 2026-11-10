@@ -10,11 +10,13 @@ misses page cache and a child that is still running, so the record names its sou
 Scratch use is the allocated size of the job's work and temporary folders, walked by a background thread every ``interval`` seconds and once more at
 exit. A peak that rises and falls between two walks is missed, so the record states the measure and the number of walks.
 
-The recording never changes the job's result: a counter or walk that fails records null and a reason, and the job's exit code or exception passes on.
+The recording never changes the job's result: a counter, walk or sampler thread that fails records null and a reason, a stderr that cannot be written
+loses only the record, and the job's exit code or exception passes on.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import resource
@@ -115,7 +117,8 @@ def _exit_code(value: object) -> int:
 def _emit(sampler: _Sampler, exit_code: int) -> None:
     try:
         sampler.stopped.set()
-        sampler.join(timeout=sampler.interval + 30)
+        if sampler.ident is not None:
+            sampler.join(timeout=sampler.interval + 30)
         if not sampler.is_alive():
             sampler.sample()
         memory, source, reason = peak_memory()
@@ -131,13 +134,18 @@ def _emit(sampler: _Sampler, exit_code: int) -> None:
         sys.stderr.write("event=resource_peaks " + json.dumps(record, sort_keys=True) + "\n")
         sys.stderr.flush()
     except Exception as error:
-        sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
+        # The diagnostic stream itself may have failed (closed or missing stderr); the job's result still passes on.
+        with contextlib.suppress(Exception):
+            sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
 
 
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
     """Run a job entry point, log its resource peaks once and exit with the job's own code or exception."""
     sampler = _Sampler(scratch, interval)
-    sampler.start()
+    try:
+        sampler.start()
+    except Exception as error:
+        sampler.error = f"sampler did not start: {type(error).__name__}: {error}"
     code = 1
     try:
         code = _exit_code(main())
