@@ -581,8 +581,9 @@ def queue_approved_registry(unit: dict, registry: dict) -> dict:
     """The registry the storage check reads for a queue unit. Most stored captures came from routes the current registry no longer names, and their old
     registries are not catalogued, so the frozen queue is the approval: the owner reviewed it, its digest binds the run and the hosts file limits its hosts."""
     view = copy.deepcopy(registry)
-    source = next((item for item in view["sources"] if item["source_id"] == unit["source_id"]), None)
-    require(source is not None, "The queue unit's source is not in the registry")
+    sources = [item for item in view["sources"] if item["source_id"] == unit["source_id"]]
+    require(len(sources) == 1, "The queue unit's source is not in the registry")
+    source = sources[0]
     source["file_routes"] = [*source.get("file_routes", []), {"route_id": queue_route_id(unit), "url": unit["url"]}]
     return view
 
@@ -593,7 +594,7 @@ def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict) -> P
     validator = receipt_validator()
     first = results[0]
     stamp = re.sub(r"[-:]", "", first.retrieved_at_utc)[:15] + "Z"
-    tag = digest(encoded_json([unit["snapshot_id"], first.retrieved_at_utc, [item.sha256 for item in results]]))[:32]
+    tag = digest(json.dumps([unit["snapshot_id"], first.retrieved_at_utc, [item.sha256 for item in results]]).encode())[:32]
     snapshot_id = f"{unit['source_id']}__{stamp}__{tag}"
     root = run.state_root / "captures" / snapshot_id
     (root / "raw").mkdir(parents=True, exist_ok=True)
