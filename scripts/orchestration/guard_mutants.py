@@ -1105,6 +1105,6 @@ GUARDS: dict[str, dict[str, tuple[Guard, ...]]] = {
 
 BEFORE_FIX: dict[str, tuple[str, ...]] = {
     "broker": ("malformed_content_length", "cancel_after_lost_submit_reply", "noop_crash_recovery", "switch_off_local_poll", "slow_answer_is_read"),
-    "supervisor": ("supervisor_listener_start_failure", "supervisor_teardown_independent"),
+    "supervisor": ("supervisor_listener_start_failure", "supervisor_teardown_independent", "supervisor_operator_log_isolated"),
     "stack": ("stack_memory_floor", "orchestration_dump_template"),
 }

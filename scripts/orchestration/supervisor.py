@@ -90,12 +90,19 @@ class SupervisorError(Exception):
 class OperatorLog(logging.Handler):
     """The supervisor's diagnostic log ``supervisor.log`` beside the broker log: one line per warning of the launcher client or the lineage worker,
     written as the broker log is (owner-only folder, append, redacted by the session's broker when there is one). Standard error keeps only the
-    command's own reports."""
+    command's own reports.
+
+    While a command runs, this handler is the only handler of both loggers: their level is WARNING, they do not propagate, so neither a handler of the
+    process (on the root or on the logger) nor an inherited level changes where a warning goes. Each logger's own level, propagate flag, disabled flag
+    and handler list are restored on every exit. A line that cannot be written (a full disk, a permission error) is dropped and ``failed`` is set;
+    nothing is written to standard error, so a failing log cannot change the command's output or raise into the command or the lineage worker."""
 
     def __init__(self, supervisor: Supervisor) -> None:
         super().__init__(logging.WARNING)
         self.supervisor = supervisor
         self.path = supervisor.paths.private / "supervisor.log"
+        self.failed = False
+        self.saved: dict[str, tuple[int, bool, bool, list[logging.Handler]]] = {}
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
@@ -107,14 +114,28 @@ class OperatorLog(logging.Handler):
         except Exception:
             self.handleError(record)
 
+    def handleError(self, record: logging.LogRecord) -> None:
+        """Drop the record: the inherited method prints a traceback and the record's raw arguments to standard error, and raises when it is closed."""
+        self.failed = True
+
     def __enter__(self) -> OperatorLog:
-        for name in DIAGNOSTIC_LOGGERS:
-            logging.getLogger(name).addHandler(self)
+        loggers = {name: logging.getLogger(name) for name in DIAGNOSTIC_LOGGERS}
+        self.saved = {name: (logger.level, logger.propagate, logger.disabled, logger.handlers) for name, logger in loggers.items()}
+        for logger in loggers.values():
+            logger.handlers = [self]
+            logger.propagate = False
+            logger.disabled = False
+            logger.setLevel(logging.WARNING)
         return self
 
     def __exit__(self, *_: object) -> None:
-        for name in DIAGNOSTIC_LOGGERS:
-            logging.getLogger(name).removeHandler(self)
+        for name, (level, propagate, disabled, handlers) in self.saved.items():
+            logger = logging.getLogger(name)
+            logger.handlers = handlers
+            logger.propagate = propagate
+            logger.disabled = disabled
+            logger.setLevel(level)
+        self.saved = {}
         self.close()
 
 
