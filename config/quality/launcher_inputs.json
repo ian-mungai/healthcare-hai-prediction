@@ -82,6 +82,11 @@
   ],
   "inventory_reads": [
     {
+      "module": "orchestration/airflow_steps.py",
+      "pattern": null,
+      "why": "reviewed: folder_bytes walks only the family scratch folders under HAI_LAUNCH_SCRATCH_PATH, the host scratch volume mounted read-only into the Airflow container, to count their allocated bytes; it lists no repository folder and reads no file contents"
+    },
+    {
       "module": "orchestration/code_digest.py",
       "pattern": "^(scripts|orchestration|feature_store|config/training|data_contracts/(features|lakehouse|training))/|^docs/[a-z_]+[.]md$|^dbt/seeds/gold/[^/]+_bridge\\.csv$|^dbt/seeds/features/frozen_hai_outcome_controls\\.csv$",
       "why": "reviewed: file_entries walks the fixed TRAINING_ROOTS (orchestration/code_digest.py:19) with iterdir (:72) and glob (:80) and git ls-files (:132); only the default roots are ever used (no other module calls file_entries), so the pattern is that tuple (the docs entry is written as any lowercase markdown file in the docs folder, which tracks only the analysis plan)"
@@ -362,8 +367,11 @@
       "why": "reviewed: verify_done lists the output folder of one training step with rglob (scripts/training/step_records.py:51), a run-time run folder"
     }
   ],
-  "dynamic_sites": {},
+  "dynamic_sites": {
+    "orchestration/dag_runtime.py": 1
+  },
   "inventory_sites": {
+    "orchestration/airflow_steps.py": 1,
     "orchestration/code_digest.py": 3,
     "orchestration/launcher.py": 9,
     "orchestration/lineage.py": 1,
@@ -502,8 +510,12 @@
     "config/lakehouse/retired_objects.json",
     "config/orchestration/broker_templates.json",
     "config/orchestration/broker_templates.schema.json",
+    "config/orchestration/ecs_broker_jobs.json",
+    "config/orchestration/ecs_broker_jobs.schema.json",
     "config/orchestration/ecs_jobs.json",
     "config/orchestration/ecs_jobs.schema.json",
+    "config/orchestration/ecs_launch.json",
+    "config/orchestration/host_jobs.json",
     "config/orchestration/platform.json",
     "config/quality/docker_calls_reviewed.json",
     "config/training/census_regions.json",
@@ -1062,6 +1074,7 @@
     "features/great_expectations/suites/silver_spine.json",
     "infra/iam/variables.tf",
     "orchestration/__init__.py",
+    "orchestration/airflow_steps.py",
     "orchestration/catalog_authority.py",
     "orchestration/catalog_transport.py",
     "orchestration/catalog_transport_child.py",
@@ -1074,6 +1087,7 @@
     "orchestration/ecs_launch.py",
     "orchestration/ecs_launch_operator.py",
     "orchestration/ecs_launch_provider.py",
+    "orchestration/ecs_preflight.py",
     "orchestration/ecs_stage.py",
     "orchestration/ecs_target.py",
     "orchestration/fake.py",
