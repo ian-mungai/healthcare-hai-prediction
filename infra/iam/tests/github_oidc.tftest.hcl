@@ -222,6 +222,24 @@ run "plan_role_holds_no_write_and_no_secret_read" {
   }
 }
 
+run "plan_role_reads_no_host_job_cap_metadata" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  # Delivery plan role and the host job cap policy (owner A, Nov 10 2026): the plan role does not mirror the ssmcap listing and tag reads, and the
+  # delivery boundary stays unchanged.
+  assert {
+    condition = alltrue([
+      for action in ["ssm:DescribeParameters", "ssm:ListTagsForResource", "ssm:GetParameter"] :
+      !contains(flatten([for statement in jsondecode(aws_iam_role_policy.github["terraform_plan"].policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), action)
+    ])
+    error_message = "The plan role holds neither ssm:DescribeParameters nor ssm:ListTagsForResource (nor ssm:GetParameter), so it stays inside the unchanged delivery boundary."
+  }
+}
+
 run "state_access_is_per_stack_and_leaves_out_iam_and_storage" {
   command = plan
 

@@ -1773,6 +1773,15 @@ def delivery_cases() -> Iterator[Case]:
         yield Case(f"delivery refused: saved plans: {role} puts a saved plan", request("s3:PutObject", PLAN_OBJECTS[0]), False, None, f"delivery_{role}")
     # The state keys stay readable and unwritable for the plan role while it saves plans.
     yield Case("delivery allowed: terraform_plan still reads a state key", request("s3:GetObject", STATE_KEYS[0]), True, None, plan_role)
+    # Delivery plan role and the host job cap policy (owner A, Nov 10 2026): the plan role mirrors neither ssmcap read.
+    yield Case("delivery refused: terraform_plan lists parameter metadata", request("ssm:DescribeParameters", "*"), False, None, plan_role)
+    yield Case(
+        "delivery refused: terraform_plan lists the tags of the host job cap",
+        request("ssm:ListTagsForResource", parameter(HOST_JOB_CAP)),
+        False,
+        None,
+        plan_role,
+    )
     yield Case(
         "delivery refused: saved plans: terraform_plan writes a state key",
         request("s3:PutObject", STATE_KEYS[0]),

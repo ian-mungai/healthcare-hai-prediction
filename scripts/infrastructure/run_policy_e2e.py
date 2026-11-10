@@ -176,7 +176,8 @@ def load_roles() -> dict[str, dict[str, Any]]:
 # What the plan role never reads, the same list as ``github_plan_unreadable`` in infra/iam/github_oidc.tf.
 PLAN_UNREADABLE = frozenset(
     {
-        "secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken",
+        "secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters", "ssm:ListTagsForResource",
+        "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken",
         "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord",
         "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts",
     }
