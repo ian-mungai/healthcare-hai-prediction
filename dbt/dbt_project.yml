@@ -178,11 +178,10 @@ vars:
 
 models:
   hai:
+    # Silver publishes every model it builds (data_contracts/lakehouse/silver_publish.json), so each is a table of the build file: a view would read the
+    # bronze catalog and the build file's own name, which the sealed copy that the publish exports has neither of.
     silver:
-      +materialized: view
-      # Window choices scan every HAI row; tables keep downstream reads fast.
-      intermediate:
-        +materialized: table
+      +materialized: table
     # Gold stores atomic facts, dimensions and bridges as tables.
     gold:
       +materialized: table

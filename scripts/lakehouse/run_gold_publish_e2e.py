@@ -29,6 +29,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -411,10 +412,52 @@ def contract_check(report: Path) -> list[dict[str, Any]]:
         step("every key column of a fact or bridge is one of the table's contract columns", not missing, missing=missing),
         step("the namespaces are gold_e2e for publish_fixture and gold for real", dict(plan.namespaces) == {"publish_fixture": "gold_e2e", "real": "gold"}),
         step("the backup prefix is the owner's folder under lakehouse/", plan.backup_prefix == "lakehouse/catalog_backups/"),
+        step("the gold plan names every gold dbt model", set(plan.tables) == dbt_models("gold"), unpublished=sorted(dbt_models("gold") - set(plan.tables))),
+        *silver_plan_steps(),
         *identifier_rule_steps(),
         *plan_boundary_steps(),
         *silver_read_steps(),
         *model_check_steps(),
+    ]
+
+
+MATERIALIZED = re.compile(r"materialized\s*=\s*['\"](\w+)['\"]")
+STAGING_GRAIN = ("_member_sha256", "_row_number")
+
+
+def dbt_models(layer: str) -> set[str]:
+    """The names of the dbt models under ``dbt/models/<layer>``."""
+    return {path.stem for path in (ROOT / "dbt/models" / layer).rglob("*.sql")}
+
+
+def materialization(path: Path, folders: dict[str, Any]) -> str:
+    """How dbt builds one model: its own ``config(materialized=...)``, else the deepest ``+materialized`` of its folders in ``dbt_project.yml``."""
+    found = MATERIALIZED.search(path.read_text())
+    if found:
+        return found[1]
+    kind, level = "view", folders
+    for part in path.relative_to(ROOT / "dbt/models").parts[:-1]:
+        level = level.get(part) or {}
+        kind = level.get("+materialized", kind)
+    return kind
+
+
+def silver_plan_steps() -> list[dict[str, Any]]:
+    """Silver publishes every model it builds, each a table in the build file, the staging copies keyed by the grain their test proves."""
+    import yaml
+
+    from scripts.lakehouse import silver_publish
+
+    plan = silver_publish.publish_plan("real")
+    project = yaml.safe_load((ROOT / "dbt/dbt_project.yml").read_text())
+    models = {path.stem: path for path in (ROOT / "dbt/models/silver").rglob("*.sql")}
+    copies = {f"stg_{table}" for table in project["vars"]["copy_tables"]}
+    views = sorted(name for name, path in models.items() if materialization(path, project["models"]["hai"]) != "table")
+    keys = sorted(name for name in copies if plan.tables.get(name) != STAGING_GRAIN)
+    return [
+        step("the silver plan names every silver dbt model", set(plan.tables) == set(models), unpublished=sorted(set(models) - set(plan.tables))),
+        step("every silver model is built as a table, so the sealed copy holds its rows without the bronze catalog", not views, views=views[:5]),
+        step("every staging copy is keyed by the file checksum and row number its grain test proves unique", bool(copies) and not keys, keys=keys[:5]),
     ]
 
 

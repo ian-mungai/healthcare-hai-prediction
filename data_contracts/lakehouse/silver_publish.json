@@ -321,9 +321,151 @@
           "wonder_row_key"
         ]
       },
+      "stg_acs_b16005": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_b19013": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_b25070": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_b25091": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_b26001": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_c16001": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_dp02": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_dp03": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_dp04": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_dp05": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_s0101": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_s0601": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_s1701": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_s2503": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_s2701": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_b16005": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_b19013": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_b25070": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_b25091": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_b26001": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_acs_summary_c16001": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_bls_laus": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
       "stg_bronze__file_copies": {
         "merge_key": [
           "copy_key"
+        ]
+      },
+      "stg_bronze__file_labels": {
+        "merge_key": [
+          "observation_id"
+        ]
+      },
+      "stg_bronze__file_selection": {
+        "merge_key": [
+          "file_key"
         ]
       },
       "stg_bronze__files": {
@@ -331,9 +473,317 @@
           "file_key"
         ]
       },
+      "stg_bronze__metadata": {
+        "merge_key": [
+          "metadata_key"
+        ]
+      },
+      "stg_bronze__physical_object_index": {
+        "merge_key": [
+          "member_sha256"
+        ]
+      },
       "stg_bronze__release_observations": {
         "merge_key": [
           "observation_id"
+        ]
+      },
+      "stg_bronze__sheet_selection": {
+        "merge_key": [
+          "sheet_key"
+        ]
+      },
+      "stg_bronze__twin_comparison": {
+        "merge_key": [
+          "twin_key"
+        ]
+      },
+      "stg_cms_cc_complications_and_deaths_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_hac_reduction_program_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_hcahps_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_hospital_general_information": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_hospital_readmissions_reduction_program_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_hvbp_tps": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_maternal_health_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_timely_and_effective_care_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_cc_unplanned_hospital_visits_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_change_of_ownership": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_geographic_variation_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hai_hospital": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hai_national": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hai_state": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hospital_cost_reports": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hospital_enrollments": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hospital_owners": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_hsa_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_ipps_sas": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_ipps_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_ipps_text_lines": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_medicare_inpatient_by_drg": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_medicare_inpatient_by_provider": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_mmd_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_occupational_mix_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_occupational_mix_text_lines": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_occupational_mix_text_lines_utf16": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_cms_provider_of_services": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_county_adjacency": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_county_adjacency_2010_text_lines": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hhs_capacity_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hrsa_hpsa_detail": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hrsa_mua_detail": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hud_zip_county": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hud_zip_county_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_onc_pi_attestations_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_onc_pi_chpl_linkage_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_places": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_ruca_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_ruca_tracts_2020": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_ruca_zip_2010": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_ruca_zip_2020": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_rucc": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_rucc_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_sahie": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_saipe_text_lines": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_svi": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_wonder_county_mortality": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
         ]
       }
     }
