@@ -1468,14 +1468,14 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
         ),
         selection_case(work, "empty_range_runs_all", ["--scope", "range", "--part", "core+layers"], WITH_LAYERS, "no usable range"),
         selection_case(
-            work, "unclassified_path_runs_all", ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "core+layers"], WITH_LAYERS, "unclassified"
+            work, "unclassified_path_runs_all", ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "core+layers"], WITH_LAYERS, "Unclassified"
         ),
         selection_case(
             work,
             "unclassified_path_runs_all_in_part_all",
             ["--scope", "paths", "--path", "newtop/tool.bin", "--part", "all"],
             [*WITH_LAYERS, "launcher", "reuse_gate_checks"],
-            "unclassified",
+            "Unclassified",
         ),
         selection_case(
             work,
@@ -3452,7 +3452,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
         part = "all" if group in {"launcher", "reuse_gate_checks"} else "core+layers"
         cases.append(staged_edit_case(work, f"body_file_edit_selects_{group}", f"{GROUP_FILES}/{group}.sh", wanted, part, split=False))
     cases.append(staged_edit_case(work, "pull_request_template_selects_no_group", ".github/pull_request_template.md", []))
-    cases.append(staged_edit_case(work, "pull_request_template_selects_only_the_launcher_in_part_all", ".github/pull_request_template.md", ["launcher"], "all"))
+    cases.append(staged_edit_case(work, "pull_request_template_selects_no_group_in_part_all", ".github/pull_request_template.md", [], "all"))
     cases.append(staged_edit_case(work, "dispatcher_edit_selects_every_group", "scripts/run_ci.sh", WITH_LAYERS, want_reason="selects every group"))
     cases.append(
         staged_edit_case(
