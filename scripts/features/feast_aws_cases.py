@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA23 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -16,7 +16,9 @@ import contextlib
 import hashlib
 import http.server
 import importlib
+import importlib.metadata
 import importlib.util
+import io
 import json
 import os
 import socket
@@ -1367,6 +1369,175 @@ def case_fa23(c: Checker) -> None:
         c.check("the drift current window refuses to start without AWS_REGION", refused)
 
 
+# ----------------------------------------------------------------------------------------------------
+# The deployed entry points: ``feast_job.main`` and ``feast_materialize.main`` on the AWS profile, as the features job's feast container runs them, with no
+# injected loader, session or hook. Only the outside world is a stand-in: the secret store (``open_ssm``), the token exchange, the catalog
+# (``open_catalog``), the redis and feast modules, the Feast store (``historical.default_store``), the Feast side of a set load (``SetHooks``) and the MLflow
+# registry (the mlflow module).
+
+SET_BASE_RUN = "20261109T010000Z-0000b001"
+SET_RUN = "20261109T020000Z-0000a001"
+SET_KEYS = [f"AAA00{number}:2022" for number in range(1, 4)]
+MLFLOW_URI = "http://10.0.1.20:5100"
+REGISTRY_PHRASE = "registry-phrase-4c1e"
+
+
+class RegistryMissing(Exception):
+    """MLflow's answer for a registered model that does not exist."""
+
+    error_code = "RESOURCE_DOES_NOT_EXIST"
+
+
+class RegistryStandIn:
+    """The MLflow registry as the mlflow module: each client records the address it was given and the login of the process environment, as MlflowClient
+    reads them, and the ``production`` alias of a model answers with the tags of its version."""
+
+    def __init__(self, tags: Mapping[str, Mapping[str, str]] | None = None) -> None:
+        self.tags = dict(tags or {})
+        self.clients: list[dict[str, str | None]] = []
+
+    def module(self) -> Any:
+        registry = self
+
+        class MlflowClient:
+            def __init__(self, tracking_uri: str | None = None) -> None:
+                login = {name: os.environ.get(name) for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")}
+                registry.clients.append({"uri": tracking_uri, **login})
+
+            def get_model_version_by_alias(self, name: str, alias: str) -> Any:
+                if name not in registry.tags:
+                    raise RegistryMissing(name)
+                return SimpleNamespace(version="1", tags=dict(registry.tags[name]))
+
+        return fake_module("mlflow", MlflowClient=MlflowClient)
+
+
+class Deployed:
+    """The stand-in world of one deployed run: the catalog of a base run and a model set run, the fake Redis, the secret store and the registry."""
+
+    def __init__(self, folder: Path, registry: RegistryStandIn) -> None:
+        self.folder, self.registry = folder, registry
+        self.catalog, self.schema, _, _ = feast_cases.set_catalog("m1")
+        entry = self.schema["model_sets"]["m1"]
+        self.catalog.tables[entry["table"]].rows = [{"spine_key": key, "event_timestamp": online_cases.T0} for key in SET_KEYS]
+        self.guarded = GuardedCatalog(self.catalog)
+        self.server = online_cases.FakeServer()
+        self.server.phrase = STORE_VALUE
+        self.store = StoreStandIn()
+        self.settings_files: list[Path] = []
+        self.loaded: list[tuple[str, int]] = []
+        feast_cases.set_folder(folder, SET_BASE_RUN)
+
+    def redis_module(self) -> Any:
+        server = self.server
+
+        def connect(**options: Any) -> Any:
+            return server.client(int(options["db"]), password=str(options.get("password", "")))
+
+        return fake_module("redis", Redis=connect)
+
+    def hooks_class(self) -> Any:
+        world = self
+
+        class SetHooksStandIn:
+            """``feast_sets.SetHooks``: one hash per entity of the set's table into the set's own database, and the settings file of the Feast store."""
+
+            def __init__(self, catalog: Any, publication: reads.Publication, entry: Mapping[str, Any], store: Any) -> None:
+                self.catalog, self.publication, self.entry = catalog, publication, entry
+                world.settings_files.append(store.settings_file)
+
+            def verify_heads(self, moment: str) -> None:
+                reads.verify_heads(self.catalog, self.publication, moment)
+
+            def materialize(self, start: Any, end: Any) -> None:
+                database = online.set_layout("m1").feature_db
+                for key in SET_KEYS:
+                    world.server.write_hash(database, key.encode(), {"value": key})
+                world.loaded.append((self.publication.run_id, database))
+
+            def parse_key(self, key: bytes) -> bool:
+                return key.decode().count(":") == 1
+
+            def verify_samples(self) -> None:
+                return None
+
+        return SetHooksStandIn
+
+    @contextlib.contextmanager
+    def running(self, environment: Mapping[str, str]) -> Iterator[None]:
+        """The process environment of the container and every stand-in, for the length of the block."""
+        feast_sets = importlib.import_module("scripts.features.feast_sets")
+        historical = importlib.import_module("scripts.features.historical")
+        real_version = importlib.metadata.version
+        modules = {
+            "redis": self.redis_module(),
+            "redis.retry": fake_module("redis.retry", Retry=lambda backoff, retries: None),
+            "redis.backoff": fake_module("redis.backoff", NoBackoff=lambda: None),
+            "feast.infra.online_stores.redis": fake_module("feast.infra.online_stores.redis", RedisOnlineStore=type("RedisOnlineStore", (), {})),
+            "mlflow": self.registry.module(),
+        }
+        kept = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR") if name in os.environ}
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(mock.patch.dict(os.environ, {**kept, **environment}, clear=True))
+            stack.enter_context(mock.patch.dict(sys.modules, modules))
+            stack.enter_context(mock.patch.object(feast_aws, "open_ssm", lambda region: self.store))
+            stack.enter_context(mock.patch.object(reads, "polaris_token", exchange_stand_in()))
+            stack.enter_context(mock.patch.object(reads, "open_catalog", lambda settings, loader=None: self.guarded))
+            stack.enter_context(mock.patch.object(feast_sets, "SetHooks", self.hooks_class()))
+            stack.enter_context(mock.patch.object(historical, "default_store", lambda environ, settings_file: SimpleNamespace(settings_file=settings_file)))
+            stack.enter_context(mock.patch("importlib.metadata.version", lambda name: "0.67.0" if name == "feast" else real_version(name)))
+            yield
+
+
+def deployed_environment(folder: Path, **changes: str | None) -> dict[str, str]:
+    """The feast container's environment of a model set run: the variables of ``aws_environment`` with the run folder, the set and a registry login."""
+    environment = aws_environment(
+        FEAST_RUN_FOLDER=str(folder),
+        FEATURE_SET="m1",
+        MLFLOW_TRACKING_URI=MLFLOW_URI,
+        MLFLOW_TRACKING_USERNAME="admin",
+        MLFLOW_TRACKING_PASSWORD=REGISTRY_PHRASE,
+    )
+    for name, value in changes.items():
+        if value is None:
+            environment.pop(name, None)
+        else:
+            environment[name] = value
+    return environment
+
+
+def entry_point(call: Callable[[], int]) -> tuple[int, str, str]:
+    """Run a ``main`` and return its exit code with what it wrote to stdout and stderr."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = call()
+        except SystemExit as error:
+            code = int(error.code or 0)
+    return code, out.getvalue(), err.getvalue()
+
+
+def case_fa24(c: Checker) -> None:
+    """FA24: the Feast phase of an online model set (m1) through ``feast_job materialize`` on the AWS profile loads the set through the AWS session (the secret
+    store's password, the AWS catalog) and the AWS settings file, into the set's own database."""
+    registry = RegistryStandIn()
+    with tempfile.TemporaryDirectory(prefix="feast_aws_deployed_") as raw:
+        world = Deployed(Path(raw), registry)
+        with world.running(deployed_environment(world.folder)):
+            code, out, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
+        record = json.loads((world.folder / "feast_materialize.json").read_text()) if (world.folder / "feast_materialize.json").is_file() else {}
+        c.check("the step exits 0", code == 0)
+        c.check("no failure was written", err == "")
+        c.check("the record says the set was loaded online", record.get("online") == "load" and bool(record.get("load_id")))
+        c.check("the registry was asked for the Production models of the set", len(registry.clients) == 1)
+        c.check("the load ran once, for the set run, into the set's own database", world.loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
+        c.check("the load opened the Feast store with the AWS settings file", world.settings_files == [feast_aws.AWS_SETTINGS_FILE])
+        c.check("the load read the AWS catalog (the stand-in of open_catalog)", f"features_e2e.{reads.RUNS_TABLE}" in world.guarded.loads)
+        c.check("the Redis password came from the secret store once", world.store.asked == [feast_aws.redis_secret_name()])
+        c.check("the set's database holds one key per entity", len(world.server.database_keys(online.set_layout("m1").feature_db)) == len(SET_KEYS))
+        c.check("no failure text holds the reader secret", SENTINEL not in out + err)
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1391,4 +1562,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA21": (case_fa21, "FA21"),
     "FA22": (case_fa22, "FA22"),
     "FA23": (case_fa23, "FA23"),
+    "FA24": (case_fa24, "FA24"),
 }

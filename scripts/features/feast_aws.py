@@ -346,7 +346,11 @@ def run_job(
         from scripts.features import feast_sets
 
         if step == "materialize":
-            return feast_sets.run_set_materialize(job, environ, feature_set, schema=schema, production=production, holds=holds)
+            # The online load of the set opens this profile's catalog session (the secret store's password, the AWS catalog) and its settings file.
+            online_load = feast_sets.online_loader(
+                job, environ, schema=schema, session=session, control=control, features=features, settings_file=AWS_SETTINGS_FILE
+            )
+            return feast_sets.run_set_materialize(job, environ, feature_set, schema=schema, production=production, loader=online_load, holds=holds)
         if feature_set != "base":
             repository = backend if backend is not None else feast_job.FeastRepository(settings_file=AWS_SETTINGS_FILE)
             return feast_sets.run_set_apply(job, environ, feature_set, backend=repository, lease=lease, schema=schema, session=session)
