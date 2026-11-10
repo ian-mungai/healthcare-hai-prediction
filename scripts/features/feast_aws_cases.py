@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA28 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA29 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -21,6 +21,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import sys
 import tempfile
@@ -41,6 +42,7 @@ from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker, fake_module, stop_worker
 from scripts.features.publication_reads import ReadError
+from scripts.orchestration.ecs_broker_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.training import promote_receipt
 
@@ -1392,15 +1394,28 @@ DEPLOYED_FEAST_SECRETS = {"POLARIS_CLIENT_ID": "reader-id-1", "POLARIS_CLIENT_SE
 
 
 class ProductionBucket(FakeLaunchBucket):
-    """The data bucket as the features task role sees it: list and read under ``promote/production/`` only (infra/iam job_writer_features_feast.json).
+    """The data bucket as the features task role sees it (infra/iam job_writer_features_feast.json): list and read under ``promote/production/``, and list
+    (never read) the lease records of one model under ``promote/models/<model>/``.
 
-    ``production`` maps an infection type to the Production records the promote action wrote for it, oldest generation first."""
+    ``production`` maps an infection type to the Production records the promote action wrote for it, oldest generation first. ``leases`` maps an infection
+    type to the state of each lease generation of its model (True closed, False open), oldest first. A type without an entry in ``leases`` gets one closed
+    generation per record, as the promote action leaves it; a record whose tags are None is not written (a generation that closed without a record)."""
 
-    def __init__(self, production: Mapping[str, list[Mapping[str, Any]]] | None = None) -> None:
-        super().__init__(FEATURE_BUCKET, "promote/production/")
+    LEASE_LIST = re.compile(r"promote/models/[A-Za-z][A-Za-z0-9_]*/")
+
+    def __init__(self, production: Mapping[str, list[Mapping[str, Any] | None]] | None = None, leases: Mapping[str, list[bool]] | None = None) -> None:
+        super().__init__(FEATURE_BUCKET, "promote/")
         names = json.loads(feature_sets_module().MODEL_CONTRACT.read_text())["registered_models"]
+        for hai_type, states in {**{hai_type: [True] * len(records) for hai_type, records in (production or {}).items()}, **(leases or {})}.items():
+            for generation, closed in enumerate(states, start=1):
+                lease = {"schema": 1, "model": names[hai_type], "generation": generation, "run_id": f"20261109T00000{generation}Z-0000c00{generation}"}
+                self.objects[f"promote/models/{names[hai_type]}/lease-{generation:010d}.json"] = json.dumps(lease).encode()
+                if closed:
+                    self.objects[f"promote/models/{names[hai_type]}/lease-{generation:010d}.done.json"] = json.dumps({**lease, "outcome": "completed"}).encode()
         for hai_type, records in (production or {}).items():
             for generation, tags in enumerate(records, start=1):
+                if tags is None:
+                    continue
                 record = {
                     "schema": 1,
                     "hai_type": hai_type,
@@ -1414,6 +1429,12 @@ class ProductionBucket(FakeLaunchBucket):
                     "promoted_at": "2026-11-09T00:00:00+00:00",
                 }
                 self.objects[f"promote/production/{hai_type}/{generation:010d}.json"] = json.dumps(record).encode()
+
+    def _enter(self, operation: str, arguments: dict[str, Any], key: str) -> None:
+        super()._enter(operation, arguments, key)
+        granted = key.startswith("promote/production/") or (operation == "list_objects_v2" and self.LEASE_LIST.fullmatch(key) is not None)
+        if not granted:
+            raise client_error("AccessDenied", operation)
 
     def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
         self._enter("list_objects_v2", arguments, str(arguments.get("Prefix", "")))
@@ -1537,7 +1558,11 @@ def case_fa24(c: Checker) -> None:
         c.check("the step exits 0", code == 0)
         c.check("no failure was written", err == "")
         c.check("the record says the set was loaded online", record.get("online") == "load" and bool(record.get("load_id")))
-        c.check("the Production records of every infection type were listed", sorted(bucket.reads()) == [f"promote/production/HAI_{n}/" for n in range(1, 7)])
+        c.check(
+            "the lease records of every model and the Production records of every infection type were listed",
+            sorted(bucket.reads())
+            == sorted([f"promote/models/hai_model_HAI_{n}/" for n in range(1, 7)] + [f"promote/production/HAI_{n}/" for n in range(1, 7)]),
+        )
         c.check("the load ran once, for the set run, into the set's own database", world.loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
         c.check("the load opened the Feast store with the AWS settings file", world.settings_files == [feast_aws.AWS_SETTINGS_FILE])
         c.check("the load read the AWS catalog (the stand-in of open_catalog)", f"features_e2e.{reads.RUNS_TABLE}" in world.guarded.loads)
@@ -1592,7 +1617,10 @@ def case_fa25(c: Checker) -> None:
         c.check("no failure was written", err == "")
         c.check("the newest record of HAI_1 (another schema) holds the load and nothing is loaded", record.get("online") == "hold" and world.loaded == [])
         c.check("the hold names the Production schemas of the set (HAI_1 and HAI_2)", hold.get("production_set_schema_sha256") == sorted([mine, "0" * 64]))
-        c.check("every read stayed under promote/production/ of the data bucket", all(key.startswith("promote/production/") for key in bucket.reads()))
+        c.check(
+            "every read stayed under promote/production/ or was a list of one model's lease records",
+            all(key.startswith("promote/production/") or ProductionBucket.LEASE_LIST.fullmatch(key) for key in bucket.reads()),
+        )
         c.check(
             "only the newest record of each type was read",
             sorted(key for key in bucket.reads() if key.endswith(".json"))
@@ -1692,6 +1720,65 @@ def case_fa27(c: Checker) -> None:
         del out
 
 
+def case_fa29(c: Checker) -> None:
+    """FA29: the Feast phase and the release of an online set refuse, by name, while a promotion of any registered model is unresolved (owner decision
+    "Features reader refuses an unresolved promotion", Nov 10 2026): a lease generation that is open, or a newest closed generation without its Production
+    record. The promote action moves the alias before it writes the record, so either state can leave the newest record naming the schema production held
+    before. A promotion that closed with its record, earlier abandoned generations included, is resolved. With no promotion of any model yet, the set loads
+    and a held run releases (the first release). The task role lists the lease prefix of each model and reads no lease record."""
+    schema, _ = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    same = {"feature_set": "m1", "feature_set_schema_sha256": mine}
+    elsewhere = {"feature_set": "m2", "feature_set_schema_sha256": "0" * 64}
+    hold = {"schema": 1, "feature_set": "m1", "run_id": SET_RUN, "base_run": SET_BASE_RUN, "set_schema_sha256": mine, "production_set_schema_sha256": []}
+
+    def attempt(bucket: ProductionBucket, step: str) -> tuple[int, str, list[Any], bool]:
+        """Run the step and return its exit code, its stderr, the loads and whether it wrote its record (the release, or the hold of a materialize)."""
+        with tempfile.TemporaryDirectory(prefix="feast_aws_unresolved_") as raw:
+            world = Deployed(Path(raw), bucket)
+            if step == "release":
+                (world.folder / "online_hold.json").write_text(json.dumps(hold))
+                with world.running(deployed_environment(world.folder, FEATURE_SET=None)):
+                    code, out, err = entry_point(lambda: feast_materialize.main(["--release", "m1", SET_RUN, "--mode", "publish_fixture"]))
+                written = (world.folder / "online_release.json").is_file()
+            else:
+                with world.running(deployed_environment(world.folder)):
+                    code, out, err = entry_point(lambda: feast_job.main(["materialize", "--run", SET_RUN, "--mode", "publish_fixture"]))
+                written = (world.folder / "online_hold.json").is_file()
+            c.check(f"{step}: no output holds the reader secret", SENTINEL not in out + err)
+            return code, err, list(world.loaded), written
+
+    refused = {
+        "an open lease of a Production model of the set": (
+            ProductionBucket({"HAI_1": [same]}, {"HAI_1": [True, False]}),
+            ("hai_model_HAI_1", "generation 2", "open"),
+        ),
+        "an open first lease of a model of another set": (ProductionBucket({"HAI_1": [same]}, {"HAI_5": [False]}), ("hai_model_HAI_5", "generation 1", "open")),
+        "a newest closed generation without its Production record": (
+            ProductionBucket({"HAI_1": [same, None]}),
+            ("hai_model_HAI_1", "generation 2", "no Production record"),
+        ),
+        "a Production record newer than every lease generation": (
+            ProductionBucket({"HAI_1": [same, same]}, {"HAI_1": [True]}),
+            ("HAI_1", "generation 2"),
+        ),
+    }
+    for name, (bucket, words) in refused.items():
+        for step in ("materialize", "release"):
+            code, err, loaded, written = attempt(bucket, step)
+            c.check(f"{step} with {name} is refused (exit 1) by name", code == 1 and all(word in err for word in words))
+            c.check(f"{step} with {name} loads nothing and records no {'release' if step == 'release' else 'hold'}", loaded == [] and not written)
+            c.check(f"{step} with {name} reads no lease record", not any(key.startswith("promote/models/") and key.endswith(".json") for key in bucket.reads()))
+    allowed = {
+        "a resolved promotion with its record, after an abandoned generation": ProductionBucket({"HAI_1": [same, None, same], "HAI_5": [elsewhere]}),
+        "no promotion of any model yet (the first release)": ProductionBucket(),
+    }
+    for name, bucket in allowed.items():
+        for step in ("materialize", "release"):
+            code, err, loaded, _ = attempt(bucket, step)
+            c.check(f"{step} with {name} loads the run once", code == 0 and err == "" and loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
+
+
 def feature_sets_module() -> Any:
     return importlib.import_module("scripts.features.feature_sets")
 
@@ -1725,4 +1812,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA26": (case_fa26, "FA26"),
     "FA27": (case_fa27, "FA27"),
     "FA28": (case_fa28, "FA28"),
+    "FA29": (case_fa29, "FA29"),
 }
