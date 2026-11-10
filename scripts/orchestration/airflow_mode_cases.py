@@ -200,6 +200,10 @@ class Rig:
         return found.get("end")
 
 
+class FormRefused(Exception):
+    """Airflow refused the trigger at the DAG's form: no DAG run and no task."""
+
+
 class World:
     """The DAG runtime with the SDK stand-in, the rig's Variable and launch services, and the current task's context."""
 
@@ -262,10 +266,15 @@ class World:
             mock.patch.object(self.runtime, "task", task),
         ):
             runpy.run_path(str(ROOT / "dags" / dag_file))
-        for form in forms:  # Airflow fills a parameter the trigger leaves out with the form's default.
-            for name, (arguments, _) in form.items():
+        for form in forms:  # Airflow fills a parameter the trigger leaves out with the form's default, and refuses the trigger before any task runs
+            for name, (arguments, settings) in form.items():  # when a required parameter is missing or a value breaks its pattern.
                 if arguments and name not in self.params:
                     self.params[name] = arguments[0]
+                if name not in self.params:
+                    raise FormRefused(f"{name} is required")
+                pattern = settings.get("pattern")
+                if pattern and isinstance(self.params[name], str) and re.search(pattern, self.params[name]) is None:
+                    raise FormRefused(f"{name}={self.params[name]!r} does not match {pattern}")
         for node in built:
             self.enter(node.task_id)
             upstream_ok = all(self.states.get(before.task_id) == "success" for before in node.upstream)
@@ -759,37 +768,63 @@ def form_mode_defaults() -> dict[str, Any]:
     return found
 
 
+PRODUCER_RUNS = (
+    ("gold_transform_dag.py", "silver_snapshot_run"),
+    ("features_transform_dag.py", "gold_snapshot_run"),
+    ("feature_store_dag.py", "gold_snapshot_run"),
+)
+
+
 def dags_run_with_their_form_defaults() -> None:
-    """A DAG triggered with only its required values runs on the direct path: no form default is a mode the preflight refuses (failure mode 3)."""
+    """Each DAG triggered with only its required inputs runs to success on the direct path (failure mode 3): no form default is a mode the preflight
+    refuses, and a DAG whose job publishes from a producer run requires that run as a run ID in its form, so a trigger without it is refused at the form
+    before any launch instead of failing its preflight."""
     defaults = form_mode_defaults()
     accepted = {"model_promotion_dag": "promote"}  # the promotion form's mode is the operation; the step maps it to real
     wrong = {dag: mode for dag, mode in defaults.items() if mode != accepted.get(dag, "real")}
     require(len(defaults) >= 10 and not wrong, f"DAG forms default to a mode the direct path refuses: {wrong}")
+    for dag_file, name in PRODUCER_RUNS:
+        declared = form_parameter(dag_file, name)
+        arguments, settings = declared or ([], {})
+        pattern = str(settings.get("pattern", ""))
+        require(declared is not None and not arguments, f"{dag_file} does not require {name}: {declared}")
+        require(
+            bool(pattern) and re.search(pattern, GOLD_RUN) is not None and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + GOLD_RUN)),
+            f"{dag_file}'s {name} pattern does not accept exactly a run ID: {pattern}",
+        )
     rig = Rig()
     layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     features = layers(gold, "features")
+    training = str(TRAIN_PARAMS["run_id"])
     with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
         require(current.step("chain_gate") == "succeeded", "the chain gate failed")
-    training = {key: value for key, value in TRAIN_PARAMS.items() if key != "mode"}
     plan = (
         ("silver_transform_dag", {"run_id": silver}, "silver", silver),
         ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver}, "gold", gold),
         ("features_transform_dag", {"run_id": features, "gold_snapshot_run": gold}, "features", features),
-        ("training_dag", training, "train", str(TRAIN_PARAMS["run_id"])),
+        ("feature_store_dag", {"run_id": STORE_RUN, "gold_snapshot_run": gold}, "features", STORE_RUN),
+        ("training_dag", {"run_id": training}, "train", training),
     )
     for dag_id, params, job, run in plan:
         rig.stage_runs(run)
-        with world(rig, dag_id, params) as current:
+        before = rig.tasks_started()
+        with world(rig, dag_id, dict(params)) as current:
             states = current.run_dag(f"{dag_id}.py")
             failed = {name: current.results[name] for name, state in states.items() if state != "success"}
-            require(bool(states) and not failed, f"{dag_id} with its form defaults did not finish: {failed}")
-        require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
-    with world(rig, "feature_store_dag", {"run_id": FEATURES_RUN}) as current:
-        current.run_dag("feature_store_dag.py")
-        refused = {name: result for name, result in current.results.items() if MODE_REFUSAL in str(result)}
-    require(not refused, f"feature_store_dag with its form defaults was refused for its mode: {refused}")
+            require(bool(states) and not failed, f"{dag_id} with only its required inputs did not finish: {failed}")
+        require(rig.tasks_started() == before + 1, f"{dag_id} started {rig.tasks_started() - before} tasks, not one")
+        require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{dag_id}: {job} has no success record")
+    for dag_file, name in PRODUCER_RUNS:
+        dag_id = dag_file.removesuffix(".py")
+        for params in ({"run_id": OTHER_RUN}, {"run_id": OTHER_RUN, name: "latest"}):
+            rig = Rig()
+            rig.stage_runs(OTHER_RUN)
+            with world(rig, dag_id, params) as current:
+                error = refuses(FormRefused, lambda current=current, dag_file=dag_file: current.run_dag(dag_file))
+                require(name in str(error) and not current.states, f"{dag_id} without its producer run was not refused at the form: {error}")
+            require(not rig.ecs.calls and not rig.records.calls, f"{dag_id} without its producer run reached ECS or the launch records")
 
 
 COLLAPSED_FILES = ("silver_transform_dag.py", "gold_transform_dag.py", "model_promotion_dag.py", "serving_deploy_dag.py")
@@ -915,10 +950,16 @@ def feature_store_takes_its_gold_run() -> None:
     rig = Rig()
     rig.stage_runs(STORE_RUN)
     with world(rig, "feature_store_dag", {"run_id": STORE_RUN}) as current:
+        error = refuses(FormRefused, lambda: current.run_dag("feature_store_dag.py"))
+        require(GOLD_RUN_PARAMETER in str(error) and not current.states, f"feature_store_dag without a gold run was not refused at the form: {error}")
+    with world(rig, "feature_store_dag", {"run_id": STORE_RUN, GOLD_RUN_PARAMETER: STORE_RUN}) as current:
         states = current.run_dag("feature_store_dag.py")
-        refused = [str(result) for result in current.results.values() if "needs the gold run" in str(result)]
-        require(states.get("release_run") == "failed" and bool(refused), f"feature_store_dag without a gold run was not refused by name: {current.results}")
-    require(rig.ecs.count("run_task") == 0 and not rig.records.calls, "a feature store run without its gold run reached ECS or the launch records")
+        refused = [str(result) for result in current.results.values() if "needs the gold job" in str(result)]
+        require(states.get("release_run") == "failed" and bool(refused), f"a gold run that never passed was not refused by the preflight: {current.results}")
+    require(
+        rig.ecs.count("run_task") == 0 and rig.records.count("put_object") == 0,
+        "a feature store run without a passed gold run started a task or wrote a launch record",
+    )
 
 
 def promotion_and_serving_dags_run_end_to_end() -> None:

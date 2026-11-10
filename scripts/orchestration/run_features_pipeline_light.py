@@ -1661,7 +1661,7 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         for text in (
             '"run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
             '"mode": Param("real", type="string", enum=["real"])',
-            '"gold_snapshot_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")',
+            '"gold_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
         )
     )
     store_dag = (ROOT / "dags" / f"{STORE_DAG}.py").read_text() if (ROOT / "dags" / f"{STORE_DAG}.py").is_file() else ""
