@@ -1169,7 +1169,7 @@ def main() -> None:
         "completed_at_utc": datetime.now(UTC).isoformat(),
         "python_version": sys.version,
         "platform": sys.platform,
-        "requirements_sha256": fingerprint(REPO_ROOT / "requirements.txt")[0],
+        "requirements_sha256": fingerprint(REPO_ROOT / "uv.lock")[0],
         "implementation_sha256": fingerprint(here.with_name("pseudonymize.py"))[0],
         "runner_sha256": fingerprint(here)[0],
         "cases": run.cases,
@@ -1178,7 +1178,7 @@ def main() -> None:
         "network_calls": 0,
         "aws_calls": 0,
         "reproduce": [sys.executable, "-m", "scripts.acquisition.run_pseudonymize_e2e", "--output", "<new_directory>"],
-        "prerequisites": ["Run from the repository root with the project .venv and the pinned requirements.txt dependencies."],
+        "prerequisites": ["Run from the repository root with the project .venv installed from uv.lock."],
         "reset": "Use a new output directory; existing evidence is preserved.",
         "tested_boundary": "Synthetic CSV files through the transformation, its Parameter Store reader with a stand-in client and the command line.",
         "untested_boundaries": [
