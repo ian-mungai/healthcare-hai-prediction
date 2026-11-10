@@ -84,6 +84,7 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "CODE_SHA256": "a" * 64,
         "CODE_SHA256_FIRST_12": "a" * 12,
         "SHA256": "b" * 64,
+        "PLAN_DIGEST": "c" * 64,
         "SIGN_TEXT": "sign-silver-20261031T120000Z-abcdef12-cccccccccccc",
         "TASK_ARN": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/example_project_cluster_dev/{task}",
         "TASK_ID": task,

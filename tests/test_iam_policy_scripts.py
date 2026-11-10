@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import json
 import os
+import re
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -205,11 +208,32 @@ def env_file(tmp_path: Path) -> Path:
     return path
 
 
-def arguments(env_file: Path, action: str, admin: str = "example_administrator", policies: list[str] | None = None) -> argparse.Namespace:
-    return argparse.Namespace(action=action, admin_profile=admin, env_file=env_file, policies=policies)
+def arguments(
+    env_file: Path, action: str, admin: str = "example_administrator", policies: list[str] | None = None, digest: str | None = None
+) -> argparse.Namespace:
+    return argparse.Namespace(action=action, admin_profile=admin, env_file=env_file, policies=policies, digest=digest)
 
 
 CONFIRMED = {manage_policies.CONFIRMATION_VARIABLE: manage_policies.CONFIRMATION}
+# A well-formed digest that no plan prints: runs that must stop before the digest is compared use it.
+UNMATCHED_DIGEST = "0" * 64
+DIGEST_LINE = re.compile(r"^Plan digest: ([0-9a-f]{64})$", re.MULTILINE)
+
+
+def planned_digest(env_file: Path, iam: FakeIam, policies: list[str] | None = None) -> str:
+    """Run the plan as the owner does and read the digest it prints."""
+    printed = io.StringIO()
+    with contextlib.redirect_stdout(printed):
+        check(manage_policies.run(arguments(env_file, "plan", policies=policies), {}, FakeSession(iam)) == 0, "the plan must succeed")
+    found = DIGEST_LINE.findall(printed.getvalue())
+    check(len(found) == 1, f"the plan must print exactly one digest:\n{printed.getvalue()}")
+    return found[0]
+
+
+def plan_and_apply(env_file: Path, iam: FakeIam, policies: list[str] | None = None) -> int:
+    """The owner's routine: plan, then apply with the digest that plan printed."""
+    digest = planned_digest(env_file, iam, policies)
+    return manage_policies.run(arguments(env_file, "apply", policies=policies, digest=digest), CONFIRMED, FakeSession(iam))
 
 
 def test_renderer_fills_every_placeholder_and_keeps_policy_variables() -> None:
@@ -329,19 +353,19 @@ def test_plan_in_an_empty_account_lists_every_creation_and_changes_nothing(env_f
 
 def test_apply_creates_everything_and_a_second_run_changes_nothing(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the first apply must succeed")
+    check(plan_and_apply(env_file, iam) == 0, "the first apply must succeed")
     check(len(iam.policies) == 14 and sorted(iam.groups) == [f"{PROJECT}_data_dev", f"{PROJECT}_platform_dev"], "policies or groups are missing")
     check(sum(len(held) for held in iam.groups.values()) == 14 and iam.members[USER] == set(iam.groups), "attachments or membership are missing")
     capsys.readouterr()
     iam.calls.clear()
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the second apply must succeed")
+    check(plan_and_apply(env_file, iam) == 0, "the second apply must succeed")
     check(iam.writes() == [], f"a second apply must write nothing: {iam.writes()}")
     check("Summary: 0 change(s), 14 unchanged." in capsys.readouterr().out, "the second plan must show no change")
 
 
 def applied_iam(env_file: Path) -> FakeIam:
     iam = FakeIam()
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the first apply must succeed")
+    check(plan_and_apply(env_file, iam) == 0, "the first apply must succeed")
     iam.calls.clear()
     return iam
 
@@ -349,7 +373,7 @@ def applied_iam(env_file: Path) -> FakeIam:
 def refused_plan(env_file: Path, iam: FakeIam, action: str = "plan") -> str:
     """Run the action and return the refusal text; nothing may have been written."""
     with pytest.raises(RuntimeError) as error:
-        manage_policies.run(arguments(env_file, action), CONFIRMED, FakeSession(iam))
+        manage_policies.run(arguments(env_file, action, digest=UNMATCHED_DIGEST), CONFIRMED, FakeSession(iam))
     check(iam.writes() == [], f"a refused run must write nothing: {iam.writes()}")
     return str(error.value)
 
@@ -403,14 +427,14 @@ def test_a_group_without_the_project_user_is_repaired_not_refused(env_file: Path
     group = f"{PROJECT}_data_dev"
     iam.group_users[group].discard(USER)
     iam.members[USER].discard(group)
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "a missing membership is a change, not a refusal")
+    check(plan_and_apply(env_file, iam) == 0, "a missing membership is a change, not a refusal")
     check(group in iam.members[USER] and USER in iam.group_users[group], "the missing membership must be restored")
 
 
 def test_a_group_with_a_missing_intended_policy_is_repaired_not_refused(env_file: Path) -> None:
     iam = applied_iam(env_file)
     iam.groups[f"{PROJECT}_data_dev"].discard(f"{PROJECT}_s3_policy")
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "a missing attachment is a change, not a refusal")
+    check(plan_and_apply(env_file, iam) == 0, "a missing attachment is a change, not a refusal")
     check(f"{PROJECT}_s3_policy" in iam.groups[f"{PROJECT}_data_dev"], "the missing attachment must be restored")
 
 
@@ -430,7 +454,7 @@ def test_the_other_grants_of_the_project_user_are_reported(env_file: Path, capsy
 def test_apply_refuses_without_the_confirmation_word_before_any_aws_call(env_file: Path) -> None:
     for environment in ({}, {manage_policies.CONFIRMATION_VARIABLE: "yes"}, {manage_policies.CONFIRMATION_VARIABLE: manage_policies.CONFIRMATION + " "}):
         with pytest.raises(ConfigurationError) as error:
-            manage_policies.run(arguments(env_file, "apply"), environment, forbidden_session)
+            manage_policies.run(arguments(env_file, "apply", digest=UNMATCHED_DIGEST), environment, forbidden_session)
         check(manage_policies.CONFIRMATION in str(error.value), "the refusal must name the confirmation word")
 
 
@@ -481,11 +505,11 @@ def test_stored_documents_in_the_form_iam_returns_count_as_unchanged() -> None:
 
 def test_an_update_frees_a_version_slot_first_and_makes_the_new_version_the_default(env_file: Path) -> None:
     iam = FakeIam()
-    manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam))
+    plan_and_apply(env_file, iam)
     name = f"{PROJECT}_sns_policy"
     iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=5)
     iam.calls.clear()
-    check(manage_policies.run(arguments(env_file, "apply", policies=["sns"]), CONFIRMED, FakeSession(iam)) == 0, "the update must succeed")
+    check(plan_and_apply(env_file, iam, policies=["sns"]) == 0, "the update must succeed")
     check(
         iam.calls[0] == f"delete_policy_version {name} v1" and iam.calls[1] == f"create_policy_version {name}", f"the oldest version must go first: {iam.calls}"
     )
@@ -495,13 +519,13 @@ def test_an_update_frees_a_version_slot_first_and_makes_the_new_version_the_defa
 def test_a_failed_step_is_reported_and_the_others_still_run(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     iam.fail_on = {f"create_policy {PROJECT}_ecr_policy"}
-    code = manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam))
+    code = plan_and_apply(env_file, iam)
     output = capsys.readouterr()
     check(code == 1, "a failed step must give a non-zero exit code")
     check(f"{PROJECT}_ecr_policy" not in iam.policies and len(iam.policies) == 13, "only the failed policy may be missing")
     check("FAILED" in output.out and "LimitExceeded" in output.out, "the failure must be named")
     iam.fail_on = set()
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0 and len(iam.policies) == 14, "a rerun must finish the work")
+    check(plan_and_apply(env_file, iam) == 0 and len(iam.policies) == 14, "a rerun must finish the work")
 
 
 def test_old_grouped_policies_are_detached_and_deleted_and_direct_attachments_move_to_the_groups(env_file: Path) -> None:
@@ -511,7 +535,7 @@ def test_old_grouped_policies_are_detached_and_deleted_and_direct_attachments_mo
         iam.user_policies[USER].add(f"{PROJECT}_{service}_policy")
     iam.add_policy(f"{PROJECT}_s3_policy", {"Version": "2012-10-17", "Statement": []})
     iam.user_policies[USER].add(f"{PROJECT}_s3_policy")
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the apply must succeed")
+    check(plan_and_apply(env_file, iam) == 0, "the apply must succeed")
     check(
         not any("platform_" in name or name.endswith(("lakehouse_policy", "secrets_policy")) for name in iam.policies),
         f"retired policies remain: {sorted(iam.policies)}",
@@ -525,7 +549,7 @@ def test_a_retired_policy_held_by_a_role_is_kept_and_reported(env_file: Path, ca
     name = f"{PROJECT}_secrets_policy"
     iam.add_policy(name, {"Version": "2012-10-17", "Statement": []})
     iam.role_policies["example_other_role"] = {name}
-    code = manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam))
+    code = plan_and_apply(env_file, iam)
     check(code == 1 and name in iam.policies, "a policy that a role holds must not be deleted")
     check("example_other_role" in capsys.readouterr().out, "the other holder must be named")
 
@@ -533,7 +557,7 @@ def test_a_retired_policy_held_by_a_role_is_kept_and_reported(env_file: Path, ca
 def test_a_selected_policy_limits_the_run_and_skips_the_retirements(env_file: Path) -> None:
     iam = FakeIam()
     iam.add_policy(f"{PROJECT}_secrets_policy", {"Version": "2012-10-17", "Statement": []})
-    manage_policies.run(arguments(env_file, "apply", policies=["sns"]), CONFIRMED, FakeSession(iam))
+    plan_and_apply(env_file, iam, policies=["sns"])
     check(sorted(iam.policies) == [f"{PROJECT}_secrets_policy", f"{PROJECT}_sns_policy"], f"only the selected policy may be created: {sorted(iam.policies)}")
     with pytest.raises(render_policy.PolicyRenderError):
         manage_policies.run(arguments(env_file, "plan", policies=["unknown"]), {}, FakeSession(iam))
@@ -561,7 +585,7 @@ def test_the_exporter_replaces_deployment_values_with_placeholders() -> None:
 
 def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(env_file: Path, tmp_path: Path) -> None:
     iam = FakeIam()
-    manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam))
+    plan_and_apply(env_file, iam)
     exported = export_policies.run(
         argparse.Namespace(admin_profile="example_administrator", env_file=env_file, output_directory=tmp_path / "out"), FakeSession(iam)
     )
@@ -573,6 +597,75 @@ def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(en
     check(f"{PROJECT}_ssm_policy" in str(error.value), "the missing policy must be named")
 
 
+def test_plan_prints_one_digest_and_apply_with_it_applies_the_plan(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    iam = FakeIam()
+    digest = planned_digest(env_file, iam)
+    check(digest == planned_digest(env_file, iam), "two plans of the same state must print the same digest")
+    check(iam.writes() == [], "a plan must not write")
+    capsys.readouterr()
+    check(manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam)) == 0, "the apply with the plan's digest must succeed")
+    check(len(iam.policies) == 14, "the apply must create the planned policies")
+    check(f"Plan digest: {digest}" in capsys.readouterr().out, "the apply must print the digest it recomputed")
+    check(planned_digest(env_file, iam) != digest, "after the apply the plan has other steps and so another digest")
+
+
+def refused_digest(env_file: Path, iam: FakeIam, digest: str, policies: list[str] | None = None) -> str:
+    """Apply with a digest that does not match; the refusal text is returned and nothing may have been written."""
+    iam.calls.clear()
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", policies=policies, digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [], f"an apply refused for its digest must write nothing: {iam.writes()}")
+    check(digest in str(error.value) and "plan again" in str(error.value), f"the refusal must name the digest and the remedy: {error.value}")
+    return str(error.value)
+
+
+def test_apply_refuses_a_wrong_digest_before_any_change(env_file: Path) -> None:
+    iam = FakeIam()
+    digest = planned_digest(env_file, iam)
+    refused_digest(env_file, iam, UNMATCHED_DIGEST)
+    refused_digest(env_file, iam, digest[::-1])
+    check(iam.policies == {} and iam.groups == {}, "nothing may be created")
+    refused_digest(env_file, iam, digest, policies=["sns"])
+
+
+def test_apply_refuses_a_digest_made_stale_by_a_live_policy_change(env_file: Path) -> None:
+    iam = applied_iam(env_file)
+    name = f"{PROJECT}_sns_policy"
+    digest = planned_digest(env_file, iam)
+    reviewed = iam.policies[name]["document"]
+    # Someone else changes the live policy between the plan and the apply: a new default version with another document.
+    iam.create_policy_version(PolicyArn=iam.arn(name), PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))
+    refused_digest(env_file, iam, digest)
+    check(iam.policies[name]["document"] == {"Version": "2012-10-17", "Statement": []}, "the changed policy must stay as it is")
+    # The same plan steps over another live version: the template is restored as a new version, so only the version id differs.
+    iam.create_policy_version(PolicyArn=iam.arn(name), PolicyDocument=json.dumps(reviewed))
+    check(planned_digest(env_file, iam) != digest, "a plan over another live version must print another digest")
+    refused_digest(env_file, iam, digest)
+
+
+def test_apply_refuses_a_digest_made_stale_by_a_template_change(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    iam = FakeIam()
+    digest = planned_digest(env_file, iam)
+    original = manage_policies.load_documents
+
+    def edited(*given: Any, **named: Any) -> dict[str, dict[str, Any]]:
+        documents = original(*given, **named)
+        documents["sns"] = {**documents["sns"], "Statement": [*documents["sns"]["Statement"], {"Effect": "Allow", "Action": "sns:Publish", "Resource": "*"}]}
+        return documents
+
+    # The template is edited between the plan and the apply: the steps stay the same, only a rendered document differs.
+    monkeypatch.setattr(manage_policies, "load_documents", edited)
+    refused_digest(env_file, iam, digest)
+    check(iam.policies == {}, "the edited template must not be applied")
+
+
+def test_apply_refuses_a_missing_or_malformed_digest_before_any_aws_call(env_file: Path) -> None:
+    for digest in (None, "", "example", "A" * 64, "0" * 63):
+        with pytest.raises(ConfigurationError) as error:
+            manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, forbidden_session)
+        check("--digest" in str(error.value), f"the refusal must name the digest option: {error.value}")
+
+
 def run_cli(module: str, env_file: Path, *extra: str) -> Any:
     environment = {
         "PATH": os.environ.get("PATH", ""),
@@ -581,13 +674,15 @@ def run_cli(module: str, env_file: Path, *extra: str) -> Any:
         "AWS_SHARED_CREDENTIALS_FILE": str(env_file.parent / "absent"),
         "AWS_EC2_METADATA_DISABLED": "true",
     }
-    return run_command(sys.executable, ["-m", module, "--env-file", str(env_file), *extra], cwd=REPO_ROOT, env=environment, timeout=60)
+    return run_command(sys.executable, ["-m", module, *extra, "--env-file", str(env_file)], cwd=REPO_ROOT, env=environment, timeout=60)
 
 
 def test_the_command_line_refuses_an_apply_without_the_word_and_renders_offline(env_file: Path, tmp_path: Path) -> None:
-    refused = run_cli("infra.iam.scripts.manage_policies", env_file, "apply", "--admin-profile", "example_administrator")
+    refused = run_cli("infra.iam.scripts.manage_policies", env_file, "apply", "--admin-profile", "example_administrator", "--digest", "0" * 64)
     check(refused.returncode == 2 and manage_policies.CONFIRMATION in refused.stderr, f"apply must refuse: {refused.stderr}")
     check("Credentials" not in refused.stderr and "botocore" not in refused.stderr, "the refusal must come before any AWS client")
+    undigested = run_cli("infra.iam.scripts.manage_policies", env_file, "apply", "--admin-profile", "example_administrator")
+    check(undigested.returncode == 2 and "--digest" in undigested.stderr, f"the command line must require the digest for apply: {undigested.stderr}")
     rendered = run_cli("infra.iam.scripts.render_policy", env_file, "--output-directory", str(tmp_path / "rendered"))
     files = sorted((tmp_path / "rendered").glob("*.json"))
     check(rendered.returncode == 0 and len(files) == 14, f"the offline render must write 14 files: {rendered.stderr}")

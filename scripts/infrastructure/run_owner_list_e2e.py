@@ -262,6 +262,7 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
 MUTANTS = (
     ("terraform output with three names", "output -raw cluster_name", "output -raw cluster_name project_tag log_group_names"),
     ("manage_policies without the administrator profile", "manage_policies plan --admin-profile <ADMIN_PROFILE>", "manage_policies plan"),
+    ("manage_policies apply without the reviewed plan's digest", " --digest <PLAN_DIGEST>", ""),
     ("push_images without the repository file", "--repository-urls <RECORD_DIR>/repository_urls.json ", ""),
     (
         "describe-tasks without the region",

@@ -1,15 +1,21 @@
 """Plan or apply the per-service IAM policies of the project profile with the administrator profile.
 
-``plan`` is the dry run: it renders the templates, reads IAM and prints what ``apply`` would do, and changes nothing. ``apply`` needs
-``CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies`` and checks it before any AWS call. Policies are customer-managed, one per service. They
-attach to two IAM groups (the managed policy quota per user is 10), and the project user joins both. The retired grouped policies are detached and deleted.
+``plan`` is the dry run: it renders the templates, reads IAM and prints what ``apply`` would do and one digest of it, and changes nothing. The digest
+covers the steps, the rendered documents and the live policy versions they were compared with. ``apply`` needs
+``CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies`` and ``--digest`` with the digest the reviewed plan printed, and checks both before any AWS
+call. It then plans again and changes nothing unless the new digest matches, so it applies only what the owner reviewed.
+
+Policies are customer-managed, one per service. They attach to two IAM groups (the managed policy quota per user is 10), and the project user joins
+both. The retired grouped policies are detached and deleted.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -24,6 +30,7 @@ from scripts.infrastructure.render_project_config import REPO_ROOT, Configuratio
 
 CONFIRMATION = "apply-healthcare-hai-prediction-policies"
 CONFIRMATION_VARIABLE = "CONFIRM_IAM_POLICIES"
+DIGEST_PATTERN = re.compile(r"[0-9a-f]{64}")
 IAM_SCALAR_OR_LIST_FIELDS = {"Action", "NotAction", "Resource", "NotResource", "Principal", "NotPrincipal"}
 MAX_POLICY_VERSIONS = 5
 # The services of each group. Each group holds at most 10 policies. A policy file whose service is in no group stops the run.
@@ -181,8 +188,12 @@ def user_other_grants(iam: Any, names: Names) -> list[str]:
     return notes
 
 
-def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], full: bool) -> list[Step]:
-    """Compare the rendered policies with IAM and list the changes in the order ``apply`` runs them. Read-only.
+# The live state a plan compared with: each policy's default version and the SHA-256 of its stored document, or None when the policy does not exist.
+Compared = dict[str, dict[str, str] | None]
+
+
+def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], full: bool) -> tuple[list[Step], Compared]:
+    """Compare the rendered policies with IAM and list the changes in the order ``apply`` runs them, with the live versions compared. Read-only.
 
     It stops before listing any change when a group holds a member, a managed policy or an inline policy beyond the intended ones.
     """
@@ -198,14 +209,16 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
         raise RuntimeError("a group of the project user holds more than intended; nothing was changed:\n  - " + "\n  - ".join(problems))
     existing = local_policies(iam)
     steps: list[Step] = []
+    compared: Compared = {}
     for name in sorted(documents):
         policy = existing.get(name)
         if policy is None:
+            compared[name] = None
             steps.append(Step("create_policy", name))
-        elif canonical(stored_document(iam, policy)) == canonical(documents[name]):
-            steps.append(Step("keep_policy", name))
-        else:
-            steps.append(Step("update_policy", name))
+            continue
+        stored = canonical(stored_document(iam, policy))
+        compared[name] = {"version": policy["DefaultVersionId"], "sha256": hashlib.sha256(stored.encode()).hexdigest()}
+        steps.append(Step("keep_policy" if stored == canonical(documents[name]) else "update_policy", name))
     wanted: dict[str, list[str]] = {}
     for name in sorted(documents):
         wanted.setdefault(group_of(names, names.service(name)), []).append(name)
@@ -226,7 +239,23 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
         steps += [Step("detach_user", name, names.user) for name in sorted(direct & set(documents))]
         retired = {names.policy(service) for service in RETIRED_SERVICES}
         steps += [Step("retire_policy", name) for name in sorted(existing) if name in retired]
-    return steps
+        compared |= {name: {"version": existing[name]["DefaultVersionId"]} for name in sorted(existing) if name in retired}
+    return steps, compared
+
+
+def sent_document(document: Mapping[str, Any]) -> str:
+    """The exact text ``apply`` sends to IAM for a rendered document."""
+    return json.dumps(document, separators=(",", ":"))
+
+
+def plan_digest(steps: list[Step], documents: Mapping[str, Mapping[str, Any]], compared: Compared) -> str:
+    """The SHA-256 of what a plan shows: its steps, the exact rendered documents and the live policy versions they were compared with."""
+    payload = {
+        "steps": [[step.kind, step.name, step.target] for step in steps],
+        "documents": {name: sent_document(documents[name]) for name in sorted(documents)},
+        "live": compared,
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
 def remove_oldest_nondefault_version(iam: Any, policy_arn: str) -> None:
@@ -267,12 +296,12 @@ def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Map
     if step.kind == "create_policy":
         iam.create_policy(
             PolicyName=step.name,
-            PolicyDocument=json.dumps(documents[step.name], separators=(",", ":")),
+            PolicyDocument=sent_document(documents[step.name]),
             Description=f"Project profile permissions: {names.service(step.name)}",
         )
     elif step.kind == "update_policy":
         remove_oldest_nondefault_version(iam, arn)
-        iam.create_policy_version(PolicyArn=arn, PolicyDocument=json.dumps(documents[step.name], separators=(",", ":")), SetAsDefault=True)
+        iam.create_policy_version(PolicyArn=arn, PolicyDocument=sent_document(documents[step.name]), SetAsDefault=True)
     elif step.kind == "create_group":
         iam.create_group(GroupName=step.name)
     elif step.kind == "attach_policy":
@@ -315,12 +344,14 @@ def connect(session_factory: SessionFactory, admin_profile: str, region: str, ac
 
 
 def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_factory: SessionFactory = boto3.Session) -> int:
-    """Plan or apply. The confirmation word is checked before any AWS client exists."""
+    """Plan or apply. The confirmation word and the form of the digest are checked before any AWS client exists."""
     storage, _ = load_configuration(arguments.env_file)
     if arguments.admin_profile == storage["aws_profile"] or not arguments.admin_profile.strip():
         raise ConfigurationError("Pass an administrator profile that is not the project profile.")
     if arguments.action == "apply" and environment.get(CONFIRMATION_VARIABLE) != CONFIRMATION:
         raise ConfigurationError(f"Set {CONFIRMATION_VARIABLE}={CONFIRMATION} to apply; nothing was read or changed.")
+    if arguments.action == "apply" and not DIGEST_PATTERN.fullmatch(arguments.digest or ""):
+        raise ConfigurationError("Pass --digest with the 64-character digest that the reviewed plan printed; nothing was read or changed.")
     names = Names(storage["project_name"], storage["environment"])
     selected = set(arguments.policies) if arguments.policies else None
     rendered = load_documents(placeholder_values(storage), selected)
@@ -328,15 +359,22 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
     for service in rendered:
         group_of(names, service)
     iam, _ = connect(session_factory, arguments.admin_profile, storage["aws_region"], storage["expected_account_id"], names)
-    steps = plan_steps(iam, names, storage["expected_account_id"], documents, full=selected is None)
+    steps, compared = plan_steps(iam, names, storage["expected_account_id"], documents, full=selected is None)
     for note in user_other_grants(iam, names):
         sys.stdout.write(f"NOTE {note}\n")
     for step in steps:
         sys.stdout.write(step.text() + "\n")
     changes = [step for step in steps if step.kind != "keep_policy"]
     sys.stdout.write(f"Summary: {len(changes)} change(s), {len(steps) - len(changes)} unchanged.\n")
+    digest = plan_digest(steps, documents, compared)
+    sys.stdout.write(f"Plan digest: {digest}\n")
     if arguments.action == "plan":
         return 0
+    if digest != arguments.digest:
+        raise RuntimeError(
+            f"the reviewed digest {arguments.digest} does not match this plan's digest {digest}: the templates or the live policies changed since the "
+            "reviewed plan, and nothing was changed. Run plan again, review it and apply with its digest."
+        )
     results = apply_steps(iam, names, storage["expected_account_id"], documents, steps)
     for result in results:
         sys.stdout.write(f"{result.status.upper():9} {result.step.text()}: {result.detail}\n")
@@ -349,11 +387,15 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
 
 
 def main() -> None:
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--admin-profile", required=True, help="The administrator AWS profile; it is never read from .env.")
+    common.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
+    common.add_argument("--policy", action="append", dest="policies", help="Limit the run to one service, for example sns. Repeat as needed.")
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("plan", "apply"))
-    parser.add_argument("--admin-profile", required=True, help="The administrator AWS profile; it is never read from .env.")
-    parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
-    parser.add_argument("--policy", action="append", dest="policies", help="Limit the run to one service, for example sns. Repeat as needed.")
+    commands = parser.add_subparsers(dest="action", required=True)
+    commands.add_parser("plan", parents=[common], help="Print the steps and their digest; changes nothing.").set_defaults(digest=None)
+    apply = commands.add_parser("apply", parents=[common], help="Plan again and run the steps if the digest matches the reviewed plan.")
+    apply.add_argument("--digest", required=True, help="The digest that the reviewed plan printed; apply changes nothing unless the new plan has it.")
     arguments = parser.parse_args()
     try:
         raise SystemExit(run(arguments, os.environ))
