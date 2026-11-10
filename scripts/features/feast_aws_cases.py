@@ -1,4 +1,4 @@
-"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24 of the AWS profile package).
+"""Stand-in cases of the Feast AWS profile (failure modes FA1 to FA24 and FA26 of the AWS profile package).
 
     .venv/bin/python -B -m scripts.features.feast_cases --part aws [--case FA6 ...]      # fake catalog, fake Redis, secret-store stand-in; no AWS, no Docker
 
@@ -1538,6 +1538,28 @@ def case_fa24(c: Checker) -> None:
         c.check("no failure text holds the reader secret", SENTINEL not in out + err)
 
 
+def case_fa26(c: Checker) -> None:
+    """FA26: ``feast_materialize --release m1 <RUN_ID>`` on the AWS profile opens one catalog session, releases the held run through it and the AWS settings
+    file, and records the release."""
+    schema, _ = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    with tempfile.TemporaryDirectory(prefix="feast_aws_release_") as raw:
+        world = Deployed(Path(raw), RegistryStandIn())
+        hold = {"schema": 1, "feature_set": "m1", "run_id": SET_RUN, "base_run": SET_BASE_RUN, "set_schema_sha256": mine, "production_set_schema_sha256": []}
+        (world.folder / "online_hold.json").write_text(json.dumps(hold))
+        with world.running(deployed_environment(world.folder, FEATURE_SET=None)):
+            code, out, err = entry_point(lambda: feast_materialize.main(["--release", "m1", SET_RUN, "--mode", "publish_fixture"]))
+        released = world.folder / "online_release.json"
+        record = json.loads(released.read_text()) if released.is_file() else {}
+        c.check("the release exits 0", code == 0)
+        c.check("no failure was written", err == "")
+        c.check("the release record names the set, the run and a load", (record.get("feature_set"), record.get("run_id")) == ("m1", SET_RUN))
+        c.check("the held run was loaded once into the set's own database", world.loaded == [(SET_RUN, online.set_layout("m1").feature_db)])
+        c.check("one session: the secret store was asked once", world.store.asked == [feast_aws.redis_secret_name()])
+        c.check("the load opened the Feast store with the AWS settings file", world.settings_files == [feast_aws.AWS_SETTINGS_FILE])
+        c.check("no output holds the reader secret", SENTINEL not in out + err)
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1563,4 +1585,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA22": (case_fa22, "FA22"),
     "FA23": (case_fa23, "FA23"),
     "FA24": (case_fa24, "FA24"),
+    "FA26": (case_fa26, "FA26"),
 }

@@ -205,13 +205,18 @@ def release_set(
         else functools.partial(feast_job.catalog_session, settings, live)
     )
     with session() as catalog:
+        # The load reuses the open catalog: the AWS session takes the reader pair out of the environment, so a second session could not open.
+        profile_file = feast_aws.AWS_SETTINGS_FILE if aws else feast_job.SETTINGS_FILE
+        set_loader = feast_sets.online_loader(
+            settings, live, schema=(document, sha), session=lambda: contextlib.nullcontext(catalog), settings_file=profile_file
+        )
         return feast_sets.release(
             feature_set,
             run,
             schema=document,
             schema_sha256=sha,
             holds=holds if holds is not None else feast_sets.hold_store(settings, live),
-            loader=loader if loader is not None else feast_sets.online_loader(settings, live, schema=(document, sha), session=session),
+            loader=loader if loader is not None else set_loader,
             newest_run=newest_run if newest_run is not None else (lambda name: feast_sets.newest_set_run(catalog, reads.NAMESPACES[args.mode], name, document)),
         )
 
