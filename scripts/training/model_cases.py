@@ -702,6 +702,15 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         else:
             raise AssertionError("the panel regressor accepted two fitting years")
 
+    def one_model_run_of_m6_carries_mundlak() -> None:
+        """The per-model path (``fit_model(request, "m6")``, one model per run) keeps the full Mundlak record as the RQ6 result, not only its status."""
+        sixty = request(years=(2019, 2020, 2021, 2022), hospitals=60)
+        with libraries(), patch.object(panel, "native_fits", side_effect=panel_standin):
+            output = suite.fit_model(sixty, "m6")
+        record = output.research["hospital_effects"]
+        require(record.get("status") == "fitted" and record.get("test") == "mundlak", f"the m6 run's RQ6 record is not a Mundlak record: {record}")
+        require({"f_statistic", "p_value", "clusters", "tested_columns"} <= set(record), f"the m6 run's RQ6 record lacks a Mundlak field: {sorted(record)}")
+
     def panel_record_carries_mundlak() -> None:
         sixty = request(years=(2019, 2020, 2021, 2022), hospitals=60)
         with libraries() as replacements, patch.object(panel, "native_fits", side_effect=panel_standin):
@@ -1805,6 +1814,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("time_folds_keep_three_fitting_years", time_folds_keep_three_fitting_years),
         ("panel_refuses_fewer_than_three_fitting_years", panel_refuses_fewer_than_three_fitting_years),
         ("panel_record_carries_mundlak", panel_record_carries_mundlak),
+        ("one_model_run_of_m6_carries_mundlak", one_model_run_of_m6_carries_mundlak),
         ("panel_fits_complete_cases", panel_fits_complete_cases),
         ("unbalanced_panel_and_unseen_effect", panel_unbalanced_and_unseen),
         ("shap_additivity_refusal", shap_failure),

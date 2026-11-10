@@ -560,6 +560,6 @@ def fit_model(request: ModelRequest, model: str) -> ModelSuite:
             )
         )
     elif model == "m6":
-        research["hospital_effects"] = fitted.details.get("hausman", {"status": fitted.status, "reason": fitted.reason})
+        research["hospital_effects"] = fitted.details.get("mundlak", {"status": fitted.status, "reason": fitted.reason})
     request.deadline.check()
     return ModelSuite(request, slots, select(slots, observed=holdout.y), select(slots, registrable=True, observed=holdout.y), research, shap, sides)
