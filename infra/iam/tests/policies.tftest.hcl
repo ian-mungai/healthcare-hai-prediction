@@ -570,7 +570,7 @@ run "platform_roles" {
       "ecs:DeregisterContainerInstance", "ecs:RegisterContainerInstance", "ecs:SubmitAttachmentStateChanges", "ecs:SubmitContainerStateChange",
       "ecs:SubmitTaskStateChange", "ecs:Poll", "ecs:StartTelemetrySession", "ecs:DiscoverPollEndpoint", "ssm:UpdateInstanceInformation",
       "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel",
-      "ec2:AssociateAddress", "ec2:AttachVolume", "ec2:DescribeAddresses", "ec2:DescribeVolumes"
+      "ec2:AssociateAddress", "ec2:AttachNetworkInterface", "ec2:AttachVolume", "ec2:DescribeAddresses", "ec2:DescribeNetworkInterfaces", "ec2:DescribeVolumes"
     ])
     error_message = "The host role holds only the ECS agent, Session Manager and boot-time actions (finding its volume and address by tag, then attaching them); no image pulls, logs, tagging or state changes beyond the agent's."
   }
@@ -592,8 +592,9 @@ run "platform_roles" {
         statement.Condition.StringEquals == (
           anytrue([for resource in flatten([statement.Resource]) : strcontains(resource, ":volume/")]) ?
           { "aws:ResourceTag/Name" = statement.Sid == "AttachScratchVolume" ? "example_project_host_scratch_dev" : "example_project_host_data_dev", "aws:ResourceTag/Project" = "example_project" } :
+          statement.Sid == "AttachHostAddressInterface" ? { "aws:ResourceTag/Name" = "example_project_host_address_dev", "aws:ResourceTag/Project" = "example_project" } :
           { "aws:ResourceTag/Name" = "example_project_host_dev", "aws:ResourceTag/Project" = "example_project" }
-        ) if anytrue([for action in flatten([statement.Action]) : startswith(action, "ec2:")]) && statement.Sid != "FindOwnDataVolumeAndAddress"
+        ) if anytrue([for action in flatten([statement.Action]) : startswith(action, "ec2:")]) && !contains(["FindOwnDataVolumeAndAddress", "FindOwnNetworkInterface"], statement.Sid)
       ]) &&
       one([for statement in jsondecode(aws_iam_role_policy.ecs_host.policy).Statement : statement if statement.Sid == "FindOwnDataVolumeAndAddress"]) == {
         Sid       = "FindOwnDataVolumeAndAddress"
@@ -679,7 +680,7 @@ run "platform_roles" {
         ] : [
         for statement in jsondecode(policy).Statement : [
           for action in flatten([statement.Action]) : contains([
-            "ec2:DescribeAddresses", "ec2:DescribeInstances", "ec2:DescribeSnapshots", "ec2:DescribeVolumes", "ecr:GetAuthorizationToken", "ecs:DiscoverPollEndpoint",
+            "ec2:DescribeAddresses", "ec2:DescribeInstances", "ec2:DescribeNetworkInterfaces", "ec2:DescribeSnapshots", "ec2:DescribeVolumes", "ecr:GetAuthorizationToken", "ecs:DiscoverPollEndpoint",
             "ssmmessages:CreateControlChannel", "ssmmessages:CreateDataChannel", "ssmmessages:OpenControlChannel", "ssmmessages:OpenDataChannel"
           ], action) && try(statement.Condition.StringEquals["aws:RequestedRegion"], "") == "eu-west-1"
         ] if statement.Effect == "Allow" && statement.Resource == "*"

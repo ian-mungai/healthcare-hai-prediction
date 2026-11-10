@@ -172,12 +172,23 @@ BOOT_VALUES = {
     "data_volume_name": "example_project_host_data_dev",
     "scratch_volume_name": "example_project_host_scratch_dev",
     "address_name": "example_project_host_dev",
+    "interface_name": "example_project_host_address_dev",
     "project_tag": "example_project",
 }
+# The runner shortens the boot script's waits, so a stalled interface ends a case in seconds. The script's own values are 5, 600 and 120.
+BOOT_TIMING = {"interface_poll_seconds": "1", "interface_attach_seconds": "6", "interface_wait_seconds": "6"}
 # The host's job firewall is a tracked file that Terraform writes into the boot script as it is.
 JOB_FIREWALL_FILE = "infra/iam/host_job_firewall.nft"
 # The host finds its data volume and Elastic IP by their Name and Project tags; the aws stand-in answers the two describe calls with these IDs.
-BOOT_IDS = {"volume": "vol-0123456789abcdef0", "scratch": "vol-0123456789abcdef1", "allocation": "eipalloc-0123456789abcdef0"}
+BOOT_IDS = {
+    "volume": "vol-0123456789abcdef0",
+    "scratch": "vol-0123456789abcdef1",
+    "allocation": "eipalloc-0123456789abcdef0",
+    "interface": "eni-0123456789abcdef0",
+}
+# The host finds its network interface by tag too: the stand-in answers with the interface ID and its address. The metadata stand-in names this instance.
+BOOT_INTERFACE_ADDRESS = "10.40.0.20"
+BOOT_INSTANCE_ID = "i-0123456789abcdef0"
 # The metadata stand-in returns this value for the token request; it must reach neither the log nor the console.
 BOOT_METADATA_SENTINEL = "example_metadata_token_do_not_print"
 # Each console line starts with this prefix; the console is a file in the temporary root, so the runner can read what the script copied.
@@ -322,11 +333,44 @@ elif arguments[:2] == ["ec2", "describe-addresses"]:
     print(os.environ.get("BOOT_ALLOCATION_RESULT", ids["allocation"]) if filters == wanted else "", end="")
 elif arguments[:2] == ["ec2", "associate-address"]:
     print(json.dumps({"AssociationId": "eipassoc-0123456789abcdef0"}))
+elif arguments[:2] == ["ec2", "describe-network-interfaces"]:
+    holder = state / "interface_holder"
+    if "--network-interface-ids" in arguments:
+        print(holder.read_text(encoding="utf-8") if holder.exists() else os.environ.get("BOOT_INTERFACE_HOLDER", "None"))
+    else:
+        wanted = {"Name=tag:Name,Values=" + os.environ["BOOT_INTERFACE_NAME"], "Name=tag:Project,Values=" + os.environ["BOOT_PROJECT_TAG"]}
+        default = ids["interface"] + "\\t" + os.environ["BOOT_INTERFACE_ADDRESS"]
+        print(os.environ.get("BOOT_INTERFACE_RESULT", default) if filters == wanted else "", end="")
+elif arguments[:2] == ["ec2", "attach-network-interface"]:
+    # EC2 refuses to attach an interface that an instance holds, and a transient failure leaves it free; the holder file is the attachment.
+    holder = state / "interface_holder"
+    counter = state / "interface_attach_calls"
+    calls = int(counter.read_text(encoding="utf-8")) if counter.exists() else 0
+    counter.write_text(str(calls + 1), encoding="utf-8")
+    if (holder.read_text(encoding="utf-8") if holder.exists() else os.environ.get("BOOT_INTERFACE_HOLDER", "None")) != "None":
+        sys.exit("aws stand-in: An error occurred (InvalidParameterValue) when calling the AttachNetworkInterface operation: the interface is in use")
+    if calls < int(os.environ.get("BOOT_INTERFACE_ATTACH_FAILURES", "0")):
+        sys.exit("aws stand-in: An error occurred (IncorrectState) when calling the AttachNetworkInterface operation: try again")
+    holder.write_text(arguments[arguments.index("--instance-id") + 1], encoding="utf-8")
+    (state / "interface_up").touch()
+    print(json.dumps({"AttachmentId": "eni-attach-0123456789abcdef0"}))
 elif arguments[:2] == ["ec2", "attach-volume"]:
     volume = arguments[arguments.index("--volume-id") + 1]
     print(json.dumps({"State": "attaching", "VolumeId": volume, "InstanceId": "i-0123456789abcdef0", "Device": arguments[arguments.index("--device") + 1]}))
 else:
     sys.exit(f"aws stand-in: unsupported arguments {arguments}")
+""",
+    "ip": """
+import os, sys
+from pathlib import Path
+state = Path(os.environ["BOOT_STATE"])
+arguments = sys.argv[1:]
+if arguments[:5] != ["-o", "-4", "addr", "show", "to"] or len(arguments) != 6:
+    sys.exit(f"ip stand-in: unsupported arguments {arguments}")
+# The operating system shows the address once the interface is attached (or was already attached), unless a case keeps it down.
+attached = (state / "interface_up").exists() or os.environ.get("BOOT_INTERFACE_HOLDER") == "i-0123456789abcdef0"
+if attached and not os.environ.get("BOOT_ADDRESS_NEVER_UP"):
+    print(f"3: ens6    inet {arguments[5]}/24 brd 10.40.0.255 scope global ens6")
 """,
     "nft": """
 import json, os, sys
@@ -1713,6 +1757,10 @@ def render_host_boot(template: str, root: Path) -> str:
         "job_firewall_rules": rules,
     }.items():
         script = script.replace("${" + name + "}", value)
+    for name, value in BOOT_TIMING.items():
+        script, count = re.subn(rf"^{name}=[0-9]+$", f"{name}={value}", script, flags=re.MULTILINE)
+        if count != 1:
+            raise CheckFailed(f"The boot template must set {name} once on its own line")
     if "${" in script or "%{" in script:
         raise CheckFailed("The boot template holds an expression the runner does not fill")
     for name, relative in BOOT_PATHS.items():
@@ -2048,6 +2096,8 @@ def boot_host(
         "BOOT_DATA_VOLUME_NAME": BOOT_VALUES["data_volume_name"],
         "BOOT_SCRATCH_VOLUME_NAME": BOOT_VALUES["scratch_volume_name"],
         "BOOT_ADDRESS_NAME": BOOT_VALUES["address_name"],
+        "BOOT_INTERFACE_NAME": BOOT_VALUES["interface_name"],
+        "BOOT_INTERFACE_ADDRESS": BOOT_INTERFACE_ADDRESS,
         "BOOT_PROJECT_TAG": BOOT_VALUES["project_tag"],
         "BOOT_NFTABLES_CONFIG": str(root / BOOT_PATHS["nftables_config"]),
         "BOOT_STATE_INITIAL": "nftables.service",
@@ -2436,6 +2486,31 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         ),
         "boot_stalled_grow": ({"xfs_growfs": STALL}, {}, "Growing the data volume file system did not finish within 120 seconds."),
         "boot_grow_fails": ({"xfs_growfs": "exit 1"}, {}, "FAILED: exit status 1"),
+        "boot_interface_already_attached": ({}, {"BOOT_INTERFACE_HOLDER": BOOT_INSTANCE_ID}, None),
+        "boot_interface_slow_attach": ({}, {"BOOT_INTERFACE_ATTACH_FAILURES": "2"}, None),
+        "boot_interface_not_found": ({}, {"BOOT_INTERFACE_RESULT": ""}, "Exactly one network interface must carry the host address tags"),
+        "boot_interface_duplicated": (
+            {},
+            {"BOOT_INTERFACE_RESULT": "eni-0123456789abcdef0\t10.40.0.20\neni-0fedcba987654321\t10.40.0.21"},
+            "Exactly one network interface must carry the host address tags",
+        ),
+        "boot_interface_malformed": (
+            {},
+            {"BOOT_INTERFACE_RESULT": "not-an-id\tnot-an-address"},
+            "Exactly one network interface must carry the host address tags",
+        ),
+        "boot_interface_search_fails": (
+            {},
+            {"BOOT_AWS_FAIL": "tag:Name,Values=example_project_host_address_dev"},
+            "The host network interface could not be listed.",
+        ),
+        "boot_interface_attachment_unreadable": ({}, {"BOOT_AWS_FAIL": "--network-interface-ids"}, "The host network interface attachment could not be read."),
+        "boot_interface_held_by_another_instance": (
+            {},
+            {"BOOT_INTERFACE_HOLDER": "i-0aaaaaaaaaaaaaaaa"},
+            "The host network interface did not attach within 6 seconds.",
+        ),
+        "boot_host_address_never_up": ({}, {"BOOT_ADDRESS_NEVER_UP": "1"}, "The host address did not come up within 6 seconds."),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2447,6 +2522,9 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_elastic_ip_search_fails": "Finding the Elastic IP",
         "boot_scratch_search_fails": "Finding the scratch volume",
         "boot_grow_fails": "Growing the data volume file system",
+        "boot_interface_search_fails": "Finding the host network interface",
+        "boot_interface_attachment_unreadable": "Reading the host network interface attachment",
+        "boot_host_address_never_up": "Waiting for the host address",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -2548,9 +2626,10 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                 (sysctl / "kernel.core_pattern").read_text(encoding="utf-8") == "core" and (sysctl / "fs.suid_dumpable").read_text(encoding="utf-8") == "0",
             )
             evidence.check(step, "timer_started", "enable --now platform_imds_watch.timer" in read_lines(root / "state" / "systemctl.log"))
+            check_interface_attachment(evidence, step, name, calls, deadlines, log)
             if planted:
                 run_planted_dependency_defect(evidence, root, environment)
-            elif name not in planted_privilege:
+            elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS:
                 run_firewall_cases(evidence, root, environment)
                 run_job_table_loss_case(evidence, root, environment)
                 run_later_start_cases(evidence, root, environment)
@@ -2565,7 +2644,92 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                     evidence.check(step, "failure_names_the_failing_step", names_step)
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
+    run_interface_plants(evidence, bash, template, gnu_timeout)
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
+
+
+# Attach calls of a successful boot: none when this instance holds the interface, three for a slow attach (two fail), else one.
+INTERFACE_ATTACH_CALLS = {"boot_interface_already_attached": 0, "boot_interface_slow_attach": 3}
+
+
+def interface_attachment_problems(name: str, calls: list[str], deadlines: list[str], log: str) -> list[str]:
+    """Name what a boot that ended well did wrong with the host's network interface; an empty list means it found, attached and checked it as required."""
+    attaches = [index for index, line in enumerate(calls) if "attach-network-interface" in line]
+    volumes = [index for index, line in enumerate(calls) if "attach-volume" in line]
+    problems: list[str] = []
+    searched = any(
+        "describe-network-interfaces" in line
+        and f"Name=tag:Name,Values={BOOT_VALUES['interface_name']}" in line
+        and f"Name=tag:Project,Values={BOOT_VALUES['project_tag']}" in line
+        for line in calls
+    )
+    if not searched:
+        problems.append("the interface was not found by its Name and Project tags")
+    if len(attaches) != INTERFACE_ATTACH_CALLS.get(name, 1):
+        problems.append(f"{len(attaches)} attach calls instead of {INTERFACE_ATTACH_CALLS.get(name, 1)}")
+    if any(f"--network-interface-id {BOOT_IDS['interface']}" not in calls[index] or "--device-index 1" not in calls[index] for index in attaches):
+        problems.append("an attach call names another interface or not the second device index")
+    if any(f"--instance-id {BOOT_INSTANCE_ID}" not in calls[index] for index in attaches):
+        problems.append("an attach call names another instance")
+    if attaches and volumes and attaches[0] > volumes[0]:
+        problems.append("the interface was attached after the first volume")
+    if attaches and not any(line.startswith("--kill-after=10 60 aws ec2 attach-network-interface") for line in deadlines):
+        problems.append("the attach call ran without a deadline")
+    if not any(line.startswith(f"--kill-after=10 30 ip -o -4 addr show to {BOOT_INTERFACE_ADDRESS}") for line in deadlines):
+        problems.append("the address was not checked on the host")
+    steps = [log.find(text) for text in ("Waiting for the host address", "Writing the ECS agent configuration")]
+    if min(steps) < 0 or steps[0] > steps[1]:
+        problems.append("the address was not up before ECS joined")
+    return problems
+
+
+def check_interface_attachment(evidence: Evidence, step: dict[str, Any], name: str, calls: list[str], deadlines: list[str], log: str) -> None:
+    """Require the interface found by tag, attached once as the second interface (never when already attached) under a deadline and before the volumes."""
+    problems = interface_attachment_problems(name, calls, deadlines, log)
+    step["interface_problems"] = problems
+    evidence.check(step, "host_interface_found_attached_and_up_before_ecs_joined", not problems)
+
+
+def run_interface_plants(evidence: Evidence, bash: str, template: str, gnu_timeout: str) -> None:
+    """Plant three defects in the interface handling and require the checks above to notice each one."""
+    plants = {
+        # Attach once and treat a refusal as the end: an interface this instance already holds, or a transient failure, then stops the boot.
+        "boot_plant_attach_without_reading_the_attachment": (
+            lambda text: replace_once(
+                replace_once(
+                    text,
+                    'holder=$(attached_instance) || {\n  echo "The host network interface attachment could not be read."\n  exit 1\n}\nwhile',
+                    "holder=None\nwhile",
+                ),
+                ' || echo "The attach call failed; reading the attachment again." >&2',
+                "",
+            ),
+            {"BOOT_INTERFACE_HOLDER": BOOT_INSTANCE_ID},
+            "boot_interface_already_attached",
+        ),
+        # The attach call runs without a deadline.
+        "boot_plant_attach_without_a_deadline": (
+            lambda text: replace_once(text, 'run_within 60 "Attaching the host network interface" aws ec2', "aws ec2"),
+            {},
+            "boot_completes",
+        ),
+        # The wait for the address ends at once, so a host whose address never comes up joins the cluster.
+        "boot_plant_no_wait_for_the_address": (
+            lambda text: replace_once(text, 'if [ -n "$shown" ]; then break; fi', "break"),
+            {"BOOT_ADDRESS_NEVER_UP": "1"},
+            "boot_host_address_never_up",
+        ),
+    }
+    for name, (plant, case_environment, scenario) in plants.items():
+        root, _, step, result = boot_host(evidence, bash, name, plant(template), {}, case_environment, gnu_timeout)
+        log = (root / "boot.log").read_text(encoding="utf-8") if (root / "boot.log").exists() else ""
+        calls = read_lines(root / "state" / "aws_calls.log")
+        deadlines = read_lines(root / "deadlines.log")
+        if scenario == "boot_host_address_never_up":
+            noticed = result.returncode == 0 and "ECS_CLUSTER=" in (root / "ecs.config").read_text(encoding="utf-8")
+        else:
+            noticed = result.returncode != 0 or bool(interface_attachment_problems(scenario, calls, deadlines, log))
+        evidence.check(step, "planted_interface_defect_is_detected", noticed)
 
 
 def nft_check_prefix(evidence: Evidence, nft: str) -> list[str] | None:

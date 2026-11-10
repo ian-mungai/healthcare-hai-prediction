@@ -26,6 +26,9 @@ locals {
   # The scratch volume is a second volume of the platform stack, mounted under the data mount at the folder the job task volumes use.
   scratch_volume_name = format(local.platform_name, "host_scratch")
   scratch_mount_path  = "${local.data_mount_path}/job_scratch"
+  # The host keeps one private address for its whole life: a network interface of this stack with its own Name, found by boot through the same tags.
+  # The host's primary interface carries the host Name tag, so the interface needs a different one or boot would find two.
+  interface_name = format(local.platform_name, "host_address")
   host_user_data = templatefile("${path.module}/host_boot.sh.tftpl", {
     region              = var.aws_region
     mount_path          = local.data_mount_path
@@ -34,6 +37,7 @@ locals {
     scratch_volume_name = local.scratch_volume_name
     scratch_path        = local.scratch_mount_path
     address_name        = local.host_name
+    interface_name      = local.interface_name
     project_tag         = local.platform_project_tag
     job_firewall_rules  = file("${path.module}/host_job_firewall.nft")
   })
@@ -65,6 +69,24 @@ resource "aws_security_group" "host" {
 
   tags = merge(local.project_tags, {
     Name = local.host_name
+  })
+}
+
+# The private address that services, jobs and job launches use to reach the host. The address belongs to this interface, not to an
+# instance, so a stopped and started host, a replaced instance and a new template version keep it. Boot attaches the interface
+# as the second interface of the instance; the platform stack finds it by tag and exports its address. The interface sits in the
+# subnet of the host group, because an interface attaches only inside its own availability zone, and carries the host group so the
+# run tasks reach the service ports at this address. Replacing the interface (a new subnet or a deleted interface) gives the host a
+# new address, which the services and jobs stacks take over at their next apply.
+resource "aws_network_interface" "host_address" {
+  description       = "Persistent private address of the container host"
+  subnet_id         = aws_subnet.public[0].id
+  security_groups   = [aws_security_group.host.id]
+  source_dest_check = true
+
+  tags = merge(local.project_tags, {
+    DataClassification = "Public"
+    Name               = local.interface_name
   })
 }
 

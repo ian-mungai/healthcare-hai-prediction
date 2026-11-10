@@ -81,3 +81,8 @@ output "project_secret_names" {
     error_message = "Each secret name must be different."
   }
 }
+
+output "host_private_ip" {
+  description = "Persistent private address of the container host: the address of its tagged network interface, which boot attaches. The platform stack finds the interface by tag and exports the same address."
+  value       = aws_network_interface.host_address.private_ip
+}

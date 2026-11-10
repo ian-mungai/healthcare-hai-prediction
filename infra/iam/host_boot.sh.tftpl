@@ -26,6 +26,10 @@ data_volume_name="${data_volume_name}"
 scratch_volume_name="${scratch_volume_name}"
 scratch_path="${scratch_path}"
 address_name="${address_name}"
+interface_name="${interface_name}"
+interface_poll_seconds=5
+interface_attach_seconds=600
+interface_wait_seconds=120
 project_tag="${project_tag}"
 
 # log and step write to the error stream, which command substitutions leave alone and which goes to the log.
@@ -285,12 +289,57 @@ scratch=$(run_within 60 "$current_step" aws ec2 describe-volumes --region "$regi
   echo "The scratch volume could not be listed."
   exit 1
 }
+current_step="Finding the host network interface"
+interface=$(run_within 60 "$current_step" aws ec2 describe-network-interfaces --region "$region" --filters "Name=tag:Name,Values=$interface_name" "Name=tag:Project,Values=$project_tag" --query "NetworkInterfaces[].[NetworkInterfaceId,PrivateIpAddress]" --output text) || {
+  echo "The host network interface could not be listed."
+  exit 1
+}
 [[ "$volume" =~ ^vol-[0-9a-f]{8,17}$ ]] || { echo "Exactly one data volume must carry the project tags, but the search did not return one volume ID."; exit 1; }
 [[ "$allocation" =~ ^eipalloc-[0-9a-f]{8,17}$ ]] || { echo "Exactly one Elastic IP must carry the project tags, but the search did not return one allocation ID."; exit 1; }
 [[ "$scratch" =~ ^vol-[0-9a-f]{8,17}$ ]] || { echo "Exactly one scratch volume must carry the project tags, but the search did not return one volume ID."; exit 1; }
+[[ "$interface" =~ ^eni-[0-9a-f]{8,17}[[:blank:]]+([0-9]{1,3}(\.[0-9]{1,3}){3})$ ]] || { echo "Exactly one network interface must carry the host address tags, but the search did not return one interface ID and address."; exit 1; }
+read -r interface_id interface_ip <<<"$interface"
 run_within 60 "Checking the Session Manager agent" rpm -q amazon-ssm-agent >/dev/null || run_within 300 "Installing the Session Manager agent" dnf install -y -q amazon-ssm-agent
 run_within 120 "Starting the Session Manager agent" systemctl enable --now amazon-ssm-agent
 run_within 60 "Associating the Elastic IP" aws ec2 associate-address --region "$region" --allocation-id "$allocation" --instance-id "$instance" --allow-reassociation >/dev/null
+# The host keeps one private address: the tagged network interface of the IAM stack, attached as the second interface before the volumes and before
+# ECS joins. An interface that is already attached to this instance counts as attached. One that is free is attached; one that an instance that is
+# going away still holds is waited for. The operating system then shows the address on the new interface (amazon-ec2-net-utils configures a
+# hot-plugged interface and its route), which the script checks before the services start, so the address that Terraform exports is the one they listen on.
+attached_instance() {
+  run_within 60 "Reading the host network interface attachment" aws ec2 describe-network-interfaces --region "$region" --network-interface-ids "$interface_id" --query "NetworkInterfaces[0].Attachment.InstanceId" --output text
+}
+deadline=$((SECONDS + interface_attach_seconds))
+current_step="Reading the host network interface attachment"
+holder=$(attached_instance) || {
+  echo "The host network interface attachment could not be read."
+  exit 1
+}
+while [ "$holder" != "$instance" ]; do
+  if ((SECONDS >= deadline)); then echo "The host network interface did not attach within $interface_attach_seconds seconds."; exit 1; fi
+  if [ "$holder" = "None" ]; then
+    run_within 60 "Attaching the host network interface" aws ec2 attach-network-interface --region "$region" --network-interface-id "$interface_id" --instance-id "$instance" --device-index 1 >/dev/null || echo "The attach call failed; reading the attachment again." >&2
+  fi
+  sleep "$interface_poll_seconds"
+  current_step="Reading the host network interface attachment"
+  holder=$(attached_instance) || {
+    echo "The host network interface attachment could not be read."
+    exit 1
+  }
+done
+step "Waiting for the host address"
+deadline=$((SECONDS + interface_wait_seconds))
+while :; do
+  current_step="Waiting for the host address"
+  shown=$(run_within 30 "Reading the addresses of the host" ip -o -4 addr show to "$interface_ip") || {
+    echo "The addresses of the host could not be read."
+    exit 1
+  }
+  if [ -n "$shown" ]; then break; fi
+  if ((SECONDS >= deadline)); then echo "The host address did not come up within $interface_wait_seconds seconds."; exit 1; fi
+  sleep "$interface_poll_seconds"
+done
+log "The host address $interface_ip is up on $interface_id."
 deadline=$((SECONDS + 600))
 until run_within 60 "Attaching the data volume" aws ec2 attach-volume --region "$region" --volume-id "$volume" --instance-id "$instance" --device /dev/xvdf >/dev/null; do
   if ((SECONDS >= deadline)); then echo "The data volume did not attach within 600 seconds."; exit 1; fi

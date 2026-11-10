@@ -96,6 +96,7 @@
       "Action": [
         "ec2:DescribeAddresses",
         "ec2:DescribeInstances",
+        "ec2:DescribeNetworkInterfaces",
         "ec2:DescribeSnapshots",
         "ec2:DescribeVolumes",
         "ecr:GetAuthorizationToken",
@@ -124,6 +125,30 @@
         "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
         "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:network-interface/*"
       ],
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "AttachHostAddressInterface",
+      "Effect": "Allow",
+      "Action": "ec2:AttachNetworkInterface",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:network-interface/*",
+      "Condition": {
+        "StringEquals": {
+          "aws:ResourceTag/Name": "${PROJECT_NAME}_host_address_${ENVIRONMENT}",
+          "aws:ResourceTag/Project": "${PROJECT_NAME}"
+        }
+      }
+    },
+    {
+      "Sid": "AttachInterfaceToProjectHost",
+      "Effect": "Allow",
+      "Action": "ec2:AttachNetworkInterface",
+      "Resource": "arn:aws:ec2:${AWS_REGION}:${AWS_ACCOUNT_ID}:instance/*",
       "Condition": {
         "StringEquals": {
           "aws:ResourceTag/Name": "${PROJECT_NAME}_host_${ENVIRONMENT}",
