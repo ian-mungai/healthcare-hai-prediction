@@ -12,7 +12,7 @@ from typing import Any
 import pytest
 from botocore.exceptions import ClientError
 
-from scripts.acquisition import publisher_run
+from scripts.acquisition import publisher_run, stage_publisher
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.tests.test_task_keys import ACCOUNT, PLANTED, ROLE, TASK_IDENTITY
 from tests.support import check
@@ -61,7 +61,9 @@ def archive(files: dict[str, bytes]) -> bytes:
 
 
 def staged(files: dict[str, bytes] | None = None) -> tuple[dict[str, bytes], str]:
-    body = archive(files or {"mirror/queue.json": b"{}", "publisher_hosts.json": b"{}"})
+    body = archive(
+        files or {"mirror/data/q/queue.json": b"{}", "publisher_hosts.json": b"{}", "publisher_manifest.json": b'{"queue": "mirror/data/q/queue.json"}'}
+    )
     return {f"lakehouse/run_stage/{RUN_ID}/inputs/publisher_inputs.tar.gz": body}, hashlib.sha256(body).hexdigest()
 
 
@@ -82,7 +84,7 @@ def test_the_inputs_are_read_by_digest_and_a_changed_archive_is_refused(tmp_path
     stage, digest = staged()
     cloud = Cloud(stage)
     inputs = publisher_run.fetch_inputs(cloud, environment(tmp_path, digest))
-    check((inputs / "mirror/queue.json").read_bytes() == b"{}", "the archive is unpacked under the workspace inputs")
+    check((inputs / "mirror/data/q/queue.json").read_bytes() == b"{}", "the archive is unpacked under the workspace inputs")
     with pytest.raises(publisher_run.PublisherError, match="digest"):
         publisher_run.fetch_inputs(cloud, environment(tmp_path / "other", "0" * 64))
 
@@ -167,3 +169,92 @@ def test_a_missing_variable_stops_the_job_before_any_read(tmp_path: Path, missin
     with pytest.raises(publisher_run.PublisherError, match=missing):
         publisher_run.main(environ, cloud.factory)
     check(cloud.puts == [], "nothing was written")
+
+
+def stage_files(tmp_path: Path) -> dict[str, Path]:
+    built = tmp_path / "built"
+    queue = built / "mirror/data/q/queue.json"
+    queue.parent.mkdir(parents=True)
+    queue.write_bytes(b'{"run": 3, "queue": []}')
+    (built / "stored_index.json").write_text("{}")
+    files = {"mirror_output": built}
+    for name in ("removal_plan", "removal_confirmation", "hosts", "hosts_approval"):
+        files[name] = tmp_path / f"{name}.json"
+        files[name].write_text("{}")
+    return files
+
+
+def stage(tmp_path: Path, output: str = "stage", resume: tuple[str, ...] = ()) -> Path:
+    files = (
+        stage_files(tmp_path)
+        if not (tmp_path / "built").exists()
+        else {name: tmp_path / f"{name}.json" for name in ("removal_plan", "removal_confirmation", "hosts", "hosts_approval")}
+        | {"mirror_output": tmp_path / "built"}
+    )
+    return stage_publisher.build(
+        files["mirror_output"],
+        "data/q/queue.json",
+        files["removal_plan"],
+        files["removal_confirmation"],
+        files["hosts"],
+        files["hosts_approval"],
+        tmp_path / output,
+        resume,
+    )
+
+
+def test_the_stage_is_deterministic_and_the_request_binds_the_archive_and_queue(tmp_path: Path) -> None:
+    first = stage(tmp_path, "a", ("BLS",))
+    second = stage(tmp_path, "b", ("BLS",))
+    body = (first / "publisher_inputs.tar.gz").read_bytes()
+    check(body == (second / "publisher_inputs.tar.gz").read_bytes(), "the same inputs give the same archive")
+    request = json.loads((first / "publisher_request.json").read_text())
+    check(
+        request
+        == {
+            "inputs_sha256": hashlib.sha256(body).hexdigest(),
+            "queue_sha256": hashlib.sha256(b'{"run": 3, "queue": []}').hexdigest(),
+            "resume_sources": ["BLS"],
+        },
+        str(request),
+    )
+    with tarfile.open(fileobj=io.BytesIO(body), mode="r:gz") as saved:
+        names = set(saved.getnames())
+    check(
+        {
+            "mirror/data/q/queue.json",
+            "stored_index.json",
+            "publisher_manifest.json",
+            "publisher_hosts.json",
+            "hosts_approval.json",
+            "removal_plan.json",
+            "removal_confirmation.json",
+        }
+        <= names,
+        str(names),
+    )
+
+
+@pytest.mark.parametrize("planted", ["mirror/stored/private_original/r/owners.csv", ".env", "mirror/.env", "mirror/secrets.tfvars.json"])
+def test_the_stage_refuses_an_original_or_a_settings_file(tmp_path: Path, planted: str) -> None:
+    files = stage_files(tmp_path)
+    (files["mirror_output"] / planted).parent.mkdir(parents=True, exist_ok=True)
+    (files["mirror_output"] / planted).write_text("x")
+    with pytest.raises(stage_publisher.StageError, match="refused"):
+        stage(tmp_path)
+    check(not (tmp_path / "stage").exists(), "nothing is staged")
+
+
+def test_the_stage_refuses_a_queue_outside_the_mirror(tmp_path: Path) -> None:
+    files = stage_files(tmp_path)
+    with pytest.raises(stage_publisher.StageError, match="queue"):
+        stage_publisher.build(
+            files["mirror_output"],
+            "../queue.json",
+            files["removal_plan"],
+            files["removal_confirmation"],
+            files["hosts"],
+            files["hosts_approval"],
+            tmp_path / "stage",
+            (),
+        )

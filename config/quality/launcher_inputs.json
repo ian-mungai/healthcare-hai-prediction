@@ -1264,6 +1264,7 @@
     "scripts/acquisition/source_receipt_index.py",
     "scripts/acquisition/source_registry.py",
     "scripts/acquisition/source_verification_log.py",
+    "scripts/acquisition/stage_publisher.py",
     "scripts/acquisition/storage_controls.py",
     "scripts/acquisition/store_census_export.py",
     "scripts/acquisition/store_cms_owners.py",

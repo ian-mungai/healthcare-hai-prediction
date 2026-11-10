@@ -28,7 +28,7 @@ REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_
 SAVED = re.compile(r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json)")
 INPUTS_NAME = "publisher_inputs.tar.gz"
 WORKSPACE = "/workspace"
-QUEUE_FILE = "mirror/queue.json"
+MANIFEST_FILE = "publisher_manifest.json"
 ClientFactory = Callable[[str, str], Any]
 
 
@@ -54,6 +54,14 @@ def fetch_inputs(s3: Any, environment: Mapping[str, str]) -> Path:
     except tarfile.FilterError:
         raise PublisherError("The staged inputs hold an unsafe path.") from None
     return inputs
+
+
+def queue_of(inputs: Path) -> Path:
+    """The queue the stage named inside the inputs. The archive's own unpacking already keeps it under the inputs folder."""
+    queue = inputs / json.loads((inputs / MANIFEST_FILE).read_text(encoding="utf-8"))["queue"]
+    if not queue.resolve().is_relative_to(inputs.resolve()) or not queue.is_file():
+        raise PublisherError("The staged manifest names no queue under the inputs.")
+    return queue
 
 
 def state_prefix(environment: Mapping[str, str]) -> str:
@@ -120,7 +128,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     state_root = state_parent / "run"
     restore_state(s3, state_root, env)
     arguments = argparse.Namespace(
-        queue=inputs / QUEUE_FILE,
+        queue=queue_of(inputs),
         state_root=state_root,
         state_parent=state_parent,
         manual_folder=None,
