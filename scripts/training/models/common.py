@@ -291,7 +291,8 @@ def dependent_positions(matrix: Array, order: Sequence[int]) -> tuple[int, ...]:
     """Columns of a design (without its intercept) that are exact combinations of the intercept and earlier columns of ``order``.
 
     The columns are taken in ``order``, so a column earlier in it is kept and a later one that depends on it is dropped. A column is dependent when its
-    unpivoted QR diagonal is below ``DEPENDENCE_RELATIVE_TOLERANCE`` of its own norm. Pivoted QR then confirms that the kept columns and the intercept have
+    unpivoted QR diagonal is below ``DEPENDENCE_RELATIVE_TOLERANCE`` of its own norm; a wide design (no more rows than columns) has a diagonal of
+    only as many entries as rows, so the pivoted pass alone judges its later columns. Pivoted QR then confirms that the kept columns and the intercept have
     full rank; a dependence it still finds (a near-exact one) drops the latest kept column in ``order`` among those it names, until the rank is full.
     """
     if matrix.shape[1] == 0:
@@ -302,9 +303,7 @@ def dependent_positions(matrix: Array, order: Sequence[int]) -> tuple[int, ...]:
     design = with_intercept(matrix[:, ordered])
     diagonal = np.abs(np.diag(np.linalg.qr(design, mode="r")))
     norms = np.linalg.norm(design, axis=0)
-    dropped = {
-        ordered[position - 1] for position in range(1, design.shape[1]) if diagonal[position] <= DEPENDENCE_RELATIVE_TOLERANCE * max(norms[position], 1.0)
-    }
+    dropped = {ordered[position - 1] for position in range(1, diagonal.size) if diagonal[position] <= DEPENDENCE_RELATIVE_TOLERANCE * max(norms[position], 1.0)}
     for _ in range(matrix.shape[1]):
         kept = [index for index in ordered if index not in dropped]
         candidate = with_intercept(matrix[:, kept])

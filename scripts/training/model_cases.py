@@ -395,6 +395,29 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         plain = FoldPreprocessor(features, forced=(changed.cmi_reference,))
         require("copy" in plain.fit_transform(training.rows).names, "the step ran on a model that did not ask for it")
 
+    def wide_design_is_refused_not_raised() -> None:
+        """A fitting matrix with no more rows than columns (intercept included) is reduced and refused, not indexed past its QR diagonal."""
+        from scripts.training.models.common import full_rank, with_intercept
+
+        def prepared_wide(rows: list[dict[str, float]], names: tuple[str, ...]) -> Any:
+            transform = FoldPreprocessor(tuple(Feature(f"v:{name}", "number") for name in names), drop_dependent=True)
+            try:
+                with libraries():
+                    return transform, transform.fit_transform(rows)
+            except IndexError as error:
+                raise AssertionError(f"the dependence step indexed past the QR diagonal of a wide design: {error}") from error
+
+        square = [{"a": 1.0, "b": 2.0, "c": 0.5}, {"a": 2.0, "b": 1.0, "c": 3.0}, {"a": 4.0, "b": 0.0, "c": 1.0}]
+        _, design = prepared_wide(square, ("a", "b", "c"))
+        require(len(design.names) + 1 <= len(square), "the kept columns and the intercept exceed the rank of three rows")
+        with libraries():
+            rejects(lambda: full_rank(with_intercept(design.matrix)), "residual degrees of freedom")
+        rows = [{"a": a, "copy": a, "b": b, "c": c} for a, b, c in ((1.0, 2.0, 0.5), (2.0, 1.0, 3.0), (4.0, 0.0, 1.0), (3.0, 5.0, 2.0))]
+        transform, design = prepared_wide(rows, ("a", "copy", "b", "c"))
+        dropped = [entry["name"] for entry in transform.dependent_records_]
+        require(dropped == ["copy"], f"a wide design dropped {dropped}, not only the duplicate column")
+        require(design.names == ("a", "b", "c"), f"a wide design kept {design.names}")
+
     def forced_elastic() -> None:
         from scripts.training.models.elastic import ElasticRegressor
 
@@ -1761,6 +1784,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
         ("rank_deficient_ols", collinear_ols),
         ("dependent_columns_dropped_and_recorded", dependent_columns_dropped_and_recorded),
         ("dependent_step_uses_fitting_rows_only", dependent_step_uses_fitting_rows_only),
+        ("wide_design_is_refused_not_raised", wide_design_is_refused_not_raised),
         ("unpenalized_cmi", forced_elastic),
         ("singleton_ownership", ownership_singleton),
         ("rmse_selection_and_registration", tied_selection),
