@@ -88,10 +88,11 @@ def run() -> list[dict[str, Any]]:
     cases.check(
         "trigger_training_configuration",
         lambda: require(
-            run_conf("training_dag", "real", RUN, None, PARAMETERS)["hai_types"] == PARAMETERS["hai_types"], "trigger dropped the training selection"
+            run_conf("training_dag", "real", RUN, None, {**PARAMETERS, "mlflow": "aws"})["hai_types"] == PARAMETERS["hai_types"],
+            "trigger dropped the training selection",
         ),
     )
-    promotion = {"hai_type": "HAI_2", "model_version": "3", "promotion_mode": "rollback", "mlflow": "local"}
+    promotion = {"hai_type": "HAI_2", "model_version": "3", "promotion_mode": "rollback", "mlflow": "aws"}
     cases.check(
         "trigger_rollback_configuration",
         lambda: require(run_conf("model_promotion_dag", "real", RUN, None, promotion)["mode"] == "rollback", "trigger changed rollback into forward promotion"),

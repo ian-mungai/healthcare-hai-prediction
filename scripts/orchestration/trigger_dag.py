@@ -28,7 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.training_contract import DAGS as TRAINING_DAGS
-from orchestration.training_contract import HAI_TYPES, parameters_for
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, parameters_for
 from scripts.infrastructure import secret_store
 from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, AirflowApiError
 
@@ -78,9 +78,10 @@ def run_conf(
         if silver_snapshot_run is not None or gold_snapshot_run is not None:
             raise TriggerError("refused: a training workflow reads no silver or gold snapshot run")
         try:
-            selected = parameters_for(dag, training or {})
+            # A DAG step launches on AWS through the direct launch library, so only the aws MLflow lane is accepted (local is refused by name).
+            selected = parameters_for(dag, training or {}, LAUNCH_LANES)
         except ValueError as error:
-            raise TriggerError(str(error)) from None
+            raise TriggerError(f"refused: {error}") from None
         if dag == "model_promotion_dag":
             conf.update({name: value for name, value in selected.items() if name != "promotion_mode"})
             conf["mode"] = selected["promotion_mode"]
@@ -176,7 +177,7 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
-    cli.add_argument("--mlflow", choices=("local", "aws"), default="local")
+    cli.add_argument("--mlflow", choices=("local", "aws"), default="aws")
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")

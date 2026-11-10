@@ -2980,6 +2980,29 @@ def trigger_refusals() -> dict[str, bool]:
     return checks
 
 
+def trigger_training_lanes() -> dict[str, bool]:
+    """Training and promotion launch on AWS through the direct launch library, so their MLflow lane is aws; local is refused before any request."""
+
+    def conf_of(result: dict[str, Any]) -> dict[str, Any]:
+        return next(item for item in result["requests"] if item["method"] == "POST")["body"]["conf"]
+
+    training = drive_trigger(["--dag", "training_dag", "--mode", "real", "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+    promotion = drive_trigger(
+        ["--dag", "model_promotion_dag", "--mode", "real", "--hai-type", "HAI_1", "--model-version", "3", "--run-id", OFFLINE_RUN, "--wait-seconds", "60"],
+        FakeAirflow(FakeClock()),
+    )
+    checks = {
+        "a training trigger without --mlflow submits the aws lane": training["exit_code"] == 0 and conf_of(training).get("mlflow") == "aws",
+        "a promotion trigger without --mlflow submits the aws lane": promotion["exit_code"] == 0 and conf_of(promotion).get("mlflow") == "aws",
+    }
+    for dag, extra in (("training_dag", []), ("model_promotion_dag", ["--hai-type", "HAI_1", "--model-version", "3"])):
+        result = drive_trigger(["--dag", dag, "--mode", "real", *extra, "--mlflow", "local", "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+        checks[f"{dag} with --mlflow local is refused before the secret is read and before any request"] = (
+            result["exit_code"] == 1 and result["store_calls"] == [] and result["requests"] == [] and result["stderr"].startswith("trigger_dag: refused")
+        )
+    return checks
+
+
 def trigger_runs() -> dict[str, bool]:
     silver = drive_trigger([*OFFLINE_SILVER, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
     posted = [item for item in silver["requests"] if item["method"] == "POST"]
@@ -3061,7 +3084,7 @@ def trigger_error_output() -> dict[str, bool]:
 
 
 def check_trigger_offline() -> dict[str, bool]:
-    return {**trigger_refusals(), **trigger_runs(), **trigger_deadlines(), **trigger_error_output()}
+    return {**trigger_refusals(), **trigger_runs(), **trigger_training_lanes(), **trigger_deadlines(), **trigger_error_output()}
 
 
 def check_trigger_verdict() -> int:
