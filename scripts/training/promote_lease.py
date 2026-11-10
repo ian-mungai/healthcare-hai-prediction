@@ -15,9 +15,10 @@ lists again: it refuses while the lease is held, and takes the next generation w
 lease resumes it, so a retry in a fresh task continues from its intent. A different run is refused (``Busy``) and never reads or writes the registry.
 
 No timer proves a run dead, so a lease is never taken over by age. The lease of a run that will never return is closed by the owner with ``resolve``, which
-restarts the MLflow service first and records the production alias (``resolve`` here takes the restart and the alias read as calls; the owner command is
-``promote_owner``, whose docstring has the steps). A run that sent its alias request and did not see it commit cannot be retried: its retry fails with
-``promotion_needs_resolution`` and keeps the lease, because the MLflow server can still commit the earlier request (see ``promote``).
+restarts the MLflow service first, writes the Production record of the generation for the version production names and records the production alias
+(``resolve`` here takes the restart, the alias read and the record write as calls; the owner command is ``promote_owner``, whose docstring has the steps). A
+run that sent its alias request and did not see it commit cannot be retried: its retry fails with ``promotion_needs_resolution`` and keeps the lease, because
+the MLflow server can still commit the earlier request (see ``promote``).
 
 The library calls no process and starts no thread. Every S3 call has the client's connect and read limits.
 """
@@ -152,14 +153,25 @@ def held(client: Any, bucket: str, model: str) -> Lease | None:
 
 
 def resolve(
-    client: Any, bucket: str, model: str, run: str, owner: str, reason: str, at: str, restart: Callable[[], None], alias: Callable[[], str | None]
+    client: Any,
+    bucket: str,
+    model: str,
+    run: str,
+    owner: str,
+    reason: str,
+    at: str,
+    restart: Callable[[], None],
+    alias: Callable[[], str | None],
+    record: Callable[[Lease, str | None], None] = lambda lease, production: None,
 ) -> Lease:
     """Close the held lease of a run the owner has stopped for good, and fence the run so it never starts again.
 
     ``restart`` restarts the MLflow service and returns only when every task that ran before is stopped and the new deployment is complete. It runs before
     anything is recorded, so no request the old server accepted can commit after the close. ``alias`` then reads the production alias, which the fence records.
     Either raises ReceiptError, and the lease stays held. Raises ReceiptError too when the model is free, another run holds it, or the run already stored its
-    receipt (a retry of the run closes its own lease).
+    receipt (a retry of the run closes its own lease). ``record`` then writes the Production record of the generation for the version production names
+    (``promote_owner`` writes it with ``production_record``, and writes nothing when production names no version). It runs before the fence and the close, so
+    a record that cannot be stored leaves the lease held and the run unfenced, and a repeat of the resolution keeps the record it wrote.
     """
     lease = held(client, bucket, model)
     if lease is None:
@@ -170,6 +182,7 @@ def resolve(
         raise ReceiptError(f"run {run} stored its receipt. Retry it and it closes its own lease")
     restart()
     production = alias()
+    record(lease, production)
     details = {"owner": owner, "reason": reason, "resolved_at": at, "production_alias": production or "none"}
     fence = promote_receipt.canonical({"schema": 1, "run_id": run, "model": model, "generation": lease.generation, "outcome": "abandoned", **details})
     promote_receipt.put_once(client, bucket, promote_receipt.key_of(run, promote_receipt.ABANDONED), fence)

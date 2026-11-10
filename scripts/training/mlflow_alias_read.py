@@ -187,6 +187,14 @@ def fetch(request: AliasRequest, limit: float) -> tuple[urllib.error.HTTPError |
 
 def read_alias(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> str | None:
     """Return the version number the alias names, or None when MLflow answers that the model or the alias does not exist. Raise AliasReadError otherwise."""
+    found = read_version(uri, model, alias, username, password, timeout)
+    return None if found is None else found[0]
+
+
+def read_version(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> tuple[str, dict[str, str]] | None:
+    """Return the version number the alias names and the tags of that version from the same answer, or None when the model or the alias does not exist.
+
+    Raise AliasReadError otherwise."""
     limit = TIMEOUT_SECONDS if timeout is None else timeout
     try:
         error, body = fetch(AliasRequest(uri, model, alias, username, password), limit)
@@ -199,7 +207,7 @@ def read_alias(uri: str, model: str, alias: str, username: str, password: str, t
     except OSError as error:
         raise AliasReadError(f"the answer of MLflow cannot be read: {type(error).__name__}") from None
     if error is None:
-        return version_in(body, model)
+        return version_in(body, model), tags_in(body, model)
     check_missing(error, body, alias)
     return None
 
@@ -229,3 +237,14 @@ def version_in(raw: bytes, model: str) -> str:
     if not isinstance(found, dict) or not isinstance(version, str) or not VERSION.fullmatch(version) or found.get("name") not in {None, model}:
         raise AliasReadError(f"the answer of MLflow holds no version of {model}")
     return version
+
+
+def tags_in(raw: bytes, model: str) -> dict[str, str]:
+    """Return the tags of the version in the 200 answer (``[{"key": ..., "value": ...}]``, absent means none), or raise AliasReadError for another shape."""
+    found = json.loads(raw)["model_version"]
+    tags = found.get("tags", [])
+    if not isinstance(tags, list) or not all(
+        isinstance(tag, dict) and isinstance(tag.get("key"), str) and isinstance(tag.get("value", ""), str) for tag in tags
+    ):
+        raise AliasReadError(f"the answer of MLflow holds no readable tags of {model}")
+    return {tag["key"]: tag.get("value", "") for tag in tags}

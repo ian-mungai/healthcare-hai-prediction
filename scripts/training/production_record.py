@@ -10,8 +10,10 @@ promotions of one model and its generation only grows, so the record with the hi
 say. A record is written create-only. A retry of the same run holds the same generation and finds its own record: it keeps the first one when every field but
 the time is the same, and refuses any other record under that key.
 
-Limit: a run the owner abandons (``promote_owner resolve``) writes no record, so after such a resolution the newest record can name the version production
-held before that run.
+The owner's resolution of an abandoned run (``promote_owner resolve``) writes the record of that run's generation for the version production names after
+the MLflow restart, before it closes the lease, and writes none when production names no version. The features job lists the lease generations first and
+refuses to load or release an online set while a generation is open or the newest closed generation has no record
+(``scripts.features.feast_sets.unresolved_promotion``), until a completed promotion or resolution of the model writes one.
 """
 
 from __future__ import annotations

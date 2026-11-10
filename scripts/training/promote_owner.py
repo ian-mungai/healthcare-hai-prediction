@@ -30,9 +30,12 @@ model stay blocked until the owner resolves the run:
    already names its version.
 3. Otherwise run resolve. It refuses when the run holds no lease or already has a receipt. It then forces a new deployment of the MLflow ECS service
    and waits (up to 15 minutes) until every task that ran before is STOPPED and the new deployment is COMPLETED, so no request the old server accepted
-   can still commit. It reads the production alias, writes promote/<run>/abandoned.json with that alias, so the run refuses to start again, then
-   closes the generation. A failed or late restart fails the command and leaves the lease held: run it again. The owner reconciles the production alias by
-   hand, and the next promotion then observes whatever production names.
+   can still commit. It reads the production alias and the tags of its version, writes the Production record of the generation for that version
+   (promote/production/<HAI_TYPE>/<generation>.json, as the promote action does; nothing when production names no version), writes
+   promote/<run>/abandoned.json with that alias, so the run refuses to start again, then closes the generation. The output names the record, or none.
+   With no record the features job keeps refusing online sets until a completed promotion of the model writes one. A failed or late restart, or a record
+   that cannot be stored, fails the command and leaves the lease held: run it again. The owner reconciles the production alias by hand, and the next
+   promotion then observes whatever production names.
 
 The project profile needs ecs:UpdateService, ecs:DescribeServices, ecs:ListTasks and ecs:DescribeTasks on the MLflow service, and the get, create-only put and
 list access to promote/ in the data bucket that the training task role has.
@@ -46,11 +49,14 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
-from scripts.training import mlflow_alias_read, promote_lease, promote_receipt, registry
+from scripts.training import mlflow_alias_read, production_record, promote_lease, promote_receipt, registry
 from scripts.training.promote_receipt import ReceiptError
 
 MLFLOW_SERVICE = "mlflow"
+MODEL_CONTRACT = Path(__file__).resolve().parents[2] / "data_contracts/training/model_contract.json"
 
 
 LOGIN_NAMES = ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
@@ -74,22 +80,51 @@ def mlflow_restarter(environ: Mapping[str, str]) -> Callable[[], None]:
     return restart
 
 
-def alias_reader(model: str, environ: Mapping[str, str]) -> Callable[[], str | None]:
-    """The read of the version production names, through the MLflow REST API at MLFLOW_TRACKING_URI. A failure raises ReceiptError."""
+class ProductionAfterResolution:
+    """The version production names after the restart, and the Production record of the resolved generation for it.
 
-    def read() -> str | None:
+    ``alias`` reads the version and its tags in one call of the MLflow REST API at MLFLOW_TRACKING_URI. ``record`` writes the record of the generation with
+    ``production_record.build`` and ``production_record.store``, as the promote action does: the infection type of the model, the version, the resolved run,
+    the mode of its stored intent (``resolved`` when the run stored none, so it never sent an alias request), the lease generation and the version's
+    ``feature_set`` and ``feature_set_schema_sha256`` tags. It writes nothing when production names no version. ``key`` is the record's key, or ``none``.
+    A failure raises ReceiptError and the lease stays held."""
+
+    def __init__(self, client: Any, bucket: str, model: str, environ: Mapping[str, str]) -> None:
+        self.client, self.bucket, self.model, self.environ = client, bucket, model, environ
+        self.tags: dict[str, str] = {}
+        self.key = "none"
+
+    def alias(self) -> str | None:
         try:
-            return mlflow_alias_read.read_alias(
-                environ.get("MLFLOW_TRACKING_URI", ""),
-                model,
+            found = mlflow_alias_read.read_version(
+                self.environ.get("MLFLOW_TRACKING_URI", ""),
+                self.model,
                 registry.CHAMPION_ALIAS,
-                environ.get("MLFLOW_TRACKING_USERNAME", ""),
-                environ.get("MLFLOW_TRACKING_PASSWORD", ""),
+                self.environ.get("MLFLOW_TRACKING_USERNAME", ""),
+                self.environ.get("MLFLOW_TRACKING_PASSWORD", ""),
             )
         except mlflow_alias_read.AliasReadError as error:
-            raise ReceiptError(f"the production alias of {model} cannot be read: {error}. The lease is still held") from None
+            raise ReceiptError(f"the production alias of {self.model} cannot be read: {error}. The lease is still held") from None
+        if found is None:
+            return None
+        version, self.tags = found
+        return version
 
-    return read
+    def record(self, lease: promote_lease.Lease, production: str | None) -> None:
+        if production is None:
+            return
+        types = {model: hai_type for hai_type, model in json.loads(MODEL_CONTRACT.read_text())["registered_models"].items()}
+        if self.model not in types:
+            raise ReceiptError(f"{self.model} is not a registered model of the model contract. The lease is still held")
+        records = promote_receipt.records_of(self.client, self.bucket, lease.run_id)
+        mode = promote_receipt.stored_intent(self.client, self.bucket, lease.run_id)["mode"] if promote_receipt.INTENT in records else "resolved"
+        request = {"model": self.model, "version": production, "run_id": lease.run_id, "mode": mode}
+        document = production_record.build(types[self.model], request, lease.generation, self.tags, datetime.now(UTC).isoformat(timespec="seconds"))
+        try:
+            production_record.store(self.client, self.bucket, document)
+        except ReceiptError as error:
+            raise ReceiptError(f"{error}. The lease is still held and the run is not fenced") from None
+        self.key = production_record.key_of(types[self.model], lease.generation)
 
 
 def main(arguments: Sequence[str] | None = None, environ: Mapping[str, str] | None = None) -> int:
@@ -115,9 +150,12 @@ def main(arguments: Sequence[str] | None = None, environ: Mapping[str, str] | No
             sys.stdout.write(json.dumps(promote_lease.report(client, bucket, options.model), sort_keys=True) + "\n")
         else:
             at = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-            restart, alias = mlflow_restarter(environ), alias_reader(options.model, environ)
-            lease = promote_lease.resolve(client, bucket, options.model, options.run, options.owner, options.reason, at, restart, alias)
-            sys.stdout.write(json.dumps({"resolved": lease.key, "run_id": options.run, "outcome": "abandoned"}, sort_keys=True) + "\n")
+            production = ProductionAfterResolution(client, bucket, options.model, environ)
+            lease = promote_lease.resolve(
+                client, bucket, options.model, options.run, options.owner, options.reason, at, mlflow_restarter(environ), production.alias, production.record
+            )
+            shown = {"resolved": lease.key, "run_id": options.run, "outcome": "abandoned", "production_record": production.key}
+            sys.stdout.write(json.dumps(shown, sort_keys=True) + "\n")
     except ReceiptError as error:
         sys.stderr.write(f"{error}\n")
         return 2
