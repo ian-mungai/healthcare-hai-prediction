@@ -251,7 +251,7 @@ PINS: dict[tuple[str, str], Pin] = {
         "dim_rurality_code: the first and last vintage of each published label of a split RUCC code bound its edition and reach its key",
     ),
     ("dim_measure", "label_bounds"): Pin(
-        "28bb15707754e643fed47961239a0aebc90204fc7ef44be45a3aae94a45813d5",
+        "dd0d5d8f1cf33c718fb380ff2ea1fec975de582ee17a2dad2190aa90a647decc",
         "dim_measure: the first and last release date of each published name of a split measure bound its edition and reach its key and identity text",
     ),
     ("dim_county", "county_list_bounds"): Pin(
