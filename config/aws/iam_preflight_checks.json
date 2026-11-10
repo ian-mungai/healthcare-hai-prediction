@@ -1729,6 +1729,18 @@
     {
       "role": "write_features",
       "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/base_pins.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/online_hold.json",
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/features_snapshot.json",
       "scope": "features"
     },
@@ -1922,6 +1934,18 @@
       "role": "project_user",
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/gold_pins.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/base_pins.json",
+      "scope": "features"
+    },
+    {
+      "role": "project_user",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/online_hold.json",
       "scope": "features"
     },
     {
