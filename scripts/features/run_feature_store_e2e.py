@@ -2100,6 +2100,39 @@ def task_environment_case(report: Report, build: LocalBuild, base: Path, first: 
         build.environment = {}
 
 
+def base_selection_case(report: Report, build: LocalBuild, base: Path, first: Path) -> None:
+    """F16: the base job builds the tables the model sets read and none of the six model-set tables or their tests, so a broken model set fails only its
+    own job. The project is a scratch copy whose feature_matrix_m1 reads a column that does not exist; every other file is the repository's."""
+    schema = schema_module.load_schema()
+    model_tables = sorted(entry["table"] for entry in schema["model_sets"].values())
+    root = base / "broken_set_root"
+    root.mkdir()
+    for entry in ROOT.iterdir():
+        if entry.name not in ("dbt", ".git"):
+            (root / entry.name).symlink_to(entry)
+    shutil.copytree(ROOT / "dbt", root / "dbt", ignore=shutil.ignore_patterns("target", "logs", "dbt_packages"))
+    broken = root / schema_module.MATRIX_FOLDER / "feature_matrix_m1.sql"
+    broken.write_text("select spine_key, event_timestamp, no_such_column from {{ ref('feature_matrix_hospital_window') }}\n")
+    folder = base / "run_base_set"
+    folder.mkdir()
+    shutil.copytree(first / "gold_input", folder / "gold_input")
+    shutil.copy2(first / "gold_pins.json", folder / "gold_pins.json")
+    done = build.build(folder, RUN, ["--project", str(root / "dbt"), "--feature-set", "base"])
+    results_path = folder / "features_work/build/target/run_results.json"
+    nodes = [str(item["unique_id"]) for item in json.loads(results_path.read_text())["results"]] if results_path.is_file() else []
+    model_set_nodes = [node for node in nodes if any(table in node for table in model_tables)]
+    report.case(
+        "F16",
+        "FS1",
+        "a base build with a broken model set passes, selects none of the model-set tables or their tests and writes the staging file",
+        done.returncode == 0 and bool(nodes) and not model_set_nodes and (folder / "staging.duckdb").is_file(),
+        exit=done.returncode,
+        nodes=len(nodes),
+        model_set_nodes=len(model_set_nodes),
+        failure=(done.stdout + done.stderr).strip()[-300:] if done.returncode else "",
+    )
+
+
 def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     """The cases that need the fixture build."""
     started = time.monotonic()
@@ -2118,6 +2151,7 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
         report.case("E01", "H5", "the build wrote staging.duckdb", False)
         return
     task_environment_case(report, build, base, first)
+    base_selection_case(report, build, base, first)
     from scripts.features.cost_report_domain_cases import built_domains
     from scripts.features.delta_cases import built_support
     from scripts.features.derived_column_cases import built_derived

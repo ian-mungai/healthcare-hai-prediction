@@ -8,8 +8,9 @@ The build does not call ``feature_columns.run_features``, because that runs ``db
 
 1. ``full.duckdb`` takes the exported gold snapshots (every file is hashed again while it is copied) and all seeds (``dbt seed``).
 2. ``worker_restrict`` copies only what a feature model may read; ``worker_stage_two`` builds the bridge filter tables with trusted SQL.
-3. ``dbt build --select tag:features --exclude resource_type:seed <filter models>`` runs on that file with external access off, the enforced contracts and the
-   project's run hooks emptied. Every selected model and test must end ``success`` or ``pass``; the as-of, identity and contract tests are part of the build.
+3. ``dbt build --select tag:features --exclude resource_type:seed <filter models>`` runs on that file with external access off, the enforced contracts and
+   the project's run hooks emptied. A base build also excludes ``feature_matrix_m1+`` to ``feature_matrix_m6+``: each model set builds its own table.
+   Every selected model and test must end ``success`` or ``pass``; the as-of, identity and contract tests are part of the build.
 4. The published tables become plain tables of ``staging.duckdb`` (a view stores the catalog name of the file that built it, so a sealed copy under another
    name could not read one), together with ``feature_build_inputs`` (what this set was built from), ``feature_build_receipt`` (the node statuses) and
    ``validation_own_snapshot`` (the own POS snapshot of each window, for the validation's independent provenance check).
@@ -128,6 +129,11 @@ class BuildBudget:
         return self.limit(step)
 
 
+def model_set_tables(root: Path) -> frozenset[str]:
+    """The tables of the six model sets (``feature_matrix_m1`` to ``feature_matrix_m6``), from the feature schema."""
+    return frozenset(entry["table"] for entry in feature_schema.load_schema(root)["model_sets"].values())
+
+
 def published_tables(root: Path) -> list[str]:
     """The tables the features contract publishes, in name order."""
     document = json.loads((root / CONTRACT).read_text())
@@ -207,9 +213,10 @@ def run_worker(root: Path, action: str, seconds: int, *arguments: str) -> None:
     run_child(["-m", "scripts.lakehouse.feature_columns", "--worker", action, *arguments], root, f"worker {action}", seconds)
 
 
-def check_results(work: Path, root: Path) -> tuple[str, list[tuple[str, str, str]]]:
-    """Require every selected node to end ``success`` or ``pass``, and every feature model that is not a bridge filter to be among them.
+def check_results(work: Path, root: Path, left_out: frozenset[str] = frozenset()) -> tuple[str, list[tuple[str, str, str]]]:
+    """Require every selected node to end ``success`` or ``pass``, and every feature model that is not a bridge filter or in ``left_out`` to be among them.
 
+    ``left_out`` names the models the build did not select (the model-set tables of a base build); a node of one of them in the results is refused.
     Returns the invocation ID and the (node, type, status) rows.
     """
     results, _ = read_record(work, "target/run_results.json")
@@ -218,7 +225,10 @@ def check_results(work: Path, root: Path) -> tuple[str, list[tuple[str, str, str
         raise PipelineError("the features build results contain an incomplete or nonpassing node")
     built = {node.split(".")[-1] for node, kind, _ in rows if kind == "model"}
     filters = {path.stem for path in (root / columns.FILTER_FOLDER).glob("*.sql")}
-    missing = sorted(set(columns.sql_models(root)) - filters - built)
+    stray = sorted(built & left_out)
+    if stray:
+        raise PipelineError(f"the features build built {stray[0]}, which its selection leaves out")
+    missing = sorted(set(columns.sql_models(root)) - filters - left_out - built)
     if missing:
         raise PipelineError(f"the features build did not build {missing[0]} (and {len(missing) - 1} more)")
     return str(results["metadata"]["invocation_id"]), rows
@@ -397,13 +407,25 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     run_worker(root, "stage_two", budget.seconds("stage_two"), str(shell), str(stage), *filters)
     profile = write_profile(work / "profiles", stage, locked=True)
     filter_paths = [f"path:{columns.FILTER_PATH}/{name}.sql" for name in filters]
+    # Base leaves out the model-set tables and their tests (``<table>+``): each model set builds its own table in its own job, so a broken set fails only it.
+    left_out = model_set_tables(root) if feature_sets.checked(args.feature_set) == feature_sets.BASE else frozenset()
+    set_paths = [f"{table}+" for table in sorted(left_out)]
     run_dbt(
-        ["build", "--select", "tag:features", "--exclude", "resource_type:seed", *filter_paths, *columns.dbt_arguments(project, profile, work / "build")],
+        [
+            "build",
+            "--select",
+            "tag:features",
+            "--exclude",
+            "resource_type:seed",
+            *filter_paths,
+            *set_paths,
+            *columns.dbt_arguments(project, profile, work / "build"),
+        ],
         root,
         "build tag:features",
         budget.seconds("build"),
     )
-    invocation, rows = check_results(work / "build", root)
+    invocation, rows = check_results(work / "build", root, left_out)
     schema_sha = feature_schema.schema_sha256(root)
     controls_sha = hashlib.sha256((project / "seeds/features/frozen_hai_outcome_controls.csv").read_bytes()).hexdigest()
     materialize(stage, folder / "staging.partial.duckdb", published_tables(root), gold_pin, args.run, args.source_sha256, schema_sha, controls_sha, rows)
