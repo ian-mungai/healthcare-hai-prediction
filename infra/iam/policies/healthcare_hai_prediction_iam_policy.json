@@ -82,7 +82,9 @@
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_mlflow_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_openmetadata_host_task_${ENVIRONMENT}",
-        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_host_code_fetch_task_${ENVIRONMENT}"
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_host_code_fetch_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_serve_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_drift_task_${ENVIRONMENT}"
       ],
       "Condition": {
         "StringEquals": {
