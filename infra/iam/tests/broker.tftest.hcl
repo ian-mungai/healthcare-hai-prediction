@@ -242,9 +242,8 @@ run "promote_family_reuses_the_train_role" {
       for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadStagedRunRecords"
       ][0] == [
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code.sha256",
-      "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/promotion_approval.json",
     ]
-    error_message = "The broker reads the staged code digest and the promotion approval of a run and no other object."
+    error_message = "The broker reads the staged code digest of a run and no other object."
   }
 }
 

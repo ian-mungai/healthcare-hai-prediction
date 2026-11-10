@@ -39,6 +39,7 @@ from scripts.training.job_failure import JobFailure
 PROMOTED_TAG = "promoted_run"
 VERDICT_TAG = "promotion_verdict"
 RECORD = "promote.json"
+CANARY_TAGS = ("canary_verdict", "canary_version", "canary_run")
 
 
 def parameters_of(path: Any) -> dict[str, Any]:
@@ -50,11 +51,26 @@ def parameters_of(path: Any) -> dict[str, Any]:
         raise JobFailure("parameters_refused", f"the promotion parameters are unusable: {error}") from None
 
 
+def canary_tags(number: str, model_run: str) -> dict[str, str]:
+    """The tags a passed canary leaves on the version it judged: its verdict, the version and the MLflow run of the model it judged."""
+    return dict(zip(CANARY_TAGS, ("promote", number, model_run), strict=True))
+
+
+def check_canary(version: Any, number: str) -> None:
+    """Refuse a promotion whose version has no passed canary result, or one for another version or another run of the model."""
+    tags = dict(getattr(version, "tags", {}) or {})
+    if not any(name in tags for name in CANARY_TAGS):
+        raise JobFailure("canary_result_missing", f"version {number} has no canary result, so production does not move to it")
+    if {name: tags.get(name) for name in CANARY_TAGS} != canary_tags(number, str(getattr(version, "run_id", ""))):
+        raise JobFailure("canary_result_mismatch", f"the canary result on version {number} is not a pass for this version and its model run")
+
+
 def check_version(version: Any, mode: str, number: str, current: str | None) -> None:
     """Refuse a forward promotion of an unpassed version and a rollback to a version that never ran in production.
 
     A version that passed against the intercept + CMI baseline (``pass_baseline``) can become only the first champion: once production names another
-    version, a new version must pass against that champion. Production naming this version already (a retry after the alias moved) is accepted.
+    version, a new version must pass against that champion. A forward promotion also needs the passed canary result that ``auto_promotion record`` tags on
+    the version, bound to the version number and its model run. Production naming this version already (a retry after the alias moved) is accepted.
     """
     tags = dict(getattr(version, "tags", {}) or {})
     verdict = tags.get(VERDICT_TAG, "none")
@@ -65,6 +81,8 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
         )
     if mode == "promote" and verdict not in ("pass", "pass_baseline"):
         raise JobFailure("version_not_promotable", f"version {number} has the verdict {verdict}, not pass")
+    if mode == "promote":
+        check_canary(version, number)
     if mode == "rollback" and PROMOTED_TAG not in tags:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")
 

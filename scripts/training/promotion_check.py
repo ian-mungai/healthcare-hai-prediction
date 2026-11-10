@@ -70,14 +70,20 @@ def champion_predictions(
 
 
 def baseline_predictions(
-    hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str
+    hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str, cmi: Mapping[str, float] | None = None
 ) -> tuple[dict[str, float] | None, dict[str, Any]]:
     """With no champion, fit the intercept + CMI baseline the fit step's RQ1 test fits, on the same training years, and predict the holdout.
 
+    A model whose own list leaves CMI out (m1) gets CMI from ``cmi``, the extract's separate table, for this fit only; its own specification is unchanged.
+
     A baseline that cannot be fitted leaves the type without a reference, so its verdict stays no_champion and nothing becomes promotable.
     """
+    if cmi is not None and any("cmi" not in row for row in rows):
+        if any(row["spine_key"] not in cmi for row in rows):
+            return None, {"model": "intercept_cmi", "status": "not_estimable", "reason": "the extract's CMI table misses a hospital-window"}
+        rows = [{**row, "cmi": cmi[row["spine_key"]]} for row in rows]
     try:
-        request = job_inputs.model_request(hai_type, rows, (), config, PROMOTION_SECONDS, root, model)
+        request = job_inputs.model_request(hai_type, rows, (), config, PROMOTION_SECONDS, root, model, with_cmi=True)
         values = research_tests.intercept_cmi_predictions(request)
     except (job_inputs.InputError, ModelError) as error:
         return None, {"model": "intercept_cmi", "status": "not_estimable", "reason": str(error)}
@@ -150,7 +156,7 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
     config = job_inputs.config_of(root)
     baseline: dict[str, Any] | None = None
     if current is None:
-        rival, baseline = baseline_predictions(hai_type, extract_rows, config, root, parameters["model"])
+        rival, baseline = baseline_predictions(hai_type, extract_rows, config, root, parameters["model"], job_inputs.cmi_of(inputs / "extract", manifest))
     else:
         try:
             rival = champion_predictions(store, current, name, manifest, holdout, year, scratch)

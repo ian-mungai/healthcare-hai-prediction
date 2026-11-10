@@ -122,6 +122,17 @@ def auxiliary_of(extract: Path, manifest: Mapping[str, Any], name: str) -> list[
     return table_of(extract, manifest["auxiliary_files"][name])
 
 
+def cmi_of(extract: Path, manifest: Mapping[str, Any]) -> dict[str, float] | None:
+    """Return the case-mix index of each hospital-window from the optional ``cmi.parquet`` table, or None when the extract carries none.
+
+    A model whose feature lists leave CMI out has no CMI column in its analysis rows. The extract supplies the values apart from them, for the
+    intercept-plus-CMI reference only.
+    """
+    if "cmi.parquet" not in manifest["auxiliary_files"]:
+        return None
+    return {str(row["spine_key"]): float(row["cmi"]) for row in auxiliary_of(extract, manifest, "cmi.parquet") if row.get("cmi") is not None}
+
+
 def catalog(root: Path) -> dict[str, Feature]:
     """Return every registered predictor of the feature schema, keyed by its view and column reference."""
     schema = read_json(root / "data_contracts/features/feature_schema.json", "feature_schema")
@@ -143,9 +154,21 @@ def feature_lists(root: Path, model: str) -> dict[str, tuple[str, ...]]:
 
 
 def model_request(
-    hai_type: str, rows: Sequence[Mapping[str, Any]], adjacency: Sequence[Mapping[str, Any]], config: Mapping[str, Any], seconds: float, root: Path, model: str
+    hai_type: str,
+    rows: Sequence[Mapping[str, Any]],
+    adjacency: Sequence[Mapping[str, Any]],
+    config: Mapping[str, Any],
+    seconds: float,
+    root: Path,
+    model: str,
+    *,
+    with_cmi: bool = False,
 ) -> ModelRequest:
-    """Build one model's request from verified rows, its feature lists and the schema's registered predictors."""
+    """Build one model's request from verified rows, its feature lists and the schema's registered predictors.
+
+    ``with_cmi`` adds the case-mix index to the dataset without adding it to any feature list, so a model that leaves CMI out of its own specification can
+    still supply the intercept-plus-CMI reference. The feature lists, and so the model's own fit, stay as they are.
+    """
     lists = feature_lists(root, model)
     known = catalog(root)
     references = sorted({reference for items in lists.values() for reference in items})
@@ -155,6 +178,8 @@ def model_request(
     forced = config["slots"]["m2_elastic_net"]["forced_references"]
     if len(forced) != 1 or forced[0] not in known:
         raise InputError("feature_lists", "the Elastic Net slot must force exactly one registered covariate")
+    if with_cmi:
+        references = sorted({*references, forced[0]})
     process_list = read_json(root / "config/training/feature_lists/m1_ols.json", "feature_list")["references"]
     processes = tuple(reference for reference in process_list if reference in references and known[reference].family == PROCESS_FAMILY)
     try:

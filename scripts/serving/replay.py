@@ -74,7 +74,9 @@ def run(
     for ccn, year in corpus:
         payload = {"hai_type": hai_type, "ccn": ccn, "window_year": year}
         for attempt in range(MAX_RETRIES + 1):
+            started = clock()
             status, headers, body = send(payload, min(REQUEST_SECONDS, remaining()))
+            seconds = clock() - started
             if clock() > deadline:
                 raise ReplayDeadline(f"the replay did not finish within {deadline_seconds:g} s")
             if status != 429 or attempt == MAX_RETRIES:
@@ -82,7 +84,16 @@ def run(
             sleep(min(retry_after(headers), remaining()))
         statuses[str(status)] += 1
         if status == 200:
-            rows.append({"served_by": body["served_by"], "prediction": body["prediction"], "model_version": body["model_version"]})
+            rows.append(
+                {
+                    "ccn": ccn,
+                    "window_year": year,
+                    "served_by": body["served_by"],
+                    "prediction": body["prediction"],
+                    "model_version": body["model_version"],
+                    "seconds": seconds,
+                }
+            )
     return {
         "hai_type": hai_type,
         "requests": len(corpus),
@@ -90,6 +101,7 @@ def run(
         "served_by": dict(Counter(row["served_by"] for row in rows)),
         "model_versions": dict(Counter(row["model_version"] for row in rows)),
         "comparison": compare.compare(rows),
+        "rows": rows,
     }
 
 

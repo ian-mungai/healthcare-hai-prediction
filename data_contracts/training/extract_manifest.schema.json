@@ -384,6 +384,58 @@
               ]
             }
           }
+        },
+        "cmi.parquet": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "file",
+            "sha256",
+            "row_count",
+            "columns",
+            "value_content_sha256",
+            "kind"
+          ],
+          "properties": {
+            "file": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_]+[.]parquet$"
+            },
+            "sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "row_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "columns": {
+              "type": "object",
+              "minProperties": 1,
+              "propertyNames": {
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "additionalProperties": {
+                "enum": [
+                  "varchar",
+                  "double",
+                  "bigint",
+                  "boolean",
+                  "date",
+                  "timestamp with time zone"
+                ]
+              }
+            },
+            "value_content_sha256": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "kind": {
+              "enum": [
+                "cmi"
+              ]
+            }
+          }
         }
       }
     },

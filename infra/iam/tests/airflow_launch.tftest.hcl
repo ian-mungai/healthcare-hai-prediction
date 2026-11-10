@@ -358,11 +358,10 @@ run "run_records_and_log_reads_are_exact_objects" {
     condition = (
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadStagedRunRecords"][0] == [
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code.sha256",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/promotion_approval.json",
       ] &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadStagedRunRecords"][0] == "s3:GetObject"
     )
-    error_message = "The launch role reads the staged code digest and the promotion approval of a run and no other object, with one get action."
+    error_message = "The launch role reads the staged code digest of a run and no other object, with one get action."
   }
 
   assert {

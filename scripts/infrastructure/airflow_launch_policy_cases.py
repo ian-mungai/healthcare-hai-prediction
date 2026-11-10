@@ -233,7 +233,7 @@ def job_cases() -> list[Case]:
     ):
         add(f"pass the unnamed role {name}", "iam:PassRole", role(name), False, pass_context)
     add("read a code digest", "s3:GetObject", f"{STAGE}/code.sha256", True)
-    add("read a promotion approval", "s3:GetObject", f"{STAGE}/promotion_approval.json", True)
+    add("read the retired promotion approval", "s3:GetObject", f"{STAGE}/promotion_approval.json", False)
     add("write a promotion approval", "s3:PutObject", f"{STAGE}/promotion_approval.json", False)
     add("read an approval of another name", "s3:GetObject", f"{STAGE}/approval.json", False)
     for key in ("code.tar.gz", "other.json", "../code.sha256"):
@@ -494,7 +494,7 @@ RESOURCES = (
     Resource("role of an unnamed family", role("job_write_features_task"), NONE, NONE),
     Resource("the launch role itself", role("airflow_launch_task"), NONE, NONE),
     Resource("staged code digest", f"{STAGE}/code.sha256", GET, GET),
-    Resource("staged promotion approval", f"{STAGE}/promotion_approval.json", GET, GET),
+    Resource("retired promotion approval", f"{STAGE}/promotion_approval.json", NONE, NONE),
     Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
     Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
     Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
@@ -913,7 +913,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
     definitions = tuple(f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{PROJECT}_{ENVIRONMENT}_job_{family}_host:*" for family in named)
     roles = tuple(sorted({role("job_execution"), *(role(FAMILY_ROLES[family]) for family in named)}))
     stage = f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs"
-    staged = (f"{stage}/code.sha256", f"{stage}/promotion_approval.json", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
+    staged = (f"{stage}/code.sha256", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
     staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs/*/check.json",) if "bronze" in named else ()
     staged += (f"{stage}/code_run.json",)
     staged += (f"arn:aws:s3:::{BUCKET}/drift/*",) if "drift" in named else ()

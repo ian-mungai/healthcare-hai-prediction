@@ -272,6 +272,10 @@ class Fixture:
             "hac.parquet": table_entry(self.extract, "hac.parquet", flags, HAC_COLUMNS, "hac"),
             "adjacency.parquet": table_entry(self.extract, "adjacency.parquet", adjacency, ADJACENCY_COLUMNS, "adjacency"),
         }
+        if self.model == "m1":
+            # The m1 list leaves CMI out, so the extract supplies it in a table of its own for the intercept-plus-CMI reference.
+            cmi_rows = [{"spine_key": row["spine_key"], "cmi": float(row["cmi"])} for row in self.rows]
+            shared["cmi.parquet"] = table_entry(self.extract, "cmi.parquet", cmi_rows, {"spine_key": "varchar", "cmi": "double"}, "cmi")
         for hai_type in self.hai_types:
             name = f"extract_{hai_type}.parquet"
             label = f"hai_{hai_type.split('_')[1]}__sir__number"
@@ -1472,6 +1476,15 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(promotion_run[0]["tags"]["mlflow.parentRunId"] == next(iter(store.parents())), "the promotion run is not a child of the parent run")
         verify_done(fixture.out, "promotion_check", DIGEST)
 
+    def first_version_of_m1() -> None:
+        fixture = promoted(folder / "first_m1", model="m1")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check of m1 failed: {error}")
+        document = json.loads((fixture.out / f"comparison_{HAI_TYPE}.json").read_text())
+        require(document["verdict"]["verdict"] == "pass_baseline", f"m1 could not become the first champion: {document['baseline']} {document['verdict']}")
+        require(document["baseline"]["status"] == "fitted", f"the baseline was not fitted for m1: {document['baseline']}")
+
     def better_challenger() -> None:
         fixture = promoted(folder / "better", Predictor(LABEL, constant=3.0))
         code, _, error = run_promotion(fixture)
@@ -1740,6 +1753,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_uri_missing", f"{code} {error}")
 
     cases.check("job_promotion_check_first_version_passes_against_the_baseline", first_version)
+    cases.check("job_promotion_check_m1_becomes_the_first_champion_against_the_baseline", first_version_of_m1)
     cases.check("job_promotion_check_first_version_one_percent_better_than_baseline_refused", first_one_percent)
     cases.check("job_promotion_check_first_version_interval_touching_zero_refused", first_interval)
     cases.check("job_promotion_check_champion_rule_unchanged", champion_rule_unchanged)

@@ -796,6 +796,11 @@ SET_HASH = "ab" * 32
 REGISTRY_WRITES = ("set_registered_model_alias", "set_model_version_tag")
 
 
+def canary(number: str, run: str = "x") -> dict[str, str]:
+    """The tags a passed canary leaves on the version it judged: its verdict, the version and the model run it judged."""
+    return {"canary_verdict": "promote", "canary_version": number, "canary_run": run}
+
+
 def registry_fixture(folder: Path) -> Fixture:
     """A registry with version 1 in production after an earlier promotion and version 2 as a passed challenger."""
     fixture = Fixture(folder)
@@ -803,7 +808,7 @@ def registry_fixture(folder: Path) -> Fixture:
     store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
     for tags in (
         {"promotion_verdict": "pass", "promoted_run": "20250101T000000Z-aaaaaaaa"},
-        {"promotion_verdict": "pass"},
+        {"promotion_verdict": "pass", **canary("2")},
         {"promotion_verdict": "fail:fairness"},
     ):
         store.create_model_version(MODEL, "runs:/x/model", run_id="x", tags=tags)
@@ -1274,7 +1279,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         )
 
     def allow_three(fixture: Fixture) -> None:
-        fixture.tracking.find_version(MODEL, "3")["tags"]["promotion_verdict"] = "pass"
+        fixture.tracking.find_version(MODEL, "3")["tags"].update({"promotion_verdict": "pass", **canary("3")})
 
     def run_b(fixture: Fixture, work: Path, bucket: ListingBucket, version: str = "3", mode: str = "promote") -> tuple[int, str, str]:
         return promote_in(fixture, work, bucket, {**PROMOTION, "model_version": version, "promotion_mode": mode}, run=RUN_B)
@@ -1737,7 +1742,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
         fixture, bucket = Fixture(folder / "first_champion"), receipt_bucket()
         store = fixture.tracking
         store.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
-        for tags in ({"promotion_verdict": "fail:rmse_improvement"}, {"promotion_verdict": "pass_baseline"}):
+        for tags in ({"promotion_verdict": "fail:rmse_improvement"}, {"promotion_verdict": "pass_baseline", **canary("2")}):
             store.create_model_version(MODEL, "runs:/x/model", run_id="x", tags=tags)
         store.set_registered_model_alias(MODEL, "challenger", "2")
         store.calls.clear()
@@ -1754,6 +1759,32 @@ def promote_cases(cases: Any, folder: Path) -> None:
         require(code != 0 and "version_not_promotable" in error and "baseline" in error, f"a baseline pass replaced a champion: {code} {error}")
         require(alias(fixture) == "1" and not writes(fixture), "a baseline pass moved production while a champion exists")
 
+    def pass_tag_without_a_canary_result_is_refused() -> None:
+        fixture = registry_fixture(folder / "no_canary")
+        for key in ("canary_verdict", "canary_version", "canary_run"):
+            del fixture.tracking.find_version(MODEL, "2")["tags"][key]
+        code, _, error = promote_call(fixture, folder / "no_canary_work")
+        require(code != 0 and "canary_result_missing" in error, f"a version with a pass tag and no canary result was promoted: {code} {error}")
+        require(alias(fixture) == "1" and not writes(fixture), "production moved without a canary result")
+
+    def canary_result_of_another_candidate_is_refused() -> None:
+        for name, changes in (("version", {"canary_version": "3"}), ("run", {"canary_run": "another_run"}), ("verdict", {"canary_verdict": "hold"})):
+            fixture = registry_fixture(folder / f"other_canary_{name}")
+            fixture.tracking.find_version(MODEL, "2")["tags"].update(changes)
+            code, _, error = promote_call(fixture, folder / f"other_canary_{name}_work")
+            require(code != 0 and "canary_result_mismatch" in error, f"a canary result of {name} {changes} was accepted: {code} {error}")
+            require(alias(fixture) == "1" and not writes(fixture), f"production moved on a canary result of another {name}")
+
+    def rollback_needs_no_canary_result() -> None:
+        fixture, bucket = registry_fixture(folder / "rollback_no_canary"), receipt_bucket()
+        for key in ("canary_verdict", "canary_version", "canary_run"):
+            fixture.tracking.find_version(MODEL, "2")["tags"].pop(key, None)
+        code, _, error = promote_in(fixture, folder / "rollback_no_canary_work", bucket, {**PROMOTION, "model_version": "1", "promotion_mode": "rollback"})
+        require(code == 0 or "canary" not in error, f"a rollback asked for a canary result: {code} {error}")
+
+    cases.check("promote_refuses_a_pass_tag_without_a_canary_result", pass_tag_without_a_canary_result_is_refused)
+    cases.check("promote_refuses_a_canary_result_of_another_version_run_or_verdict", canary_result_of_another_candidate_is_refused)
+    cases.check("promote_rollback_needs_no_canary_result", rollback_needs_no_canary_result)
     cases.check("promote_first_champion_from_a_baseline_pass", first_champion_promoted)
     cases.check("promote_refuses_a_baseline_pass_once_a_champion_exists", baseline_pass_needs_no_champion)
     cases.check("promote_refuses_a_second_run_while_an_interrupted_run_is_unresolved", rolled_back_run_cannot_repeat_the_move)

@@ -166,7 +166,10 @@ def cases() -> list[Case]:
         add(f"pass the unnamed role {name}", "iam:PassRole", role(name), False, pass_context)
     add("read a code digest", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/code.sha256", True)
     add(
-        "read a promotion approval", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/promotion_approval.json", True
+        "read the retired promotion approval",
+        "s3:GetObject",
+        f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/promotion_approval.json",
+        False,
     )
     add(
         "write a promotion approval",

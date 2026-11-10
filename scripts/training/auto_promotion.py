@@ -1,12 +1,15 @@
 """Automatic promotion: a challenger that passed the promotion rule goes to the canary, the canary checks decide the full rollout, the owner is told.
 
     python -m scripts.training.auto_promotion plan --research research_HAI_1.json --percent 10
-    python -m scripts.training.auto_promotion verdict --report replay_report.json
+    python -m scripts.training.auto_promotion verdict --report replay_report.json --research research_HAI_1.json
+    python -m scripts.training.auto_promotion record --report replay_report.json --research research_HAI_1.json
     python -m scripts.training.auto_promotion release --model m2 --features-run <run ID>
     python -m scripts.training.auto_promotion notify --hai-type HAI_1 --outcome promoted --detail <text>
 
 ``plan`` reads the research record of a type and prints the parameters of the canary deployment and of the promotion, or ``{"challenger": null}``. ``verdict``
-judges the replay report of the canary with the canary checks and prints ``promote`` or ``hold`` with the failed checks. ``release`` loads the held online
+judges the replay report of the canary with the owner's pass rule and the offline predictions of the research record, and prints ``promote`` or ``hold``
+with the failed checks. ``record`` does the same and, on a pass, tags the challenger's version with the result, bound to the version and its model run
+(``MLFLOW_TRACKING_URI``); the ``promote`` action refuses a version without it. ``release`` loads the held online
 data of the model's feature set, which only a model with another feature schema than the online one needs (``schema_changed``). ``notify`` publishes the
 outcome to the project's alerts topic named by ``ALERTS_TOPIC_ARN``. No step needs the owner's approval, and none moves an alias: the ``promote`` action does.
 """
@@ -24,9 +27,11 @@ from typing import Any
 
 from orchestration import serving_contract, training_contract
 from scripts.process import run_command
-from scripts.serving import compare
+from scripts.serving import compare, replay
+from scripts.training import promote, registry, run_tracking
 
 RELEASE_SECONDS = 1800.0
+MAX_RELATIVE_DIFFERENCE = 1e-6
 OUTCOMES = ("promoted", "held", "rolled_back")
 
 
@@ -53,16 +58,52 @@ def plan(record: Mapping[str, Any], percent: int) -> dict[str, Any]:
     }
 
 
-def canary_checks(report: Mapping[str, Any]) -> dict[str, Any]:
-    """Judge the replay report of a canary: every request answered, and both sides large enough to compare."""
+def same_within_rounding(canary: float, offline: float) -> bool:
+    """True when two predictions differ by at most ``MAX_RELATIVE_DIFFERENCE`` of the larger one."""
+    return abs(canary - offline) <= MAX_RELATIVE_DIFFERENCE * max(abs(canary), abs(offline))
+
+
+def canary_checks(report: Mapping[str, Any], offline: Mapping[str, float], candidate_version: str) -> dict[str, Any]:
+    """Judge the replay report of a canary against the owner's pass rule.
+
+    Every request answered 200, each within the API's time limit (``replay.REQUEST_SECONDS``). Both sides hold at least ``compare.MIN_ROWS`` rows. The canary
+    side was served by the candidate version, and each canary prediction matches the one the research job scored offline for the same version and
+    hospital-window (``offline`` maps ``<CCN>:<year>`` to it) within ``MAX_RELATIVE_DIFFERENCE``. A canary row with no offline prediction fails.
+    """
     failed = []
     statuses = report.get("statuses", {})
+    rows = [row for row in report.get("rows", []) if isinstance(row, Mapping)]
+    canary = [row for row in rows if row.get("served_by") == "canary"]
+    stable = [row for row in rows if row.get("served_by") == "stable"]
     if not report.get("requests") or statuses != {"200": report["requests"]}:
         failed.append("requests_answered")
+    if not rows or any(not isinstance(row.get("seconds"), int | float) or not 0 <= row["seconds"] <= replay.REQUEST_SECONDS for row in rows):
+        failed.append("within_time_limit")
     comparison = report.get("comparison", {})
-    if comparison.get("status") != "ok" or min(comparison.get("stable", {}).get("count", 0), comparison.get("canary", {}).get("count", 0)) < compare.MIN_ROWS:
+    counts = (comparison.get("stable", {}).get("count", 0), comparison.get("canary", {}).get("count", 0), len(stable), len(canary))
+    if comparison.get("status") != "ok" or min(counts) < compare.MIN_ROWS:
         failed.append("both_sides_compared")
+    if any(str(row.get("model_version")) != candidate_version for row in canary):
+        failed.append("canary_version")
+    if not canary or any(
+        f"{row.get('ccn')}:{row.get('window_year')}" not in offline
+        or not same_within_rounding(float(row["prediction"]), float(offline[f"{row.get('ccn')}:{row.get('window_year')}"]))
+        for row in canary
+    ):
+        failed.append("predictions_match_offline")
     return {"decision": "hold" if failed else "promote", "failed": failed}
+
+
+def record_canary(store: Any, name: str, number: str, report: Mapping[str, Any], offline: Mapping[str, float]) -> dict[str, Any]:
+    """Judge the canary of one version and, only on a pass, tag the version with the result bound to its number and its model run."""
+    version = next((item for item in registry.versions_of(store, name) if str(item.version) == number), None)
+    if version is None:
+        raise ValueError(f"{name} has no version {number}")
+    result = canary_checks(report, offline, number)
+    if result["decision"] == "promote":
+        for key, value in promote.canary_tags(number, str(version.run_id)).items():
+            store.set_model_version_tag(name, number, key, value)
+    return result
 
 
 def schema_changed(promoted_tags: Mapping[str, str], online_tags: Mapping[str, str] | None) -> bool:
@@ -94,7 +135,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     planned = commands.add_parser("plan")
     planned.add_argument("--research", type=Path, required=True)
     planned.add_argument("--percent", type=int, required=True, help="the share of hospital-windows the canary receives, 1 to 50")
-    commands.add_parser("verdict").add_argument("--report", type=Path, required=True)
+    for command in ("verdict", "record"):
+        judged = commands.add_parser(command)
+        judged.add_argument("--report", type=Path, required=True)
+        judged.add_argument("--research", type=Path, required=True)
     released = commands.add_parser("release")
     released.add_argument("--model", required=True)
     released.add_argument("--features-run", required=True)
@@ -106,8 +150,20 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.command == "plan":
             result: Any = plan(json.loads(arguments.research.read_bytes()), arguments.percent)
-        elif arguments.command == "verdict":
-            result = canary_checks(json.loads(arguments.report.read_bytes()))
+        elif arguments.command in ("verdict", "record"):
+            record = json.loads(arguments.research.read_bytes())
+            challenger = record["promotion"]["challenger"]
+            if challenger is None or not record["promotion"].get("challenger_predictions"):
+                raise ValueError("the research record has no challenger with offline predictions")
+            report = json.loads(arguments.report.read_bytes())
+            offline = record["promotion"]["challenger_predictions"]
+            if arguments.command == "verdict":
+                result = canary_checks(report, offline, str(challenger["version"]))
+            else:
+                uri = os.environ.get("MLFLOW_TRACKING_URI", "")
+                if not uri:
+                    raise ValueError("MLFLOW_TRACKING_URI is not set")
+                result = record_canary(run_tracking.open_store(uri), record["promotion"]["registered_model"], str(challenger["version"]), report, offline)
         elif arguments.command == "release":
             release(arguments.model, arguments.features_run)
             result = {"released": arguments.model, "features_run": arguments.features_run}

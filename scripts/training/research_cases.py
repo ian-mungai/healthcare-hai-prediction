@@ -71,11 +71,13 @@ def research_cases(cases: Any, folder: Path) -> None:
         require(rq4["status"] == "fitted" and rq4["extra_degrees_of_freedom"] > 0 and 0 <= rq4["f_p_value"] <= 1 and len(rq4["interval"]) == 2, f"rq4: {rq4}")
         by_model = {item["model"]: item for item in document["promotion"]["candidates"]}
         require(set(by_model) == {"m1", "m2", "m4"}, f"candidates: {sorted(by_model)}")
-        require(by_model["m1"]["verdict"] == "no_champion" and not by_model["m1"]["eligible"], f"m1 has no baseline: {by_model['m1']}")
+        require(by_model["m1"]["verdict"] == "pass_baseline" and by_model["m1"]["eligible"], f"m1 has no baseline: {by_model['m1']}")
         eligible = [item for item in by_model.values() if item["eligible"]]
-        require(len(eligible) == 2, f"m2 and m4 pass the baseline: {by_model}")
+        require(len(eligible) == 3, f"m1, m2 and m4 pass the baseline: {by_model}")
         best = min(eligible, key=lambda item: item["rmse"])
         require(document["promotion"]["challenger"]["model"] == best["model"], f"challenger: {document['promotion']['challenger']}, best {best}")
+        offline = document["promotion"]["challenger_predictions"]
+        require(offline and all(key.count(":") == 1 for key in offline), f"the record holds no offline predictions of the challenger: {offline}")
         aliases = tracking.models[NAME]["aliases"]
         require(aliases == {"challenger": best["version"]}, f"aliases: {aliases}")
         logged = [run for run in tracking.active().values() if run["tags"].get("step_key") == "research"]
@@ -141,6 +143,50 @@ def research_cases(cases: Any, folder: Path) -> None:
         document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
         require(document["runs"]["m2"] == later, f"runs: {document['runs']}")
 
+    def refuses_other_holdout_rows_at_the_same_count() -> None:
+        tracking, fixtures = finished_models(folder / "identity", m4={"years": range(2018, 2023)})
+        code, _, error, output = research(folder / "identity_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_holdouts_differ", f"m4 scored other hospital-windows: {code} {error}")
+        require(listing(output) == [] and not tracking.models[NAME]["aliases"], "a challenger was chosen from runs on other holdout rows")
+
+    def refuses_other_holdout_outcomes() -> None:
+        def shifted(rows: list[dict[str, Any]]) -> None:
+            newest = max(row["window_year"] for row in rows)
+            for row in rows:
+                if row["window_year"] == newest:
+                    row[LABEL] = row[LABEL] + 0.5
+
+        tracking, fixtures = finished_models(folder / "outcomes", m4={"adjust": shifted})
+        code, _, error, _ = research(folder / "outcomes_research", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "research_holdouts_differ", f"m4 scored other outcomes on the same keys: {code} {error}")
+        require(not tracking.models[NAME]["aliases"], "a challenger was chosen from runs with other holdout outcomes")
+
+    def later_model_run_cannot_change_a_recorded_research() -> None:
+        tracking, fixtures = finished_models(folder / "freeze")
+        first = research(folder / "freeze_first", fixtures["m2"])
+        require(first[0] == 0, f"research failed: {first[2]}")
+        before = dict(tracking.models[NAME]["aliases"])
+        later = "20261024T000012Z-1234abcd"
+        finished_models(folder / "freeze_later", models=("m2",), tracking=tracking, runs={"m2": later})
+        for parent in tracking.parents().values():
+            if parent["tags"].get("run_id") == later:
+                parent["metrics"]["comparison_rmse.m2_elastic_net"] = [0.0]
+        second = research(folder / "freeze_second", fixtures["m2"])
+        require(second[0] == 0, f"the retry of a recorded research failed: {second[2]}")
+        document = json.loads((second[3] / f"research_{HAI_TYPE}.json").read_text())
+        require(document["runs"] == RUNS, f"the retry did not keep the runs of the record: {document['runs']}")
+        require(tracking.models[NAME]["aliases"] == before, f"the retry moved the alias: {before} to {tracking.models[NAME]['aliases']}")
+
+    def changed_record_is_refused_before_any_alias_write() -> None:
+        tracking, fixtures = finished_models(folder / "changed")
+        require(research(folder / "changed_first", fixtures["m2"])[0] == 0, "research failed")
+        before = dict(tracking.models[NAME]["aliases"])
+        challenger = next(item for item in tracking.models[NAME]["versions"] if item["version"] == before["challenger"])
+        challenger["tags"]["promotion_verdict"] = "fail:minimum_improvement"
+        code, _, error, _ = research(folder / "changed_second", fixtures["m2"])
+        require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_bundle_conflict", f"a changed record was accepted: {code} {error}")
+        require(tracking.models[NAME]["aliases"] == before, f"the refused retry moved the alias: {before} to {tracking.models[NAME]['aliases']}")
+
     def phase_publishes_each_record_once() -> None:
         tracking, fixtures = finished_models(folder / "phase")
         bucket = aws_run_cases.ListingBucket(aws_run_cases.BUCKET, "research/")
@@ -177,6 +223,10 @@ def research_cases(cases: Any, folder: Path) -> None:
     cases.check("research_refuses_runs_of_another_base_run", refuses_runs_of_another_base)
     cases.check("research_refuses_runs_on_other_holdout_windows", refuses_other_windows)
     cases.check("research_refuses_a_run_without_its_completion_mark", refuses_an_unfinished_run)
+    cases.check("research_refuses_holdouts_with_other_rows_at_the_same_count", refuses_other_holdout_rows_at_the_same_count)
+    cases.check("research_refuses_holdouts_with_other_outcomes", refuses_other_holdout_outcomes)
+    cases.check("research_retry_keeps_the_runs_of_its_record_when_a_later_run_exists", later_model_run_cannot_change_a_recorded_research)
+    cases.check("research_refuses_a_changed_record_before_any_alias_write", changed_record_is_refused_before_any_alias_write)
     cases.check("research_retry_adds_no_run_and_moves_no_alias", retry_changes_nothing)
     cases.check("research_sets_no_challenger_when_no_version_passed", sets_no_challenger_when_none_passes)
     cases.check("research_takes_the_later_run_of_a_model", later_run_of_a_model_counts)

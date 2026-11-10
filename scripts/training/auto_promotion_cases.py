@@ -19,12 +19,24 @@ RESEARCH = {
     "hai_type": "HAI_1",
     "promotion": {"registered_model": "hai_model_HAI_1", "candidates": [], "challenger": {"model": "m2", "version": "4", "verdict": "pass"}},
 }
+VERSION = "4"
+OFFLINE = {f"{index:06d}:2023": 0.5 + index / 100 for index in range(40)}
+ROWS = [
+    {"ccn": f"{index:06d}", "window_year": 2023, "served_by": "canary", "model_version": VERSION, "prediction": OFFLINE[f"{index:06d}:2023"], "seconds": 0.05}
+    for index in range(40)
+] + [{"ccn": f"9{index:05d}", "window_year": 2023, "served_by": "stable", "model_version": "3", "prediction": 0.9, "seconds": 0.05} for index in range(60)]
 REPORT = {
     "requests": 100,
     "statuses": {"200": 100},
-    "served_by": {"stable": 90, "canary": 10},
-    "comparison": {"status": "ok", "stable": {"count": 90}, "canary": {"count": 40}},
+    "served_by": {"stable": 60, "canary": 40},
+    "comparison": {"status": "ok", "stable": {"count": 60}, "canary": {"count": 40}},
+    "rows": ROWS,
 }
+
+
+def judged(report: dict[str, Any], offline: dict[str, float] | None = None, version: str = VERSION) -> dict[str, Any]:
+    """The canary decision for a report against the offline predictions of the candidate version."""
+    return auto_promotion.canary_checks(report, OFFLINE if offline is None else offline, version)
 
 
 def raises(call: Any, message: str) -> None:
@@ -69,16 +81,49 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         raises(lambda: auto_promotion.plan(RESEARCH, 51), "percent")
 
     def canary_passes() -> None:
-        require(auto_promotion.canary_checks(REPORT) == {"decision": "promote", "failed": []}, "a clean canary was held")
+        require(judged(REPORT) == {"decision": "promote", "failed": []}, f"a clean canary was held: {judged(REPORT)}")
 
     def canary_holds() -> None:
         failed_request = {**REPORT, "statuses": {"200": 99, "500": 1}}
-        thin = {**REPORT, "comparison": {"status": "insufficient", "stable": {"count": 90}, "canary": {"count": 3}}}
+        thin_rows = [row for row in ROWS if row["served_by"] == "stable" or int(row["ccn"]) < 29]
+        thin = {**REPORT, "rows": thin_rows, "comparison": {"status": "insufficient", "stable": {"count": 60}, "canary": {"count": 29}}}
+        slow = {**REPORT, "rows": [{**ROWS[0], "seconds": 5.5}, *ROWS[1:]]}
+        other_version = {**REPORT, "rows": [{**ROWS[0], "model_version": "5"}, *ROWS[1:]]}
+        off = {**REPORT, "rows": [{**ROWS[0], "prediction": ROWS[0]["prediction"] * (1 + 2e-6)}, *ROWS[1:]]}
+        within = {**REPORT, "rows": [{**ROWS[1], "prediction": ROWS[1]["prediction"] * (1 + 5e-7)}, *ROWS[:1], *ROWS[2:]]}
+        unscored = {**REPORT, "rows": [{**ROWS[0], "ccn": "777777"}, *ROWS[1:]]}
+        require(judged(failed_request) == {"decision": "hold", "failed": ["requests_answered"]}, "a failed request did not hold the canary")
+        require(judged(thin) == {"decision": "hold", "failed": ["both_sides_compared"]}, f"too few canary rows did not hold the canary: {judged(thin)}")
+        few_rows = {**REPORT, "rows": thin_rows}
         require(
-            auto_promotion.canary_checks(failed_request) == {"decision": "hold", "failed": ["requests_answered"]}, "a failed request did not hold the canary"
+            judged(few_rows) == {"decision": "hold", "failed": ["both_sides_compared"]}, f"29 canary rows passed on a report that says ok: {judged(few_rows)}"
         )
-        require(auto_promotion.canary_checks(thin) == {"decision": "hold", "failed": ["both_sides_compared"]}, "a thin comparison did not hold the canary")
-        require(auto_promotion.canary_checks({})["decision"] == "hold", "an empty report did not hold the canary")
+        require(judged(slow) == {"decision": "hold", "failed": ["within_time_limit"]}, f"a slow answer did not hold the canary: {judged(slow)}")
+        require(judged(other_version) == {"decision": "hold", "failed": ["canary_version"]}, f"another version served as the canary: {judged(other_version)}")
+        require(
+            judged(off) == {"decision": "hold", "failed": ["predictions_match_offline"]}, f"a prediction off by 2e-6 did not hold the canary: {judged(off)}"
+        )
+        require(judged(within)["decision"] == "promote", f"a difference of 5e-7 held the canary: {judged(within)}")
+        require(
+            judged(unscored) == {"decision": "hold", "failed": ["predictions_match_offline"]}, f"a row with no offline prediction passed: {judged(unscored)}"
+        )
+        require(judged({})["decision"] == "hold", "an empty report did not hold the canary")
+
+    def record_binds_the_result_to_the_candidate() -> None:
+        store = SimpleNamespace(
+            versions={"4": SimpleNamespace(version="4", run_id="mlrun4", tags={})},
+            tags={},
+        )
+        store.set_model_version_tag = lambda name, number, key, value: store.tags.setdefault(number, {}).__setitem__(key, value)
+        store.search_model_versions = lambda filter_string="": list(store.versions.values())
+        held = auto_promotion.record_canary(store, "hai_model_HAI_1", VERSION, {**REPORT, "statuses": {"200": 99, "500": 1}}, OFFLINE)
+        require(held["decision"] == "hold" and not store.tags, f"a held canary left tags: {held} {store.tags}")
+        done = auto_promotion.record_canary(store, "hai_model_HAI_1", VERSION, REPORT, OFFLINE)
+        require(done["decision"] == "promote", f"a clean canary was held: {done}")
+        require(
+            store.tags["4"] == {"canary_verdict": "promote", "canary_version": "4", "canary_run": "mlrun4"},
+            f"the result is not bound to the version and its run: {store.tags}",
+        )
 
     def schema_comparison() -> None:
         promoted, online = {"feature_list_sha256": "a" * 64}, {"feature_list_sha256": "a" * 64}
@@ -122,8 +167,15 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         report.write_text(json.dumps(REPORT))
         code, out, _ = command(["plan", "--research", str(research), "--percent", "10"])
         require(code == 0 and json.loads(out)["promotion"]["model_version"] == "4", f"plan: {code} {out}")
-        code, out, _ = command(["verdict", "--report", str(report)])
+        with_predictions = {**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger_predictions": OFFLINE}}
+        research.write_text(json.dumps(with_predictions))
+        report.write_text(json.dumps(REPORT))
+        code, out, _ = command(["verdict", "--report", str(report), "--research", str(research)])
         require(code == 0 and json.loads(out)["decision"] == "promote", f"verdict: {code} {out}")
+        research.write_text(json.dumps(RESEARCH))
+        code, _, error = command(["verdict", "--report", str(report), "--research", str(research)])
+        require(code == 2 and "offline predictions" in error, f"a research record without offline predictions judged a canary: {code} {error}")
+        research.write_text(json.dumps(RESEARCH))
         code, _, error = command(["plan", "--research", str(research), "--percent", "99"])
         require(code == 2 and json.loads(error)["failure"] == "ValueError", f"refusal: {code} {error}")
 
@@ -133,6 +185,7 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     cases.check("auto_promotion_refuses_a_canary_share_outside_the_serving_contract", refuses_a_canary_share_outside_the_serving_contract)
     cases.check("auto_promotion_canary_checks_pass_a_clean_canary", canary_passes)
     cases.check("auto_promotion_canary_checks_hold_a_failed_or_thin_canary", canary_holds)
+    cases.check("auto_promotion_canary_result_is_bound_to_the_version_and_its_run", record_binds_the_result_to_the_candidate)
     cases.check("auto_promotion_compares_the_feature_schema_with_the_online_one", schema_comparison)
     cases.check("auto_promotion_release_calls_the_feast_release_command", release_calls_the_feast_command)
     cases.check("auto_promotion_release_failure_is_visible", release_failure_is_visible)
