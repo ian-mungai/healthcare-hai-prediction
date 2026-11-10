@@ -155,4 +155,18 @@ fi
 if [[ "$stack" == iam && "$action" == plan ]]; then
   exec terraform -chdir="$directory" plan -input=false "-var=admin_profile=$admin_profile" "$@"
 fi
+if [[ "$stack" == services && "$action" == apply ]]; then
+  # Launch hold during services applies (owner A, Nov 10 2026): set the hold before the apply changes anything and clear it only after the ECS
+  # services reach steady state. A failed apply or settle leaves the hold set until the owner resolves it.
+  "$python_bin" -m scripts.infrastructure.services_apply hold --reason "terraform.sh --services apply ${plan_path##*/}" || {
+    printf 'The launch hold could not be set, so the services apply did not start.\n' >&2
+    exit 1
+  }
+  if ! terraform -chdir="$directory" apply -input=false "$@"; then
+    printf 'The services apply failed. The launch hold stays set, so no host job launches. Check the apply and the services, then run:\n' >&2
+    printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s\n' "$python_bin" "'<what you checked>'" >&2
+    exit 1
+  fi
+  exec "$python_bin" -m scripts.infrastructure.services_apply settle
+fi
 exec terraform -chdir="$directory" "$action" -input=false "$@"

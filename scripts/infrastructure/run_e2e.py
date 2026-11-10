@@ -122,7 +122,8 @@ if arguments[1:] == ["output", "-json"] and arguments[0] == "-chdir=" + str(root
 elif arguments[1:3] == ["show", "-json"] and arguments[0] == "-chdir=" + str(root / "infra/services"):
     sys.stdout.write(Path(arguments[3]).read_text(encoding="utf-8"))
 elif arguments[0] == "-chdir=" + str(root / "infra/services") and arguments[1] in ("plan", "apply", "validate"):
-    pass
+    if arguments[1] == "apply" and (root / "apply_fails").is_file():
+        sys.exit(1)
 else:
     sys.exit("Unsupported services Terraform stand-in call")
 """
@@ -1395,6 +1396,14 @@ def run_platform_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
 def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str) -> None:
     """Exercise services rendering and the actual wrapper with synthetic platform outputs and command stand-ins."""
     workspace = copied_workspace(evidence.temporary, "services", sources, FIXTURE).resolve()
+    # The launch hold steps that terraform.sh runs around a services apply: a stand-in that records them and makes no AWS call
+    # (scripts/infrastructure/run_services_apply_e2e.py checks the real steps).
+    (workspace / "scripts/infrastructure/services_apply.py").write_text(
+        "import json, sys\nfrom pathlib import Path\n"
+        "with Path('services_apply_calls.jsonl').open('a') as calls:\n    calls.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+        "sys.exit(1 if Path(sys.argv[1] + '_fails').is_file() else 0)\n",
+        encoding="utf-8",
+    )
     tools = workspace / "tools"
     tools.mkdir()
     for name, body in {"terraform": SERVICES_TERRAFORM, "aws": SERVICES_AWS}.items():
@@ -1569,8 +1578,26 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         "saved_services_plan_applied",
         result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/services'}", "apply", "-input=false", "reviewed.tfplan"],
     )
+    holds = [json.loads(line) for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()]
+    evidence.check(step, "launch_hold_set_then_settled", [item[0] for item in holds] == ["hold", "settle"])
+    evidence.check(step, "launch_hold_names_the_plan", "--reason" in holds[0] and "reviewed.tfplan" in " ".join(holds[0]))
     evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
     evidence.check(step, "image_record_unchanged", sha256(images.read_bytes()) == images_before)
+    # Launch hold during services applies (owner A, Nov 10 2026): a failed apply keeps the hold, and a hold that cannot be set stops the apply.
+    for marker, label in (("apply_fails", "failed_services_apply_keeps_the_hold"), ("hold_fails", "unset_hold_stops_the_services_apply")):
+        (workspace / marker).write_text("stand-in failure", encoding="utf-8")
+        before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
+        before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
+        step, result = evidence.run(label, [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+        (workspace / marker).unlink()
+        holds = [json.loads(line)[0] for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()][before_holds:]
+        applied = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
+        applied = [call for call in applied if call["arguments"][1:2] == ["apply"]]
+        if marker == "apply_fails":
+            evidence.check(step, "hold_set_apply_run_and_no_settle", result.returncode == 1 and holds == ["hold"] and len(applied) == 1)
+            evidence.check(step, "resolve_command_named", "services_apply resolve" in result.stderr and "launch hold stays set" in result.stderr)
+        else:
+            evidence.check(step, "no_apply_without_the_hold", result.returncode == 1 and holds == ["hold"] and not applied)
     (workspace / "identity").write_text("example_other_user", encoding="utf-8")
     step, result = evidence.run("reject_services_identity", [*wrapper, "plan"], workspace, environment)
     evidence.check(step, "wrong_identity_refused", result.returncode == 2 and "same-named IAM user" in result.stderr)
