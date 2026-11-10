@@ -146,7 +146,19 @@ def promotion_type(context: Any, record: Mapping[str, Any], parameters: Mapping[
         name,
         parent,
         f"{context.run}:{hai_type}:promotion",
-        {key: run_tags[key] for key in ("hai_type", "model", "base_run", "target_control", "feature_schema_sha256", "feature_list_sha256")}
+        {
+            key: run_tags[key]
+            for key in (
+                "hai_type",
+                "model",
+                "base_run",
+                "target_control",
+                "feature_schema_sha256",
+                "feature_list_sha256",
+                "feature_set",
+                "feature_set_schema_sha256",
+            )
+        }
         | {"source_run_id": parent, "bundle_sha256": bundle_hash},
     )
     year = max(row["window_year"] for row in extract_rows)

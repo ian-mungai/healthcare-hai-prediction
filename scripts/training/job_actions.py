@@ -360,6 +360,8 @@ def run_tags(
         "features_run_id": manifest["publication_run_id"],
         "features_snapshot_set_sha256": manifest["features_snapshot_set_sha256"],
         "feature_schema_sha256": manifest["feature_schema_sha256"],
+        "feature_set": manifest["feature_set"],
+        "feature_set_schema_sha256": manifest["feature_set_schema_sha256"],
         "gold_run_id": manifest["gold_run_id"],
         "dvc_md5": digests["dvc_md5"],
         "extract_sha256": manifest["sha256"],

@@ -22,6 +22,7 @@ from typing import Any, Protocol
 from jsonschema import Draft202012Validator
 
 from orchestration.training_contract import HAI_TYPES, JOB_LANES, MODEL_LISTS, parameters_for
+from scripts.features import feature_schema
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -542,6 +543,8 @@ def extract(
                 "feature_list_sha256": feature_list_sha,
                 "model": model,
                 "feature_service": service,
+                "feature_set": model,
+                "feature_set_schema_sha256": feature_schema.set_schema_sha256(model, schema=reader.schema),
                 "base_run": base_run,
                 "writer_lock_sha256": writer_lock_sha256,
                 **file_info,

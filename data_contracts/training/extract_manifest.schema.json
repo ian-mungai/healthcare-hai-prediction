@@ -36,6 +36,8 @@
     "auxiliary_files",
     "model",
     "feature_service",
+    "feature_set",
+    "feature_set_schema_sha256",
     "base_run"
   ],
   "properties": {
@@ -452,6 +454,20 @@
     "feature_service": {
       "type": "string",
       "pattern": "^model_m[1-6]$"
+    },
+    "feature_set": {
+      "enum": [
+        "m1",
+        "m2",
+        "m3",
+        "m4",
+        "m5",
+        "m6"
+      ]
+    },
+    "feature_set_schema_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     },
     "base_run": {
       "type": "string",

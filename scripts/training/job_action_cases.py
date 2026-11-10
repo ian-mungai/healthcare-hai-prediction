@@ -21,6 +21,7 @@ from typing import Any
 from unittest import mock
 
 from orchestration import training_contract
+from scripts.features import feature_schema, feature_sets
 from scripts.features.training_extract import canonical, content_sha256
 from scripts.training import (
     bundle,
@@ -30,6 +31,7 @@ from scripts.training import (
     job,
     job_inputs,
     mediation,
+    production_record,
     promotion,
     promotion_cases,
     promotion_check,
@@ -306,6 +308,8 @@ class Fixture:
                 "feature_list_sha256": "5" * 64,
                 "model": self.model,
                 "feature_service": f"model_{self.model}",
+                "feature_set": self.model,
+                "feature_set_schema_sha256": feature_schema.set_schema_sha256(self.model),
                 "base_run": self.base_run,
                 "writer_lock_sha256": "6" * 64,
                 **table_entry(self.extract, name, rows, columns),
@@ -1416,6 +1420,22 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     """Register the candidate, compare it with the champion and record the verdict, without ever moving production."""
     name = f"hai_model_{HAI_TYPE}"
 
+    def registers_the_feature_set_and_its_schema_hash() -> None:
+        """The registered version carries the set the run trained on and that set's schema hash, so the Production record names them and the features
+        job counts the champion in its schema comparison (a version without them made a changed schema load online)."""
+        fixture = promoted(folder / "set_identity")
+        fixture.candidate = Predictor(LABEL, offset=0.0)
+        code, _, error = run_promotion(fixture)
+        require(code == 0, f"promotion_check failed: {error}")
+        tags = fixture.tracking.models[name]["versions"][0]["tags"]
+        expected = {"feature_set": fixture.model, "feature_set_schema_sha256": feature_schema.set_schema_sha256(fixture.model)}
+        require({key: tags.get(key) for key in expected} == expected, f"the version does not carry its set and schema hash: {tags}")
+        record = production_record.build(
+            HAI_TYPE, {"model": name, "version": "1", "run_id": fixture.run, "mode": "promote"}, 1, tags, "2026-11-10T00:00:00+00:00"
+        )
+        found = feature_sets.production_models({HAI_TYPE: record}, fixture.model)
+        require(found == {HAI_TYPE: expected["feature_set_schema_sha256"]}, f"the features job does not count the champion: {found}")
+
     def first_version() -> None:
         fixture = promoted(folder / "first")
         fixture.candidate = Predictor(LABEL, offset=0.0)
@@ -1752,6 +1772,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
             code, _, error = call(fixture.arguments("promotion_check"))
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_uri_missing", f"{code} {error}")
 
+    cases.check("job_promotion_check_registers_the_feature_set_and_its_schema_hash", registers_the_feature_set_and_its_schema_hash)
     cases.check("job_promotion_check_first_version_passes_against_the_baseline", first_version)
     cases.check("job_promotion_check_m1_becomes_the_first_champion_against_the_baseline", first_version_of_m1)
     cases.check("job_promotion_check_first_version_one_percent_better_than_baseline_refused", first_one_percent)
