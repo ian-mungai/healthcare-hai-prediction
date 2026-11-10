@@ -26,7 +26,7 @@ from scripts.training.step_records import file_sha256, verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
 GROUP_COLUMNS = ("control_type_code", "provider_subtype_code", "state_code", "bed_count", "county_fips")
-SPINE_FIELDS = ("spine_key", "window_start", "is_primary_population", "is_sensitivity_population")
+SPINE_FIELDS = ("spine_key", "window_start", "is_primary_population", "is_sensitivity_population", "cmi")
 VALIDATION_FIELDS = (
     "alignment_key",
     "spine_key",
@@ -459,6 +459,10 @@ def extract(
             "adjacency",
         ),
     }
+    if "cmi" not in predictors:
+        # A model whose lists leave CMI out (m1) gets the spine's unadjusted CMI, which the hospital-window matrix copies, in a table of its own for the
+        # intercept + CMI reference of the promotion check. A held CMI stays null, as it is in the matrix.
+        shared["cmi.parquet"] = ([{"spine_key": key, "cmi": spine[key]["cmi"]} for key in sorted(flags)], {"spine_key": "varchar", "cmi": "double"}, "cmi")
     table_writer = writer if writer is not None else ParquetWriter()
     manifest_schema = json.loads((root / "data_contracts/training/extract_manifest.schema.json").read_bytes())
     validator = Draft202012Validator(manifest_schema)

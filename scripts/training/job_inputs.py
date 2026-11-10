@@ -122,15 +122,15 @@ def auxiliary_of(extract: Path, manifest: Mapping[str, Any], name: str) -> list[
     return table_of(extract, manifest["auxiliary_files"][name])
 
 
-def cmi_of(extract: Path, manifest: Mapping[str, Any]) -> dict[str, float] | None:
+def cmi_of(extract: Path, manifest: Mapping[str, Any]) -> dict[str, float | None] | None:
     """Return the case-mix index of each hospital-window from the optional ``cmi.parquet`` table, or None when the extract carries none.
 
     A model whose feature lists leave CMI out has no CMI column in its analysis rows. The extract supplies the values apart from them, for the
-    intercept-plus-CMI reference only.
+    intercept-plus-CMI reference only. A held CMI is null in the table and stays None here, as it is in the CMI column of the other models' rows.
     """
     if "cmi.parquet" not in manifest["auxiliary_files"]:
         return None
-    return {str(row["spine_key"]): float(row["cmi"]) for row in auxiliary_of(extract, manifest, "cmi.parquet") if row.get("cmi") is not None}
+    return {str(row["spine_key"]): None if row.get("cmi") is None else float(row["cmi"]) for row in auxiliary_of(extract, manifest, "cmi.parquet")}
 
 
 def catalog(root: Path) -> dict[str, Feature]:

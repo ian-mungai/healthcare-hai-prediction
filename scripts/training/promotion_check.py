@@ -70,7 +70,7 @@ def champion_predictions(
 
 
 def baseline_predictions(
-    hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str, cmi: Mapping[str, float] | None = None
+    hai_type: str, rows: list[dict[str, Any]], config: Mapping[str, Any], root: Path, model: str, cmi: Mapping[str, float | None] | None = None
 ) -> tuple[dict[str, float] | None, dict[str, Any]]:
     """With no champion, fit the intercept + CMI baseline the fit step's RQ1 test fits, on the same training years, and predict the holdout.
 

@@ -24,6 +24,7 @@ from scripts.features import training_extract as extract
 from scripts.lakehouse import memory_budget, run_lock
 from scripts.orchestration.broker import Broker, BrokerPaths, load_templates
 from scripts.process import CompletedProcess
+from scripts.training import job_inputs
 from scripts.training.step_records import verify_done, write_done
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -221,7 +222,11 @@ class SyntheticReader:
                     row[f"hai_{number}__alignment_status__category"] = "aligned"
                     row[f"hai_{number}__predicted__number"] = hospital + number / 10
                 self.rows.append(row)
-                spine.append({"spine_key": key, "window_start": date(year, 1, 1), "is_primary_population": hospital < 3, "is_sensitivity_population": True})
+                # The spine carries the unadjusted CMI the hospital-window matrix copies; hospital 1's 2025 CMI is held, so it is null.
+                cmi = None if (hospital, year) == (1, 2025) else round(1.0 + hospital / 10 + (year - 2024) / 100, 4)
+                spine.append(
+                    {"spine_key": key, "window_start": date(year, 1, 1), "is_primary_population": hospital < 3, "is_sensitivity_population": True, "cmi": cmi}
+                )
                 for measure, control in (("PSI_90", "E038"), ("PSI_13", "E039")):
                     validation.append(
                         {
@@ -429,7 +434,7 @@ def extract_command_case(source: Path, folder: Path) -> None:
         mock.patch.object(extract, "ParquetWriter", return_value=writer),
     ):
         require(extract.main(arguments) == 0, "the extraction command did not prepare the accepted Feast environment")
-    require(len(verify_done(output, "extract", "a" * 64)["outputs"]) == 15, "the command mixed Feast cache files with its extract outputs")
+    require(len(verify_done(output, "extract", "a" * 64)["outputs"]) == 16, "the command mixed Feast cache files with its extract outputs")
 
 
 def weight_cases(
@@ -531,7 +536,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
 
     cases.check(
         "extract_publication_complete",
-        lambda: require(len(run(output)["outputs"]) == 15, "six extracts, six manifests and three auxiliary files were not written"),
+        lambda: require(len(run(output)["outputs"]) == 16, "six extracts, six manifests and the four auxiliary files of m1 were not written"),
     )
     if not (output / "extract.done.json").exists():
         return
@@ -568,6 +573,34 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             len(writer.rows["mediator.parquet"]) == 12 and len(writer.rows["hac.parquet"]) == 6, "auxiliary files did not retain the selected population"
         ),
     )
+
+    def m1_extract_carries_the_spine_cmi() -> None:
+        """The reviewer's scenario: m1's lists leave CMI out, so only a CMI table of the real extract lets m1 fit the intercept + CMI reference."""
+        entry = manifest["auxiliary_files"].get("cmi.parquet")
+        require(entry is not None, f"the m1 extract wrote no cmi.parquet, only {sorted(manifest['auxiliary_files'])}, so m1 cannot become the first champion")
+        spine = {row["spine_key"]: row for row in reader.tables["int_hospital_spine"]}
+        expected = [{"spine_key": key, "cmi": row["cmi"]} for key, row in sorted(spine.items()) if row["is_primary_population"]]
+        require(
+            entry["kind"] == "cmi" and entry["columns"] == {"cmi": "double", "spine_key": "varchar"} and writer.rows["cmi.parquet"] == expected,
+            f"the CMI table is not the primary population's spine CMI: {entry} {writer.rows['cmi.parquet']}",
+        )
+        require(any("cmi" in scan["fields"] for scan in reader.scans if scan["table"] == "int_hospital_spine"), "the spine scan did not read cmi")
+
+        def read_stand_in(path: Path) -> list[dict[str, Any]]:
+            payload = json.loads(path.read_bytes())
+            return [dict(zip(payload["columns"], values, strict=True)) for values in payload["rows"]]
+
+        def decoded(value: Any) -> Any:
+            return float.fromhex(value["float64"]) if isinstance(value, dict) else value
+
+        with mock.patch.object(job_inputs, "read_rows", lambda path: [{key: decoded(value) for key, value in row.items()} for row in read_stand_in(path)]):
+            read = job_inputs.cmi_of(output, manifest)
+        require(
+            read == {row["spine_key"]: row["cmi"] for row in expected},
+            f"the training job reads another CMI from the extract, or drops the held window: {read}",
+        )
+
+    cases.check("extract_m1_writes_the_spine_cmi_for_the_intercept_cmi_reference", m1_extract_carries_the_spine_cmi)
     cases.check(
         "extract_manifest_identity",
         lambda: require(
