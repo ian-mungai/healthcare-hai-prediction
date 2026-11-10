@@ -33,20 +33,6 @@ WRITER_DEFINITIONS = {
     "spark_write_features": ("lakehouse_write", "spark", "write_features_task"),
     "spark_write_bronze": ("lakehouse_write", "spark", "write_bronze_task"),
 }
-PUBLISHER_DEFINITIONS = {"publisher_fetch": ("publisher", "analytics", "publisher_task")}
-PUBLISHER_CONTRACT = {
-    "job_class": "publisher",
-    "task_role_key": "publisher_task",
-    "capacity_providers": ["FARGATE"],
-    "network": "publisher",
-    "assign_public_ip": "ENABLED",
-    "capture_root": "raw/",
-    "deadline_variable": "HAI_DEADLINE_UTC",
-    "hosts_file": "/workspace/inputs/publisher_hosts.json",
-    "hosts_approval_file": "/workspace/inputs/hosts_approval.json",
-    "stored_mirror_root": "/workspace/inputs/mirror",
-    "stored_index_file": "/workspace/inputs/stored_index.json",
-}
 ENTRY_POINT = ["/opt/hai/deadline_run", "python", "-I", "/opt/hai/bootstrap/run.py"]
 
 
@@ -187,26 +173,6 @@ def _writer_parameters(jobs: dict[str, Any], selected: set[str], region: str, ac
             for environment, parameter in zip(("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"), parameters, strict=True)
         }
     return bindings
-
-
-def publisher_dispatch(jobs: dict[str, Any], selected: set[str]) -> dict[str, Any]:
-    """Return the closed run 3 publisher contracts for the selected definitions, or refuse anything else.
-
-    The application target does not carry this class yet. This check is the mapping it will use:
-    its own network, a public IP, on-demand capacity and the raw root.
-    """
-    chosen = selected & PUBLISHER_DEFINITIONS.keys()
-    exported = jobs.get("publisher_dispatch_contracts")
-    if not chosen and (exported is None or (isinstance(exported, dict) and exported.get("value") is None)):
-        return {}
-    contracts = _output(jobs, "publisher_dispatch_contracts")
-    if (
-        not isinstance(contracts, dict)
-        or set(contracts) != chosen
-        or any(contract != PUBLISHER_CONTRACT | {"container": name, "log_container": name} for name, contract in contracts.items())
-    ):
-        raise TargetError("Invalid publisher dispatch contract.")
-    return contracts
 
 
 def _dispatch(jobs: dict[str, Any], selected: set[str]) -> dict[str, Any]:

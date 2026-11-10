@@ -65,25 +65,3 @@ output "writer_dispatch_contracts" {
     }
   }
 }
-
-output "publisher_dispatch_contracts" {
-  description = "Closed run 3 publisher placement. The class has its own network group and a public IP because the network has no NAT. Dispatch must enforce this contract and the approved hosts file before RunTask."
-  value = length(local.selected_publishers) == 0 ? null : {
-    for name, spec in local.selected_publishers : name => {
-      job_class          = "publisher"
-      task_role_key      = spec.role
-      capacity_providers = ["FARGATE"]
-      network            = "publisher"
-      assign_public_ip   = "ENABLED"
-      capture_root       = "raw/"
-      # Dispatch overrides and reads logs from the one container, which carries the definition's name.
-      container           = name
-      log_container       = name
-      deadline_variable   = "HAI_DEADLINE_UTC"
-      hosts_file          = "/workspace/inputs/publisher_hosts.json"
-      hosts_approval_file = "/workspace/inputs/hosts_approval.json"
-      stored_mirror_root  = "/workspace/inputs/mirror"
-      stored_index_file   = "/workspace/inputs/stored_index.json"
-    }
-  }
-}

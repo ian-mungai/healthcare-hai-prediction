@@ -162,8 +162,10 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
 run "no_fargate_publisher_definition_remains" {
   command = plan
   variables {
-    jobs_enabled        = true
-    enabled_definitions = ["publisher_fetch"]
+    jobs_enabled                          = true
+    enabled_definitions                   = ["publisher_fetch"]
+    aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
+    aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   }
   expect_failures = [var.enabled_definitions]
 }

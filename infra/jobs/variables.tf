@@ -82,7 +82,7 @@ variable "enabled_definitions" {
       (var.jobs_enabled || length(var.enabled_definitions) == 0) &&
       length(setsubtract(var.enabled_definitions, toset(keys(local.all_definition_specs)))) == 0
     )
-    error_message = "Select only the five read, five writer or one publisher definition and enable jobs_enabled before selecting any definition."
+    error_message = "Select only the five read or five writer definitions and enable jobs_enabled before selecting any definition."
   }
 }
 

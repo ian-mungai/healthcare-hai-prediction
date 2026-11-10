@@ -105,18 +105,21 @@ def test_the_publisher_dependencies_are_declared_for_a_hash_locked_install() -> 
 
 
 def environment_names_the_task_definition_sets() -> set[str]:
-    text = (ROOT / "infra/jobs/main.tf").read_text(encoding="utf-8")
+    text = (ROOT / "infra/jobs/publisher.tf").read_text(encoding="utf-8")
     return set(re.findall(r'name\s*=\s*"([A-Z][A-Z0-9_]+)"', text))
 
 
 def test_every_variable_the_task_code_reads_is_set_by_the_task_definition() -> None:
-    from scripts.acquisition import collection_layout, raw_root, stored_mirror, transport
+    from scripts.acquisition import collection_layout, raw_root, stored_mirror, task_role, transport
 
     needed = {
         transport.APPROVED_HOSTS_VARIABLE,
         transport.APPROVED_HOSTS_APPROVAL_VARIABLE,
         collection_layout.CAPTURE_ROOT_VARIABLE,
         *stored_mirror.REQUIRED_ENVIRONMENT,
+        task_role.BUCKET_VARIABLE,
+        task_role.KEYS_VARIABLE,
+        task_role.FILTERED_VARIABLE,
     }
     missing = sorted(needed - environment_names_the_task_definition_sets())
     check(missing == [], f"the task definition does not set {missing}")
