@@ -7,11 +7,12 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 
 1. A DAG file or the DAG runtime reaches a broker client, or a step reaches anything but the launch library (``dags_hold_no_broker_client``).
 2. The pool applies only where the deployment names it, and every task that launches a job takes it (``pool_only_when_configured``).
-3. Each gate refuses before any record or ECS call: the first signed publishes, real mode, the previous job's success, the training parameters, the
+3. Each gate refuses before any record or ECS call: real mode, the previous job's success, the training parameters, the
    promotion approval, the staged bronze and serving requests, the staged code digest (``gates_refuse_before_any_cloud_call`` and the request and digest
    cases). A staged input that is not ready yet is waited for within a bound. A ``LaunchUnavailable`` of the library is never repeated by the step
    (``unavailable_is_bounded``).
-4. A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
+4. A chain step and the chain gate run without a signed record, and the gate binds the chain's code runs (``chain_runs_without_a_signed_record``).
+   A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
 5. A control step launches nothing (``control_step_launches_nothing``). A job launches once, later steps of its DAG join it, a failure fails every step,
    and a retry launches nothing (``job_runs_once_and_steps_join``, ``failed_job_fails_every_step``).
 6. The silver, gold, promotion and serving DAGs are one task per job: preflight, job, evidence and gate, and a refused preflight or a failed job fails
@@ -33,6 +34,7 @@ from __future__ import annotations
 import ast
 import contextlib
 import importlib
+import inspect
 import io
 import json
 import os
@@ -65,7 +67,6 @@ from scripts.orchestration.ecs_broker_cases import (
     PROMOTE_RUN,
     SERVE_RUN,
     SERVING_REQUEST,
-    SIGNED,
     SILVER_RUN,
     collections_of_table_map,
     table_pair,
@@ -137,9 +138,8 @@ def host_definitions() -> dict[str, frozenset[str]]:
 class Rig:
     """The stand-in cloud, the staged inputs and the launch services of one case."""
 
-    def __init__(self, signed: str | None = SIGNED) -> None:
+    def __init__(self) -> None:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
-        self.signed = signed
         self.ecs, self.logs, self.stage = FakeEcs(), FakeLogs(), StageBucket()
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
@@ -164,7 +164,6 @@ class Rig:
             host=host,
             settings=preflight.PreflightSettings(polaris_uri=POLARIS, mlflow_uri=MLFLOW),
             code_digest=preflight.s3_digest_reader(self.stage, BUCKET),
-            signed=lambda: self.signed,
             approvals=preflight.s3_object_reader(self.stage, BUCKET, "promotion_approval.json"),
             store=store,
             code_runs=preflight.S3CodeRuns(self.stage, BUCKET),
@@ -388,14 +387,6 @@ def pool_only_when_configured() -> None:
 
 
 def gates_refuse_before_any_cloud_call() -> None:
-    rig = Rig(signed=None)
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
-        require("signed" in str(error), f"the closed chain is not named: {error}")
-        rig.signed = '{"silver": "x"}'
-        refuses(LaunchRefused, lambda: current.step("pin_bronze"))
-        rig.signed = SIGNED
-    require(not rig.ecs.calls and not rig.records.calls, "a refused chain step reached the cloud or wrote a record")
     rig = Rig()
     with world(rig, "silver_transform_dag", {**SILVER, "mode": "publish_fixture"}) as current:
         error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
@@ -404,6 +395,26 @@ def gates_refuse_before_any_cloud_call() -> None:
     with world(rig, "silver_transform_dag", SILVER) as current:
         error = refuses(LaunchRefused, lambda: current.step("ghost_step"))
         require("no ECS job" in str(error) and not rig.ecs.calls, f"an unknown step was not refused: {error}")
+
+
+def chain_runs_without_a_signed_record() -> None:
+    """Signing the first publishes is the owner's manual step (owner decision, Nov 10 2026), not a code gate: the direct path reads no signed record and
+    takes no setting for one, a chain step and the chain gate run without it, and the gate still binds the chain's code runs."""
+    preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
+    require("signed" not in inspect.signature(preflight.Preflight).parameters, "the preflight still takes a signed record reader")
+    require(not hasattr(preflight.Preflight, "require_signed"), "the preflight still has the signed gate")
+    require(not any("SIGNED" in name for name in steps.SETTINGS), f"the launch settings still name a signed record: {steps.SETTINGS}")
+    require("ssm_signed_reader" not in (ROOT / "orchestration/airflow_steps.py").read_text(), "the launch services still build a signed record reader")
+    rig = Rig()
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "a chain step did not run without a signed record")
+    require(rig.tasks_started() == 1, "the chain step did not launch its job")
+    rig = Rig()
+    silver = preflight.derived_run_id(BRONZE_RUN, "silver")
+    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate did not run without a signed record")
+    require(rig.preflight.code_runs.stored(silver) == BRONZE_RUN, "the chain gate did not bind the silver run to the bronze run's code")
+    require(not rig.ecs.calls, "the chain gate launched a task")
 
 
 def after_needs_the_previous_job_to_pass() -> None:
@@ -537,7 +548,7 @@ def bronze_request_is_checked_and_bound() -> None:
     pair, other = table_pair()
     good = {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY}
     params = {"run_id": BRONZE_RUN, "mode": "real"}
-    rig = Rig(signed=None)
+    rig = Rig()
     with world(rig, "ingestion_dag", params) as current:
         raised = refuses(LaunchUnavailable, lambda: current.step("bronze_load"))
         require("not_staged" in str(raised) and rig.time.now - 1_800_000_000.0 <= 700, f"a missing request was not retried within a bound: {raised}")
@@ -1170,6 +1181,7 @@ CASES: dict[str, Callable[[], None]] = {
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
     "gates_refuse_before_any_cloud_call": gates_refuse_before_any_cloud_call,
+    "chain_runs_without_a_signed_record": chain_runs_without_a_signed_record,
     "after_needs_the_previous_job_to_pass": after_needs_the_previous_job_to_pass,
     "training_parameters_are_checked": training_parameters_are_checked,
     "aws_mlflow_lane_reaches_the_jobs": aws_mlflow_lane_reaches_the_jobs,

@@ -1,7 +1,8 @@
 """Run silver, gold, features and drift in order after one bronze run, with no calendar schedule.
 
 The owner starts this DAG by hand after a new bronze snapshot, with ``run_id`` set to the run of that snapshot. A sensor that starts it comes later.
-The first task checks that the first silver and gold publishes are signed. Without that record the gate refuses and the chain stops.
+The first task binds every layer run of the chain to the bronze run's staged code. Signing the first silver and gold publishes is the owner's manual step,
+not a gate of the chain.
 Each layer then runs as a triggered DAG run and the chain waits for its success before the next layer, so a failed layer or a failed acceptance check stops
 the chain before the later layers. Every wait has a limit.
 

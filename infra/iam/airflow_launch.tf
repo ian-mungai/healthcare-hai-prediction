@@ -1,5 +1,5 @@
 variable "airflow_launch_prepared" {
-  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest, the job logs and the record of the signed first publishes, read and create once the code run binding of a run, read the run record of each bronze run when bronze is named and the drift records when drift is named, and write each launch record once under its own prefix."
+  description = "Prepare the role of the Airflow scheduler that launches the batch jobs on the host. It may run, stop and describe the host definitions of the named job families only, pass their roles, check the cluster's container instances, read the code digest and the job logs, read and create once the code run binding of a run, read the run record of each bronze run when bronze is named and the drift records when drift is named, and write each launch record once under its own prefix."
   type        = bool
   default     = false
   nullable    = false
@@ -64,7 +64,6 @@ locals {
     TASK_ARN_PATTERN               = "${local.ecs_arn}:task/${local.cluster_name}/*"
     LOG_GROUP_NAME                 = format(local.platform_name, "jobs")
     DATA_BUCKET_NAME               = var.data_bucket_name
-    SIGNED_PARAMETER_NAME          = var.broker_signed_parameter_name
     RECORD_PREFIX                  = var.airflow_launch_record_prefix
     REQUEST_OBJECT_ARNS            = jsonencode(local.airflow_launch_request_arns)
     FAMILIES                       = jsonencode(local.airflow_launch_families_sorted)
@@ -80,7 +79,7 @@ resource "aws_iam_role" "airflow_launch_task" {
   count = var.airflow_launch_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "airflow_launch_task")
-  description          = "Airflow scheduler: runs, stops and describes the host definitions of the named job families only, passes their roles, writes each launch record once and reads the code digest, the job logs and the signed publish record."
+  description          = "Airflow scheduler: runs, stops and describes the host definitions of the named job families only, passes their roles, writes each launch record once and reads the code digest and the job logs."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

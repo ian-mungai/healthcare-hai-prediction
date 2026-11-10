@@ -27,22 +27,21 @@ locals {
   airflow_launch_host = var.mlflow_host_ip
 
   # What orchestration/airflow_steps.py reads to launch a job (its SETTINGS), all from existing variables. None is a secret: the step signs with the task
-  # role, reads the signed record by its Parameter Store name and the record prefix from config/orchestration/ecs_launch.json. A value with no source yet is
-  # empty, and the step refuses by the setting's name. The bucket is airflow_launch_bucket_name and the host address mlflow_host_ip, both required once the
+  # role and reads the record prefix from config/orchestration/ecs_launch.json. A value with no source yet is empty, and the step refuses by the setting's
+  # name. The bucket is airflow_launch_bucket_name and the host address mlflow_host_ip, both required once the
   # scheduler runs as the launch role; broker_jobs feeds nothing here.
   airflow_launch_environment = {
-    AWS_REGION                  = var.aws_region
-    HAI_LAUNCH_POOL             = local.airflow_launch_pool
-    HAI_LAUNCH_CLUSTER          = var.cluster_name
-    HAI_LAUNCH_FAMILY_PREFIX    = "${var.project_name}_${var.environment}_job_"
-    HAI_LAUNCH_PROJECT_TAG      = var.project_tag
-    HAI_LAUNCH_LOG_GROUP        = "${var.project_name}_jobs_${var.environment}"
-    HAI_LAUNCH_HOST_PROVIDER    = var.ec2_capacity_provider_name
-    HAI_LAUNCH_BUCKET           = var.airflow_launch_bucket_name == null ? "" : var.airflow_launch_bucket_name
-    HAI_LAUNCH_SIGNED_PARAMETER = var.broker_signed_parameter_name
-    HAI_LAUNCH_POLARIS_URI      = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:8181/api/catalog"
-    HAI_LAUNCH_MLFLOW_URI       = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:5100"
-    HAI_LAUNCH_SCRATCH_PATH     = "/opt/hai/job_scratch"
+    AWS_REGION               = var.aws_region
+    HAI_LAUNCH_POOL          = local.airflow_launch_pool
+    HAI_LAUNCH_CLUSTER       = var.cluster_name
+    HAI_LAUNCH_FAMILY_PREFIX = "${var.project_name}_${var.environment}_job_"
+    HAI_LAUNCH_PROJECT_TAG   = var.project_tag
+    HAI_LAUNCH_LOG_GROUP     = "${var.project_name}_jobs_${var.environment}"
+    HAI_LAUNCH_HOST_PROVIDER = var.ec2_capacity_provider_name
+    HAI_LAUNCH_BUCKET        = var.airflow_launch_bucket_name == null ? "" : var.airflow_launch_bucket_name
+    HAI_LAUNCH_POLARIS_URI   = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:8181/api/catalog"
+    HAI_LAUNCH_MLFLOW_URI    = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:5100"
+    HAI_LAUNCH_SCRATCH_PATH  = "/opt/hai/job_scratch"
   }
   airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} 1 'One host job at a time'"
 

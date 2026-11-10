@@ -3,9 +3,10 @@
 ``orchestration/dag_runtime.py`` calls ``launch_step`` for a step of a shipped DAG. A job step passes the preflight (``orchestration/ecs_preflight.py``), then
 the launch operator runs the job: the first step of a job launches its one ECS task and waits, and every later step finds the recorded outcome of that
 launch. A failed job fails each step, and trying again needs a new run. A control step (one with no job: acquire, seal, release, the gates) and the chain
-gate launch nothing: the gate checks the signed first publishes and binds the code runs of the chain. A staged input that is not there yet (``InputNotReady``)
-is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause. A ``LaunchUnavailable`` from the launch library means the launch is not
-finished: the step fails with it at once and nothing repeats it, because only the library's own evidence or its manual owner path resolves the launch.
+gate launch nothing: the gate binds the code runs of the chain. Signing the first publishes is the owner's manual step, not a gate here. A staged input
+that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
+A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
+the library's own evidence or its manual owner path resolves the launch.
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
 (the launch's end record says the job passed).
 The owner ends an unresolved launch with ``python -m orchestration.airflow_steps settle`` in the scheduler container (``Launcher.owner_settle``).
@@ -38,7 +39,6 @@ from orchestration.ecs_preflight import (
     s3_digest_reader,
     s3_object_reader,
     serving_request_reader,
-    ssm_signed_reader,
 )
 from orchestration.interface import SubmissionRequest
 
@@ -53,7 +53,6 @@ SETTINGS = (
     "HAI_LAUNCH_LOG_GROUP",
     "HAI_LAUNCH_HOST_PROVIDER",
     "HAI_LAUNCH_BUCKET",
-    "HAI_LAUNCH_SIGNED_PARAMETER",
     "HAI_LAUNCH_POLARIS_URI",
     "HAI_LAUNCH_MLFLOW_URI",
     "HAI_LAUNCH_SCRATCH_PATH",
@@ -84,7 +83,7 @@ def services() -> LaunchServices:
 
     table, host = load_tables(ROOT)
     session = boto3.session.Session(region_name=values["AWS_REGION"])
-    s3, ssm = (session.client(name, config=client_config()) for name in ("s3", "ssm"))
+    s3 = session.client("s3", config=client_config())
     adapter = EcsAdapter.from_session(
         session,
         EcsSettings(
@@ -115,7 +114,6 @@ def services() -> LaunchServices:
         host=host,
         settings=PreflightSettings(polaris_uri=values["HAI_LAUNCH_POLARIS_URI"], mlflow_uri=values["HAI_LAUNCH_MLFLOW_URI"]),
         code_digest=s3_digest_reader(s3, bucket),
-        signed=ssm_signed_reader(ssm, values["HAI_LAUNCH_SIGNED_PARAMETER"]),
         approvals=s3_object_reader(s3, bucket, "promotion_approval.json"),
         store=store,
         code_runs=S3CodeRuns(s3, bucket),

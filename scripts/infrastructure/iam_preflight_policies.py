@@ -256,7 +256,6 @@ def airflow_launch_inputs(infra: Path, values: Mapping[str, str], names: Mapping
         "TASK_ARN_PATTERN": f"arn:aws:ecs:{region}:{account}:task/{cluster}/*",
         "LOG_GROUP_NAME": f"{project}_jobs_{environment}",
         "PROJECT_TAG": project,
-        "SIGNED_PARAMETER_NAME": names["BROKER_SIGNED_PARAMETER_NAME"],
         "RECORD_PREFIX": names["AIRFLOW_LAUNCH_RECORD_PREFIX"],
         "FAMILIES": json.dumps(families),
         "TASK_DEFINITION_ARNS": json.dumps([f"arn:aws:ecs:{region}:{account}:task-definition/{project}_{environment}_job_{f}_host:*" for f in families]),

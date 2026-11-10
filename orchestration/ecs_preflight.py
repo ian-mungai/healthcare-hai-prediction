@@ -1,10 +1,12 @@
 """The gates of the job broker, as a library for the Airflow launch mode, and the staged-input readers both share.
 
 ``Preflight.prepare`` turns the request of one DAG step into the ``JobSpec`` of the direct ECS launch library (``orchestration/ecs_launch.py``). It ports the
-broker's gates: the signed first publishes, real mode, the previous job's success (``after``), the training parameters, the promotion approval, the staged
+broker's gates: real mode, the previous job's success (``after``), the training parameters, the promotion approval, the staged
 bronze and serving requests, the staged code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the
 code digest, the request hash and the input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
 The readers at the top are the broker's own: ``scripts/orchestration/ecs_broker.py`` imports them from here, so one reading of the staged inputs serves both.
+Signing the first silver and gold publishes is the owner's manual step, not a gate of this path: ``ssm_signed_reader`` and ``CLOSED`` stay only for the
+broker, which still checks the signed record.
 The host table (``config/orchestration/host_jobs.json``) may give a job its own containers and log container, where its host task definition differs from the
 Fargate one the broker starts (the metadata job).
 """
@@ -48,7 +50,7 @@ DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 GATE = "@gate"
 CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
-CLOSED = "the chain is closed until the first silver and gold publishes are signed"
+CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
 NO_STAGED_CODE = "0" * 64  # the bound code digest of a job that fetches no staged code
 
@@ -319,7 +321,6 @@ class Preflight:
         host: Mapping[str, Any],
         settings: PreflightSettings,
         code_digest: Callable[[str], str],
-        signed: Callable[[], str | None],
         approvals: Callable[[str], str | None],
         store: LaunchStore,
         code_runs: CodeRuns,
@@ -332,7 +333,6 @@ class Preflight:
         self.host = host
         self.settings = settings
         self.code_digest = code_digest
-        self.signed = signed
         self.approvals = approvals
         self.store = store
         self.code_runs = code_runs
@@ -359,7 +359,6 @@ class Preflight:
             raise LaunchRefused(f"{request.template} has no ECS job")
         job = self.steps[request.template]
         if job == GATE:
-            self.require_signed()
             self.record_chain(request.run_id)
             return None
         if job is None:
@@ -367,8 +366,6 @@ class Preflight:
         if request.mode != JOB_MODE:
             raise LaunchRefused(f"{request.template} runs on AWS in real mode only")
         row = self.jobs[job]
-        if row.get("chain"):
-            self.require_signed()
         if row.get("after"):
             self.require_passed(job, row["after"], request.input_run_id)
         if row.get("needs_training_parameters"):
@@ -389,20 +386,6 @@ class Preflight:
             run = derived_run_id(run, layer)
             self.code_runs.bind(run, bronze_run)
         self.code_runs.bind(training_run_id(run), bronze_run)
-
-    def require_signed(self) -> None:
-        """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
-        raw = self.read(self.signed)
-        try:
-            record = json.loads(raw) if raw else None
-        except ValueError:
-            record = None
-        if (
-            not isinstance(record, dict)
-            or set(record) != {"silver", "gold"}
-            or not all(isinstance(run, str) and RUN_ID.fullmatch(run) for run in record.values())
-        ):
-            raise LaunchRefused(CLOSED)
 
     def require_passed(self, job: str, after: str, input_run: str | None) -> None:
         """Refuse a job unless the launch of the previous job in the run it publishes from ended with every acceptance check passed."""

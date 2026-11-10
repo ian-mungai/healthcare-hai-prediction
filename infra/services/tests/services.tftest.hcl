@@ -2941,15 +2941,16 @@ run "launch_mounts_are_always_present" {
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
           length(setsubtract(
-            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_SIGNED_PARAMETER", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH"],
+            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH"],
             [for item in container.environment : item.name]
           )) == 0
+          && !anytrue([for item in container.environment : item.name == "HAI_LAUNCH_SIGNED_PARAMETER"])
           && !anytrue([for item in try(container.secrets, []) : startswith(item.name, "HAI_LAUNCH_") || item.name == "AWS_REGION"])
           && !anytrue([for item in container.environment : startswith(item.name, "HAI_LAUNCH_") && (strcontains(item.value, "arn:aws:ssm") || strcontains(item.value, "arn:aws:secretsmanager"))])
         ) if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "Every Airflow container carries each launch setting as a plain environment value, and none of them is a secret or a secret reference."
+    error_message = "Every Airflow container carries each launch setting as a plain environment value, none of them is a secret or a secret reference, and none names a signed record (a manual step)."
   }
 
   assert {
@@ -2982,7 +2983,6 @@ run "launch_settings_come_from_the_stack_variables" {
             "HAI_LAUNCH_LOG_GROUP=example_project_jobs_dev",
             "HAI_LAUNCH_HOST_PROVIDER=example-project-dev-host",
             "HAI_LAUNCH_BUCKET=example-project-data-dev",
-            "HAI_LAUNCH_SIGNED_PARAMETER=/healthcare_hai_prediction/first_publishes_signed",
             "HAI_LAUNCH_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
             "HAI_LAUNCH_MLFLOW_URI=http://10.0.1.20:5100",
             "HAI_LAUNCH_SCRATCH_PATH=/opt/hai/job_scratch",
@@ -2991,7 +2991,7 @@ run "launch_settings_come_from_the_stack_variables" {
         ]) if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "The launch settings name the cluster, the job definitions, the jobs log group, the host provider, the data bucket, the signed record and the host's catalog and MLflow addresses from the stack's variables."
+    error_message = "The launch settings name the cluster, the job definitions, the jobs log group, the host provider, the data bucket and the host's catalog and MLflow addresses from the stack's variables."
   }
 }
 

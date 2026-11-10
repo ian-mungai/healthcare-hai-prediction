@@ -1,7 +1,7 @@
 """Exercise the grants of the Airflow launch role without AWS calls.
 
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
-families and the job execution role, read the staged code digest, the job logs and the record of the signed first publishes, check the cluster's container
+families and the job execution role, read the staged code digest and the job logs, check the cluster's container
 instances, and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
 prefix. It reads every run's code run binding, ``lakehouse/run_stage/<run>/inputs/code_run.json``, creates it once and lists exactly that key, so a missing
 binding answers 404. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the
@@ -108,7 +108,6 @@ def values(families: list[str]) -> dict[str, str]:
         "TASK_ARN_PATTERN": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/*",
         "LOG_GROUP_NAME": LOG_GROUP,
         "DATA_BUCKET_NAME": BUCKET,
-        "SIGNED_PARAMETER_NAME": SIGNED,
         "RECORD_PREFIX": RECORD_PREFIX,
         "REQUEST_OBJECT_ARNS": json.dumps(requests),
         "FAMILIES": json.dumps(sorted(families)),
@@ -229,7 +228,7 @@ def job_cases() -> list[Case]:
     add("read a stream of another group", "logs:GetLogEvents", stream.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), False)
     add("write a job log stream", "logs:PutLogEvents", stream, False)
     signed = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
-    add("read the signed record", "ssm:GetParameter", signed, True)
+    add("read the signed record (a manual step, not a code gate)", "ssm:GetParameter", signed, False)
     add("read the signed record by the plural call", "ssm:GetParameters", signed, False)
     add("write the signed record", "ssm:PutParameter", signed, False)
     add("delete the signed record", "ssm:DeleteParameter", signed, False)
@@ -471,7 +470,7 @@ RESOURCES = (
     Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}), NONE),
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
-    Resource("signed publish record", SIGNED_ARN, frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
+    Resource("signed publish record", SIGNED_ARN, NONE, NONE),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
     Resource("a KMS key", KMS_KEY, NONE, NONE),
     Resource("another KMS key", KMS_OTHER_KEY, NONE, NONE),
@@ -601,7 +600,6 @@ WIDENING_ACTIONS = {
     "PassNamedJobRoles": ("sts:AssumeRole", "iam:AttachRolePolicy"),
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
-    "ReadSignedPublishRecord": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
     "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
@@ -665,9 +663,12 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "PassNamedJobRoles_another_family_role", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("job_write_features_task")])),
         ("jobs", "PassNamedJobRoles_role_wildcard", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("job_*")])),
         ("jobs", "PassNamedJobRoles_the_scheduler_role_itself", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("airflow_launch_task")])),
-        ("jobs", "ReadSignedPublishRecord_a_parameter_prefix", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}/healthcare_hai_prediction/*")),
-        ("jobs", "ReadSignedPublishRecord_every_parameter", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}/*")),
-        ("jobs", "ReadSignedPublishRecord_a_name_prefix", replaced(jobs, "ReadSignedPublishRecord", Resource=f"{ssm}{SIGNED}*")),
+        (
+            "jobs",
+            "regression_the_signed_record_read",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}{SIGNED}"}),
+        ),
+        ("jobs", "regression_a_parameter_prefix", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}/*"})),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("jobs", "ReadStagedRunRecords_delete_the_digest", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObject"])),
         (
@@ -757,12 +758,12 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ),
         ("records", "ReadLaunchRecords_the_lakehouse", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/lakehouse/*")),
         ("records", "ReadLaunchRecords_the_whole_bucket", replaced(records, "ReadLaunchRecords", Resource=f"{bucket}/*")),
-        ("jobs", "regression_ssm_DeleteParameters", replaced(jobs, "ReadSignedPublishRecord", Action=["ssm:GetParameter", "ssm:DeleteParameters"])),
         (
             "jobs",
-            "regression_kms_CreateGrant",
-            replaced(jobs, "ReadSignedPublishRecord", Action=["ssm:GetParameter", "kms:CreateGrant"], Resource=[f"{ssm}{SIGNED}", KMS_KEY]),
+            "regression_ssm_DeleteParameters",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:DeleteParameters", "Resource": f"{ssm}{SIGNED}"}),
         ),
+        ("jobs", "regression_kms_CreateGrant", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "kms:CreateGrant", "Resource": KMS_KEY})),
         ("jobs", "regression_s3_PutObjectVersionAcl", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:PutObjectVersionAcl"])),
         ("jobs", "regression_s3_DeleteObjectTagging", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObjectTagging"])),
         ("jobs", "regression_s3_PutBucketPolicy", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "s3:PutBucketPolicy", "Resource": bucket})),
@@ -893,7 +894,6 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
-        Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}",), {}),
     ]
 
 

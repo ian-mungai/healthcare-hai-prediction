@@ -296,9 +296,9 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadSignedPublishRecord"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadJobLogs"], statement.Sid) || can(statement.Condition)
     ])
-    error_message = "Each launch, stop, describe, list and pass grant carries a condition. Only the three reads of fixed objects go without one."
+    error_message = "Each launch, stop, describe, list and pass grant carries a condition. Only the two reads of fixed objects go without one."
   }
 
   assert {
@@ -339,7 +339,7 @@ run "container_instance_checks_stay_in_the_cluster" {
   }
 }
 
-run "run_records_and_signed_record_reads_are_exact_objects" {
+run "run_records_and_log_reads_are_exact_objects" {
   command = plan
 
   assert {
@@ -355,15 +355,13 @@ run "run_records_and_signed_record_reads_are_exact_objects" {
 
   assert {
     condition = (
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadSignedPublishRecord"][0] == "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/first_publishes_signed" &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadSignedPublishRecord"][0] == "ssm:GetParameter" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadJobLogs"][0] == "arn:aws:logs:eu-west-1:111111111111:log-group:example_project_jobs_dev:log-stream:*"
     )
-    error_message = "The launch role reads exactly the signed publish record parameter and the log streams of the jobs log group."
+    error_message = "The launch role reads exactly the log streams of the jobs log group."
   }
 }
 
-run "signed_record_follows_the_named_parameter" {
+run "no_grant_reads_the_signed_record" {
   command = plan
 
   variables {
@@ -371,8 +369,12 @@ run "signed_record_follows_the_named_parameter" {
   }
 
   assert {
-    condition     = [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadSignedPublishRecord"][0] == "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/signed_record"
-    error_message = "The signed record grant follows the signed parameter name."
+    condition = !anytrue(flatten([
+      for policy in [aws_iam_role_policy.airflow_launch_jobs[0].policy, aws_iam_role_policy.airflow_launch_records[0].policy] : [
+        for statement in jsondecode(policy).Statement : anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
+      ]
+    ]))
+    error_message = "Signing the first publishes is a manual step: the launch role reads no Parameter Store value, whatever the broker's signed parameter name is."
   }
 }
 
