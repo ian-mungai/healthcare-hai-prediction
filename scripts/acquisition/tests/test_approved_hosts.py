@@ -127,3 +127,92 @@ def test_a_hosts_file_without_its_owner_approval_refuses_every_request(monkeypat
         approval.write_text(json.dumps({"hosts_sha256": transport.hosts_digest(["data.example.gov"])}))
     with pytest.raises(transport.CaptureError, match="hosts file"):
         transport.HttpsRequest("https://data.example.gov/file.csv")
+
+
+# The one reviewed unsigned redirect route (owner decision "CHHS S3 redirect route for Run 3"): data.chhs.ca.gov to the CHHS open-data bucket prefix.
+# The cases build every URL from the routes table, so the bucket name is spelled only there.
+CHHS_SOURCE = "https://data.chhs.ca.gov/dataset/example/resource/0001/download/table.csv"
+CHHS_PREFIX = transport.UNSIGNED_REDIRECT_ROUTES["data.chhs.ca.gov"]
+CHHS_TARGET = CHHS_PREFIX + "0001/table.csv"
+
+
+class ChhsRequest:
+    full_url = CHHS_SOURCE
+    headers = {"Authorization": "Bearer example", "Cookie": "session=example"}
+
+    def get_method(self) -> str:
+        return "GET"
+
+
+def chhs_handler(
+    monkeypatch: pytest.MonkeyPatch, folder: Path, hosts: tuple[str, ...] = ("data.chhs.ca.gov", "s3.amazonaws.com")
+) -> transport.ReviewedRedirects:
+    use_hosts(monkeypatch, folder, list(hosts))
+    return transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=CHHS_SOURCE)
+
+
+def test_the_reviewed_chhs_redirect_is_followed_without_credentials_or_cookies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path)
+    for target in (CHHS_TARGET, CHHS_TARGET.replace("https://s3.amazonaws.com/", "https://s3.amazonaws.com:443/")):
+        followed = handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, target)
+        check(followed.full_url == target, "the reviewed route is followed to the exact target")
+        sent = {name.lower() for name in followed.headers} | {name.lower() for name in followed.unredirected_hdrs}
+        check(not sent & {"authorization", "cookie", "proxy-authorization"}, "no authorization or cookie header crosses to S3")
+        check(handler.resolved_metadata(target) == (target, False), "the resolved S3 URL is recorded as it is")
+        handler = chhs_handler(monkeypatch, tmp_path)
+    with pytest.raises(transport.CaptureError, match="Additional redirects"):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_TARGET)
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_TARGET + "2")
+
+
+def test_the_chhs_route_needs_s3_on_the_approved_hosts_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path, ("data.chhs.ca.gov",))
+    with pytest.raises(transport.CaptureError, match="approved hosts"):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_TARGET)
+
+
+def test_the_same_bucket_from_another_source_host_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_hosts(monkeypatch, tmp_path, ["data.example.gov", "s3.amazonaws.com"])
+    handler = transport.ReviewedRedirects({"data.example.gov"}, source_url="https://data.example.gov/file.csv")
+    with pytest.raises(transport.CaptureError, match="not been reviewed"):
+        handler.redirect_request(Request(), None, 302, "Found", {}, CHHS_TARGET)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        "https://s3.amazonaws.com/another-open-data-bucket/resources/0001/table.csv",
+        CHHS_PREFIX.removesuffix("/resources/") + "-copy/resources/0001/table.csv",
+        CHHS_PREFIX.removesuffix("resources/") + "resources-extra/0001/table.csv",
+        CHHS_PREFIX.removesuffix("resources/") + "other/0001/table.csv",
+        CHHS_PREFIX + "../../another-open-data-bucket/resources/table.csv",
+        CHHS_TARGET.replace("s3.amazonaws.com", "s3.amazonaws.com.example.org"),
+        CHHS_TARGET + "?X-Amz-Signature=" + "a" * 64,
+    ],
+    ids=["another bucket", "lookalike bucket", "lookalike prefix", "other folder", "dot segments", "lookalike host", "query string"],
+)
+def test_a_chhs_redirect_off_the_reviewed_prefix_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target: str) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path, ("data.chhs.ca.gov", "s3.amazonaws.com", "s3.amazonaws.com.example.org"))
+    with pytest.raises(transport.CaptureError):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, target)
+
+
+@pytest.mark.parametrize(
+    "target",
+    [CHHS_TARGET.replace("https://", "http://"), CHHS_TARGET.replace("https://", "https://user:secret@")],
+    ids=["http", "credentials"],
+)
+def test_a_chhs_redirect_without_plain_https_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target: str) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path)
+    with pytest.raises(transport.CaptureError):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, target)
+
+
+def test_no_refusal_message_names_the_bucket(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path)
+    bucket = CHHS_PREFIX.split("/")[3]
+    with pytest.raises(transport.CaptureError) as caught:
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_PREFIX.removesuffix("resources/") + "other/table.csv")
+    check(
+        bucket not in str(caught.value) and bucket.rsplit("-", 1)[-1] not in str(caught.value), "the refusal does not repeat the bucket or its account number"
+    )

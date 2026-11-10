@@ -217,3 +217,12 @@ def test_executing_run_3_with_an_incomplete_route_is_refused_with_the_gate_probl
 def test_other_runs_do_not_need_the_route_gate(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="independent review"):
         redownload.execute(execution_run(tmp_path, 2), allow_network=True)
+
+
+def test_the_hosts_file_adds_s3_only_while_a_chhs_unit_is_active(tmp_path: Path) -> None:
+    (tmp_path / "with").mkdir()
+    (tmp_path / "without").mkdir()
+    with_chhs = write_state(tmp_path / "with", [unit("S__1"), unit("S__2", host="data.chhs.ca.gov")], [])
+    check("s3.amazonaws.com" in json.loads(with_chhs["hosts"].read_text())["hosts"], "an active CHHS unit adds the reviewed redirect host")
+    without = write_state(tmp_path / "without", [unit("S__1"), unit("S__2", "not_used_by_bronze", host="data.chhs.ca.gov")], [])
+    check("s3.amazonaws.com" not in json.loads(without["hosts"].read_text())["hosts"], "an inactive CHHS unit adds nothing")

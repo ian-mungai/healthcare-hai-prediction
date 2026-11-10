@@ -29,6 +29,13 @@ from scripts.acquisition.source_registry import reject_constant, unique_object
 SIGNED_REDIRECT_ROUTES = {
     "https://data.chhs.ca.gov/dataset/9c594ceb-fe46-4e6d-9553-c138a868bdc5/resource/e887fd1f-331c-45ea-ab9f-332ab21224bd/download/49hospitaldata.xlsx": "https://s3.amazonaws.com/og-production-open-data-chelseama-892364687672/resources/e887fd1f-331c-45ea-ab9f-332ab21224bd/49hospitaldata.xlsx"
 }
+# Reviewed unsigned redirect routes: a download from the source host may be redirected once, below the exact target prefix only, over HTTPS without
+# credentials, a query or a fragment, by a new request that carries no header of the first one. Every other cross-host redirect is refused. Owner
+# decision "CHHS S3 redirect route for Run 3" (Nov 10 2026): CHHS open-data resources redirect to their public bucket.
+UNSIGNED_REDIRECT_ROUTES = {
+    "data.chhs.ca.gov": "https://s3.amazonaws.com/og-production-open-data-chelseama-892364687672/resources/",
+}
+REDIRECT_CODES = {301, 302, 303, 307, 308}
 
 
 APPROVED_HOSTS_VARIABLE = "HAI_APPROVED_HOSTS"
@@ -290,6 +297,7 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         self.allowed_hosts = allowed_hosts
         self.source_url = source_url
         self.signed_destination: str | None = None
+        self.unsigned_destination: str | None = None
 
     def resolved_metadata(self, url: str) -> tuple[str, bool]:
         """Return the reviewed resolved URL and whether signed query metadata was removed."""
@@ -306,7 +314,12 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         """Permit only a reviewed HTTPS redirect without forwarding sensitive headers across hosts."""
         if self.signed_destination is not None:
             raise CaptureError("Additional redirects after a signed download are not approved.")
+        if self.unsigned_destination is not None:
+            raise CaptureError("Additional redirects after a reviewed cross-host redirect are not approved.")
         require_approved(newurl)
+        route = UNSIGNED_REDIRECT_ROUTES.get(urllib.parse.urlsplit(self.source_url or req.full_url).hostname or "")
+        if route is not None and urllib.parse.urlsplit(newurl).hostname == urllib.parse.urlsplit(route).hostname:
+            return self.follow_unsigned_route(req, code, newurl, route)
         target = SIGNED_REDIRECT_ROUTES.get(self.source_url or "")
         if target is not None:
             parsed = urllib.parse.urlsplit(newurl)
@@ -340,6 +353,26 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         if urllib.parse.urlsplit(newurl).hostname not in self.allowed_hosts:
             raise CaptureError("Redirect host has not been reviewed for this capture.")
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+    def follow_unsigned_route(self, req: Any, code: int, newurl: str, route: str) -> Any:
+        """Follow one reviewed unsigned redirect below its exact prefix with a new request; the refusals never repeat the target."""
+        parts = urllib.parse.urlsplit(newurl)
+        segments = urllib.parse.unquote(parts.path).split("/")
+        if (
+            req.full_url != self.source_url
+            or req.get_method() != "GET"
+            or code not in REDIRECT_CODES
+            or parts.query
+            or "." in segments
+            or ".." in segments
+            or not canonical_url(newurl).startswith(canonical_url(route) + "/")
+        ):
+            raise CaptureError("Redirect differs from the reviewed redirect route of this source.")
+        safe_url(newurl)
+        self.unsigned_destination = newurl
+        self.allowed_hosts = {*self.allowed_hosts, str(parts.hostname)}
+        # A new request, so no Authorization, cookie or custom header of the publisher request reaches the other host.
+        return HttpsRequest(newurl, headers={"Accept-Encoding": "identity", "User-Agent": "HistoricalSourceCapture/1.0"})
 
 
 # Most specific first. Codes keep the spellings earlier receipts used, but always come from this table, never a run-time name.

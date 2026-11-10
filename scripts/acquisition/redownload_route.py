@@ -18,7 +18,7 @@ from scripts.acquisition import unit_classification
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import RegistryError
-from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
+from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, UNSIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
 from scripts.acquisition.unused_files import read_plan
 
 ACTIVE = ("api", "direct_download", "approved_manual")
@@ -111,13 +111,17 @@ def confirmation_problems(confirmation_path: Path, removal: dict) -> list[str]:
 
 
 def queue_hosts(queue: dict) -> set[str]:
-    """Return the hosts of the active queue units, plus the host of each reviewed signed redirect."""
+    """Return the hosts of the active queue units, plus the target host of each reviewed redirect an active unit can take: its signed route, or the
+    unsigned route of its host. A route no active unit uses adds nothing."""
     hosts: set[str] = set()
     for unit in queue["queue"]:
         if unit["disposition"] in ACTIVE:
-            hosts.add(str(urllib.parse.urlsplit(unit["url"]).hostname))
+            host = str(urllib.parse.urlsplit(unit["url"]).hostname)
+            hosts.add(host)
             if unit["url"] in SIGNED_REDIRECT_ROUTES:
                 hosts.add(str(urllib.parse.urlsplit(SIGNED_REDIRECT_ROUTES[unit["url"]]).hostname))
+            if host in UNSIGNED_REDIRECT_ROUTES:
+                hosts.add(str(urllib.parse.urlsplit(UNSIGNED_REDIRECT_ROUTES[host]).hostname))
     return hosts
 
 
