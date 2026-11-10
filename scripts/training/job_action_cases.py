@@ -1821,10 +1821,13 @@ def log_run_cases(cases: Any, folder: Path) -> None:
         require(snapshots == {table: str(value) for table, value in manifest["snapshot_set"].items()}, f"snapshot tags differ: {snapshots}")
         require("counts.holdout" in run["metrics"] and run["params"]["selected_model"], f"parent: {sorted(run['metrics'])[:5]} {run['params']}")
         children = {item["tags"]["step_key"]: item for item in store.active().values() if item["tags"].get("mlflow.parentRunId") == run_id}
-        contract_children = set(contract["child_runs"]) - {"promotion"}
+        contract_children = set(contract["child_runs"])
+        # An m2 run logs its own children only; the contract names the children of every model and job.
+        require(set(children) == CHILDREN, f"the m2 run's children differ from its expected children: {sorted(set(children) ^ CHILDREN)}")
+        require(CHILDREN.issubset(contract_children), f"the contract lacks a child of the m2 run: {sorted(CHILDREN - contract_children)}")
         require(
-            set(children) == CHILDREN and contract_children == CHILDREN,
-            f"children differ from the Mundlak names: job {sorted(set(children) ^ CHILDREN)}, contract {sorted(contract_children ^ CHILDREN)}",
+            "rq6_mundlak" in contract_children and "rq6_hausman" not in contract_children,
+            f"the contract does not name the m6 child rq6_mundlak: {sorted(contract_children)}",
         )
         require(
             all(item["status"] == "FINISHED" and item["tags"]["run_id"] == RUN for item in children.values()), "a child was not finished or lacks its run ID"
