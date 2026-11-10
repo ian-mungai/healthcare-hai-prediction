@@ -25,7 +25,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 from orchestration.ecs_preflight import LAUNCH_HOLD_CLEAR
-from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError
+from scripts.acquisition.s3_store import AwsCli, StorageError
+from scripts.infrastructure.host_session import tolerant_runner
+from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 
 SERVICES_VARIABLES = REPO_ROOT / "infra" / "services" / "variables.tf"
 # The window between a fit check that read a clear hold and its RunTask reply: one RunTask attempt ends within 5 s to connect and 10 s to read
@@ -33,11 +35,20 @@ SERVICES_VARIABLES = REPO_ROOT / "infra" / "services" / "variables.tf"
 HOLD_SETTLE_SECONDS = 30
 STABLE_SECONDS = 1200
 POLL_SECONDS = 15
+CALL_SECONDS = 60
 RESOLVE_COMMAND = "python -m scripts.infrastructure.services_apply resolve --statement '<what you checked>'"
 
 
 class ServicesApplyError(Exception):
     """A step that could not finish. The launch hold stays as it was."""
+
+
+class HoldStoreError(Exception):
+    """A Parameter Store call for the hold failed; ``code`` is the AWS error code or a fixed category."""
+
+    def __init__(self, code: str) -> None:
+        self.code = code
+        super().__init__(f"Parameter Store: {code}")
 
 
 def hold_parameter_name() -> str:
@@ -95,6 +106,8 @@ class Steps:
         while True:
             try:
                 settled = bool(self.stable())
+            except ConfigurationError:
+                raise  # the services outputs are missing: a configuration error (exit 2), and the hold stays
             except Exception as error:  # a failed rollout or a failed describe call: the services are not known to be stable
                 raise ServicesApplyError(
                     f"the services did not reach steady state ({type(error).__name__}: {str(error)[:200]}). The launch hold stays set; check the "
@@ -121,6 +134,8 @@ class Steps:
             raise ServicesApplyError("resolve needs --statement with what you checked. The launch hold stays set")
         try:
             settled = bool(self.stable())
+        except ConfigurationError:
+            raise
         except Exception as error:  # the same refusal as in wait_stable
             raise ServicesApplyError(f"the services are not stable ({type(error).__name__}). The launch hold stays set") from None
         if not settled:
@@ -130,24 +145,40 @@ class Steps:
 
 
 def open_steps() -> Steps:
-    """The steps with the project profile: the hold through Parameter Store and the steady-state check of the host session."""
-    from scripts.infrastructure.host_session import HostSessionError, open_session
-
-    session = open_session()
+    """The steps with the project profile. The hold is written through Parameter Store with only the ``.env`` configuration, so ``hold`` works on a
+    fresh stack before the services stack has any output. The steady-state check opens the host session, which reads the platform and services
+    outputs, only when ``settle`` or ``resolve`` first calls it."""
+    settings, _ = load_configuration(REPO_ROOT / ".env")
+    cli = AwsCli(settings, tolerant_runner)
     name = hold_parameter_name()
 
+    def call(operation: str, arguments: list[str]) -> dict[str, Any]:
+        try:
+            return cli.call_bounded("ssm", operation, ["--name", name, *arguments], timeout=CALL_SECONDS)
+        except StorageError as error:
+            raise HoldStoreError(error.code) from None
+
     def put(value: str) -> None:
-        session.call("ssm", "put-parameter", ["--name", name, "--type", "String", "--value", value, "--overwrite"])
+        call("put-parameter", ["--type", "String", "--value", value, "--overwrite"])
 
     def get() -> str | None:
         try:
-            return str(session.call("ssm", "get-parameter", ["--name", name])["Parameter"]["Value"])
-        except HostSessionError as error:
-            if "ParameterNotFound" in str(error):
+            return str(call("get-parameter", [])["Parameter"]["Value"])
+        except HoldStoreError as error:
+            if error.code == "ParameterNotFound":
                 return None
             raise
 
-    return Steps(put=put, get=get, stable=session.services_stable)
+    sessions: list[Any] = []
+
+    def stable() -> bool:
+        if not sessions:
+            from scripts.infrastructure.host_session import open_session  # reads the services outputs, which settle and resolve need
+
+            sessions.append(open_session())
+        return bool(sessions[0].services_stable())
+
+    return Steps(put=put, get=get, stable=stable)
 
 
 def build_parser() -> argparse.ArgumentParser:

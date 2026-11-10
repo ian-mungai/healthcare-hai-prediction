@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import json
 import re
 import sys
 import traceback
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from unittest import mock
+
+from scripts.process import CompletedProcess
 
 ROOT = Path(__file__).resolve().parents[2]
 HOLD = "/healthcare_hai_prediction/host_launch_hold"
@@ -154,7 +158,101 @@ def the_hold_name_is_the_terraform_default() -> None:
     require(module.hold_parameter_name() == HOLD, f"the command writes {module.hold_parameter_name()}, not {HOLD}")
 
 
+SETTINGS = {
+    "aws_profile": "example_project_dev",
+    "aws_region": "eu-west-1",
+    "data_bucket_name": "example-project-data-dev",
+    "project_name": "example_project",
+    "environment": "dev",
+}
+
+
+class AwsStandIn:
+    """The AWS command line the real module runs through ``AwsCli``: Parameter Store put and get of one value, every command recorded, any other
+    command refused."""
+
+    def __init__(self, value: str | None = None) -> None:
+        self.value = value
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str], **_: Any) -> CompletedProcess[str]:
+        self.commands.append(list(command))
+        operation = command[1:3]
+        name = command[command.index("--name") + 1] if "--name" in command else ""
+        if operation == ["ssm", "put-parameter"] and name == HOLD:
+            self.value = command[command.index("--value") + 1]
+            return CompletedProcess(command, 0, json.dumps({"Version": 1}), "")
+        if operation == ["ssm", "get-parameter"] and name == HOLD:
+            if self.value is None:
+                return CompletedProcess(command, 254, "", "An error occurred (ParameterNotFound) when calling the GetParameter operation")
+            return CompletedProcess(command, 0, json.dumps({"Parameter": {"Name": HOLD, "Value": self.value}}), "")
+        return CompletedProcess(command, 1, "", "An error occurred (AccessDenied) when calling an unexpected operation")
+
+
+def run_real(arguments: list[str], aws: AwsStandIn) -> tuple[int, list[str]]:
+    """Run the real ``services_apply.main`` on a fresh stack: the configuration is synthetic, the services stack has no outputs yet (reading them
+    fails), the AWS command line is the stand-in and the settle wait does not sleep. Returns the exit code and the services output reads."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    session = importlib.import_module("scripts.infrastructure.host_session")
+    config = importlib.import_module("scripts.infrastructure.render_project_config")
+    output_reads: list[str] = []
+
+    def no_outputs(*_: Any, **__: Any) -> Any:
+        output_reads.append("load_names")
+        raise config.ConfigurationError("The Terraform output service_names is missing or has the wrong type.")
+
+    patches = [
+        mock.patch.object(session, "load_names", no_outputs),
+        mock.patch.object(session, "load_configuration", lambda *_, **__: (dict(SETTINGS), {})),
+        mock.patch.object(session, "tolerant_runner", aws),
+        mock.patch.object(module.Clock, "sleep", staticmethod(lambda _seconds: None)),
+    ]
+    for name, value in (("load_configuration", lambda *_, **__: (dict(SETTINGS), {})), ("tolerant_runner", aws)):
+        if hasattr(module, name):
+            patches.append(mock.patch.object(module, name, value))
+    for patch in patches:
+        patch.start()
+    try:
+        return module.main(arguments), output_reads
+    finally:
+        for patch in reversed(patches):
+            patch.stop()
+
+
+def hold_on_a_fresh_stack_needs_no_services_outputs() -> None:
+    """The first services apply on a fresh stack: the real ``hold`` writes and reads back the hold through Parameter Store alone. It reads no
+    services output, which does not exist yet."""
+    aws = AwsStandIn()
+    code, output_reads = run_real(["hold", "--reason", "terraform.sh --services apply reviewed.tfplan"], aws)
+    require(code == 0, f"hold failed on a fresh stack (exit {code}; services output reads {output_reads})")
+    require(not output_reads, f"hold read the services outputs: {output_reads}")
+    operations = [command[1:3] for command in aws.commands]
+    require(operations == [["ssm", "put-parameter"], ["ssm", "get-parameter"]], f"hold sent other AWS calls: {operations}")
+    put = aws.commands[0]
+    require("--overwrite" in put and put[put.index("--type") + 1] == "String", f"the hold is not an overwriting String put: {put}")
+    require(str(aws.value).startswith("held by services_apply") and "reviewed.tfplan" in str(aws.value), f"the hold value is wrong: {aws.value}")
+    require(
+        all("--profile" in command and command[command.index("--profile") + 1] == SETTINGS["aws_profile"] for command in aws.commands),
+        "a call left the project profile",
+    )
+
+
+def settle_on_a_fresh_stack_keeps_the_hold() -> None:
+    """settle and resolve need the services outputs to check steady state. Without them they fail as a configuration error and write nothing, so
+    the hold stays."""
+    for arguments in (["settle"], ["resolve", "--statement", "checked"]):
+        aws = AwsStandIn("held by services_apply")
+        code, output_reads = run_real(arguments, aws)
+        require(code == 2 and output_reads, f"{arguments[0]} did not fail on the missing services outputs: exit {code}, reads {output_reads}")
+        require(
+            aws.value == "held by services_apply" and not any(command[1:3] == ["ssm", "put-parameter"] for command in aws.commands),
+            f"{arguments[0]} changed the hold",
+        )
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "hold_on_a_fresh_stack_needs_no_services_outputs": hold_on_a_fresh_stack_needs_no_services_outputs,
+    "settle_on_a_fresh_stack_keeps_the_hold": settle_on_a_fresh_stack_keeps_the_hold,
     "hold_is_written_and_settles_before_the_apply": hold_is_written_and_settles_before_the_apply,
     "settle_clears_only_after_steady_state": settle_clears_only_after_steady_state,
     "settle_that_never_reaches_steady_state_keeps_the_hold": settle_that_never_reaches_steady_state_keeps_the_hold,
