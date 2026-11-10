@@ -88,7 +88,7 @@ def run() -> list[dict[str, Any]]:
     cases.check(
         "trigger_training_configuration",
         lambda: require(
-            run_conf("training_dag", "fixture", RUN, None, PARAMETERS)["hai_types"] == PARAMETERS["hai_types"], "trigger dropped the training selection"
+            run_conf("training_dag", "real", RUN, None, PARAMETERS)["hai_types"] == PARAMETERS["hai_types"], "trigger dropped the training selection"
         ),
     )
     promotion = {"hai_type": "HAI_2", "model_version": "3", "promotion_mode": "rollback", "mlflow": "local"}

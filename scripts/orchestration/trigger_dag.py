@@ -7,7 +7,9 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_transform_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
 
 A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features and feature store the
-gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request.
+gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
+does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
+``--promotion-mode``).
 
 The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
@@ -35,7 +37,9 @@ PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 # The producer-run parameter each workflow's form requires, by workflow.
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_transform_dag": "gold_snapshot_run", "feature_store_dag": "gold_snapshot_run"}
 DAGS = ("silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS)
-MODES = ("fixture", "publish_fixture", "real")
+# The modes each workflow's form accepts. A workflow the table does not name takes MODES.
+FORM_MODES = {dag: ("real",) for dag in DAGS}
+MODES = ("real",)
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 MAX_WAIT_SECONDS = 4 * 3600
 POLL_SECONDS = 2.0
@@ -64,12 +68,15 @@ def run_conf(
 ) -> dict[str, Any]:
     """The validated configuration of one run. Gold names the committed silver run it reads, features and feature store the gold run; the others name
     none."""
-    if dag not in DAGS or mode not in MODES or not RUN_ID.fullmatch(run_id):
-        raise TriggerError(f"refused: unknown workflow, mode or run ID ({dag!r}, {mode!r}, {run_id!r})")
+    if dag not in DAGS or not RUN_ID.fullmatch(run_id):
+        raise TriggerError(f"refused: unknown workflow or run ID ({dag!r}, {run_id!r})")
+    accepted = FORM_MODES.get(dag, MODES)
+    if mode not in accepted:
+        raise TriggerError(f"refused: {dag} accepts only the mode its form offers ({', '.join(accepted)}), not {mode!r}")
     conf: dict[str, Any] = {"run_id": run_id, "mode": mode}
     if dag in TRAINING_DAGS:
-        if silver_snapshot_run is not None or gold_snapshot_run is not None or mode not in (("fixture", "real") if dag == "training_dag" else ("real",)):
-            raise TriggerError("refused: training mode or silver snapshot selection is unsupported")
+        if silver_snapshot_run is not None or gold_snapshot_run is not None:
+            raise TriggerError("refused: a training workflow reads no silver or gold snapshot run")
         try:
             selected = parameters_for(dag, training or {})
         except ValueError as error:
@@ -80,8 +87,8 @@ def run_conf(
         else:
             conf.update(selected)
         return conf
-    if training is not None or mode == "fixture":
-        raise TriggerError("refused: training parameters or fixture mode belong only to training workflows")
+    if training is not None:
+        raise TriggerError("refused: training parameters belong only to training workflows")
     given = {"silver_snapshot_run": silver_snapshot_run, "gold_snapshot_run": gold_snapshot_run}
     needed = PRODUCER_RUNS.get(dag)
     for name, value in given.items():
@@ -161,7 +168,7 @@ def read_token_secret(deadline: float) -> str:
 def main(argv: list[str] | None = None) -> int:
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     cli.add_argument("--dag", choices=DAGS, required=True)
-    cli.add_argument("--mode", choices=MODES, required=True)
+    cli.add_argument("--mode", required=True, help="the mode the workflow's form accepts: real for every workflow here")
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")

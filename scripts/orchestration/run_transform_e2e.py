@@ -2800,8 +2800,8 @@ OFFLINE_SIGNING_VALUE = "offline-signing-value"
 OFFLINE_PORT = 8080
 OFFLINE_RUN = "20261015T000000Z-0a0a0a0a"
 OFFLINE_OTHER_RUN = "20261015T000001Z-0b0b0b0b"
-OFFLINE_SILVER = ["--dag", "silver_transform_dag", "--mode", "publish_fixture"]
-OFFLINE_GOLD = ["--dag", "gold_transform_dag", "--mode", "publish_fixture"]
+OFFLINE_SILVER = ["--dag", "silver_transform_dag", "--mode", "real"]
+OFFLINE_GOLD = ["--dag", "gold_transform_dag", "--mode", "real"]
 OFFLINE_FEATURES = ["--dag", "features_transform_dag", "--mode", "real"]
 OFFLINE_STORE = ["--dag", "feature_store_dag", "--mode", "real"]
 
@@ -2953,6 +2953,25 @@ def trigger_refusals() -> dict[str, bool]:
         checks[f"{name} is refused before the secret is read and before any request"] = (
             result["exit_code"] == 1 and result["store_calls"] == [] and result["requests"] == [] and result["stderr"].startswith("trigger_dag: refused")
         )
+    # Each workflow offers only the modes its form accepts (real after the direct launch); a broker fixture mode is refused locally.
+    complete = {
+        "silver_transform_dag": [],
+        "gold_transform_dag": ["--silver-snapshot-run", OFFLINE_OTHER_RUN],
+        "features_transform_dag": ["--gold-snapshot-run", OFFLINE_OTHER_RUN],
+        "feature_store_dag": ["--gold-snapshot-run", OFFLINE_OTHER_RUN],
+        "training_dag": [],
+        "model_promotion_dag": ["--hai-type", "HAI_1", "--model-version", "3"],
+    }
+    for dag, extra in complete.items():
+        for mode in ("fixture", "publish_fixture"):
+            result = drive_trigger(["--dag", dag, "--mode", mode, *extra, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
+            checks[f"{dag} in {mode} mode is refused before the secret is read and before any request"] = (
+                result["exit_code"] == 1
+                and result["store_calls"] == []
+                and result["requests"] == []
+                and result["stderr"].startswith("trigger_dag: refused")
+                and "real" in result["stderr"]
+            )
     for seconds in ("0", "-1", "nan", str(trigger_dag.MAX_WAIT_SECONDS + 1)):
         result = drive_trigger([*OFFLINE_SILVER, "--wait-seconds", seconds], FakeAirflow(FakeClock()))
         checks[f"--wait-seconds {seconds} is refused before the secret is read"] = (
@@ -2979,7 +2998,7 @@ def trigger_runs() -> dict[str, bool]:
         "a run on a workflow that starts paused ends in success and exits 0": silver["exit_code"] == 0 and shown.get("state") == "success",
         "the run ID is generated only when none is given": len(posted) == 1
         and trigger_dag.RUN_ID.fullmatch(posted[0]["body"]["dag_run_id"]) is not None
-        and posted[0]["body"]["conf"] == {"run_id": posted[0]["body"]["dag_run_id"], "mode": "publish_fixture"},
+        and posted[0]["body"]["conf"] == {"run_id": posted[0]["body"]["dag_run_id"], "mode": "real"},
         "a features run and a feature store run send the gold snapshot run they publish from": all(
             next(item for item in found["requests"] if item["method"] == "POST")["body"]["conf"]
             == {"run_id": OFFLINE_RUN, "mode": "real", "gold_snapshot_run": OFFLINE_OTHER_RUN}
