@@ -321,13 +321,15 @@ def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output
         ("a_binding_in_another_form", json.dumps("job_memory_mib=23552"), 0),
         ("a_binding_that_does_not_add_up", json.dumps(binding.replace("23552", "24576")), 0),
         ("a_job_room_below_one_job", json.dumps("job_memory_mib=2048 usable_memory_mib=9216 system_reserve_mib=2048 service_reservations_mib=5120"), 0),
-        ("a_job_room_left_unset_without_the_usable_memory", "null", 0),
+        ("a_null_binding", "null", 0),
     ):
         answer(text, code)
         result = invoke(host_variables)
         checks["host_room_refuses_" + name] = result.returncode == 2 and "job room" in result.stderr and output.read_bytes() == rendered
-    # The services stack gives no room until the owner sets the ECS registered memory, so the refusal must name that input.
-    checks["host_room_refusal_names_the_usable_memory_input"] = "host_usable_memory_mib" in result.stderr
+    # host_usable_memory_mib defaults to the current host size (owner decision, Nov 10 2026), so the refusal asks for a services apply, never for the input.
+    checks["host_room_refusal_asks_for_a_services_apply_not_the_usable_memory_input"] = (
+        "apply the services stack" in result.stderr.lower() and "host_usable_memory_mib" not in result.stderr
+    )
     calls.unlink(missing_ok=True)
     answer(json.dumps(binding), 0)
     result = invoke(document["variables"])

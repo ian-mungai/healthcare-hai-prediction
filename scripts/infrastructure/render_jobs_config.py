@@ -56,8 +56,7 @@ def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
         raise ConfigurationError(
             "Host jobs need the job room from the services stack output host_capacity_binding (job_memory_mib of at least 4096 MiB, equal to "
             "usable_memory_mib less system_reserve_mib and service_reservations_mib). "
-            "The output stays empty until the services inputs set host_usable_memory_mib to the ECS registered memory of the host. "
-            "Set it, apply the services stack, then render again. No Terraform action was run."
+            "Apply the services stack, then render again. No Terraform action was run."
         )
     return room, str(binding)
 
