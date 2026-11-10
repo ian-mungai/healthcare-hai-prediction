@@ -462,11 +462,6 @@ class Preflight:
     def require_capacity(self, job: str) -> str:
         """The current usable-memory inputs (``HAI_LAUNCH_HOST_CAPACITY``), checked before every other job gate, so before any record or cloud call."""
         capacity = self.host_capacity
-        if not capacity:
-            raise LaunchRefused(
-                f"the host capacity is not set, so no {job} host job launches: HAI_LAUNCH_HOST_CAPACITY stays empty until the services input "
-                "host_usable_memory_mib is set. Set it, apply the services stack, render and apply the jobs stack, then run again"
-            )
         if CAPACITY_FORM.fullmatch(capacity) is None:
             raise LaunchRefused(f"the host capacity {capacity[:200]!r} is not in the rendered form usable_memory_mib=<MiB> system_reserve_mib=<MiB>")
         return capacity
@@ -474,7 +469,7 @@ class Preflight:
     def checked_revision(self, job: str) -> str:
         """Host launch capacity binding (owner A, Nov 10 2026): the ARN of the latest active revision of the job's host definition, described once, after
         checking that it is bound to the current usable-memory cap. The services stack renders the cap's inputs into ``HAI_LAUNCH_HOST_CAPACITY``
-        (``usable_memory_mib=<n> system_reserve_mib=<n>``, empty while ``host_usable_memory_mib`` is not set). The jobs stack labels the init container
+        (``usable_memory_mib=<n> system_reserve_mib=<n>``). The jobs stack labels the init container
         of every host revision it registers with the binding it was sized from (label ``hai.host_capacity``: the job memory, the same two inputs and the
         service reservations, from the services output ``host_capacity_binding``). A revision without the label (registered before the job memory came
         from ``host_usable_memory_mib``), bound to other inputs, with a label whose job memory is not the inputs less the reservations, or with task

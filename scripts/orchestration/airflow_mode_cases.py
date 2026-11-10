@@ -29,10 +29,11 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    plan) and the case ``host_definitions_hold_the_init_step_and_the_layer_guards`` checks them against what the job table and the owner decisions expect.
 10. Host launch capacity binding (owner A, Nov 10 2026): a host job runs only the revision whose binding the preflight checked against the current host
    capacity. A latest active revision without a binding (registered before ``host_usable_memory_mib`` set the job memory) is refused
-   (``unbound_revision_is_refused``), so is one bound to another capacity or sized to other memory (``revision_bound_to_another_capacity_is_refused``),
-   and so is every host job while the services stack leaves the capacity empty (``unset_usable_memory_refuses``). Every refusal comes before any write,
-   and the empty capacity before any AWS call: no staged-input or record read and no ECS call masks it
-   (``unset_usable_memory_refuses``), and a drift job refused for its unbound revision writes no training code-run binding
+   (``unbound_revision_is_refused``), so is one bound to another capacity or sized to other memory (``revision_bound_to_another_capacity_is_refused``).
+   The capacity is a required launch setting, since the services stack always renders it, and an empty or malformed one refuses every host job
+   (``malformed_capacity_refuses``). Every refusal comes before any write, and the malformed capacity before any AWS call: no staged-input or record
+   read and no ECS call masks it (``malformed_capacity_refuses``), and a drift job refused for its unbound
+   revision writes no training code-run binding
    (``unbound_revision_is_refused``). A bound revision runs by its exact ARN,
    so a revision registered after the check never runs in its place (``bound_revision_runs_by_its_exact_arn``).
 """
@@ -837,15 +838,23 @@ def revision_bound_to_another_capacity_is_refused() -> None:
         require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision with {label} and {memory} MiB launched or wrote a record")
 
 
-def unset_usable_memory_refuses() -> None:
-    """While ``host_usable_memory_mib`` is null the services stack renders an empty HAI_LAUNCH_HOST_CAPACITY. Every host job is refused by name before
-    any ECS call or record, and a capacity that is not the rendered form is refused the same way."""
-    for capacity, named in (("", "host_usable_memory_mib"), (BINDING, "not in the rendered form")):
+def malformed_capacity_refuses() -> None:
+    """The services stack always renders HAI_LAUNCH_HOST_CAPACITY (host_usable_memory_mib defaults to the current host size, owner decision Nov 10
+    2026), so the Airflow environment requires it like every other launch setting. A capacity that is empty or not the rendered form is refused by
+    name before any ECS call or record, and no cloud-reading gate masks it."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+    require(steps.HOST_CAPACITY in steps.SETTINGS, "the rendered host capacity is not a required launch setting")
+    environment = {name: f"example-{name.lower()}" for name in steps.SETTINGS if name != steps.HOST_CAPACITY}
+    with mock.patch.dict("os.environ", environment, clear=True):
+        error = refuses(Exception, steps.services)
+    require(f"{steps.HOST_CAPACITY} is not set" in str(error), f"a missing host capacity setting is not named: {error}")
+    for capacity in ("", BINDING):
         rig = Rig(capacity=capacity)
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
-        require(named in str(error), f"the unset capacity is not named: {error}")
-        require(not rig.aws_calls(), f"an unset capacity made an AWS call before the refusal: {rig.aws_calls()}")
+        require("not in the rendered form" in str(error), f"the malformed capacity {capacity!r} is not named: {error}")
+        require("host_usable_memory_mib" not in str(error), f"the refusal still asks the owner to set the defaulted input: {error}")
+        require(not rig.aws_calls(), f"a malformed capacity made an AWS call before the refusal: {rig.aws_calls()}")
     for dag_id, params, template in (
         ("silver_transform_dag", SILVER, "pin_bronze"),
         ("gold_transform_dag", GOLD, "pin_silver"),
@@ -854,8 +863,8 @@ def unset_usable_memory_refuses() -> None:
         rig = Rig(capacity="")
         with world(rig, dag_id, params) as current:
             error = refuses(LaunchRefused, partial(current.step, template))
-        require("host_usable_memory_mib" in str(error), f"{template}: a cloud-reading gate masked the unset capacity: {error}")
-        require(not rig.aws_calls(), f"{template}: an unset capacity made an AWS call before the refusal: {rig.aws_calls()}")
+        require("not in the rendered form" in str(error), f"{template}: a cloud-reading gate masked the malformed capacity: {error}")
+        require(not rig.aws_calls(), f"{template}: a malformed capacity made an AWS call before the refusal: {rig.aws_calls()}")
 
 
 def bound_revision_runs_by_its_exact_arn() -> None:
@@ -1450,7 +1459,7 @@ CASES: dict[str, Callable[[], None]] = {
     "unavailable_is_bounded": unavailable_is_bounded,
     "unbound_revision_is_refused": unbound_revision_is_refused,
     "revision_bound_to_another_capacity_is_refused": revision_bound_to_another_capacity_is_refused,
-    "unset_usable_memory_refuses": unset_usable_memory_refuses,
+    "malformed_capacity_refuses": malformed_capacity_refuses,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,

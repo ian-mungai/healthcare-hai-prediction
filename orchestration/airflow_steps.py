@@ -56,9 +56,10 @@ SETTINGS = (
     "HAI_LAUNCH_POLARIS_URI",
     "HAI_LAUNCH_MLFLOW_URI",
     "HAI_LAUNCH_SCRATCH_PATH",
+    "HAI_LAUNCH_HOST_CAPACITY",
 )
-# The host capacity the services stack renders (infra/services output host_capacity_binding). It stays empty while host_usable_memory_mib is not set, so
-# it is not one of the required settings: the preflight refuses every host job by name until it is set.
+# The usable-memory inputs the services stack always renders (host_usable_memory_mib defaults to the current host size), checked by the preflight
+# against the binding of every host revision.
 HOST_CAPACITY = "HAI_LAUNCH_HOST_CAPACITY"
 
 
@@ -123,7 +124,7 @@ def services() -> LaunchServices:
         clock=clock.wall,
         bronze_request=bronze_request_reader(s3, bucket, collections),
         serving_request=serving_request_reader(s3, bucket),
-        host_capacity=os.environ.get(HOST_CAPACITY, ""),
+        host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
     )
     return LaunchServices(preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock)
