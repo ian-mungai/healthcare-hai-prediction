@@ -515,6 +515,7 @@ class Launcher:
         clock: Clock | None = None,
         cleanup: Callable[[JobSpec], None] | None = None,
         scratch_usage: Callable[[], Mapping[str, int]] | None = None,
+        send_check: Callable[[Resources], None] | None = None,
     ) -> None:
         """``cleanup`` runs once after a successful job. It raises ``CleanupFailed`` when it cannot finish. ``scratch_usage`` gives the bytes each family's
         scratch folder holds (owner decision A, Nov 7 2026): the launching family's own bytes count as free, because the gate has shown the family idle and
@@ -525,6 +526,8 @@ class Launcher:
         self.clock = clock or Clock()
         self.cleanup = cleanup
         self.scratch_usage = scratch_usage
+        # Run at the send boundary with the claim's needs, after the cancel and window checks; it raises SendWithheld to withhold the RunTask.
+        self.send_check = send_check
 
     def validate(self, spec: JobSpec) -> None:
         """Refuse a malformed request before any record or cloud call."""
@@ -846,7 +849,7 @@ class Launcher:
                     continue
                 try:
                     arn = self.adapter.start(
-                        spec.job, key, spec.environment, "", HOST, guard=partial(self.guard, run_id, job, end), revision=spec.task_definition
+                        spec.job, key, spec.environment, "", HOST, guard=partial(self.send_guard, run_id, job, end, need), revision=spec.task_definition
                     )
                     return arn, iso(self.clock.wall())
                 except SendWithheld:
@@ -866,6 +869,12 @@ class Launcher:
         """Called immediately before every RunTask call. A cancel request or the end of the window withholds the call."""
         if self.cancel_requested(run_id, job) or self.clock.wall() >= end:
             raise SendWithheld
+
+    def send_guard(self, run_id: str, job: str, end: float, need: Resources) -> None:
+        """The guard of every RunTask call: ``guard``, then ``send_check`` with the claim's needs, which raises ``SendWithheld`` to withhold it."""
+        self.guard(run_id, job, end)
+        if self.send_check is not None:
+            self.send_check(need)
 
     def unresolved(self, claim: Mapping[str, Any], prefix: str = "") -> LaunchUnavailable:
         """The launch may have a task that has not been found. Nothing closes it and nothing else starts. The owner resolves it by hand."""

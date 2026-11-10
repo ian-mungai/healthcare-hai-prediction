@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
@@ -30,7 +31,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 
 from orchestration import serving_contract
-from orchestration.ecs_adapter import TaskRefused, TaskUnavailable
+from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
 from orchestration.training_approvals import PROMOTION_KEYS
@@ -227,6 +228,10 @@ def ssm_host_cap_reader(ssm: Any, name: str) -> Callable[[], str | None]:
 # Launch hold during services applies (owner A, Nov 10 2026): the owner command around every services apply writes HELD_PREFIX... before it
 # changes anything and LAUNCH_HOLD_CLEAR only after the ECS services reach steady state. Any other value, or no parameter, holds every host launch.
 LAUNCH_HOLD_CLEAR = "clear"
+# The longest time from the start of the send boundary's hold and cap reads to the RunTask call. With one RunTask attempt (5 s to connect, 10 s to
+# read, orchestration.ecs_adapter.send_config) a task that the reads allowed is sent and answered within 25 s, below the 30 s the services apply
+# command waits after it sets the hold (scripts/infrastructure/services_apply.py HOLD_SETTLE_SECONDS).
+SEND_AUTHORIZATION_SECONDS = 10.0
 
 
 def ssm_launch_hold_reader(ssm: Any, name: str) -> Callable[[], str | None]:
@@ -249,8 +254,8 @@ def held(value: str | None) -> str | None:
     """Why a launch hold value holds host launches, or None when it is the clear value."""
     if value is None:
         return "the launch hold parameter was not found (no services apply command has cleared it yet)"
-    if value.strip() != LAUNCH_HOLD_CLEAR:
-        return f"the launch hold is set ({value.strip()[:120]})"
+    if value != LAUNCH_HOLD_CLEAR:  # exactly "clear": a padded or differently written value holds launches
+        return f"the launch hold is set ({value.strip()[:120]!r})"
     return None
 
 
@@ -265,8 +270,20 @@ class HeldCapProbe:
     job cap each time: while the hold is set, or the cap is unreadable, the room is unavailable (the launcher waits and never sends); otherwise the
     free memory is never more than the current cap, so a cap that a services apply lowered after the preflight withholds the RunTask."""
 
-    def __init__(self, inner: Any, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> None:
-        self.inner, self.hold, self.cap = inner, hold, cap
+    def __init__(self, inner: Any, hold: Callable[[], str | None], cap: Callable[[], str | None], monotonic: Callable[[], float] = time.monotonic) -> None:
+        self.inner, self.hold, self.cap, self.monotonic = inner, hold, cap, monotonic
+
+    def authorize(self, need: Resources) -> None:
+        """The send boundary (``Launcher.send_check``), run immediately before every RunTask: reread the cap, then the hold, and withhold the send
+        while the hold is set, the cap is unreadable or below the job's memory, or the reads took longer than ``SEND_AUTHORIZATION_SECONDS``."""
+        started = self.monotonic()
+        try:
+            cap = cap_value(self.cap())
+            reason = held(self.hold())
+        except TaskUnavailable:
+            raise SendWithheld from None
+        if reason is not None or cap is None or need.memory_mib > cap or self.monotonic() - started > SEND_AUTHORIZATION_SECONDS:
+            raise SendWithheld
 
     def free(self) -> Resources:
         reason = held(self.hold())

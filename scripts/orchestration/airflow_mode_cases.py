@@ -171,6 +171,7 @@ class Rig:
     def __init__(self, capacity: str = CAPACITY, host_cap: str | None = str(JOB_MEMORY)) -> None:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
         self.host_cap = host_cap
+        self.built: Any = None  # the production launch services, when held_rig builds them
         self.cloud: list[str] = []  # the staged-input S3 reads and writes and the SSM read of the host job cap, in order
         self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket(self.cloud)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
@@ -1039,9 +1040,14 @@ class LaunchSsm:
     def __init__(self, answers: dict[str, list[str | Exception]]) -> None:
         self.answers = {name: list(values) for name, values in answers.items()}
         self.requests: list[dict[str, Any]] = []
+        self.slow_after: int | None = None  # reads after this many take slow_seconds on slow_clock
+        self.slow_seconds = 0.0
+        self.slow_clock: Any = None
 
     def get_parameter(self, **request: Any) -> dict[str, Any]:
         self.requests.append(dict(request))
+        if self.slow_after is not None and len(self.requests) > self.slow_after:
+            self.slow_clock.sleep(self.slow_seconds)
         queue = self.answers.get(str(request.get("Name")))
         if not queue:
             raise client_error("AccessDeniedException", "GetParameter", f"the launch role may not read {request.get('Name')}")
@@ -1091,7 +1097,22 @@ def held_rig(hold: list[str | Exception], cap: list[str | Exception]) -> tuple[R
     rig.preflight.host_job_cap = built.preflight.host_job_cap
     rig.preflight.host_launch_hold = hold_reader
     rig.launcher.probe = steps.host_fit_probe(rig.launcher.probe, hold_reader, built.preflight.host_job_cap)
+    rig.launcher.probe.monotonic = rig.time.clock().monotonic  # the rig's virtual clock in place of the process clock
+    rig.launcher.send_check = getattr(rig.launcher.probe, "authorize", None)
+    rig.built = built
     return rig, ssm
+
+
+def the_production_launcher_rechecks_at_send() -> None:
+    """The launcher that ``airflow_steps.services()`` builds rereads the hold and the cap at the send boundary: its ``send_check`` is the fit
+    probe's ``authorize``."""
+    rig, _ = held_rig([CLEAR], [str(JOB_MEMORY)])
+    launcher = rig.built.launcher
+    check = getattr(launcher, "send_check", None)
+    require(
+        check is not None and getattr(check, "__self__", None) is launcher.probe and getattr(check, "__name__", "") == "authorize",
+        "the production launcher does not recheck the hold and the cap at the send boundary (Launcher.send_check of the fit probe)",
+    )
 
 
 def launch_during_the_hold_is_refused() -> None:
@@ -1114,6 +1135,54 @@ def a_hold_set_after_the_preflight_withholds_runtask() -> None:
         refuses(Exception, lambda: current.step("pin_bronze"))
     require(ssm.reads(HOLD_PARAMETER) >= 2, f"the fit probe did not reread the hold: {ssm.requests}")
     require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent after the hold was set")
+
+
+def a_hold_set_after_the_probe_withholds_runtask() -> None:
+    """Forced order: the preflight and the fit probe read a clear hold, then the services apply sets the hold before the send. The send boundary
+    rereads the hold immediately before RunTask, so no RunTask is sent."""
+    rig, ssm = held_rig([CLEAR, CLEAR, HELD], [str(JOB_MEMORY)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(ssm.reads(HOLD_PARAMETER) >= 3, f"the send boundary did not reread the hold: {ssm.requests}")
+    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent after the hold was set behind the probe")
+
+
+def a_cap_lowered_after_the_probe_withholds_runtask() -> None:
+    """Forced order: the cap the preflight and the probe read is lowered before the send. The send boundary rereads the cap, so no RunTask is sent."""
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY), str(JOB_MEMORY), str(JOB_MEMORY - 1024)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(ssm.reads(CAP_PARAMETER) >= 3, f"the send boundary did not reread the cap: {ssm.requests}")
+    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent above a cap lowered behind the probe")
+
+
+def a_slow_authorization_withholds_runtask() -> None:
+    """The send boundary's reads are bounded: when they take longer than the authorization window, the send is withheld, so the time from the
+    observed clear hold to the RunTask reply stays below the services apply command's drain wait."""
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    adapter = importlib.import_module("orchestration.ecs_adapter")
+    apply = importlib.import_module("scripts.infrastructure.services_apply")
+    window = getattr(preflight, "SEND_AUTHORIZATION_SECONDS", None)
+    require(window is not None, "the preflight has no SEND_AUTHORIZATION_SECONDS")
+    config = adapter.send_config()
+    require(
+        window + config.connect_timeout + config.read_timeout < apply.HOLD_SETTLE_SECONDS,
+        f"authorization {window} s plus one RunTask attempt is not below the drain wait {apply.HOLD_SETTLE_SECONDS} s",
+    )
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)])
+    ssm.slow_after, ssm.slow_seconds, ssm.slow_clock = 2, window + 1, rig.time
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(rig.ecs.count("run_task") == 0, "RunTask was sent although the authorization reads took longer than the window")
+
+
+def a_padded_clear_value_holds_launches() -> None:
+    """The hold is clear only for the exact value "clear": a padded or differently written value holds every host launch."""
+    for value in (" clear ", "clear\n", "Clear", "CLEAR"):
+        rig, _ = held_rig([value], [str(JOB_MEMORY)])
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require("launch hold" in str(error) and rig.tasks_started() == 0, f"the hold value {value!r} let a launch run: {error}")
 
 
 def a_cap_lowered_during_the_apply_withholds_runtask() -> None:
@@ -1748,6 +1817,11 @@ CASES: dict[str, Callable[[], None]] = {
     "launch_during_the_hold_is_refused": launch_during_the_hold_is_refused,
     "a_hold_set_after_the_preflight_withholds_runtask": a_hold_set_after_the_preflight_withholds_runtask,
     "a_cap_lowered_during_the_apply_withholds_runtask": a_cap_lowered_during_the_apply_withholds_runtask,
+    "the_production_launcher_rechecks_at_send": the_production_launcher_rechecks_at_send,
+    "a_hold_set_after_the_probe_withholds_runtask": a_hold_set_after_the_probe_withholds_runtask,
+    "a_cap_lowered_after_the_probe_withholds_runtask": a_cap_lowered_after_the_probe_withholds_runtask,
+    "a_slow_authorization_withholds_runtask": a_slow_authorization_withholds_runtask,
+    "a_padded_clear_value_holds_launches": a_padded_clear_value_holds_launches,
     "a_cap_raised_by_the_apply_lets_the_next_launch_run": a_cap_raised_by_the_apply_lets_the_next_launch_run,
     "a_cleared_hold_lets_the_launch_run": a_cleared_hold_lets_the_launch_run,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,

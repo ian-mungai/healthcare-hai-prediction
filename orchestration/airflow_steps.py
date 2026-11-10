@@ -81,8 +81,9 @@ class LaunchServices:
 
 
 def host_fit_probe(inner: EcsFitProbe, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> HeldCapProbe:
-    """The fit probe of every host launch: it rereads the launch hold and the host job cap before each RunTask (owner A, Nov 10 2026: launch hold
-    during services applies), so a hold set or a cap lowered after the preflight withholds the call."""
+    """The fit probe of every host launch: it rereads the launch hold and the host job cap at each fit check and, as the launcher's ``send_check``,
+    again immediately before each RunTask (owner A, Nov 10 2026: launch hold during services applies), so a hold set or a cap lowered after the
+    preflight or after the fit check withholds the call."""
     return HeldCapProbe(inner, hold, cap)
 
 
@@ -116,13 +117,15 @@ def services() -> LaunchServices:
     hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"])
     cap = ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"])
     clock = Clock()
+    probe = host_fit_probe(EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free), hold, cap)
     store = S3LaunchStore(s3, values["HAI_LAUNCH_BUCKET"], launch_record_prefix())
     launcher = Launcher(
         adapter,
         store,
-        host_fit_probe(EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free), hold, cap),
+        probe,
         clock,
         scratch_usage=partial(scratch_usage, scratch, sorted(table["jobs"])),
+        send_check=probe.authorize,
     )
     bucket = values["HAI_LAUNCH_BUCKET"]
     collections = {entry["table"]: entry["collection"] for entry in json.loads((ROOT / TABLE_MAP_FILE).read_text())["tables"]}
