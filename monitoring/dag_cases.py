@@ -176,9 +176,9 @@ def bucket_with(records: list[dict[str, Any]], *, marker: bool = True, marker_ru
     return s3
 
 
-def decide(module: Any, s3: MemoryS3, *, mlflow: str = "aws") -> list[dict[str, Any]]:
-    """Run the real ``decide`` task body for the DRIFT_RUN against the in-memory bucket."""
-    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow}}
+def decide(module: Any, s3: MemoryS3, *, mlflow: str = "aws", model: str = "m2") -> list[dict[str, Any]]:
+    """Run the real ``decide`` task body for the DRIFT_RUN of one model against the in-memory bucket."""
+    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow, "model": model}}
     with mock.patch.dict(os.environ, {"HAI_LAUNCH_BUCKET": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
         os.environ.pop("DATA_BUCKET_NAME", None)
         result: list[dict[str, Any]] = module.dag.task_dict["decide"].function()
@@ -255,7 +255,9 @@ def aws_decision_reaches_a_training_request(folder: Path) -> Problems:
             return [f"expected one training request on the aws lane, got {requests}"]
         conf = requests[0]["conf"]
         try:
-            parameters_for("training_dag", {name: conf[name] for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}, LAUNCH_LANES)
+            parameters_for(
+                "training_dag", {name: conf[name] for name in ("features_run", "population", "hai_types", "trigger", "mlflow", "model")}, LAUNCH_LANES
+            )
         except ValueError as error:
             return [f"the training DAG's launch step would refuse the request: {error}"]
         return []

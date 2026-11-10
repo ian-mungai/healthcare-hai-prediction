@@ -21,6 +21,8 @@ with DAG(
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),
         "trigger": Param("manual", type="string", pattern=r"^(manual|drift:[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
+        # The one model this run fits; no default, so a form trigger must choose it (orchestration.training_contract.MODELS).
+        "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
     },
     default_args={"retries": 0},
 ) as dag:

@@ -1481,6 +1481,17 @@ STORE_RUN = "20261104T120000Z-5a5a5a5a"
 GOLD_RUN_PARAMETER = "gold_snapshot_run"
 
 
+def training_form_requires_a_model() -> None:
+    """The training DAG's form requires the model a run fits, with no default and exactly the contract's models: the launch step reads params["model"],
+    so a form trigger without it raised KeyError and launched nothing."""
+    models = list(importlib.import_module("orchestration.training_contract").MODELS)
+    declared = form_parameter("training_dag.py", "model")
+    require(declared is not None, "training_dag declares no model parameter")
+    arguments, settings = declared or ([], {})
+    require(not arguments and "default" not in settings, f"the training form gives the model a default: {declared}")
+    require(settings.get("enum") == models, f"the training form's models differ from the contract's: {settings.get('enum')} {models}")
+
+
 def form_parameter(dag_file: str, name: str) -> tuple[list[Any], dict[str, Any]] | None:
     """The positional and keyword arguments of the ``Param`` call that declares ``name`` in a shipped DAG file's trigger form."""
     for node in ast.walk(ast.parse((ROOT / "dags" / dag_file).read_text())):
@@ -1915,6 +1926,7 @@ CASES: dict[str, Callable[[], None]] = {
     "local_mlflow_is_refused_visibly": local_mlflow_is_refused_visibly,
     "promotion_needs_no_approval": promotion_needs_no_approval,
     "fresh_run_settles_the_unfinished_launch_itself": fresh_run_settles_the_unfinished_launch_itself,
+    "training_form_requires_a_model": training_form_requires_a_model,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
     "ingestion_dag_without_a_request_launches_nothing": ingestion_dag_without_a_request_launches_nothing,

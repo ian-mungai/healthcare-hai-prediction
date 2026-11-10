@@ -73,12 +73,12 @@ def read_records(s3: Any, bucket: str, drift_run: str) -> list[dict[str, Any]]:
     return sorted(records, key=lambda item: HAI_TYPES.index(item["hai_type"]))
 
 
-def training_requests(drift_run: str, mlflow: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return one request for ``training_dag`` naming every drifted type, or none when no record triggered."""
+def training_requests(drift_run: str, mlflow: str, model: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return one request for ``training_dag`` that retrains ``model`` for every drifted type, or none when no record triggered."""
     drifted = [record["hai_type"] for record in records if record["triggered"]]
     if not drifted:
         return []
-    training = {"features_run": "latest", "population": "primary", "hai_types": drifted, "trigger": f"drift:{drift_run}", "mlflow": mlflow}
+    training = {"features_run": "latest", "population": "primary", "hai_types": drifted, "trigger": f"drift:{drift_run}", "mlflow": mlflow, "model": model}
     return [
         {
             "trigger_run_id": f"drift__{drift_run}",
@@ -97,6 +97,8 @@ with DAG(
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
         "mode": Param("real", type="string", enum=["real"]),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
+        # The model whose drift this run checks and whose training it starts (orchestration.training_contract.MODELS).
+        "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
     },
     default_args={"retries": 0},
 ) as dag:
@@ -111,7 +113,7 @@ with DAG(
         bucket = os.environ.get("HAI_LAUNCH_BUCKET", "")
         if not bucket:
             raise RuntimeError("HAI_LAUNCH_BUCKET (the data bucket of the launched jobs) is not set in the Airflow service environment")
-        return training_requests(params["run_id"], params["mlflow"], read_records(s3_client(), bucket, params["run_id"]))
+        return training_requests(params["run_id"], params["mlflow"], params["model"], read_records(s3_client(), bucket, params["run_id"]))
 
     ran = drift_run()
     requests = decide()
