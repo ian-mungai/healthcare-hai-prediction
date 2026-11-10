@@ -2277,7 +2277,7 @@ WRITING_KIND_SAMPLES = [
     ("history is exempt in the changelog", {"CHANGELOG.md": "This replaced the earlier rule.\n"}, (), 0, []),
     (
         "history allowlist entry silences its kind",
-        {"notes.md": "This replaced the earlier rule.\n", WRITING_ALLOWLIST: "history notes.md -- the text quotes a past rule\n"},
+        {"notes.md": "This replaced the earlier rule.\n", WRITING_ALLOWLIST: "history notes.md -- the text quotes a past rule -- permanent\n"},
         ("--block", "history"),
         0,
         [],
@@ -2286,7 +2286,7 @@ WRITING_KIND_SAMPLES = [
     ("no longer warns in the changelog", {"CHANGELOG.md": "The hook no longer runs on push.\n"}, (), 0, [f"WARN CHANGELOG.md:1: {NO_LONGER_FINDING}"]),
     (
         "no longer allowlist entry silences its kind",
-        {"notes.md": "The hook no longer runs on push.\n", WRITING_ALLOWLIST: "no-longer notes.md -- a current rule keeps the phrase\n"},
+        {"notes.md": "The hook no longer runs on push.\n", WRITING_ALLOWLIST: "no-longer notes.md -- a current rule keeps the phrase -- permanent\n"},
         (),
         0,
         [],
@@ -2295,7 +2295,7 @@ WRITING_KIND_SAMPLES = [
     ("--block wrap blocks", {"notes.md": "Wrapped\nline.\n"}, ("--block", "wrap"), 1, [f"notes.md:2: {WRAP_FINDING}"]),
     (
         "wrap allowlist entry silences its kind",
-        {"notes.md": "Wrapped\nline.\n", WRITING_ALLOWLIST: "wrap notes.md -- quoted text\n"},
+        {"notes.md": "Wrapped\nline.\n", WRITING_ALLOWLIST: "wrap notes.md -- quoted text -- permanent\n"},
         ("--block", "wrap"),
         0,
         [],
