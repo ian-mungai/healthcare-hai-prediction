@@ -1,9 +1,13 @@
-"""Trigger one silver, gold or maintenance workflow run on the running orchestration stack and wait for its end, with a deadline.
+"""Trigger one silver, gold, features, feature store or training workflow run on the running orchestration stack and wait for its end, with a deadline.
 
 Usage::
 
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_transform_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
+
+A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features and feature store the
+gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request.
 
 The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
@@ -28,7 +32,9 @@ from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, A
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
-DAGS = ("silver_transform_dag", "gold_transform_dag", *TRAINING_DAGS)
+# The producer-run parameter each workflow's form requires, by workflow.
+PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_transform_dag": "gold_snapshot_run", "feature_store_dag": "gold_snapshot_run"}
+DAGS = ("silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS)
 MODES = ("fixture", "publish_fixture", "real")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 MAX_WAIT_SECONDS = 4 * 3600
@@ -48,13 +54,21 @@ def new_run_id() -> str:
     return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
-def run_conf(dag: str, mode: str, run_id: str, silver_snapshot_run: str | None, training: dict[str, Any] | None = None) -> dict[str, Any]:
-    """The validated configuration of one run; a gold run names the committed silver set it reads, the others name none."""
+def run_conf(
+    dag: str,
+    mode: str,
+    run_id: str,
+    silver_snapshot_run: str | None,
+    training: dict[str, Any] | None = None,
+    gold_snapshot_run: str | None = None,
+) -> dict[str, Any]:
+    """The validated configuration of one run. Gold names the committed silver run it reads, features and feature store the gold run; the others name
+    none."""
     if dag not in DAGS or mode not in MODES or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: unknown workflow, mode or run ID ({dag!r}, {mode!r}, {run_id!r})")
     conf: dict[str, Any] = {"run_id": run_id, "mode": mode}
     if dag in TRAINING_DAGS:
-        if silver_snapshot_run is not None or mode not in (("fixture", "real") if dag == "training_dag" else ("real",)):
+        if silver_snapshot_run is not None or gold_snapshot_run is not None or mode not in (("fixture", "real") if dag == "training_dag" else ("real",)):
             raise TriggerError("refused: training mode or silver snapshot selection is unsupported")
         try:
             selected = parameters_for(dag, training or {})
@@ -68,13 +82,17 @@ def run_conf(dag: str, mode: str, run_id: str, silver_snapshot_run: str | None, 
         return conf
     if training is not None or mode == "fixture":
         raise TriggerError("refused: training parameters or fixture mode belong only to training workflows")
-    if dag == "gold_transform_dag":
-        snapshot = "latest" if silver_snapshot_run is None else silver_snapshot_run
-        if snapshot != "latest" and not RUN_ID.fullmatch(snapshot):
-            raise TriggerError(f"refused: silver snapshot run {snapshot!r} is not a run ID")
-        conf["silver_snapshot_run"] = snapshot
-    elif silver_snapshot_run is not None:
-        raise TriggerError(f"refused: only gold_transform_dag reads a silver snapshot run, not {dag}")
+    given = {"silver_snapshot_run": silver_snapshot_run, "gold_snapshot_run": gold_snapshot_run}
+    needed = PRODUCER_RUNS.get(dag)
+    for name, value in given.items():
+        if name != needed and value is not None:
+            raise TriggerError(f"refused: {dag} reads no {name.replace('_', ' ')}")
+    if needed is not None:
+        value = given[needed]
+        flag = "--" + needed.replace("_", "-")
+        if value is None or not RUN_ID.fullmatch(value):
+            raise TriggerError(f"refused: {dag} needs {flag} as a run ID (not latest), the producer run its job publishes from; got {value!r}")
+        conf[needed] = value
     return conf
 
 
@@ -145,7 +163,8 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--dag", choices=DAGS, required=True)
     cli.add_argument("--mode", choices=MODES, required=True)
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
-    cli.add_argument("--silver-snapshot-run", help="gold only: the committed silver run to read, or latest")
+    cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
+    cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
     cli.add_argument("--features-run", default="latest")
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
@@ -165,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
-        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training)
+        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training, args.gold_snapshot_run)
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:
