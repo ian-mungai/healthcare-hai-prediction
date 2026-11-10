@@ -144,7 +144,7 @@
     {
       "module": "scripts/acquisition/store_nber_hc.py",
       "pattern": null,
-      "why": "reviewed: the module lists only the run and attempt folders of its own local capture under data/datasets/historical_acquisition/nber_hospital_compare, which Git ignores and which hold no tracked file"
+      "why": "reviewed: the module lists only the run and attempt folders of its own local capture (scripts/acquisition/store_nber_hc.py:41 run_*/attempt_*/transport.json, :58 run_*, ROOT :34 = data/datasets/historical_acquisition/nber_hospital_compare), which Git ignores and which hold no tracked file"
     },
     {
       "module": "scripts/features/feature_schema.py",
