@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 import sys
@@ -19,6 +20,7 @@ from scripts.process import CompletedProcess, SubprocessError
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config" / "acquisition"
+CONTROL_SEED = REPO_ROOT / "dbt/seeds/gold/registry_controls.csv"
 LEGACY_ARCHIVE = REPO_ROOT / "data/acquisition_planning/registry_legacy_20260929"
 FILES = ("source_registry.json", "source_registry_lock.json", "registry_additions.json", "registry_additions_lock.json")
 PINNED_BATCH = CONFIG / "planning_v1" / "bounded_batch_v1.json"
@@ -96,6 +98,45 @@ def drop_evidence_record(additions: dict[str, Any]) -> None:
 def remove_entry(additions: dict[str, Any]) -> None:
     """Remove one entry while the lock still lists it (failure mode 949)."""
     additions["source_metadata"] = [item for item in additions["source_metadata"] if item["source_id"] != "CMS_GV"]
+
+
+# The sub-controls the registry additions hold: the two MMD conditions of Sep 25 2026 and, from the owner decision of Nov 9 2026, the SSI procedure volumes
+# (colon: Medicare discharges of DRG 329 to 331; hysterectomy: DRG 742 to 743) under C087 and the CMS ownership system size under C060.
+ADDED_IDS = ("C060.03", "C087.01", "C087.02", "C258.80", "C258.81")
+OWNER_DECISION_PARENTS = {"C060.03": "C060", "C087.01": "C087", "C087.02": "C087"}
+
+
+def owner_decision_checks(additions: dict[str, Any], registry: dict[str, Any]) -> list[dict[str, Any]]:
+    """Check the three sub-controls of the Nov 9 2026 decision in the real additions file: parent and sources registered, gate not run, a hold decision and the
+    user's approval of that day."""
+    added = {item["id"]: item for item in additions["measure_controls"]}
+    known = {item["id"]: item for item in registry["measure_controls"]}
+    sources = {item["source_id"] for item in registry["sources"]}
+    checks = []
+    for identifier, parent in OWNER_DECISION_PARENTS.items():
+        item = added.get(identifier, {})
+        approval = item.get("approval", {})
+        decision = item.get("preserved_controls", {}).get("current_review_decision", "")
+        checks += [
+            {"name": f"{identifier}_added_under_{parent}", "passed": item.get("parent_id") == parent and parent in known},
+            {"name": f"{identifier}_sources_registered", "passed": bool(item.get("source_ids")) and set(item["source_ids"]) <= sources},
+            {"name": f"{identifier}_gate_not_run_and_on_hold", "passed": item.get("gate_status") == "not_run" and decision.startswith("hold_")},
+            {"name": f"{identifier}_approved_by_user_on_nov_9", "passed": approval.get("decided_by") == "user" and approval.get("decided_on") == "2026-11-09"},
+        ]
+    return checks
+
+
+def gold_seed_checks(seed: Path) -> list[dict[str, Any]]:
+    """Check that the generated gold control seed carries each sub-control of the Nov 9 2026 decision under its parent, as a registry addition."""
+    with seed.open(newline="", encoding="utf-8") as handle:
+        rows = {row["measure_control"]: row for row in csv.DictReader(handle)}
+    return [
+        {
+            "name": f"{identifier}_in_gold_control_seed",
+            "passed": rows.get(identifier, {}).get("parent_control") == parent and rows[identifier]["origin"] == "registry_additions",
+        }
+        for identifier, parent in OWNER_DECISION_PARENTS.items()
+    ]
 
 
 def counts_match(stdout: str, additions: dict[str, Any]) -> bool:
@@ -549,10 +590,12 @@ def run_cases(root: Path) -> list[dict[str, Any]]:
         result,
         [
             {"name": "exit_code_0", "passed": result.returncode == 0},
-            {"name": "lists_both_ids", "passed": "C258.80" in result.stdout and "C258.81" in result.stdout},
+            {"name": "lists_every_added_id", "passed": all(identifier in result.stdout for identifier in ADDED_IDS)},
             {"name": "reports_source_metadata_counts", "passed": counts_match(result.stdout, read_json(CONFIG / FILES[2]))},
         ],
     )
+    record("owner_decision_controls_added", None, owner_decision_checks(read_json(CONFIG / FILES[2]), registry))
+    record("owner_decision_controls_in_gold_seed", None, gold_seed_checks(CONTROL_SEED))
     case = prepare(root, "idempotent_relock")
     before = fingerprint(case / FILES[3])
     first, second = cli(case, write_lock=True), cli(case, write_lock=True)

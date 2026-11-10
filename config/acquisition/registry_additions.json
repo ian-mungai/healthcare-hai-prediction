@@ -631,6 +631,91 @@
     {
       "approval": {
         "decided_by": "user",
+        "decided_on": "2026-11-09",
+        "decision": "Give SSI procedure volume and CMS ownership system size registry identities as sub-controls through the additions file: C087.01 colon procedure volume (DRG 329 to 331) and C087.02 hysterectomy procedure volume (DRG 742 to 743) under C087, and C060.03 CMS ownership system size under C060; each starts on a hold decision with no cleared gate until a review clears it for training.",
+        "recorded_in": "project standard (local, untracked), Decisions; second-opinion record jev_20261109_registry_identities"
+      },
+      "collection": "user_additions",
+      "gate_status": "not_run",
+      "id": "C060.03",
+      "mandatory_resolution": "Resolve the complete canonical record and earlier_review_links before closing its gates; any explicit exclusion/hold overrides generic source eligibility.",
+      "parent_id": "C060",
+      "preserved_controls": {
+        "current_exact_field": "CMS ownership system size: the largest number of hospitals (CCNs) that one organisation owner (type_owner O) with role code 34 or 35 reaches in the latest CMS owner release before the window start, as owner_system_size_log (natural log) and is_system_member (size above 1). A hospital listed in that release with no such owner has size 1; a hospital with no owner release before the window start is missing (owner decision, Nov 9 2026).",
+        "current_remaining_checks": [
+          "The local owner history starts at valid_from 2022-11-30, so only the 2023 and 2024 windows have a value; earlier windows are missing.",
+          "The enrollment's CCN is its latest valid CCN, not a CCN dated to the release period; a hospital whose CCN changed may be misattributed.",
+          "Not the AHRQ compendium count of C060.01 or C060.02; the two counts have not been reconciled.",
+          "Predictive usefulness: Untested."
+        ],
+        "current_review_decision": "hold_definition"
+      },
+      "source_ids": [
+        "CMS_OWNERS",
+        "ENROLL"
+      ]
+    },
+    {
+      "approval": {
+        "decided_by": "user",
+        "decided_on": "2026-11-09",
+        "decision": "Give SSI procedure volume and CMS ownership system size registry identities as sub-controls through the additions file: C087.01 colon procedure volume (DRG 329 to 331) and C087.02 hysterectomy procedure volume (DRG 742 to 743) under C087, and C060.03 CMS ownership system size under C060; each starts on a hold decision with no cleared gate until a review clears it for training.",
+        "recorded_in": "project standard (local, untracked), Decisions; second-opinion record jev_20261109_registry_identities"
+      },
+      "collection": "user_additions",
+      "gate_status": "not_run",
+      "id": "C087.01",
+      "mandatory_resolution": "Resolve the complete canonical record and earlier_review_links before closing its gates; any explicit exclusion/hold overrides generic source eligibility.",
+      "parent_id": "C087",
+      "preserved_controls": {
+        "current_exact_field": "Colon procedure volume: Sum(Tot_Dschrgs where DRG_Cd in {'329', '330', '331'}) per Rndrng_Prvdr_CCN and data year in Medicare Inpatient Hospitals - by Provider and Service. A DRG row absent from the file is a suppressed cell (under 11 discharges): it stays missing, is never read as zero and is never carried over from an earlier data year.",
+        "current_remaining_checks": [
+          "Medicare fee-for-service inpatient discharges only; the relation of these DRG discharges to the NHSN surgical site infection procedure denominator is not verified.",
+          "Read the latest data year before the window year (measured-period rule): every data year 2013 to 2021 has release_year 2023, so a publication rule would leave no volume before the 2023 windows.",
+          "Year-specific MS-DRG versions of these codes remain to reconcile against each data year's file.",
+          "Coverage on the local data: 1,217 to 1,629 hospitals a year with an unsuppressed cell.",
+          "Predictive usefulness: Untested."
+        ],
+        "current_review_decision": "hold_definition"
+      },
+      "source_ids": [
+        "CMS-DRG-MAPS",
+        "CMS-MUP-DICTIONARIES",
+        "CMS-MUP-DRG"
+      ]
+    },
+    {
+      "approval": {
+        "decided_by": "user",
+        "decided_on": "2026-11-09",
+        "decision": "Give SSI procedure volume and CMS ownership system size registry identities as sub-controls through the additions file: C087.01 colon procedure volume (DRG 329 to 331) and C087.02 hysterectomy procedure volume (DRG 742 to 743) under C087, and C060.03 CMS ownership system size under C060; each starts on a hold decision with no cleared gate until a review clears it for training.",
+        "recorded_in": "project standard (local, untracked), Decisions; second-opinion record jev_20261109_registry_identities"
+      },
+      "collection": "user_additions",
+      "gate_status": "not_run",
+      "id": "C087.02",
+      "mandatory_resolution": "Resolve the complete canonical record and earlier_review_links before closing its gates; any explicit exclusion/hold overrides generic source eligibility.",
+      "parent_id": "C087",
+      "preserved_controls": {
+        "current_exact_field": "Hysterectomy procedure volume: Sum(Tot_Dschrgs where DRG_Cd in {'742', '743'}) per Rndrng_Prvdr_CCN and data year in Medicare Inpatient Hospitals - by Provider and Service. A DRG row absent from the file is a suppressed cell (under 11 discharges): it stays missing, is never read as zero and is never carried over from an earlier data year.",
+        "current_remaining_checks": [
+          "Medicare fee-for-service inpatient discharges only; the relation of these DRG discharges to the NHSN surgical site infection procedure denominator is not verified.",
+          "Read the latest data year before the window year (measured-period rule): every data year 2013 to 2021 has release_year 2023, so a publication rule would leave no volume before the 2023 windows.",
+          "Year-specific MS-DRG versions of these codes remain to reconcile against each data year's file.",
+          "Coverage on the local data: 148 (2017) down to 47 (2024) hospitals with an unsuppressed cell against about 950 HAI_4 hospitals, so more than 50% missing for HAI_4.",
+          "Predictive usefulness: Untested."
+        ],
+        "current_review_decision": "hold_definition"
+      },
+      "source_ids": [
+        "CMS-DRG-MAPS",
+        "CMS-MUP-DICTIONARIES",
+        "CMS-MUP-DRG"
+      ]
+    },
+    {
+      "approval": {
+        "decided_by": "user",
         "decided_on": "2026-09-25",
         "decision": "Add Alcohol Use Disorders and Drug Use Disorders to the registry and the MMD work list.",
         "recorded_in": ".agent_handoff/current.md, Decisions"

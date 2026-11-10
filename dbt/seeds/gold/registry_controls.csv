@@ -1,4 +1,7 @@
 measure_control,parent_control,origin,family,closeout_decision
+C060.03,C060,registry_additions,Structure,
+C087.01,C087,registry_additions,Structure,
+C087.02,C087,registry_additions,Structure,
 C258.80,C258,registry_additions,Context,
 C258.81,C258,registry_additions,Context,
 C001,,source_registry,Structure,redefined
