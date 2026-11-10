@@ -1,8 +1,9 @@
 """The run 3 publisher job: fetch the staged inputs by digest, restore the last state, run the harness and save the new state under ``raw/``.
 
-The inputs are one archive staged beside the code archive. The broker reads its digest from the run's request and hands it to the job, so a changed archive
-stops the job before anything runs. A task's workspace ends with the task, so the outcomes and the BLS request ledger travel between tasks in a saved state.
-It holds those records only: no fresh file, no diagnostic and no original can enter it. BLS needs more than one day, so run 3 takes more than one task.
+The inputs are one archive staged beside the code archive. The launch (orchestration.publisher_launch) reads its digest from the run's request and hands it to
+the job, so a changed archive stops the job before anything runs. A task's workspace ends with the task, so the outcomes and the BLS request ledger travel
+between tasks in a saved state. It holds those records only: no fresh file, no diagnostic and no original can enter it. BLS needs more than one day, so run 3
+takes more than one task.
 """
 
 from __future__ import annotations
@@ -51,7 +52,7 @@ def fetch_inputs(s3: Any, environment: Mapping[str, str]) -> Path:
     key = f"lakehouse/run_stage/{environment['RUN_ID']}/inputs/{INPUTS_NAME}"
     body = s3.get_object(Bucket=environment["DATA_BUCKET_NAME"], Key=key, ExpectedBucketOwner=environment["EXPECTED_ACCOUNT_ID"])["Body"].read()
     if hashlib.sha256(body).hexdigest() != environment["PUBLISHER_INPUTS_SHA256"]:
-        raise PublisherError("The staged inputs differ from the digest the broker bound.")
+        raise PublisherError("The staged inputs differ from the digest the launch bound.")
     inputs = workspace_of(environment) / "inputs"
     inputs.mkdir(parents=True, exist_ok=True)
     try:
@@ -121,7 +122,7 @@ def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> dic
 
 
 def approved_prior(environment: Mapping[str, str]) -> dict[str, str] | None:
-    """The one prior state the broker bound from the request, or None for a first task. The task never lists the prefix, because any task can write there."""
+    """The one prior state the launch bound from the request, or None for a first task. The task never lists the prefix, because any task can write there."""
     text = environment.get("PUBLISHER_PRIOR_STATE", "")
     if not text:
         return None
@@ -182,9 +183,9 @@ def restore_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> 
 
 
 def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
-    """The unpacked queue must be the one the broker bound, because that digest names the state the job restores and saves."""
+    """The unpacked queue must be the one the launch bound, because that digest names the state the job restores and saves."""
     if hashlib.sha256(queue.read_bytes()).hexdigest() != environment["PUBLISHER_QUEUE_SHA256"]:
-        raise PublisherError("The staged queue differs from the digest the broker bound.")
+        raise PublisherError("The staged queue differs from the digest the launch bound.")
 
 
 def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client) -> None:

@@ -1102,6 +1102,7 @@
     "orchestration/pipeline_protocol.py",
     "orchestration/pipeline_render.py",
     "orchestration/pipeline_session.py",
+    "orchestration/publisher_launch.py",
     "orchestration/remote_run.py",
     "orchestration/sdk_worker.py",
     "orchestration/serving_contract.py",
