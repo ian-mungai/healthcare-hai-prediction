@@ -216,6 +216,13 @@ DEFECTS = (
         "test_apply_refuses_a_digest_made_stale_by_a_retired_policy_holder_or_version",
     ),
     ScriptDefect(
+        "the digest leaves out the retired policy's versions",
+        MANAGE,
+        '                "versions": [version["VersionId"] for version in version_inventory(iam, arn)],\n',
+        "",
+        "test_a_retired_policy_version_added_after_the_new_plan_stops_apply_before_any_write",
+    ),
+    ScriptDefect(
         "thirteen policies go into one group",
         MANAGE,
         '"platform": ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "logs", "sns"),',

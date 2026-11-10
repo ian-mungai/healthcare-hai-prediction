@@ -701,6 +701,21 @@ def test_a_retired_policy_holder_added_after_the_new_plan_stops_apply_before_any
     check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
 
 
+def test_a_retired_policy_version_added_after_the_new_plan_stops_apply_before_any_write(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The new plan matches the reviewed digest; a version that is not the default arrives before the first write. The retirement deletes only the
+    # planned versions, so apply must stop at the recheck instead of reaching a policy it cannot delete.
+    iam = FakeIam()
+    name = f"{PROJECT}_secrets_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=2)
+    digest = planned_digest(env_file, iam)
+    stale_after_replan(monkeypatch, lambda: iam.add_version(name, datetime(2026, 3, 1, tzinfo=UTC)))
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [] and iam.policies.keys() == {name}, f"a new version must stop the apply before any write: {iam.writes()}")
+    check(len(iam.policies[name]["versions"]) == 3, "no version of the retired policy may be deleted")
+    check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
+
+
 def test_the_plan_and_the_recheck_read_every_page_of_a_retired_policy_holders(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # IAM may truncate a holder listing below MaxItems. With one holder per page, the project user is on page one and a role on page two.
     iam = FakeIam()
