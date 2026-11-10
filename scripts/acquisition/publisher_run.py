@@ -21,6 +21,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from scripts import resource_peaks
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import stored_mirror
 from scripts.acquisition.collection_layout import RAW_ROOT
@@ -238,4 +239,4 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
 
 
 if __name__ == "__main__":
-    main()
+    resource_peaks.recorded(main)

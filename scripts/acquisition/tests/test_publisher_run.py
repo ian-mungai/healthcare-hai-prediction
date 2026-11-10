@@ -344,3 +344,27 @@ def test_the_job_saves_its_state_as_it_goes_so_a_kill_loses_little(monkeypatch: 
     with pytest.raises(KeyboardInterrupt):
         publisher_run.main(environ, cloud.factory)
     check(len(cloud.puts) >= 3, f"two saves ran during the work and one at the end: {cloud.puts}")
+
+
+def test_the_publisher_entry_point_runs_through_the_resource_peaks_recorder() -> None:
+    """Like every job entry point, the publisher's ``__main__`` runs ``main`` through ``resource_peaks.recorded``, so its first host run logs its peaks."""
+    import ast
+
+    tree = ast.parse(Path(publisher_run.__file__).read_text(encoding="utf-8"))
+    guards = [node for node in tree.body if isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'"]
+    check(len(guards) == 1, "one __main__ block")
+    check([ast.unparse(statement) for statement in guards[0].body] == ["resource_peaks.recorded(main)"], "the __main__ block runs main through the recorder")
+
+
+def test_a_failed_publisher_start_still_logs_one_resource_peaks_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from scripts import resource_peaks
+
+    for name in publisher_run.REQUIRED:
+        monkeypatch.delenv(name, raising=False)
+    with pytest.raises(publisher_run.PublisherError):
+        resource_peaks.recorded(publisher_run.main, scratch=(tmp_path,), interval=0.02)
+    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("event=resource_peaks ")]
+    check(len(lines) == 1, f"one resource_peaks line: {lines}")
+    check(json.loads(lines[0].removeprefix("event=resource_peaks "))["exit_code"] == 1, "the failed start is recorded with exit code 1")
