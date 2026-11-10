@@ -199,7 +199,7 @@ def refused(repository: Repository, messages: tuple[str, ...], checks: dict[str,
     code, stdout, stderr = guard(repository, "rebind")
     checks["rebind exits 1"] = code == 1
     checks["failure messages"] = all(message in stderr for message in messages)
-    checks["nothing written"] = repository.reviewed_bytes() == saved and "nothing written" in stderr and "moved" not in stdout
+    checks["nothing written"] = repository.reviewed_bytes() == saved and "Nothing was written" in stderr and "moved" not in stdout
     return checks
 
 

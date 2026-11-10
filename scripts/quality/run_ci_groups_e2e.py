@@ -5131,7 +5131,7 @@ def unreadable_status_case(scratch: Path) -> dict[str, Any]:
     code, out, error = pre_push(root, "run", timeout=120)
     return {
         "case": "pre_push_refuses_a_tree_whose_state_cannot_be_read",
-        "passed": code != 0 and not [call for call in pre_push_calls(root) if call["stub"] == "run_ci"] and "no check ran" in out and "cannot be read" in out,
+        "passed": code != 0 and not [call for call in pre_push_calls(root) if call["stub"] == "run_ci"] and "No check ran" in out and "cannot be read" in out,
         "exit": code,
         "output": (out + error)[-300:],
     }
