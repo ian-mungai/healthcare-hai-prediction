@@ -6,7 +6,8 @@ against its parser.
 The commands come from the "Silver first run", "Gold after silver" and "Features after gold" lists of that file (the text moved out of the tracked
 documents). Each runs through the parser of its real program with synthetic values (``scripts.infrastructure.owner_commands``), so a typo, a missing
 argument or a wrong option fails here and not on the owner's first run. The reviewed jobs file that each list describes passes the real renderer
-through the real wrapper. Nothing calls AWS or Docker."""
+through the real wrapper. The cases of the list "Gold through Airflow on the host" are in ``scripts.infrastructure.owner_list_host_cases``. Nothing calls
+AWS or Docker."""
 
 from __future__ import annotations
 
@@ -20,7 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import owner_commands
+from scripts.infrastructure import owner_commands, owner_list_host_cases
 from scripts.infrastructure.run_activation_inputs_e2e import (
     ADMIN,
     PLATFORM_DEFAULT_LOG_GROUPS,
@@ -287,7 +288,12 @@ def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
 def run(output: Path) -> dict[str, dict[str, bool]]:
     text = "".join(f"## {heading}\n{body}" for heading, body in json.loads(OWNER_LISTS.read_text()).items())
     with tempfile.TemporaryDirectory(prefix="owner_list_") as folder:
-        results = {"structure": structure_checks(text), "commands": command_checks(text, Path(folder)), "mutants": mutant_checks(text, Path(folder))}
+        results = {
+            "structure": structure_checks(text),
+            "commands": command_checks(text, Path(folder)),
+            "mutants": mutant_checks(text, Path(folder)),
+            "host": owner_list_host_cases.host_checks(text, Path(folder)),
+        }
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(results, indent=2, sort_keys=True) + "\n")
     return results
