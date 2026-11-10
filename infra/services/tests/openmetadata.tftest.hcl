@@ -466,7 +466,8 @@ run "limits_that_exceed_the_host_are_refused" {
   command = plan
 
   variables {
-    host_memory_mib = 16384
+    host_memory_mib        = 16384
+    host_usable_memory_mib = 16384 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
     openmetadata_memory_mib = {
       server    = { limit = 4096, reservation = 1280, heap_mib = 2048 }
       search    = { limit = 4096, reservation = 1280, heap_mib = 2048 }

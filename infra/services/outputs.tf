@@ -53,22 +53,22 @@ output "reserved_memory_mib" {
 }
 
 output "host_job_memory_mib" {
-  description = "Memory MiB one job gets on the host: the usable (ECS registered) memory less the safety margin host_system_reserve_mib and the always-on service reservations, or null while host_usable_memory_mib is not set. render_jobs_config passes it to the jobs stack as host_job_memory_mib."
+  description = "Memory MiB one job gets on the host: the usable (ECS registered) memory less the safety margin host_system_reserve_mib and the always-on service reservations. render_jobs_config passes it to the jobs stack as host_job_memory_mib."
   value       = local.host_job_memory_mib
 
   precondition {
-    condition     = local.host_job_memory_mib == null ? true : local.host_job_memory_mib >= var.host_job_memory_floor_mib
+    condition     = local.host_job_memory_mib >= var.host_job_memory_floor_mib
     error_message = "The always-on service reservations and the system reserve leave less than host_job_memory_floor_mib for one job on the host."
   }
 
   precondition {
-    condition     = local.host_job_memory_mib == null ? true : local.host_job_memory_mib + local.reserved_memory_mib + var.host_system_reserve_mib <= var.host_usable_memory_mib
+    condition     = local.host_job_memory_mib + local.reserved_memory_mib + var.host_system_reserve_mib <= var.host_usable_memory_mib
     error_message = "The job room, the always-on service reservations and the safety margin together exceed the memory ECS can place on the host."
   }
 }
 
 output "host_capacity_binding" {
-  description = "The host capacity binding: job_memory_mib=<host_job_memory_mib> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, or null while host_usable_memory_mib is not set. render_jobs_config passes it to the jobs stack, which labels the init container of every host revision with it (hai.host_capacity); the launch preflight refuses a host revision whose label does not carry the current usable-memory inputs (owner decision A, Nov 10 2026)."
+  description = "The host capacity binding: job_memory_mib=<host_job_memory_mib> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>. render_jobs_config passes it to the jobs stack, which labels the init container of every host revision with it (hai.host_capacity); the launch preflight refuses a host revision whose label does not carry the current usable-memory inputs (owner decision A, Nov 10 2026)."
   value       = local.host_capacity_binding
 }
 

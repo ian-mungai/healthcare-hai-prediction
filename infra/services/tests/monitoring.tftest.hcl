@@ -446,7 +446,8 @@ run "monitoring_that_overruns_the_host_is_refused" {
   command = plan
 
   variables {
-    host_memory_mib = 16384 # the r7g.large size this refusal is about
+    host_memory_mib        = 16384 # the r7g.large size this refusal is about
+    host_usable_memory_mib = 16384 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
     monitoring_memory_mib = {
       prometheus      = { limit = 1024, reservation = 512 }
       grafana         = { limit = 1024, reservation = 512 }

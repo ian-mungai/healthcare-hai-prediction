@@ -23,7 +23,7 @@ variables {
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   mlflow_host_ip                  = "10.0.1.20"
   mlflow_artifact_bucket          = "example-project-data-dev"
-  # TEST FIXTURE ONLY, not a measured value: the owner sets host_usable_memory_mib from the ECS registered memory of the real host.
+  # TEST FIXTURE ONLY, not a measured value: an explicit override of the 32768 MiB default, as the owner sets it from the ECS registered memory of the host.
   host_usable_memory_mib = 30720
 
   log_group_names = {
@@ -189,27 +189,28 @@ run "a_larger_system_reserve_shrinks_the_job_room" {
   }
 }
 
-run "without_the_usable_memory_there_is_no_job_room" {
+run "the_default_usable_memory_is_the_current_host_size" {
   command = plan
 
+  # Recommended capacity from the start (owner decision, Nov 10 2026): an unset input takes the default, the current r7g.xlarge host size of 32768 MiB,
+  # so the stack always gives a job room. A null input is the same as no input for a variable that is not nullable.
   variables {
     host_usable_memory_mib = null
   }
 
-  # The services still plan (the code checkout list applies them before any host session), but render_jobs_config refuses host jobs without a room.
   assert {
-    condition     = output.host_job_memory_mib == null
-    error_message = "Without the owner's ECS registered memory the stack gives no job room instead of one computed from the nominal host memory."
+    condition     = var.host_usable_memory_mib == 32768 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
+    error_message = "Without an owner value the job room comes from the current host size (32768 MiB) less the 2048 MiB system reserve and the service reservations."
   }
 
   assert {
-    condition = output.host_capacity_binding == null && alltrue([
+    condition = output.host_capacity_binding == "job_memory_mib=${32768 - 2048 - output.reserved_memory_mib} usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}" && alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAPACITY=") if startswith(container.name, "airflow")
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAPACITY=usable_memory_mib=32768 system_reserve_mib=2048") if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "Without the usable memory there is no capacity binding and HAI_LAUNCH_HOST_CAPACITY is empty, so the launch preflight refuses every host job."
+    error_message = "The default gives a capacity binding and every Airflow container carries its usable-memory inputs, so host jobs are not refused for an empty capacity."
   }
 }
 

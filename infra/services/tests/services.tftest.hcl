@@ -118,7 +118,8 @@ run "host_too_small_is_refused" {
   command = plan
 
   variables {
-    host_memory_mib = 10240
+    host_memory_mib        = 10240
+    host_usable_memory_mib = 10240 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
   }
 
   expect_failures = [aws_ecs_task_definition.service]
@@ -129,6 +130,7 @@ run "hard_limits_beyond_host_are_refused" {
 
   variables {
     host_memory_mib            = 12288
+    host_usable_memory_mib     = 12288 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
     other_services_reserve_mib = 2048
   }
 
@@ -1200,11 +1202,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "e89bcbf334103ad8e3dcb4abb08c212caddffbf500734cc24d4a0216c32fb3c7"
-      "airflow_apiserver/airflow_migrate"           = "441a701dee9fcd6497d7b36f873f6cfbccd438870bf8521d5e7f5cc38b5e6be9"
-      "airflow_dag_processor/airflow_dag_processor" = "40b1edb81435436aa73d098e3d2595d4a9850095ca453bbac9ebae1f27401a52"
-      "airflow_scheduler/airflow_scheduler"         = "19c94b66b6367ab709fe5870ff733bdbc2a52e1097802780d979b7ee45f2e646"
-      "airflow_triggerer/airflow_triggerer"         = "7add95d806e921c950804d92a19282736019aa6a1ba61c4b25132e6fe8e60fec"
+      "airflow_apiserver/airflow_apiserver"         = "7772580054a69c77e29eea0466cbcb02c88d6d55a0a4101a240aaad1407ec7dd"
+      "airflow_apiserver/airflow_migrate"           = "bab7a97926c50eaac96e0a86969e69b2e8127664325b8627cc5cb2c66613e85d"
+      "airflow_dag_processor/airflow_dag_processor" = "d26ce19dacaa0ac7db58985da9b5ce73227d6e3cce1b397752c1733deb1e611d"
+      "airflow_scheduler/airflow_scheduler"         = "6866afa26947e7440184b5c6e3cdfd9dfaebf6f2ce99f8fdaf4d10189be27cda"
+      "airflow_triggerer/airflow_triggerer"         = "f45667d95fffc72e282b7a09eac0a3f29f19f3ce0721638ea4f989d01d580355"
       "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
@@ -2290,6 +2292,7 @@ run "model_api_with_marquez_does_not_fit_the_small_host" {
 
   variables {
     host_memory_mib         = 16384 # the r7g.large size this refusal is about
+    host_usable_memory_mib  = 16384 # at most the smaller host; the 32768 MiB default is the r7g.xlarge size
     model_api_enabled       = true
     model_api_task_role_arn = "arn:aws:iam::111111111111:role/example-model-api"
     model_api_manifest_uri  = "s3://example-data/serving/deployments"

@@ -407,13 +407,13 @@ variable "host_memory_mib" {
 }
 
 variable "host_usable_memory_mib" {
-  description = "Memory in MiB that ECS can place on the host: the MEMORY integerValue of registeredResources that describe-container-instances shows for the host, a little under the nominal host_memory_mib. The owner sets it from the first host session; it is not known offline and has no default. Until it is set the stack gives no job room (output host_job_memory_mib is null) and render_jobs_config refuses host jobs."
+  description = "Memory in MiB that ECS can place on the host. It defaults to the current host size (r7g.xlarge: 32768 MiB, the same as host_memory_mib), so the stack always gives a job room; host_system_reserve_mib is the margin for the operating system, Docker and the ECS agent below it. After a host session the owner may set it to the MEMORY integerValue of registeredResources that describe-container-instances shows for the host, which then replaces the default."
   type        = number
-  default     = null
-  nullable    = true
+  default     = 32768
+  nullable    = false
 
   validation {
-    condition     = var.host_usable_memory_mib == null ? true : (var.host_usable_memory_mib > 0 && var.host_usable_memory_mib <= var.host_memory_mib && var.host_usable_memory_mib == floor(var.host_usable_memory_mib))
+    condition     = var.host_usable_memory_mib > 0 && var.host_usable_memory_mib <= var.host_memory_mib && var.host_usable_memory_mib == floor(var.host_usable_memory_mib)
     error_message = "Use the ECS registered memory of the host: a whole number of MiB above 0 and at most the nominal host_memory_mib."
   }
 }
