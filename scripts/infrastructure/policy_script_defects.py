@@ -113,8 +113,8 @@ DEFECTS = (
     ScriptDefect(
         "the digest leaves out the live default version",
         MANAGE,
-        '{"version": policy["DefaultVersionId"], "sha256":',
-        '{"sha256":',
+        '            "version": policy["DefaultVersionId"],\n            "sha256":',
+        '            "sha256":',
         "test_apply_refuses_a_digest_made_stale_by_a_live_policy_change",
     ),
     ScriptDefect(
@@ -141,9 +141,30 @@ DEFECTS = (
     ScriptDefect(
         "an update skips the version pruning",
         MANAGE,
-        "        remove_oldest_nondefault_version(iam, arn)\n",
+        "        for version in step.removes:\n            iam.delete_policy_version(PolicyArn=arn, VersionId=version)\n",
         "",
         "test_an_update_frees_a_version_slot_first_and_makes_the_new_version_the_default",
+    ),
+    ScriptDefect(
+        "the plan names no version for an update to delete",
+        MANAGE,
+        "    return (candidates[0],)\n",
+        "    return ()\n",
+        "test_the_plan_names_the_version_an_update_deletes",
+    ),
+    ScriptDefect(
+        "the digest leaves out the version inventory",
+        MANAGE,
+        '            "versions": [version["VersionId"] for version in version_inventory(iam, policy["Arn"])],\n',
+        "",
+        "test_apply_refuses_a_digest_made_stale_by_a_new_policy_version",
+    ),
+    ScriptDefect(
+        "apply writes without reading the live state again",
+        MANAGE,
+        "    check_unchanged(iam, names, documents, compared, full)\n",
+        "",
+        "test_apply_checks_the_version_inventory_again_before_the_first_write",
     ),
     ScriptDefect(
         "a failed step stops the others",

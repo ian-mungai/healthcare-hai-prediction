@@ -3,7 +3,10 @@
 ``plan`` is the dry run: it renders the templates, reads IAM and prints what ``apply`` would do and one digest of it, and changes nothing. The digest
 covers the steps, the rendered documents and the live policy versions they were compared with. ``apply`` needs
 ``CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies`` and ``--digest`` with the digest the reviewed plan printed, and checks both before any AWS
-call. It then plans again and changes nothing unless the new digest matches, so it applies only what the owner reviewed.
+call. It then plans again and changes nothing unless the new digest matches, so it applies only what the owner reviewed. Each live policy in the digest
+carries its whole version inventory, and each step names the versions it deletes: IAM keeps five versions, so an update first deletes the oldest
+version that is not the default, and the plan names that version. Before the first write, apply reads the live state again and stops if it differs
+from the plan.
 
 Policies are customer-managed, one per service. They attach to two IAM groups (the managed policy quota per user is 10), and the project user joins
 both. The retired grouped policies are detached and deleted.
@@ -50,15 +53,22 @@ SessionFactory = Callable[..., Any]
 
 @dataclass(frozen=True)
 class Step:
-    """One change. ``kind`` is create_policy, update_policy, keep_policy, create_group, attach_policy, add_user, detach_user or retire_policy."""
+    """One change. ``kind`` is create_policy, update_policy, keep_policy, create_group, attach_policy, add_user, detach_user or retire_policy.
+
+    ``removes`` names the policy versions the step deletes, chosen by the plan; apply deletes exactly these.
+    """
 
     kind: str
     name: str
     target: str = ""
+    removes: tuple[str, ...] = ()
 
     def text(self) -> str:
         label = self.kind.replace("_", " ").upper()
-        return f"{label:16} {self.name}" + (f" -> {self.target}" if self.target else "")
+        text = f"{label:16} {self.name}" + (f" -> {self.target}" if self.target else "")
+        if self.removes:
+            text += f" (deletes version{'s' if len(self.removes) > 1 else ''} {', '.join(self.removes)})"
+        return text
 
 
 @dataclass(frozen=True)
@@ -192,14 +202,53 @@ def user_other_grants(iam: Any, names: Names) -> list[str]:
     return notes
 
 
-# The live state a plan compared with: each policy's default version and the SHA-256 of its stored document, or None when the policy does not exist.
-Compared = dict[str, dict[str, str] | None]
+# The live state a plan compared with, by policy name, or None when the policy does not exist: the default version, the version inventory and, for
+# a rendered policy, the SHA-256 of its stored document.
+Compared = dict[str, dict[str, Any] | None]
+
+
+def version_inventory(iam: Any, arn: str) -> list[dict[str, Any]]:
+    """Every version of a policy, oldest first."""
+    versions: list[dict[str, Any]] = iam.list_policy_versions(PolicyArn=arn)["Versions"]
+    return sorted(versions, key=lambda version: (version["CreateDate"], version["VersionId"]))
+
+
+def live_state(iam: Any, names: Names, documents: Mapping[str, Mapping[str, Any]], existing: Mapping[str, Mapping[str, Any]], full: bool) -> Compared:
+    """The live state of every policy a plan covers: the rendered policies and, in a full run, the retired policies that exist. Read-only."""
+    state: Compared = {}
+    for name in sorted(documents):
+        policy = existing.get(name)
+        if policy is None:
+            state[name] = None
+            continue
+        stored = canonical(stored_document(iam, policy))
+        state[name] = {
+            "version": policy["DefaultVersionId"],
+            "sha256": hashlib.sha256(stored.encode()).hexdigest(),
+            "versions": [version["VersionId"] for version in version_inventory(iam, policy["Arn"])],
+        }
+    if full:
+        retired = {names.policy(service) for service in RETIRED_SERVICES}
+        state |= {name: {"version": existing[name]["DefaultVersionId"]} for name in sorted(existing) if name in retired}
+    return state
+
+
+def pruned_version(iam: Any, policy: Mapping[str, Any]) -> tuple[str, ...]:
+    """The version an update deletes first: IAM keeps five, so with five the oldest version that is not the default goes. Read-only."""
+    versions = version_inventory(iam, policy["Arn"])
+    if len(versions) < MAX_POLICY_VERSIONS:
+        return ()
+    candidates = [version["VersionId"] for version in versions if not version["IsDefaultVersion"]]
+    if not candidates:
+        raise RuntimeError(f"{policy['PolicyName']} has five versions but no version that is not the default; nothing was changed")
+    return (candidates[0],)
 
 
 def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], full: bool) -> tuple[list[Step], Compared]:
-    """Compare the rendered policies with IAM and list the changes in the order ``apply`` runs them, with the live versions compared. Read-only.
+    """Compare the rendered policies with IAM and list the changes in the order ``apply`` runs them, with the live state compared. Read-only.
 
-    It stops before listing any change when a group holds a member, a managed policy or an inline policy beyond the intended ones.
+    It stops before listing any change when a group holds a member, a managed policy or an inline policy beyond the intended ones, or when an update
+    has no version it can delete.
     """
     try:
         iam.get_user(UserName=names.user)
@@ -212,17 +261,16 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
     if problems:
         raise RuntimeError("a group of the project user holds more than intended; nothing was changed:\n  - " + "\n  - ".join(problems))
     existing = local_policies(iam)
+    compared = live_state(iam, names, documents, existing, full)
     steps: list[Step] = []
-    compared: Compared = {}
     for name in sorted(documents):
-        policy = existing.get(name)
-        if policy is None:
-            compared[name] = None
+        policy, live = existing.get(name), compared[name]
+        if policy is None or live is None:
             steps.append(Step("create_policy", name))
-            continue
-        stored = canonical(stored_document(iam, policy))
-        compared[name] = {"version": policy["DefaultVersionId"], "sha256": hashlib.sha256(stored.encode()).hexdigest()}
-        steps.append(Step("keep_policy" if stored == canonical(documents[name]) else "update_policy", name))
+        elif live["sha256"] == hashlib.sha256(canonical(documents[name]).encode()).hexdigest():
+            steps.append(Step("keep_policy", name))
+        else:
+            steps.append(Step("update_policy", name, removes=pruned_version(iam, policy)))
     wanted: dict[str, list[str]] = {}
     for name in sorted(documents):
         wanted.setdefault(group_of(names, names.service(name)), []).append(name)
@@ -243,7 +291,6 @@ def plan_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Map
         steps += [Step("detach_user", name, names.user) for name in sorted(direct & set(documents))]
         retired = {names.policy(service) for service in RETIRED_SERVICES}
         steps += [Step("retire_policy", name) for name in sorted(existing) if name in retired]
-        compared |= {name: {"version": existing[name]["DefaultVersionId"]} for name in sorted(existing) if name in retired}
     return steps, compared
 
 
@@ -253,24 +300,21 @@ def sent_document(document: Mapping[str, Any]) -> str:
 
 
 def plan_digest(steps: list[Step], documents: Mapping[str, Mapping[str, Any]], compared: Compared) -> str:
-    """The SHA-256 of what a plan shows: its steps, the exact rendered documents and the live policy versions they were compared with."""
+    """The SHA-256 of what a plan shows: its steps with the versions they delete, the exact rendered documents and the live state compared."""
     payload = {
-        "steps": [[step.kind, step.name, step.target] for step in steps],
+        "steps": [[step.kind, step.name, step.target, list(step.removes)] for step in steps],
         "documents": {name: sent_document(documents[name]) for name in sorted(documents)},
         "live": compared,
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def remove_oldest_nondefault_version(iam: Any, policy_arn: str) -> None:
-    """IAM keeps five versions, so free one before creating the sixth."""
-    versions = iam.list_policy_versions(PolicyArn=policy_arn)["Versions"]
-    if len(versions) < MAX_POLICY_VERSIONS:
-        return
-    candidates = sorted((version for version in versions if not version["IsDefaultVersion"]), key=lambda version: version["CreateDate"])
-    if not candidates:
-        raise RuntimeError("the policy has five versions but no removable nondefault version")
-    iam.delete_policy_version(PolicyArn=policy_arn, VersionId=candidates[0]["VersionId"])
+def check_unchanged(iam: Any, names: Names, documents: Mapping[str, Mapping[str, Any]], compared: Compared, full: bool) -> None:
+    """Stop before the first write when the live state of any planned policy differs from the plan. Read-only."""
+    current = live_state(iam, names, documents, local_policies(iam), full)
+    changed = sorted(name for name in {*current, *compared} if current.get(name) != compared.get(name))
+    if changed:
+        raise RuntimeError(f"these policies changed after the plan was read: {', '.join(changed)}; nothing was changed. Run plan again, review it and apply.")
 
 
 def retire(iam: Any, names: Names, policy: Mapping[str, Any]) -> str:
@@ -304,7 +348,8 @@ def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Map
             Description=f"Project profile permissions: {names.service(step.name)}",
         )
     elif step.kind == "update_policy":
-        remove_oldest_nondefault_version(iam, arn)
+        for version in step.removes:
+            iam.delete_policy_version(PolicyArn=arn, VersionId=version)
         iam.create_policy_version(PolicyArn=arn, PolicyDocument=sent_document(documents[step.name]), SetAsDefault=True)
     elif step.kind == "create_group":
         iam.create_group(GroupName=step.name)
@@ -321,8 +366,11 @@ def apply_step(iam: Any, names: Names, account: str, documents: Mapping[str, Map
     return "completed"
 
 
-def apply_steps(iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], steps: list[Step]) -> list[StepResult]:
-    """Run the steps in order; a failed step is recorded and the others still run."""
+def apply_steps(
+    iam: Any, names: Names, account: str, documents: Mapping[str, Mapping[str, Any]], steps: list[Step], compared: Compared, full: bool
+) -> list[StepResult]:
+    """Check that the live state still matches the plan, then run the steps in order; a failed step is recorded and the others still run."""
+    check_unchanged(iam, names, documents, compared, full)
     existing = local_policies(iam)
     results = []
     for step in steps:
@@ -416,7 +464,7 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
             f"the reviewed digest {arguments.digest} does not match this plan's digest {digest}: the templates or the live policies changed since the "
             "reviewed plan, and nothing was changed. Run plan again, review it and apply with its digest."
         )
-    results = apply_steps(iam, names, storage["expected_account_id"], documents, steps)
+    results = apply_steps(iam, names, storage["expected_account_id"], documents, steps, compared, full=selected is None)
     for result in results:
         sys.stdout.write(f"{result.status.upper():9} {result.step.text()}: {result.detail}\n")
     failures = [result for result in results if result.status == "failed"]

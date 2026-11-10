@@ -83,6 +83,13 @@ class FakeIam:
         }
         self.policies[name]["document"] = document
 
+    def add_version(self, name: str, created: datetime) -> str:
+        """Another administrator adds a version that is not the default: the stored document and the default version stay the same."""
+        versions = self.policies[name]["versions"]
+        version_id = f"v{len(versions) + 1}"
+        versions.append({"VersionId": version_id, "IsDefaultVersion": False, "CreateDate": created})
+        return version_id
+
     def get_paginator(self, name: str) -> Paginator:
         listing: dict[str, tuple[str, Callable[..., list[Any]]]] = {
             "list_policies": ("Policies", self.local_policies),
@@ -105,7 +112,10 @@ class FakeIam:
         return [{"UserName": user} for user in sorted(self.group_users.get(GroupName, set()))]
 
     def local_policies(self, Scope: str) -> list[dict[str, Any]]:
-        return [{"PolicyName": n, "Arn": self.arn(n), "DefaultVersionId": p["versions"][-1]["VersionId"]} for n, p in sorted(self.policies.items())]
+        return [{"PolicyName": n, "Arn": self.arn(n), "DefaultVersionId": self.default_version(n)} for n in sorted(self.policies)]
+
+    def default_version(self, name: str) -> str:
+        return next(version["VersionId"] for version in self.policies[name]["versions"] if version["IsDefaultVersion"])
 
     def get_user(self, **_: Any) -> dict[str, Any]:
         if not self.user_exists:
@@ -516,6 +526,63 @@ def test_an_update_frees_a_version_slot_first_and_makes_the_new_version_the_defa
     check(len(iam.policies[name]["versions"]) == 5 and iam.policies[name]["versions"][-1]["IsDefaultVersion"], "the new version must be the default")
 
 
+def test_the_plan_names_the_version_an_update_deletes(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    iam = applied_iam(env_file)
+    name = f"{PROJECT}_sns_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=5)
+    capsys.readouterr()
+    check(manage_policies.run(arguments(env_file, "plan", policies=["sns"]), {}, FakeSession(iam)) == 0, "the plan must succeed")
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.startswith("UPDATE POLICY")]
+    check(lines == [f"UPDATE POLICY    {name} (deletes version v1)"], f"the plan must name the version the update deletes: {lines}")
+
+
+def stale_after_replan(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
+    """Make ``change`` happen after each digest is computed: in an apply, after the new plan and before the first write. Patch after the plan."""
+    original = manage_policies.plan_digest
+
+    def changed_after_digest(*given: Any, **named: Any) -> str:
+        digest = original(*given, **named)
+        change()
+        return digest
+
+    monkeypatch.setattr(manage_policies, "plan_digest", changed_after_digest)
+
+
+def test_apply_refuses_a_digest_made_stale_by_a_new_policy_version(env_file: Path) -> None:
+    # Four versions, so the reviewed plan deletes none. A fifth version added before the apply must not let the apply delete the oldest one.
+    iam = applied_iam(env_file)
+    name = f"{PROJECT}_sns_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=4)
+    digest = planned_digest(env_file, iam, policies=["sns"])
+    iam.add_version(name, datetime(2026, 3, 1, tzinfo=UTC))
+    refused_digest(env_file, iam, digest, policies=["sns"])
+    check([v["VersionId"] for v in iam.policies[name]["versions"]] == ["v1", "v2", "v3", "v4", "v5"], "no version may be deleted")
+    # Any change to the inventory makes the digest stale, also one that leaves the plan's steps the same: three versions become four.
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=3)
+    digest = planned_digest(env_file, iam, policies=["sns"])
+    iam.add_version(name, datetime(2026, 3, 1, tzinfo=UTC))
+    refused_digest(env_file, iam, digest, policies=["sns"])
+
+
+def test_apply_checks_the_version_inventory_again_before_the_first_write(env_file: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The reviewed plan deletes v1 to free a slot. If the inventory changes after the new plan and before the first write, apply must stop
+    # instead of choosing another version to delete or skipping the deletion.
+    iam = applied_iam(env_file)
+    name = f"{PROJECT}_sns_policy"
+    iam.add_policy(name, {"Version": "2012-10-17", "Statement": []}, versions=5)
+    digest = planned_digest(env_file, iam, policies=["sns"])
+    iam.calls.clear()
+
+    def remove_v2() -> None:
+        iam.policies[name]["versions"] = [v for v in iam.policies[name]["versions"] if v["VersionId"] != "v2"]
+
+    stale_after_replan(monkeypatch, remove_v2)
+    with pytest.raises(RuntimeError) as error:
+        manage_policies.run(arguments(env_file, "apply", policies=["sns"], digest=digest), CONFIRMED, FakeSession(iam))
+    check(iam.writes() == [], f"a changed inventory must stop the apply before any write: {iam.writes()}")
+    check(name in str(error.value) and "plan again" in str(error.value), f"the refusal must name the policy and the remedy: {error.value}")
+
+
 def test_a_failed_step_is_reported_and_the_others_still_run(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     iam.fail_on = {f"create_policy {PROJECT}_ecr_policy"}
@@ -654,9 +721,14 @@ def test_apply_refuses_a_digest_made_stale_by_a_live_policy_change(env_file: Pat
     iam.create_policy_version(PolicyArn=iam.arn(name), PolicyDocument=json.dumps({"Version": "2012-10-17", "Statement": []}))
     refused_digest(env_file, iam, digest)
     check(iam.policies[name]["document"] == {"Version": "2012-10-17", "Statement": []}, "the changed policy must stay as it is")
-    # The same plan steps over another live version: the template is restored as a new version, so only the version id differs.
+    # The same plan steps over another default version: two versions hold the reviewed document and the default moves from one to the other, so
+    # only the default version id differs.
     iam.create_policy_version(PolicyArn=iam.arn(name), PolicyDocument=json.dumps(reviewed))
-    check(planned_digest(env_file, iam) != digest, "a plan over another live version must print another digest")
+    iam.create_policy_version(PolicyArn=iam.arn(name), PolicyDocument=json.dumps(reviewed))
+    digest = planned_digest(env_file, iam)
+    for version in iam.policies[name]["versions"]:
+        version["IsDefaultVersion"] = version["VersionId"] == "v3"
+    check(planned_digest(env_file, iam) != digest, "a plan over another default version must print another digest")
     refused_digest(env_file, iam, digest)
 
 
