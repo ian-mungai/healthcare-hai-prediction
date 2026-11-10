@@ -5,11 +5,17 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_transform_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
 
 A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features and feature store the
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
+
+A trigger creates the run before it polls, so a trigger that fails after the create can leave a queued or running run behind. ``--status`` reads the state of
+one run (``absent`` when Airflow holds none) and its task states, and changes nothing. ``--settle`` pauses the DAG, so the scheduler starts nothing more of
+it, marks a run that has not ended failed and reads it again until it is terminal; an absent or ended run is left as it is. Both end at ``--wait-seconds``.
 
 The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
@@ -155,6 +161,38 @@ def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float
     return {"dag": dag, "run_id": run_id, "state": run["state"], "seconds": round(time.monotonic() - started, 1), "tasks": tasks}
 
 
+def run_state(api: AirflowApi, dag: str, run_id: str) -> dict[str, object]:
+    """The run's state and task states, or the state ``absent`` when Airflow answers that it holds no such run."""
+    try:
+        record = api.run(dag, run_id)
+    except AirflowApiError as error:
+        if "status 404" in str(error):
+            return {"dag": dag, "run_id": run_id, "state": "absent", "tasks": {}}
+        raise
+    return {"dag": dag, "run_id": run_id, "state": record["state"], "tasks": api.task_states(dag, run_id)}
+
+
+def settle(api: AirflowApi, dag: str, run_id: str, deadline: float, wait_seconds: float) -> dict[str, object]:
+    """Pause the DAG, mark the run failed unless it is absent or has ended, and read it until it is terminal; every call ends at the deadline."""
+    api.pause(dag)
+    found = run_state(api, dag, run_id)
+    if found["state"] == "absent" or found["state"] in TERMINAL_RUN_STATES:
+        return found | {"paused": True, "marked_failed": False}
+    api.mark_failed(dag, run_id)
+    wait_for_end(api, dag, run_id, deadline, wait_seconds)
+    return run_state(api, dag, run_id) | {"paused": True, "marked_failed": True}
+
+
+def inspect(action: str, dag: str, run_id: str, deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
+    """``status`` or ``settle`` of one run, with the API's answers turned into a TriggerError that names the run and a safe cause."""
+    try:
+        return run_state(api, dag, run_id) if action == "status" else settle(api, dag, run_id, deadline, wait_seconds)
+    except AirflowApiError as error:
+        raise TriggerError(f"{dag} run {run_id}: {action}: {safe_cause(error)}") from None
+    except (ValueError, KeyError, TypeError):
+        raise TriggerError(f"{dag} run {run_id}: {action}: the API answered in an unexpected way") from None
+
+
 def read_token_secret(deadline: float) -> str:
     """The Airflow token secret, read with the time that remains before the command's deadline; the store setup and the read both count."""
     remaining = deadline - time.monotonic()
@@ -169,7 +207,7 @@ def read_token_secret(deadline: float) -> str:
 def main(argv: list[str] | None = None) -> int:
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     cli.add_argument("--dag", choices=DAGS, required=True)
-    cli.add_argument("--mode", required=True, help="the mode the workflow's form accepts: real for every workflow here")
+    cli.add_argument("--mode", help="the mode of a new run: real for every workflow here; required for a trigger, refused with --status or --settle")
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
@@ -182,11 +220,27 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
     cli.add_argument("--wait-seconds", type=float, required=True, help=f"the deadline of the whole wait, at most {MAX_WAIT_SECONDS} s")
+    action = cli.add_mutually_exclusive_group()
+    action.add_argument("--status", action="store_true", help="read the state of the run --run-id and change nothing")
+    action.add_argument("--settle", action="store_true", help="pause the DAG and mark the run --run-id failed unless it is absent or has ended")
     args = cli.parse_args(argv)
+    inspecting = "status" if args.status else "settle" if args.settle else None
+    if inspecting and (args.run_id is None or args.mode is not None):
+        cli.error(f"--{inspecting} needs --run-id and takes no --mode")
+    if not inspecting and args.mode is None:
+        cli.error("a trigger needs --mode")
     try:
         if not 0 < args.wait_seconds <= MAX_WAIT_SECONDS:
             raise TriggerError(f"refused: --wait-seconds must be above 0 and at most {MAX_WAIT_SECONDS}")
         deadline = time.monotonic() + args.wait_seconds
+        if inspecting:
+            if not RUN_ID.fullmatch(args.run_id):
+                raise TriggerError(f"refused: {args.run_id!r} is not a run ID")
+            found = inspect(
+                inspecting, args.dag, args.run_id, deadline, args.wait_seconds, AirflowApi(api_port(), read_token_secret(deadline), deadline=deadline)
+            )
+            sys.stdout.write(json.dumps(found) + "\n")
+            return 0
         training = None
         if args.dag == "training_dag":
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}

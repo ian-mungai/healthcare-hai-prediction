@@ -7,6 +7,7 @@
     "\"$python_bin\" -B -m scripts.orchestration.sdk_supervisor_cases --mode native --source-smoke --output \"$quality_output/sdk_supervisor_cases/report.json\"",
     "\"$python_bin\" -B -m scripts.orchestration.sdk_supervisor_cases --mode static --source-smoke --output \"$quality_output/sdk_supervisor_cases/report.json\"",
     "\"$python_bin\" -B -m scripts.orchestration.sdk_worker_cases --check-fixtures --fixtures \"$repo_root/data_contracts/orchestration/examples/sdk_worker_cases\" --revision \"$(git rev-parse HEAD)\" --output \"$quality_output/sdk_worker_cases/report.json\"",
+    "\"$python_bin\" -B -m scripts.orchestration.trigger_dag_cases --output \"$quality_output/trigger_dag_cases/report.json\"",
     "\"$python_bin\" -B -m scripts.serving.run_serving_checks --output \"$quality_output/serving_checks\"",
     "\"$python_bin\" -B -m scripts.streamlit_app.run_streamlit_checks --output \"$quality_output/streamlit_checks\"",
     "\"$python_bin\" -m monitoring.run_drift_e2e",

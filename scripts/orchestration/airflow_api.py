@@ -119,6 +119,10 @@ class AirflowApi:
         """Let the scheduler run the DAG's runs (DAGs start paused)."""
         self.request("PATCH", f"/dags/{dag_id}", {"is_paused": False})
 
+    def pause(self, dag_id: str) -> None:
+        """Stop the scheduler from starting the DAG's runs and tasks; a queued run stays queued until it is marked or the DAG is unpaused."""
+        self.request("PATCH", f"/dags/{dag_id}", {"is_paused": True})
+
     def trigger(self, dag_id: str, dag_run_id: str, conf: dict[str, Any]) -> dict[str, Any]:
         """Start a manual run with a run ID and a configuration."""
         started: dict[str, Any] = self.request("POST", f"/dags/{dag_id}/dagRuns", {"dag_run_id": dag_run_id, "logical_date": None, "conf": conf})

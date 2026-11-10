@@ -22,6 +22,7 @@ orchestration_checks() {
   timed "orchestration_checks: ECS placement static proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof S
   timed "orchestration_checks: ECS placement handler proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof D
   timed "orchestration_checks: task guard cases" "$python_bin" -m scripts.orchestration.task_guard_cases
+  timed "orchestration_checks: trigger_dag cases" "$python_bin" -B -m scripts.orchestration.trigger_dag_cases --output "$quality_output/trigger_dag_cases/report.json"
   timed "orchestration_checks: direct ECS launch E2E" "$python_bin" -m scripts.orchestration.run_ecs_launch_e2e
   timed "orchestration_checks: Airflow launch mode E2E" "$python_bin" -m scripts.orchestration.run_airflow_mode_e2e
   timed "orchestration_checks: layer driver E2E" "$python_bin" -m scripts.lakehouse.run_layer_run_e2e

@@ -45,6 +45,7 @@ MUTANTS = (
     ),
     ("an approval without its code digest", "--run <GOLD_RUN_ID> --code-sha256 <CODE_SHA256> --out", "--run <GOLD_RUN_ID> --out"),
     ("a gold report without its output path", " --out <RECORD_DIR>/qualification_gold.json", ""),
+    ("a mistyped settle option", "--run-id <RUN_ID> --settle --wait-seconds 600 >", "--run-id <RUN_ID> --settled --wait-seconds 600 >"),
 )
 
 
@@ -96,6 +97,35 @@ def staged_before_trigger(body: str, layer: str) -> bool:
     return min(staged, archive) >= 0 and trigger >= 0 and max(staged, archive) < trigger
 
 
+def failure_path_checks(step: str) -> dict[str, bool]:
+    """The failure path settles the Airflow run before it drains and stops: a missing launch record is an unconfirmed state, never a refusal; the run's
+    state is read and settled over the forward; when Airflow cannot be reached, a restart hold keeps the run from launching a job at the next start."""
+
+    def at(needle: str) -> int:
+        return step.find(needle)
+
+    order = [
+        at("lakehouse/launch_records/<RUN_ID>/"),
+        at("trigger_dag --dag <DAG_ID> --run-id <RUN_ID> --status"),
+        at("trigger_dag --dag <DAG_ID> --run-id <RUN_ID> --settle"),
+        at("inputs/code_run.json"),
+        at("aws_tasks list"),
+        at("host_session stop"),
+    ]
+    return {
+        "the failure path calls a missing launch record an unconfirmed launch state, not a refusal": "unconfirmed" in step
+        and "refused before any ECS call" not in step,
+        f"the failure path reads the records, then the run's status, settles it, holds it, drains and stops ({order})": all(position >= 0 for position in order)
+        and order == sorted(order),
+        "the settle is bounded and its success is a terminal or absent run": all(
+            word in step for word in ("--settle --wait-seconds 600", "--status --wait-seconds 60", "`failed`", "`absent`")
+        ),
+        "the restart hold binds the run to a code run with nothing staged and is recorded": all(
+            word in step for word in ("restart hold", "<HOLD_RUN_ID>", "restart_hold.txt", "code_digest_not_staged")
+        ),
+    }
+
+
 def structure_checks(body: str) -> dict[str, bool]:
     steps = steps_of(body)
     numbers = [int(step.split(".", 1)[0]) for step in steps]
@@ -141,7 +171,7 @@ def structure_checks(body: str) -> dict[str, bool]:
     checks[f"the forward joins local port {local} (trigger_dag) to the API server's port {remote}"] = (
         remote > 0 and body.count(f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}') >= 2
     )
-    waits = [float(value) for value in re.findall(r"--wait-seconds ([0-9]+)", body)]
+    waits = [float(value) for value in re.findall(r"--mode real .*?--wait-seconds ([0-9]+)", body)]
     limit = max_wait_seconds()
     checks[f"every trigger wait is within trigger_dag's limit of {limit:g} s ({waits})"] = (
         limit > 0 and len(waits) == 2 and all(0 < wait <= limit for wait in waits)
@@ -153,6 +183,13 @@ def structure_checks(body: str) -> dict[str, bool]:
     )
     checks["the failure path is bounded and names what it establishes"] = failure >= 0 and all(
         word in steps[failure] for word in ("at most", "launch_records", "Ctrl-C", "no instance", "new run ID")
+    )
+    checks |= failure_path_checks(steps[failure] if failure >= 0 else "")
+    planted = re.sub(r"(?m)^.*trigger_dag .*--settle.*\n", "", steps[failure]) if failure >= 0 else ""
+    checks["planted: a failure path without the settle fails the settle order case"] = bool(planted) and not all(failure_path_checks(planted).values())
+    forward_step = index("ssm start-session", "AWS-StartPortForwardingSession")
+    checks["a restart hold of an earlier session is settled right after the forward and before any staging"] = forward_step >= 0 and all(
+        word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle")
     )
     trigger = index(*trigger_of("silver"))
     checks["the silver trigger step names the token secret that a local start rotates"] = trigger >= 0 and all(
