@@ -430,6 +430,18 @@ variable "host_job_cap_parameter_name" {
   }
 }
 
+variable "host_launch_hold_parameter_name" {
+  description = "Parameter Store name of the launch hold. The services apply command (scripts/infrastructure/services_apply.py, run by terraform.sh --services apply) sets it before the apply changes anything and clears it only after the ECS services reach steady state. The launch preflight and the fit probe refuse every host launch while it is set or missing. Not managed by Terraform, so an apply never clears it."
+  type        = string
+  default     = "/healthcare_hai_prediction/host_launch_hold"
+  nullable    = false
+
+  validation {
+    condition     = length(var.host_launch_hold_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.host_launch_hold_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.host_launch_hold_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "host_system_reserve_mib" {
   description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The job room (output host_job_memory_mib) is the usable memory less this margin and the always-on service reservations."
   type        = number

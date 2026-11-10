@@ -46,6 +46,18 @@ variable "host_job_cap_parameter_name" {
   }
 }
 
+variable "host_launch_hold_parameter_name" {
+  description = "Parameter Store name of the launch hold that the services apply command sets and clears (the services variable of the same name). The Airflow launch role may read this one name; the project user may put and read it."
+  type        = string
+  default     = "/healthcare_hai_prediction/host_launch_hold"
+  nullable    = false
+
+  validation {
+    condition     = length(var.host_launch_hold_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.host_launch_hold_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.host_launch_hold_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 locals {
   # The task role each family runs with, as the host definitions of infra/jobs take them. Promote reuses the training role.
   airflow_launch_family_roles = {
@@ -70,17 +82,18 @@ locals {
     if contains(keys(local.airflow_launch_request_files), family)
   ]
   airflow_launch_policy_values = merge(local.owner_policy_values, {
-    PROJECT_TAG                    = local.platform_project_tag
-    CLUSTER_ARN                    = "${local.ecs_arn}:cluster/${local.cluster_name}"
-    CONTAINER_INSTANCE_ARN_PATTERN = "${local.ecs_arn}:container-instance/${local.cluster_name}/*"
-    TASK_ARN_PATTERN               = "${local.ecs_arn}:task/${local.cluster_name}/*"
-    LOG_GROUP_NAME                 = format(local.platform_name, "jobs")
-    DATA_BUCKET_NAME               = var.data_bucket_name
-    HOST_JOB_CAP_PARAMETER_NAME    = var.host_job_cap_parameter_name
-    RECORD_PREFIX                  = var.airflow_launch_record_prefix
-    REQUEST_OBJECT_ARNS            = jsonencode(local.airflow_launch_request_arns)
-    FAMILIES                       = jsonencode(local.airflow_launch_families_sorted)
-    TASK_DEFINITION_ARNS           = jsonencode([for family in local.airflow_launch_families_sorted : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}_host:*"])
+    PROJECT_TAG                     = local.platform_project_tag
+    CLUSTER_ARN                     = "${local.ecs_arn}:cluster/${local.cluster_name}"
+    CONTAINER_INSTANCE_ARN_PATTERN  = "${local.ecs_arn}:container-instance/${local.cluster_name}/*"
+    TASK_ARN_PATTERN                = "${local.ecs_arn}:task/${local.cluster_name}/*"
+    LOG_GROUP_NAME                  = format(local.platform_name, "jobs")
+    DATA_BUCKET_NAME                = var.data_bucket_name
+    HOST_JOB_CAP_PARAMETER_NAME     = var.host_job_cap_parameter_name
+    HOST_LAUNCH_HOLD_PARAMETER_NAME = var.host_launch_hold_parameter_name
+    RECORD_PREFIX                   = var.airflow_launch_record_prefix
+    REQUEST_OBJECT_ARNS             = jsonencode(local.airflow_launch_request_arns)
+    FAMILIES                        = jsonencode(local.airflow_launch_families_sorted)
+    TASK_DEFINITION_ARNS            = jsonencode([for family in local.airflow_launch_families_sorted : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}_host:*"])
     ROLE_ARNS = jsonencode(sort(distinct(concat(
       ["arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_execution")}"],
       [for family in local.airflow_launch_families_sorted : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, local.airflow_launch_family_roles[family])}"]

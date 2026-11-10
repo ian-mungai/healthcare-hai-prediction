@@ -135,6 +135,10 @@ HOST_JOB_CAP = "host_job_cap"
 HOST_JOB_CAP_STATEMENT = "ManageHostJobCapParameter"
 HOST_JOB_CAP_LISTING = "ListParameterMetadataForTerraform"
 HOST_JOB_CAP_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource")
+# Launch hold during services applies (owner A, Nov 10 2026): the services apply command puts and reads the hold; it never deletes or tags it.
+HOST_LAUNCH_HOLD = "host_launch_hold"
+HOST_LAUNCH_HOLD_STATEMENT = "SetHostLaunchHold"
+HOST_LAUNCH_HOLD_ACTIONS = ("PutParameter", "GetParameter")
 HOST_JOB_CAP_NEIGHBORS = ("host_job_cap_extra", "host_job_cap/child", "host_job_capacity", "host_job")
 OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
 OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
@@ -287,6 +291,8 @@ def approved_requests() -> dict[str, list[Request]]:
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
     for action in HOST_JOB_CAP_ACTIONS:
         ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None))
+    for action in HOST_LAUNCH_HOLD_ACTIONS:
+        ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_LAUNCH_HOLD), region=None))
     ops["ssmcap"].append(request("ssm:DescribeParameters", "*"))
     add(
         "ssm",
@@ -1171,6 +1177,17 @@ def host_job_cap_cases() -> Iterator[Case]:
         for action in ("DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource"):
             yield Case(f"host job cap: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
     yield Case("host job cap: list parameter metadata", request("ssm:DescribeParameters", "*"), True, HOST_JOB_CAP_LISTING)
+    for action in PARAMETER_ACTIONS:
+        allowed = action in HOST_LAUNCH_HOLD_ACTIONS
+        yield Case(
+            f"launch hold: {action} {HOST_LAUNCH_HOLD}",
+            request(f"ssm:{action}", parameter(HOST_LAUNCH_HOLD), region=None),
+            allowed,
+            HOST_LAUNCH_HOLD_STATEMENT if allowed else None,
+        )
+    for name in ("host_launch_hold_extra", "host_launch_hold/child", "host_launch"):
+        for action in HOST_LAUNCH_HOLD_ACTIONS:
+            yield Case(f"launch hold: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
     yield Case("host job cap: no parameter listing in another region", request("ssm:DescribeParameters", "*", region="eu-west-2"), False)
     key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
     for action in ("Decrypt", "Encrypt", "GenerateDataKey"):

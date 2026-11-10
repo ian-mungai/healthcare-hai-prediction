@@ -42,6 +42,11 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    (``revision_within_the_host_job_cap_runs``). The production reader that ``airflow_steps.services()`` wires sends one exact GetParameter per
    launch and refuses on a missing or denied parameter (``production_reader_reads_the_host_job_cap``), and a constant reader in its place fails
    those checks (``a_constant_cap_reader_is_caught``).
+12. Launch hold during services applies (owner A, Nov 10 2026): the preflight refuses every host launch while the hold is set or its parameter is
+   missing (``launch_during_the_hold_is_refused``); the fit probe rereads the hold and the cap before every RunTask, so a hold set or a cap lowered
+   after the preflight sends no RunTask (``a_hold_set_after_the_preflight_withholds_runtask``, ``a_cap_lowered_during_the_apply_withholds_runtask``);
+   a raised cap lets the next launch run (``a_cap_raised_by_the_apply_lets_the_next_launch_run``) and a cleared hold lets a launch run
+   (``a_cleared_hold_lets_the_launch_run``).
 """
 
 from __future__ import annotations
@@ -202,6 +207,7 @@ class Rig:
             task_definition=self.adapter.task_definition,
             host_job_cap=self.read_host_cap,
         )
+        self.preflight.host_launch_hold = lambda: "clear"  # no services apply is running; held_rig puts the production hold reader here
         self.services = steps.LaunchServices(
             preflight=self.preflight,
             launcher=self.launcher,
@@ -1021,6 +1027,127 @@ def a_constant_cap_reader_is_caught() -> None:
     raise AssertionError("a constant 999999 MiB cap reader passed the production reader checks")
 
 
+HOLD_PARAMETER = "/healthcare_hai_prediction/host_launch_hold"
+CLEAR = "clear"
+HELD = "held by services_apply at 2026-11-10T20:00:00Z"
+
+
+class LaunchSsm:
+    """The SSM client of the production launch services for the launch hold and the host job cap: a queue of answers per name (the last repeats),
+    every request recorded in order, and an access refusal for any other name."""
+
+    def __init__(self, answers: dict[str, list[str | Exception]]) -> None:
+        self.answers = {name: list(values) for name, values in answers.items()}
+        self.requests: list[dict[str, Any]] = []
+
+    def get_parameter(self, **request: Any) -> dict[str, Any]:
+        self.requests.append(dict(request))
+        queue = self.answers.get(str(request.get("Name")))
+        if not queue:
+            raise client_error("AccessDeniedException", "GetParameter", f"the launch role may not read {request.get('Name')}")
+        answer = queue.pop(0) if len(queue) > 1 else queue[0]
+        if isinstance(answer, Exception):
+            raise answer
+        return {"Parameter": {"Name": request["Name"], "Type": "String", "Value": answer}}
+
+    def reads(self, name: str) -> int:
+        return sum(1 for item in self.requests if item == {"Name": name})
+
+
+def held_rig(hold: list[str | Exception], cap: list[str | Exception]) -> tuple[Rig, LaunchSsm]:
+    """A rig whose preflight hold and cap readers and whose fit probe wrapper are the production ones from ``airflow_steps.services()``, wired to a
+    stand-in SSM client. Before the launch hold exists the production pieces are missing and the case fails on that, not on a type error."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+    ssm = LaunchSsm({HOLD_PARAMETER: hold, CAP_PARAMETER: cap})
+
+    class Session:
+        def __init__(self, region_name: str) -> None:
+            self.region = region_name
+
+        def client(self, name: str, config: Any = None) -> Any:
+            return ssm if name == "ssm" else FakeEcs() if name == "ecs" else FakeLogs() if name == "logs" else FakeS3()
+
+    with tempfile.TemporaryDirectory() as scratch:
+        environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
+        environment |= {"HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER, "HAI_LAUNCH_HOST_HOLD_PARAMETER": HOLD_PARAMETER, "HAI_LAUNCH_HOST_CAPACITY": CAPACITY}
+        provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
+        with (
+            mock.patch.dict("os.environ", environment, clear=True),
+            mock.patch.dict(sys.modules, {"orchestration.ecs_launch_provider": provider}),
+            mock.patch("boto3.session.Session", Session),
+        ):
+            built = steps.services()
+    require("HAI_LAUNCH_HOST_HOLD_PARAMETER" in steps.SETTINGS, "the launch hold parameter name is not a required launch setting")
+    hold_reader = getattr(built.preflight, "host_launch_hold", None)
+    require(callable(hold_reader), "the production preflight has no launch hold reader")
+    require(callable(getattr(steps, "host_fit_probe", None)), "airflow_steps has no host_fit_probe that rechecks the hold and the cap before RunTask")
+    probe = built.launcher.probe
+    require(
+        getattr(probe, "hold", None) is hold_reader and getattr(probe, "cap", None) is built.preflight.host_job_cap,
+        "the production fit probe does not recheck the production hold and cap readers",
+    )
+    require(not ssm.requests, f"building the launch services read SSM before any launch: {ssm.requests}")
+    rig = Rig()
+    rig.preflight.host_job_cap = built.preflight.host_job_cap
+    rig.preflight.host_launch_hold = hold_reader
+    rig.launcher.probe = steps.host_fit_probe(rig.launcher.probe, hold_reader, built.preflight.host_job_cap)
+    return rig, ssm
+
+
+def launch_during_the_hold_is_refused() -> None:
+    """Launch hold during services applies (owner A, Nov 10 2026): while the hold is set, or while the hold parameter is missing (fail closed), the
+    preflight refuses every host launch by name before any record or ECS call: zero tasks."""
+    for hold, named in (([HELD], "launch hold"), ([client_error("ParameterNotFound", "GetParameter")], "launch hold")):
+        rig, ssm = held_rig(hold, [str(JOB_MEMORY)])
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require(named in str(error), f"the hold {hold[0]!r} is not named: {error}")
+        require(ssm.reads(HOLD_PARAMETER) >= 1, f"the hold was not read: {ssm.requests}")
+        require(rig.tasks_started() == 0 and not rig.records.calls and not rig.ecs.count("run_task"), "a launch went ahead during the hold")
+
+
+def a_hold_set_after_the_preflight_withholds_runtask() -> None:
+    """Forced order: the preflight reads a clear hold, then the services apply sets the hold before the launcher's fit check. The fit probe rereads
+    the hold before every RunTask, so no RunTask is sent; the launch closes without a task when its window ends."""
+    rig, ssm = held_rig([CLEAR, HELD], [str(JOB_MEMORY)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(ssm.reads(HOLD_PARAMETER) >= 2, f"the fit probe did not reread the hold: {ssm.requests}")
+    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent after the hold was set")
+
+
+def a_cap_lowered_during_the_apply_withholds_runtask() -> None:
+    """Forced order, cap decrease: the preflight accepts the revision at the old cap, then the apply lowers the cap below the job memory before
+    the fit check. The probe gives the job no more than the current cap, so no RunTask is sent and the launch closes without a task."""
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY), str(JOB_MEMORY - 1024)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        refuses(Exception, lambda: current.step("pin_bronze"))
+    require(ssm.reads(CAP_PARAMETER) >= 2, f"the fit probe did not reread the cap: {ssm.requests}")
+    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent above the lowered cap")
+
+
+def a_cap_raised_by_the_apply_lets_the_next_launch_run() -> None:
+    """Forced order, cap increase: a launch above the old cap is refused; after the apply raises the cap and clears the hold, the next launch runs
+    once."""
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY - 1), str(JOB_MEMORY + 1024)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+    require("host job cap" in str(error) and rig.tasks_started() == 0, f"the launch above the old cap was not refused: {error}")
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "the launch after the cap increase did not run")
+    require(rig.tasks_started() == 1, f"the launch after the cap increase started {rig.tasks_started()} tasks")
+
+
+def a_cleared_hold_lets_the_launch_run() -> None:
+    """After the apply reaches steady state the hold is cleared: the launch runs, and the hold and the cap are read by the preflight and before the
+    RunTask."""
+    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)])
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "a launch with a clear hold did not run")
+    require(rig.tasks_started() == 1, "a launch with a clear hold did not start exactly one task")
+    require(ssm.reads(HOLD_PARAMETER) >= 2 and ssm.reads(CAP_PARAMETER) >= 2, f"the hold and the cap were not read twice: {ssm.requests}")
+
+
 def bound_revision_runs_by_its_exact_arn() -> None:
     """A bound revision is described once and runs by its exact ARN. A revision registered after the check (here an unbound one, made latest while
     the task starts) never runs in its place: the RunTask call names the checked revision, not the family."""
@@ -1618,6 +1745,11 @@ CASES: dict[str, Callable[[], None]] = {
     "revision_within_the_host_job_cap_runs": revision_within_the_host_job_cap_runs,
     "production_reader_reads_the_host_job_cap": production_reader_reads_the_host_job_cap,
     "a_constant_cap_reader_is_caught": a_constant_cap_reader_is_caught,
+    "launch_during_the_hold_is_refused": launch_during_the_hold_is_refused,
+    "a_hold_set_after_the_preflight_withholds_runtask": a_hold_set_after_the_preflight_withholds_runtask,
+    "a_cap_lowered_during_the_apply_withholds_runtask": a_cap_lowered_during_the_apply_withholds_runtask,
+    "a_cap_raised_by_the_apply_lets_the_next_launch_run": a_cap_raised_by_the_apply_lets_the_next_launch_run,
+    "a_cleared_hold_lets_the_launch_run": a_cleared_hold_lets_the_launch_run,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,

@@ -396,11 +396,11 @@ run "launch_role_reads_only_the_host_job_cap_parameter" {
   assert {
     condition = (
       length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadHostJobCap"]) == 1 &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_job_cap" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_job_cap", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_launch_hold"] &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadHostJobCap"][0] == "ssm:GetParameter" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadHostJobCap"][0] == "Allow"
     )
-    error_message = "The launch role reads exactly the host job cap parameter, with ssm:GetParameter only."
+    error_message = "The launch role reads exactly the host job cap and launch hold parameters, with ssm:GetParameter only."
   }
 }
 
@@ -412,8 +412,21 @@ run "host_job_cap_grant_follows_the_named_parameter" {
   }
 
   assert {
-    condition     = [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/host_job_cap"
+    condition     = contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0], "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/host_job_cap")
     error_message = "The host job cap grant follows the parameter name the services stack writes."
+  }
+}
+
+run "launch_hold_grant_follows_the_named_parameter" {
+  command = plan
+
+  variables {
+    host_launch_hold_parameter_name = "/example_project/launch_hold"
+  }
+
+  assert {
+    condition     = contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0], "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/launch_hold")
+    error_message = "The launch role reads the launch hold the services apply command writes, by its parameter name."
   }
 }
 

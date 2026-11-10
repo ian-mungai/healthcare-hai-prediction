@@ -87,7 +87,7 @@ ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 OPENMETADATA_VARIABLES = ("openmetadata_admin_password_name", "openmetadata_db_password_name")
 OPENMETADATA_FILES = ("openmetadata.tf", "openmetadata_persistent.tf")
 # The host job cap parameter name is declared beside the Airflow launch role, which reads it; the services apply manages it as the project user.
-HOST_JOB_CAP_VARIABLES = ("host_job_cap_parameter_name",)
+HOST_JOB_CAP_VARIABLES = ("host_job_cap_parameter_name", "host_launch_hold_parameter_name")
 HOST_JOB_CAP_FILES = ("airflow_launch.tf",)
 FEATURES_PAIR_VARIABLES = ("aws_polaris_features_client_id_name", "aws_polaris_features_client_secret_name")
 FEATURES_PAIR_FILES = ("job_writer_variables.tf",)

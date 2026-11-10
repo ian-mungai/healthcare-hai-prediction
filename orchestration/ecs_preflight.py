@@ -224,6 +224,61 @@ def ssm_host_cap_reader(ssm: Any, name: str) -> Callable[[], str | None]:
     return read
 
 
+# Launch hold during services applies (owner A, Nov 10 2026): the owner command around every services apply writes HELD_PREFIX... before it
+# changes anything and LAUNCH_HOLD_CLEAR only after the ECS services reach steady state. Any other value, or no parameter, holds every host launch.
+LAUNCH_HOLD_CLEAR = "clear"
+
+
+def ssm_launch_hold_reader(ssm: Any, name: str) -> Callable[[], str | None]:
+    """Read the launch hold that the services apply command writes to Parameter Store, or None while the parameter does not exist."""
+
+    def read() -> str | None:
+        try:
+            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise TaskUnavailable("launch_hold_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("launch_hold_unreadable") from None
+
+    return read
+
+
+def held(value: str | None) -> str | None:
+    """Why a launch hold value holds host launches, or None when it is the clear value."""
+    if value is None:
+        return "the launch hold parameter was not found (no services apply command has cleared it yet)"
+    if value.strip() != LAUNCH_HOLD_CLEAR:
+        return f"the launch hold is set ({value.strip()[:120]})"
+    return None
+
+
+def cap_value(raw: str | None) -> int | None:
+    """The host job cap in MiB, or None when the parameter is missing or not a whole number above 0."""
+    text = (raw or "").strip()
+    return int(text) if text.isdecimal() and text.isascii() and int(text) > 0 else None
+
+
+class HeldCapProbe:
+    """The fit probe of host launches: before every RunTask the launcher asks it for the host's free room. It rereads the launch hold and the host
+    job cap each time: while the hold is set, or the cap is unreadable, the room is unavailable (the launcher waits and never sends); otherwise the
+    free memory is never more than the current cap, so a cap that a services apply lowered after the preflight withholds the RunTask."""
+
+    def __init__(self, inner: Any, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> None:
+        self.inner, self.hold, self.cap = inner, hold, cap
+
+    def free(self) -> Resources:
+        reason = held(self.hold())
+        if reason is not None:
+            raise TaskUnavailable(f"launch_hold: {reason}")
+        cap = cap_value(self.cap())
+        if cap is None:
+            raise TaskUnavailable("host_job_cap_unreadable")
+        free = self.inner.free()
+        return Resources(cpu_units=free.cpu_units, memory_mib=min(free.memory_mib, cap), scratch_bytes=free.scratch_bytes)
+
+
 class InputNotReady(LaunchUnavailable):
     """A staged input of the run is not readable yet, or the store of the staged inputs throttled. This is the preflight's own wait: a later identical call
     can succeed, and ``airflow_steps`` repeats the step for a bounded time. A ``LaunchUnavailable`` that is not this class comes from the launch library: its
@@ -355,6 +410,7 @@ class Preflight:
         host_capacity: str,
         task_definition: Callable[[str], Mapping[str, Any]],
         host_job_cap: Callable[[], str | None],
+        host_launch_hold: Callable[[], str | None] | None = None,
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
@@ -372,6 +428,7 @@ class Preflight:
         self.host_capacity = host_capacity
         self.task_definition = task_definition
         self.host_job_cap = host_job_cap
+        self.host_launch_hold = host_launch_hold
 
     def containers(self, job: str) -> tuple[dict[str, list[str]], str]:
         """The containers of the job's host task definition and the one whose log is read: the host table's where it names them, else the job table's."""
@@ -399,6 +456,7 @@ class Preflight:
         if request.mode != JOB_MODE:
             raise LaunchRefused(f"{request.template} runs on AWS in real mode only")
         self.require_capacity(job)  # before every gate that reads the cloud, so an empty capacity is never masked by a read
+        self.require_no_hold(job)
         row = self.jobs[job]
         if row.get("after"):
             self.require_passed(job, row["after"], request.input_run_id)
@@ -410,10 +468,13 @@ class Preflight:
         if row.get("approval") == "promotion":
             self.require_promotion_approval(request)
         spec = self.spec(request, job)
-        revision = self.checked_revision(job)
+        revision, job_memory = self.checked_revision(job)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
-        return replace(spec, task_definition=revision)
+        # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
+        # probe gives no more than the current host job cap, so a cap lowered after this check withholds the RunTask (launch hold, owner A).
+        need = replace(spec.need, memory_mib=max(spec.need.memory_mib, job_memory))
+        return replace(spec, task_definition=revision, need=need)
 
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and the training run of the last one, to the bronze run's staged code."""
@@ -484,10 +545,10 @@ class Preflight:
             raise LaunchRefused(f"the host capacity {capacity[:200]!r} is not in the rendered form usable_memory_mib=<MiB> system_reserve_mib=<MiB>")
         return capacity
 
-    def checked_revision(self, job: str) -> str:
-        """Host launch capacity binding (owner A, Nov 10 2026): the ARN of the latest active revision of the job's host definition, described once, after
-        checking that it is bound to the current usable-memory cap. The services stack renders the cap's inputs into ``HAI_LAUNCH_HOST_CAPACITY``
-        (``usable_memory_mib=<n> system_reserve_mib=<n>``). The jobs stack labels the init container
+    def checked_revision(self, job: str) -> tuple[str, int]:
+        """Host launch capacity binding (owner A, Nov 10 2026): the ARN and the job memory of the latest active revision of the job's host
+        definition, described once, after checking that it is bound to the current usable-memory cap. The services stack renders the cap's inputs
+        into ``HAI_LAUNCH_HOST_CAPACITY`` (``usable_memory_mib=<n> system_reserve_mib=<n>``). The jobs stack labels the init container
         of every host revision it registers with the binding it was sized from (label ``hai.host_capacity``: the job memory, the same two inputs and the
         service reservations, from the services output ``host_capacity_binding``). A revision without the label (registered before the job memory came
         from ``host_usable_memory_mib``), bound to other inputs, with a label whose job memory is not the inputs less the reservations, or with task
@@ -520,7 +581,19 @@ class Preflight:
                 f"gives a job {binding['job']} MiB. {again}"
             )
         self.require_within_cap(job, name, int(binding["job"]))
-        return str(found.get("taskDefinitionArn", ""))
+        return str(found.get("taskDefinitionArn", "")), int(binding["job"])
+
+    def require_no_hold(self, job: str) -> None:
+        """Launch hold during services applies (owner A, Nov 10 2026): refuse every host launch while a services apply holds launches, and fail
+        closed while no hold reader is wired or the hold parameter is missing."""
+        if self.host_launch_hold is None:
+            raise LaunchRefused(f"no launch hold reader is configured, so no {job} host job launches")
+        reason = held(self.read(self.host_launch_hold))
+        if reason is not None:
+            raise LaunchRefused(
+                f"{reason}, so no {job} host job launches while a services apply runs. When the apply finished, wait for its owner command to clear "
+                "the hold, or resolve a failed apply with python -m scripts.infrastructure.services_apply resolve, then run again"
+            )
 
     def require_within_cap(self, job: str, name: str, job_memory: int) -> None:
         """Current host job cap at launch (owner A, Nov 10 2026): read the cap the services stack wrote at its last apply, at every host launch, and

@@ -30,6 +30,7 @@ from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, Laun
 from orchestration.ecs_preflight import (
     GATE,
     TABLE_MAP_FILE,
+    HeldCapProbe,
     InputNotReady,
     Preflight,
     PreflightSettings,
@@ -40,6 +41,7 @@ from orchestration.ecs_preflight import (
     s3_object_reader,
     serving_request_reader,
     ssm_host_cap_reader,
+    ssm_launch_hold_reader,
 )
 from orchestration.interface import SubmissionRequest
 
@@ -59,6 +61,7 @@ SETTINGS = (
     "HAI_LAUNCH_SCRATCH_PATH",
     "HAI_LAUNCH_HOST_CAPACITY",
     "HAI_LAUNCH_HOST_CAP_PARAMETER",
+    "HAI_LAUNCH_HOST_HOLD_PARAMETER",
 )
 # The usable-memory inputs the services stack always renders (host_usable_memory_mib defaults to the current host size), checked by the preflight
 # against the binding of every host revision.
@@ -75,6 +78,12 @@ class LaunchServices:
     cluster: str
     definition: Callable[[str], str]
     clock: Clock
+
+
+def host_fit_probe(inner: EcsFitProbe, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> HeldCapProbe:
+    """The fit probe of every host launch: it rereads the launch hold and the host job cap before each RunTask (owner A, Nov 10 2026: launch hold
+    during services applies), so a hold set or a cap lowered after the preflight withholds the call."""
+    return HeldCapProbe(inner, hold, cap)
 
 
 def services() -> LaunchServices:
@@ -104,12 +113,14 @@ def services() -> LaunchServices:
         ),
     )
     scratch = Path(values["HAI_LAUNCH_SCRATCH_PATH"])
+    hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"])
+    cap = ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"])
     clock = Clock()
     store = S3LaunchStore(s3, values["HAI_LAUNCH_BUCKET"], launch_record_prefix())
     launcher = Launcher(
         adapter,
         store,
-        EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free),
+        host_fit_probe(EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free), hold, cap),
         clock,
         scratch_usage=partial(scratch_usage, scratch, sorted(table["jobs"])),
     )
@@ -128,7 +139,8 @@ def services() -> LaunchServices:
         serving_request=serving_request_reader(s3, bucket),
         host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
-        host_job_cap=ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"]),
+        host_job_cap=cap,
+        host_launch_hold=hold,
     )
     return LaunchServices(preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock)
 

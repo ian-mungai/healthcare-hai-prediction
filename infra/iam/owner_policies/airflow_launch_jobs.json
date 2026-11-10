@@ -80,7 +80,10 @@
       "Sid": "ReadHostJobCap",
       "Effect": "Allow",
       "Action": "ssm:GetParameter",
-      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+      "Resource": [
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}",
+        "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_LAUNCH_HOLD_PARAMETER_NAME}"
+      ]
     }
   ]
 }

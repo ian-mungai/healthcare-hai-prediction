@@ -45,8 +45,9 @@ locals {
     # The usable-memory inputs a host revision must be bound to (owner A, Nov 10 2026). Variables only: the job room also counts the reservations of
     # these Airflow containers, so it cannot be named here without a cycle.
     # The parameter that holds the current host job cap (owner A, Nov 10 2026), read by the preflight at every host launch.
-    HAI_LAUNCH_HOST_CAP_PARAMETER = var.host_job_cap_parameter_name
-    HAI_LAUNCH_HOST_CAPACITY      = format("usable_memory_mib=%d system_reserve_mib=%d", var.host_usable_memory_mib, var.host_system_reserve_mib)
+    HAI_LAUNCH_HOST_CAP_PARAMETER  = var.host_job_cap_parameter_name
+    HAI_LAUNCH_HOST_HOLD_PARAMETER = var.host_launch_hold_parameter_name
+    HAI_LAUNCH_HOST_CAPACITY       = format("usable_memory_mib=%d system_reserve_mib=%d", var.host_usable_memory_mib, var.host_system_reserve_mib)
   }
   airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} 1 'One host job at a time'"
 

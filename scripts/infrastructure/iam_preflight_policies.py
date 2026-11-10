@@ -118,6 +118,7 @@ def infra_names(infra: Path = INFRA) -> dict[str, str]:
     names["BROKER_SIGNED_PARAMETER_NAME"] = terraform_default(infra, "broker.tf", "broker_signed_parameter_name")
     names["AIRFLOW_LAUNCH_RECORD_PREFIX"] = terraform_default(infra, "airflow_launch.tf", "airflow_launch_record_prefix")
     names["HOST_JOB_CAP_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "host_job_cap_parameter_name")
+    names["HOST_LAUNCH_HOLD_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "host_launch_hold_parameter_name")
     for part in ("id", "secret"):
         names[f"AWS_POLARIS_FEATURES_CLIENT_{part.upper()}_NAME"] = terraform_default(
             infra, "job_writer_variables.tf", f"aws_polaris_features_client_{part}_name"
