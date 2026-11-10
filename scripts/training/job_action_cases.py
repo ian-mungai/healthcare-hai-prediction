@@ -2199,6 +2199,73 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
         require(code == 3 and record["exit_code"] == 3, f"exit {code} {record['exit_code']}")
         require(record["peak_scratch_bytes"] is None and "did not start" in record["scratch_measure"], f"{record}")
 
+    def sampler_construction_failure_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        ran: list[bool] = []
+
+        def job() -> int:
+            ran.append(True)
+            return 3
+
+        def unbuildable(*_args: Any, **_kwargs: Any) -> Any:
+            raise RuntimeError("can't create a thread lock")
+
+        try:
+            code, record = _recorded(job, scratch, _Sampler=unbuildable)
+        except RuntimeError as error:
+            raise AssertionError(f"a sampler that could not be built stopped the job: {error}") from error
+        require(ran == [True], "the job did not run when the sampler could not be built")
+        require(code == 3 and record["exit_code"] == 3, f"exit {code} {record['exit_code']}")
+        require(record["peak_scratch_bytes"] is None and record["scratch_measure"].startswith("unavailable"), f"{record}")
+        require(record["scratch_samples"] == 0, f"samples {record['scratch_samples']}")
+
+    def recorder_interrupt_kept() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import resource_peaks
+
+        def raises() -> int:
+            raise RuntimeError("job failed")
+
+        interrupted = mock.patch.object(resource_peaks._Sampler, "join", side_effect=KeyboardInterrupt)
+        try:
+            with interrupted, contextlib.redirect_stderr(io.StringIO()):
+                resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
+        except RuntimeError as error:
+            require(str(error) == "job failed", f"the recorder replaced the job's exception: {error}")
+        except BaseException as error:
+            raise AssertionError(f"an interrupt inside the recorder replaced the job's exception with {type(error).__name__}") from error
+        else:
+            raise AssertionError("the job's exception was swallowed")
+
+        try:
+            with interrupted, contextlib.redirect_stderr(io.StringIO()):
+                resource_peaks.recorded(lambda: 3, scratch=(scratch,), interval=0.02)
+        except SystemExit as stop:
+            require(stop.code == 3, f"an interrupt inside the recorder changed the exit code to {stop.code}")
+        except BaseException as error:
+            raise AssertionError(f"an interrupt inside the recorder replaced the job's exit with {type(error).__name__}") from error
+        else:
+            raise AssertionError("recorded returned without the job's exit")
+
+    def job_interrupt_propagates() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import resource_peaks
+
+        def interrupted() -> int:
+            raise KeyboardInterrupt
+
+        stream = io.StringIO()
+        try:
+            with contextlib.redirect_stderr(stream):
+                resource_peaks.recorded(interrupted, scratch=(scratch,), interval=0.02)
+        except KeyboardInterrupt:
+            pass
+        except BaseException as error:
+            raise AssertionError(f"the job's own interrupt became {type(error).__name__}") from error
+        else:
+            raise AssertionError("the job's own interrupt was swallowed")
+        require(_peak_line(stream.getvalue())["exit_code"] == 1, "an interrupted job logs exit code 1")
+
     def broken_stderr_kept() -> None:
         scratch.mkdir(parents=True, exist_ok=True)
         from scripts import resource_peaks
@@ -2261,6 +2328,9 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
     cases.check("resource_peaks_job_result_kept", failures_kept)
     cases.check("resource_peaks_broken_sampler_kept", broken_sampler_kept)
     cases.check("resource_peaks_sampler_start_failure_kept", sampler_start_failure_kept)
+    cases.check("resource_peaks_sampler_construction_failure_kept", sampler_construction_failure_kept)
+    cases.check("resource_peaks_recorder_interrupt_kept", recorder_interrupt_kept)
+    cases.check("resource_peaks_job_interrupt_propagates", job_interrupt_propagates)
     cases.check("resource_peaks_broken_stderr_kept", broken_stderr_kept)
     cases.check("resource_peaks_unreadable_subfolder_skipped", unreadable_subfolder)
     cases.check("resource_peaks_every_job_entry_point", entry_points)
