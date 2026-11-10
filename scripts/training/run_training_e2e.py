@@ -28,6 +28,13 @@ ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matr
 # Registered and servable, but location identity never enters a feature list (owner decision, Nov 8 2026).
 LOCATION = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
 REDUNDANT = "feature_matrix_hospital:c001_01__value__number"
+# A control on a hold review decision in the gold control bridges never enters a feature list. In the real bridges C036 is
+# hold_definition and C161 hold_observations; C036.01 has no bridge row, so the hold of its parent C036 does not reach it.
+HOLD_DECISIONS = ("hold_definition", "hold_observations")
+HOLD = "feature_matrix_hospital:c036__value__number"
+HOLD_OBSERVATIONS = "feature_matrix_care_compare:c161__value__number"
+HOLD_CHILD = "feature_matrix_hospital:c036_01__value__number"
+ALL_SCOPE_SLOTS = ("m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects")
 TRAINING_PINS = {
     "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
@@ -146,6 +153,69 @@ def _fixture(folder: Path) -> None:
     for slot in SLOTS:
         path = folder / f"config/training/feature_lists/{slot}.json"
         _edit(path, partial(_set_references, references=sorted(CMS if slot in ("m1_ols", "rq4_reduced") else ALL)))
+
+
+def _hold_controls(root: Path) -> set[str]:
+    """Return the controls with a hold review decision in any gold control bridge, read independently of the guard."""
+    return {
+        row["measure_control"]
+        for path in sorted((root / "dbt/seeds/gold").glob("*_bridge.csv"))
+        for row in csv.DictReader(path.open(newline="", encoding="utf-8"))
+        if row["review_decision"] in HOLD_DECISIONS
+    }
+
+
+def _real_hold_cases(report: Report) -> None:
+    """The real configuration: no committed feature list names a column whose control is on hold in the gold control bridges."""
+    holds = _hold_controls(ROOT)
+    schema = json.loads((ROOT / "data_contracts/features/feature_schema.json").read_text(encoding="utf-8"))
+    controls = {
+        f"{column['view']}:{column['name']}": column.get("pivot", {}).get("match", {}).get("measure_control", "")
+        for table in schema["tables"].values()
+        for column in table["columns"]
+        if column.get("view")
+    }
+    listed = {
+        slot: sorted(
+            reference
+            for reference in json.loads((ROOT / f"config/training/feature_lists/{slot}.json").read_text(encoding="utf-8"))["references"]
+            if controls.get(reference) in holds
+        )
+        for slot in SLOTS
+    }
+    report.assertion("real_bridges_hold_controls", bool(holds), hold_controls=len(holds))
+    report.assertion(
+        "no_real_feature_list_names_a_hold_control",
+        not any(listed.values()),
+        hold_references={slot: len(found) for slot, found in listed.items()},
+        hold_controls_listed=sorted({controls[reference] for found in listed.values() for reference in found}),
+    )
+
+
+def _add_column(folder: Path, reference: str, control: str, slots: tuple[str, ...], cleared: str | None = None) -> None:
+    """Register a servable predictor column of ``control`` in the copied feature schema and list it in ``slots``; ``cleared`` rewrites that control's
+    bridge rows to another review decision."""
+    view, name = reference.split(":")
+    path = folder / "data_contracts/features/feature_schema.json"
+    schema = json.loads(path.read_text(encoding="utf-8"))
+    schema["tables"][view]["columns"].append(_column(name, view, control=control))
+    schema["servable"] = sorted([*schema["servable"], reference])
+    _write(path, schema)
+    for slot in slots:
+        _edit(folder / f"config/training/feature_lists/{slot}.json", partial(_append_reference, reference=reference))
+    if cleared is None:
+        return
+    for bridge in sorted((folder / "dbt/seeds/gold").glob("*_bridge.csv")):
+        with bridge.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            fields, rows = reader.fieldnames or [], list(reader)
+        for row in rows:
+            if row["measure_control"] == control:
+                row["review_decision"] = cleared
+        with bridge.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            writer.writerows(rows)
 
 
 def _lock_fixture(folder: Path) -> None:
@@ -432,6 +502,24 @@ def _guard_cases(report: Report, scratch: Path) -> None:
     run("bare_reference", lambda f: refs(f, "c119__value__number"), "references", "E11")
     run("duplicate_reference", lambda f: refs(f, CMS[0]), "references", "E11")
     run("state_code_reference", lambda f: refs(f, LOCATION[1]), "location identity", "E11")
+    # Hold guard: a column whose control has a hold review decision in a gold control bridge is refused in every list, and the
+    # all-scope lists leave it out; a cleared hold and a child control without its own hold rows are listed as usual.
+    run("hold_definition_reference_refused", partial(_add_column, reference=HOLD, control="C036", slots=ALL_SCOPE_SLOTS), "hold control C036", "E11")
+    run(
+        "hold_observations_reference_refused_in_cms_list",
+        partial(_add_column, reference=HOLD_OBSERVATIONS, control="C161", slots=SLOTS),
+        "hold control C161",
+        "E11",
+    )
+    run("hold_column_listed_nowhere_accepted", partial(_add_column, reference=HOLD, control="C036", slots=()))
+    run("cleared_hold_column_listed_accepted", partial(_add_column, reference=HOLD, control="C036", slots=ALL_SCOPE_SLOTS, cleared="retain_conditional"))
+    run(
+        "cleared_hold_column_left_out_refused",
+        partial(_add_column, reference=HOLD, control="C036", slots=(), cleared="retain_conditional"),
+        "feature list differs",
+        "E11",
+    )
+    run("child_of_hold_control_listed_accepted", partial(_add_column, reference=HOLD_CHILD, control="C036.01", slots=ALL_SCOPE_SLOTS))
     run(
         "county_fips_in_cms_baseline",
         partial(_edit_config, filename="feature_lists/m1_ols.json", change=lambda d: d["references"].append(LOCATION[0])),
@@ -790,6 +878,7 @@ def main() -> int:
     try:
         with tempfile.TemporaryDirectory(prefix="training_static_") as scratch:
             _guard_cases(report, Path(scratch))
+            _real_hold_cases(report)
             _committed_feature_lists(report, revision.stdout.strip())
             _lock_cases(report, Path(scratch))
             _check_output_cases(report)

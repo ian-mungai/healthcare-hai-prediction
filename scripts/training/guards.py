@@ -23,6 +23,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SLOTS = ("m1_ols", "m2_elastic_net", "m3_mixed", "m4_boosting", "m5_spatial", "m6_fixed_effects", "rq4_reduced")
 ALL_ROW_BRIDGES = frozenset(("hai_outcome_measures_bridge.csv", "validation_measures_bridge.csv"))
 EXCLUDED_DECISIONS = frozenset(("exclude_primary", "comparison_only"))
+# A control on hold waits for a review of its definition or observations, so no feature list may name it. The rule is
+# exact: a child control with no hold rows of its own (C051.01 under C051) is not held by its parent.
+HOLD_DECISIONS = frozenset(("hold_definition", "hold_observations"))
 CMI_COLUMNS = frozenset(("cmi", "cmi_cases", "has_cmi", "is_cmi_held", "cmi_cases_log", "cmi_change"))
 # Counties nest in states, so their one-hot columns are collinear; geography enters through county context and the spatial test instead.
 LOCATION_COLUMNS = frozenset(("state_code", "county_fips"))
@@ -79,8 +82,10 @@ def _plan(root: Path) -> bytes:
     return content
 
 
-def _bridge_controls(root: Path) -> set[str]:
+def _bridge_controls(root: Path) -> tuple[set[str], dict[str, str]]:
+    """Return the excluded controls (every row of the all-row bridges and every excluding decision) and each held control with its hold decision."""
     controls: set[str] = set()
+    holds: dict[str, str] = {}
     paths = sorted((root / "dbt/seeds/gold").glob("*_bridge.csv"))
     missing = ALL_ROW_BRIDGES - {path.name for path in paths}
     if missing:
@@ -93,6 +98,8 @@ def _bridge_controls(root: Path) -> set[str]:
                 if not {"fact", "measure_key", "value_column", "measure_control", "review_decision"}.issubset(reader.fieldnames or []):
                     raise GuardError(f"{name}: missing control-bridge columns")
                 for row in reader:
+                    if row["review_decision"] in HOLD_DECISIONS and row["measure_control"]:
+                        holds.setdefault(row["measure_control"], row["review_decision"])
                     if name not in ALL_ROW_BRIDGES and row["review_decision"] not in EXCLUDED_DECISIONS:
                         continue
                     control = row["measure_control"]
@@ -101,7 +108,7 @@ def _bridge_controls(root: Path) -> set[str]:
                     controls.add(control)
         except OSError as error:
             raise GuardError(f"{name}: cannot read control bridge ({type(error).__name__})") from error
-    return controls
+    return controls, holds
 
 
 def _columns(schema: dict[str, Any]) -> tuple[dict[str, tuple[dict[str, Any], dict[str, Any]]], set[str]]:
@@ -153,7 +160,12 @@ def _redundant(document: dict[str, Any], columns: dict[str, tuple[dict[str, Any]
 
 
 def _references(
-    document: dict[str, Any], columns: dict[str, tuple[dict[str, Any], dict[str, Any]]], servable: set[str], excluded: set[str], redundant: frozenset[str]
+    document: dict[str, Any],
+    columns: dict[str, tuple[dict[str, Any], dict[str, Any]]],
+    servable: set[str],
+    excluded: set[str],
+    redundant: frozenset[str],
+    holds: dict[str, str],
 ) -> None:
     references = document["references"]
     for reference in references:
@@ -170,6 +182,12 @@ def _references(
             raise GuardError(f"reference: not registered in a predictor view: {reference}")
         if _is_excluded(_control(column), excluded):
             raise GuardError(f"reference: excluded control {_control(column)} in {reference}")
+        if _control(column) in holds:
+            control = _control(column)
+            raise GuardError(
+                f"reference: hold control {control} in {reference} has review decision {holds[control]} in the gold control bridges. "
+                "Remove it from the feature list until a review clears the hold."
+            )
         if column["name"] in LOCATION_COLUMNS:
             raise GuardError(f"reference: location identity {reference} cannot be a predictor")
         if reference in redundant:
@@ -181,6 +199,7 @@ def _references(
         and column["role"] == "predictor"
         and reference in servable
         and not _is_excluded(_control(column), excluded)
+        and _control(column) not in holds
         and column["name"] not in LOCATION_COLUMNS
         and reference not in redundant
         and (
@@ -229,7 +248,7 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
     if target_problems:
         raise GuardError("targets: " + "; ".join(target_problems))
     excluded = set(documents["excluded_controls"]["controls"])
-    bridge_controls = _bridge_controls(root)
+    bridge_controls, holds = _bridge_controls(root)
     if excluded != bridge_controls:
         raise GuardError("exclusions: bridge mismatch. Regenerate excluded_controls.json from all gold control bridges and their review decisions.")
     schema_path = feature_schema or root / "data_contracts/features/feature_schema.json"
@@ -247,7 +266,7 @@ def check(root: Path = ROOT, *, feature_schema: Path | None = None, git_commit: 
         document = _validate(paths[key], contracts / "feature_list.schema.json")
         if document["slot"] != slot:
             raise GuardError(f"{slot}.json: slot does not match the filename")
-        _references(document, columns, servable, forbidden, redundant)
+        _references(document, columns, servable, forbidden, redundant, holds)
         if slot != "rq4_reduced" and not set(documents["models"]["slots"][slot]["forced_references"]).issubset(document["references"]):
             raise GuardError(f"{slot}: a forced covariate is missing from the feature list")
     _redundant(documents["redundant_features"], columns, servable)
