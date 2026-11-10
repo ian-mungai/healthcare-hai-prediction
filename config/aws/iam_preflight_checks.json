@@ -695,6 +695,46 @@
     },
     {
       "role": "airflow_launch",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:PutParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:GetParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:DeleteParameter",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:AddTagsToResource",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:RemoveTagsFromResource",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:ListTagsForResource",
+      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
+    },
+    {
+      "role": "project_user",
+      "action": "ssm:DescribeParameters",
+      "resource": "*"
+    },
+    {
+      "role": "airflow_launch",
       "action": "s3:PutObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/${AIRFLOW_LAUNCH_RECORD_PREFIX}example_run/train/0/intent.json",
       "context": {

@@ -224,7 +224,7 @@ def test_renderer_fills_every_placeholder_and_keeps_policy_variables() -> None:
         "arn:aws:s3:::example-data/lakehouse/*" in text and "role/healthcare_hai_prediction_lakehouse_reader" in text and f"{PROJECT}_lakehouse" not in text,
         "the bucket or the project name was not substituted",
     )
-    check(len(documents) == 13, "the renderer must produce the 13 approved policies")
+    check(len(documents) == 14, "the renderer must produce the 14 approved policies")
 
 
 def statement_resources(documents: dict[str, dict[str, Any]], service: str, sid: str) -> list[str]:
@@ -322,7 +322,7 @@ def test_plan_in_an_empty_account_lists_every_creation_and_changes_nothing(env_f
     code = manage_policies.run(arguments(env_file, "plan"), {}, session)
     output = capsys.readouterr().out
     check(code == 0, "a plan must succeed")
-    check(output.count("CREATE POLICY") == 13 and output.count("CREATE GROUP") == 2 and output.count("ATTACH POLICY") == 13, f"unexpected plan:\n{output}")
+    check(output.count("CREATE POLICY") == 14 and output.count("CREATE GROUP") == 2 and output.count("ATTACH POLICY") == 14, f"unexpected plan:\n{output}")
     check(output.count("ADD USER") == 2, "the user must join both groups")
     check(iam.writes() == [] and session.profiles == ["example_administrator"], "a plan must not write and must use the administrator profile")
 
@@ -330,13 +330,13 @@ def test_plan_in_an_empty_account_lists_every_creation_and_changes_nothing(env_f
 def test_apply_creates_everything_and_a_second_run_changes_nothing(env_file: Path, capsys: pytest.CaptureFixture[str]) -> None:
     iam = FakeIam()
     check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the first apply must succeed")
-    check(len(iam.policies) == 13 and sorted(iam.groups) == [f"{PROJECT}_data_dev", f"{PROJECT}_platform_dev"], "policies or groups are missing")
-    check(sum(len(held) for held in iam.groups.values()) == 13 and iam.members[USER] == set(iam.groups), "attachments or membership are missing")
+    check(len(iam.policies) == 14 and sorted(iam.groups) == [f"{PROJECT}_data_dev", f"{PROJECT}_platform_dev"], "policies or groups are missing")
+    check(sum(len(held) for held in iam.groups.values()) == 14 and iam.members[USER] == set(iam.groups), "attachments or membership are missing")
     capsys.readouterr()
     iam.calls.clear()
     check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0, "the second apply must succeed")
     check(iam.writes() == [], f"a second apply must write nothing: {iam.writes()}")
-    check("Summary: 0 change(s), 13 unchanged." in capsys.readouterr().out, "the second plan must show no change")
+    check("Summary: 0 change(s), 14 unchanged." in capsys.readouterr().out, "the second plan must show no change")
 
 
 def applied_iam(env_file: Path) -> FakeIam:
@@ -498,10 +498,10 @@ def test_a_failed_step_is_reported_and_the_others_still_run(env_file: Path, caps
     code = manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam))
     output = capsys.readouterr()
     check(code == 1, "a failed step must give a non-zero exit code")
-    check(f"{PROJECT}_ecr_policy" not in iam.policies and len(iam.policies) == 12, "only the failed policy may be missing")
+    check(f"{PROJECT}_ecr_policy" not in iam.policies and len(iam.policies) == 13, "only the failed policy may be missing")
     check("FAILED" in output.out and "LimitExceeded" in output.out, "the failure must be named")
     iam.fail_on = set()
-    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0 and len(iam.policies) == 13, "a rerun must finish the work")
+    check(manage_policies.run(arguments(env_file, "apply"), CONFIRMED, FakeSession(iam)) == 0 and len(iam.policies) == 14, "a rerun must finish the work")
 
 
 def test_old_grouped_policies_are_detached_and_deleted_and_direct_attachments_move_to_the_groups(env_file: Path) -> None:
@@ -565,7 +565,7 @@ def test_export_writes_one_template_per_service_and_stops_on_a_missing_policy(en
     exported = export_policies.run(
         argparse.Namespace(admin_profile="example_administrator", env_file=env_file, output_directory=tmp_path / "out"), FakeSession(iam)
     )
-    check(len(exported) == 13 and all(path.read_text(encoding="utf-8").endswith("}\n") for path in exported), "one template per service must be written")
+    check(len(exported) == 14 and all(path.read_text(encoding="utf-8").endswith("}\n") for path in exported), "one template per service must be written")
     check(ACCOUNT not in "".join(path.read_text(encoding="utf-8") for path in exported), "the account must not appear in an exported template")
     del iam.policies[f"{PROJECT}_ssm_policy"]
     with pytest.raises(RuntimeError) as error:
@@ -590,7 +590,7 @@ def test_the_command_line_refuses_an_apply_without_the_word_and_renders_offline(
     check("Credentials" not in refused.stderr and "botocore" not in refused.stderr, "the refusal must come before any AWS client")
     rendered = run_cli("infra.iam.scripts.render_policy", env_file, "--output-directory", str(tmp_path / "rendered"))
     files = sorted((tmp_path / "rendered").glob("*.json"))
-    check(rendered.returncode == 0 and len(files) == 13, f"the offline render must write 13 files: {rendered.stderr}")
+    check(rendered.returncode == 0 and len(files) == 14, f"the offline render must write 14 files: {rendered.stderr}")
     check(all(oct(path.stat().st_mode & 0o777) == "0o600" for path in files), "rendered files must be owner-only")
     check(
         f":{ACCOUNT}:" in files[0].read_text(encoding="utf-8") or ACCOUNT in "".join(path.read_text(encoding="utf-8") for path in files),

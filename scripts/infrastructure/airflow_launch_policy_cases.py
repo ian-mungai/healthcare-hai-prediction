@@ -97,6 +97,10 @@ def container_instance(cluster: str = CLUSTER, identifier: str = "0123456789abcd
     return f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{cluster}/{identifier}"
 
 
+# The parameter the services stack writes the current host job cap to (infra/iam/airflow_launch.tf host_job_cap_parameter_name).
+HOST_CAP = "/healthcare_hai_prediction/host_job_cap"
+
+
 def values(families: list[str]) -> dict[str, str]:
     """The template inputs, built as infra/iam/airflow_launch.tf builds them."""
     requests = [f"arn:aws:s3:::{BUCKET}/lakehouse/run_stage/*/inputs/{REQUEST_FILES[family]}" for family in sorted(families) if family in REQUEST_FILES]
@@ -109,6 +113,7 @@ def values(families: list[str]) -> dict[str, str]:
         "TASK_ARN_PATTERN": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/*",
         "LOG_GROUP_NAME": LOG_GROUP,
         "DATA_BUCKET_NAME": BUCKET,
+        "HOST_JOB_CAP_PARAMETER_NAME": HOST_CAP,
         "RECORD_PREFIX": RECORD_PREFIX,
         "REQUEST_OBJECT_ARNS": json.dumps(requests),
         "FAMILIES": json.dumps(sorted(families)),
@@ -245,6 +250,14 @@ def job_cases() -> list[Case]:
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter",
         False,
     )
+    # Current host job cap at launch (owner A, Nov 10 2026): one read of the cap the services stack writes, nothing else on it or beside it.
+    cap = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}"
+    add("read the host job cap", "ssm:GetParameter", cap, True)
+    add("read the host job cap by the plural call", "ssm:GetParameters", cap, False)
+    add("write the host job cap", "ssm:PutParameter", cap, False)
+    add("delete the host job cap", "ssm:DeleteParameter", cap, False)
+    add("read a sibling of the host job cap", "ssm:GetParameter", f"{cap}_extra", False)
+    add("read a parameter beside the host job cap", "ssm:GetParameter", cap.replace("host_job_cap", "host_job_cap_previous"), False)
     add("read the broker token", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/broker_token", False)
     add("read the MLflow password", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/mlflow_admin_password", False)
     for action in ("ecs:UpdateService", "ecs:DeleteService", "ecs:CreateService", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"):
@@ -479,6 +492,7 @@ RESOURCES = (
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
     Resource("signed publish record", SIGNED_ARN, NONE, NONE),
+    Resource("host job cap", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
     Resource("a KMS key", KMS_KEY, NONE, NONE),
     Resource("another KMS key", KMS_OTHER_KEY, NONE, NONE),
@@ -609,6 +623,7 @@ WIDENING_ACTIONS = {
     "PassNamedJobRoles": ("sts:AssumeRole", "iam:AttachRolePolicy"),
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
+    "ReadHostJobCap": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
     "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
@@ -678,6 +693,8 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
             appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}{SIGNED}"}),
         ),
         ("jobs", "regression_a_parameter_prefix", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}/*"})),
+        ("jobs", "ReadHostJobCap_a_parameter_prefix", replaced(jobs, "ReadHostJobCap", Resource=f"{ssm}/healthcare_hai_prediction/*")),
+        ("jobs", "ReadHostJobCap_a_name_prefix", replaced(jobs, "ReadHostJobCap", Resource=f"{ssm}{HOST_CAP}*")),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("jobs", "ReadStagedRunRecords_delete_the_digest", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObject"])),
         (
@@ -904,6 +921,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
+        Grant("ssm:GetParameter", (f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}",), {}),
     ]
 
 

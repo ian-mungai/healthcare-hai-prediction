@@ -330,7 +330,7 @@ def check_inventory(documents: dict[str, dict[str, Any]], operations: dict[str, 
     user_names = {name for name in documents if name.startswith("healthcare_hai_prediction_")}
     if user_names != expected_names:
         extra, missing = sorted(user_names - expected_names), sorted(expected_names - user_names)
-        problems.append(f"policy files differ from the 13 approved services: extra {extra}, missing {missing}")
+        problems.append(f"policy files differ from the {len(policy_cases.SERVICES)} approved services: extra {extra}, missing {missing}")
     approved = policy_cases.approved_actions(operations)
     for name, actions in policy_cases.APPROVED_OWNER_ACTIONS.items():
         allowed = allowed_actions([documents[f"owner_{name}"]])
@@ -376,6 +376,8 @@ AWS_PAIRS = ("ssm", "SetUpAwsPolarisPairs")
 OPENMETADATA_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.OPENMETADATA_PASSWORDS)
 OPENMETADATA_PASSWORDS = ("ssm", policy_cases.OPENMETADATA_STATEMENT)
 OPENMETADATA_DENY = ("ssm", policy_cases.OPENMETADATA_DENY)
+HOST_JOB_CAP_PLACEHOLDER = "HOST_JOB_CAP_PARAMETER_NAME"
+HOST_JOB_CAP = ("ssmcap", policy_cases.HOST_JOB_CAP_STATEMENT)
 TASK_EXECUTION = "owner_task_execution"
 STS = ("sts", "AssumeLakehouseRolesOnly")
 INJECT = (TASK_EXECUTION, "InjectNamedParameters")
@@ -396,6 +398,7 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         AWS_PAIRS: {parameter_arn(names[key]) for key in AWS_POLARIS_PLACEHOLDERS},
         OPENMETADATA_PASSWORDS: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
         OPENMETADATA_DENY: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
+        HOST_JOB_CAP: {parameter_arn(names[HOST_JOB_CAP_PLACEHOLDER])},
     }
 
 
@@ -475,6 +478,7 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
         approved[placeholder] = {folder + name}
     for placeholder, name in zip(OPENMETADATA_PLACEHOLDERS, policy_cases.OPENMETADATA_PASSWORDS, strict=True):
         approved[placeholder] = {folder + name}
+    approved[HOST_JOB_CAP_PLACEHOLDER] = {folder + policy_cases.HOST_JOB_CAP}
     for placeholder, expected_names in approved.items():
         problems += difference(
             f"{placeholder} variable defaults against the approved list", {str(item) for item in as_list(names[placeholder])}, expected_names
@@ -516,6 +520,7 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         | expected[INJECT]
         | expected[AWS_PAIRS]
         | expected[OPENMETADATA_PASSWORDS]
+        | expected[HOST_JOB_CAP]
     )
     problems += difference("parameter resources of all policies against the injected names", granted, allowed)
     named_secrets = {
@@ -602,7 +607,7 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="policy_name_defects_") as scratch:
         root = Path(scratch)
         original = VARIABLES.read_text(encoding="utf-8")
-        for sibling in (*secret_store.OPENMETADATA_FILES, *secret_store.FEATURES_PAIR_FILES):
+        for sibling in (*secret_store.OPENMETADATA_FILES, *secret_store.FEATURES_PAIR_FILES, *secret_store.HOST_JOB_CAP_FILES):
             shutil.copy(VARIABLES.parent / sibling, root / sibling)
 
         def changed_variables(old: str, new: str, label: str) -> Path:

@@ -17,7 +17,8 @@ from scripts.infrastructure.policy_evaluator import POLICY_VARIABLE, Request, as
 R, A, P, E, B = "eu-west-1", "111111111111", "example_project", "dev", "example-project-ci-bucket"
 VALUES = {"AWS_REGION": R, "AWS_ACCOUNT_ID": A, "PROJECT_NAME": P, "ENVIRONMENT": E, "DATA_BUCKET_NAME": B}
 TAG = {"Project": P}
-SERVICES = ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "iam", "logs", "s3", "secretsmanager", "sns", "ssm", "sts")
+# The policy files of the project user, by the service part of their name. ssmcap holds the Terraform grants on the host job cap parameter.
+SERVICES = ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "iam", "logs", "s3", "secretsmanager", "sns", "ssm", "ssmcap", "sts")
 USER = "example_project_dev"
 LEAF = "0" * 64
 
@@ -128,6 +129,13 @@ AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
 # The catalog setup creates these two passwords as the project user. PutParameter carries the condition key ssm:Overwrite (a string), so an explicit
 # Deny on Overwrite = true keeps the two names create-only. The grant is limited to the two names.
 OPENMETADATA_PASSWORDS = ("openmetadata_admin_password", "openmetadata_db_password")
+# Host job cap parameter writer (owner A, Nov 10 2026): the services stack creates the host job cap as a Terraform aws_ssm_parameter, so the project
+# user manages that one name (put, read, delete and tag it) and lists parameter metadata, which ssm:DescribeParameters allows only on "*".
+HOST_JOB_CAP = "host_job_cap"
+HOST_JOB_CAP_STATEMENT = "ManageHostJobCapParameter"
+HOST_JOB_CAP_LISTING = "ListParameterMetadataForTerraform"
+HOST_JOB_CAP_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource")
+HOST_JOB_CAP_NEIGHBORS = ("host_job_cap_extra", "host_job_cap/child", "host_job_capacity", "host_job")
 OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
 OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
 OPENMETADATA_NEIGHBORS = (
@@ -277,6 +285,9 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", "GetParameter", parameter(name), region=None)
         add("ssm", "PutParameter", parameter(name), region=None)
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
+    for action in HOST_JOB_CAP_ACTIONS:
+        ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None))
+    ops["ssmcap"].append(request("ssm:DescribeParameters", "*"))
     add(
         "ssm",
         "StartSession",
@@ -868,7 +879,6 @@ def parameter_cases() -> Iterator[Case]:
     )
     yield Case("parameter: write the public ECS parameter", request("ssm:PutParameter", PUBLIC_PARAMETER, region=None), False)
     for name in (
-        "ssm:DescribeParameters",
         "ssm:DeleteParameter",
         "ssm:DeleteParameters",
         "ssm:LabelParameterVersion",
@@ -1129,10 +1139,42 @@ def aws_polaris_pair_cases() -> Iterator[Case]:
     for name in ("aws_polaris_root_secret", "aws_polaris_writer_client_secret"):
         for action in ("PutParameter", "GetParameter"):
             yield Case(f"aws pair: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
-    yield Case("aws pair: refuse the account-wide parameter listing", request("ssm:DescribeParameters", "*"), False)
+
+
+def host_job_cap_cases() -> Iterator[Case]:
+    """The host job cap parameter that the services stack manages: every parameter action on that one name is allowed exactly when Terraform needs it,
+    no neighbouring name, region, account or folder gets any of them, and the metadata listing is allowed on "*" only through its own statement."""
+    for action in PARAMETER_ACTIONS:
+        allowed = action in HOST_JOB_CAP_ACTIONS
+        yield Case(
+            f"host job cap: {action} {HOST_JOB_CAP}",
+            request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None),
+            allowed,
+            HOST_JOB_CAP_STATEMENT if allowed else None,
+        )
     yield Case(
-        "aws pair: refuse a listing scoped to a pair name", request("ssm:DescribeParameters", parameter("aws_polaris_gold_client_id"), region=None), False
+        f"host job cap: overwrite {HOST_JOB_CAP} at a later apply",
+        request("ssm:PutParameter", parameter(HOST_JOB_CAP), extra={"ssm:Overwrite": "true"}, region=None),
+        True,
     )
+    for name in HOST_JOB_CAP_NEIGHBORS:
+        for action in HOST_JOB_CAP_ACTIONS:
+            yield Case(f"host job cap: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    for label, resource in (
+        ("another region", parameter(HOST_JOB_CAP).replace(f":{R}:", ":eu-west-2:")),
+        ("another account", parameter(HOST_JOB_CAP).replace(f":{A}:", ":222222222222:")),
+        ("another folder", parameter(HOST_JOB_CAP).replace(f"/{PARAMETER_FOLDER}/", "/another_project/")),
+    ):
+        for action in HOST_JOB_CAP_ACTIONS:
+            yield Case(f"host job cap: refuse {action} {HOST_JOB_CAP} in {label}", request(f"ssm:{action}", resource, region=None), False)
+    for name in ("postgres_password", "redis_password", OPENMETADATA_PASSWORDS[0], "aws_polaris_gold_client_secret"):
+        for action in ("DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource"):
+            yield Case(f"host job cap: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    yield Case("host job cap: list parameter metadata", request("ssm:DescribeParameters", "*"), True, HOST_JOB_CAP_LISTING)
+    yield Case("host job cap: no parameter listing in another region", request("ssm:DescribeParameters", "*", region="eu-west-2"), False)
+    key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
+    for action in ("Decrypt", "Encrypt", "GenerateDataKey"):
+        yield Case(f"host job cap: refuse kms:{action}", request(f"kms:{action}", key), False)
 
 
 def openmetadata_password_cases() -> Iterator[Case]:
@@ -1188,12 +1230,6 @@ def openmetadata_password_cases() -> Iterator[Case]:
     for name in OPENMETADATA_NEIGHBORS:
         for action in ("PutParameter", "GetParameter"):
             yield Case(f"openmetadata passwords: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
-    yield Case("openmetadata passwords: refuse the account-wide parameter listing", request("ssm:DescribeParameters", "*"), False)
-    yield Case(
-        "openmetadata passwords: refuse a listing scoped to a password name",
-        request("ssm:DescribeParameters", parameter(OPENMETADATA_PASSWORDS[0]), region=None),
-        False,
-    )
     key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
     for action in ("Decrypt", "Encrypt", "GenerateDataKey"):
         yield Case(f"openmetadata passwords: refuse kms:{action}", request(f"kms:{action}", key), False)
@@ -1413,7 +1449,6 @@ FORBIDDEN = {
         "CreateAssociation",
         "StartSession_shell",
         "DeleteParameter",
-        "DescribeParameters",
         "GetParametersByPath",
         "DescribeInstanceInformation",
     ),
@@ -2237,6 +2272,7 @@ def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from project_parameter_grid_cases()
     yield from aws_polaris_pair_cases()
     yield from openmetadata_password_cases()
+    yield from host_job_cap_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()
@@ -2621,11 +2657,6 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def aws_pair_statement_dropped(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "ssm", "SetUpAwsPolarisPairs")
 
-    def aws_pair_listing_granted(documents: dict[str, dict[str, Any]]) -> None:
-        documents["healthcare_hai_prediction_ssm_policy"]["Statement"].append(
-            {"Sid": "ListParameters", "Effect": "Allow", "Action": "ssm:DescribeParameters", "Resource": "*"}
-        )
-
     aws_pair_defects: dict[str, tuple[str, Mutation]] = {
         f"aws pair resource {name} widened": (
             f"aws pair: refuse PutParameter {name}_extra",
@@ -2653,7 +2684,6 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "aws pair: refuse AddTagsToResource aws_polaris_silver_client_id",
                 aws_pair_action("SetUpAwsPolarisPairs", "ssm:AddTagsToResource"),
             ),
-            "account-wide parameter listing granted": ("aws pair: refuse the account-wide parameter listing", aws_pair_listing_granted),
         }
     )
 

@@ -28,7 +28,7 @@ IAM_SCALAR_OR_LIST_FIELDS = {"Action", "NotAction", "Resource", "NotResource", "
 MAX_POLICY_VERSIONS = 5
 # The services of each group. Each group holds at most 10 policies. A policy file whose service is in no group stops the run.
 GROUP_SERVICES = {
-    "data": ("iam", "s3", "secretsmanager", "ssm", "sts"),
+    "data": ("iam", "s3", "secretsmanager", "ssm", "ssmcap", "sts"),
     "platform": ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "logs", "sns"),
 }
 MAX_GROUP_POLICIES = 10

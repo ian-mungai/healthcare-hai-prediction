@@ -86,6 +86,9 @@ ROLE_VARIABLES = ("lakehouse_reader_role_name", "lakehouse_writer_role_name")
 # The two catalog password names are declared beside the catalog's own IAM variables, not in variables.tf. Only the setup that creates them writes them.
 OPENMETADATA_VARIABLES = ("openmetadata_admin_password_name", "openmetadata_db_password_name")
 OPENMETADATA_FILES = ("openmetadata.tf", "openmetadata_persistent.tf")
+# The host job cap parameter name is declared beside the Airflow launch role, which reads it; the services apply manages it as the project user.
+HOST_JOB_CAP_VARIABLES = ("host_job_cap_parameter_name",)
+HOST_JOB_CAP_FILES = ("airflow_launch.tf",)
 FEATURES_PAIR_VARIABLES = ("aws_polaris_features_client_id_name", "aws_polaris_features_client_secret_name")
 FEATURES_PAIR_FILES = ("job_writer_variables.tf",)
 DEPLOYMENT = "infra/deployment.auto.tfvars.json"
@@ -213,6 +216,14 @@ def openmetadata_names(variables: Path) -> dict[str, str]:
     Only the policy renderer needs them (``render_policy.terraform_names``), so ``variable_names`` stays readable from a lone ``variables.tf``.
     """
     return beside_names(variables, OPENMETADATA_FILES, OPENMETADATA_VARIABLES)
+
+
+def host_job_cap_names(variables: Path) -> dict[str, str]:
+    """The host job cap parameter name by placeholder, read from the Airflow launch variables beside ``variables.tf``.
+
+    Only the policy renderer needs it (``render_policy.terraform_names``), for the project user's grant on that one parameter.
+    """
+    return beside_names(variables, HOST_JOB_CAP_FILES, HOST_JOB_CAP_VARIABLES)
 
 
 def features_pair_names(variables: Path) -> dict[str, str]:

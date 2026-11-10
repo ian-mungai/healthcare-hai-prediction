@@ -75,6 +75,12 @@
       "Effect": "Allow",
       "Action": "logs:GetLogEvents",
       "Resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${LOG_GROUP_NAME}:log-stream:*"
+    },
+    {
+      "Sid": "ReadHostJobCap",
+      "Effect": "Allow",
+      "Action": "ssm:GetParameter",
+      "Resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${HOST_JOB_CAP_PARAMETER_NAME}"
     }
   ]
 }

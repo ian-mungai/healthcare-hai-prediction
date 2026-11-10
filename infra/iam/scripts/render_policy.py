@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
-from scripts.infrastructure.secret_store import SecretStoreError, features_pair_names, openmetadata_names, policy_names, variable_names
+from scripts.infrastructure.secret_store import SecretStoreError, features_pair_names, host_job_cap_names, openmetadata_names, policy_names, variable_names
 
 POLICIES_DIRECTORY = Path(__file__).resolve().parents[1] / "policies"
 VARIABLES_FILE = Path(__file__).resolve().parents[1] / "variables.tf"
@@ -58,7 +58,13 @@ def non_whitespace_length(document: Mapping[str, Any]) -> int:
 def terraform_names(variables: Path = VARIABLES_FILE) -> dict[str, Sequence[str]]:
     """The names of the Terraform variable defaults, by placeholder: the three name lists, and each single name as a string."""
     try:
-        return {**policy_names(variables), **variable_names(variables), **openmetadata_names(variables), **features_pair_names(variables)}
+        return {
+            **policy_names(variables),
+            **variable_names(variables),
+            **openmetadata_names(variables),
+            **features_pair_names(variables),
+            **host_job_cap_names(variables),
+        }
     except (OSError, SecretStoreError) as error:
         raise PolicyRenderError(f"the names cannot be read from {variables.name}: {error}") from None
 
