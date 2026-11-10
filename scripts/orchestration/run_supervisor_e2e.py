@@ -11,9 +11,11 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import errno
 import fcntl
 import io
 import json
+import logging
 import socket
 import stat
 import sys
@@ -307,9 +309,10 @@ def supervisor_teardown_independent(env: SessionEnv) -> dict[str, bool]:
     }
 
 
-def run_down(env: SessionEnv, supervisor: Supervisor) -> tuple[int | None, dict[str, Any], str]:
-    """The command line's ``down`` on a supervisor: its exit code (None when it raised), the JSON it printed and what it wrote to stderr."""
-    output, errors = io.StringIO(), io.StringIO()
+def run_down(env: SessionEnv, supervisor: Supervisor, errors: io.StringIO | None = None) -> tuple[int | None, dict[str, Any], str]:
+    """The command line's ``down`` on a supervisor: its exit code (None when it raised), the JSON it printed and what it wrote to stderr (empty
+    when the given stderr stream is closed)."""
+    output, errors = io.StringIO(), errors if errors is not None else io.StringIO()
     argv = ["supervisor", "--test-registry", str(env.registry), "down"]
     code: int | None = None
     with (
@@ -321,7 +324,7 @@ def run_down(env: SessionEnv, supervisor: Supervisor) -> tuple[int | None, dict[
     ):
         code = supervisor_module.main()
     printed = output.getvalue()
-    return code, json.loads(printed) if printed.strip().startswith("{") else {}, errors.getvalue()
+    return code, json.loads(printed) if printed.strip().startswith("{") else {}, "" if errors.closed else errors.getvalue()
 
 
 def stack_is_down(env: SessionEnv) -> bool:
@@ -405,6 +408,120 @@ def supervisor_teardown_unresolved(env: SessionEnv) -> dict[str, bool]:
         "a failed start still raises its own error": "test failure point" in start_raised,
         "a failed start reports the cleanup that did not finish": "stack" in start_errors.getvalue() and "cleanup" in start_errors.getvalue(),
         "a confirmed teardown returns 0 with nothing on stderr": clean_code == 0 and not clean_errors and clean.get("stack", {}).get("phase") == "down",
+    }
+
+
+LOGGING_STATE = ("level", "propagate", "disabled")
+
+
+def logger_state(name: str) -> tuple[Any, ...]:
+    """A logger's own level, propagate flag, disabled flag and handler list (the handler objects, compared by identity)."""
+    logger = logging.getLogger(name)
+    return (*(getattr(logger, field) for field in LOGGING_STATE), tuple(id(handler) for handler in logger.handlers))
+
+
+@contextlib.contextmanager
+def warn_on_down(supervisor: Supervisor, marker: str) -> Any:
+    """While open, the supervisor's teardown request logs one warning on each diagnostic logger, carrying the marker and a record argument that must
+    stay out of standard error. The case's own cleanup teardown, which runs outside the command, then requests without warnings."""
+    original = supervisor.client.call
+
+    def call(method: str, *args: Any, **kwargs: Any) -> Any:
+        if method == "orchestration_down":
+            logging.getLogger("launcher.client").warning("synthetic slow exchange %s %s", marker, "synthetic-record-argument")
+            logging.getLogger("orchestration.lineage").warning("synthetic lineage warning %s %s", marker, "synthetic-record-argument")
+        return original(method, *args, **kwargs)
+
+    with mock.patch.object(supervisor.client, "call", call):
+        yield
+
+
+@contextlib.contextmanager
+def supervisor_log_full() -> Any:
+    """Every open of ``supervisor.log`` fails as on a full disk; other files open as usual."""
+    original = Path.open
+
+    def full(self: Path, *args: Any, **kwargs: Any) -> Any:
+        if self.name == "supervisor.log":
+            raise OSError(errno.ENOSPC, "synthetic: no space left on device", str(self))
+        return original(self, *args, **kwargs)
+
+    with mock.patch.object(Path, "open", full):
+        yield
+
+
+@case("supervisor_operator_log_isolated")
+def supervisor_operator_log_isolated(env: SessionEnv) -> dict[str, bool]:
+    """933d: the warnings of the launcher client and the lineage worker reach ``supervisor.log`` and nothing else, whatever the process's logging setup,
+    and a failing log never reaches the command: ``down`` with no session, run while both loggers warn. A log write that fails (disk full) leaves the exit
+    code, the result and an empty stderr unchanged, also with a closed stderr; a root stderr handler and a handler on the logger itself receive nothing
+    and keep their configuration; an inherited ERROR level does not hide the warning, and every logger's own level, propagate flag and handlers are
+    the same afterwards."""
+    services_script(env)
+    env.start()
+    names = ("launcher.client", "orchestration.lineage", "orchestration", "launcher", "")
+    before = {name: logger_state(name) for name in names}
+    log = BrokerPaths(run_lock.Registry(env.registry, "test"), env.temp).private / "supervisor.log"
+
+    def logged() -> str:
+        return log.read_text() if log.is_file() else ""
+
+    def ended_down(code: int | None, result: dict[str, Any]) -> bool:
+        return code == 0 and result.get("stack", {}).get("phase") == "down" and "errors" not in result
+
+    full = env.supervisor()
+    with warn_on_down(full, "marker-full"), supervisor_log_full():
+        full_code, full_result, full_errors = run_down(env, full)
+    closed_stream = io.StringIO()
+    closed_stream.close()
+    closed = env.supervisor()
+    with warn_on_down(closed, "marker-closed"), supervisor_log_full():
+        closed_code, closed_result, _ = run_down(env, closed, closed_stream)
+    root_stream, own_stream = io.StringIO(), io.StringIO()
+    root_handler, own_handler = logging.StreamHandler(root_stream), logging.StreamHandler(own_stream)
+    root = logging.getLogger()
+    root_level = root.level
+    root.addHandler(root_handler)
+    root.setLevel(logging.WARNING)
+    logging.getLogger("launcher.client").addHandler(own_handler)
+    try:
+        configured = {name: logger_state(name) for name in names}
+        routed = env.supervisor()
+        with warn_on_down(routed, "marker-routed"):
+            routed_code, routed_result, routed_errors = run_down(env, routed)
+        routed_after = {name: logger_state(name) for name in names}
+        root_kept = root_handler.stream is root_stream and root_handler.level == logging.NOTSET
+    finally:
+        logging.getLogger("launcher.client").removeHandler(own_handler)
+        root.removeHandler(root_handler)
+        root.setLevel(root_level)
+    logging.getLogger("launcher.client").setLevel(logging.ERROR)
+    logging.getLogger("orchestration").setLevel(logging.ERROR)
+    try:
+        quiet_before = {name: logger_state(name) for name in names}
+        quiet = env.supervisor()
+        with warn_on_down(quiet, "marker-quiet"):
+            quiet_code, quiet_result, quiet_errors = run_down(env, quiet)
+        quiet_after = {name: logger_state(name) for name in names}
+    finally:
+        logging.getLogger("launcher.client").setLevel(logging.NOTSET)
+        logging.getLogger("orchestration").setLevel(logging.NOTSET)
+    text = logged()
+    return {
+        f"a log that cannot be written leaves down at 0 with its result and nothing on stderr ({full_errors[:80]!r})": ended_down(full_code, full_result)
+        and not full_errors,
+        "a log that cannot be written with stderr closed leaves down at 0 with its result": ended_down(closed_code, closed_result),
+        "the failed writes left no line in supervisor.log": "marker-full" not in text and "marker-closed" not in text,
+        "with a root stderr handler, down still returns 0 with nothing on stderr": ended_down(routed_code, routed_result) and not routed_errors,
+        "a root stderr handler receives nothing during the command": root_stream.getvalue() == "",
+        "a handler on the launcher client logger receives nothing during the command": own_stream.getvalue() == "",
+        "both warnings of the routed run reach supervisor.log": text.count("marker-routed") == 2,
+        "the root and named loggers keep their level, propagate flag and handlers": routed_after == configured and root_kept,
+        "with an inherited ERROR level, down still returns 0 with nothing on stderr": ended_down(quiet_code, quiet_result) and not quiet_errors,
+        "with an inherited ERROR level, both warnings still reach supervisor.log": text.count("marker-quiet") == 2,
+        "the ERROR levels and every logger's settings are restored": quiet_after == quiet_before,
+        "the record argument never reaches stderr": "synthetic-record-argument" not in full_errors + routed_errors + quiet_errors,
+        "every logger is as it was before the case": {name: logger_state(name) for name in names} == before,
     }
 
 
@@ -535,6 +652,7 @@ ALL_CASES = (
     supervisor_listener_start_failure,
     supervisor_teardown_independent,
     supervisor_teardown_unresolved,
+    supervisor_operator_log_isolated,
     supervisor_failure_after_start,
     supervisor_image_missing,
     supervisor_pulls_missing_postgres,
