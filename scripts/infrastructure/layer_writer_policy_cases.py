@@ -29,6 +29,7 @@ LARGEST_BUCKET = f"arn:aws:s3:::{LARGEST_BUCKET_NAME}"
 MANAGED_PREFIX = "storage_bronze_"
 EXTRAS = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_activation")
 PRODUCTION_PREFIX = "promote/production/"
+LEASE_PREFIX = "promote/models/"
 POLICIES = (
     "job_writer_layer_storage",
     "job_writer_execution",
@@ -180,8 +181,20 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             "promote/productions/x.json",
         ):
             add(f"{layer} promotion record outside production {key}", layer, "s3:GetObject", f"{BUCKET}/{key}", False)
-        for prefix in ("promote/", "promote/models/", "promote/production", "promote/productions/", "production/"):
+        for prefix in ("promote/", "promote/models/", "promote/models", "promote/production", "promote/productions/", "production/"):
             add(f"{layer} promotion list outside production {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
+        # Before it loads or releases an online set, the Feast phase lists the promotion lease generations of each model (promote/models/<model>/) and
+        # reads no lease record (owner decision "Features reader refuses an unresolved promotion", Nov 10 2026).
+        for model in ("hai_model_HAI_1", "hai_model_HAI_6"):
+            lease = f"{LEASE_PREFIX}{model}/"
+            add(f"{layer} lease list {model}", layer, "s3:ListBucket", BUCKET, layer == "features", {"s3:prefix": (lease,)})
+            add(f"{layer} lease list other bucket {model}", layer, "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": (lease,)})
+            add(f"{layer} lease versions {model}", layer, "s3:ListBucketVersions", BUCKET, False, {"s3:prefix": (lease,)})
+            for neighbour in (f"{LEASE_PREFIX}{model}", f"promote/modelsx/{model}/", f"promote/{model}/", f"{model}/"):
+                add(f"{layer} lease list neighbour {neighbour}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (neighbour,)})
+            for suffix in ("lease-0000000001.json", "lease-0000000001.done.json"):
+                for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"):
+                    add(f"{layer} lease record {model} {suffix} {action}", layer, action, f"{BUCKET}/{lease}{suffix}", False)
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
         for action in ("ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter"):
             add(f"{layer} redis password excludes {action}", layer, action, REDIS_PARAMETER, False)
@@ -357,6 +370,7 @@ def render_documents(root: Path, base: dict[str, dict[str, Any]], bucket: str, c
         "BUCKET_ARN": bucket,
         "PRODUCTION_OBJECT_ARNS": json.dumps([f"{bucket}/{PRODUCTION_PREFIX}*"]),
         "PRODUCTION_LIST_PREFIXES": json.dumps([f"{PRODUCTION_PREFIX}*"]),
+        "LEASE_LIST_PREFIXES": json.dumps([f"{LEASE_PREFIX}*/"]),
     }
     documents["layer_feast_features"] = load(directory / "job_writer_features_feast.json", feast)
     activation = {"BUCKET_ARN": bucket, "RUN_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/layer_runs/features/*"])}
