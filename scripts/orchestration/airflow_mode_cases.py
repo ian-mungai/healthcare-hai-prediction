@@ -39,7 +39,9 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 11. Current host job cap at launch (owner A, Nov 10 2026): the preflight reads the host job cap the services stack writes to SSM at every host launch
    and refuses a revision whose label gives a job more memory, or any launch while the cap is missing or malformed
    (``revision_above_the_host_job_cap_is_refused``). A revision at or below the cap runs, and a cap lowered later refuses the next launch
-   (``revision_within_the_host_job_cap_runs``).
+   (``revision_within_the_host_job_cap_runs``). The production reader that ``airflow_steps.services()`` wires sends one exact GetParameter per
+   launch and refuses on a missing or denied parameter (``production_reader_reads_the_host_job_cap``), and a constant reader in its place fails
+   those checks (``a_constant_cap_reader_is_caught``).
 """
 
 from __future__ import annotations
@@ -917,6 +919,108 @@ def revision_within_the_host_job_cap_runs() -> None:
     require(rig.cloud.count("ssm:GetParameter host_job_cap") == 2 and rig.tasks_started() == 1, f"the cap was not read at every launch: {rig.cloud}")
 
 
+CAP_PARAMETER = "/healthcare_hai_prediction/host_job_cap"
+
+
+class CapSsm:
+    """The SSM client of the production launch services: it answers GetParameter for the host job cap from a queue of values or errors, records every
+    request, and refuses any other parameter or operation, so a reader that skips the call or asks for something else fails. The last answer repeats."""
+
+    def __init__(self, answers: list[str | Exception]) -> None:
+        self.answers = list(answers)
+        self.requests: list[dict[str, Any]] = []
+
+    def get_parameter(self, **request: Any) -> dict[str, Any]:
+        self.requests.append(dict(request))
+        if request.get("Name") != CAP_PARAMETER:
+            raise client_error("AccessDeniedException", "GetParameter", f"the launch role may not read {request.get('Name')}")
+        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]  # the last answer stays, as a lasting refusal does
+        if isinstance(answer, Exception):
+            raise answer
+        return {"Parameter": {"Name": CAP_PARAMETER, "Type": "String", "Value": answer}}
+
+
+def production_cap_reader(ssm: CapSsm) -> Any:
+    """The host job cap reader that ``airflow_steps.services()`` wires, built with a stand-in boto3 session whose SSM client is ``ssm``, from the
+    Airflow environment the services stack renders. It returns the production preflight's reader, never a reader of this module."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+
+    class Session:
+        def __init__(self, region_name: str) -> None:
+            self.region = region_name
+
+        def client(self, name: str, config: Any = None) -> Any:
+            return ssm if name == "ssm" else FakeEcs() if name == "ecs" else FakeLogs() if name == "logs" else FakeS3()
+
+    with tempfile.TemporaryDirectory() as scratch:
+        environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
+        environment |= {"HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER, "HAI_LAUNCH_HOST_CAPACITY": CAPACITY}
+        provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
+        with (
+            mock.patch.dict("os.environ", environment, clear=True),
+            mock.patch.dict(sys.modules, {"orchestration.ecs_launch_provider": provider}),
+            mock.patch("boto3.session.Session", Session),
+        ):
+            built = steps.services()
+    require(not ssm.requests, f"building the launch services read the cap before any launch: {ssm.requests}")
+    return built.preflight.host_job_cap
+
+
+def check_production_cap_reader() -> None:
+    """The production reader, through the shipped preflight and DAG runtime: one exact GetParameter per launch (the rendered name, no decryption
+    flag), a value that changes between launches is read again, and a missing parameter or a denied read launches no task."""
+    ssm = CapSsm([str(JOB_MEMORY), str(JOB_MEMORY - 1)])
+    rig = Rig()
+    rig.preflight.host_job_cap = production_cap_reader(ssm)
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "a revision at the cap the production reader returned did not run")
+    require(ssm.requests == [{"Name": CAP_PARAMETER}], f"the production reader did not send exactly one GetParameter for the cap: {ssm.requests}")
+    with world(rig, "gold_transform_dag", GOLD) as current:
+        error = refuses(LaunchRefused, lambda: current.step("pin_silver"))
+    require("host job cap" in str(error) and str(JOB_MEMORY - 1) in str(error), f"a cap lowered between launches did not refuse the next launch: {error}")
+    require(ssm.requests == [{"Name": CAP_PARAMETER}] * 2 and rig.tasks_started() == 1, f"the cap was not read again at the next launch: {ssm.requests}")
+    for answer, named in (
+        (client_error("ParameterNotFound", "GetParameter"), "not found"),
+        (client_error("AccessDeniedException", "GetParameter"), "host_job_cap_unreadable"),
+    ):
+        ssm = CapSsm([answer])
+        rig = Rig()
+        rig.preflight.host_job_cap = production_cap_reader(ssm)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(Exception, lambda: current.step("pin_bronze"))
+        require(named in str(error), f"the production reader's {type(answer).__name__} is not named: {type(error).__name__}: {error}")
+        # A missing parameter refuses at once. A denied read is unavailable: the step asks again within its bound, then fails.
+        expected = 1 if named == "not found" else len(ssm.requests)
+        require(
+            len(ssm.requests) == expected >= 1 and all(item == {"Name": CAP_PARAMETER} for item in ssm.requests),
+            f"the refused launch did not send only the exact GetParameter for the cap: {ssm.requests}",
+        )
+        require(rig.tasks_started() == 0 and not rig.records.calls, f"a launch went ahead after {named}")
+
+
+def production_reader_reads_the_host_job_cap() -> None:
+    """Finding 2 of the SSM cap review: the launch suite runs the production SSM reader and its wiring in ``airflow_steps.services()``, not a reader
+    of its own."""
+    check_production_cap_reader()
+
+
+def a_constant_cap_reader_is_caught() -> None:
+    """Mutation: the production ``ssm_host_cap_reader`` swapped for a reader that always answers 999999 MiB and never calls SSM. The production
+    reader checks must fail, so the suite cannot pass with the cap read removed."""
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    steps = importlib.import_module("orchestration.airflow_steps")
+
+    def constant(_ssm: Any, _name: str) -> Callable[[], str | None]:
+        return lambda: "999999"
+
+    with mock.patch.object(preflight, "ssm_host_cap_reader", constant), mock.patch.object(steps, "ssm_host_cap_reader", constant):
+        try:
+            check_production_cap_reader()
+        except AssertionError:
+            return
+    raise AssertionError("a constant 999999 MiB cap reader passed the production reader checks")
+
+
 def bound_revision_runs_by_its_exact_arn() -> None:
     """A bound revision is described once and runs by its exact ARN. A revision registered after the check (here an unbound one, made latest while
     the task starts) never runs in its place: the RunTask call names the checked revision, not the family."""
@@ -1512,6 +1616,8 @@ CASES: dict[str, Callable[[], None]] = {
     "malformed_capacity_refuses": malformed_capacity_refuses,
     "revision_above_the_host_job_cap_is_refused": revision_above_the_host_job_cap_is_refused,
     "revision_within_the_host_job_cap_runs": revision_within_the_host_job_cap_runs,
+    "production_reader_reads_the_host_job_cap": production_reader_reads_the_host_job_cap,
+    "a_constant_cap_reader_is_caught": a_constant_cap_reader_is_caught,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
