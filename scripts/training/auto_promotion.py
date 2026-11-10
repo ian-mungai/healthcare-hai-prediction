@@ -9,7 +9,9 @@
 ``plan`` reads the research record of a type and prints the parameters of the canary deployment and of the promotion, or ``{"challenger": null}``. ``verdict``
 judges the replay report of the canary with the owner's pass rule and the offline predictions of the research record, and prints ``promote`` or ``hold``
 with the failed checks. ``record`` does the same and, on a pass, tags the challenger's version with the result, bound to the version and its model run
-(``MLFLOW_TRACKING_URI``); the ``promote`` action refuses a version without it. ``release`` loads the held online
+(``MLFLOW_TRACKING_URI``); the ``promote`` action refuses a version without it. Both refuse, by the name in ``code``, a replay of another infection type than
+the record's; ``record`` also refuses a registry version that is not the record's challenger (other registered model, source run, model, type, base run or
+selected training run), so a record and replay from another tracking store certify nothing. ``release`` loads the held online
 data of the model's feature set, which only a model with another feature schema than the online one needs (``schema_changed``). ``notify`` publishes the
 outcome to the project's alerts topic named by ``ALERTS_TOPIC_ARN``. No step needs the owner's approval, and none moves an alias: the ``promote`` action does.
 """
@@ -28,7 +30,7 @@ from typing import Any
 from orchestration import serving_contract, training_contract
 from scripts.process import run_command
 from scripts.serving import compare, replay
-from scripts.training import promote, registry, run_tracking
+from scripts.training import job_inputs, promote, registry, run_tracking
 
 RELEASE_SECONDS = 1800.0
 MAX_RELATIVE_DIFFERENCE = 1e-6
@@ -37,6 +39,53 @@ OUTCOMES = ("promoted", "held", "rolled_back")
 
 class PlanRefused(ValueError):
     """The research record cannot start a promotion."""
+
+
+class CandidateRefused(ValueError):
+    """The research record, the replay report and the registry version do not name one candidate; ``code`` names the check that failed."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(f"{code}: {detail}")
+        self.code = code
+
+
+def check_replay(record: Mapping[str, Any], report: Mapping[str, Any]) -> None:
+    """Refuse a replay of another infection type than the research record's, and a record whose challenger names no source run."""
+    hai_type = record.get("hai_type")
+    if hai_type not in training_contract.HAI_TYPES or report.get("hai_type") != hai_type:
+        raise CandidateRefused("replay_type_differs", f"the replay is of {report.get('hai_type')!r}, the research record of {hai_type!r}")
+    source_run = (record["promotion"]["challenger"] or {}).get("source_run")
+    if not isinstance(source_run, str) or not source_run:
+        raise CandidateRefused("research_source_run_missing", "the research record's challenger names no source run, so no version can be bound to it")
+
+
+def check_candidate(store: Any, record: Mapping[str, Any], name: str, version: Any) -> None:
+    """Refuse a registry version that is not the research record's challenger.
+
+    The registered model is the one the model contract names for the record's type, and the version came from the challenger's source run, was
+    registered for the challenger's model, type and base run, and its source run is the training run the record selected for that model.
+    """
+    challenger, hai_type = record["promotion"]["challenger"], record["hai_type"]
+    contract = job_inputs.read_json(job_inputs.ROOT / "data_contracts/training/model_contract.json", "model_contract")
+    if contract["registered_models"].get(hai_type) != name:
+        raise CandidateRefused("candidate_registered_model_differs", f"{name} is not the registered model of {hai_type}")
+    tags = dict(getattr(version, "tags", {}) or {})
+    source_run = challenger["source_run"]
+    if str(version.run_id) != source_run or tags.get("source_run_id") != source_run:
+        raise CandidateRefused(
+            "candidate_source_run_differs",
+            f"version {version.version} of {name} came from {version.run_id}, the research record's challenger from {source_run}",
+        )
+    for key, expected in (("model", challenger["model"]), ("hai_type", hai_type), ("base_run", record.get("base_run"))):
+        if tags.get(key) != expected:
+            raise CandidateRefused(
+                f"candidate_{key}_differs", f"version {version.version} of {name} has {key} {tags.get(key)!r}, the research record {expected!r}"
+            )
+    training_run = store.get_run(source_run).data.tags.get("run_id")
+    if training_run != record.get("runs", {}).get(challenger["model"]):
+        raise CandidateRefused(
+            "candidate_training_run_differs", f"the source run {source_run} belongs to the training run {training_run!r}, not to the one the record selected"
+        )
 
 
 def plan(record: Mapping[str, Any], percent: int) -> dict[str, Any]:
@@ -94,12 +143,18 @@ def canary_checks(report: Mapping[str, Any], offline: Mapping[str, float], candi
     return {"decision": "hold" if failed else "promote", "failed": failed}
 
 
-def record_canary(store: Any, name: str, number: str, report: Mapping[str, Any], offline: Mapping[str, float]) -> dict[str, Any]:
-    """Judge the canary of one version and, only on a pass, tag the version with the result bound to its number and its model run."""
+def record_canary(store: Any, record: Mapping[str, Any], report: Mapping[str, Any]) -> dict[str, Any]:
+    """Judge the canary of the research record's challenger and, only on a pass, tag its version with the result bound to its number and its model run.
+
+    The replay, the research record and the registry version must name one candidate (``check_replay``, ``check_candidate``), or nothing is tagged.
+    """
+    check_replay(record, report)
+    name, number = record["promotion"]["registered_model"], str(record["promotion"]["challenger"]["version"])
     version = next((item for item in registry.versions_of(store, name) if str(item.version) == number), None)
     if version is None:
         raise ValueError(f"{name} has no version {number}")
-    result = canary_checks(report, offline, number)
+    check_candidate(store, record, name, version)
+    result = canary_checks(report, record["promotion"]["challenger_predictions"], number)
     if result["decision"] == "promote":
         for key, value in promote.canary_tags(number, str(version.run_id)).items():
             store.set_model_version_tag(name, number, key, value)
@@ -157,13 +212,14 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("the research record has no challenger with offline predictions")
             report = json.loads(arguments.report.read_bytes())
             offline = record["promotion"]["challenger_predictions"]
+            check_replay(record, report)
             if arguments.command == "verdict":
                 result = canary_checks(report, offline, str(challenger["version"]))
             else:
                 uri = os.environ.get("MLFLOW_TRACKING_URI", "")
                 if not uri:
                     raise ValueError("MLFLOW_TRACKING_URI is not set")
-                result = record_canary(run_tracking.open_store(uri), record["promotion"]["registered_model"], str(challenger["version"]), report, offline)
+                result = record_canary(run_tracking.open_store(uri), record, report)
         elif arguments.command == "release":
             release(arguments.model, arguments.features_run)
             result = {"released": arguments.model, "features_run": arguments.features_run}
@@ -175,7 +231,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 raise ValueError("ALERTS_TOPIC_ARN is not set")
             result = {"message_id": notify(boto3.client("sns"), topic, arguments.hai_type, arguments.outcome, arguments.detail)}
     except (PlanRefused, ValueError, RuntimeError, OSError, KeyError) as error:
-        sys.stderr.write(json.dumps({"command": arguments.command, "failure": type(error).__name__, "detail": str(error)}) + "\n")
+        failure = {"command": arguments.command, "failure": type(error).__name__, "detail": str(error)}
+        if isinstance(error, CandidateRefused):
+            failure["code"] = error.code
+        sys.stderr.write(json.dumps(failure) + "\n")
         return 2
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
     return 0

@@ -128,15 +128,16 @@ def side_of(store: Any, parent: Any, name: str) -> Mapping[str, Any]:
 
 
 def candidate_of(store: Any, name: str, model: str, parent: Any) -> dict[str, Any]:
-    """Describe the version a model's run registered: the verdict of its promotion check and its holdout RMSE."""
+    """Describe the version a model's run registered: the verdict of its promotion check, its holdout RMSE and the MLflow run it came from."""
     versions = [item for item in registry.versions_of(store, name) if item.run_id == parent.info.run_id]
     rmse = parent.data.metrics.get(f"comparison_rmse.{MODEL_SLOT[model]}")
     if len(versions) != 1:
-        return {"model": model, "version": None, "verdict": "missing_version", "rmse": rmse, "eligible": False}
+        return {"model": model, "version": None, "verdict": "missing_version", "rmse": rmse, "eligible": False, "source_run": parent.info.run_id}
     verdict = str(versions[0].tags.get("promotion_verdict", "none"))
     return {
         "model": model,
         "version": str(versions[0].version),
+        "source_run": parent.info.run_id,
         "verdict": verdict,
         "rmse": rmse,
         "eligible": verdict in promotion.REFERENCES.values() and rmse is not None,
@@ -183,7 +184,7 @@ def research_type(store: Any, parameters: Mapping[str, Any], hai_type: str, run:
         "promotion": {
             "registered_model": name,
             "candidates": candidates,
-            "challenger": None if winner is None else {"model": winner["model"], "version": winner["version"], "verdict": winner["verdict"]},
+            "challenger": None if winner is None else {key: winner[key] for key in ("model", "version", "verdict", "source_run")},
             "challenger_predictions": None if winner is None else holdouts[winner["model"]][1],
         },
     }

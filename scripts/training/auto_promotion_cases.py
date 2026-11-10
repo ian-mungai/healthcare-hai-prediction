@@ -17,7 +17,13 @@ RUN = "20261024T000000Z-1234abcd"
 RESEARCH = {
     "schema": 1,
     "hai_type": "HAI_1",
-    "promotion": {"registered_model": "hai_model_HAI_1", "candidates": [], "challenger": {"model": "m2", "version": "4", "verdict": "pass"}},
+    "base_run": "20261023T000000Z-5678abcd",
+    "runs": {"m2": RUN},
+    "promotion": {
+        "registered_model": "hai_model_HAI_1",
+        "candidates": [],
+        "challenger": {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"},
+    },
 }
 VERSION = "4"
 OFFLINE = {f"{index:06d}:2023": 0.5 + index / 100 for index in range(40)}
@@ -26,6 +32,7 @@ ROWS = [
     for index in range(40)
 ] + [{"ccn": f"9{index:05d}", "window_year": 2023, "served_by": "stable", "model_version": "3", "prediction": 0.9, "seconds": 0.05} for index in range(60)]
 REPORT = {
+    "hai_type": "HAI_1",
     "requests": 100,
     "statuses": {"200": 100},
     "served_by": {"stable": 60, "canary": 40},
@@ -55,6 +62,25 @@ def command(arguments: list[str]) -> tuple[int, str, str]:
     with redirect_stdout(out), redirect_stderr(err):
         code = auto_promotion.main(arguments)
     return code, out.getvalue(), err.getvalue()
+
+
+def replayed(record: dict[str, Any], hai_type: str | None = None) -> dict[str, Any]:
+    """Replay a 60-row corpus through ``replay.run`` against a stand-in API: 30 of the record's holdout rows go to the canary, which answers with the
+    record's offline predictions under the challenger's version, and 30 other hospital-windows go to the stable model."""
+    from scripts.serving import replay
+
+    offline = record["promotion"]["challenger_predictions"]
+    canary_keys = sorted(offline)[:30]
+    corpus = [(key.split(":")[0], int(key.split(":")[1])) for key in canary_keys] + [(f"8{index:05d}", 2023) for index in range(30)]
+    ticks = iter(range(10_000))
+
+    def send(payload: dict[str, Any], timeout: float) -> tuple[int, dict[str, str], dict[str, Any]]:
+        key = f"{payload['ccn']}:{payload['window_year']}"
+        if key in offline:
+            return 200, {}, {"served_by": "canary", "prediction": offline[key], "model_version": record["promotion"]["challenger"]["version"]}
+        return 200, {}, {"served_by": "stable", "prediction": 0.9, "model_version": "1"}
+
+    return replay.run(send, corpus, hai_type or record["hai_type"], clock=lambda: next(ticks) * 0.001, sleep=lambda seconds: None, deadline_seconds=900.0)
 
 
 def auto_promotion_cases(cases: Cases, folder: Path) -> None:
@@ -110,15 +136,18 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         require(judged({})["decision"] == "hold", "an empty report did not hold the canary")
 
     def record_binds_the_result_to_the_candidate() -> None:
+        registered = {"model": "m2", "hai_type": "HAI_1", "base_run": RESEARCH["base_run"], "source_run_id": "mlrun4"}
         store = SimpleNamespace(
-            versions={"4": SimpleNamespace(version="4", run_id="mlrun4", tags={})},
+            versions={"4": SimpleNamespace(version="4", run_id="mlrun4", tags=registered)},
             tags={},
         )
         store.set_model_version_tag = lambda name, number, key, value: store.tags.setdefault(number, {}).__setitem__(key, value)
         store.search_model_versions = lambda filter_string="": list(store.versions.values())
-        held = auto_promotion.record_canary(store, "hai_model_HAI_1", VERSION, {**REPORT, "statuses": {"200": 99, "500": 1}}, OFFLINE)
+        store.get_run = lambda run_id: SimpleNamespace(data=SimpleNamespace(tags={"run_id": RUN}))
+        record = {**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger_predictions": OFFLINE}}
+        held = auto_promotion.record_canary(store, record, {**REPORT, "statuses": {"200": 99, "500": 1}})
         require(held["decision"] == "hold" and not store.tags, f"a held canary left tags: {held} {store.tags}")
-        done = auto_promotion.record_canary(store, "hai_model_HAI_1", VERSION, REPORT, OFFLINE)
+        done = auto_promotion.record_canary(store, record, REPORT)
         require(done["decision"] == "promote", f"a clean canary was held: {done}")
         require(
             store.tags["4"] == {"canary_verdict": "promote", "canary_version": "4", "canary_run": "mlrun4"},
@@ -179,6 +208,74 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         code, _, error = command(["plan", "--research", str(research), "--percent", "99"])
         require(code == 2 and json.loads(error)["failure"] == "ValueError", f"refusal: {code} {error}")
 
+    def record_refuses_a_candidate_of_another_identity() -> None:
+        """The reviewer's scenario: a research record and its replay from one tracking store certify version 3 of another store, which holds another run."""
+        from scripts.training import research_cases
+        from scripts.training.job_action_cases import standins
+
+        source, fixtures = research_cases.finished_models(folder / "identity_a")
+        code, _, error, output = research_cases.research(folder / "identity_a_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        research_path = output / f"research_{research_cases.HAI_TYPE}.json"
+        record = json.loads(research_path.read_text())
+        number = str(record["promotion"]["challenger"]["version"])
+        other_runs = {"m1": "20261025T000001Z-1234abcd", "m2": "20261025T000002Z-1234abcd", "m4": "20261025T000004Z-1234abcd"}
+        other, other_fixtures = research_cases.finished_models(folder / "identity_b", models=("m1", "m4", "m2"), runs=other_runs)
+
+        def canary_tags(store: Any) -> dict[str, dict[str, str]]:
+            return {
+                str(item.version): {key: value for key, value in item.tags.items() if key.startswith("canary_")}
+                for item in store.search_model_versions(f"name='{research_cases.NAME}'")
+                if any(key.startswith("canary_") for key in item.tags)
+            }
+
+        def recorded(store_fixture: Any, research_file: Path, report: dict[str, Any], step: str = "record") -> tuple[int, str, str]:
+            report_path = folder / f"identity_report_{len(list(folder.glob('identity_report_*')))}.json"
+            report_path.write_text(json.dumps(report))
+            with standins(store_fixture):
+                return command([step, "--report", str(report_path), "--research", str(research_file)])
+
+        def refusal_code(error: str) -> str:
+            return str(json.loads(error).get("code", "")) if error.strip() else ""
+
+        report = replayed(record)
+        require(auto_promotion.canary_checks(report, record["promotion"]["challenger_predictions"], number)["decision"] == "promote", "the replay itself fails")
+        code, out, error = recorded(other_fixtures["m1"], research_path, report)
+        require(
+            code == 2 and refusal_code(error).startswith("candidate_") and not canary_tags(other),
+            f"another store's version {number} was certified from this research record: exit {code}, {out.strip()} {error.strip()}, tags {canary_tags(other)}",
+        )
+        for step in ("verdict", "record"):
+            code, out, error = recorded(fixtures["m2"], research_path, replayed(record, hai_type="HAI_2"), step)
+            require(
+                code == 2 and refusal_code(error) == "replay_type_differs" and not canary_tags(source),
+                f"{step} accepted a replay of another infection type: exit {code}, {out.strip()} {error.strip()}",
+            )
+        unbound = folder / "identity_unbound.json"
+        unbound.write_text(
+            json.dumps({**record, "promotion": {**record["promotion"], "challenger": {**record["promotion"]["challenger"], "source_run": None}}})
+        )
+        code, out, error = recorded(fixtures["m2"], unbound, report)
+        require(
+            code == 2 and refusal_code(error) == "research_source_run_missing" and not canary_tags(source),
+            f"a record that names no source run certified a version: exit {code}, {out.strip()} {error.strip()}",
+        )
+        renamed = source.find_version(research_cases.NAME, number)
+        renamed["tags"]["model"], kept = "m1", renamed["tags"]["model"]
+        code, out, error = recorded(fixtures["m2"], research_path, report)
+        renamed["tags"]["model"] = kept
+        require(
+            code == 2 and refusal_code(error) == "candidate_model_differs" and not canary_tags(source),
+            f"a version registered for another model was certified: exit {code}, {out.strip()} {error.strip()}",
+        )
+        code, out, error = recorded(fixtures["m2"], research_path, report)
+        require(code == 0 and json.loads(out)["decision"] == "promote", f"the matching candidate was refused: exit {code}, {out.strip()} {error.strip()}")
+        source_run = record["promotion"]["challenger"]["source_run"]
+        require(
+            canary_tags(source) == {number: {"canary_verdict": "promote", "canary_version": number, "canary_run": source_run}},
+            f"the result is not bound to the research record's source run: {canary_tags(source)}",
+        )
+
     cases.check("auto_promotion_plans_the_canary_and_the_promotion_of_a_challenger", plans_canary_and_promotion)
     cases.check("auto_promotion_plans_nothing_without_a_challenger", plans_nothing_without_a_challenger)
     cases.check("auto_promotion_refuses_an_ineligible_challenger", refuses_ineligible_challengers)
@@ -186,6 +283,7 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     cases.check("auto_promotion_canary_checks_pass_a_clean_canary", canary_passes)
     cases.check("auto_promotion_canary_checks_hold_a_failed_or_thin_canary", canary_holds)
     cases.check("auto_promotion_canary_result_is_bound_to_the_version_and_its_run", record_binds_the_result_to_the_candidate)
+    cases.check("auto_promotion_record_refuses_a_candidate_of_another_identity", record_refuses_a_candidate_of_another_identity)
     cases.check("auto_promotion_compares_the_feature_schema_with_the_online_one", schema_comparison)
     cases.check("auto_promotion_release_calls_the_feast_release_command", release_calls_the_feast_command)
     cases.check("auto_promotion_release_failure_is_visible", release_failure_is_visible)
