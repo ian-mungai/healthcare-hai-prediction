@@ -298,9 +298,21 @@ paired as (
 ),
 
 identities as (
-    select * from seeded
+    select
+        seeded.fact,
+        seeded.measure_key,
+        seeded.value_column,
+        seeded.vintage_start,
+        seeded.vintage_end
+    from seeded
     union all
-    select * from paired
+    select
+        paired.fact,
+        paired.measure_key,
+        paired.value_column,
+        paired.vintage_start,
+        paired.vintage_end
+    from paired
 ),
 
 names_published as (
@@ -409,8 +421,6 @@ ordinary as (
 
 split_rows as (
     select
-        md5(concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start)) as measure_sk,
-        concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start) as measure_identity,
         base.fact,
         base.measure_key,
         base.value_column,
@@ -421,16 +431,46 @@ split_rows as (
         base.vintage_end,
         editions.edition_start,
         editions.edition_end,
-        'split' as identity_rule
+        'split' as identity_rule,
+        md5(concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start)) as measure_sk,
+        concat_ws('|', base.fact, base.measure_key, base.value_column, editions.edition_start) as measure_identity
     from base
     inner join editions
         on base.fact = editions.fact and base.measure_key = editions.measure_key
 ),
 
 final as (
-    select * from ordinary
+    select
+        ordinary.measure_sk,
+        ordinary.measure_identity,
+        ordinary.fact,
+        ordinary.measure_key,
+        ordinary.value_column,
+        ordinary.measure_label,
+        ordinary.unit,
+        ordinary.value_kind,
+        ordinary.vintage_start,
+        ordinary.vintage_end,
+        ordinary.edition_start,
+        ordinary.edition_end,
+        ordinary.identity_rule
+    from ordinary
     union all
-    select * from split_rows
+    select
+        split_rows.measure_sk,
+        split_rows.measure_identity,
+        split_rows.fact,
+        split_rows.measure_key,
+        split_rows.value_column,
+        split_rows.measure_label,
+        split_rows.unit,
+        split_rows.value_kind,
+        split_rows.vintage_start,
+        split_rows.vintage_end,
+        split_rows.edition_start,
+        split_rows.edition_end,
+        split_rows.identity_rule
+    from split_rows
     union all
     select
         md5('<unknown>') as measure_sk,
