@@ -139,6 +139,9 @@ def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int) -> None:
         sys.stderr.flush()
     except BaseException as error:
         # The recorder's own failure, an interrupt during the join or a closed stderr, loses only the record; the job's result still passes on.
+        # After an interrupt the record is abandoned with no further write: stderr may be a full pipe whose reader stopped, and a write would block.
+        if isinstance(error, KeyboardInterrupt):
+            return
         with contextlib.suppress(BaseException):
             sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
 

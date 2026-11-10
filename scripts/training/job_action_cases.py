@@ -2227,11 +2227,14 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
             raise RuntimeError("job failed")
 
         interrupted = mock.patch.object(resource_peaks._Sampler, "join", side_effect=KeyboardInterrupt)
+        written = io.StringIO()
         try:
-            with interrupted, contextlib.redirect_stderr(io.StringIO()):
+            with interrupted, contextlib.redirect_stderr(written):
                 resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
         except RuntimeError as error:
             require(str(error) == "job failed", f"the recorder replaced the job's exception: {error}")
+            # After an interrupt the recorder abandons its record: a further stderr write could block on a full pipe whose reader stopped.
+            require(written.getvalue() == "", f"the recorder wrote to stderr after an interrupt: {written.getvalue()!r}")
         except BaseException as error:
             raise AssertionError(f"an interrupt inside the recorder replaced the job's exception with {type(error).__name__}") from error
         else:
