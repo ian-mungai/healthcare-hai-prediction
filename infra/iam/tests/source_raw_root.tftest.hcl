@@ -122,7 +122,7 @@ run "publisher_job_class_is_off_by_default" {
   command = plan
 
   assert {
-    condition     = length(aws_iam_role.job_publisher) == 0 && length(aws_security_group.job_publisher) == 0 && output.publisher_job_contract == null
+    condition     = length(aws_iam_role.job_publisher) == 0 && output.publisher_job_contract == null
     error_message = "The run 3 publisher class must create nothing by default."
   }
 }
@@ -166,12 +166,10 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
 
   assert {
     condition = (
-      aws_vpc_security_group_egress_rule.job_publisher_https[0].from_port == 443 &&
-      aws_vpc_security_group_egress_rule.job_publisher_https[0].to_port == 443 &&
-      aws_vpc_security_group_egress_rule.job_publisher_https[0].ip_protocol == "tcp" &&
+      output.publisher_job_contract.egress == "host_job_firewall_tcp_443" && !contains(keys(output.publisher_job_contract), "security_group") &&
       output.publisher_job_contract.host_limit == "application_queue_hosts"
     )
-    error_message = "Publisher egress is HTTPS only, and the contract states that the host limit is enforced by the queue gate."
+    error_message = "The publisher runs on the host bridge network: it has no security group of its own, its egress is the host job firewall's TCP 443 and the queue gate limits its hosts."
   }
 }
 
@@ -180,7 +178,7 @@ run "publisher_exports_are_absent_by_default" {
 
   assert {
     condition = (
-      !contains(keys(output.job_roles), "publisher_task") && output.publisher_role == null && output.publisher_network == null &&
+      !contains(keys(output.job_roles), "publisher_task") && output.publisher_role == null &&
       output.publisher_project_delta == null && toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
     )
     error_message = "By default no publisher role, network or grant is exported and the private job network is unchanged."
@@ -205,10 +203,9 @@ run "publisher_exports_leave_the_target_role_set_untouched" {
 
   assert {
     condition = (
-      output.publisher_role.name == "example_project_job_publisher_task_dev" &&
-      output.publisher_network.assign_public_ip == "ENABLED"
+      output.publisher_role.name == "example_project_job_publisher_task_dev" && output.publisher_job_contract.network == "host_bridge"
     )
-    error_message = "The publisher role and network must come out of their own outputs for the jobs root."
+    error_message = "The publisher role comes out of its own output for the jobs root, and the publisher runs on the host bridge network: no subnet, security group or public IP of its own."
   }
 }
 
