@@ -44,6 +44,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
@@ -200,6 +201,20 @@ class Rig:
         return found.get("end")
 
 
+def json_type_matches(value: Any, declared: str | list[str]) -> bool:
+    """Whether ``value`` has the JSON Schema type the form declares (as Airflow's form validation does): a bool is never a number."""
+    kinds = {
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "number": lambda item: isinstance(item, int | float) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "array": lambda item: isinstance(item, list),
+        "object": lambda item: isinstance(item, dict),
+        "null": lambda item: item is None,
+    }
+    return any(kinds[kind](value) for kind in ([declared] if isinstance(declared, str) else declared))
+
+
 class FormRefused(Exception):
     """Airflow refused the trigger at the DAG's form: no DAG run and no task."""
 
@@ -272,9 +287,12 @@ class World:
                     self.params[name] = arguments[0]
                 if name not in self.params:
                     raise FormRefused(f"{name} is required")
+                value, declared = self.params[name], settings.get("type")
+                if declared is not None and not json_type_matches(value, declared):
+                    raise FormRefused(f"{name}={value!r} is not of the declared type {declared}")
                 pattern = settings.get("pattern")
-                if pattern and isinstance(self.params[name], str) and re.search(pattern, self.params[name]) is None:
-                    raise FormRefused(f"{name}={self.params[name]!r} does not match {pattern}")
+                if pattern and re.search(pattern, value) is None:  # the form's patterns apply to strings, which the type check above guarantees
+                    raise FormRefused(f"{name}={value!r} does not match {pattern}")
         for node in built:
             self.enter(node.task_id)
             upstream_ok = all(self.states.get(before.task_id) == "success" for before in node.upstream)
@@ -768,6 +786,8 @@ def form_mode_defaults() -> dict[str, Any]:
     return found
 
 
+# Values of every JSON type but string, for a parameter the form declares as a string.
+NON_STRINGS: tuple[Any, ...] = (None, 20261104, 1.5, True, [GOLD_RUN], {"run": GOLD_RUN})
 PRODUCER_RUNS = (
     ("gold_transform_dag.py", "silver_snapshot_run"),
     ("features_transform_dag.py", "gold_snapshot_run"),
@@ -818,13 +838,22 @@ def dags_run_with_their_form_defaults() -> None:
         require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{dag_id}: {job} has no success record")
     for dag_file, name in PRODUCER_RUNS:
         dag_id = dag_file.removesuffix(".py")
-        for params in ({"run_id": OTHER_RUN}, {"run_id": OTHER_RUN, name: "latest"}):
+        # Omitted, latest, and values of another JSON type than the declared string: each is refused at the form.
+        triggers: list[dict[str, Any]] = [
+            {"run_id": OTHER_RUN},
+            {"run_id": OTHER_RUN, name: "latest"},
+            *({"run_id": OTHER_RUN, name: value} for value in NON_STRINGS),
+        ]
+        for params in triggers:
             rig = Rig()
             rig.stage_runs(OTHER_RUN)
             with world(rig, dag_id, params) as current:
-                error = refuses(FormRefused, lambda current=current, dag_file=dag_file: current.run_dag(dag_file))
-                require(name in str(error) and not current.states, f"{dag_id} without its producer run was not refused at the form: {error}")
-            require(not rig.ecs.calls and not rig.records.calls, f"{dag_id} without its producer run reached ECS or the launch records")
+                error = refuses(FormRefused, partial(current.run_dag, dag_file))
+                require(name in str(error) and not current.states, f"{dag_id} with {params} was not refused at the form: {error}")
+            require(
+                not rig.ecs.calls and not rig.records.calls and not rig.stage.reads and not rig.stage.puts,
+                f"{dag_id} with {params} reached ECS, the launch records or the staged inputs",
+            )
 
 
 COLLAPSED_FILES = ("silver_transform_dag.py", "gold_transform_dag.py", "model_promotion_dag.py", "serving_deploy_dag.py")
