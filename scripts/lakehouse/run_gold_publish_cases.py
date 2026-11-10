@@ -69,6 +69,7 @@ UPDATE_AMOUNT_Q = "UPDATE {table}.branch_{branch} SET amount = amount + 1 WHERE 
 UPDATE_SITE_Q = "UPDATE {table}.branch_{branch} SET site_name = 'x' WHERE site_sk = 's1'"
 INSERT_SITE_Q = "INSERT INTO {table} VALUES ('s9', 'other writer')"
 BASE_INSERT = "INSERT INTO {table} SELECT * FROM base_rows"
+ADVANCE_Q = "UPDATE {table} SET v = v + 1000"
 LAST_SNAPSHOT_Q = "SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1"
 RELEASE_LISTS_Q = "SELECT release_sk, publication_dates, download_run_ids FROM {table} VERSION AS OF {snapshot}"
 
@@ -1278,7 +1279,7 @@ def base_pin_and_extract(h: Harness) -> Check:
         q(spark, BASE_INSERT, table=ctx.fq(name))
         snapshots[name] = int(q(spark, LAST_SNAPSHOT_Q, table=ctx.fq(name)).collect()[0][0])
 
-    def commit(run: str, names: list[str], hour: int) -> None:
+    def commit(run: str, names: list[str], hour: int, at: dict[str, int] | None = None) -> None:
         row = {
             "run_id": run,
             "mode": MODE,
@@ -1287,7 +1288,7 @@ def base_pin_and_extract(h: Harness) -> Check:
             "export_manifest_sha256": "b" * 64,
             "backup_name": "catalog_backup_x.json",
             "backup_sha256": "c" * 64,
-            "snapshot_set": {name: snapshots.get(name, 1) for name in names},
+            "snapshot_set": {name: (at or snapshots).get(name, 1) for name in names},
         }
         view = publish.runs_view(ctx, row)
         spark.sql(publish.MERGE_RUN.format(table=ctx.fq(plan.runs_table), view=view))
@@ -1301,17 +1302,29 @@ def base_pin_and_extract(h: Harness) -> Check:
     checks["the pin names the six domain matrices at the snapshots of the base run, read from the real catalog"] = record["snapshot_set"] == {
         n: snapshots[n] for n in domain
     }
-    commit("20261109T050000Z-0000b002", every, 5)
+    # Every matrix moves on after the pin: a newer snapshot whose values are all shifted by 1000, published by a newer base run. An extract that read the
+    # current tables instead of the pinned snapshots would return the shifted values, which the exact row check below refuses.
+    advanced: dict[str, int] = {}
+    for name in domain:
+        q(spark, ADVANCE_Q, table=ctx.fq(name))
+        advanced[name] = int(q(spark, LAST_SNAPSHOT_Q, table=ctx.fq(name)).collect()[0][0])
+    checks["every matrix has a newer snapshot than its pinned one"] = all(advanced[n] != snapshots[n] for n in domain)
+    commit("20261109T050000Z-0000b002", every, 5, advanced)
     checks["a retry after a newer base run was committed returns the same pin"] = features_input.pin_base(ctx, pin_path, base_run) == record
     older = refusal_of(lambda: features_input.pin_base(ctx, folder / "second.json", base_run))
     checks["an older base run is refused for a new pin and both runs are named"] = "20261109T050000Z-0000b002" in older and base_run in older
     pin_sha = publish.sha256_file(pin_path)
     first = features_input.extract(ctx, folder, pin_sha, base=True)
     manifest = publish.read_record(folder / features_input.BASE_INPUT_NAME / "manifest.json")[0]
-    checks["the extract writes one Parquet table per domain matrix with the pinned rows"] = (
-        set(manifest["snapshot_set"]) == set(domain)
-        and all(len(list((folder / features_input.BASE_INPUT_NAME / name).glob("*.parquet"))) >= 1 for name in domain)
-        and sum(spark.read.parquet(str(folder / features_input.BASE_INPUT_NAME / name)).count() for name in domain) == 3 * len(domain)
+    extracted = {
+        name: sorted((str(row[0]), float(row[1])) for row in spark.read.parquet(str(folder / features_input.BASE_INPUT_NAME / name)).collect())
+        for name in domain
+    }
+    checks["the extract writes one Parquet table per domain matrix at its pinned snapshot"] = set(manifest["snapshot_set"]) == set(domain) and all(
+        len(list((folder / features_input.BASE_INPUT_NAME / name).glob("*.parquet"))) >= 1 for name in domain
+    )
+    checks["each extracted matrix holds exactly its pinned rows, none of the newer snapshot's shifted values"] = all(
+        extracted[name] == sorted(rows[name]) for name in domain
     )
     again = features_input.extract(ctx, folder, pin_sha, base=True)
     checks["a repeated extract leaves the same manifest"] = again["snapshot_set"] == first["snapshot_set"] and again["pins_sha256"] == first["pins_sha256"]

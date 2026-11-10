@@ -280,7 +280,7 @@
     {
       "module": "scripts/lakehouse/run_gold_publish_cases.py",
       "pattern": null,
-      "why": "reviewed: the cases list a scratch parquet folder (scripts/lakehouse/run_gold_publish_cases.py:119), the warehouse of the harness (:609) and private copies below self.root / work (:209) and the Parquet files of the base pin case's extract under its case folder (:1313); the harness root is a temporary folder"
+      "why": "reviewed: the cases list a scratch parquet folder (scripts/lakehouse/run_gold_publish_cases.py:119), the warehouse of the harness (:609) and private copies below self.root / work (:209) and the Parquet files of the base pin case's extract under its case folder (:1324); the harness root is a temporary folder"
     },
     {
       "module": "scripts/lakehouse/run_launcher_e2e.py",
