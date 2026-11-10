@@ -1200,11 +1200,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "6d2eaf6781ced37f64793ab3f3b3a2b21a4b67f563fa643d9a89d69a0f019156"
-      "airflow_apiserver/airflow_migrate"           = "e3e21c8f29979eed59c67f73129cf4baec7b83c8ec774baeb417638fdb4d064b"
-      "airflow_dag_processor/airflow_dag_processor" = "a44e46860eecdb47ec3700c1ec5521678cf2a43e6c0a6050df1124eff17d014d"
-      "airflow_scheduler/airflow_scheduler"         = "1a12aa3ee36daffcdc3904515aaa745e69c42116ad75260a983bd28bcb65a632"
-      "airflow_triggerer/airflow_triggerer"         = "419213ebdc36894da3c94306f4656c70a12ed442f0607122ac25c944903dba3b"
+      "airflow_apiserver/airflow_apiserver"         = "c4e18687fcbe5be4d303b69e3e035011efc143c921d8ac52328c6e5caea20585"
+      "airflow_apiserver/airflow_migrate"           = "c0867d034ff810e964af1631c46abdca0283bd230ac3ee11b6a29ef463b35388"
+      "airflow_dag_processor/airflow_dag_processor" = "a1e24b8483a051b255cb1f79badc6259c1ccedd7682b6438076f0278d87d4a80"
+      "airflow_scheduler/airflow_scheduler"         = "a762c1b8ddc9487528578e2e929260acec819611a1c0eaeb8a101ba77dc82d1b"
+      "airflow_triggerer/airflow_triggerer"         = "505f81771e9aa5911a919e305151dd3d03e4573a9112a45e2a848eb7b16712d8"
       "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
