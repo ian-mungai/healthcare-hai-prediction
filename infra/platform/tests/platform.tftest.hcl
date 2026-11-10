@@ -71,6 +71,16 @@ override_data {
   }
 }
 
+# The IAM stack creates the host's network interface; this stack finds it by tag and exports its private address.
+override_data {
+  target          = data.aws_network_interface.host_address
+  override_during = plan
+  values = {
+    id         = "eni-0123456789abcdef0"
+    private_ip = "10.40.0.20"
+  }
+}
+
 variables {
   aws_profile         = "example_project_dev"
   environment         = "dev"
@@ -367,4 +377,23 @@ run "reject_zero_snapshots_kept" {
   }
 
   expect_failures = [var.snapshot_retain_count]
+}
+
+# Failure modes: the lookup matches the host's primary interface (same Name as the host) or any project interface; the address is
+# not exported, so the services and jobs renderers fail or a person types it; the output is sensitive or empty.
+run "host_address_found_by_tag_and_exported" {
+  command = plan
+
+  assert {
+    condition = (
+      toset([for filter in data.aws_network_interface.host_address.filter : "${filter.name}=${one(filter.values)}"]) == toset(["tag:Name=example_project_host_address_dev", "tag:Project=example_project"]) &&
+      length(data.aws_network_interface.host_address.filter) == 2
+    )
+    error_message = "The platform stack finds the host's interface by its own Name and the Project tag, never by the host's Name."
+  }
+
+  assert {
+    condition     = output.host_private_ip == "10.40.0.20"
+    error_message = "The private address of the host's interface is exported as host_private_ip for the services and jobs renderers."
+  }
 }

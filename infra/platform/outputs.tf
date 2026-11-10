@@ -58,6 +58,11 @@ output "host_public_ip" {
   value       = aws_eip.host.public_ip
 }
 
+output "host_private_ip" {
+  description = "Persistent private address of the container host: the address of its tagged network interface, which the host attaches at boot. Services and jobs reach the host's services at this address."
+  value       = data.aws_network_interface.host_address.private_ip
+}
+
 output "data_volume_id" {
   description = "The host's gp3 data volume, snapshotted daily."
   value       = aws_ebs_volume.data.id
