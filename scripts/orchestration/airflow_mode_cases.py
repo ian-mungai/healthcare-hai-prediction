@@ -53,7 +53,7 @@ from unittest import mock
 from botocore.exceptions import ClientError
 
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
-from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch import EcsFitProbe, FamilyBusy, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import InputNotReady
 from orchestration.interface import SubmissionRequest
@@ -548,6 +548,74 @@ def owner_settle_command_reaches_the_launcher() -> None:
         code = steps.main(["settle", "--run", SILVER_RUN, "--job", "silver", "--statement", "ECS console and CloudTrail show no task for this launch"])
     end = rig.end(SILVER_RUN, "silver")
     require(code == 0 and end is not None and end["outcome"] in output.getvalue(), f"the settle command did not settle and report: {output.getvalue()} {end}")
+
+
+SETTLE_DAG_RUN = "20261104T130000Z-5e771e00"
+FRESH_SILVER_RUN = "20261104T140000Z-f2e5f2e5"
+SETTLE_STATEMENT = "aws_tasks list names no job task and ECS shows the silver task STOPPED"
+
+
+def settle_params(statement: str = SETTLE_STATEMENT) -> dict[str, Any]:
+    return {"run_id": SETTLE_DAG_RUN, "mode": "real", "launch_run": SILVER_RUN, "job": "silver", "statement": statement}
+
+
+def unfinished_silver_launch(rig: Rig) -> str:
+    """A silver launch whose scheduler died after the task started: the records stop at ``intent`` and ``started``. The owner then stopped the task
+    (``aws_tasks stop``), so ECS shows it STOPPED. Returns the task ARN."""
+    rig.ecs.hold = True
+    request = SubmissionRequest("pin_bronze", SILVER_RUN, "real", 1, "silver_transform_dag", "pin_bronze", "manual__test", None)
+    spec = rig.preflight.prepare(request)
+    require(spec is not None, "the silver step names no job")
+    launch = rig.launcher.attach(spec)
+    rig.launcher.start(launch)
+    events = sorted(rig.launcher.events(SILVER_RUN, "silver", 1))
+    require(events == ["intent", "started"] and launch.arn is not None, f"the unfinished launch has other records: {events}")
+    rig.ecs.stop_task(cluster=CLUSTER, task=launch.arn, reason="aws_tasks stop")
+    rig.ecs.hold = False
+    return str(launch.arn)
+
+
+def launch_settle_dag_frees_the_family() -> None:
+    """The owner's recovery of an unfinished launch (Codex round 3 on the owner list): with the task stopped and the send window over, the
+    ``launch_settle_dag`` run settles the launch through the scheduler's own launch services, and a fresh run of the family launches. Without the
+    settle the fresh run is refused with FamilyBusy, so the owner list's failure path must run the DAG before recovery is complete."""
+    rig = Rig()
+    unfinished_silver_launch(rig)
+    rig.stage_runs(FRESH_SILVER_RUN)
+    fresh = {"run_id": FRESH_SILVER_RUN, "mode": "real"}
+    with world(rig, "silver_transform_dag", fresh) as current:
+        error = refuses(FamilyBusy, lambda: current.step("pin_bronze"))
+    require(SILVER_RUN in str(error) and rig.launcher.store.run_record(FRESH_SILVER_RUN, "silver", "claim") is None, f"the busy family was not named: {error}")
+    rig.time.sleep(601.0)  # the send window of the claim (FIT_WAIT_SECONDS) is over
+    with world(rig, "launch_settle_dag", settle_params()) as current:
+        states = current.run_dag("launch_settle_dag.py")
+        require(states == {"settle": "success"}, f"the settle DAG did not settle: {states} {current.results}")
+        require("silver" in str(current.results["settle"]) and SILVER_RUN in str(current.results["settle"]), f"no outcome reported: {current.results}")
+    end = rig.end(SILVER_RUN, "silver")
+    require(end is not None and end["outcome"] in ("cancelled", "failed_closed"), f"the unfinished launch has no end record: {end}")
+    started = rig.tasks_started()
+    with world(rig, "silver_transform_dag", fresh) as current:
+        require(current.step("pin_bronze") == "succeeded", "the fresh run did not launch after the settle")
+    require(rig.tasks_started() == started + 1, "the fresh run did not start its own task")
+    require((rig.end(FRESH_SILVER_RUN, "silver") or {}).get("outcome") == "succeeded", "the fresh run has no success record")
+
+
+def launch_settle_dag_refuses_without_evidence() -> None:
+    """A statement that names too little is refused before anything is written, and a run with no launch is refused: the DAG run fails and no end
+    record appears. The DAG's one task takes no launch pool, because it starts no task."""
+    rig = Rig()
+    unfinished_silver_launch(rig)
+    rig.time.sleep(601.0)
+    with world(rig, "launch_settle_dag", settle_params("short")) as current:
+        states = current.run_dag("launch_settle_dag.py")
+        require(states == {"settle": "failed"} and "LaunchRefused" in str(current.results["settle"]), f"a short statement was not refused: {current.results}")
+        require(all(not node.settings.get("pool") for node in current.built), "the settle task takes a launch pool")
+    require(rig.end(SILVER_RUN, "silver") is None, "a refused settle wrote an end record")
+    with world(rig, "launch_settle_dag", settle_params() | {"launch_run": FRESH_SILVER_RUN}) as current:
+        states = current.run_dag("launch_settle_dag.py")
+        require(
+            states == {"settle": "failed"} and "nothing to settle" in str(current.results["settle"]), f"a run with no launch was settled: {current.results}"
+        )
 
 
 def promotion_needs_the_approval() -> None:
@@ -1068,7 +1136,8 @@ def host_table_matches_the_job_table() -> None:
         )
     shipped = {found.group(1) for path in (ROOT / "dags").glob("*.py") if "dag_runtime" in path.read_text() and (found := DAG_ID.search(path.read_text()))}
     require(shipped <= set(host["dags"]), f"DAG files with no family in the host table: {shipped - set(host['dags'])}")
-    require(set(host["dags"].values()) <= set(table["jobs"]) | {"chain"}, "a DAG names a family that is not a job")
+    require(set(host["dags"].values()) <= set(table["jobs"]) | {"chain", "owner"}, "a DAG names a family that is not a job")
+    require({dag for dag, family in host["dags"].items() if family == "owner"} == {"launch_settle_dag"}, "only the settle DAG launches no job")
 
 
 # The host scratch volume: scratch_volume_gb of infra/platform (60 GiB, PR 83, owner decision of Oct 30 to Nov 3 2026). The filesystem keeps about 5 GiB, so
@@ -1258,6 +1327,8 @@ CASES: dict[str, Callable[[], None]] = {
     "local_mlflow_is_refused_visibly": local_mlflow_is_refused_visibly,
     "promotion_needs_the_approval": promotion_needs_the_approval,
     "owner_settle_command_reaches_the_launcher": owner_settle_command_reaches_the_launcher,
+    "launch_settle_dag_frees_the_family": launch_settle_dag_frees_the_family,
+    "launch_settle_dag_refuses_without_evidence": launch_settle_dag_refuses_without_evidence,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
     "serving_request_is_checked": serving_request_is_checked,
     "code_digest_is_checked": code_digest_is_checked,

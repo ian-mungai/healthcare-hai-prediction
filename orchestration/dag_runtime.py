@@ -4,7 +4,8 @@ A DAG of one job is one chain of four tasks (``build_job_chain``): ``preflight``
 launch pool), ``evidence`` (the durable launch record says the job and its acceptance checks passed) and ``gate`` (runs after a failure too, fails the DAG
 run unless the three passed and carries the asset event). The features and training DAGs still have one task per step (``build_tasks``): ``run_step`` runs
 a task's fixed template through ``orchestration/airflow_steps.py``, where a job step launches or joins its job's one ECS task and a control step (acquire,
-seal, release, the gates) launches nothing. There is no other path: the DAGs hold no broker client.
+seal, release, the gates) launches nothing. ``launch_settle_dag`` has one task (``build_settle_task``) that runs the owner's settle of an unfinished launch.
+There is no other path: the DAGs hold no broker client.
 """
 
 from __future__ import annotations
@@ -125,6 +126,18 @@ def build_job_chain(template: str, asset: str | None = None) -> Any:
     first, launched, found, last = preflight().operator, job().operator, evidence().operator, gate().operator
     first >> launched >> found >> last
     return last
+
+
+def build_settle_task() -> Any:
+    """Create the one task of ``launch_settle_dag`` and return its operator: the owner's settle of an unfinished launch (``settle_launch`` of the launch
+    module, ``Launcher.owner_settle``), with the scheduler's own launch services and role. It starts no task, so it takes no launch pool."""
+
+    @task(task_id="settle", retries=0, execution_timeout=CHECK_TIMEOUT)
+    def settle() -> str:
+        params = get_current_context()["params"]
+        return str(launch_module().settle_launch(str(params["launch_run"]), str(params["job"]), str(params["statement"])))
+
+    return settle().operator
 
 
 def task_states(task_ids: tuple[str, ...]) -> dict[str, str | None]:

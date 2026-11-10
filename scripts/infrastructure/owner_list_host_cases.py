@@ -109,8 +109,13 @@ def failure_path_checks(step: str) -> dict[str, bool]:
         at("trigger_dag --dag <DAG_ID> --run-id <RUN_ID> --status"),
         at("trigger_dag --dag <DAG_ID> --run-id <RUN_ID> --settle"),
         at("inputs/code_run.json"),
-        at("aws_tasks list"),
-        at("host_session stop"),
+        at("scripts.infrastructure.aws_tasks list"),
+        at("scripts.infrastructure.aws_tasks stop"),
+        step.find("scripts.infrastructure.aws_tasks list", at("scripts.infrastructure.aws_tasks stop")),
+        at("launch_records_failed/<JOB>/claim.json"),
+        at("trigger_dag --dag launch_settle_dag"),
+        at("launch_records_settled/"),
+        at("scripts.infrastructure.host_session stop"),
     ]
     return {
         "the failure path calls a missing launch record an unconfirmed launch state, not a refusal": "unconfirmed" in step
@@ -119,6 +124,9 @@ def failure_path_checks(step: str) -> dict[str, bool]:
         and order == sorted(order),
         "the settle is bounded and its success is a terminal or absent run": all(
             word in step for word in ("--settle --wait-seconds 600", "--status --wait-seconds 60", "`failed`", "`absent`")
+        ),
+        "the launch settle runs only with the family stopped and the window over, and its end record is checked": all(
+            word in step for word in ("--launch-run <RUN_ID> --job <JOB>", "--statement", "10 minutes", "`at`", "end record", "FamilyBusy", "names no job task")
         ),
         "the restart hold binds the run to a code run with nothing staged and is recorded": all(
             word in step for word in ("restart hold", "<HOLD_RUN_ID>", "restart_hold.txt", "code_digest_not_staged")
@@ -174,7 +182,7 @@ def structure_checks(body: str) -> dict[str, bool]:
     waits = [float(value) for value in re.findall(r"--mode real .*?--wait-seconds ([0-9]+)", body)]
     limit = max_wait_seconds()
     checks[f"every trigger wait is within trigger_dag's limit of {limit:g} s ({waits})"] = (
-        limit > 0 and len(waits) == 2 and all(0 < wait <= limit for wait in waits)
+        limit > 0 and len(waits) >= 2 and all(0 < wait <= limit for wait in waits)
     )
     failure = order[-1][1]
     stops = [position for position, step in enumerate(steps) if re.search(r"\bStop (if|on)\b", step) and position != failure]
@@ -187,9 +195,11 @@ def structure_checks(body: str) -> dict[str, bool]:
     checks |= failure_path_checks(steps[failure] if failure >= 0 else "")
     planted = re.sub(r"(?m)^.*trigger_dag .*--settle.*\n", "", steps[failure]) if failure >= 0 else ""
     checks["planted: a failure path without the settle fails the settle order case"] = bool(planted) and not all(failure_path_checks(planted).values())
+    planted = re.sub(r"(?m)^.*--dag launch_settle_dag.*\n", "", steps[failure]) if failure >= 0 else ""
+    checks["planted: a failure path without the launch settle fails its cases"] = bool(planted) and not all(failure_path_checks(planted).values())
     forward_step = index("ssm start-session", "AWS-StartPortForwardingSession")
     checks["a restart hold of an earlier session is settled right after the forward and before any staging"] = forward_step >= 0 and all(
-        word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle")
+        word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle", "--dag launch_settle_dag")
     )
     trigger = index(*trigger_of("silver"))
     checks["the silver trigger step names the token secret that a local start rotates"] = trigger >= 0 and all(

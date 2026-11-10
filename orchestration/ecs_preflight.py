@@ -49,6 +49,8 @@ SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 GATE = "@gate"
 CHAIN = "chain"
+# The value of a DAG in the host table that launches no job: the owner's settle of an unfinished launch (launch_settle_dag).
+OWNER = "owner"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
 CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
@@ -288,7 +290,7 @@ def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if unknown:
         raise LaunchRefused(f"{JOBS_FILE.name}: steps name unknown jobs {unknown}")
     host: dict[str, Any] = json.loads((root / HOST_FILE).read_text())
-    if set(host["jobs"]) != set(jobs) or not set(host["dags"].values()) <= set(jobs) | {CHAIN}:
+    if set(host["jobs"]) != set(jobs) or not set(host["dags"].values()) <= set(jobs) | {CHAIN, OWNER}:
         raise LaunchRefused(f"{HOST_FILE.name} names other jobs than {JOBS_FILE.name}")
     for job, need in host["jobs"].items():
         if "containers" not in need and "log_container" not in need:

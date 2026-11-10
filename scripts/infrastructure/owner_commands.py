@@ -79,6 +79,8 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "GOLD_RUN_ID": "20261031T100000Z-23456789",
         "HOLD_RUN_ID": "20261031T130000Z-fedcba98",
         "DAG_ID": "gold_transform_dag",
+        "JOB": "gold",
+        "STATEMENT": "aws_tasks list names no job task and ECS shows the gold task STOPPED",
         "CODE_SHA256": "a" * 64,
         "CODE_SHA256_FIRST_12": "a" * 12,
         "SHA256": "b" * 64,

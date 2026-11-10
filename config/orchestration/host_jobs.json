@@ -65,6 +65,7 @@
     "model_promotion_dag": "promote",
     "serving_deploy_dag": "serve",
     "metadata_ingest_dag": "metadata",
-    "bronze_chain_dag": "chain"
+    "bronze_chain_dag": "chain",
+    "launch_settle_dag": "owner"
   }
 }

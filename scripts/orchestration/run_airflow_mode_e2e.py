@@ -21,6 +21,7 @@ from scripts.process import run_command
 ROOT = Path(__file__).resolve().parents[2]
 SOURCES = (
     "orchestration/airflow_steps.py",
+    "dags/launch_settle_dag.py",
     "orchestration/dag_runtime.py",
     "orchestration/ecs_preflight.py",
     "config/orchestration/host_jobs.json",

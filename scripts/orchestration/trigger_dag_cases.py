@@ -203,12 +203,78 @@ def trigger_cases() -> dict[str, bool]:
     }
 
 
+SETTLE_DAG = "launch_settle_dag"
+STATEMENT = "aws_tasks list names no job task and ECS shows the task STOPPED"
+
+
+def settle_dag_cases() -> dict[str, bool]:
+    """The owner's settle DAG: its run carries the launch's run and job and the owner's statement, each checked before the secret is read."""
+
+    class Ends(StandIn):
+        def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+            record = super().run(dag_id, dag_run_id)
+            self.runs[dag_run_id] = "success"
+            return record
+
+    posted: list[dict[str, Any]] = []
+
+    class Records(Ends):
+        def trigger(self, dag_id: str, dag_run_id: str, conf: dict[str, Any]) -> dict[str, Any]:
+            posted.append({"dag_id": dag_id, "dag_run_id": dag_run_id, "conf": conf})
+            return super().trigger(dag_id, dag_run_id, conf)
+
+    good = ["--dag", SETTLE_DAG, "--mode", "real", "--launch-run", SILVER, "--job", "silver", "--statement", STATEMENT, "--wait-seconds", "5"]
+    api = Records()
+    code, printed, _, _ = invoke(api, good)
+    conf = posted[0]["conf"] if posted else {}
+    checks = {
+        "the settle DAG run carries the launch run, the job and the statement in its own new run": code == 0
+        and printed is not None
+        and printed["state"] == "success"
+        and conf.get("launch_run") == SILVER
+        and conf.get("job") == "silver"
+        and conf.get("statement") == STATEMENT
+        and conf.get("mode") == "real"
+        and conf.get("run_id") not in (None, SILVER)
+        and posted[0]["dag_run_id"] == conf.get("run_id")
+    }
+
+    def refused(arguments: list[str]) -> bool:
+        api = StandIn()
+        code, _, error, _ = invoke(api, arguments)
+        return code in (1, 2) and not api.calls and (code == 2 or "refused" in error)
+
+    def without(name: str) -> list[str]:
+        index = good.index(name)
+        return good[:index] + good[index + 2 :]
+
+    def replaced(name: str, value: str) -> list[str]:
+        index = good.index(name)
+        return [*good[: index + 1], value, *good[index + 2 :]]
+
+    checks |= {
+        "a settle without the launch run is refused before any request": refused(without("--launch-run")),
+        "a settle without the job is refused before any request": refused(without("--job")),
+        "a settle without a statement is refused before any request": refused(without("--statement")),
+        "a launch run that is not a run ID is refused": refused(replaced("--launch-run", "run-1")),
+        "a job the job table does not name is refused": refused(replaced("--job", "silverx")),
+        "a statement shorter than the launch library's minimum is refused": refused(replaced("--statement", "short")),
+        "a statement of more than one line is refused": refused(replaced("--statement", STATEMENT + "\nsecond line")),
+        "a settle in fixture mode is refused": refused(replaced("--mode", "publish_fixture")),
+        "the settle fields on another DAG are refused": refused(
+            ["--dag", DAG, "--mode", "real", "--silver-snapshot-run", SILVER, "--job", "silver", "--wait-seconds", "5"]
+        ),
+    }
+    return checks
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
     "settle": settle_cases,
     "parse": parse_cases,
     "trigger": trigger_cases,
+    "settle DAG": settle_dag_cases,
 }
 
 
