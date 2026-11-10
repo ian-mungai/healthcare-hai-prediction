@@ -68,6 +68,8 @@ COUNT_AT_Q = "SELECT count(*) FROM {table} VERSION AS OF {snapshot}"
 UPDATE_AMOUNT_Q = "UPDATE {table}.branch_{branch} SET amount = amount + 1 WHERE visit_key = 'v1'"
 UPDATE_SITE_Q = "UPDATE {table}.branch_{branch} SET site_name = 'x' WHERE site_sk = 's1'"
 INSERT_SITE_Q = "INSERT INTO {table} VALUES ('s9', 'other writer')"
+BASE_INSERT = "INSERT INTO {table} SELECT * FROM base_rows"
+LAST_SNAPSHOT_Q = "SELECT snapshot_id FROM {table}.snapshots ORDER BY committed_at DESC LIMIT 1"
 RELEASE_LISTS_Q = "SELECT release_sk, publication_dates, download_run_ids FROM {table} VERSION AS OF {snapshot}"
 
 
@@ -1255,6 +1257,70 @@ def schema_evolution(h: Harness) -> Check:
     return checks
 
 
+def base_pin_and_extract(h: Harness) -> Check:
+    """A model set pins the domain matrices of the newest committed base run in the features namespace and exports exactly those snapshots."""
+    from scripts.features import features_input, features_publish
+
+    spark = h.fresh()
+    checks = h.begin()
+    plan = features_publish.publish_plan(MODE)
+    domain = features_input.base_tables()
+    folder = h.root / "base_pin"
+    folder.mkdir()
+    ctx = Context(spark, plan, "20261109T020000Z-0000a001", MODE, folder, "", create_namespace=True, needs_sealed=False)
+    publish.ensure_namespace(ctx)
+    publish.ensure_runs_table(ctx)
+    rows = {name: [(f"s{index}", float(index)) for index in range(3)] for name in domain}
+    snapshots: dict[str, int] = {}
+    for name in domain:
+        spark.sql(f"CREATE TABLE {ctx.fq(name)} (spine_key string, v double) USING iceberg TBLPROPERTIES ('format-version' = '2')")
+        spark.createDataFrame(rows[name], "spine_key string, v double").createOrReplaceTempView("base_rows")
+        q(spark, BASE_INSERT, table=ctx.fq(name))
+        snapshots[name] = int(q(spark, LAST_SNAPSHOT_Q, table=ctx.fq(name)).collect()[0][0])
+
+    def commit(run: str, names: list[str], hour: int) -> None:
+        row = {
+            "run_id": run,
+            "mode": MODE,
+            "committed_at": datetime(2026, 11, 9, hour, tzinfo=UTC).isoformat(),
+            "sealed_sha256": "a" * 64,
+            "export_manifest_sha256": "b" * 64,
+            "backup_name": "catalog_backup_x.json",
+            "backup_sha256": "c" * 64,
+            "snapshot_set": {name: snapshots.get(name, 1) for name in names},
+        }
+        view = publish.runs_view(ctx, row)
+        spark.sql(publish.MERGE_RUN.format(table=ctx.fq(plan.runs_table), view=view))
+
+    every = sorted(plan.tables)
+    commit("20261109T010000Z-0000b001", every, 1)
+    commit("20261109T030000Z-0000c001", ["feature_matrix_m1"], 3)
+    base_run = "20261109T010000Z-0000b001"
+    pin_path = folder / features_input.BASE_PIN_NAME
+    record = features_input.pin_base(ctx, pin_path, base_run)
+    checks["the pin names the six domain matrices at the snapshots of the base run, read from the real catalog"] = record["snapshot_set"] == {
+        n: snapshots[n] for n in domain
+    }
+    commit("20261109T050000Z-0000b002", every, 5)
+    checks["a retry after a newer base run was committed returns the same pin"] = features_input.pin_base(ctx, pin_path, base_run) == record
+    older = refusal_of(lambda: features_input.pin_base(ctx, folder / "second.json", base_run))
+    checks["an older base run is refused for a new pin and both runs are named"] = "20261109T050000Z-0000b002" in older and base_run in older
+    pin_sha = publish.sha256_file(pin_path)
+    first = features_input.extract(ctx, folder, pin_sha, base=True)
+    manifest = publish.read_record(folder / features_input.BASE_INPUT_NAME / "manifest.json")[0]
+    checks["the extract writes one Parquet table per domain matrix with the pinned rows"] = (
+        set(manifest["snapshot_set"]) == set(domain)
+        and all(len(list((folder / features_input.BASE_INPUT_NAME / name).glob("*.parquet"))) >= 1 for name in domain)
+        and sum(spark.read.parquet(str(folder / features_input.BASE_INPUT_NAME / name)).count() for name in domain) == 3 * len(domain)
+    )
+    again = features_input.extract(ctx, folder, pin_sha, base=True)
+    checks["a repeated extract leaves the same manifest"] = again["snapshot_set"] == first["snapshot_set"] and again["pins_sha256"] == first["pins_sha256"]
+    checks["an extract with another pin digest is refused"] = "changed after launcher acceptance" in refusal_of(
+        lambda: features_input.extract(ctx, folder, "0" * 64, base=True)
+    )
+    return checks
+
+
 CASES: dict[str, Case] = {
     "iceberg_check": iceberg_check,
     "happy_path": happy_path,
@@ -1272,6 +1338,7 @@ CASES: dict[str, Case] = {
     "reader_discovery": reader_discovery,
     "contract_plan": contract_plan,
     "schema_evolution": schema_evolution,
+    "base_pin_and_extract": base_pin_and_extract,
     "readback": readback,
 }
 STAMP = ""
