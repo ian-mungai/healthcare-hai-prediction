@@ -208,6 +208,22 @@ def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
     return read
 
 
+def ssm_host_cap_reader(ssm: Any, name: str) -> Callable[[], str | None]:
+    """Read the current host job cap (MiB) that the services stack writes to Parameter Store, or None while the parameter does not exist."""
+
+    def read() -> str | None:
+        try:
+            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise TaskUnavailable("host_job_cap_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("host_job_cap_unreadable") from None
+
+    return read
+
+
 class InputNotReady(LaunchUnavailable):
     """A staged input of the run is not readable yet, or the store of the staged inputs throttled. This is the preflight's own wait: a later identical call
     can succeed, and ``airflow_steps`` repeats the step for a bounded time. A ``LaunchUnavailable`` that is not this class comes from the launch library: its
@@ -338,6 +354,7 @@ class Preflight:
         clock: Callable[[], float],
         host_capacity: str,
         task_definition: Callable[[str], Mapping[str, Any]],
+        host_job_cap: Callable[[], str | None],
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
@@ -354,6 +371,7 @@ class Preflight:
         self.serving_request = serving_request
         self.host_capacity = host_capacity
         self.task_definition = task_definition
+        self.host_job_cap = host_job_cap
 
     def containers(self, job: str) -> tuple[dict[str, list[str]], str]:
         """The containers of the job's host task definition and the one whose log is read: the host table's where it names them, else the job table's."""
@@ -501,7 +519,27 @@ class Preflight:
                 f"the latest active revision {name} of the {job} host job has {str(found.get('memory', ''))[:20]} MiB of task memory, but its binding "
                 f"gives a job {binding['job']} MiB. {again}"
             )
+        self.require_within_cap(job, name, int(binding["job"]))
         return str(found.get("taskDefinitionArn", ""))
+
+    def require_within_cap(self, job: str, name: str, job_memory: int) -> None:
+        """Current host job cap at launch (owner A, Nov 10 2026): read the cap the services stack wrote at its last apply, at every host launch, and
+        refuse a revision whose binding gives a job more memory. The cap counts the service reservations as applied, which the jobs stack only learns
+        at its next render, so a services change that shrank the room refuses the old revision instead of overfilling the host."""
+        raw = self.read(self.host_job_cap)
+        if raw is None:
+            raise LaunchRefused(
+                f"the host job cap parameter was not found, so no {job} host job launches. Apply the services stack, which writes it, then run again"
+            )
+        text = raw.strip()
+        if not (text.isdecimal() and text.isascii()) or int(text) <= 0:
+            raise LaunchRefused(f"the host job cap {raw[:40]!r} is not a whole number of MiB above 0. Apply the services stack, then run again")
+        cap = int(text)
+        if job_memory > cap:
+            raise LaunchRefused(
+                f"the latest active revision {name} of the {job} host job gives a job {job_memory} MiB, above the current host job cap of {cap} MiB. "
+                "Render and apply the jobs stack so it registers a revision sized from the current services, then run again"
+            )
 
     def spec(self, request: SubmissionRequest, job: str) -> JobSpec:
         """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the

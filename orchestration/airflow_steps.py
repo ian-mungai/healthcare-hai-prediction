@@ -39,6 +39,7 @@ from orchestration.ecs_preflight import (
     s3_digest_reader,
     s3_object_reader,
     serving_request_reader,
+    ssm_host_cap_reader,
 )
 from orchestration.interface import SubmissionRequest
 
@@ -57,6 +58,7 @@ SETTINGS = (
     "HAI_LAUNCH_MLFLOW_URI",
     "HAI_LAUNCH_SCRATCH_PATH",
     "HAI_LAUNCH_HOST_CAPACITY",
+    "HAI_LAUNCH_HOST_CAP_PARAMETER",
 )
 # The usable-memory inputs the services stack always renders (host_usable_memory_mib defaults to the current host size), checked by the preflight
 # against the binding of every host revision.
@@ -87,7 +89,7 @@ def services() -> LaunchServices:
 
     table, host = load_tables(ROOT)
     session = boto3.session.Session(region_name=values["AWS_REGION"])
-    s3 = session.client("s3", config=client_config())
+    s3, ssm = (session.client(name, config=client_config()) for name in ("s3", "ssm"))
     adapter = EcsAdapter.from_session(
         session,
         EcsSettings(
@@ -126,6 +128,7 @@ def services() -> LaunchServices:
         serving_request=serving_request_reader(s3, bucket),
         host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
+        host_job_cap=ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"]),
     )
     return LaunchServices(preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock)
 

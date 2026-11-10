@@ -36,6 +36,10 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    revision writes no training code-run binding
    (``unbound_revision_is_refused``). A bound revision runs by its exact ARN,
    so a revision registered after the check never runs in its place (``bound_revision_runs_by_its_exact_arn``).
+11. Current host job cap at launch (owner A, Nov 10 2026): the preflight reads the host job cap the services stack writes to SSM at every host launch
+   and refuses a revision whose label gives a job more memory, or any launch while the cap is missing or malformed
+   (``revision_above_the_host_job_cap_is_refused``). A revision at or below the cap runs, and a cap lowered later refuses the next launch
+   (``revision_within_the_host_job_cap_runs``).
 """
 
 from __future__ import annotations
@@ -157,9 +161,10 @@ def host_definitions() -> dict[str, frozenset[str]]:
 class Rig:
     """The stand-in cloud, the staged inputs and the launch services of one case."""
 
-    def __init__(self, capacity: str = CAPACITY) -> None:
+    def __init__(self, capacity: str = CAPACITY, host_cap: str | None = str(JOB_MEMORY)) -> None:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
-        self.cloud: list[str] = []  # the staged-input S3 reads and writes, in order
+        self.host_cap = host_cap
+        self.cloud: list[str] = []  # the staged-input S3 reads and writes and the SSM read of the host job cap, in order
         self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket(self.cloud)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
@@ -193,6 +198,7 @@ class Rig:
             serving_request=preflight.serving_request_reader(self.stage, BUCKET),
             host_capacity=capacity,
             task_definition=self.adapter.task_definition,
+            host_job_cap=self.read_host_cap,
         )
         self.services = steps.LaunchServices(
             preflight=self.preflight,
@@ -203,6 +209,11 @@ class Rig:
             clock=self.time.clock(),
         )
         self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, str(TRAIN_PARAMS["run_id"]))
+
+    def read_host_cap(self) -> str | None:
+        """The stand-in of the SSM GetParameter call that reads the current host job cap the services stack writes."""
+        self.cloud.append("ssm:GetParameter host_job_cap")
+        return self.host_cap
 
     def aws_calls(self) -> list[str]:
         """Every AWS call of the case so far: the staged-input S3 reads and writes, the launch-record S3 calls, ECS and CloudWatch Logs."""
@@ -867,6 +878,45 @@ def malformed_capacity_refuses() -> None:
         require(not rig.aws_calls(), f"{template}: a malformed capacity made an AWS call before the refusal: {rig.aws_calls()}")
 
 
+def revision_above_the_host_job_cap_is_refused() -> None:
+    """Current host job cap at launch (owner A, Nov 10 2026): the services stack writes the current job room (usable memory less the system reserve
+    and every service reservation) to one SSM parameter, and the preflight reads it at every host launch. A revision whose label gives a job more
+    memory than that cap is refused by name; so is a launch while the parameter is missing or not a whole number of MiB. Nothing is recorded and no
+    task starts."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+    require("HAI_LAUNCH_HOST_CAP_PARAMETER" in steps.SETTINGS, "the host job cap parameter name is not a required launch setting")
+    for cap, named in (
+        (str(JOB_MEMORY - 1), ("host job cap", str(JOB_MEMORY - 1), str(JOB_MEMORY))),
+        (None, ("host job cap", "not found")),
+        ("23552.5", ("host job cap", "not a whole number")),
+        ("", ("host job cap", "not a whole number")),
+    ):
+        rig = Rig(host_cap=cap)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require(all(part in str(error) for part in named), f"the refusal for the cap {cap!r} does not name {named}: {error}")
+        require("ssm:GetParameter host_job_cap" in rig.cloud, f"the cap {cap!r} was not read from the parameter: {rig.cloud}")
+        require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision over the cap {cap!r} launched or wrote a record")
+
+
+def revision_within_the_host_job_cap_runs() -> None:
+    """A revision whose job memory equals the cap, or is below it, runs, and the cap is read again at every launch (never cached), so a cap the
+    services stack lowered later refuses the next launch."""
+    for cap in (str(JOB_MEMORY), str(JOB_MEMORY + 1024)):
+        rig = Rig(host_cap=cap)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            require(current.step("pin_bronze") == "succeeded", f"a revision within the cap {cap} did not run")
+        require(rig.tasks_started() == 1 and rig.cloud.count("ssm:GetParameter host_job_cap") == 1, f"the cap {cap} was not read once: {rig.cloud}")
+    rig = Rig()
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "the first launch within the cap did not run")
+    rig.host_cap = str(JOB_MEMORY - 1024)
+    with world(rig, "gold_transform_dag", GOLD) as current:
+        error = refuses(LaunchRefused, lambda: current.step("pin_silver"))
+    require("host job cap" in str(error), f"a lowered cap did not refuse the next launch: {error}")
+    require(rig.cloud.count("ssm:GetParameter host_job_cap") == 2 and rig.tasks_started() == 1, f"the cap was not read at every launch: {rig.cloud}")
+
+
 def bound_revision_runs_by_its_exact_arn() -> None:
     """A bound revision is described once and runs by its exact ARN. A revision registered after the check (here an unbound one, made latest while
     the task starts) never runs in its place: the RunTask call names the checked revision, not the family."""
@@ -1460,6 +1510,8 @@ CASES: dict[str, Callable[[], None]] = {
     "unbound_revision_is_refused": unbound_revision_is_refused,
     "revision_bound_to_another_capacity_is_refused": revision_bound_to_another_capacity_is_refused,
     "malformed_capacity_refuses": malformed_capacity_refuses,
+    "revision_above_the_host_job_cap_is_refused": revision_above_the_host_job_cap_is_refused,
+    "revision_within_the_host_job_cap_runs": revision_within_the_host_job_cap_runs,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
