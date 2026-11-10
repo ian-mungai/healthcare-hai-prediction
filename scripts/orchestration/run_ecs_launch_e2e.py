@@ -1,8 +1,9 @@
-"""Run the direct ECS launch core offline: the failing-first matrix against the fake ECS, log and bucket clients, then the operator cases on the stand-in.
+"""Run the direct ECS launch core offline: the failing-first matrix against the fake ECS, log and bucket clients, then the operator cases on the stand-in and
+the Run 3 publisher job cases.
 
 No AWS call, no Docker and no credential is used. Each run writes ``data/e2e/direct_ecs_launch_core/<timestamp>.json`` (ignored by Git) with the revision,
 the changed files, the substitutions and one line per case. Run from the repository root:
-``.venv/bin/python -m scripts.orchestration.run_ecs_launch_e2e [--only core|operator] [--case NAME]``.
+``.venv/bin/python -m scripts.orchestration.run_ecs_launch_e2e [--only core|operator|publisher] [--case NAME]``.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import ecs_launch_cases, ecs_launch_operator_cases
+from scripts.orchestration import ecs_launch_cases, ecs_launch_operator_cases, ecs_launch_publisher_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -27,13 +28,19 @@ SOURCES = (
     "orchestration/ecs_launch_provider.py",
     "scripts/orchestration/ecs_launch_cases.py",
     "scripts/orchestration/ecs_launch_operator_cases.py",
+    "orchestration/publisher_launch.py",
+    "scripts/orchestration/ecs_launch_publisher_cases.py",
     "scripts/orchestration/ecs_launch_fake.py",
     "scripts/orchestration/ecs_launch_standin.py",
     "scripts/orchestration/ecs_broker_fake.py",
     "config/orchestration/ecs_launch.json",
     "scripts/orchestration/run_ecs_launch_e2e.py",
 )
-SUITES: dict[str, dict[str, Callable[[], None]]] = {"core": ecs_launch_cases.CASES, "operator": ecs_launch_operator_cases.CASES}
+SUITES: dict[str, dict[str, Callable[[], None]]] = {
+    "core": ecs_launch_cases.CASES,
+    "operator": ecs_launch_operator_cases.CASES,
+    "publisher": ecs_launch_publisher_cases.CASES,
+}
 SUBSTITUTIONS = [
     "fake ECS, Logs and write-once S3 clients",
     "virtual clock (waits of minutes take no real time)",
