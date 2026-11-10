@@ -207,7 +207,8 @@ locals {
   reserved_memory_mib = sum([for service in local.services : sum([for container in service.containers : container.memoryReservation])])
   hard_memory_mib     = sum([for container in local.all_containers : container.memory])
   memory_budget_mib   = var.host_memory_mib - var.other_services_reserve_mib
-  host_job_memory_mib = var.host_memory_mib - var.host_system_reserve_mib - local.reserved_memory_mib
+  # The job room starts from the memory ECS can place (host_usable_memory_mib), never the nominal host memory; null until the owner sets it.
+  host_job_memory_mib = var.host_usable_memory_mib == null ? null : var.host_usable_memory_mib - var.host_system_reserve_mib - local.reserved_memory_mib
   secret_arns_used    = sort(distinct(flatten([for container in local.all_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   serving_secret_arns = sort(distinct(flatten([for container in local.serving_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   other_secret_arns   = sort(distinct(flatten([for container in local.other_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))

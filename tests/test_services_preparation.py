@@ -59,6 +59,9 @@ def test_changed_bytes_are_refused(tmp_path: Path) -> None:
         {"mlflow_host_ip": "mlflow.example.com"},
         {"mlflow_task_role_arn": "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev"},
         {"mlflow_artifact_bucket": "Not_A_Bucket"},
+        {"host_usable_memory_mib": 0},
+        {"host_usable_memory_mib": "30720"},
+        {"host_usable_memory_mib": 30720.5},
     ],
 )
 def test_inputs_outside_the_contract_are_refused(tmp_path: Path, change: dict[str, Any]) -> None:
@@ -66,6 +69,13 @@ def test_inputs_outside_the_contract_are_refused(tmp_path: Path, change: dict[st
     with pytest.raises(ConfigurationError) as refusal:
         renderer.services_preparation(path, digest)
     check("preparation contract" in str(refusal.value), "the message names the contract")
+
+
+def test_the_usable_host_memory_reaches_the_stack_from_the_reviewed_file(tmp_path: Path) -> None:
+    # TEST FIXTURE ONLY, not a measured value: the owner reads the real figure from the ECS registered memory of the host.
+    variables = VARIABLES | {"host_usable_memory_mib": 30720}
+    path, digest = reviewed(tmp_path, variables)
+    check(renderer.services_preparation(path, digest) == variables, "the owner's usable host memory is a reviewed services input")
 
 
 def test_other_root_is_refused(tmp_path: Path) -> None:

@@ -46,7 +46,8 @@ def host_job_room(directory: Path = SERVICES_DIRECTORY) -> int:
     if type(room) is not int or room < JOB_ROOM_FLOOR_MIB:
         raise ConfigurationError(
             "Host jobs need the job room from the services stack output host_job_memory_mib (a whole number of at least 4096 MiB). "
-            "Apply the services stack, then render again. No Terraform action was run."
+            "The output stays empty until the services inputs set host_usable_memory_mib to the ECS registered memory of the host. "
+            "Set it, apply the services stack, then render again. No Terraform action was run."
         )
     return room
 

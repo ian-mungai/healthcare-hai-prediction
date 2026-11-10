@@ -406,8 +406,20 @@ variable "host_memory_mib" {
   }
 }
 
+variable "host_usable_memory_mib" {
+  description = "Memory in MiB that ECS can place on the host: the MEMORY integerValue of registeredResources that describe-container-instances shows for the host, a little under the nominal host_memory_mib. The owner sets it from the first host session; it is not known offline and has no default. Until it is set the stack gives no job room (output host_job_memory_mib is null) and render_jobs_config refuses host jobs."
+  type        = number
+  default     = null
+  nullable    = true
+
+  validation {
+    condition     = var.host_usable_memory_mib == null ? true : (var.host_usable_memory_mib > 0 && var.host_usable_memory_mib <= var.host_memory_mib && var.host_usable_memory_mib == floor(var.host_usable_memory_mib))
+    error_message = "Use the ECS registered memory of the host: a whole number of MiB above 0 and at most the nominal host_memory_mib."
+  }
+}
+
 variable "host_system_reserve_mib" {
-  description = "Memory in MiB of the host that no task gets: the operating system, Docker and the ECS agent. The job room (output host_job_memory_mib) is the host memory less this reserve and the always-on service reservations."
+  description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The job room (output host_job_memory_mib) is the usable memory less this margin and the always-on service reservations."
   type        = number
   default     = 2048
   nullable    = false

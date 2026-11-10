@@ -255,6 +255,10 @@
               }
             }
           }
+        },
+        "host_usable_memory_mib": {
+          "type": "integer",
+          "minimum": 1
         }
       }
     }

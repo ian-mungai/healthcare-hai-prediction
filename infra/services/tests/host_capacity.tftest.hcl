@@ -23,6 +23,8 @@ variables {
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   mlflow_host_ip                  = "10.0.1.20"
   mlflow_artifact_bucket          = "example-project-data-dev"
+  # TEST FIXTURE ONLY, not a measured value: the owner sets host_usable_memory_mib from the ECS registered memory of the real host.
+  host_usable_memory_mib = 30720
 
   log_group_names = {
     postgres   = "/example/postgres"
@@ -121,17 +123,41 @@ run "service_cpu_reservations_fit_beside_a_full_job" {
   }
 }
 
-run "the_job_memory_room_is_the_host_less_the_system_reserve_and_the_service_reservations" {
+run "the_job_memory_room_is_the_usable_memory_less_the_system_reserve_and_the_service_reservations" {
   command = plan
 
   assert {
-    condition     = output.host_job_memory_mib == var.host_memory_mib - var.host_system_reserve_mib - output.reserved_memory_mib && var.host_system_reserve_mib == 2048
-    error_message = "One job gets the host memory less 2 GiB for the operating system and the ECS agent and less every always-on service reservation."
+    condition     = output.host_job_memory_mib == var.host_usable_memory_mib - var.host_system_reserve_mib - output.reserved_memory_mib && var.host_system_reserve_mib == 2048
+    error_message = "One job gets the memory ECS can place on the host less the 2 GiB safety margin and less every always-on service reservation, not the nominal host memory."
   }
 
   assert {
-    condition     = output.host_job_memory_mib >= 4096 && output.host_job_memory_mib < var.host_memory_mib
-    error_message = "The job room is a usable job size and smaller than the host."
+    condition     = output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib <= var.host_usable_memory_mib
+    error_message = "The job, the service reservations and the safety margin together fit the memory ECS can place."
+  }
+
+  assert {
+    condition     = output.host_job_memory_mib >= 4096 && output.host_job_memory_mib < var.host_usable_memory_mib
+    error_message = "The job room is a usable job size and smaller than the usable memory."
+  }
+}
+
+run "a_1024_mib_reserve_keeps_the_job_and_the_reservations_inside_the_usable_memory" {
+  command = plan
+
+  variables {
+    host_system_reserve_mib = 1024
+  }
+
+  # The rejected design started from the nominal 32768 MiB: with a 1024 MiB reserve the job and the reservations then took 31744 MiB, more than ECS can place.
+  assert {
+    condition     = output.host_job_memory_mib + output.reserved_memory_mib + 1024 <= var.host_usable_memory_mib
+    error_message = "With a 1024 MiB reserve the job, the service reservations and the margin still fit the memory ECS can place."
+  }
+
+  assert {
+    condition     = output.host_job_memory_mib == var.host_usable_memory_mib - 1024 - output.reserved_memory_mib
+    error_message = "The job room follows the usable memory and the reserve, so no job size is typed by hand."
   }
 }
 
@@ -143,9 +169,53 @@ run "a_larger_system_reserve_shrinks_the_job_room" {
   }
 
   assert {
-    condition     = output.host_job_memory_mib == var.host_memory_mib - 4096 - output.reserved_memory_mib
+    condition     = output.host_job_memory_mib == var.host_usable_memory_mib - 4096 - output.reserved_memory_mib
     error_message = "The job room follows the system reserve, so no job size is typed by hand."
   }
+}
+
+run "without_the_usable_memory_there_is_no_job_room" {
+  command = plan
+
+  variables {
+    host_usable_memory_mib = null
+  }
+
+  # The services still plan (the code checkout list applies them before any host session), but render_jobs_config refuses host jobs without a room.
+  assert {
+    condition     = output.host_job_memory_mib == null
+    error_message = "Without the owner's ECS registered memory the stack gives no job room instead of one computed from the nominal host memory."
+  }
+}
+
+run "usable_memory_above_the_nominal_host_is_refused" {
+  command = plan
+
+  variables {
+    host_usable_memory_mib = 32769
+  }
+
+  expect_failures = [var.host_usable_memory_mib]
+}
+
+run "usable_memory_of_zero_is_refused" {
+  command = plan
+
+  variables {
+    host_usable_memory_mib = 0
+  }
+
+  expect_failures = [var.host_usable_memory_mib]
+}
+
+run "usable_memory_that_is_not_a_whole_number_is_refused" {
+  command = plan
+
+  variables {
+    host_usable_memory_mib = 30720.5
+  }
+
+  expect_failures = [var.host_usable_memory_mib]
 }
 
 run "services_that_leave_no_room_for_a_job_are_refused" {

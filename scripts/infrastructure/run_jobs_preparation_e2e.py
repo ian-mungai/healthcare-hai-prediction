@@ -313,10 +313,17 @@ def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output
         and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_job_memory_mib"]]
     )
     rendered = output.read_bytes()
-    for name, text, code in (("a_failed_services_output", "", 1), ("a_job_room_that_is_not_a_number", '"big"', 0), ("a_job_room_below_one_job", "2048", 0)):
+    for name, text, code in (
+        ("a_failed_services_output", "", 1),
+        ("a_job_room_that_is_not_a_number", '"big"', 0),
+        ("a_job_room_below_one_job", "2048", 0),
+        ("a_job_room_left_unset_without_the_usable_memory", "null", 0),
+    ):
         answer(text, code)
         result = invoke(host_variables)
         checks["host_room_refuses_" + name] = result.returncode == 2 and "job room" in result.stderr and output.read_bytes() == rendered
+    # The services stack gives no room until the owner sets the ECS registered memory, so the refusal must name that input.
+    checks["host_room_refusal_names_the_usable_memory_input"] = "host_usable_memory_mib" in result.stderr
     calls.unlink(missing_ok=True)
     answer("23552", 0)
     result = invoke(document["variables"])
