@@ -1657,14 +1657,12 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         text in features_dag
         for text in (
             '"run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
-            '"mode": Param("publish_fixture", type="string", enum=["publish_fixture", "real"])',
+            '"mode": Param("real", type="string", enum=["real"])',
             '"gold_snapshot_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")',
         )
     )
     store_dag = (ROOT / "dags" / f"{STORE_DAG}.py").read_text() if (ROOT / "dags" / f"{STORE_DAG}.py").is_file() else ""
-    checks["store_params"] = (
-        '"mode": Param("publish_fixture", type="string", enum=["publish_fixture", "real"])' in store_dag and "snapshot_run" not in store_dag
-    )
+    checks["store_params"] = '"mode": Param("real", type="string", enum=["real"])' in store_dag and "snapshot_run" not in store_dag
     runtime = (ROOT / "orchestration/dag_runtime.py").read_text()
     checks["runtime_gold_selection"] = (
         re.search(r'"pin_gold": "gold_snapshot_run"', runtime) is not None and re.search(r'"pin_silver": "silver_snapshot_run"', runtime) is not None
