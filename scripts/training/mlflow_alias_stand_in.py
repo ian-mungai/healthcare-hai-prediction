@@ -8,7 +8,8 @@
   returns True for it) and has no such alias. Without ``exists`` no model exists.
 - 401 and a plain-text body when the request carries no valid HTTP Basic login.
 
-``lookup(model, alias)`` returns the version number the alias names, or None. ``fault`` names what goes wrong instead: ``server_error`` (500),
+``lookup(model, alias)`` returns the version number the alias names, or None. ``tags(model, version)`` returns the tags of that version, which the 200 answer
+carries as MLflow does: a list of ``{"key": ..., "value": ...}`` (none without ``tags``). ``fault`` names what goes wrong instead: ``server_error`` (500),
 ``other_404`` (404 with the code ENDPOINT_NOT_FOUND, as a wrong address gives), ``invalid_alias_400`` (400 with the code INVALID_PARAMETER_VALUE and the message
 of an invalid alias name), ``other_code_400`` (400 with the alias message and another code), ``other_alias_400`` (400 with the alias message for another
 alias), ``malformed`` (200 with text that is not JSON), ``wrong_shape`` (200 with JSON that has no version), ``redirect`` (302 to another path of the same
@@ -40,8 +41,15 @@ DRIP_BYTES = 12
 class AliasServer:
     """One local server for the alias endpoint, bound to an unused port of 127.0.0.1."""
 
-    def __init__(self, lookup: Callable[[str, str], str | None], username: str, password: str, exists: Callable[[str], bool] = lambda model: False) -> None:
-        self.lookup, self.exists, self.fault = lookup, exists, ""
+    def __init__(
+        self,
+        lookup: Callable[[str, str], str | None],
+        username: str,
+        password: str,
+        exists: Callable[[str], bool] = lambda model: False,
+        tags: Callable[[str, str], dict[str, str]] = lambda model, version: {},
+    ) -> None:
+        self.lookup, self.exists, self.tags, self.fault = lookup, exists, tags, ""
         self.expected = "Basic " + base64.b64encode(f"{username}:{password}".encode()).decode()
         self.requests: list[dict[str, Any]] = []
         self.release = threading.Event()
@@ -119,7 +127,8 @@ class AliasServer:
             elif version is None:
                 self.send(handler, 404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": f"Registered Model with name={query.get('name')} not found"})
             else:
-                self.send(handler, 200, {"model_version": {"name": query["name"], "version": version, "aliases": [query["alias"]], "tags": []}})
+                tags = [{"key": key, "value": value} for key, value in sorted(self.tags(query["name"], version).items())]
+                self.send(handler, 200, {"model_version": {"name": query["name"], "version": version, "aliases": [query["alias"]], "tags": tags}})
 
     def drip(self, handler: BaseHTTPRequestHandler, query: dict[str, str]) -> None:
         """Send the answer of the fault slowly: one byte every ``DRIP_SECONDS`` for ``DRIP_BYTES`` bytes, then the rest at once. Stop when the server stops."""

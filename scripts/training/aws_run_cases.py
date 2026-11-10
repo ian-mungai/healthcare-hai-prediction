@@ -880,6 +880,15 @@ def alias_lookup(fixture: Fixture) -> Callable[[str, str], str | None]:
     return lookup
 
 
+def version_tags(fixture: Fixture) -> Callable[[str, str], dict[str, str]]:
+    """The tags of a model version in the registry stand-in, read without counting as a registry call."""
+
+    def tags(model: str, version: str) -> dict[str, str]:
+        return {str(key): str(value) for key, value in fixture.tracking.find_version(model, version)["tags"].items()}
+
+    return tags
+
+
 def owner_run(
     fixture: Fixture,
     bucket: ListingBucket,
@@ -900,7 +909,9 @@ def owner_run(
 
     out, err = io.StringIO(), io.StringIO()
     with (
-        mlflow_alias_stand_in.AliasServer(lookup or alias_lookup(fixture), "admin", OWNER_LOGIN, lambda model: model in fixture.tracking.models) as server,
+        mlflow_alias_stand_in.AliasServer(
+            lookup or alias_lookup(fixture), "admin", OWNER_LOGIN, lambda model: model in fixture.tracking.models, version_tags(fixture)
+        ) as server,
         without_mlflow() as blocker,
     ):
         server.fault = fault
@@ -1494,6 +1505,76 @@ def promote_cases(cases: Any, folder: Path) -> None:
         fence = json.loads(bucket.objects[promote_receipt.key_of(RUN, "abandoned.json")])
         require(fence["production_alias"] == "none", f"the fence does not record no production alias: {fence}")
 
+    def stopped_before_the_record(name: str) -> tuple[Fixture, ListingBucket, MlflowService]:
+        """Run A moved production to version 2 (set m1, ``SET_HASH``) and failed to write its Production record, so generation 1 is open with no record."""
+        fixture, bucket = tagged_fixture(name), receipt_bucket()
+        bucket.put_faults[f"{PRODUCTION_PREFIX}0000000001.json"] = [client_error("AccessDenied", "put_object")]
+        code, _, error = promote_in(fixture, folder / f"{name}_a", bucket)
+        require(code != 0 and "production_record_failed" in error and alias(fixture) == "2", f"run A did not stop before its record: {code} {error}")
+        require(f"{PRODUCTION_PREFIX}0000000001.json" not in bucket.objects, "run A wrote its Production record")
+        return fixture, bucket, MlflowService(fixture.tracking)
+
+    def online_set(bucket: ListingBucket) -> tuple[dict[str, str | None] | None, str]:
+        """What the features job reads for set m1 from the bucket: the Production schema hashes, or None and the refusal."""
+        from scripts.features import feast_sets
+        from scripts.features.publication_reads import ReadError
+
+        try:
+            return feast_sets.stored_production(bucket, BUCKET, "m1"), ""
+        except ReadError as error:
+            return None, str(error)
+
+    def owner_resolution_writes_the_production_record() -> None:
+        fixture, bucket, service = stopped_before_the_record("resolve_record")
+        before, refusal = online_set(bucket)
+        require(before is None and "generation 1 is open" in refusal, f"the features job did not refuse the open lease: {before} {refusal}")
+        code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and "abandoned" in out and lease_closed(1) in lease_keys(bucket), f"the owner could not resolve: {code} {out} {error}")
+        record = production_record(bucket)
+        expected = {
+            "schema": 1,
+            "hai_type": HAI_TYPE,
+            "model": MODEL,
+            "version": "2",
+            "run_id": RUN,
+            "mode": "promote",
+            "generation": 1,
+            "feature_set": "m1",
+            "feature_set_schema_sha256": SET_HASH,
+        }
+        require({name: record.get(name) for name in expected} == expected and set(record) == {*expected, "promoted_at"}, f"the record: {record}")
+        require(
+            json.loads(out.strip().splitlines()[-1]).get("production_record") == f"{PRODUCTION_PREFIX}0000000001.json",
+            f"the output does not name the record: {out}",
+        )
+        puts = [str(arguments["Key"]) for name, arguments in bucket.calls if name == "put_object"]
+        written = [key for key in puts if key.endswith(("0000000001.json", "abandoned.json", "0000000001.done.json"))]
+        require(
+            written[-3:] == [f"{PRODUCTION_PREFIX}0000000001.json", promote_receipt.key_of(RUN, "abandoned.json"), f"{LEASE_PREFIX}{lease_closed(1)}"],
+            f"the record was not written before the fence and the close: {written}",
+        )
+        after, refusal = online_set(bucket)
+        require(after == {HAI_TYPE: SET_HASH} and refusal == "", f"the set was not released after the resolution: {after} {refusal}")
+
+    def owner_resolution_writes_no_record_without_a_production_version() -> None:
+        fixture, bucket, service = stopped_before_the_record("resolve_no_version")
+        del fixture.tracking.models[MODEL]["aliases"]["production"]
+        code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 0 and lease_closed(1) in lease_keys(bucket), f"the owner could not resolve: {code} {out} {error}")
+        require(json.loads(out.strip().splitlines()[-1]).get("production_record") == "none", f"the output does not say that no record was written: {out}")
+        require(not any(key.startswith(PRODUCTION_PREFIX) for key in bucket.objects), f"a record was written for no version: {sorted(bucket.objects)}")
+        after, refusal = online_set(bucket)
+        require(after is None and "no Production record" in refusal, f"the features job did not refuse the generation without a record: {after} {refusal}")
+
+    def owner_resolution_record_conflict_keeps_the_lease() -> None:
+        fixture, bucket, service = stopped_before_the_record("resolve_conflict")
+        other = production_record_module.build(HAI_TYPE, {"model": MODEL, "version": "1", "run_id": RUN, "mode": "promote"}, 1, {}, "2026-11-10T00:00:00+00:00")
+        bucket.objects[f"{PRODUCTION_PREFIX}0000000001.json"] = promote_receipt.canonical(other)
+        code, out, error, _, _ = owner_run(fixture, bucket, service, resolve)
+        require(code == 2 and "Production record" in error, f"a conflicting record did not refuse the resolution: {code} {out} {error}")
+        require(lease_closed(1) not in lease_keys(bucket), "the lease was closed after the record conflict")
+        require(promote_receipt.key_of(RUN, "abandoned.json") not in bucket.objects, "the run was fenced after the record conflict")
+
     def owner_reads_a_missing_model_as_none() -> None:
         fixture, bucket, service = stuck_run("rest_no_model")
         del fixture.tracking.models[MODEL]
@@ -1678,6 +1759,9 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_owner_reads_the_alias_without_the_mlflow_package", owner_reads_the_alias_without_the_mlflow_package)
     cases.check("promote_owner_reads_a_missing_production_alias_as_none", owner_reads_a_missing_alias_as_none)
     cases.check("promote_owner_reads_a_missing_model_as_none", owner_reads_a_missing_model_as_none)
+    cases.check("promote_owner_resolution_writes_the_production_record", owner_resolution_writes_the_production_record)
+    cases.check("promote_owner_resolution_writes_no_record_without_a_production_version", owner_resolution_writes_no_record_without_a_production_version)
+    cases.check("promote_owner_resolution_record_conflict_keeps_the_lease", owner_resolution_record_conflict_keeps_the_lease)
     cases.check("promote_owner_alias_read_failures_keep_the_lease_held", owner_alias_read_failures_keep_the_lease_held)
     cases.check("promote_owner_alias_read_deadline_covers_every_byte", owner_alias_read_deadline_covers_every_byte)
     cases.check("promote_owner_alias_error_body_timeout_keeps_the_lease_held", owner_alias_error_body_timeout_keeps_the_lease_held)
