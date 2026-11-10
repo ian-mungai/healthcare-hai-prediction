@@ -177,7 +177,9 @@ def task_problems(layer: str, described: Any) -> list[str]:
 
 
 def definition_pattern(layer: str) -> re.Pattern[str]:
-    return re.compile(rf"arn:aws:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/[a-z][a-z0-9_]*_job_{layer}:[0-9]+")
+    """The job's task definition: the Fargate family ``<project>_<env>_job_<layer>`` or its host twin ``..._job_<layer>_host`` that the direct ECS launch
+    starts from a DAG step. No other suffix is accepted."""
+    return re.compile(rf"arn:aws:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/[a-z][a-z0-9_]*_job_{layer}(?:_host)?:[0-9]+")
 
 
 def task_is_this_runs(layer: str, run: str, task: Mapping[str, Any], approved_sha: str, code_run: str, input_run: str) -> bool:
@@ -221,7 +223,8 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     markers = [item for item in before_deleted if item[0].startswith(prefix)]
     same = held_before == held_after and markers == [item for item in after_deleted if item[0].startswith(prefix)]
     entries = sorted([("V", *item) for item in held_before] + [("D", key, version, "", 0) for key, version in markers], key=lambda entry: entry[1])
-    allowed = (*WRITE_PREFIXES[layer], f"lakehouse/layer_runs/{layer}/{run}/")
+    # The run's own uploads, and the write-once launch records that the direct ECS launch writes for the run (config/orchestration/ecs_launch.json).
+    allowed = (*WRITE_PREFIXES[layer], f"lakehouse/layer_runs/{layer}/{run}/", f"lakehouse/launch_records/{run}/")
     seen_before = {(key, version) for key, version, _, _ in before} | set(before_deleted)
     seen_after = {(key, version) for key, version, _, _ in after} | set(after_deleted)
     added = [key for key, _ in seen_after - seen_before]

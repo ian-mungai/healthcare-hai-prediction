@@ -815,6 +815,63 @@ def cases(work: Path, layer: str) -> dict[str, bool]:
     return checks
 
 
+def host_twin_cases(work: Path) -> dict[str, bool]:
+    """A run of the host twin (``<project>_<env>_job_<layer>_host``) that the direct ECS launch started from a DAG step: its definition and its launch
+    records under ``lakehouse/launch_records/<run>/`` pass, while any other family suffix and any write outside the run's prefixes stay refused."""
+
+    def definition(suffix: str) -> Callable[[Env, Env], None]:
+        def apply(env: Env, other: Env) -> None:
+            edit(
+                env.root / "describe.json",
+                lambda d: d["tasks"][0].update(taskDefinitionArn=re.sub(r"_job_([a-z]+):[0-9]+$", rf"_job_\1{suffix}:3", d["tasks"][0]["taskDefinitionArn"])),
+            )
+
+        return apply
+
+    def written(*keys: str) -> Callable[[Env, Env], None]:
+        def apply(env: Env, other: Env) -> None:
+            run, layer = env.spec.run, env.spec.layer
+            names = [key.format(run=run, other=other.spec.run, layer=layer) for key in keys]
+            edit(env.root / "after.json", lambda d: d["versions"].extend({"key": key, "version": "lr", "etag": '"l"', "bytes": 1} for key in names))
+
+        return apply
+
+    def both(*changes: Callable[[Env, Env], None]) -> Callable[[Env, Env], None]:
+        def apply(env: Env, other: Env) -> None:
+            for change in changes:
+                change(env, other)
+
+        return apply
+
+    records = ("lakehouse/launch_records/{run}/{layer}/claim.json", "lakehouse/launch_records/{run}/{layer}/01/end.json")
+    good = (
+        ("a host twin definition", definition("_host")),
+        ("the launch records of the run", written(*records)),
+        ("a host twin run with its launch records", both(definition("_host"), written(*records))),
+    )
+    planted = (
+        ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
+        ("a definition with a suffix after host", definition("_host_x"), NAMES["task"]),
+        ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),
+        ("the launch records of another run", written("lakehouse/launch_records/{other}/{layer}/claim.json"), NAMES["scope"]),
+        ("a file at the top of the launch records", written("lakehouse/launch_records/claim.json"), NAMES["scope"]),
+        ("a prefix that only starts like the launch records", written("lakehouse/launch_records_x/{run}/{layer}/claim.json"), NAMES["scope"]),
+    )
+    checks: dict[str, bool] = {}
+    for layer in ("silver", "gold"):
+        for label, change in good:
+            env, other = scenario(work, layer, f"host {label}")
+            change(env, other)
+            code, failed, _ = accept(env)
+            checks[f"{layer}: {label} passes every check ({failed})"] = code == 0 and not failed
+        for label, change, name in planted:
+            env, other = scenario(work, layer, f"host {label}")
+            change(env, other)
+            code, failed, _ = accept(env)
+            checks[f"{layer}: planted {label} is refused by its check"] = code == 1 and name in failed
+    return checks
+
+
 def report_check_defects() -> list[tuple[str, ReportChange]]:
     return [
         ("missing checks", lambda d: d.pop("checks")),
@@ -1187,6 +1244,7 @@ def main() -> int:
                 results[f"defects {layer}"] = group(f"defects {layer}", cases, work, layer)
             results["inputs"] = group("inputs", input_cases, work)
             results["guard"] = group("guard", guard_cases, work)
+            results["host twin"] = group("host twin", host_twin_cases, work)
             results["commands"] = command_cases(work)
             results["plan"] = plan_cases(work)
     finally:
