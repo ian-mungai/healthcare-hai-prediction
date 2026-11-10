@@ -317,7 +317,12 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         if self.unsigned_destination is not None:
             raise CaptureError("Additional redirects after a reviewed cross-host redirect are not approved.")
         require_approved(newurl)
-        route = UNSIGNED_REDIRECT_ROUTES.get(urllib.parse.urlsplit(self.source_url or req.full_url).hostname or "")
+        # A source with a reviewed signed route keeps that exact handling; only a source without one may take its host's unsigned route.
+        route = (
+            None
+            if (self.source_url or "") in SIGNED_REDIRECT_ROUTES
+            else UNSIGNED_REDIRECT_ROUTES.get(urllib.parse.urlsplit(self.source_url or req.full_url).hostname or "")
+        )
         if route is not None and urllib.parse.urlsplit(newurl).hostname == urllib.parse.urlsplit(route).hostname:
             return self.follow_unsigned_route(req, code, newurl, route)
         target = SIGNED_REDIRECT_ROUTES.get(self.source_url or "")
@@ -355,17 +360,23 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
     def follow_unsigned_route(self, req: Any, code: int, newurl: str, route: str) -> Any:
-        """Follow one reviewed unsigned redirect below its exact prefix with a new request; the refusals never repeat the target."""
+        """Follow one reviewed unsigned redirect below its exact prefix with a new request; the refusals never repeat the target.
+
+        The request keeps the raw path, so the check reads the raw path too: it starts with the route's own path, and the rest has no empty or dot
+        segment and no percent escape (no folded slash, encoded slash or encoded dot can pass). Every recorded CHHS object path has that plain shape.
+        """
         parts = urllib.parse.urlsplit(newurl)
-        segments = urllib.parse.unquote(parts.path).split("/")
+        prefix = urllib.parse.urlsplit(route)
+        rest = parts.path[len(prefix.path) :].split("/") if parts.path.startswith(prefix.path) else [""]
         if (
             req.full_url != self.source_url
             or req.get_method() != "GET"
             or code not in REDIRECT_CODES
+            or parts.scheme != "https"
+            or parts.port not in (None, 443)
             or parts.query
-            or "." in segments
-            or ".." in segments
-            or not canonical_url(newurl).startswith(canonical_url(route) + "/")
+            or "%" in newurl
+            or any(segment in {"", ".", ".."} for segment in rest)
         ):
             raise CaptureError("Redirect differs from the reviewed redirect route of this source.")
         safe_url(newurl)

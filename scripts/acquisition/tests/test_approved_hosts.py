@@ -216,3 +216,59 @@ def test_no_refusal_message_names_the_bucket(monkeypatch: pytest.MonkeyPatch, tm
     check(
         bucket not in str(caught.value) and bucket.rsplit("-", 1)[-1] not in str(caught.value), "the refusal does not repeat the bucket or its account number"
     )
+
+
+SIGNED_QUERY = (
+    "?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=example%2F20261110%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20261110T000000Z"
+    "&X-Amz-Expires=60&X-Amz-SignedHeaders=host&X-Amz-Signature=" + "a" * 64
+)
+
+
+class SignedRequest:
+    full_url = SIGNED_SOURCE
+    headers = {"Authorization": "Bearer example"}
+
+    def get_method(self) -> str:
+        return "GET"
+
+
+@pytest.mark.parametrize(
+    "target",
+    [
+        CHHS_PREFIX.removesuffix("resources/") + "/resources/0001/table.csv",
+        CHHS_PREFIX + "0001//table.csv",
+        CHHS_PREFIX + "0001%2Ftable.csv",
+        CHHS_PREFIX.removesuffix("resources/") + "resources%2F0001/table.csv",
+        CHHS_PREFIX + "%2E%2E/%2E%2E/another-open-data-bucket/table.csv",
+        CHHS_PREFIX + "0001/%2e/table.csv",
+    ],
+    ids=["double slash before the prefix", "double slash inside", "encoded slash", "encoded slash in the prefix", "encoded dot segments", "encoded dot"],
+)
+def test_a_chhs_redirect_is_checked_on_its_raw_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, target: str) -> None:
+    """The request keeps the raw path, so the check reads the raw path too: no folded slash, no escape and no dot segment passes."""
+    handler = chhs_handler(monkeypatch, tmp_path)
+    with pytest.raises(transport.CaptureError, match="reviewed redirect route"):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, target)
+
+
+def test_the_reviewed_signed_route_is_still_followed_beside_the_unsigned_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_hosts(monkeypatch, tmp_path, ["data.chhs.ca.gov", "s3.amazonaws.com"])
+    handler = transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=SIGNED_SOURCE)
+    target = transport.SIGNED_REDIRECT_ROUTES[SIGNED_SOURCE] + SIGNED_QUERY
+    followed = handler.redirect_request(SignedRequest(), None, 302, "Found", {}, target)
+    check(followed.full_url == target, "the signed route is followed with its query")
+    check("authorization" not in {name.lower() for name in followed.headers}, "no authorization header crosses to S3")
+
+
+def test_the_signed_source_refuses_an_unsigned_shaped_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    use_hosts(monkeypatch, tmp_path, ["data.chhs.ca.gov", "s3.amazonaws.com"])
+    handler = transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=SIGNED_SOURCE)
+    for target in (transport.SIGNED_REDIRECT_ROUTES[SIGNED_SOURCE], CHHS_TARGET):
+        with pytest.raises(transport.CaptureError, match="Signed redirect differs"):
+            handler.redirect_request(SignedRequest(), None, 302, "Found", {}, target)
+
+
+def test_an_unsigned_chhs_source_refuses_a_signed_shaped_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    handler = chhs_handler(monkeypatch, tmp_path)
+    with pytest.raises(transport.CaptureError, match="reviewed redirect route"):
+        handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_TARGET + SIGNED_QUERY)
