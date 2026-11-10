@@ -5,6 +5,7 @@ import re
 import sys
 from pathlib import Path
 
+from scripts.quality import lock_env
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -78,8 +79,14 @@ def third_party_imports() -> set[str]:
     return found
 
 
-def locked_packages(path: Path) -> set[str]:
-    return {name.lower().replace("_", "-") for name in re.findall(r"^([A-Za-z0-9_.-]+)==", path.read_text(encoding="utf-8"), re.M)}
+def locked_packages(text: str) -> set[str]:
+    return {name.lower().replace("_", "-") for name in re.findall(r"^([A-Za-z0-9_.-]+)==", text, re.M)}
+
+
+def analytics_image_requirements() -> str:
+    """The hash-pinned requirements the analytics image installs: the analytics group of uv.lock, exported exactly as the image build writes its
+    Git-ignored requirements.txt (scripts.quality.lock_env, since main's c0498c2 replaced the committed services/analytics/requirements.txt)."""
+    return lock_env.export("analytics")
 
 
 def declared(path: Path) -> set[str]:
@@ -89,7 +96,7 @@ def declared(path: Path) -> set[str]:
 
 def test_the_task_code_imports_only_packages_the_image_will_hold() -> None:
     analytics = ROOT / "services/analytics"
-    allowed = locked_packages(analytics / "requirements.txt") | declared(analytics / "requirements.publisher.in")
+    allowed = locked_packages(analytics_image_requirements()) | declared(analytics / "requirements.publisher.in")
     missing = sorted(name for name in third_party_imports() if PACKAGE_OF.get(name, name).lower().replace("_", "-") not in allowed)
     check(missing == [], f"the image lacks {missing}")
 
@@ -138,7 +145,10 @@ def test_every_file_the_default_build_copies_exists() -> None:
         parts = line.split()
         if parts and parts[0] == "COPY" and not any(part.startswith("--from=") for part in parts):
             sources += [part for part in parts[1:-1] if not part.startswith("--")]
-    missing = sorted(name for name in sources if not list(folder.glob(name)))
+    # The requirement files lock_env writes from uv.lock before every image build are Git-ignored, so only they may be absent from the checkout.
+    generated = {Path(path).relative_to("services/analytics").as_posix() for path in lock_env.IMAGE_FILES["analytics"].values()}
+    check("requirements.txt" in generated, "the analytics requirements are generated from uv.lock")
+    missing = sorted(name for name in sources if name not in generated and not list(folder.glob(name)))
     check(missing == [], f"the default build copies files that do not exist: {missing}")
 
 
