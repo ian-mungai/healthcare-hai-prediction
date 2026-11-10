@@ -33,3 +33,5 @@ docs-path scripts/quality/run_ci_groups_e2e.py -- the scratch repositories of th
 docs-path scripts/quality/run_documentation_review_e2e.py -- the scratch repositories of the cases hold their own docs/ files -- permanent
 docs-path scripts/quality/run_lint_tools_e2e.py -- the scratch copy of the tree gets a planted docs/ file -- permanent
 docs-path scripts/training/lane_b_cases.py -- the case renames the plan in a scratch copy to plan_original.md -- permanent
+unused-code scripts/quality/install_tools.py -- urllib's opener dispatches http_open and https_open of the guarded handlers by method name -- permanent
+unused-code scripts/quality/run_e2e.py -- http.server dispatches do_GET of the scripted download stand-in by method name -- permanent
