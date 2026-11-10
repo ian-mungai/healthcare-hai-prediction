@@ -8,9 +8,10 @@ A model set run publishes one table, ``feature_matrix_<set>``. Its Feast phase
 2. ``set_materialize`` decides what happens online (``scripts.features.feature_sets.online_action``): nothing for base, offline only for a set that is not
    online, a held load when the set's schema hash differs from the hash of a Production model of that set (the newest Production record of each infection
    type in the data bucket, ``production_reader``), otherwise the load. A held load writes
-   ``online_hold.json`` in the run's prefix and loads nothing; the set's table is published and registered offline either way.
+   ``online_hold.json`` in the run's prefix and loads nothing; the set's table is published and registered offline either way. While a promotion of any model
+   is unresolved (an open lease generation, or a newest closed generation without its Production record) the step is refused (``unresolved_promotion``).
 3. ``release`` loads a held run online. The training side calls it after the model trained on the new schema is promoted:
-   ``python -m scripts.features.feast_materialize --release <SET> <RUN_ID>``. A repeat changes nothing.
+   ``python -m scripts.features.feast_materialize --release <SET> <RUN_ID>``. A repeat changes nothing. An unresolved promotion refuses it too.
 
 Each online set (m1, m2 and m4) has its own Redis database (3, 4 and 5) and its own marker (``online_protocol.set_layout``), so the load of one set flushes and
 marks nothing of another and a held set keeps serving its last online data. ``online_loader`` is the load step; it is injected so the cases need no Feast.
@@ -36,7 +37,7 @@ from scripts.features import feast_job, feature_schema, feature_sets, historical
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
-from scripts.training import production_record, promote_receipt
+from scripts.training import production_record, promote_lease, promote_receipt
 
 HOLD_NAME = "online_hold.json"
 RELEASE_NAME = "online_release.json"
@@ -472,18 +473,61 @@ def records_bucket(settings: feast_job.JobSettings) -> str:
     return location.netloc if location.scheme == "s3" and location.netloc else reads.deployment_bucket()
 
 
+def unresolved_promotion(client: Any, bucket: str, models: Mapping[str, str]) -> dict[str, int]:
+    """The newest closed lease generation of each model by infection type (0 for a model never promoted), or ReadError while a promotion is unresolved.
+
+    The promote action moves the ``production`` alias before it writes the Production record, so a promotion that failed or was abandoned in between leaves
+    the newest record naming the schema production held before. A generation that is open is such a promotion, whatever the set of its version, so any open
+    generation of any model refuses (owner decision "Features reader refuses an unresolved promotion", Nov 10 2026). Only the listing is read, never a lease
+    record."""
+    newest: dict[str, int] = {}
+    for hai_type in sorted(models):
+        try:
+            found = promote_lease.generations(client, bucket, models[hai_type])
+        except promote_receipt.ReceiptError as error:
+            raise ReadError(f"the promotion leases cannot be read: {error}") from None
+        opened = sorted(generation for generation, closed in found.items() if not closed)
+        if opened:
+            raise ReadError(
+                f"the promotion of {models[hai_type]} ({hai_type}) is unresolved: lease generation {opened[-1]} is open, so production may not match its "
+                "newest Production record. Retry the promotion run, or resolve it with python -m scripts.training.promote_owner resolve, then run this again"
+            )
+        newest[hai_type] = max(found, default=0)
+    return newest
+
+
 def stored_production(client: Any, bucket: str, feature_set: str) -> dict[str, str | None]:
-    """The schema hash of each Production model of the set by infection type, from the newest Production record of each type in the data bucket."""
+    """The schema hash of each Production model of the set by infection type, from the newest Production record of each type in the data bucket.
+
+    The leases are listed first (``unresolved_promotion``). Then the newest record of every type must be the record of its model's newest closed generation:
+    a generation that closed without its record (a promotion the owner abandoned after the alias request) or a record newer than every generation the
+    listing showed (a promotion that ran in between) is refused, so no older Production state decides the load or the release. With no generation and no
+    record for any model, nothing is in production and the set loads (the first release)."""
     names = json.loads(feature_sets.MODEL_CONTRACT.read_text())["registered_models"]
+    closed = unresolved_promotion(client, bucket, names)
     try:
         records = production_record.current(client, bucket, names)
     except promote_receipt.ReceiptError as error:
         raise ReadError(f"the Production records cannot be read: {error}") from None
+    for hai_type, record in records.items():
+        generation = int(record["generation"]) if record is not None else 0
+        if generation == closed[hai_type]:
+            continue
+        if generation < closed[hai_type]:
+            raise ReadError(
+                f"lease generation {closed[hai_type]} of {names[hai_type]} ({hai_type}) closed with no Production record, so production may not match its "
+                "newest record. A completed promotion of the model writes its record and ends this refusal"
+            )
+        raise ReadError(
+            f"the Production record of {hai_type} has generation {generation}, newer than lease generation {closed[hai_type]} of {names[hai_type]}: "
+            "a promotion ran while the records were read. Run this again"
+        )
     return feature_sets.production_models(records, feature_set)
 
 
 def production_reader(settings: feast_job.JobSettings, feature_set: str) -> Callable[[], dict[str, str | None]]:
-    """Read the Production models of the set from the records in the data bucket when called (the task role reads ``promote/production/`` only)."""
+    """Read the Production models of the set from the leases and records in the data bucket when called (the task role lists the lease prefix of each model
+    under ``promote/models/`` and reads ``promote/production/`` only)."""
     return lambda: stored_production(promote_receipt.s3_client(), records_bucket(settings), feature_set)
 
 
