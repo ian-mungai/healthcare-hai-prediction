@@ -1,4 +1,6 @@
-"""Trigger one silver, gold, features, feature store or training workflow run on the running orchestration stack and wait for its end, with a deadline.
+"""Trigger one ingestion, silver, gold, features, feature store or training workflow run on the running orchestration stack and wait for its end.
+
+Every wait has a deadline.
 
 Usage::
 
@@ -44,7 +46,7 @@ PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 SETTLE_DAG = "launch_settle_dag"
 # The producer-run parameter each workflow's form requires, by workflow.
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_transform_dag": "gold_snapshot_run", "feature_store_dag": "gold_snapshot_run"}
-DAGS = ("silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS, SETTLE_DAG)
+DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS, SETTLE_DAG)
 JOBS_FILE = REPO_ROOT / "config/orchestration/ecs_broker_jobs.json"
 STATEMENT_MAX = 500
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.

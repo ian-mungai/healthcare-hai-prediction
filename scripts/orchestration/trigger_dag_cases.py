@@ -195,11 +195,16 @@ def trigger_cases() -> dict[str, bool]:
 
     api = Ends()
     code, printed, _, _ = invoke(api, ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5"])
+    ingestion = Ends()
+    started, ended, _, _ = invoke(ingestion, ["--dag", "ingestion_dag", "--mode", "real", "--run-id", RUN, "--wait-seconds", "5"])
+    extra = invoke(Ends(), ["--dag", "ingestion_dag", "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5"])[0]
     return {
         "a trigger that ends in success exits 0 with the run's end state": code == 0
         and printed is not None
         and printed["state"] == "success"
-        and api.calls[:2] == ["unpause", "trigger"]
+        and api.calls[:2] == ["unpause", "trigger"],
+        "ingestion_dag triggers with its run ID and mode only": started == 0 and ended is not None and ended["state"] == "success",
+        "ingestion_dag refuses a silver snapshot run": extra != 0,
     }
 
 
