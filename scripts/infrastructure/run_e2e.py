@@ -218,6 +218,9 @@ BOOT_STALL_WITH_PID = 'echo $$ >"$BOOT_STATE/stalled.pid"; exec /bin/sleep 45'
 # The most seconds an interrupted boot run may take to come back to its caller: the stalled step would otherwise run for BOOT_INTERRUPT_STALL_CAP seconds.
 BOOT_INTERRUPT_LIMIT = 4.0
 BOOT_INTERRUPT_STALL_CAP = 8
+# How long the "survivor" runs wait for the interrupted job to end. The job's own unconfirmed stop takes under a second alone but over 3 s under the full
+# local CI, and a job still running at the end of the wait raises its own error, which would hide the planted dropped worker error.
+BOOT_SURVIVOR_CANCEL_WAIT = 8.0
 # Runs boot_host in its own process and interrupts it with SIGINT once the stalled step runs. Arguments: repository root, case folder, mode ("interrupt", or
 # "survivor": a session stop that is never confirmed), plant ("" or the name of a planted defect), the real bash and the GNU timeout. It writes result.json.
 BOOT_INTERRUPT_RUNNER = """
@@ -255,7 +258,7 @@ def gone(pid):
 patches = []
 if mode == "survivor":
     patches += [mock.patch("scripts.process.session_left", survivor_session_left), mock.patch("scripts.process.CONFIRM_SECONDS", 0.5)]
-    patches.append(mock.patch("scripts.process.CANCEL_WAIT_SECONDS", 3.0))
+    patches.append(mock.patch("scripts.process.CANCEL_WAIT_SECONDS", run_e2e.BOOT_SURVIVOR_CANCEL_WAIT))
 if plant == "plain_executor":
     patches.append(mock.patch.object(run_e2e, "LaunchPool", ThreadPoolExecutor, create=True))
 if plant == "no_cancellation":
@@ -2265,7 +2268,7 @@ def boot_interrupt_result(evidence: Evidence, bash: str, gnu_timeout: str, mode:
     arguments = ["-B", str(runner), str(REPO_ROOT), str(folder), mode, plant, bash, gnu_timeout]
     # A runner that never comes back (the defect) is stopped, with its session and everything in it, when this deadline passes.
     with contextlib.suppress(TimeoutExpired):
-        run_command(sys.executable, arguments, cwd=REPO_ROOT, env=evidence.environment, timeout=BOOT_INTERRUPT_STALL_CAP + 12)
+        run_command(sys.executable, arguments, cwd=REPO_ROOT, env=evidence.environment, timeout=BOOT_INTERRUPT_STALL_CAP + BOOT_SURVIVOR_CANCEL_WAIT + 12)
     path = folder / "result.json"
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
 
