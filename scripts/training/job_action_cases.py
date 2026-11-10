@@ -2250,6 +2250,45 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
         else:
             raise AssertionError("recorded returned without the job's exit")
 
+    def startup_interrupt_silent() -> None:
+        scratch.mkdir(parents=True, exist_ok=True)
+        from scripts import resource_peaks
+
+        def raises() -> int:
+            raise RuntimeError("job failed")
+
+        def unbuildable(*_args: Any, **_kwargs: Any) -> Any:
+            raise KeyboardInterrupt
+
+        for label, patch in (
+            ("construction", mock.patch.object(resource_peaks, "_Sampler", side_effect=unbuildable)),
+            ("start", mock.patch.object(resource_peaks._Sampler, "start", side_effect=KeyboardInterrupt)),
+        ):
+            # After an interrupt while the sampler is built or started, the recorder abandons its record: no stderr write that could block.
+            written = io.StringIO()
+            try:
+                with patch, contextlib.redirect_stderr(written):
+                    resource_peaks.recorded(raises, scratch=(scratch,), interval=0.02)
+            except RuntimeError as error:
+                require(str(error) == "job failed", f"{label}: the recorder replaced the job's exception: {error}")
+            except BaseException as error:
+                raise AssertionError(f"{label}: an interrupt inside the recorder replaced the job's exception with {type(error).__name__}") from error
+            else:
+                raise AssertionError(f"{label}: the job's exception was swallowed")
+            require(written.getvalue() == "", f"{label}: the recorder wrote to stderr after an interrupt: {written.getvalue()!r}")
+
+            written = io.StringIO()
+            try:
+                with patch, contextlib.redirect_stderr(written):
+                    resource_peaks.recorded(lambda: 3, scratch=(scratch,), interval=0.02)
+            except SystemExit as stop:
+                require(stop.code == 3, f"{label}: an interrupt inside the recorder changed the exit code to {stop.code}")
+            except BaseException as error:
+                raise AssertionError(f"{label}: an interrupt inside the recorder replaced the job's exit with {type(error).__name__}") from error
+            else:
+                raise AssertionError(f"{label}: recorded returned without the job's exit")
+            require(written.getvalue() == "", f"{label}: the recorder wrote to stderr after an interrupt: {written.getvalue()!r}")
+
     def job_interrupt_propagates() -> None:
         scratch.mkdir(parents=True, exist_ok=True)
         from scripts import resource_peaks
@@ -2333,6 +2372,7 @@ def resource_peak_cases(cases: Any, folder: Path) -> None:
     cases.check("resource_peaks_sampler_start_failure_kept", sampler_start_failure_kept)
     cases.check("resource_peaks_sampler_construction_failure_kept", sampler_construction_failure_kept)
     cases.check("resource_peaks_recorder_interrupt_kept", recorder_interrupt_kept)
+    cases.check("resource_peaks_startup_interrupt_silent", startup_interrupt_silent)
     cases.check("resource_peaks_job_interrupt_propagates", job_interrupt_propagates)
     cases.check("resource_peaks_broken_stderr_kept", broken_stderr_kept)
     cases.check("resource_peaks_unreadable_subfolder_skipped", unreadable_subfolder)

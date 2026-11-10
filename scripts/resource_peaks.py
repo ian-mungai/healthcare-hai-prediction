@@ -146,22 +146,26 @@ def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int) -> None:
             sys.stderr.write(f"event=resource_peaks_failed {type(error).__name__}: {error}\n")
 
 
-def _start(folders: tuple[Path, ...], interval: float) -> tuple[_Sampler | None, str]:
-    """Build and start the scratch sampler; a sampler that cannot be built or started, an interrupt included, leaves the measure unavailable."""
+def _start(folders: tuple[Path, ...], interval: float) -> tuple[_Sampler | None, str, bool]:
+    """Build and start the scratch sampler; a sampler that cannot be built or started leaves the measure unavailable.
+
+    The third value is True after an interrupt here: the record is then abandoned, with no stderr write that could block on a full pipe.
+    """
     try:
         sampler = _Sampler(folders, interval)
     except BaseException as error:
-        return None, f"sampler not built: {type(error).__name__}: {error}"
+        return None, f"sampler not built: {type(error).__name__}: {error}", isinstance(error, KeyboardInterrupt)
     try:
         sampler.start()
     except BaseException as error:
         sampler.error = f"sampler did not start: {type(error).__name__}: {error}"
-    return sampler, ""
+        return sampler, "", isinstance(error, KeyboardInterrupt)
+    return sampler, "", False
 
 
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
     """Run a job entry point, log its resource peaks once and exit with the job's own code or exception."""
-    sampler, unavailable = _start(scratch, interval)
+    sampler, unavailable, abandoned = _start(scratch, interval)
     code = 1
     try:
         code = _exit_code(main())
@@ -169,5 +173,9 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
         code = _exit_code(stop.code)
         raise
     finally:
-        _emit(sampler, unavailable, code)
+        if abandoned:
+            if sampler is not None:
+                sampler.stopped.set()
+        else:
+            _emit(sampler, unavailable, code)
     raise SystemExit(code)
