@@ -382,3 +382,15 @@ moved {
   from = aws_ecs_service.service["streamlit"]
   to   = aws_ecs_service.serving["streamlit"]
 }
+
+# Current host job cap at launch (owner A, Nov 10 2026): the job room this apply leaves on the host, read by the launch preflight at every host launch.
+# Host job cap parameter writer (owner A, Nov 10 2026): Terraform manages the parameter, so the project user may put, read, delete and tag this one name.
+resource "aws_ssm_parameter" "host_job_cap" {
+  #checkov:skip=CKV2_AWS_34:The host job cap is a memory size in MiB, not a secret; the Airflow launch role reads it with ssm:GetParameter and no key.
+  name        = var.host_job_cap_parameter_name
+  description = "Memory MiB one host job may get: the usable host memory less the system reserve and every always-on service reservation."
+  type        = "String"
+  tier        = "Standard"
+  data_type   = "text"
+  value       = tostring(local.host_job_memory_mib)
+}

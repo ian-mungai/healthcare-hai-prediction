@@ -325,3 +325,52 @@ run "an_unknown_job_family_name_is_refused" {
 
   expect_failures = [var.host_job_families]
 }
+
+run "the_host_job_cap_is_written_to_one_standard_parameter" {
+  command = plan
+
+  # Current host job cap at launch (owner A, Nov 10 2026): the launch preflight reads this parameter at every host launch and refuses a revision
+  # whose hai.host_capacity label gives a job more memory.
+  assert {
+    condition = (
+      aws_ssm_parameter.host_job_cap.name == "/healthcare_hai_prediction/host_job_cap" &&
+      aws_ssm_parameter.host_job_cap.type == "String" &&
+      aws_ssm_parameter.host_job_cap.tier == "Standard" &&
+      aws_ssm_parameter.host_job_cap.value == tostring(output.host_job_memory_mib)
+    )
+    error_message = "The services stack writes the current job room (usable memory less the system reserve and every service reservation) to one standard String parameter."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAP_PARAMETER=/healthcare_hai_prediction/host_job_cap") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container names the host job cap parameter, so the launch preflight reads the cap the services stack wrote."
+  }
+}
+
+run "a_larger_reserve_lowers_the_written_cap" {
+  command = plan
+
+  variables {
+    host_system_reserve_mib = 4096
+  }
+
+  assert {
+    condition     = aws_ssm_parameter.host_job_cap.value == tostring(var.host_usable_memory_mib - 4096 - output.reserved_memory_mib)
+    error_message = "The written cap follows the inputs, so a larger reserve or a larger service reservation lowers it at the next services apply."
+  }
+}
+
+run "a_host_job_cap_parameter_name_with_a_wildcard_is_refused" {
+  command = plan
+
+  variables {
+    host_job_cap_parameter_name = "/healthcare_hai_prediction/*"
+  }
+
+  expect_failures = [var.host_job_cap_parameter_name]
+}

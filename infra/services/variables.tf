@@ -418,6 +418,18 @@ variable "host_usable_memory_mib" {
   }
 }
 
+variable "host_job_cap_parameter_name" {
+  description = "Parameter Store name the stack writes the current host job cap to (output host_job_memory_mib, in MiB). The launch preflight reads it at every host launch and refuses a revision whose hai.host_capacity label gives a job more memory. The IAM stack grants the Airflow launch role a read of this one name."
+  type        = string
+  default     = "/healthcare_hai_prediction/host_job_cap"
+  nullable    = false
+
+  validation {
+    condition     = length(var.host_job_cap_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.host_job_cap_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.host_job_cap_parameter_name))
+    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+  }
+}
+
 variable "host_system_reserve_mib" {
   description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The job room (output host_job_memory_mib) is the usable memory less this margin and the always-on service reservations."
   type        = number
