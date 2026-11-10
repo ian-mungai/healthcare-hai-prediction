@@ -731,7 +731,10 @@
     {
       "role": "project_user",
       "action": "ssm:DescribeParameters",
-      "resource": "*"
+      "resource": "*",
+      "context": {
+        "aws:RequestedRegion": "${AWS_REGION}"
+      }
     },
     {
       "role": "airflow_launch",
