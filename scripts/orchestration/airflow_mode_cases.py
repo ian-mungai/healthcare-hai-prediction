@@ -17,7 +17,8 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 6. The silver, gold, promotion and serving DAGs are one task per job: preflight, job, evidence and gate, and a refused preflight or a failed job fails
    the gate with nothing launched again (``collapsed_job_dags_are_one_chain``). The five DAGs of the chain run end to end (``five_dags_run_end_to_end``),
    and every DAG triggered with only its required values runs with its form's defaults: no form defaults to a mode the direct path refuses
-   (``dags_run_with_their_form_defaults``).
+   (``dags_run_with_their_form_defaults``). The feature store DAG's form requires the gold run its features job publishes from, and a run without it
+   is refused before any launch (``feature_store_takes_its_gold_run``).
 7. The modules, the mount list and the host table agree, and a container without the launch module names it (``launch_modules_are_in_the_mount_list``,
    ``host_table_matches_the_job_table``, ``missing_launch_module_is_named``).
 8. The launch services come from the named environment, with the session adapter (``services_come_from_named_environment``,
@@ -853,6 +854,62 @@ def collapsed_job_dags_are_one_chain() -> None:
     require("no successful launch" in str(error) and not rig.ecs.calls, f"evidence without a launch was not refused: {error}")
 
 
+STORE_RUN = "20261104T120000Z-5a5a5a5a"
+GOLD_RUN_PARAMETER = "gold_snapshot_run"
+
+
+def form_parameter(dag_file: str, name: str) -> tuple[list[Any], dict[str, Any]] | None:
+    """The positional and keyword arguments of the ``Param`` call that declares ``name`` in a shipped DAG file's trigger form."""
+    for node in ast.walk(ast.parse((ROOT / "dags" / dag_file).read_text())):
+        if isinstance(node, ast.Dict):
+            for key, value in zip(node.keys, node.values, strict=True):
+                if isinstance(key, ast.Constant) and key.value == name and isinstance(value, ast.Call):
+                    return [ast.literal_eval(item) for item in value.args], {item.arg: ast.literal_eval(item.value) for item in value.keywords if item.arg}
+    return None
+
+
+def feature_store_takes_its_gold_run() -> None:
+    """The feature store DAG's Feast steps run the features job, whose preflight needs the passed gold run it publishes from. The form requires that run
+    (a run ID, not latest), the run reaches the launch, and a trigger without it is refused before any launch record or ECS call."""
+    declared = form_parameter("feature_store_dag.py", GOLD_RUN_PARAMETER)
+    require(declared is not None, f"feature_store_dag declares no {GOLD_RUN_PARAMETER} parameter")
+    arguments, settings = declared or ([], {})
+    pattern = str(settings.get("pattern", ""))
+    require(not arguments and settings.get("type") == "string", f"the gold run must be required, with no default: {declared}")
+    require(
+        bool(pattern)
+        and re.fullmatch(pattern.strip("^$"), GOLD_RUN) is not None
+        and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + GOLD_RUN)),
+        f"the form's pattern does not accept exactly a run ID: {pattern}",
+    )
+    rig = Rig()
+    rig.stage_runs(STORE_RUN)
+    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    silver = layers(BRONZE_RUN, "silver")
+    gold = layers(silver, "gold")
+    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    for dag_id, params in (("silver_transform_dag", {"run_id": silver}), ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver})):
+        with world(rig, dag_id, params) as current:
+            current.run_dag(f"{dag_id}.py")
+            require(current.results.get("gate") == "accepted", f"{dag_id} did not pass: {current.results}")
+    before = rig.tasks_started()
+    with world(rig, "feature_store_dag", {"run_id": STORE_RUN, GOLD_RUN_PARAMETER: gold}) as current:
+        states = current.run_dag("feature_store_dag.py")
+        failed = {name: current.results[name] for name, state in states.items() if state != "success"}
+        require(bool(states) and not failed, f"feature_store_dag with a passed gold run did not finish: {failed}")
+    require(rig.tasks_started() == before + 1, f"feature_store_dag started {rig.tasks_started() - before} tasks, not one")
+    claim = rig.launcher.store.run_record(STORE_RUN, "features", "claim")
+    require((rig.end(STORE_RUN, "features") or {}).get("outcome") == "succeeded" and claim is not None, "the features job of the store run has no success")
+    rig = Rig()
+    rig.stage_runs(STORE_RUN)
+    with world(rig, "feature_store_dag", {"run_id": STORE_RUN}) as current:
+        states = current.run_dag("feature_store_dag.py")
+        refused = [str(result) for result in current.results.values() if "needs the gold run" in str(result)]
+        require(states.get("release_run") == "failed" and bool(refused), f"feature_store_dag without a gold run was not refused by name: {current.results}")
+    require(rig.ecs.count("run_task") == 0 and not rig.records.calls, "a feature store run without its gold run reached ECS or the launch records")
+
+
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
     approval = {
@@ -1131,6 +1188,7 @@ CASES: dict[str, Callable[[], None]] = {
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
     "dags_run_with_their_form_defaults": dags_run_with_their_form_defaults,
     "collapsed_job_dags_are_one_chain": collapsed_job_dags_are_one_chain,
+    "feature_store_takes_its_gold_run": feature_store_takes_its_gold_run,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,

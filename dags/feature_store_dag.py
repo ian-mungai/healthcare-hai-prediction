@@ -16,6 +16,8 @@ with DAG(
     params={
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
         "mode": Param("real", type="string", enum=["real"]),
+        # The passed gold run the features job publishes from: its preflight refuses a run without it, so the form requires a run ID.
+        "gold_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
     },
     default_args={"retries": 0},
 ) as dag:
