@@ -18,7 +18,7 @@ variables {
   data_mount_path             = "/mnt/example-data"
   marquez_enabled             = true
   mlflow_task_role_arn        = "arn:aws:iam::111111111111:role/example-mlflow"
-  mlflow_host_ip              = "10.0.1.20"
+  host_private_ip             = "10.0.1.20"
   mlflow_artifact_bucket      = "example-project-data-dev"
 
   log_group_names = {
@@ -1566,7 +1566,7 @@ run "mlflow_off_needs_no_inputs" {
 
   variables {
     mlflow_task_role_arn   = null
-    mlflow_host_ip         = null
+    host_private_ip        = null
     mlflow_artifact_bucket = null
     log_group_names = {
       postgres = "/example/postgres"
@@ -1706,11 +1706,11 @@ run "mlflow_without_address_is_refused" {
   command = plan
 
   variables {
-    mlflow_enabled = true
-    mlflow_host_ip = "mlflow.example.com"
+    mlflow_enabled  = true
+    host_private_ip = "mlflow.example.com"
   }
 
-  expect_failures = [var.mlflow_host_ip]
+  expect_failures = [var.host_private_ip]
 }
 
 run "mlflow_without_bucket_is_refused" {
@@ -2969,7 +2969,7 @@ run "launch_settings_come_from_the_stack_variables" {
   command = plan
 
   variables {
-    mlflow_host_ip               = "10.0.1.20"
+    host_private_ip              = "10.40.0.20"
     airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
     airflow_launch_bucket_name   = "example-project-data-dev"
   }
@@ -2986,8 +2986,8 @@ run "launch_settings_come_from_the_stack_variables" {
             "HAI_LAUNCH_LOG_GROUP=example_project_jobs_dev",
             "HAI_LAUNCH_HOST_PROVIDER=example-project-dev-host",
             "HAI_LAUNCH_BUCKET=example-project-data-dev",
-            "HAI_LAUNCH_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
-            "HAI_LAUNCH_MLFLOW_URI=http://10.0.1.20:5100",
+            "HAI_LAUNCH_POLARIS_URI=http://10.40.0.20:8181/api/catalog",
+            "HAI_LAUNCH_MLFLOW_URI=http://10.40.0.20:5100",
             "HAI_LAUNCH_SCRATCH_PATH=/opt/hai/job_scratch",
             "HAI_LAUNCH_POOL=host_jobs",
           ] : contains([for item in container.environment : "${item.name}=${item.value}"], expected)
@@ -3090,8 +3090,41 @@ run "launch_role_shared_with_mlflow_is_refused" {
   expect_failures = [var.airflow_launch_task_role_arn]
 }
 
+# The host address is the platform stack's output, passed in by the renderer. MLflow's accepted Host header, the catalog and MLflow addresses of every
+# Airflow container and nothing else take their address from host_private_ip: a different value changes all of them, so no second source exists.
+run "the_host_address_reaches_mlflow_and_every_airflow_launch_address" {
+  command = plan
+
+  variables {
+    host_private_ip              = "10.40.0.77"
+    mlflow_enabled               = true
+    airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
+    airflow_launch_bucket_name   = "example-project-data-dev"
+  }
+
+  assert {
+    condition = (
+      endswith(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command[length(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command) - 1], ",10.40.0.77:5100") &&
+      alltrue([
+        for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+          for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+            contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_POLARIS_URI=http://10.40.0.77:8181/api/catalog") &&
+            contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_MLFLOW_URI=http://10.40.0.77:5100")
+          ) if startswith(container.name, "airflow")
+        ])
+      ])
+    )
+    error_message = "MLflow's allowed Host header and the Airflow launch addresses all come from host_private_ip."
+  }
+
+  assert {
+    condition     = !strcontains(jsonencode([for key, definition in aws_ecs_task_definition.service : definition.container_definitions]), "10.0.1.20")
+    error_message = "No file-level address leaks into a definition: the address comes only from the variable."
+  }
+}
+
 # The launch path has its own inputs (review, Nov 7 2026): the bucket of the launch records and staged inputs is airflow_launch_bucket_name, and the host
-# address of the catalog and MLflow is mlflow_host_ip. Both are required once the scheduler runs as the launch role, and broker_jobs feeds nothing.
+# address of the catalog and MLflow is host_private_ip (the platform output). Both are required once the scheduler runs as the launch role, and broker_jobs feeds nothing.
 run "launch_role_without_the_launch_bucket_is_refused" {
   command = plan
 
@@ -3117,7 +3150,7 @@ run "launch_role_without_the_host_address_is_refused" {
   command = plan
 
   variables {
-    mlflow_host_ip               = null
+    host_private_ip              = null
     mlflow_enabled               = false
     airflow_launch_task_role_arn = "arn:aws:iam::111111111111:role/example_project_airflow_launch_task_dev"
     airflow_launch_bucket_name   = "example-project-data-dev"
@@ -3150,7 +3183,7 @@ run "the_broker_bucket_never_feeds_the_launch_path" {
         !strcontains(jsonencode(container.environment), "example-project-broker-dev") && !strcontains(jsonencode(container.environment), "10.0.1.99")
       ) if startswith(container.name, "airflow")
     ])
-    error_message = "The launch settings come from airflow_launch_bucket_name and mlflow_host_ip; the broker's bucket and host address reach no Airflow container."
+    error_message = "The launch settings come from airflow_launch_bucket_name and the host's private address; the broker's bucket and host address reach no Airflow container."
   }
 }
 

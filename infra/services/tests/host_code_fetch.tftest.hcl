@@ -21,7 +21,7 @@ variables {
   monitoring_enabled              = true
   mlflow_enabled                  = true
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
-  mlflow_host_ip                  = "10.0.1.20"
+  host_private_ip                 = "10.0.1.20"
   mlflow_artifact_bucket          = "example-project-data-dev"
 
   log_group_names = {

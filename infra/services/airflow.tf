@@ -24,11 +24,11 @@ locals {
   # The one-slot Airflow pool that serializes the tasks launching a host job. The migrate container creates it (airflow pools set is an upsert) and every
   # Airflow container names it in HAI_LAUNCH_POOL, which orchestration/dag_runtime.py reads.
   airflow_launch_pool = "host_jobs"
-  airflow_launch_host = var.mlflow_host_ip
+  airflow_launch_host = var.host_private_ip
 
   # What orchestration/airflow_steps.py reads to launch a job (its SETTINGS), all from existing variables. None is a secret: the step signs with the task
   # role and reads the record prefix from config/orchestration/ecs_launch.json. A value with no source yet is empty, and the step refuses by the setting's
-  # name. The bucket is airflow_launch_bucket_name and the host address mlflow_host_ip, both required once the
+  # name. The bucket is airflow_launch_bucket_name and the host address host_private_ip, both required once the
   # scheduler runs as the launch role; broker_jobs feeds nothing here.
   airflow_launch_environment = {
     AWS_REGION               = var.aws_region

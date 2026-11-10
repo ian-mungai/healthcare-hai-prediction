@@ -21,7 +21,7 @@ locals {
         "--workers", "1",
         "--serve-artifacts",
         "--artifacts-destination", "s3://${coalesce(var.mlflow_artifact_bucket, "unset")}/mlflow/",
-        "--allowed-hosts", "127.0.0.1:${local.mlflow_port},localhost:${local.mlflow_port},${coalesce(var.mlflow_host_ip, "unset")}:${local.mlflow_port}",
+        "--allowed-hosts", "127.0.0.1:${local.mlflow_port},localhost:${local.mlflow_port},${coalesce(var.host_private_ip, "unset")}:${local.mlflow_port}",
       ]
       environment = [
         { name = "AWS_REGION", value = var.aws_region },

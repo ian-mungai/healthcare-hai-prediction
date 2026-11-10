@@ -242,14 +242,14 @@ variable "mlflow_task_role_arn" {
   }
 }
 
-variable "mlflow_host_ip" {
-  description = "Private IPv4 address of the container host. The training jobs call MLflow at this address on port 5100, so MLflow accepts it as a Host header. Required when mlflow_enabled is true."
+variable "host_private_ip" {
+  description = "Private IPv4 address of the container host: the platform stack's host_private_ip output, which the services renderer reads, never typed by hand. The training jobs call MLflow at this address on port 5100, so MLflow accepts it as a Host header, and Airflow launches the host jobs with the catalog and MLflow addresses built from it. Required when mlflow_enabled is true."
   type        = string
   default     = null
 
   validation {
-    condition     = !var.mlflow_enabled || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.mlflow_host_ip, "none")))
-    error_message = "Supply the private IPv4 address of the host, or set mlflow_enabled to false."
+    condition     = !var.mlflow_enabled || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.host_private_ip, "none")))
+    error_message = "Supply the private IPv4 address of the host (the platform output host_private_ip), or set mlflow_enabled to false."
   }
 }
 
@@ -675,8 +675,8 @@ variable "airflow_launch_task_role_arn" {
   }
 
   validation {
-    condition     = var.airflow_launch_task_role_arn == null || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.mlflow_host_ip, "none")))
-    error_message = "The launched jobs reach the catalog and MLflow at the host's private address: supply mlflow_host_ip with airflow_launch_task_role_arn."
+    condition     = var.airflow_launch_task_role_arn == null || can(regex("^(10\\.[0-9]{1,3}|172\\.(1[6-9]|2[0-9]|3[01])|192\\.168)\\.[0-9]{1,3}\\.[0-9]{1,3}$", coalesce(var.host_private_ip, "none")))
+    error_message = "The launched jobs reach the catalog and MLflow at the host's private address: supply host_private_ip with airflow_launch_task_role_arn."
   }
 }
 
