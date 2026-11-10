@@ -42,6 +42,9 @@ locals {
     HAI_LAUNCH_POLARIS_URI   = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:8181/api/catalog"
     HAI_LAUNCH_MLFLOW_URI    = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:5100"
     HAI_LAUNCH_SCRATCH_PATH  = "/opt/hai/job_scratch"
+    # The usable-memory inputs a host revision must be bound to (owner A, Nov 10 2026). Variables only: the job room also counts the reservations of
+    # these Airflow containers, so it cannot be named here without a cycle. Empty while host_usable_memory_mib is not set, so every host job is refused.
+    HAI_LAUNCH_HOST_CAPACITY = var.host_usable_memory_mib == null ? "" : format("usable_memory_mib=%d system_reserve_mib=%d", var.host_usable_memory_mib, var.host_system_reserve_mib)
   }
   airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} 1 'One host job at a time'"
 

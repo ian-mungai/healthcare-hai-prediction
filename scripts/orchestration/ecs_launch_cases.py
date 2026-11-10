@@ -37,8 +37,8 @@ from orchestration.ecs_launch import (
     iso,
     launch_record_prefix,
 )
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
-from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeLogs, SdkStub, client_error
+from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
 
 ROOT = Path(__file__).resolve().parents[2]
 RUN = "20261104T100000Z-abcdef01"
@@ -58,6 +58,8 @@ SETTINGS = EcsSettings(
 NEED = Resources(cpu_units=3072, memory_mib=16384, scratch_bytes=100 * 2**30)
 BOUND = {"code_digest": "a" * 64, "request_hash": "b" * 64, "input_run": "20261103T100000Z-12345678"}
 ENVIRONMENT = {"gold": {"RUN_ID": RUN}, "verify": {"RUN_ID": RUN}}
+# The revision of each family's host definition that the preflight checked (registered as revision 1 by every rig).
+REVISIONS = {family: f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_{family}_host:1" for family in ("gold", "drift")}
 EVENT_ORDER = ("intent", "started", "end")
 THROTTLE = client_error("ThrottlingException", "DescribeTasks")
 
@@ -70,7 +72,9 @@ class Rig:
     """One stand-in cloud, bucket and clock. ``launcher`` makes a new process over them."""
 
     def __init__(self) -> None:
-        self.ecs, self.logs = FakeEcs(), FakeLogs()
+        self.ecs, self.logs = RevisionEcs(), FakeLogs()
+        for family in REVISIONS:
+            self.ecs.register(f"example_dev_job_{family}_host", NEED.memory_mib, None)
         self.bucket = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
@@ -125,7 +129,9 @@ def spec(attempt: int = 1, **changes: Any) -> JobSpec:
         acceptance=("verify",),
         log_container="gold",
         log_prefix="gold",
+        task_definition=REVISIONS["gold"],
     )
+    changes.setdefault("task_definition", REVISIONS.get(str(changes.get("job", "gold")), REVISIONS["gold"]))
     return replace(base, **changes)
 
 
@@ -850,10 +856,25 @@ def validation_failure() -> None:
         spec(bound={**BOUND, "extra": "x"}),
         spec(need=Resources(-1, 1, 1)),
         spec(environment=wrong_type),
+        spec(task_definition=""),
+        spec(task_definition="example_dev_job_gold_host"),
+        spec(task_definition=REVISIONS["drift"]),
+        spec(task_definition=REVISIONS["gold"].replace(":1", ":1x")),
+        spec(task_definition=REVISIONS["gold"].replace("_gold_host", "_gold")),
     ]
     for item in bad:
         refuses(LaunchRefused, partial(rig.launcher().run, item))
     require(not rig.ecs.calls and not rig.bucket.calls, "a refused request reaches neither the cloud nor the bucket")
+
+
+def runs_the_checked_revision() -> None:
+    """Host launch capacity binding (owner A, Nov 10 2026): the task runs the exact revision the preflight checked, never the family name, so a revision
+    registered after the check cannot run in its place."""
+    rig = Rig()
+    rig.ecs.register("example_dev_job_gold_host", NEED.memory_mib, None)  # a later revision, now the latest active one
+    done = rig.launcher().run(spec())
+    require(done.ok, f"the checked revision did not run: {done}")
+    require(rig.ecs.sent == [REVISIONS["gold"]], f"RunTask did not name the checked revision: {rig.ecs.sent}")
 
 
 def acceptance_missing() -> None:
@@ -1531,6 +1552,7 @@ CASES: dict[str, Callable[[], None]] = {
     "overlap_intent_only": overlap_intent_only,
     "changed_inputs": changed_inputs,
     "validation_failure": validation_failure,
+    "runs_the_checked_revision": runs_the_checked_revision,
     "acceptance_missing": acceptance_missing,
     "guard_exit_ignored": guard_exit_ignored,
     "timeout": timeout,

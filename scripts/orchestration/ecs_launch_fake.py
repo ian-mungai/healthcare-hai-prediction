@@ -6,19 +6,23 @@ write with ``IfMatch`` on the ETag it was read with. Any key outside the allowed
 does when the role may list the prefix. There is no list call and no delete call, because the library never lists or deletes. Switches model faults:
 ``absent_reads_denied`` is a role that cannot list (an absent key answers ``AccessDenied``), ``deny_reads`` is a role that lost its read grant, ``deny_keys``
 denies the read of single records while writes stay allowed, and ``read_hook`` and ``write_hook`` run another caller at the start of a read or a write.
-``FakeClock`` moves time only when a case sleeps, so ten minutes of waiting take no real time.
+``FakeClock`` moves time only when a case sleeps, so ten minutes of waiting take no real time. ``RevisionEcs`` is the fake ECS with task definition
+revisions: ``register`` makes a family's latest active revision, ``describe_task_definition`` answers with it, and ``run_task`` takes the ARN of a
+registered revision as well as a family name.
 """
 
 from __future__ import annotations
 
+import copy
 import hashlib
+import re
 from collections.abc import Callable
 from typing import Any
 
 from botocore.exceptions import ReadTimeoutError
 
 from orchestration.ecs_launch import Clock
-from scripts.orchestration.ecs_broker_fake import client_error
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, REGION, FakeEcs, client_error
 
 START_TIME = 1_800_000_000.0
 
@@ -39,6 +43,62 @@ class FakeClock:
 
     def clock(self) -> Clock:
         return Clock(wall=lambda: self.now, monotonic=lambda: self.now, sleep=self.sleep)
+
+
+REVISION_ARN = re.compile(r"arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task-definition/([A-Za-z0-9_-]+):([0-9]+)")
+
+
+class RevisionEcs(FakeEcs):
+    """The fake ECS with task definition revisions. ``register`` adds a revision of a family and makes it the latest active one, which
+    ``describe_task_definition`` answers for the family name, as ECS does. ``run_task`` takes a family name or the ARN of a registered revision, refuses
+    any other ARN as ECS does, and runs the revision under its family. ``sent`` lists the task definition of every RunTask call as the caller sent it."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.revisions: dict[str, dict[str, Any]] = {}
+        self.registered: set[str] = set()
+        self.sent: list[str] = []
+
+    def register(self, family: str, memory: int, label: str | None, cpu: int = 3072) -> str:
+        """Register a revision of ``family`` with the task memory and the capacity label of its init container (none when ``label`` is None)."""
+        number = 1 + sum(1 for arn in self.registered if arn.rsplit("/", 1)[-1].rsplit(":", 1)[0] == family)
+        arn = f"arn:aws:ecs:{REGION}:{ACCOUNT}:task-definition/{family}:{number}"
+        init: dict[str, Any] = {"name": "init"}
+        if label is not None:
+            init["dockerLabels"] = {"hai.host_capacity": label}
+        self.registered.add(arn)
+        self.revisions[family] = {
+            "taskDefinitionArn": arn,
+            "family": family,
+            "revision": number,
+            "status": "ACTIVE",
+            "cpu": str(cpu),
+            "memory": str(memory),
+            "containerDefinitions": [init, {"name": "work"}],
+        }
+        return arn
+
+    def describe_task_definition(self, **arguments: Any) -> dict[str, Any]:
+        self.calls.append(("describe_task_definition", dict(arguments)))  # the call names no cluster, so the cluster check of _enter does not apply
+        queue = self.faults.get("describe_task_definition")
+        if queue:
+            fault = queue.pop(0)
+            if fault is not None:
+                raise fault
+        found = self.revisions.get(str(arguments.get("taskDefinition")))
+        if found is None:
+            raise client_error("ClientException", "DescribeTaskDefinition", "Unable to describe task definition.")
+        return {"taskDefinition": copy.deepcopy(found)}
+
+    def run_task(self, **arguments: Any) -> dict[str, Any]:
+        name = str(arguments.get("taskDefinition"))
+        self.sent.append(name)
+        match = REVISION_ARN.fullmatch(name)
+        if match is not None:
+            if name not in self.registered:
+                raise client_error("ClientException", "RunTask", "TaskDefinition not found.")
+            arguments = {**arguments, "taskDefinition": match.group(1)}
+        return super().run_task(**arguments)
 
 
 class _Body:

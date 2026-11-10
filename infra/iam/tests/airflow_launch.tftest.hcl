@@ -269,16 +269,27 @@ run "the_launch_role_never_passes_itself_or_the_broker_role" {
   }
 }
 
-run "no_statement_holds_a_wildcard_action_or_resource_except_the_cluster_lists" {
+run "no_statement_holds_a_wildcard_action_or_resource_except_the_cluster_lists_and_the_revision_read" {
   command = plan
 
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
       !contains(flatten([statement.Action]), "*") && !anytrue([for action in flatten([statement.Action]) : endswith(action, ":*")]) &&
-      (contains(["ListClusterTasks", "ListClusterContainerInstances"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
+      (contains(["ListClusterTasks", "ListClusterContainerInstances", "DescribeHostJobRevisions"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
     ])
-    error_message = "Only the two cluster lists take a resource wildcard, and each is bound to the cluster. No action is a wildcard."
+    error_message = "Only the two cluster lists and the revision read take a resource wildcard. No action is a wildcard."
+  }
+
+  # ecs:DescribeTaskDefinition takes no resource-level permission, so the preflight's read of the latest host revision (host launch capacity binding,
+  # owner A, Nov 10 2026) names "*". It is that one read action, held to the stack's region.
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "DescribeHostJobRevisions"][0] == "ecs:DescribeTaskDefinition" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "DescribeHostJobRevisions"][0] == "*" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition if statement.Sid == "DescribeHostJobRevisions"][0] == { StringEquals = { "aws:RequestedRegion" = "eu-west-1" } }
+    )
+    error_message = "The revision read is ecs:DescribeTaskDefinition alone, on the only resource the action takes, in the stack's region."
   }
 
   assert {

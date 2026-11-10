@@ -140,6 +140,21 @@ run "the_job_memory_room_is_the_usable_memory_less_the_system_reserve_and_the_se
     condition     = output.host_job_memory_mib >= 4096 && output.host_job_memory_mib < var.host_usable_memory_mib
     error_message = "The job room is a usable job size and smaller than the usable memory."
   }
+
+  assert {
+    condition     = output.host_capacity_binding == "job_memory_mib=${output.host_job_memory_mib} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}"
+    error_message = "The capacity binding names the job room and the usable memory, the safety margin and the service reservations it comes from (owner decision A, Nov 10 2026: host launch capacity binding)."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAPACITY=usable_memory_mib=30720 system_reserve_mib=2048") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container carries the current usable-memory inputs in HAI_LAUNCH_HOST_CAPACITY, the part of the binding the launch preflight checks a host revision against."
+  }
 }
 
 run "a_1024_mib_reserve_keeps_the_job_and_the_reservations_inside_the_usable_memory" {
@@ -185,6 +200,16 @@ run "without_the_usable_memory_there_is_no_job_room" {
   assert {
     condition     = output.host_job_memory_mib == null
     error_message = "Without the owner's ECS registered memory the stack gives no job room instead of one computed from the nominal host memory."
+  }
+
+  assert {
+    condition = output.host_capacity_binding == null && alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAPACITY=") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Without the usable memory there is no capacity binding and HAI_LAUNCH_HOST_CAPACITY is empty, so the launch preflight refuses every host job."
   }
 }
 

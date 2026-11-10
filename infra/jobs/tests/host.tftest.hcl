@@ -10,6 +10,8 @@ variables {
   data_bucket_name    = "example-project-data-dev"
   log_group_name      = "example_project_jobs_dev"
   host_job_memory_mib = 23552
+  # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
+  host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
   images = {
     analytics = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     quality   = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_quality_dev@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -145,6 +147,14 @@ run "flag_on_plans_the_nine_host_definitions" {
     )])
     error_message = "Each host definition runs under the execution role and the same task role as its Fargate twin."
   }
+
+  assert {
+    condition = alltrue([for family, json in output.host_container_definitions : (
+      jsondecode(json)[0].name == "init" && jsondecode(json)[0].dockerLabels == { "hai.host_capacity" = var.host_capacity_binding } &&
+      alltrue([for container in slice(jsondecode(json), 1, length(jsondecode(json))) : !contains(keys(container), "dockerLabels")])
+    )])
+    error_message = "The init container of every host revision carries the capacity binding it was sized from (label hai.host_capacity), which the launch preflight checks against the current usable memory (owner decision A, Nov 10 2026); no other container carries a label."
+  }
 }
 
 run "flag_on_leaves_every_existing_definition_unchanged" {
@@ -191,8 +201,8 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
       promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
       } : (
-      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters"], key)) || (key == "command" && container.essential && container.name != "guard")) }] ==
-      [for container in fargate : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters"], key)) || (key == "command" && container.essential && container.name != "guard")) }] &&
+      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters", "dockerLabels"], key)) || (key == "command" && container.essential && container.name != "guard")) }] ==
+      [for container in fargate : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters", "dockerLabels"], key)) || (key == "command" && container.essential && container.name != "guard")) }] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.name]] ==
       [for container in fargate : [for item in container.environment : item.name]] &&
       [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value]] ==
@@ -344,8 +354,9 @@ run "every_host_job_gets_the_computed_cap_whatever_its_fargate_shape" {
   command = plan
 
   variables {
-    host_jobs_enabled   = true
-    host_job_memory_mib = 20480
+    host_jobs_enabled     = true
+    host_job_memory_mib   = 20480
+    host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=27648 system_reserve_mib=2048 service_reservations_mib=5120"
     layer_resources = {
       silver   = { cpu = 4096, memory = 30720, ephemeral_storage_gib = 100 }
       gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
@@ -382,6 +393,50 @@ run "the_job_room_must_fit_the_host" {
   }
 
   expect_failures = [var.host_job_memory_mib]
+}
+
+run "host_jobs_need_the_capacity_binding" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_capacity_binding = null
+  }
+
+  expect_failures = [var.host_capacity_binding]
+}
+
+run "the_capacity_binding_has_the_rendered_form" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_capacity_binding = "job_memory_mib=23552"
+  }
+
+  expect_failures = [var.host_capacity_binding]
+}
+
+run "the_capacity_binding_adds_up" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  expect_failures = [var.host_capacity_binding]
+}
+
+run "the_capacity_binding_gives_the_job_room" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_capacity_binding = "job_memory_mib=25600 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  expect_failures = [aws_ecs_task_definition.host]
 }
 
 run "the_job_room_may_not_be_too_small_for_a_layer_job" {

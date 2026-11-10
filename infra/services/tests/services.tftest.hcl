@@ -1200,11 +1200,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "c4e18687fcbe5be4d303b69e3e035011efc143c921d8ac52328c6e5caea20585"
-      "airflow_apiserver/airflow_migrate"           = "c0867d034ff810e964af1631c46abdca0283bd230ac3ee11b6a29ef463b35388"
-      "airflow_dag_processor/airflow_dag_processor" = "a1e24b8483a051b255cb1f79badc6259c1ccedd7682b6438076f0278d87d4a80"
-      "airflow_scheduler/airflow_scheduler"         = "a762c1b8ddc9487528578e2e929260acec819611a1c0eaeb8a101ba77dc82d1b"
-      "airflow_triggerer/airflow_triggerer"         = "505f81771e9aa5911a919e305151dd3d03e4573a9112a45e2a848eb7b16712d8"
+      "airflow_apiserver/airflow_apiserver"         = "e89bcbf334103ad8e3dcb4abb08c212caddffbf500734cc24d4a0216c32fb3c7"
+      "airflow_apiserver/airflow_migrate"           = "441a701dee9fcd6497d7b36f873f6cfbccd438870bf8521d5e7f5cc38b5e6be9"
+      "airflow_dag_processor/airflow_dag_processor" = "40b1edb81435436aa73d098e3d2595d4a9850095ca453bbac9ebae1f27401a52"
+      "airflow_scheduler/airflow_scheduler"         = "19c94b66b6367ab709fe5870ff733bdbc2a52e1097802780d979b7ee45f2e646"
+      "airflow_triggerer/airflow_triggerer"         = "7add95d806e921c950804d92a19282736019aa6a1ba61c4b25132e6fe8e60fec"
       "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
@@ -2941,7 +2941,7 @@ run "launch_mounts_are_always_present" {
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
           length(setsubtract(
-            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH"],
+            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH", "HAI_LAUNCH_HOST_CAPACITY"],
             [for item in container.environment : item.name]
           )) == 0
           && !anytrue([for item in container.environment : item.name == "HAI_LAUNCH_SIGNED_PARAMETER"])

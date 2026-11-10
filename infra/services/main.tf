@@ -209,6 +209,12 @@ locals {
   memory_budget_mib   = var.host_memory_mib - var.other_services_reserve_mib
   # The job room starts from the memory ECS can place (host_usable_memory_mib), never the nominal host memory; null until the owner sets it.
   host_job_memory_mib = var.host_usable_memory_mib == null ? null : var.host_usable_memory_mib - var.host_system_reserve_mib - local.reserved_memory_mib
+  # The capacity binding (owner A, Nov 10 2026): the job room and the inputs it comes from. The jobs stack labels the init container of every host
+  # revision with it, and the launch preflight runs a host job only from a revision bound to the usable-memory inputs in HAI_LAUNCH_HOST_CAPACITY.
+  host_capacity_binding = local.host_job_memory_mib == null ? null : format(
+    "job_memory_mib=%d usable_memory_mib=%d system_reserve_mib=%d service_reservations_mib=%d",
+    local.host_job_memory_mib, var.host_usable_memory_mib, var.host_system_reserve_mib, local.reserved_memory_mib
+  )
   secret_arns_used    = sort(distinct(flatten([for container in local.all_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   serving_secret_arns = sort(distinct(flatten([for container in local.serving_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))
   other_secret_arns   = sort(distinct(flatten([for container in local.other_containers : [for secret in lookup(container, "secrets", []) : secret.valueFrom]])))

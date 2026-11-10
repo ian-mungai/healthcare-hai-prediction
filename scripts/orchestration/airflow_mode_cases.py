@@ -27,6 +27,11 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 9. The metadata job sends overrides only for the one container of its host definition (``metadata_uses_the_host_containers``). The rig's fake ECS holds
    the containers that Terraform plans for the nine host definitions (``infra/jobs/tests/host_definitions.json``, which a Terraform test keeps equal to the
    plan) and the case ``host_definitions_hold_the_init_step_and_the_layer_guards`` checks them against what the job table and the owner decisions expect.
+10. Host launch capacity binding (owner A, Nov 10 2026): a host job runs only the revision whose binding the preflight checked against the current host
+   capacity. A latest active revision without a binding (registered before ``host_usable_memory_mib`` set the job memory) is refused
+   (``unbound_revision_is_refused``), so is one bound to another capacity or sized to other memory (``revision_bound_to_another_capacity_is_refused``),
+   and so is every host job while the services stack leaves the capacity empty (``unset_usable_memory_refuses``). A bound revision runs by its exact ARN,
+   so a revision registered after the check never runs in its place (``bound_revision_runs_by_its_exact_arn``).
 """
 
 from __future__ import annotations
@@ -76,7 +81,7 @@ from scripts.orchestration.ecs_broker_cases import TRAIN_PARAMS as BROKER_TRAIN_
 from scripts.orchestration.ecs_broker_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_launch_cases import refuses
-from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket
+from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
 from scripts.orchestration.ecs_launch_operator_cases import StandInLaunchOperator
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -96,6 +101,12 @@ HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
 LAYER_JOBS = frozenset({"silver", "gold", "features"})
 POLARIS = "http://10.0.0.5:8181/api/catalog"
 MLFLOW = "http://10.0.0.5:5100"
+# TEST FIXTURE ONLY, not measured values: the usable-memory inputs the services stack renders (HAI_LAUNCH_HOST_CAPACITY), the binding label of a host
+# revision sized from them (the services output host_capacity_binding) and the job memory it gives.
+JOB_MEMORY = 23552
+CAPACITY = "usable_memory_mib=30720 system_reserve_mib=2048"
+BINDING = f"job_memory_mib={JOB_MEMORY} {CAPACITY} service_reservations_mib=5120"
+NOMINAL_BINDING = "job_memory_mib=25600 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=5120"
 
 
 class StageBucket(FakeS3):
@@ -139,14 +150,15 @@ def host_definitions() -> dict[str, frozenset[str]]:
 class Rig:
     """The stand-in cloud, the staged inputs and the launch services of one case."""
 
-    def __init__(self) -> None:
+    def __init__(self, capacity: str = CAPACITY) -> None:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
-        self.ecs, self.logs, self.stage = FakeEcs(), FakeLogs(), StageBucket()
+        self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket()
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
         table, host = preflight.load_tables(ROOT)
         self.ecs.definitions = host_definitions()
+        self.bound = {family: self.ecs.register(family, JOB_MEMORY, BINDING) for family in self.ecs.definitions}
         settings = EcsSettings(
             cluster=CLUSTER,
             family_prefix="example_dev_job_",
@@ -171,6 +183,8 @@ class Rig:
             clock=lambda: self.time.now,
             bronze_request=preflight.bronze_request_reader(self.stage, BUCKET, collections_of_table_map()),
             serving_request=preflight.serving_request_reader(self.stage, BUCKET),
+            host_capacity=capacity,
+            task_definition=self.adapter.task_definition,
         )
         self.services = steps.LaunchServices(
             preflight=self.preflight,
@@ -766,6 +780,69 @@ def failed_job_fails_every_step() -> None:
     require(rig.tasks_started() == 1, "a retry launched beside a failed job")
 
 
+def unbound_revision_is_refused() -> None:
+    """Owner decision A (Nov 10 2026, host launch capacity binding): the latest active revision of a family carries no capacity binding when it was
+    registered before ``host_usable_memory_mib`` set the job memory (sized from the nominal host memory). The step is refused by name, nothing is
+    recorded and no task starts. An empty label is refused the same way."""
+    for label in (None, ""):
+        rig = Rig()
+        old = rig.ecs.register("example_dev_job_silver_host", 25600, label)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require(
+            "carries no host capacity binding" in str(error) and f"example_dev_job_silver_host:{old.rsplit(':', 1)[1]}" in str(error),
+            f"the unbound revision is not named: {error}",
+        )
+        require("000000000000" not in str(error) and "arn:" not in str(error), f"the refusal shows an ARN or an account: {error}")
+        require(rig.tasks_started() == 0 and not rig.records.calls, "an unbound revision launched or wrote a record")
+
+
+def revision_bound_to_another_capacity_is_refused() -> None:
+    """A revision bound to another usable memory (here the nominal 32768 MiB) is refused. So is a revision whose label names the current inputs but
+    does not add up, and one whose task memory is not the job memory of its label (a label that does not describe its own revision)."""
+    for memory, label, named in (
+        (25600, NOMINAL_BINDING, ("bound to job_memory_mib=25600", CAPACITY)),
+        (25600, BINDING.replace(f"job_memory_mib={JOB_MEMORY}", "job_memory_mib=25600"), ("does not add up",)),
+        (25600, BINDING, ("25600 MiB", f"{JOB_MEMORY} MiB")),
+    ):
+        rig = Rig()
+        rig.ecs.register("example_dev_job_silver_host", memory, label)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require(all(part in str(error) for part in named), f"the refusal does not name {named}: {error}")
+        require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision with {label} and {memory} MiB launched or wrote a record")
+
+
+def unset_usable_memory_refuses() -> None:
+    """While ``host_usable_memory_mib`` is null the services stack renders an empty HAI_LAUNCH_HOST_CAPACITY. Every host job is refused by name before
+    any ECS call or record, and a capacity that is not the rendered form is refused the same way."""
+    for capacity, named in (("", "host_usable_memory_mib"), (BINDING, "not in the rendered form")):
+        rig = Rig(capacity=capacity)
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+        require(named in str(error), f"the unset capacity is not named: {error}")
+        require(not rig.ecs.calls and not rig.records.calls, f"an unset capacity reached ECS or wrote a record: {rig.ecs.calls}")
+
+
+def bound_revision_runs_by_its_exact_arn() -> None:
+    """A bound revision is described once and runs by its exact ARN. A revision registered after the check (here an unbound one, made latest while
+    the task starts) never runs in its place: the RunTask call names the checked revision, not the family."""
+    rig = Rig()
+    checked = rig.bound["example_dev_job_silver_host"]
+
+    def register_late(operation: str) -> None:
+        if operation == "list_tasks" and rig.ecs.count("describe_task_definition") == 1:
+            rig.ecs.register("example_dev_job_silver_host", 25600, None)
+            rig.ecs.call_hook = None
+
+    rig.ecs.call_hook = register_late
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        require(current.step("pin_bronze") == "succeeded", "the bound revision did not run")
+    require(rig.ecs.sent == [checked], f"the task did not run the checked revision: {rig.ecs.sent}")
+    require(rig.ecs.count("describe_task_definition") == 1, "the revision was not resolved exactly once")
+    require(rig.ecs.revisions["example_dev_job_silver_host"]["taskDefinitionArn"] != checked, "the case did not register a later revision")
+
+
 def unavailable_is_bounded() -> None:
     """A staged input that is not ready is waited for within a bound. A launch the library cannot finish is not repeated by the step."""
     rig = Rig()
@@ -1337,6 +1414,10 @@ CASES: dict[str, Callable[[], None]] = {
     "job_runs_once_and_steps_join": job_runs_once_and_steps_join,
     "failed_job_fails_every_step": failed_job_fails_every_step,
     "unavailable_is_bounded": unavailable_is_bounded,
+    "unbound_revision_is_refused": unbound_revision_is_refused,
+    "revision_bound_to_another_capacity_is_refused": revision_bound_to_another_capacity_is_refused,
+    "unset_usable_memory_refuses": unset_usable_memory_refuses,
+    "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,
     "promotion_and_serving_dags_run_end_to_end": promotion_and_serving_dags_run_end_to_end,
     "dags_run_with_their_form_defaults": dags_run_with_their_form_defaults,

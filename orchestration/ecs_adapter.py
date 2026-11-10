@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from botocore.config import Config
 from botocore.exceptions import BotoCoreError, ClientError
@@ -68,6 +68,13 @@ class EcsClient(Protocol):
     def stop_task(self, **arguments: Any) -> dict[str, Any]: ...
 
     def list_tasks(self, **arguments: Any) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class DefinitionClient(Protocol):
+    """The boto3 ECS client call that reads a task definition. Only the launch library's preflight needs it, so it is not part of ``EcsClient``."""
+
+    def describe_task_definition(self, **arguments: Any) -> dict[str, Any]: ...
 
 
 class LogsClient(Protocol):
@@ -247,6 +254,29 @@ class EcsAdapter:
             return f"{self.settings.family_prefix}{family}{HOST_SUFFIX}"
         raise TaskRefused("placement_unknown")
 
+    def is_revision(self, family: str, arn: str, placement: str = HOST) -> bool:
+        """True when ``arn`` names one revision of the task definition that runs the family in the placement."""
+        return (
+            re.fullmatch(rf"arn:aws[a-z-]*:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/{re.escape(self.definition(family, placement))}:[1-9][0-9]*", arn)
+            is not None
+        )
+
+    def task_definition(self, family: str, placement: str = HOST) -> dict[str, Any]:
+        """The latest active revision of the task definition that runs the family in the placement, as ECS describes it: a family name without a
+        revision names that revision. A failed call raises ``TaskUnavailable`` or ``TaskRefused``, a reply without a task definition ``TaskUnavailable``."""
+        if family not in self.settings.families:
+            raise TaskRefused("family_not_named")
+        if not isinstance(self.ecs, DefinitionClient):
+            raise TaskRefused("task_definition_reader_missing")
+        try:
+            reply = self.ecs.describe_task_definition(taskDefinition=self.definition(family, placement))
+        except (ClientError, BotoCoreError) as error:
+            raise classify(error) from None
+        found = reply.get("taskDefinition")
+        if not isinstance(found, dict):
+            raise TaskUnavailable("task_definition_not_described")
+        return dict(found)
+
     def placement(self, placement: str, network: str) -> dict[str, Any]:
         """The ``RunTask`` arguments that choose where the task runs. A refusal comes before any cloud call."""
         if placement == FARGATE:
@@ -276,13 +306,17 @@ class EcsAdapter:
         network: str,
         placement: str = FARGATE,
         guard: Callable[[], None] | None = None,
+        revision: str | None = None,
     ) -> str:
         """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. ``network`` names the
         class whose security groups a Fargate task gets: each family runs only in the network its job table row approves. A host task has no security group,
         the host firewall bounds it. ``guard`` runs immediately before the RunTask call, after the discovery of a running task, and raises ``SendWithheld`` to
-        stop the call. The call is one request with no SDK retry. A RunTask call that may have been sent and has no answer raises ``SendUnknown``."""
+        stop the call. The call is one request with no SDK retry. A RunTask call that may have been sent and has no answer raises ``SendUnknown``.
+        ``revision``, when given, is the ARN of the one revision of the family's definition to run, in place of the family's latest active revision."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
+        if revision is not None and not self.is_revision(family, revision, placement):
+            raise TaskRefused("revision_not_of_family")
         where = self.placement(placement, network)
         digest = hashlib.sha256(key.encode()).hexdigest()
         started_by = self.identity(key)
@@ -297,7 +331,7 @@ class EcsAdapter:
         try:
             reply = self.sender.run_task(
                 cluster=self.settings.cluster,
-                taskDefinition=self.definition(family, placement),
+                taskDefinition=revision if revision is not None else self.definition(family, placement),
                 count=1,
                 **where,
                 overrides={

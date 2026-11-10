@@ -304,19 +304,23 @@ def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output
 
     host_variables = document["variables"] | {"host_jobs_enabled": True}
     checks: dict[str, bool] = {}
-    answer("23552", 0)
+    # TEST FIXTURE ONLY, not measured values: the binding the services output host_capacity_binding gives for a 30720 MiB usable host.
+    binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+    answer(json.dumps(binding), 0)
     result = invoke(host_variables)
     asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
-    checks["host_jobs_get_the_services_job_room"] = (
+    checks["host_jobs_get_the_services_job_room_and_its_binding"] = (
         result.returncode == 0
-        and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552}
-        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_job_memory_mib"]]
+        and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
+        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_capacity_binding"]]
     )
     rendered = output.read_bytes()
     for name, text, code in (
         ("a_failed_services_output", "", 1),
-        ("a_job_room_that_is_not_a_number", '"big"', 0),
-        ("a_job_room_below_one_job", "2048", 0),
+        ("a_binding_that_is_not_text", "23552", 0),
+        ("a_binding_in_another_form", json.dumps("job_memory_mib=23552"), 0),
+        ("a_binding_that_does_not_add_up", json.dumps(binding.replace("23552", "24576")), 0),
+        ("a_job_room_below_one_job", json.dumps("job_memory_mib=2048 usable_memory_mib=9216 system_reserve_mib=2048 service_reservations_mib=5120"), 0),
         ("a_job_room_left_unset_without_the_usable_memory", "null", 0),
     ):
         answer(text, code)
@@ -325,10 +329,10 @@ def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output
     # The services stack gives no room until the owner sets the ECS registered memory, so the refusal must name that input.
     checks["host_room_refusal_names_the_usable_memory_input"] = "host_usable_memory_mib" in result.stderr
     calls.unlink(missing_ok=True)
-    answer("23552", 0)
+    answer(json.dumps(binding), 0)
     result = invoke(document["variables"])
     checks["jobs_without_host_jobs_read_no_services_output"] = (
-        result.returncode == 0 and not calls.exists() and "host_job_memory_mib" not in json.loads(output.read_text())
+        result.returncode == 0 and not calls.exists() and not {"host_job_memory_mib", "host_capacity_binding"} & set(json.loads(output.read_text()))
     )
     return checks
 

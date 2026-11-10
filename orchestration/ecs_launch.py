@@ -40,6 +40,9 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    does not show STOPPED (running, pending or stopping) or while a run in the write-once family index has a claimed attempt without an end record. A
    listing that fails refuses too. An unresolved launch is ended by the owner's settle (``owner_settle``), which needs the window over, the family
    stopped and the owner's statement of what was checked.
+12. Checked revision (owner A, Nov 10 2026): a request names the ARN of the revision of the job's host definition that the preflight checked against the
+   current host capacity (``JobSpec.task_definition``). A request without one is refused before any record, and RunTask names that revision, never the
+   family, so ECS cannot substitute a later latest revision.
 
 Every wait has a deadline. The library calls no process and starts no thread.
 """
@@ -137,7 +140,8 @@ class Resources:
 @dataclass(frozen=True)
 class JobSpec:
     """One job attempt. ``bound`` holds the code digest, request hash and input run that every attempt of a run and job must share. ``environment`` maps a
-    container name to the variables it receives. ``acceptance`` names the containers that must exit 0."""
+    container name to the variables it receives. ``acceptance`` names the containers that must exit 0. ``task_definition`` is the ARN of the revision of
+    the job's host definition that the preflight checked against the current host capacity: the task runs that revision, never the family's latest one."""
 
     run_id: str
     job: str
@@ -150,6 +154,7 @@ class JobSpec:
     log_container: str = ""
     log_prefix: str = ""
     log_lines: int = 50
+    task_definition: str = ""
 
     @property
     def key(self) -> str:
@@ -543,6 +548,8 @@ class Launcher:
             problems.append("need")
         if not all(isinstance(name, str) and name for name in spec.acceptance):
             problems.append("acceptance")
+        if "job" not in problems and not (isinstance(spec.task_definition, str) and self.adapter.is_revision(spec.job, spec.task_definition, HOST)):
+            problems.append("task_definition (the checked revision of the job's host definition)")
         if problems:
             raise LaunchRefused(f"request refused: {', '.join(problems)}")
 
@@ -838,7 +845,9 @@ class Launcher:
                 if decision is None and not self.win_send(launch, claim):
                     continue
                 try:
-                    arn = self.adapter.start(spec.job, key, spec.environment, "", HOST, guard=partial(self.guard, run_id, job, end))
+                    arn = self.adapter.start(
+                        spec.job, key, spec.environment, "", HOST, guard=partial(self.guard, run_id, job, end), revision=spec.task_definition
+                    )
                     return arn, iso(self.clock.wall())
                 except SendWithheld:
                     continue

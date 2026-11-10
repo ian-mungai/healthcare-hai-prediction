@@ -346,7 +346,8 @@ EXEMPT = {
     "allow_destructive_teardown": "teardown guard of the platform stack, never an activation",
     "bronze_writer_prepared": "required key of the committed IAM preparation file",
     "job_writer_e2e_prepared": "required key of the committed IAM preparation file",
-    "host_job_memory_mib": "rendered by render_jobs_config from the services stack output host_job_memory_mib",
+    "host_job_memory_mib": "rendered by render_jobs_config from the job memory of the services stack output host_capacity_binding",
+    "host_capacity_binding": "rendered by render_jobs_config from the services stack output host_capacity_binding",
 }
 TOOL = (
     f"#!{sys.executable}\nimport json, os, sys\n"
@@ -427,8 +428,10 @@ class Workspace:
         self.plan = self.root / "standin_plan.json"
         self.calls = self.root / "terraform_calls.jsonl"
         self.outputs = self.root / "standin_outputs.json"
-        # The platform outputs the services renderer reads, and the services output host_job_memory_mib the jobs renderer reads for host jobs.
-        self.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_job_memory_mib": 23552}.items()}))
+        # The platform outputs the services renderer reads, and the services output host_capacity_binding the jobs renderer reads for host jobs
+        # (TEST FIXTURE ONLY, not measured values).
+        binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+        self.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding}.items()}))
         for stack in ("services",):
             (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
             (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))

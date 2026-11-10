@@ -648,6 +648,14 @@
     },
     {
       "role": "airflow_launch",
+      "action": "ecs:DescribeTaskDefinition",
+      "resource": "*",
+      "context": {
+        "aws:RequestedRegion": "${AWS_REGION}"
+      }
+    },
+    {
+      "role": "airflow_launch",
       "action": "ecs:DescribeContainerInstances",
       "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
       "context": {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,12 @@ from scripts.process import TimeoutExpired, run_command
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
 SERVICES_DIRECTORY = REPO_ROOT / "infra/services"
 JOB_ROOM_FLOOR_MIB = 4096
+# The services output host_capacity_binding: the job room and the usable-memory inputs and service reservations it comes from. The jobs stack labels the
+# init container of every host revision with it, and the launch preflight runs a host job only from a revision bound to the current inputs.
+BINDING_FORM = re.compile(
+    r"job_memory_mib=(?P<job>[1-9][0-9]*) usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+) "
+    r"service_reservations_mib=(?P<services>[0-9]+)"
+)
 PREPARATION_SCHEMA = REPO_ROOT / "data_contracts/infrastructure/jobs_preparation.schema.json"
 
 
@@ -33,23 +40,26 @@ def jobs_values(storage: dict[str, str]) -> dict[str, str]:
     return {key: storage[key] for key in ("aws_profile", "aws_region", "data_bucket_name", "environment", "expected_account_id", "project_name")}
 
 
-def host_job_room(directory: Path = SERVICES_DIRECTORY) -> int:
-    """Return the memory MiB one host job gets, read from the services stack output host_job_memory_mib, or refuse."""
+def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
+    """Return the memory MiB one host job gets and the binding it comes from, read from the services stack output host_capacity_binding, or refuse."""
     try:
-        result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "host_job_memory_mib"], timeout=120)
+        result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "host_capacity_binding"], timeout=120)
     except (OSError, TimeoutExpired):
         raise ConfigurationError("The services job room could not be read within 120 seconds. No Terraform action was run.") from None
     try:
-        room = json.loads(result.stdout) if result.returncode == 0 else None
+        binding = json.loads(result.stdout) if result.returncode == 0 else None
     except ValueError:
-        room = None
-    if type(room) is not int or room < JOB_ROOM_FLOOR_MIB:
+        binding = None
+    form = BINDING_FORM.fullmatch(binding) if isinstance(binding, str) else None
+    room = int(form["job"]) if form is not None else 0
+    if form is None or room != int(form["usable"]) - int(form["reserve"]) - int(form["services"]) or room < JOB_ROOM_FLOOR_MIB:
         raise ConfigurationError(
-            "Host jobs need the job room from the services stack output host_job_memory_mib (a whole number of at least 4096 MiB). "
+            "Host jobs need the job room from the services stack output host_capacity_binding (job_memory_mib of at least 4096 MiB, equal to "
+            "usable_memory_mib less system_reserve_mib and service_reservations_mib). "
             "The output stays empty until the services inputs set host_usable_memory_mib to the ECS registered memory of the host. "
             "Set it, apply the services stack, then render again. No Terraform action was run."
         )
-    return room
+    return room, str(binding)
 
 
 def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
@@ -104,7 +114,7 @@ def main() -> int:
             directory /= "identity_probe"
         values.update(prepared)
         if root == "jobs" and values.get("host_jobs_enabled") is True:
-            values["host_job_memory_mib"] = host_job_room()
+            values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
         if arguments.check_plan:
             try:
                 result = run_command("terraform", [f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], timeout=120)

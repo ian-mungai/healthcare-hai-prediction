@@ -51,6 +51,22 @@ variable "host_job_memory_mib" {
   }
 }
 
+variable "host_capacity_binding" {
+  description = "The services stack output host_capacity_binding, rendered by scripts/infrastructure/render_jobs_config.py: job_memory_mib=<host_job_memory_mib> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>. The init container of every host revision carries it as the label hai.host_capacity, and the launch preflight runs a host job only from a revision bound to the current usable-memory inputs (owner decision A, Nov 10 2026)."
+  type        = string
+  default     = null
+  nullable    = true
+
+  validation {
+    condition = var.host_capacity_binding == null ? !var.host_jobs_enabled : try(
+      [for parts in [regex("^job_memory_mib=([1-9][0-9]*) usable_memory_mib=([1-9][0-9]*) system_reserve_mib=([0-9]+) service_reservations_mib=([0-9]+)$", var.host_capacity_binding)] :
+      tonumber(parts[0]) == tonumber(parts[1]) - tonumber(parts[2]) - tonumber(parts[3])][0],
+      false
+    )
+    error_message = "Host jobs need host_capacity_binding from the services stack output: job_memory_mib=<n> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, where the job memory is the usable memory less the reserve and the reservations."
+  }
+}
+
 variable "host_openmetadata_api" {
   description = "Address of the persistent OpenMetadata API for the metadata host task, for example http://10.0.1.20:8585/api, always port 8585 and path /api. Use the private address of the host, because the bridge task reaches the host's services at that address and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
   type        = string
@@ -92,6 +108,8 @@ locals {
   # A job derives its threads, memory and spill cap from these task-level limits when it starts, so the host rewrites no engine value.
   host_cpu_cap    = 3072
   host_memory_cap = var.host_job_memory_mib
+  # The init container of every host revision carries the capacity binding it was sized from; orchestration/ecs_preflight.py reads this label.
+  host_capacity_label = "hai.host_capacity"
   # The two volumes of every Fargate job keep their names and become host folders; a volume that is not named here keeps its own name as the folder.
   host_volume_directories = { workspace = "work" }
   host_source_ready = {
@@ -215,6 +233,7 @@ locals {
         { for key, value in {
           command         = [format("%s%s", local.host_init_wipe, container.command[0])]
           linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })
+          dockerLabels    = { (local.host_capacity_label) = coalesce(var.host_capacity_binding, "unset") }
         } : key => value if container.name == "init" },
         { for key, value in {
           command = [format("(%s) && %s", container.command[0], local.host_scratch_wipe)]
@@ -271,6 +290,13 @@ resource "aws_ecs_task_definition" "host" {
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "ARM64"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = try(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0], "") == tostring(var.host_job_memory_mib)
+      error_message = "The capacity binding gives another job memory than host_job_memory_mib. Render both from the same services output with render_jobs_config."
+    }
   }
 
   dynamic "volume" {

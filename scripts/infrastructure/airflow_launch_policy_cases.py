@@ -2,7 +2,8 @@
 
 The role belongs to the Airflow scheduler. It may start, stop and describe the host definitions of the named job families only, pass the roles of those
 families and the job execution role, read the staged code digest and the job logs, check the cluster's container
-instances, and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
+instances, describe task definitions in its own region (the preflight checks the capacity binding of a host revision; the action takes no resource),
+and write each launch record once, replace the decision record of a run with a version check, and list and read the records under its own
 prefix. It reads every run's code run binding, ``lakehouse/run_stage/<run>/inputs/code_run.json``, creates it once and lists exactly that key, so a missing
 binding answers 404. A role that may start the bronze family also reads the run record of each bronze run, ``lakehouse/bronze_runs/<run>/check.json``, as the
 job's evidence, and one that may start the drift family reads the records under ``drift/`` for the drift DAG's decision. It holds nothing else.
@@ -174,6 +175,11 @@ def job_cases() -> list[Case]:
         add(f"{action} on a task without the job tag", action, task(), False, tagged(None))
         add(f"{action} on an unnamed job's task", action, task(), False, tagged("features"))
         add(f"{action} in another cluster", action, task("another_cluster"), False, tagged("train"))
+    in_region: Context = {"aws:RequestedRegion": (REGION,)}
+    add("describe the latest host revision in the region", "ecs:DescribeTaskDefinition", "*", True, in_region)
+    add("describe a task definition in another region", "ecs:DescribeTaskDefinition", "*", False, {"aws:RequestedRegion": ("eu-north-1",)})
+    add("describe a task definition without a region", "ecs:DescribeTaskDefinition", "*", False)
+    add("register a host revision", "ecs:RegisterTaskDefinition", "*", False, in_region)
     add("list tasks in the cluster", "ecs:ListTasks", "*", True, cluster_only)
     add("list tasks in another cluster", "ecs:ListTasks", "*", False, {"ecs:cluster": (OTHER_CLUSTER_ARN,)})
     add("list tasks without a cluster", "ecs:ListTasks", "*", False)
@@ -422,6 +428,7 @@ class Resource(NamedTuple):
 
 GET = frozenset({"s3:GetObject"})
 LISTS = frozenset({"ecs:ListTasks", "ecs:ListContainerInstances"})
+DESCRIBE_DEFINITIONS = frozenset({"ecs:DescribeTaskDefinition"})  # no resource-level permission: the request names "*"
 # Every condition of every grant met at once, so that only the action and the resource decide.
 PERMISSIVE: Context = {
     **run_context("train"),
@@ -429,6 +436,7 @@ PERMISSIVE: Context = {
     "ecs:CreateAction": ("RunTask",),
     "iam:PassedToService": (ECS_TASKS,),
     "s3:prefix": (RECORD_PREFIX,),
+    "aws:RequestedRegion": (REGION,),
     **ONCE,
 }
 KMS_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/00000000-1111-2222-3333-444444444444"
@@ -445,7 +453,7 @@ RESOURCES = (
     Resource("host definition of an unnamed family", definition("features"), NONE, NONE),
     Resource("task of the cluster", task(), frozenset({"ecs:TagResource", "ecs:StopTask", "ecs:DescribeTasks"}), NONE),
     Resource("task of another cluster", task("another_cluster"), NONE, NONE),
-    Resource("cluster-wide list", "*", LISTS, NONE),
+    Resource("cluster-wide list", "*", LISTS | DESCRIBE_DEFINITIONS, NONE),
     Resource("container instance of the cluster", container_instance(), frozenset({"ecs:DescribeContainerInstances"}), NONE),
     Resource("container instance of another cluster", container_instance("another_cluster"), NONE, NONE),
     Resource("task role of a named family", role("job_train_task"), frozenset({"iam:PassRole"}), NONE),
@@ -551,7 +559,7 @@ def matrix_cases() -> list[Case]:
     rows: list[Case] = []
     for item in RESOURCES:
         for action in ACTIONS:
-            if action in LISTS and item.resource != "*":
+            if action in LISTS | DESCRIBE_DEFINITIONS and item.resource != "*":
                 continue
             rows.append((f"{item.name}: {action} with every condition met", action, item.resource, action in item.allowed, PERMISSIVE))
             rows.append((f"{item.name}: {action} with no condition", action, item.resource, action in item.bare, {}))
@@ -597,6 +605,7 @@ WIDENING_ACTIONS = {
     "ListClusterTasks": ("ecs:ListServices",),
     "ListClusterContainerInstances": ("ecs:DescribeClusters",),
     "DescribeClusterContainerInstances": ("ecs:DeregisterContainerInstance", "ecs:UpdateContainerInstancesState"),
+    "DescribeHostJobRevisions": ("ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"),
     "PassNamedJobRoles": ("sts:AssumeRole", "iam:AttachRolePolicy"),
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
@@ -885,6 +894,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("ecs:DescribeTasks", (tasks,), tagged_tasks),
         Grant("ecs:ListTasks", ("*",), cluster),
         Grant("ecs:ListContainerInstances", ("*",), cluster),
+        Grant("ecs:DescribeTaskDefinition", ("*",), {"StringEquals": {"aws:RequestedRegion": [REGION]}}),
         Grant("ecs:DescribeContainerInstances", (f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/*",), cluster),
         Grant("iam:PassRole", roles, {"StringEquals": {"iam:PassedToService": [ECS_TASKS]}}),
         Grant("s3:GetObject", (*staged, f"{RECORDS}*"), {}),

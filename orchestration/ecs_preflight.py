@@ -9,6 +9,9 @@ Signing the first silver and gold publishes is the owner's manual step, not a ga
 broker, which still checks the signed record.
 The host table (``config/orchestration/host_jobs.json``) may give a job its own containers and log container, where its host task definition differs from the
 Fargate one the broker starts (the metadata job).
+Host launch capacity binding (owner A, Nov 10 2026): the gates refuse while the usable-memory inputs are not set. After the staged-input reads, the
+preflight describes the latest active revision of the job's host definition once and refuses it unless its capacity label is bound to the current
+inputs (``checked_revision``). The spec names that exact revision and the launch library runs it, so a revision registered later never runs in its place.
 """
 
 from __future__ import annotations
@@ -17,7 +20,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from functools import partial
 from pathlib import Path
@@ -55,6 +58,12 @@ CHAIN_LAYERS = ("silver", "gold", "features", "drift")
 CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
 NO_STAGED_CODE = "0" * 64  # the bound code digest of a job that fetches no staged code
+CAPACITY_LABEL = "hai.host_capacity"  # the label of a host revision's init container that binds it to the host capacity (infra/jobs/host.tf)
+CAPACITY_FORM = re.compile(r"usable_memory_mib=[1-9][0-9]* system_reserve_mib=[0-9]+")  # HAI_LAUNCH_HOST_CAPACITY, from the services stack
+BINDING_FORM = re.compile(
+    r"job_memory_mib=(?P<job>[1-9][0-9]*) (?P<inputs>usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+)) "
+    r"service_reservations_mib=(?P<services>[0-9]+)"
+)  # the label of a host revision, the services output host_capacity_binding
 
 
 class S3Reader(Protocol):
@@ -327,6 +336,8 @@ class Preflight:
         store: LaunchStore,
         code_runs: CodeRuns,
         clock: Callable[[], float],
+        host_capacity: str,
+        task_definition: Callable[[str], Mapping[str, Any]],
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
     ) -> None:
@@ -341,6 +352,8 @@ class Preflight:
         self.clock = clock
         self.bronze_request = bronze_request
         self.serving_request = serving_request
+        self.host_capacity = host_capacity
+        self.task_definition = task_definition
 
     def containers(self, job: str) -> tuple[dict[str, list[str]], str]:
         """The containers of the job's host task definition and the one whose log is read: the host table's where it names them, else the job table's."""
@@ -377,9 +390,11 @@ class Preflight:
                 raise LaunchRefused(str(error)) from None
         if row.get("approval") == "promotion":
             self.require_promotion_approval(request)
+        self.require_capacity(job)
         if request.template == "drift_run":
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
-        return self.spec(request, job)
+        spec = self.spec(request, job)
+        return replace(spec, task_definition=self.checked_revision(job))
 
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and the training run of the last one, to the bronze run's staged code."""
@@ -443,8 +458,58 @@ class Preflight:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(row["deadline_seconds"]))
         return values
 
+    def require_capacity(self, job: str) -> str:
+        """The current usable-memory inputs (``HAI_LAUNCH_HOST_CAPACITY``), checked with the other gates before any record or cloud call."""
+        capacity = self.host_capacity
+        if not capacity:
+            raise LaunchRefused(
+                f"the host capacity is not set, so no {job} host job launches: HAI_LAUNCH_HOST_CAPACITY stays empty until the services input "
+                "host_usable_memory_mib is set. Set it, apply the services stack, render and apply the jobs stack, then run again"
+            )
+        if CAPACITY_FORM.fullmatch(capacity) is None:
+            raise LaunchRefused(f"the host capacity {capacity[:200]!r} is not in the rendered form usable_memory_mib=<MiB> system_reserve_mib=<MiB>")
+        return capacity
+
+    def checked_revision(self, job: str) -> str:
+        """Host launch capacity binding (owner A, Nov 10 2026): the ARN of the latest active revision of the job's host definition, described once, after
+        checking that it is bound to the current usable-memory cap. The services stack renders the cap's inputs into ``HAI_LAUNCH_HOST_CAPACITY``
+        (``usable_memory_mib=<n> system_reserve_mib=<n>``, empty while ``host_usable_memory_mib`` is not set). The jobs stack labels the init container
+        of every host revision it registers with the binding it was sized from (label ``hai.host_capacity``: the job memory, the same two inputs and the
+        service reservations, from the services output ``host_capacity_binding``). A revision without the label (registered before the job memory came
+        from ``host_usable_memory_mib``), bound to other inputs, with a label whose job memory is not the inputs less the reservations, or with task
+        memory other than that job memory is refused. The launch runs the returned ARN, so a revision registered after this check never runs in its
+        place."""
+        capacity = self.require_capacity(job)
+        found = self.read(self.task_definition, job)
+        name = f"{found.get('family', '')}:{found.get('revision', '')}"
+        init = next((item for item in found.get("containerDefinitions") or [] if isinstance(item, dict) and item.get("name") == "init"), {})
+        labels = init.get("dockerLabels")
+        bound = str(labels.get(CAPACITY_LABEL) or "") if isinstance(labels, dict) else ""
+        again = "Render and apply the jobs stack so it registers a revision bound to the current capacity, then run again"
+        if found.get("status") != "ACTIVE":
+            raise LaunchRefused(f"the latest revision {name} of the {job} host job is not active. {again}")
+        if not bound:
+            raise LaunchRefused(
+                f"the latest active revision {name} of the {job} host job carries no host capacity binding (label {CAPACITY_LABEL} on its init "
+                f"container): it was registered before the job memory came from host_usable_memory_mib. {again}"
+            )
+        binding = BINDING_FORM.fullmatch(bound)
+        if binding is None or binding["inputs"] != capacity:
+            raise LaunchRefused(
+                f"the latest active revision {name} of the {job} host job is bound to {bound[:200]}, but the current host capacity is {capacity}. {again}"
+            )
+        if int(binding["job"]) != int(binding["usable"]) - int(binding["reserve"]) - int(binding["services"]):
+            raise LaunchRefused(f"the binding {bound[:200]} of the latest active revision {name} of the {job} host job does not add up. {again}")
+        if str(found.get("memory", "")) != binding["job"]:
+            raise LaunchRefused(
+                f"the latest active revision {name} of the {job} host job has {str(found.get('memory', ''))[:20]} MiB of task memory, but its binding "
+                f"gives a job {binding['job']} MiB. {again}"
+            )
+        return str(found.get("taskDefinitionArn", ""))
+
     def spec(self, request: SubmissionRequest, job: str) -> JobSpec:
-        """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the acceptance."""
+        """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the
+        acceptance. ``prepare`` adds the checked revision of the job's host definition."""
         row = self.jobs[job]
         code_run = self.code_runs.resolve(request.run_id)
         fixed = self.fixed_values(request, job)

@@ -41,6 +41,13 @@
       "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
     },
     {
+      "Sid": "DescribeHostJobRevisions",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeTaskDefinition",
+      "Resource": "*",
+      "Condition": { "StringEquals": { "aws:RequestedRegion": "${AWS_REGION}" } }
+    },
+    {
       "Sid": "DescribeClusterContainerInstances",
       "Effect": "Allow",
       "Action": "ecs:DescribeContainerInstances",
