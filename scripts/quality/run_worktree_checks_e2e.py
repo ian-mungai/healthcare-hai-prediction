@@ -235,7 +235,7 @@ def tools_cases() -> list[tuple[str, bool, str]]:
     case("pinned_tool_without_an_executable_is_refused", "pinned tool phantom_tool", phantom)
     case("missing_package_archive_is_refused", "the dbt package archive does not verify", no_archive)
     case("damaged_package_archive_is_refused", "the dbt package archive does not verify", damaged_archive)
-    case("missing_push_gate_is_refused", "the Git config hook hai-push-input", no_gate)
+    case("missing_push_gate_is_refused", "The Git config hook hai-push-input", no_gate)
     return rows
 
 
