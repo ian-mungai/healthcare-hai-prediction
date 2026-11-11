@@ -1,14 +1,14 @@
 """Freeze the run 3 execution controls for the publisher task, offline: the code, the operational inputs and the state root the task computes.
 
 The task checks its controls inside its own layout: the code archive is the code root, the unpacked mirror is the stored data root and its state root is
-``run`` under its state parent. This script computes the same controls on the owner's Mac and writes them beside the queue as ``controls.json``. It must run
-from the code tree to bind, which is a clean export of the revision that goes into the code archive: tracked files only, no ``.env`` and no untracked
-configuration. The independent review then binds the SHA-256 of these controls (``independent_review.json``, ``reviewed_controls_sha256``).
+``run`` under its state parent. This script computes the same controls on the owner's Mac and writes them beside the queue as ``controls.json``. It binds the
+code tree it imports, which must be the tree the task runs: the extracted code archive that is staged for the run (tracked files only, no ``.env`` and no
+untracked configuration). The independent review then binds the SHA-256 of these controls (``independent_review.json``, ``reviewed_controls_sha256``).
 
-Usage, from a clean export of the revision (PYTHONPATH names that export):
-    python -m scripts.acquisition.one_off.redownload.freeze_controls_run3 --queue <data root>/data/redownload_checks/20261111_bls2006/queue.json \\
-        --data-root <data root> --state-parent <new empty folder> --code-root <the export>
-No network or AWS request is made. Controls already written are never overwritten.
+Usage: extract the staged ``code.tar.gz`` into a new empty folder, then run this file from any checkout with PYTHONPATH naming that folder:
+    PYTHONPATH=<extracted code> python freeze_controls_run3.py --queue <data root>/data/redownload_checks/20261111_run3_scope/queue.json \\
+        --data-root <data root> --state-parent <new empty folder> --code-root <extracted code>
+No network or AWS request is made. Controls already written are never overwritten, so controls for other code go beside a copy of the queue in a new folder.
 """
 
 import argparse
