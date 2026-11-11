@@ -33,18 +33,21 @@
       "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}"
     },
     {
-      "Sid": "SubscribeToAlertTopic",
+      "Sid": "SubscribeToAlertTopics",
       "Effect": "Allow",
       "Action": [
-        "sns:Subscribe"
+        "sns:Subscribe",
+        "sns:GetSubscriptionAttributes"
       ],
-      "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}"
+      "Resource": [
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_*alerts_${ENVIRONMENT}",
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_*alerts_${ENVIRONMENT}:*"
+      ]
     },
     {
-      "Sid": "ManageAlertTopicSubscriptions",
+      "Sid": "UnsubscribeFromPlatformAlertTopic",
       "Effect": "Allow",
       "Action": [
-        "sns:GetSubscriptionAttributes",
         "sns:Unsubscribe"
       ],
       "Resource": [

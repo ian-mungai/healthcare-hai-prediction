@@ -163,6 +163,7 @@ def test_no_ci_path_plans_the_alerts_root() -> None:
     check(re.search(r"stack: \[platform, services, jobs\]", workflow) is not None, "the plan matrix keeps its three stacks")
     oidc = (ROOT / "infra/iam/github_oidc.tf").read_text(encoding="utf-8")
     check('github_state_stacks = ["platform", "services", "jobs"]' in oidc, "the plan role's stack list keeps its three stacks")
+    check("sns:GetSubscriptionAttributes" in oidc.split("github_plan_unreadable")[1].split("\n")[0], "the plan role never reads a subscription")
 
 
 def test_the_budget_topic_name_is_the_one_the_iam_stack_creates() -> None:

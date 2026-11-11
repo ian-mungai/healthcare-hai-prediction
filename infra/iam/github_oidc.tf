@@ -144,7 +144,9 @@ locals {
   # configuration and heads the bucket (s3:ListBucket), and the stack has no object resource, so no object read needs an exception.
   # ssm:DescribeParameters and ssm:ListTagsForResource are not in the delivery boundary, so the plan role does not mirror them (owner A, Nov 10 2026:
   # delivery plan role; the project user's ssmcap policy listed them for the host job cap parameter until Nov 11 2026).
-  github_plan_unreadable       = ["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters", "ssm:ListTagsForResource", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord", "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"]
+  # sns:GetSubscriptionAttributes returns the alert address of a subscription. The project user may read the subscriptions of the project alert topics, and
+  # the plan role never does (owner, Nov 11 2026: the alert subscription stays away from CI).
+  github_plan_unreadable       = ["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters", "ssm:ListTagsForResource", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord", "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts", "sns:GetSubscriptionAttributes"]
   github_policy_shared_secrets = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
   github_plan_read_statements = flatten([
     for file in sort(tolist(local.approved_policy_files)) : [

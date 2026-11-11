@@ -145,17 +145,6 @@
       ]
     },
     {
-      "Sid": "ReadAlertSubscriptions",
-      "Effect": "Allow",
-      "Action": [
-        "sns:GetSubscriptionAttributes"
-      ],
-      "Resource": [
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}:*"
-      ]
-    },
-    {
       "Sid": "ReadSnapshotSchedules",
       "Effect": "Allow",
       "Action": [

@@ -1,5 +1,6 @@
 # The budget only reports: the owner tracks spend and acts on the alerts by hand, and no action stops spending. The budget has
-# its own topic, which the project user's policy does not name: it cannot change or delete the topic and so cannot silence the alerts.
+# its own topic, which the project user's policy does not manage: it cannot change or delete the topic, and it can subscribe to it and read its
+# subscriptions but never remove one (sns:Unsubscribe is limited to the platform alerts topic), so it cannot silence the alerts.
 # AWS Budgets cannot publish to a topic encrypted with the AWS-managed SNS key, and a customer-managed key adds cost.
 # Alerts carry spend figures, not data.
 #trivy:ignore:AWS-0095

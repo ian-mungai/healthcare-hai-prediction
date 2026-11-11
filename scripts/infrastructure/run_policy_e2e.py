@@ -192,7 +192,7 @@ PLAN_UNREADABLE = frozenset(
         "secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters", "ssm:ListTagsForResource",
         "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken",
         "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord",
-        "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts",
+        "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts", "sns:GetSubscriptionAttributes",
     }
 )  # fmt: skip
 PLAN_READ_ACTION = re.compile(r"^[a-z0-9]+:(Describe|List|Get|BatchGet)")
