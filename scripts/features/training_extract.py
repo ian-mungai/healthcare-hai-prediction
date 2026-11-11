@@ -362,10 +362,13 @@ def extract(
         raise ExtractError(f"the feature reader selected another publication than base run {base_run}")
     if any(name not in base.snapshot_set for name in SUPPORT_TABLES):
         raise ExtractError(f"base run {base_run} lacks a required training support snapshot")
+    offline = [reference for reference in references if reference in feature_schema.offline_group_references()]
     try:
-        expected = feature_schema.service_references(reader.schema, model, references)
+        expected = feature_schema.service_references(reader.schema, model, [reference for reference in references if reference not in offline])
     except feature_schema.SchemaError as error:
         raise ExtractError(str(error)) from None
+    if sorted(offline) != sorted(feature_schema.offline_group_references()):
+        raise ExtractError(f"the {model} extract lacks a group attribute that the offline read must return")
     served = reader.service_references(service)
     if set(served) != set(expected) or len(served) != len(expected):
         gap = sorted(set(served) ^ set(expected))
@@ -373,14 +376,15 @@ def extract(
             f"the Feast feature service {service} differs from the reviewed lists of {model} and the labels: {len(gap)} references, first {gap[0]}"
         )
     check()
-    history = reader.historical(tuple(expected), publication.run_id)
+    requested = (*expected, *offline)
+    history = reader.historical(requested, publication.run_id)
     if history.publication != publication or history.base != base or history.feature_schema_sha256 != reader.schema_sha256:
         raise ExtractError("historical features came from another publication, base publication or schema")
     historical_rows = history.frame.to_pylist()
     historical = _unique(historical_rows, "spine_key", "historical features")
     if history.entity_count != len(historical):
         raise ExtractError("historical feature entity count differs from its rows")
-    bare = {reference.split(":", 1)[1] for reference in expected}
+    bare = {reference.split(":", 1)[1] for reference in requested}
     if any(not bare.issubset(row) or set(row) - bare - {"spine_key", "event_timestamp"} for row in historical_rows):
         raise ExtractError("historical feature result has missing or unexpected columns")
 

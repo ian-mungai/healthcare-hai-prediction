@@ -1441,7 +1441,6 @@ MODEL_SETS = {
 }
 LIST_FOLDER = "config/training/feature_lists"
 LABEL_VIEW_NAMES = [f"label_hai_{number}" for number in range(1, 7)]
-GROUP_PROJECTION = "feature_matrix_hospital_window[state_code,county_fips]"
 
 
 def list_references(slot: str, root: Path = ROOT) -> list[str]:
@@ -1491,8 +1490,8 @@ def model_set_cases(report: Report) -> None:
     report.case(
         "M05",
         "FS5",
-        "the definitions register one feature service model_<set> per set with its view, the state and county group attributes and the six label views",
-        all(services.get(f"model_{set_id}") == [f"model_{set_id}_view", GROUP_PROJECTION, *LABEL_VIEW_NAMES] for set_id in MODEL_SETS),
+        "the definitions register one feature service model_<set> per set with its view and the six label views, and no group attribute",
+        all(services.get(f"model_{set_id}") == [f"model_{set_id}_view", *LABEL_VIEW_NAMES] for set_id in MODEL_SETS),
         services=sorted(services),
     )
     domain = getattr(schema_module, "servable_in_definitions", lambda text: [])(definitions)
@@ -1559,20 +1558,25 @@ def model_set_cases(report: Report) -> None:
 
 
 def service_mapping_cases(report: Report) -> None:
-    """M14 to M17: the generated services serve the state and county group attributes beside the model view, no feature list names them, and the
-    mapping from the domain references of a model's lists to the service's references is defined, validated and equal to what the services serve."""
+    """M14 to M17: the generated services name no hospital window view, so the state and county group attributes stay in the offline read; no feature list
+    names them; and the mapping from the domain references of a model's lists to the service's references is defined, validated and equal to what the
+    services serve."""
     from scripts.features import training_extract
 
     schema = schema_module.load_schema()
     definitions = (ROOT / schema_module.DEFINITIONS).read_text()
     served = getattr(schema_module, "service_references_in_definitions", lambda text: {})(definitions)
-    identity = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
+    window = "feature_matrix_hospital_window"
+    offline = getattr(schema_module, "offline_group_references", lambda: ())()
     report.case(
         "M14",
         "FS5",
-        "every generated service serves state_code and county_fips from the hospital window view",
-        len(served) == len(MODEL_SETS) and all(sorted(name for name in references if name in identity) == identity for references in served.values()),
+        "no generated service names the hospital window view: m1, m2 and m4 (the online sets) select only their own view and the label views",
+        len(served) == len(MODEL_SETS)
+        and all(not any(name.startswith(f"{window}:") for name in references) for references in served.values())
+        and all(all(name.startswith((f"model_{set_id}:", "label_hai_")) for name in served[f"model_{set_id}"]) for set_id in ("m1", "m2", "m4")),
         services=sorted(served),
+        offline=list(offline),
     )
     lists = {name for slot, _ in MODEL_SETS.values() for name in (reference.split(":", 1)[1] for reference in list_references(slot))}
     report.case(
@@ -1587,24 +1591,26 @@ def service_mapping_cases(report: Report) -> None:
     for set_id in MODEL_SETS:
         try:
             domain, _, _ = training_extract.model_references(ROOT, schema, set_id)
-            equal[set_id] = sorted(mapping(schema, set_id, domain)) == sorted(served.get(f"model_{set_id}", ())) != []
+            equal[set_id] = (
+                bool(offline)
+                and set(offline) <= set(domain)
+                and sorted(mapping(schema, set_id, [name for name in domain if name not in offline])) == sorted(served.get(f"model_{set_id}", ())) != []
+            )
         except Exception as error:
             equal[set_id] = False
             equal[f"{set_id} error"] = type(error).__name__
     report.case(
         "M16",
         "FS5",
-        "the mapped references of each model's lists, group attributes and labels equal the references its generated service serves",
+        "the mapped references of each model's lists and labels equal the references its service serves, and the offline group attributes are the rest",
         all(value is True for value in equal.values()) and len(equal) == len(MODEL_SETS),
         equal=equal,
     )
-    window = "feature_matrix_hospital_window"
     own = next(reference for reference in list_references("m1_ols") if not reference.startswith(window))
     first = schema["model_sets"]["m1"]["columns"][2]["name"]
     outside = next(name for name in (column["name"] for column in schema["model_sets"]["m2"]["columns"]) if name not in lists_of(schema, "m1"))
     table = {
         "a listed column maps to its model view": mapping(schema, "m1", [own]) == [f"model_m1:{own.split(':', 1)[1]}"] if mapping else False,
-        "an identity attribute keeps its own view": mapping(schema, "m1", [f"{window}:state_code"]) == [f"{window}:state_code"] if mapping else False,
         "a label keeps its own view": mapping(schema, "m1", ["label_hai_1:hai_1__sir__number"]) == ["label_hai_1:hai_1__sir__number"] if mapping else False,
         "the first listed column maps": bool(first) and mapping is not None,
     }
@@ -1616,6 +1622,8 @@ def service_mapping_cases(report: Report) -> None:
         ),
         ("a column of a view other than its source table", f"label_hai_1:{own.split(':', 1)[1]}"),
         ("an unknown view", "no_such_view:c001__value__number"),
+        ("an offline group attribute", f"{window}:state_code"),
+        ("the other offline group attribute", f"{window}:county_fips"),
     ):
         refused[label] = (
             bool(mapping) and refuses(lambda reference=reference: mapping(schema, "m1", [reference]), reference.split(":", 1)[1]) if reference else False
@@ -1623,7 +1631,7 @@ def service_mapping_cases(report: Report) -> None:
     report.case(
         "M17",
         "FS5",
-        "the mapping maps listed columns to the model view, keeps identity and label references, and refuses any other reference by name",
+        "the mapping maps listed columns to the model view, keeps labels, and refuses any other reference, the offline group attributes included, by name",
         all(table.values()) and all(refused.values()),
         table=table,
         refused=refused,

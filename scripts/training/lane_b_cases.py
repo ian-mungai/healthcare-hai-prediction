@@ -146,7 +146,7 @@ def fixture(root: Path) -> dict[str, Any]:
         for number in range(1, 7)
         for field in ("sir__number", "alignment_status__category", "predicted__number")
     ]
-    listed_groups = [column for column in groups if column["name"] not in feature_schema.SERVICE_GROUP_ATTRIBUTES]
+    listed_groups = [column for column in groups if column["name"] not in feature_schema.OFFLINE_GROUP_ATTRIBUTES]
     schema: dict[str, Any] = {
         "schema": 1,
         "tables": {
@@ -663,10 +663,29 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
         ),
     )
     cases.check(
-        "extract_reads_the_references_its_service_serves",
+        "extract_reads_the_references_its_service_serves_and_the_offline_group_attributes",
         lambda: require(
-            set(reader.references) == set(feature_schema.service_references_in_definitions(feature_schema.render_definitions(reader.schema))["model_m1"]),
+            set(reader.references)
+            == {
+                *feature_schema.service_references_in_definitions(feature_schema.render_definitions(reader.schema))["model_m1"],
+                *feature_schema.offline_group_references(),
+            },
             f"the extract asked for {sorted(reader.references)}",
+        ),
+    )
+    cases.check(
+        "extract_asks_the_offline_store_for_the_group_attributes_by_reference",
+        lambda: require(
+            {"feature_matrix_hospital_window:state_code", "feature_matrix_hospital_window:county_fips"} <= set(reader.references)
+            and not any(name.startswith("feature_matrix_hospital_window:") for name in reader.service_references("model_m1")),
+            f"the extract asked for {sorted(reader.references)}",
+        ),
+    )
+    cases.check(
+        "extract_still_returns_state_code_and_county_fips",
+        lambda: require(
+            all({"state_code", "county_fips"} <= set(row) for row in writer.rows["extract_HAI_1.parquet"]) and bool(writer.rows["extract_HAI_1.parquet"]),
+            "the extract rows lost a group attribute",
         ),
     )
     cases.check(
@@ -689,8 +708,8 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     for name, change, reason in (
         ("extract_service_with_an_extra_feature_refused", {"service_extra": ("model_m1:c002__score__number",)}, "feature service"),
         ("extract_service_missing_a_feature_refused", {"service_dropped": ("model_m1:c001__score__number",)}, "feature service"),
-        ("extract_service_missing_a_group_attribute_refused", {"service_dropped": ("feature_matrix_hospital_window:state_code",)}, "feature service"),
-        ("extract_service_missing_the_county_attribute_refused", {"service_dropped": ("feature_matrix_hospital_window:county_fips",)}, "feature service"),
+        ("extract_service_serving_the_state_attribute_refused", {"service_extra": ("feature_matrix_hospital_window:state_code",)}, "feature service"),
+        ("extract_service_serving_the_county_attribute_refused", {"service_extra": ("feature_matrix_hospital_window:county_fips",)}, "feature service"),
     ):
         serving = SyntheticReader(source)
         for attribute, value in change.items():

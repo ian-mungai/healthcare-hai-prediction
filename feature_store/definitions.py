@@ -2936,7 +2936,6 @@ model_m1_service = FeatureService(
     name="model_m1",
     features=[
         model_m1_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,
@@ -2950,7 +2949,6 @@ model_m2_service = FeatureService(
     name="model_m2",
     features=[
         model_m2_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,
@@ -2964,7 +2962,6 @@ model_m3_service = FeatureService(
     name="model_m3",
     features=[
         model_m3_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,
@@ -2978,7 +2975,6 @@ model_m4_service = FeatureService(
     name="model_m4",
     features=[
         model_m4_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,
@@ -2992,7 +2988,6 @@ model_m5_service = FeatureService(
     name="model_m5",
     features=[
         model_m5_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,
@@ -3006,7 +3001,6 @@ model_m6_service = FeatureService(
     name="model_m6",
     features=[
         model_m6_view,
-        feature_matrix_hospital_window[["state_code", "county_fips"]],
         label_hai_1,
         label_hai_2,
         label_hai_3,

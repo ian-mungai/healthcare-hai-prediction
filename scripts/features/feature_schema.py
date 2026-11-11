@@ -79,8 +79,9 @@ SET_VIEW = "model_{set_id}"
 HAI_TYPES = tuple(f"HAI_{number}" for number in range(1, 7))
 LABEL_TABLE = "label_matrix_hai_outcomes"
 WINDOW_TABLE = "feature_matrix_hospital_window"
-# The group attributes that every model's service serves from the hospital window view although no feature list names them: they are identity, not predictors.
-SERVICE_GROUP_ATTRIBUTES = ("state_code", "county_fips")
+# The group attributes that training reads from the offline store by feature reference although no feature list names them (identity, not predictors).
+# No feature service selects them, so nothing loads them online.
+OFFLINE_GROUP_ATTRIBUTES = ("state_code", "county_fips")
 LABEL_VIEW = "label_hai_{number}"
 ENTITY = "hospital_window"
 SCHEMA_VERSION = 1
@@ -1110,8 +1111,7 @@ def render_definitions(schema: dict[str, Any]) -> str:
     registered = [f'{name} = view("{name}", True)' for name in predictor] + [f'{view} = view("{view}", False)' for view in labels["label_views"]]
     for entry in schema["model_sets"].values():
         registered.append(f'{entry["view"]}_view = model_view("{entry["view"]}")')
-        group = f"{WINDOW_TABLE}[[{', '.join(json.dumps(name) for name in SERVICE_GROUP_ATTRIBUTES)}]]"
-        features = "".join(f"        {item},\n" for item in (f"{entry['view']}_view", group, *entry["label_views"]))
+        features = "".join(f"        {item},\n" for item in (f"{entry['view']}_view", *entry["label_views"]))
         registered.append(f'{entry["service"]}_service = FeatureService(\n    name="{entry["service"]}",\n    features=[\n{features}    ],\n)')
     return "\n".join(out) + "\n" + tail + "\n".join(registered) + "\n"
 
@@ -1202,17 +1202,13 @@ def model_services_in_definitions(text: str) -> dict[str, list[str]]:
 
 
 def feature_name(item: ast.expr) -> str:
-    """One feature of a service as text: a view's name, or ``view[column,column]`` for the columns of a view that the service selects."""
-    if isinstance(item, ast.Name):
-        return item.id
-    if isinstance(item, ast.Subscript) and isinstance(item.value, ast.Name) and isinstance(item.slice, ast.List):
-        return f"{item.value.id}[{','.join(str(ast.literal_eval(column)) for column in item.slice.elts)}]"
-    return ast.unparse(item)
+    """One feature of a service as text: the name of its view."""
+    return item.id if isinstance(item, ast.Name) else ast.unparse(item)
 
 
 def service_references_in_definitions(text: str) -> dict[str, tuple[str, ...]]:
-    """The ``<view>:<feature>`` references that each feature service of a definitions file serves, read from its text: a model view serves its columns,
-    a label view its label columns and a selected view the columns it selects."""
+    """The ``<view>:<feature>`` references that each feature service of a definitions file serves, read from its text: a model view serves its columns
+    and a label view its label columns."""
     tree = ast.parse(text)
     tables: dict[str, dict[str, Any]] = {}
     for node in tree.body:
@@ -1227,21 +1223,21 @@ def service_references_in_definitions(text: str) -> dict[str, tuple[str, ...]]:
     columns |= {view: [column for column, _ in fields] for view, (_, fields) in tables.get("LABEL_VIEWS", {}).items()}
     found: dict[str, tuple[str, ...]] = {}
     for service, features in model_services_in_definitions(text).items():
-        references: list[str] = []
-        for feature in features:
-            view, _, selected = feature.partition("[")
-            names = selected.rstrip("]").split(",") if selected else columns.get(feature, [])
-            references += [f"{view.removesuffix('_view') if feature in columns else view}:{name}" for name in names]
-        found[service] = tuple(references)
+        found[service] = tuple(f"{view.removesuffix('_view')}:{name}" for view in features for name in columns.get(view, []))
     return found
 
 
-def service_references(schema: Mapping[str, Any], model: str, references: Sequence[str]) -> list[str]:
-    """Map the domain references of a model (its lists, the group attributes and the labels) to the references its generated service serves.
+def offline_group_references() -> tuple[str, ...]:
+    """The ``<view>:<column>`` references of the group attributes that training reads from the offline store only."""
+    return tuple(f"{WINDOW_TABLE}:{name}" for name in OFFLINE_GROUP_ATTRIBUTES)
 
-    A label keeps its view. A group attribute of ``SERVICE_GROUP_ATTRIBUTES`` keeps the hospital window view that the service selects it from. Any other
-    column must be a column of the model's view that comes from the same source table, and maps to ``<model view>:<column>``. Any other reference is refused
-    by name, so a list that names a column its model does not hold, or one that the service does not serve, never reaches a read."""
+
+def service_references(schema: Mapping[str, Any], model: str, references: Sequence[str]) -> list[str]:
+    """Map the domain references of a model (its lists and the labels) to the references its generated service serves.
+
+    A label keeps its view. Any other column must be a column of the model's view that comes from the same source table, and maps to
+    ``<model view>:<column>``. Any other reference is refused by name, the offline group attributes included: they are not served, so a list that
+    names a column its model does not hold, or one that the service does not serve, never reaches a read."""
     entry = schema["model_sets"][model]
     held = {column["name"]: column for column in entry["columns"] if column["role"] == "predictor"}
     labels = {
@@ -1250,12 +1246,12 @@ def service_references(schema: Mapping[str, Any], model: str, references: Sequen
     mapped = []
     for reference in references:
         view, _, name = reference.partition(":")
-        if reference in labels or (view == WINDOW_TABLE and name in SERVICE_GROUP_ATTRIBUTES):
+        if reference in labels:
             mapped.append(reference)
         elif name in held and held[name]["source_table"] == view:
             mapped.append(f"{entry['view']}:{name}")
         else:
-            raise SchemaError(f"model {model}: reference {reference} is neither a column of {entry['view']} from {view}, a group attribute nor a label")
+            raise SchemaError(f"model {model}: reference {reference} is neither a column of {entry['view']} from {view} nor a label")
     return mapped
 
 
