@@ -529,16 +529,29 @@ run "the_record_prefix_follows_the_variable" {
   }
 }
 
-run "no_request_grant_without_the_bronze_or_serve_family" {
+run "no_request_grant_without_the_bronze_family" {
   command = plan
 
   assert {
     condition     = length(aws_iam_role_policy.airflow_launch_requests) == 0
-    error_message = "Without the bronze or serve family the launch role holds no read grant on a staged request."
+    error_message = "Without the bronze family the launch role holds no read grant on a staged request."
   }
 }
 
-run "the_bronze_and_serve_families_add_one_request_read_each" {
+run "the_serve_family_adds_no_request_read" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["promote", "serve", "train"]
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.airflow_launch_requests) == 0
+    error_message = "The serve family deploys from the closed launch request, so it adds no staged request read to the launch role."
+  }
+}
+
+run "the_bronze_family_alone_adds_the_bronze_request_only" {
   command = plan
 
   variables {
@@ -550,30 +563,14 @@ run "the_bronze_and_serve_families_add_one_request_read_each" {
       aws_iam_role_policy.airflow_launch_requests[0].role == aws_iam_role.airflow_launch_task[0].name &&
       jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement == [
         {
-          Sid    = "ReadStagedRequests"
-          Effect = "Allow"
-          Action = "s3:GetObject"
-          Resource = [
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/bronze_request.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/serving_request.json",
-          ]
+          Sid      = "ReadStagedRequests"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/bronze_request.json"]
         }
       ]
     )
-    error_message = "Bronze adds the staged bronze request and serve adds the staged serving request, one get action on exactly those keys."
-  }
-}
-
-run "the_bronze_family_alone_adds_the_bronze_request_only" {
-  command = plan
-
-  variables {
-    airflow_launch_families = ["bronze", "train"]
-  }
-
-  assert {
-    condition     = jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/bronze_request.json"]
-    error_message = "The bronze family adds the bronze request key and not the serving request key."
+    error_message = "The bronze family adds one get action on the staged bronze request key alone, whatever other families the role may start."
   }
 }
 
@@ -710,10 +707,9 @@ run "the_drift_family_reads_only_the_drift_records" {
         "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
       ] &&
       jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Condition.StringEquals["aws:RequestTag/HaiJob"] == ["drift", "promote", "serve", "train"] &&
-      length(aws_iam_role_policy.airflow_launch_requests) == 1 &&
-      jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/serving_request.json"]
+      length(aws_iam_role_policy.airflow_launch_requests) == 0
     )
-    error_message = "The four families of the Airflow DAG launches pass the drift, serve and train task roles (promote reuses the train role) with the execution role, tag their four jobs and read the staged serving request."
+    error_message = "The four families of the Airflow DAG launches pass the drift, serve and train task roles (promote reuses the train role) with the execution role, tag their four jobs and read no staged request."
   }
 }
 

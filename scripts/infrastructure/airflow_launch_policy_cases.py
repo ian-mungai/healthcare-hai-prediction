@@ -60,7 +60,7 @@ Context = dict[str, tuple[str, ...]]
 Role = dict[str, dict[str, Any]]
 ONCE: Context = {"s3:if-none-match": ("*",)}
 VERSION_CHECKED: Context = {"s3:if-match": ('"9b2cf535f27731c974343645a3985328"',)}
-REQUEST_FILES = {"bronze": "bronze_request.json", "serve": "serving_request.json"}
+REQUEST_FILES = {"bronze": "bronze_request.json"}
 FAMILY_ROLES = {
     "promote": "job_train_task",
     "train": "job_train_task",
@@ -441,13 +441,13 @@ def record_cases() -> list[tuple[Any, ...]]:
 
 
 def request_cases() -> list[tuple[Any, ...]]:
-    """The staged requests of the bronze and serve runs, read one key each. They exist because bronze and serve are named."""
+    """The staged request of a bronze run, read at one key. It exists because bronze is named. No other staged input is readable: a serve deploy is a closed
+    launch request and stages nothing."""
     return [
         ("read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", True),
-        ("read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", True),
+        ("read a staged input that no family names", "s3:GetObject", f"{STAGE}/staged_input.json", False),
         ("read the code archive (inside the staged code archive grant)", "s3:GetObject", f"{STAGE}/code.tar.gz", True),
         ("read a request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/bronze/inputs/bronze_request.json", False),
-        ("read a serving request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/inputs/serving_request.json", False),
         (
             "read a request in another bucket",
             "s3:GetObject",
@@ -455,7 +455,7 @@ def request_cases() -> list[tuple[Any, ...]]:
             False,
         ),
         ("write the staged bronze request", "s3:PutObject", f"{STAGE}/bronze_request.json", False),
-        ("write the staged serving request", "s3:PutObject", f"{STAGE}/serving_request.json", False),
+        ("write a staged input that no family names", "s3:PutObject", f"{STAGE}/staged_input.json", False),
         ("delete the staged bronze request", "s3:DeleteObject", f"{STAGE}/bronze_request.json", False),
         ("read a deployment record", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/active/HAI_1.json", False),
     ]
@@ -581,7 +581,7 @@ RESOURCES = (
     Resource("staged code digest", f"{STAGE}/code.sha256", GET, GET),
     Resource("retired promotion approval", f"{STAGE}/promotion_approval.json", NONE, NONE),
     Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
-    Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
+    Resource("staged input that no family names", f"{STAGE}/staged_input.json", NONE, NONE),
     Resource("staged code archive", f"{STAGE}/code.tar.gz", GET, GET),
     Resource("staged code archive sibling", f"{STAGE}/code.tar.gz.bak", NONE, NONE),
     Resource("staged code run binding", CODE_RUN, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
@@ -706,7 +706,7 @@ def train_only_cases() -> list[Case]:
         ("train only: pass the gold role", "iam:PassRole", role("job_write_gold_task"), False, pass_context),
         ("train only: pass the bronze role", "iam:PassRole", role("job_write_bronze_task"), False, pass_context),
         ("train only: read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", False, {}),
-        ("train only: read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", False, {}),
+        ("train only: read a staged input that no family names", "s3:GetObject", f"{STAGE}/staged_input.json", False, {}),
         ("train only: read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, False, {}),
         ("train only: create a launch record", "s3:PutObject", RECORD, True, ONCE),
         ("train only: read the code run binding", "s3:GetObject", CODE_RUN, True, {}),
@@ -1117,7 +1117,7 @@ def allowlist_problems(documents: Role, families: list[str]) -> list[str]:
 
 
 def role_documents(directory: Path, families: list[str]) -> Role:
-    """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze or serve is named, the bronze record
+    """The policies of one role, rendered from a folder of templates. The request policy exists only while bronze is named, the bronze record
     policy only while bronze is named."""
     documents = {
         "jobs": render(directory / JOBS_TEMPLATE.name, families),

@@ -72,11 +72,10 @@ locals {
     metadata  = "job_openmetadata_task"
     publisher = "job_publisher_task"
   }
-  # The staged request a family's run reads before it starts. Only these three families stage one; the launch reads the publisher's
-  # (orchestration/publisher_launch.py) and binds every attempt to its digest.
+  # The staged request a family's run reads before it starts. Only the bronze and publisher families stage one: a serving deployment is a closed launch request. The launch
+  # reads the publisher's (orchestration/publisher_launch.py) and binds every attempt to its digest.
   airflow_launch_request_files = {
     bronze    = "bronze_request.json"
-    serve     = "serving_request.json"
     publisher = "publisher_request.json"
   }
   airflow_launch_families_sorted = sort(var.airflow_launch_families)
@@ -131,7 +130,7 @@ resource "aws_iam_role_policy" "airflow_launch_records" {
   policy = templatefile("${path.module}/owner_policies/airflow_launch_records.json", local.airflow_launch_policy_values)
 }
 
-# The staged request of a bronze run holds its tables, target and dry run flag, that of a serving deployment names the HAI type, the mode and the candidate, and that of a Run 3 publisher run names its inputs, queue, resumed sources and prior state. Only a launch role that may start the bronze, serve or publisher family can read them.
+# The staged request of a bronze run holds its tables, target and dry run flag, and that of a Run 3 publisher run names its inputs, queue, resumed sources and prior state. Only a launch role that may start the bronze or publisher family can read them.
 resource "aws_iam_role_policy" "airflow_launch_requests" {
   count = var.airflow_launch_prepared && length(local.airflow_launch_request_arns) > 0 ? 1 : 0
 
