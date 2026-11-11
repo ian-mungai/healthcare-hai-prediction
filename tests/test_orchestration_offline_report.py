@@ -46,6 +46,9 @@ IMAGE_CHECK = "image labels, user and top layers"
 DAG_CHECK = "every DAG file imports in the image with no error or cycle"
 PINS_CHECK = "image packages equal the constraints file and the release pins"
 TRANSFORM_CHECK = "transform_dag passes the graph validator (Airflow object)"
+REAL_RAN = "real-image DAG runs ran"
+REAL_COVERAGE = "real-image DAG runs cover every DAG file in the image"
+REAL_SCENARIO = "real-image DAG run: synthetic scenario"
 VIOLATION = {"rule": "upstream", "task": "final_gate", "detail": "synthetic missing upstream edge"}
 ALLOCATION = "synthetic-offline-report-allocation"
 TRANSPORT_ERROR = "synthetic image job transport failure"
@@ -63,8 +66,15 @@ def _platform() -> dict[str, Any]:
 
 
 def _document(transform_present: bool = False) -> dict[str, Any]:
+    dag_ids = ["transform_dag"] if transform_present else list(PIPELINE_DAGS)
     return {
-        "dags": {"files": ["synthetic_dag.py"], "dag_ids": ["transform_dag"] if transform_present else list(PIPELINE_DAGS), "import_errors": {}},
+        "dags": {"files": ["synthetic_dag.py"], "dag_ids": dag_ids, "import_errors": {}},
+        "real_dags": {
+            "ok": True,
+            "dags": list(dag_ids),
+            "import_errors": {},
+            "scenarios": [{"name": "synthetic scenario", "ok": True, "detail": None, "seconds": 0.1, "steps": []}],
+        },
         "graph_cases": {name: {"expected": rule, "rules": [] if rule is None else [rule], "ok": True} for name, rule in GRAPH_CASES.items()},
         "transform_graph": {"present": transform_present, "violations": [], "tasks": ["synthetic_task"] if transform_present else []},
         "pipeline_graphs": {name: {"present": True, "violations": []} for name in PIPELINE_DAGS},
@@ -198,7 +208,7 @@ def _failures(code: int, report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _complete(code: int, report: dict[str, Any], transform_present: bool = False) -> None:
-    required = {IMAGE_CHECK, DAG_CHECK, PINS_CHECK, *(f"graph (Airflow objects): {name}" for name in GRAPH_CASES)}
+    required = {IMAGE_CHECK, DAG_CHECK, PINS_CHECK, REAL_COVERAGE, REAL_SCENARIO, *(f"graph (Airflow objects): {name}" for name in GRAPH_CASES)}
     required |= {TRANSFORM_CHECK} if transform_present else {f"{name} passes the graph validator (Airflow object)" for name in PIPELINE_DAGS}
     check(code == 0 and report["status"] == "pass", "complete consistent image evidence passes the real outer CLI")
     check(required <= report["results"].keys(), "all independently pinned required checks survive result projection")
@@ -462,4 +472,52 @@ def test_malformed_release_fields_preserve_failed_report(boundary: ImageBoundary
     boundary.transport.attempt.stdout = _stdout(document)
     failures = _failures(*_run_cli(boundary))
     check(failures.get("in-image checks ran", {}).get("ok") is False, "malformed release evidence is a persisted report refusal")
+    _released(boundary)
+
+
+def test_a_failed_real_image_scenario_cannot_be_overwritten_by_incoming_ok(boundary: ImageBoundary) -> None:
+    document = _document()
+    document["real_dags"]["scenarios"][0].update(ok=False, detail="synthetic DAG run refusal")
+    document["real_dags"]["ok"] = True
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(set(failures) == {REAL_SCENARIO}, "the failed scenario is the intended and only failure")
+    check("synthetic DAG run refusal" in json.dumps(failures), "the scenario's own detail survives projection")
+    _released(boundary)
+
+
+def test_a_dag_without_a_real_image_run_is_refused(boundary: ImageBoundary) -> None:
+    document = _document()
+    document["real_dags"]["dags"].remove("feature_store_dag")
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(set(failures) == {REAL_COVERAGE}, "an uncovered DAG is the intended and only failure")
+    check("feature_store_dag" in json.dumps(failures), "the refusal names the DAG that no scenario runs")
+    _released(boundary)
+
+
+def test_a_crashed_real_image_run_is_a_named_failure(boundary: ImageBoundary) -> None:
+    document = _document()
+    document["real_dags"] = {"ok": False, "error": "synthetic driver crash"}
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(set(failures) == {REAL_RAN}, "a driver crash fails its own check and nothing else")
+    check("synthetic driver crash" in json.dumps(failures), "the crash cause survives projection")
+    _released(boundary)
+
+
+@pytest.mark.parametrize("damage", ["missing", "not_a_mapping", "no_scenarios", "scenario_without_verdict"])
+def test_a_malformed_real_image_section_is_a_recorded_refusal(boundary: ImageBoundary, damage: str) -> None:
+    document = _document()
+    if damage == "missing":
+        document.pop("real_dags")
+    elif damage == "not_a_mapping":
+        document["real_dags"] = ["synthetic"]
+    elif damage == "no_scenarios":
+        document["real_dags"]["scenarios"] = []
+    else:
+        document["real_dags"]["scenarios"][0].pop("ok")
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(failures.get("in-image checks ran", {}).get("ok") is False, "an incomplete real-image section fails at its owning boundary")
     _released(boundary)

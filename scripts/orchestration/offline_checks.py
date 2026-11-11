@@ -385,6 +385,31 @@ def image_graph_names() -> set[str]:
     return {key.value for key in registries[0].keys if isinstance(key, ast.Constant) and isinstance(key.value, str)}
 
 
+def real_dags_problem(section: object) -> str:
+    """Why the real-image DAG section of an IN_IMAGE report is unusable, or an empty string. A crashed run is a usable section: it carries its error."""
+    if not isinstance(section, dict):
+        return "IN_IMAGE report is missing the real_dags mapping"
+    if "error" in section:
+        return "" if isinstance(section["error"], str) else "real_dags error must be text"
+    scenarios, dags = section.get("scenarios"), section.get("dags")
+    if not isinstance(scenarios, list) or not scenarios or not isinstance(dags, list):
+        return "real_dags report needs its scenarios and the DAGs they ran"
+    if any(not isinstance(row, dict) or type(row.get("ok")) is not bool or not isinstance(row.get("name"), str) for row in scenarios):
+        return "real_dags scenarios require a name and a Boolean verdict"
+    return ""
+
+
+def real_dags_results(image: dict[str, Any]) -> dict[str, Any]:
+    """One check per real-image DAG scenario, and one that every DAG file in the image is run by some scenario, so a new DAG without a scenario fails."""
+    section = image["real_dags"]
+    if "error" in section:
+        return {"real-image DAG runs ran": {"ok": False, "error": section["error"]}}
+    results: dict[str, Any] = {f"real-image DAG run: {row['name']}": {**row, "ok": row["ok"] is True} for row in section["scenarios"]}
+    uncovered = sorted(set(image["dags"]["dag_ids"]) - set(section["dags"]))
+    results["real-image DAG runs cover every DAG file in the image"] = {"ok": not uncovered, "uncovered": uncovered, "versions": section.get("versions", {})}
+    return results
+
+
 def image_report_problem(report: dict[str, Any]) -> str:
     for name in ("dags", "graph_cases", "transform_graph", "constraints"):
         if not isinstance(report.get(name), dict):
@@ -412,6 +437,9 @@ def image_report_problem(report: dict[str, Any]) -> str:
         return "IN_IMAGE constraints report is incomplete"
     if not isinstance(pins.get("release", {}), dict) or not isinstance(pins.get("release_problems", []), list):
         return "IN_IMAGE constraints release fields are malformed"
+    problem = real_dags_problem(report.get("real_dags"))
+    if problem:
+        return problem
     if set(pins["build_tools"]) != set(BUILD_TOOLS):
         missing = ", ".join(sorted(set(BUILD_TOOLS) - set(pins["build_tools"]))) or "none"
         return f"IN_IMAGE build_tools inventory differs; missing {missing}; expected exactly {', '.join(BUILD_TOOLS)}"
@@ -515,6 +543,7 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
             else:
                 for name, graph in image["pipeline_graphs"].items():
                     results[f"{name} passes the graph validator (Airflow object)"] = {**graph, "ok": graph["present"] and not graph["violations"]}
+            results.update(real_dags_results(image))
             pins = image["constraints"]
             tools_ok = set(pins["build_tools"]) == set(BUILD_TOOLS) and all(tool["ok"] is True for tool in pins["build_tools"].values())
             release_ok = not pins.get("release_problems") and set(pins.get("release", {})) == set(platform["airflow"]["release_packages"])

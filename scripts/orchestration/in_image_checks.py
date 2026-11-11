@@ -11,6 +11,9 @@ read-only and runs ``python in_image_checks.py``. It prints one JSON object:
   tools at the version the image records, or in the exact release set of ``config/orchestration/platform.json`` at its own pinned version. Nothing is
   exempt by name prefix: any other distribution, an extra provider or the task SDK included, is reported as unpinned.
 
+- ``real_dags``: every DAG that launches a host job, run with Airflow's own test runner and the real Amazon provider operator against the stand-in cloud
+  of the offline rig (``scripts/orchestration/real_image_dags.py``), so a fault in how Airflow treats our classes shows here and not in the live run.
+
 The lineage probe checks the provider and client already installed in the pinned image. It starts no service or network delivery.
 """
 
@@ -18,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import importlib.util
 import json
 import os
 import re
@@ -39,6 +43,7 @@ from orchestration.graph import EXPECTED_RULES, EXPECTED_UPSTREAM, GRAPH_DAGS, g
 DAG_FOLDER = Path("/opt/hai/dags")
 CONSTRAINTS = Path("/opt/hai/constraints.txt")
 RELEASE_FILE = Path("/opt/hai/platform.json")
+REPO = Path("/opt/hai/repo")  # the read-only checkout folders that the real-image DAG runs need (docker-compose.orchestration.yaml, service airflow-check)
 PIN = re.compile(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;#]+)")
 
 
@@ -239,6 +244,25 @@ def lineage_transport() -> dict[str, Any]:
     return {"ok": True, "factory": transport.kind, "native_run_uuid_preserved": True, "sentinel_absent": True, "network": "none"}
 
 
+def real_dags() -> dict[str, Any]:
+    """Run each host-launching DAG in this image with Airflow's own test runner (``scripts/orchestration/real_image_dags.py``). A crash of the run is the
+    section's error, so the other checks still report."""
+    try:
+        path = REPO / "scripts/orchestration/real_image_dags.py"
+        spec = importlib.util.spec_from_file_location(
+            "real_image_dags", path
+        )  # loaded by path: its folder is the checkout copy, not a package root of this image
+        if spec is None or spec.loader is None:
+            raise ImportError(f"{path} cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        report: dict[str, Any] = module.run_all(None)
+    except Exception as error:
+        return {"ok": False, "error": f"{type(error).__name__}: {error}"[:1000]}
+    return report
+
+
 def main() -> int:
     """Print every result as JSON."""
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
@@ -254,7 +278,8 @@ def main() -> int:
         report["lineage_transport"] = lineage_transport()
     except (OSError, ValueError, TypeError, AttributeError, ImportError) as error:
         report["lineage_transport"] = {"ok": False, "error": type(error).__name__}
-    sys.stdout.write("IN_IMAGE " + json.dumps(report) + "\n")
+    report["real_dags"] = real_dags()
+    sys.stdout.write("IN_IMAGE " + json.dumps(report, default=str) + "\n")
     return 0
 
 

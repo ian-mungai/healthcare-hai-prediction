@@ -155,6 +155,11 @@ services:
     environment:
       AIRFLOW_HOME: /tmp/airflow
       PYTHONPATH: /opt/hai
+      # The real-image DAG runs (scripts/orchestration/real_image_dags.py): a SQLite metadata database in the container and no lineage emission.
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////tmp/airflow/airflow.db
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/hai/repo/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__OPENLINEAGE__DISABLED: "true"
     volumes:
       - ${HAI_ORCH_REPO}/dags:/opt/hai/dags:ro
       - ${HAI_ORCH_REPO}/orchestration/__init__.py:/opt/hai/orchestration/__init__.py:ro
@@ -165,6 +170,15 @@ services:
       - ${HAI_ORCH_REPO}/orchestration/dag_runtime.py:/opt/hai/orchestration/dag_runtime.py:ro
       - ${HAI_ORCH_REPO}/orchestration/training_contract.py:/opt/hai/orchestration/training_contract.py:ro
       - ${HAI_ORCH_REPO}/scripts/orchestration/in_image_checks.py:/opt/hai/checks/in_image_checks.py:ro
+      # The folders of the real-image DAG runs, read only: the DAGs, the launch library, the offline rig and the tables and fixtures they read.
+      - ${HAI_ORCH_REPO}/dags:/opt/hai/repo/dags:ro
+      - ${HAI_ORCH_REPO}/orchestration:/opt/hai/repo/orchestration:ro
+      - ${HAI_ORCH_REPO}/scripts/orchestration:/opt/hai/repo/scripts/orchestration:ro
+      - ${HAI_ORCH_REPO}/scripts/process.py:/opt/hai/repo/scripts/process.py:ro
+      - ${HAI_ORCH_REPO}/scripts/quality/lock_env.py:/opt/hai/repo/scripts/quality/lock_env.py:ro
+      - ${HAI_ORCH_REPO}/config/orchestration:/opt/hai/repo/config/orchestration:ro
+      - ${HAI_ORCH_REPO}/config/lakehouse/bronze_tables.json:/opt/hai/repo/config/lakehouse/bronze_tables.json:ro
+      - ${HAI_ORCH_REPO}/infra/jobs/tests:/opt/hai/repo/infra/jobs/tests:ro
       - ${HAI_ORCH_REPO}/services/orchestration/constraints-3.12.txt:/opt/hai/constraints.txt:ro
       - ${HAI_ORCH_REPO}/config/orchestration/platform.json:/opt/hai/platform.json:ro
     mem_limit: ${JOB_MEMORY_LIMIT:?run through the orchestration_check template}
