@@ -14,7 +14,9 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from orchestration import graph, promotion_chain, training_contract
+from botocore.exceptions import ClientError
+
+from orchestration import airflow_steps, graph, promotion_chain, training_contract
 from orchestration.ecs_launch import LaunchRefused
 from orchestration.interface import SubmissionRequest
 from scripts.orchestration.airflow_mode_cases import RUN_KEY, FormRefused, Rig, task_graph, world
@@ -258,6 +260,41 @@ def a_failed_release_still_announces_the_promotion() -> None:
     require(
         recorder.calls[-1][0] == "owner_notice" and recorder.calls[-1][3]["outcome"] == "promoted", f"the promotion was not announced: {recorder.calls[-1]}"
     )
+
+
+def one_types_binding_failure_stops_only_its_chain() -> None:
+    """A failure to bind one step's run to its code (a throttled or refused write of the binding record) ends that type's chain with a named failure and a hold
+    notice, and the other type's chain still runs. A denied and a throttled write are both ordinary runtime boundaries, so both are tried."""
+    both = {"HAI_1": CHALLENGER, "HAI_2": {**CHALLENGER, "model": "m4", "version": "7"}}
+    first = training_contract.chain_run_id(RESEARCH, "HAI_1", "canary")
+    for code in ("AccessDenied", "SlowDown"):
+        rig = Rig()
+        rig.stage_runs(RESEARCH)
+        stage_records(rig.stage.objects, both)
+        original = rig.stage.put_object
+        key = rig.preflight.code_runs.key(first)
+
+        def put(code: str = code, original: Callable[..., Any] = original, key: str = key, **arguments: Any) -> Any:
+            if arguments["Key"] == key:
+                raise ClientError({"Error": {"Code": code}}, "PutObject")
+            return original(**arguments)
+
+        with (
+            world(rig, "research_dag", dag_params()) as current,
+            mock.patch.object(rig.stage, "put_object", side_effect=put),
+            mock.patch.object(promotion_chain, "release_online", lambda *arguments: None),
+        ):
+            current.enter("chain")
+            error = refuses(RuntimeError, lambda: airflow_steps.research_chain_step(request_for("research", RESEARCH, RESEARCH_PARAMS), current.context))
+        require("HAI_1 canary check" in str(error) and code in str(error), f"{code}: the failure does not name the type, the step and the cause: {error}")
+        phases = [
+            (json.loads(rig.environment(index)["promote"]["TRAINING_PARAMETERS"])["hai_type"], rig.environment(index)["promote"]["PHASE"])
+            for index in range(rig.tasks_started())
+        ]
+        require(
+            phases == [("HAI_1", "notify"), ("HAI_2", "canary"), ("HAI_2", "promote"), ("HAI_2", "notify")],
+            f"{code}: HAI_1 was not held and announced, or HAI_2 did not run in full: {phases}",
+        )
 
 
 def bad_research_records_are_failures_and_launch_nothing() -> None:
@@ -515,6 +552,7 @@ CASES: dict[str, Callable[[], None]] = {
     "a_missing_or_unreadable_canary_result_holds": a_missing_or_unreadable_canary_result_holds,
     "one_type_failing_stops_only_its_chain": one_type_failing_stops_only_its_chain,
     "a_failed_release_still_announces_the_promotion": a_failed_release_still_announces_the_promotion,
+    "one_types_binding_failure_stops_only_its_chain": one_types_binding_failure_stops_only_its_chain,
     "bad_research_records_are_failures_and_launch_nothing": bad_research_records_are_failures_and_launch_nothing,
     "the_chain_is_the_same_for_a_retry": the_chain_is_the_same_for_a_retry,
     "research_dag_form_and_graph": research_dag_form_and_graph,

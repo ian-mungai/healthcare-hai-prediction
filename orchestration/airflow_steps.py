@@ -341,15 +341,16 @@ def research_missing_models(request: SubmissionRequest) -> list[str]:
 def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) -> str:
     """Run the promotion chain of every infection type of the research request that has a challenger, and fail with every failure after the last type.
 
-    Each launching step binds its run to the code of the research run, launches once under its own run (a retry joins it) and fails by name when its job does.
+    Each launching step binds its run to the code of the research run, launches once under its own run (a retry joins it) and fails by name when its binding,
+    its launch or its job does, so one type's failure never reaches another type.
     """
     found = services()
     training = request.training or {}
 
     def launch_step_of(template: str, run: str, parameters: dict[str, Any]) -> None:
-        found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
         step = replace(request, template=template, run_id=run, input_run_id=None, training=parameters)
         try:
+            found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
             spec = prepared(found, step)
             if spec is None:
                 raise LaunchRefused(f"{template} starts no ECS job")
