@@ -62,10 +62,10 @@ MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
 # The same rule as the airflow_launch_record_prefix validation in infra/iam/airflow_launch.tf.
 LAUNCH_RECORD_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
-# One plain address, with no display name, list, scheme or space. The same rule as the alert_email validation in infra/platform/variables.tf.
+# One plain address, with no display name, list, scheme or space. The same rule as the alert_email validation in infra/alerts/variables.tf.
 ALERT_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
 ALERT_EMAIL_LIMIT = 254
-# .env keys that may be left out; only the platform stack reads them.
+# .env keys that may be left out; only the alerts root reads them.
 OPTIONAL_ENV_KEYS = frozenset({"ALERT_EMAIL"})
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
@@ -112,7 +112,7 @@ def build_configuration(environment: dict[str, str | None], admin_profile: str |
 
 
 def alert_email_input(environment: Mapping[str, str | None]) -> dict[str, str]:
-    """The platform input for the optional ALERT_EMAIL key: empty when the key is unset or empty, else the one validated address, never echoed."""
+    """The alerts root input for the optional ALERT_EMAIL key: empty when the key is unset or empty, else the one validated address, never echoed."""
     value = environment.get("ALERT_EMAIL")
     if value is None or value == "":
         return {}

@@ -108,7 +108,7 @@ def test_alert_email_is_an_optional_key_that_stays_out_of_the_storage_and_iam_in
     environment["ALERT_EMAIL"] = value
     storage, iam = build_configuration(environment)
     check(storage == plain_storage and iam == plain_iam, "the alert address reaches neither the storage nor the IAM inputs")
-    check(alert_email_input(environment) == ({"alert_email": value} if value else {}), "only a set address becomes the platform input")
+    check(alert_email_input(environment) == ({"alert_email": value} if value else {}), "only a set address becomes the alerts root input")
 
 
 @pytest.mark.parametrize("value", [None, ""])
