@@ -80,11 +80,11 @@
     },
     {
       "path": "scripts/acquisition/redownload.py",
-      "line": 1162,
+      "line": 1177,
       "code_sha256": "1f9cde2b11b126d85b0a497a720ed502098d56b9be95ecc5ee818a47b3260b0d",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "448ec945aa01452dd54912373ad809009895679dad79c71708ad70e35c83733e",
+      "file_sha256": "282932de31ebf84452685058238074b5711426a8a4ac0e64d4ddd6bdb748b43b",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:ab20cccad03c6543176f66af6018fcd5c80e51bd29bf84569b5d928463aabf76",
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
@@ -122,7 +122,7 @@
       "code_sha256": "465341b9818d9470082c277fe541dde751a8de546e5d0df64cc7b3e909e87322",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "448ec945aa01452dd54912373ad809009895679dad79c71708ad70e35c83733e",
+      "file_sha256": "282932de31ebf84452685058238074b5711426a8a4ac0e64d4ddd6bdb748b43b",
       "dependencies": {
         "scripts/acquisition/bls_api_transport.py": "sha256:ab20cccad03c6543176f66af6018fcd5c80e51bd29bf84569b5d928463aabf76",
         "scripts/acquisition/capture.py": "sha256:e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa",
@@ -283,7 +283,7 @@
       "occurrences": 1,
       "file_sha256": "c1304afc43816561700d2606c25fe41cd47131eb450241729ee2611de8d8ab27",
       "dependencies": {
-        "scripts/acquisition/redownload.py": "sha256:448ec945aa01452dd54912373ad809009895679dad79c71708ad70e35c83733e",
+        "scripts/acquisition/redownload.py": "sha256:282932de31ebf84452685058238074b5711426a8a4ac0e64d4ddd6bdb748b43b",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
       },
       "reason": "imports a plan module named in the PLANNED table; the plan loaders read and validate plans and start no process",

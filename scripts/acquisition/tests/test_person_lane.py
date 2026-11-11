@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+from contextlib import suppress
 from pathlib import Path
 from typing import Any
 
@@ -437,3 +438,104 @@ def test_a_fresh_wonder_export_is_stored_as_a_fresh_capture_with_its_derived_csv
     check(any(body == STORED for body in bucket_bodies(bucket).values()), "the export bytes are stored")
     proof = json.loads((receipt_path.parent / "evidence/download_proof.json").read_text())
     check(proof["planned_sha256"] == "0" * 64 and proof["sha256"] == hashlib.sha256(STORED).hexdigest(), "the plan comparison is recorded, not required")
+
+
+def create_once_bucket() -> Any:
+    """A bucket stand-in that refuses a second create of a key, as the real one does with its conditional write."""
+    from scripts.acquisition.tests.test_task_owners import TaskS3
+
+    class CreateOnceS3(TaskS3):
+        def put_object(self, **arguments: Any) -> dict:
+            if arguments["Key"] in self.objects:
+                raise self.missing("PutObject", "PreconditionFailed")
+            return super().put_object(**arguments)
+
+    return CreateOnceS3()
+
+
+def interrupted_before_the_outcome(monkeypatch: pytest.MonkeyPatch, action: Any) -> None:
+    """Run the action and stop it by a user interruption at the write of the first outcome record, after the capture was stored."""
+    original = harness.write_once
+
+    def crash(path: Path, body: bytes) -> Any:
+        if path.parent.name == "outcomes":
+            raise KeyboardInterrupt("synthetic interruption before the outcome was saved")
+        return original(path, body)
+
+    monkeypatch.setattr(harness, "write_once", crash)
+    with suppress(KeyboardInterrupt):
+        action()
+    monkeypatch.setattr(harness, "write_once", original)
+
+
+def capture_keys(bucket: Any) -> set[str]:
+    """The stored objects of the capture itself, not the lane's own records."""
+    return {key for key in bucket.objects if not key.startswith(("raw/run3_person/", "raw/run3_runs/"))}
+
+
+@pytest.mark.parametrize("kind", ["browser file", "reference save"])
+def test_a_resumed_lane_reuses_the_capture_an_interrupted_attempt_stored_and_records_the_outcome(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None, kind: str
+) -> None:
+    from scripts.acquisition.tests.test_task_raw_store import STORED
+
+    bucket = create_once_bucket()
+    run, unit = browser_run(monkeypatch, tmp_path, bucket, STORED)
+    # A browser file keeps the creation time it had, so the resumed attempt names the same capture folder.
+    monkeypatch.setattr(harness.download_metadata, "download_created_at", lambda _path: "2099-01-01T00:00:00+00:00")
+    if kind == "reference save":
+        reference = reshaped_receipt(run, unit, [("evidence/download_proof.json", "export_receipt")], "dictionary")
+        monkeypatch.setattr(harness, "stored_receipt", lambda unit, run: reference)
+    interrupted_before_the_outcome(monkeypatch, lambda: harness.execute(run))
+    stored = capture_keys(bucket)
+    check(bool(stored) and harness.outcome(run, unit["snapshot_id"]) is None, "the interruption came after the capture was stored and before its outcome")
+    summary = harness.execute(run)
+    record = harness.outcome(run, unit["snapshot_id"]) or {}
+    check(summary["outcomes"] == {"exact_match": 1} and "stored" in record, f"the resumed lane did not record the stored capture: {record}")
+    check(capture_keys(bucket) == stored, "the resumed attempt stored the capture again or stored another one")
+    check(record["stored"]["receipt"]["key"] in bucket.objects, "the outcome names a receipt that is not stored")
+    check(harness.report(run)["s3_writes"] == 1, "the report does not count the stored capture")
+
+
+def test_a_resumed_lane_refuses_a_capture_folder_whose_file_is_not_the_saved_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None) -> None:
+    from scripts.acquisition.tests.test_task_raw_store import STORED
+
+    bucket = create_once_bucket()
+    run, unit = browser_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness.download_metadata, "download_created_at", lambda _path: "2099-01-01T00:00:00+00:00")
+    interrupted_before_the_outcome(monkeypatch, lambda: harness.execute(run))
+    stored = capture_keys(bucket)
+    leftover = next((run.state_root / "captures").glob("*/raw/*"))
+    leftover.unlink()
+    leftover.write_bytes(b"another file under the same name")
+    harness.execute(run)
+    record = harness.outcome(run, unit["snapshot_id"]) or {}
+    check(record.get("outcome") == "blocked" and "stored" not in record, f"a changed file in the capture folder was reused: {record}")
+    check(capture_keys(bucket) == stored, "a changed file was stored")
+
+
+def test_a_fresh_wonder_export_is_reused_when_the_adapter_runs_again_after_an_interruption(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None
+) -> None:
+    from scripts.acquisition import wonder_export_contract
+    from scripts.acquisition.tests.test_task_raw_store import STORED
+
+    bucket = create_once_bucket()
+    run, unit = browser_run(monkeypatch, tmp_path, bucket, STORED)
+    monkeypatch.setattr(harness.download_metadata, "download_created_at", lambda _path: "2099-01-01T00:00:00+00:00")
+    batch = {"id": "b" * 64, "database": "D76", "file_name": "saved.csv", "sha256": "0" * 64, "bytes": 1, "years": [2020, 2020]}
+    wonder = reshaped_receipt(
+        run, unit, [("derived/county_year.csv", "data"), ("evidence/download_proof.json", "export_receipt"), ("references/scope.json", "layout")], "data"
+    )
+    monkeypatch.setattr(harness, "stored_receipt", lambda unit, run: wonder)
+    monkeypatch.setattr(harness, "planned", lambda unit, run: ({"batches": [batch]}, batch))
+    monkeypatch.setattr(harness, "manual_file", lambda folder, name, started: run.manual_folder / name)
+    monkeypatch.setattr(wonder_export_contract, "sanitize_origins", lambda origins, database: None)
+    monkeypatch.setattr(wonder_export_contract, "validate_export", lambda raw, batch, plan: (b"county,year\n01001,2020\n", {"query": "q", "rows": 1}))
+    monkeypatch.setattr(wonder_export_contract, "stored_name", lambda batch: "a.csv")
+    run.cache["started_at"] = None
+    first = harness.adapt_wonder(unit | {"mode": "wonder_export"}, run)
+    stored = capture_keys(bucket)
+    again = harness.adapt_wonder(unit | {"mode": "wonder_export"}, run)
+    check(again == first, "the resumed adapter chose another capture")
+    check(capture_keys(bucket) == stored, "the resumed adapter stored the export again")

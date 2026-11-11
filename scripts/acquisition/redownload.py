@@ -670,6 +670,21 @@ DOWNLOADED_ROLES = frozenset({"data", "api_page"})
 REFERENCE_ROLES = frozenset({"dictionary", "methodology", "layout"})
 
 
+def link_download(result: Any, target: Path) -> None:
+    """Put a download into its capture folder by a hard link. A folder an interrupted attempt already filled is reused when its file is this download.
+
+    A fresh capture is named by the download's own facts, so a resumed attempt chooses the same folder. A file there with other bytes, or one that is not a
+    plain file, stops the unit instead of being reused.
+    """
+    if not target.exists() and not target.is_symlink():
+        os.link(result.path, target)
+        return
+    require(
+        target.is_file() and not target.is_symlink() and fingerprint(target) == (result.sha256, result.byte_count),
+        "The capture folder of an earlier attempt holds another file than this download",
+    )
+
+
 def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict, companions: Sequence[tuple[str, bytes, str]] = ()) -> Path:
     """Write the receipt of a fresh download beside its bytes. It keeps the stored capture's reviewed scope and states this download's own facts.
 
@@ -690,7 +705,7 @@ def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict, comp
     artifacts = []
     for index, (result, earlier) in enumerate(zip(results, repeated, strict=True), 1):
         target = root / "raw" / result.path.name
-        os.link(result.path, target)
+        link_download(result, target)
         record = artifact_record(replace(result, path=target), root, earlier["role"], index)
         artifacts.append(record | {"compression": earlier.get("compression"), "hash_scope": earlier.get("hash_scope", record["hash_scope"])})
     for index, (relative, body, role) in enumerate(companions, len(artifacts) + 1):
