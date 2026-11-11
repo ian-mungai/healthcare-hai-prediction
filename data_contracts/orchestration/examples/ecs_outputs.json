@@ -43,7 +43,7 @@
   ],
   "run_id": "20261024T000000Z-a1b2c3d4",
   "schema_version": 1,
-  "task_arn": "arn:aws:ecs:us-west-2:000000000000:task/synthetic/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "task_arn": "arn:aws:ecs:us-west-2:111111111111:task/synthetic/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "template": "pipeline_dbt",
   "timings": {
     "execute_seconds": 1.0

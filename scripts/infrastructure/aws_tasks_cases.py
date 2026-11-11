@@ -457,13 +457,13 @@ def missing_definition_refuses() -> dict[str, bool]:
 
 def mismatch_output_privacy() -> dict[str, bool]:
     host, cleanup, lines = build()
-    leak = f"{PREFIX}x {ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
+    leak = f"{PREFIX}x {ACCOUNT_MARK}task/leak i-0123456789abcdef0 111111111111"
     host.add_task(WRITER, group=f"family:{leak}")
     host.add_task("other_dev_job_read_silver", group=f"family:{leak}")
     cleanup.list_tasks()
     message = failure(lambda: cleanup.stop(frozenset())) or ""
     text = "\n".join([*lines, message])
-    return {"no ARN, account ID or instance ID from the group": not ARN_OR_ACCOUNT.search(text) and ACCOUNT_MARK not in text and "123456789012" not in text}
+    return {"no ARN, account ID or instance ID from the group": not ARN_OR_ACCOUNT.search(text) and ACCOUNT_MARK not in text and "111111111111" not in text}
 
 
 def stop_failed_call_is_described() -> dict[str, bool]:
@@ -586,7 +586,7 @@ def output_privacy() -> dict[str, bool]:
         "no ARN, account ID or instance ID": not ARN_OR_ACCOUNT.search(text),
         "no account marker": ACCOUNT_MARK not in text,
         "no full task ID": "ababababab" not in text,
-        "no provider reason text": "Essential container" not in text and "123456789012" not in text,
+        "no provider reason text": "Essential container" not in text and "111111111111" not in text,
         "family and suffix are shown": READ in text and suffix(found["writer"]) in text,
     }
 

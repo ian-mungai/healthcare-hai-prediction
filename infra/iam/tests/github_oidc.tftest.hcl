@@ -756,7 +756,7 @@ run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" {
 
   variables {
     aws_region          = "ap-southeast-2"
-    expected_account_id = "999999999999"
+    expected_account_id = "111111111111"
     project_name        = "healthcare_hai_prediction_longest_nm0"
     aws_profile         = "healthcare_hai_prediction_longest_nm0_prod"
     environment         = "prod"

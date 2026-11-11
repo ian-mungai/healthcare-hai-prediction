@@ -344,7 +344,7 @@ run "foreign_account_role_is_refused" {
     enabled_definitions = ["analytics_read"]
     job_role_arns = {
       execution = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
-      read_task = "arn:aws:iam::222222222222:role/example_project_job_read_task_dev"
+      read_task = format("arn:aws:iam::%s:role/example_project_job_read_task_dev", "222222222222")
     }
   }
   expect_failures = [var.job_role_arns]

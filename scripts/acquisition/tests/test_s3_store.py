@@ -600,7 +600,7 @@ def test_verification_failure_keeps_uploaded_object_for_retry(bundle: tuple) -> 
 @pytest.mark.parametrize(
     "operation,payload,match",
     [
-        ("get-caller-identity", {"Account": "000000000000", "Arn": "invalid"}, "identity"),
+        ("get-caller-identity", {"Account": ("0" * 12), "Arn": "invalid"}, "identity"),
         ("get-caller-identity", {"Account": ("1" * 12), "Arn": ("arn:aws:sts::" + "1" * 12 + ":assumed-role/example/session")}, "identity"),
         ("get-caller-identity", {"Account": ("1" * 12), "Arn": ("arn:aws:iam::" + "1" * 12 + ":user/other_user")}, "same-named"),
         ("get-bucket-location", {"LocationConstraint": "us-east-2"}, "region"),

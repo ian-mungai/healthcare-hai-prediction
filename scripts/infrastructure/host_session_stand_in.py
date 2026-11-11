@@ -28,7 +28,7 @@ SERVICES = {"airflow_scheduler": "stand-in-airflow-scheduler", "polaris": "stand
 OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 CODE_FETCH_FAMILY = "stand-in-code-fetch"
-ACCOUNT_MARK = "arn:aws:ecs:stand-in:000000000000:"
+ACCOUNT_MARK = "arn:aws:ecs:stand-in:111111111111:"
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
 TASK_SECONDS = 20
@@ -36,7 +36,7 @@ NO_INSTANCES = (
     "\nAn error occurred (InvalidParameterException) when calling the RunTask operation: The specified capacity provider contains no container instances.\n"
 )
 SERVICE_START_SECONDS = 45
-LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 123456789012"
+LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 111111111111"
 CLIENT_TOKEN_LIMIT = 64
 STOP_TASK_SECONDS = 15
 FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown", "--no-paginate"}

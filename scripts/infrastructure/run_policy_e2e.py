@@ -41,7 +41,7 @@ PERSON_POLICIES = REPO_ROOT / "config" / "lakehouse" / "person_policies.json"
 # The longest values the real deployment can use, to check the managed policy size limit with them.
 LONGEST_VALUES = {
     "AWS_REGION": "ap-southeast-2",
-    "AWS_ACCOUNT_ID": "999999999999",
+    "AWS_ACCOUNT_ID": "111111111111",
     "PROJECT_NAME": "healthcare_hai_prediction",
     "ENVIRONMENT": "prod",
     "DATA_BUCKET_NAME": "healthcare-hai-prediction-data-bucket-0123456789ab",

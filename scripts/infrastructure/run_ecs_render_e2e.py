@@ -270,7 +270,7 @@ def writer_cases(root: Path, folder: Path) -> dict[str, bool]:
         for layer in selected:
             name, role = "spark_write_" + layer, "write_" + layer + "_task"
             role_name = "example_project_job_" + role + "_dev"
-            role_arn = "arn:aws:iam::000000000000:role/" + role_name
+            role_arn = "arn:aws:iam::111111111111:role/" + role_name
             value["iam_outputs"]["job_roles"]["value"][role] = {
                 "name": role_name,
                 "arn": role_arn,
@@ -279,12 +279,12 @@ def writer_cases(root: Path, folder: Path) -> dict[str, bool]:
             task = copy.deepcopy(exports["task_definition_settings"]["value"]["spark_read"])
             task.update(family="example_project_dev_job_" + name, task_role_arn=role_arn)
             exports["task_definition_settings"]["value"][name] = task
-            exports["task_definition_arns"]["value"][name] = "arn:aws:ecs:eu-west-1:000000000000:task-definition/" + task["family"] + ":1"
+            exports["task_definition_arns"]["value"][name] = "arn:aws:ecs:eu-west-1:111111111111:task-definition/" + task["family"] + ":1"
             container = json.loads(exports["container_definitions"]["value"]["spark_read"])[0]
             container["name"] = name
             parameters = ["/example_project/aws_polaris_" + layer + "_client_" + suffix for suffix in ("id", "secret")]
             container["secrets"] = [
-                {"name": environment, "valueFrom": "arn:aws:ssm:eu-west-1:000000000000:parameter" + parameter}
+                {"name": environment, "valueFrom": "arn:aws:ssm:eu-west-1:111111111111:parameter" + parameter}
                 for environment, parameter in zip(("POLARIS_CLIENT_ID", "POLARIS_CLIENT_SECRET"), parameters, strict=True)
             ]
             exports["container_definitions"]["value"][name] = json.dumps([container])
@@ -400,7 +400,7 @@ def writer_cases(root: Path, folder: Path) -> dict[str, bool]:
     altered = copy.deepcopy(value)
     altered["iam_outputs"]["job_roles"]["value"]["write_unknown_task"] = {
         "name": "example_project_job_write_unknown_task_dev",
-        "arn": "arn:aws:iam::000000000000:role/example_project_job_write_unknown_task_dev",
+        "arn": "arn:aws:iam::111111111111:role/example_project_job_write_unknown_task_dev",
         "unique_id": "AROA" + "U" * 17,
     }
     refused("unknown_writer_role", altered, "role contract")
@@ -560,12 +560,12 @@ def jobs_config_cases(root: Path, folder: Path) -> dict[str, bool]:
         shutil.copy2(source, destination)
     environment_file = workspace / "environment.txt"
     environment_file.write_text(
-        "AWS_PROFILE=example_project_dev\nAWS_ACCOUNT_ID=000000000000\nAWS_REGION=eu-west-1\n"
+        "AWS_PROFILE=example_project_dev\nAWS_ACCOUNT_ID=111111111111\nAWS_REGION=eu-west-1\n"
         "ENVIRONMENT=dev\nPROJECT_NAME=example_project\nS3_BUCKET=example-project-data\n"
     )
     values = {
         "aws_profile": "example_project_dev",
-        "expected_account_id": "000000000000",
+        "expected_account_id": "111111111111",
         "aws_region": "eu-west-1",
         "environment": "dev",
         "project_name": "example_project",

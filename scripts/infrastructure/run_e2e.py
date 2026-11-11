@@ -761,7 +761,7 @@ class Evidence:
             "AWS_CONFIG_FILE": str(temporary / "absent_aws_config"),
             "AWS_SHARED_CREDENTIALS_FILE": str(temporary / "absent_aws_credentials"),
             "AWS_PROFILE": "example_stale_profile",
-            "AWS_ACCOUNT_ID": "222222222222",
+            "AWS_ACCOUNT_ID": "2" * 12,
             "AWS_REGION": "us-east-1",
         }
 

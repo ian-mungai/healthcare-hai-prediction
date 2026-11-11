@@ -153,9 +153,10 @@ def test_wrong_aws_identity_is_rejected(environment: dict[str, Any], caller_iden
     storage, _ = build_configuration(environment)
     account = environment["AWS_ACCOUNT_ID"]
     profile = environment["AWS_PROFILE"]
+    other_account = "2" * 12
     replacements: dict[str, dict[str, str | None]] = {
-        "account": {"Account": "222222222222"},
-        "arn_account": {"Arn": f"arn:aws:iam::222222222222:user/{profile}"},
+        "account": {"Account": other_account},
+        "arn_account": {"Arn": f"arn:aws:iam::{other_account}:user/{profile}"},
         "user": {"Arn": f"arn:aws:iam::{account}:user/example_different_user"},
         "role": {"Arn": f"arn:aws:iam::{account}:role/{profile}"},
         "assumed_role": {"Arn": f"arn:aws:sts::{account}:assumed-role/{profile}/example_session"},
@@ -310,7 +311,7 @@ def test_cli_checks_identity_before_writing_inputs(
     monkeypatch.setattr(renderer, "load_preparation", lambda bucket: committed(bucket, DEFAULT_PREPARATION))
     monkeypatch.setattr(sys, "argv", ["renderer", "--verify-identity"])
     if not matches:
-        caller_identity["Account"] = "222222222222"
+        caller_identity["Account"] = "2" * 12
     monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, json.dumps(caller_identity), ""))
     if matches:
         renderer.main()
