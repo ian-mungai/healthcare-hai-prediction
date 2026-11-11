@@ -161,8 +161,8 @@ def structure_checks(body: str) -> dict[str, bool]:
         checks[f"the {layer} run has its code staged under its own run ID before its trigger"] = staged_before_trigger(body, layer)
     planted = re.sub(r"(?m)^.*run_stage/<GOLD_RUN_ID>/inputs/code\.(tar\.gz|sha256).*\n", "", body)
     checks["planted: a list without the gold code staging fails the staging case"] = planted != body and not staged_before_trigger(planted, "gold")
-    checks["the list saves no version listing by hand: the preflight task saves it"] = (
-        bool(body) and "list-object-versions" not in body and "preflight task saves the listing" in body
+    checks["the list saves no version listing by hand: the job task saves it"] = (
+        bool(body) and "list-object-versions" not in body and "job task saves the listing" in body
     )
     checks["the list has no approval, no signature and no report command"] = bool(body) and not any(
         word in body
