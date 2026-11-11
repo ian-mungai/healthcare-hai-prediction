@@ -92,15 +92,10 @@ def run(
 
 
 def _confirm(manifests: ManifestStore, hai_type: str, wanted: Deployment) -> None:
-    """Read the active deployment back and refuse unless it is the one just written: the same id, stable version, candidate and percent."""
+    """Read the active deployment back and refuse unless it is the one just written, field for field: type, id, versions, percent and sequence."""
     stored = manifests.read_active(hai_type)
     found = _parse(stored.body) if stored is not None else None
-    if found is None or (found.deployment_id, found.stable_version, found.candidate_version, found.percent) != (
-        wanted.deployment_id,
-        wanted.stable_version,
-        wanted.candidate_version,
-        wanted.percent,
-    ):
+    if found != wanted:
         raise DeployRefused(
             f"the active deployment is not the one written for {wanted.deployment_id}: it reads back as {None if found is None else found.deployment_id}"
         )

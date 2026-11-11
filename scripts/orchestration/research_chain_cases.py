@@ -218,10 +218,10 @@ def a_challenger_is_deployed_promoted_rolled_out_and_announced() -> None:
     require(notice[3] == {**chain_parameters("owner_notice"), "outcome": "promoted"}, f"notice: {notice[3]}")
 
 
-def a_held_canary_promotes_nothing_removes_the_canary_and_tells_the_owner() -> None:
+def a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner() -> None:
     recorder = Recorder({"HAI_1": CHALLENGER}, canary="hold")
     require(recorder.run() == [], "a held canary is a result, not a failure")
-    expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")]
+    expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("owner_notice", "HAI_1")]
     require(recorder.steps() == expected, f"steps: {recorder.steps()}")
     require(recorder.calls[-1][3]["outcome"] == "held", f"notice: {recorder.calls[-1]}")
 
@@ -233,8 +233,8 @@ def a_canary_result_of_another_candidate_is_a_hold_and_a_failure() -> None:
         failures = recorder.run()
         require(len(failures) == 1 and "canary" in failures[0], f"a canary result of another candidate was not reported: {changes} {failures}")
         require(
-            ("promote", "HAI_1") not in recorder.steps() and recorder.calls[-1][3]["outcome"] == "held" and ("serve_stable", "HAI_1") in recorder.steps(),
-            f"it promoted, left the canary or did not tell the owner: {changes} {recorder.steps()}",
+            ("promote", "HAI_1") not in recorder.steps() and recorder.calls[-1][3]["outcome"] == "held" and ("serve_stable", "HAI_1") not in recorder.steps(),
+            f"it promoted, deployed again or did not tell the owner: {changes} {recorder.steps()}",
         )
 
 
@@ -344,7 +344,6 @@ def one_types_binding_failure_stops_only_its_chain() -> None:
         require(
             phases
             == [
-                ("HAI_1", "serve_stable"),
                 ("HAI_1", "notify"),
                 ("HAI_2", "serve_canary"),
                 ("HAI_2", "canary"),
@@ -352,7 +351,7 @@ def one_types_binding_failure_stops_only_its_chain() -> None:
                 ("HAI_2", "serve_stable"),
                 ("HAI_2", "notify"),
             ],
-            f"{code}: HAI_1 was not cleared and announced, or HAI_2 did not run in full: {phases}",
+            f"{code}: HAI_1 was not held and announced, or HAI_2 did not run in full: {phases}",
         )
 
 
@@ -623,7 +622,7 @@ def training_dag_starts_the_research_after_its_release() -> None:
 
 CASES: dict[str, Callable[[], None]] = {
     "a_challenger_is_deployed_promoted_rolled_out_and_announced": a_challenger_is_deployed_promoted_rolled_out_and_announced,
-    "a_held_canary_promotes_nothing_removes_the_canary_and_tells_the_owner": a_held_canary_promotes_nothing_removes_the_canary_and_tells_the_owner,
+    "a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner": a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner,
     "a_canary_result_of_another_candidate_is_a_hold_and_a_failure": a_canary_result_of_another_candidate_is_a_hold_and_a_failure,
     "a_missing_or_unreadable_canary_result_holds": a_missing_or_unreadable_canary_result_holds,
     "one_type_failing_stops_only_its_chain": one_type_failing_stops_only_its_chain,

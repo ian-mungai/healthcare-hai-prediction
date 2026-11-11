@@ -678,6 +678,18 @@ class LostWrite(manifests.FileManifestStore):
         return None
 
 
+class AlteredWrite(manifests.FileManifestStore):
+    """A manifest store that persists the active record with one field changed, as a write the service would refuse or misread."""
+
+    def __init__(self, folder: Path, field: str, value: Any) -> None:
+        super().__init__(folder)
+        self.field, self.value = field, value
+
+    def replace_active(self, hai_type: str, body: bytes, token: str | None) -> Any:
+        altered = json.loads(body) | {self.field: self.value}
+        return super().replace_active(hai_type, json.dumps(altered).encode(), token)
+
+
 def case_deploy_verifies_the_active_version(c: Checker) -> None:
     """A deploy reports success only when the active deployment read back is the one it wrote, with the production version as stable and no candidate."""
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
@@ -686,6 +698,15 @@ def case_deploy_verifies_the_active_version(c: Checker) -> None:
             lambda: deploy.run(registry=Registry(), manifests=store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1)
         )
         c.check("a stable deploy whose active write did not land is refused", refused and store.read_active(HAI) is None)
+    for changed, value in (("hai_type", "HAI_2"), ("sequence", 9)):
+        with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+            store = AlteredWrite(Path(folder), changed, value)
+            refused = rejected(
+                lambda store=store: deploy.run(
+                    registry=Registry(), manifests=store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1
+                )
+            )
+            c.check(f"a stable deploy whose active record has another {changed} is refused", refused)
     with world(deployment=False) as w:
         outcome = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1)
         active = w.store.read_active(HAI)
@@ -710,40 +731,45 @@ def case_chain_rollout(c: Checker) -> None:
         body = w.api.health().body[HAI]
         return (body["stable"], body["candidate"])
 
+    def run_chain(
+        w: World, recorder: Any, fail: tuple[str, str] | None = None, release_fails: bool = False
+    ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
+        """Run the chain of the recorder's challenger against the world's registry, manifest store and API."""
+        recorder.release_fails = release_fails
+        seen: dict[str, Any] = {}
+
+        def launch(step: str, run: str, params: dict[str, Any]) -> None:
+            recorder.calls.append((step, params["hai_type"], run, params))
+            if step == "serve_deploy":
+                if fail == (step, params["deploy_mode"]):
+                    raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
+                values = ecs_preflight.serving_values(params, chain.RESEARCH, 10, recorder.read)
+                request = json.loads(values["SERVING_REQUEST"])
+                deploy.run(
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=request["hai_type"],
+                    candidate_version=request["candidate_version"],
+                    percent=request["percent"],
+                    mode=request["deploy_mode"],
+                    deployment_id=run,
+                )
+            if step == "canary_check":
+                seen["at_the_check"] = served(w)
+            if step == "promote":
+                w.registry.aliases["production"] = params["model_version"]
+
+        failures = promotion_chain.run_types(chain.BASE, chain.RESEARCH, [HAI], launch=launch, read=recorder.read, release=recorder.release)
+        seen["after"] = served(w)
+        seen["alias"] = w.registry.aliases["production"]
+        seen["answers"] = {ask(w, key).body.get("model_version") for key in hospital_keys(40)}
+        return failures, recorder.calls, seen
+
     def scenario(
         decision: str = "promote", release_fails: bool = False, fail: tuple[str, str] | None = None
     ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
         with world(count=40, deployment=False) as w:
-            recorder = chain.Recorder({HAI: chain.CHALLENGER}, canary=decision)
-            recorder.release_fails = release_fails
-            seen: dict[str, Any] = {}
-
-            def launch(step: str, run: str, params: dict[str, Any]) -> None:
-                recorder.calls.append((step, params["hai_type"], run, params))
-                if step == "serve_deploy":
-                    if fail == (step, params["deploy_mode"]):
-                        raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
-                    values = ecs_preflight.serving_values(params, chain.RESEARCH, 10, recorder.read)
-                    request = json.loads(values["SERVING_REQUEST"])
-                    deploy.run(
-                        registry=w.registry,
-                        manifests=w.store,
-                        hai_type=request["hai_type"],
-                        candidate_version=request["candidate_version"],
-                        percent=request["percent"],
-                        mode=request["deploy_mode"],
-                        deployment_id=run,
-                    )
-                if step == "canary_check":
-                    seen["at_the_check"] = served(w)
-                if step == "promote":
-                    w.registry.aliases["production"] = params["model_version"]
-
-            failures = promotion_chain.run_types(chain.BASE, chain.RESEARCH, [HAI], launch=launch, read=recorder.read, release=recorder.release)
-            seen["after"] = served(w)
-            seen["alias"] = w.registry.aliases["production"]
-            seen["answers"] = {ask(w, key).body["model_version"] for key in hospital_keys(40)}
-            return failures, recorder.calls, seen
+            return run_chain(w, chain.Recorder({HAI: chain.CHALLENGER}, canary=decision), fail, release_fails)
 
     def names(calls: list[tuple[Any, ...]]) -> list[str]:
         return [f"{call[0]}:{call[3]['deploy_mode']}" if call[0] == "serve_deploy" else str(call[0]) for call in calls]
@@ -772,22 +798,34 @@ def case_chain_rollout(c: Checker) -> None:
     )
     failures, calls, seen = scenario(decision="hold")
     c.check(
-        "a held canary is taken off the API with a stable-only deploy and announced as held, and the alias does not move",
+        "a held canary is announced as held and the alias does not move, and no stable deploy follows",
         failures == []
-        and names(calls) == ["serve_deploy:canary", "canary_check", "serve_deploy:stable", "owner_notice"]
+        and names(calls) == ["serve_deploy:canary", "canary_check", "owner_notice"]
         and calls[-1][3]["outcome"] == "held"
-        and seen["after"] == (PRODUCTION, None)
         and seen["alias"] == PRODUCTION,
     )
     failures, calls, seen = scenario(fail=("serve_deploy", "canary"))
     c.check(
-        "a failed canary deploy checks and promotes nothing, clears any canary and announces held",
+        "a failed canary deploy checks and promotes nothing, deploys nothing else and announces held",
         len(failures) == 1
         and "canary deploy" in failures[0]
-        and names(calls) == ["serve_deploy:canary", "serve_deploy:stable", "owner_notice"]
+        and names(calls) == ["serve_deploy:canary", "owner_notice"]
         and calls[-1][3]["outcome"] == "held"
         and seen["alias"] == PRODUCTION,
     )
+    with world(count=40, deployment=False) as w:
+        first = run_chain(w, chain.Recorder({HAI: chain.CHALLENGER}), release_fails=True)
+        later = chain.Recorder({HAI: {**chain.CHALLENGER, "version": "5"}})
+        failures, calls, seen = run_chain(w, later, fail=("serve_deploy", "canary"))
+        c.check(
+            "after a promotion whose release failed, a failed next canary leaves the healthy stable deployment as it is",
+            first[2]["after"] == (PRODUCTION, CANDIDATE)
+            and first[2]["alias"] == CANDIDATE
+            and "serve_deploy:stable" not in names(calls)
+            and seen["after"] == (PRODUCTION, CANDIDATE)
+            and calls[-1][3]["outcome"] == "held"
+            and len(failures) == 1,
+        )
 
 
 def case_images(c: Checker) -> None:
