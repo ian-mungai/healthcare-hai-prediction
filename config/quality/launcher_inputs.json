@@ -112,11 +112,6 @@
       "why": "reviewed: receipt_for_job globs captures/*/*/receipt.json (scripts/acquisition/batch.py:51) and reserve_bls_requests globs the quota folder (:89), both below the state root that run_batch receives (:99) from the --state-root argument (:250); the state root is a run-time store, not a repository folder"
     },
     {
-      "module": "scripts/acquisition/bls_api_contract.py",
-      "pattern": "^scripts/acquisition/[^/]+\\.py$",
-      "why": "reviewed: code_hashes globs *.py in REPO_ROOT / \"scripts/acquisition\" (scripts/acquisition/bls_api_contract.py:29); a new or removed module in that folder changes the hashes"
-    },
-    {
       "module": "scripts/acquisition/bls_api_transport.py",
       "pattern": null,
       "why": "reviewed: reserve globs the requests folder of the state root (scripts/acquisition/bls_api_transport.py:63, reserve(root, ...) :49 with the state root of fetch :108); the state root is a run-time store. The repository-wide quota ledger glob it reaches through quota_lock is listed under scripts/acquisition/redownload_controls.py"
@@ -147,9 +142,24 @@
       "why": "reviewed: upload_snapshot lists the audit folder of one capture with rglob (scripts/acquisition/s3_store.py:460, root / \"audit\"); the capture folder is run-time data"
     },
     {
+      "module": "scripts/acquisition/store_cms_owners.py",
+      "pattern": null,
+      "why": "reviewed: the module lists only the run and attempt folders of its own local capture (scripts/acquisition/store_cms_owners.py:36 run_*/attempt_*/transport.json, :53 run_*, ROOT :30 = data/datasets/historical_acquisition/cms_hospital_owners), which Git ignores and which hold no tracked file"
+    },
+    {
+      "module": "scripts/acquisition/store_hcai_util.py",
+      "pattern": null,
+      "why": "reviewed: the module lists only the run and attempt folders of its own local capture (scripts/acquisition/store_hcai_util.py:38 transport.json below the year folder, :55 run_*, ROOT :32 = data/datasets/historical_acquisition/hcai_util_2018_2025), which Git ignores and which hold no tracked file"
+    },
+    {
       "module": "scripts/acquisition/store_nber_hc.py",
       "pattern": null,
       "why": "reviewed: the module lists only the run and attempt folders of its own local capture (scripts/acquisition/store_nber_hc.py:41 run_*/attempt_*/transport.json, :58 run_*, ROOT :34 = data/datasets/historical_acquisition/nber_hospital_compare), which Git ignores and which hold no tracked file"
+    },
+    {
+      "module": "scripts/acquisition/store_onc_mu.py",
+      "pattern": null,
+      "why": "reviewed: the module lists only the run and attempt folders of its own local capture (scripts/acquisition/store_onc_mu.py:37 transport.json below downloads, :53 run_*, ROOT :30 = data/datasets/historical_acquisition/onc_mu_attestation), which Git ignores and which hold no tracked file"
     },
     {
       "module": "scripts/features/feature_schema.py",
