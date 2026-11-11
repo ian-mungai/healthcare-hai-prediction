@@ -40,6 +40,7 @@ REPORT_PREFIX = "REAL_IMAGE_DAGS "
 SUBSTITUTIONS = (
     "the cloud: the fake ECS, Logs, SSM and S3 of the airflow_mode_cases rig behind a loopback bridge (aws_http_bridge.py), "
     "reached with AWS_ENDPOINT_URL and fake credentials",
+    "the bridge checks the SigV4 credential scope and the request rules of the bundled service models, not the signature, IAM policy or quotas",
     "the free space of the scratch volume: shutil.disk_usage answers 400 GiB, because the host's scratch volume is not in the container",
     "airflow_steps.UNAVAILABLE_SECONDS is 1 second: a staged input that is not there yet is waited for one second, not ten minutes",
     "the fake task ends at its first status read (finish_after 1) and its exit codes are planned by the scenario",
@@ -47,9 +48,41 @@ SUBSTITUTIONS = (
     "the Airflow metadata database is SQLite in a temporary folder and DAG.test() runs the tasks in process (no scheduler, no API server)",
 )
 FAKE_CREDENTIAL = "stand-in"
+LOG_GROUP = "example_jobs_dev"
+STAGE_PREFIXES = ("lakehouse/run_stage/", "drift/")  # the staged inputs the launch role reads (the run stage, the drift records)
 SCRATCH_FREE = 400 * 2**30
 DONE_STATE = "success"
 BAG: dict[str, Any] = {}
+
+
+@dataclass(frozen=True)
+class Plant:
+    """A fault planted in the launch code's own boto3 calls: ``rewrite`` changes the arguments of every call of ``operation`` for which ``when`` is true,
+    above the SDK's serialization and the HTTP transport, which stay real. A scenario with a plant passes only when the cloud (the bridge) refuses the call
+    as AWS would and the DAG run fails closed."""
+
+    operation: str
+    rewrite: Callable[[dict[str, Any]], dict[str, Any]]
+    when: Callable[[dict[str, Any]], bool] = lambda _params: True
+
+
+@contextlib.contextmanager
+def planted(plant: Plant | None) -> Iterator[None]:
+    """Apply ``plant`` to every boto3 client call in the block."""
+    if plant is None:
+        yield
+        return
+    from botocore.client import BaseClient
+
+    original = BaseClient._make_api_call
+
+    def make_api_call(self: Any, operation_name: str, api_params: dict[str, Any]) -> Any:
+        if operation_name == plant.operation and plant.when(api_params):
+            api_params = plant.rewrite(dict(api_params))
+        return original(self, operation_name, api_params)
+
+    with mock.patch.object(BaseClient, "_make_api_call", make_api_call):
+        yield
 
 
 @dataclass(frozen=True)
@@ -72,6 +105,8 @@ class Step:
     end: str | None = None
     environment: Mapping[str, str] = field(default_factory=dict)
     prepare: Callable[[Any], None] | None = None
+    plant: Plant | None = None
+    check: Callable[[Any, dict[str, Any]], None] | None = None
 
 
 @dataclass(frozen=True)
@@ -181,7 +216,7 @@ def launch_environment(rig: Any, endpoint: str, scratch: str) -> dict[str, str]:
         "HAI_LAUNCH_CLUSTER": fake.CLUSTER,
         "HAI_LAUNCH_FAMILY_PREFIX": "example_dev_job_",
         "HAI_LAUNCH_PROJECT_TAG": "example",
-        "HAI_LAUNCH_LOG_GROUP": "example_jobs_dev",
+        "HAI_LAUNCH_LOG_GROUP": LOG_GROUP,
         "HAI_LAUNCH_HOST_PROVIDER": "stand-in_host",
         "HAI_LAUNCH_BUCKET": cases.BUCKET,
         "HAI_LAUNCH_POLARIS_URI": cases.POLARIS,
@@ -209,12 +244,28 @@ def states_of(run: Any) -> dict[str, str]:
     return {item.task_id: str(getattr(item.state, "value", item.state)) for item in run.get_task_instances()}
 
 
+def make_bridge(rig: Any) -> Any:
+    """The loopback cloud of a rig: its fakes behind the bridge."""
+    from scripts.orchestration.aws_http_bridge import Bridge
+
+    modules = rig_modules()
+    return Bridge(
+        {"ecs": rig.ecs, "ssm": rig.ssm, "logs": rig.logs},
+        rig.stage,
+        rig.records,
+        f"{modules.cases.PREFIX}/",
+        bucket=modules.cases.BUCKET,
+        region=modules.fake.REGION,
+        access_key=FAKE_CREDENTIAL,
+        log_group=LOG_GROUP,
+        stage_prefixes=STAGE_PREFIXES,
+    )
+
+
 def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
     """Run one DAG of a scenario in the image and check it against its step. Returns the facts of the run."""
     from orchestration import airflow_steps
-    from scripts.orchestration.aws_http_bridge import Bridge
 
-    cases = rig_modules().cases
     if step.prepare is not None:
         step.prepare(rig)
     rig.ecs.plan = dict(step.plan or {})
@@ -223,13 +274,14 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
     observer = Observer()
     dag = bag.get_dag(step.dag_id)
     require(dag is not None, f"{step.dag_id} is not in the DAG folder")
-    with Bridge({"ecs": rig.ecs, "ssm": rig.ssm, "logs": rig.logs}, rig.stage, rig.records, f"{cases.PREFIX}/") as bridge:
+    with make_bridge(rig) as bridge:
         environment = launch_environment(rig, bridge.endpoint, scratch) | dict(step.environment)
         with (
             mock.patch.dict(os.environ, environment),
             mock.patch.object(airflow_steps, "UNAVAILABLE_SECONDS", 1.0),
             mock.patch.object(shutil, "disk_usage", lambda _path: SimpleNamespace(total=SCRATCH_FREE, used=0, free=SCRATCH_FREE)),
             observer.watching(),
+            planted(step.plant),
         ):
             run = dag.test(run_conf=dict(step.params), mark_success_pattern=step.skip)
         states = states_of(run)
@@ -260,6 +312,9 @@ def check_run(rig: Any, step: Step, facts: dict[str, Any], calls: list[dict[str,
     if step.reason is not None:
         text = " | ".join(facts["errors"])
         require(step.reason in text, f"{where}: no failing task named {step.reason!r}: {text or 'no error was raised'}")
+    if step.check is not None:
+        step.check(rig, facts)
+        return
     if step.starts == 0:
         require(step.run_state == "success" or not rig.ecs.count("describe_tasks"), f"{where}: a refused run read task state")
         return
@@ -371,6 +426,134 @@ def form_check(_rig: Any) -> None:
             problems.append(f"{dag_id} accepted latest for {name}")
     missing = sorted(set(BAG["bag"].dag_ids) - set(required))
     require(not missing, f"DAGs without a form case: {missing}")
+    require(not problems, "; ".join(problems))
+
+
+def aws_error(call: Callable[[], Any]) -> str:
+    """The error code AWS would answer for ``call``: ``accepted`` when the call went through, the botocore error class when the SDK or the transport
+    failed instead of the service answering."""
+    from botocore.exceptions import ClientError
+
+    try:
+        call()
+    except ClientError as error:
+        return str(error.response.get("Error", {}).get("Code", ""))
+    except Exception as error:
+        return type(error).__name__
+    return "accepted"
+
+
+def bridge_conformance(rig: Any) -> None:
+    """The bridge answers real botocore clients as AWS answers requests the services refuse: what the launch code sends is valid and passes (the DAG
+    scenarios), and each request below, which the launch code never sends, is refused with its error code. The cases are the rules of the ECS, SSM, Logs
+    and S3 services for the fields the launch library uses (the bundled service models state them) and the bridge's own scope: one bucket, the staged
+    prefixes, the operations the launch library calls, the region of its credentials."""
+    import boto3
+    from botocore.config import Config
+
+    modules = rig_modules()
+    c, fake = modules.cases, modules.fake
+    group, bucket, other = LOG_GROUP, c.BUCKET, "nonexistent-review-bucket"
+    with make_bridge(rig) as bridge:
+
+        def client(service: str, region: str = fake.REGION) -> Any:
+            return boto3.session.Session(region_name=region, aws_access_key_id=FAKE_CREDENTIAL, aws_secret_access_key=FAKE_CREDENTIAL).client(
+                service, endpoint_url=bridge.endpoint, config=Config(retries={"max_attempts": 1, "mode": "standard"}, connect_timeout=5, read_timeout=10)
+            )
+
+        ecs, ssm, logs, s3 = client("ecs"), client("ssm"), client("logs"), client("s3")
+        base = {
+            "cluster": fake.CLUSTER,
+            "taskDefinition": "example_dev_job_publisher_host",
+            "count": 1,
+            "clientToken": "x" * 40,
+            "startedBy": "conformance",
+            "capacityProviderStrategy": [{"capacityProvider": "stand-in_host", "weight": 1}],
+        }
+        arn = f"arn:aws:ecs:{fake.REGION}:{fake.ACCOUNT}:task/{fake.CLUSTER}/" + "0" * 32
+        refused: dict[str, tuple[Callable[[], Any], tuple[str, ...]]] = {
+            "RunTask with a launch type and a capacity provider strategy": (lambda: ecs.run_task(**base, launchType="EC2"), ("InvalidParameterException",)),
+            "RunTask with a startedBy of unlisted characters": (lambda: ecs.run_task(**{**base, "startedBy": "has space"}), ("InvalidParameterException",)),
+            "RunTask with overrides over 8192 characters": (
+                lambda: ecs.run_task(**base, overrides={"containerOverrides": [{"name": "run", "environment": [{"name": "A", "value": "v" * 8200}]}]}),
+                ("InvalidParameterException",),
+            ),
+            "RunTask with a repeated container override": (
+                lambda: ecs.run_task(**base, overrides={"containerOverrides": [{"name": "run"}, {"name": "run"}]}),
+                ("InvalidParameterException",),
+            ),
+            "RunTask with more than 50 tags": (
+                lambda: ecs.run_task(**base, tags=[{"key": f"k{index}", "value": "v"} for index in range(51)]),
+                ("InvalidParameterException",),
+            ),
+            "RunTask with a task definition that is not registered": (
+                lambda: ecs.run_task(**{**base, "taskDefinition": "example_dev_job_unknown_host"}),
+                ("ClientException",),
+            ),
+            "RunTask with a malformed task definition": (lambda: ecs.run_task(**{**base, "taskDefinition": "no good"}), ("InvalidParameterException",)),
+            "DescribeTasks of more than 100 tasks": (lambda: ecs.describe_tasks(cluster=fake.CLUSTER, tasks=[arn] * 101), ("InvalidParameterException",)),
+            "DescribeTasks of a malformed task": (lambda: ecs.describe_tasks(cluster=fake.CLUSTER, tasks=["not a task"]), ("InvalidParameterException",)),
+            "DescribeTasks with an unknown include": (
+                lambda: ecs.describe_tasks(cluster=fake.CLUSTER, tasks=[arn], include=["EVERYTHING"]),
+                ("InvalidParameterException",),
+            ),
+            "ListTasks with an unknown desired status": (lambda: ecs.list_tasks(cluster=fake.CLUSTER, desiredStatus="DONE"), ("InvalidParameterException",)),
+            "StopTask with a reason over 255 characters": (
+                lambda: ecs.stop_task(cluster=fake.CLUSTER, task=arn, reason="r" * 256),
+                ("InvalidParameterException",),
+            ),
+            "DescribeContainerInstances of a malformed instance": (
+                lambda: ecs.describe_container_instances(cluster=fake.CLUSTER, containerInstances=["not an instance"]),
+                ("InvalidParameterException",),
+            ),
+            "ListContainerInstances of another cluster": (lambda: ecs.list_container_instances(cluster="another-cluster"), ("ClusterNotFoundException",)),
+            "an ECS operation the launch library never calls": (lambda: ecs.delete_cluster(cluster=fake.CLUSTER), ("AccessDeniedException",)),
+            "GetParameter of a name with characters SSM refuses": (lambda: ssm.get_parameter(Name="/not a name!"), ("ValidationException",)),
+            "GetParameter of a name the launch role may not read": (lambda: ssm.get_parameter(Name="/other/parameter"), ("AccessDeniedException",)),
+            "an SSM operation the launch library never calls": (lambda: ssm.put_parameter(Name="/x/y", Value="v", Type="String"), ("AccessDeniedException",)),
+            "GetLogEvents of another log group": (
+                lambda: logs.get_log_events(logGroupName="another_group", logStreamName="stream", limit=10),
+                ("ResourceNotFoundException",),
+            ),
+            "GetLogEvents of a stream name with a colon": (
+                lambda: logs.get_log_events(logGroupName=group, logStreamName="a:b", limit=10),
+                ("InvalidParameterException",),
+            ),
+            "GetObject from another bucket": (
+                lambda: s3.get_object(Bucket=other, Key=c.RUN_KEY.format(run=c.SILVER_RUN, name="code.sha256")),
+                ("NoSuchBucket",),
+            ),
+            "GetObject of a key outside the staged prefixes": (lambda: s3.get_object(Bucket=bucket, Key="private/secret.json"), ("AccessDenied",)),
+            "PutObject to another bucket": (lambda: s3.put_object(Bucket=other, Key=f"{c.PREFIX}/x.json", Body=b"{}", IfNoneMatch="*"), ("NoSuchBucket",)),
+            "PutObject of a key outside the launch prefix": (
+                lambda: s3.put_object(Bucket=bucket, Key="private/x.json", Body=b"{}", IfNoneMatch="*"),
+                ("AccessDenied",),
+            ),
+            "ListObjectsV2 of another bucket": (lambda: s3.list_objects_v2(Bucket=other, Prefix=f"{c.PREFIX}/families/"), ("NoSuchBucket",)),
+            "GetObject of a key over 1024 bytes": (lambda: s3.get_object(Bucket=bucket, Key="lakehouse/run_stage/" + "k" * 1100), ("KeyTooLongError",)),
+            "an ECS request signed for another region": (
+                lambda: client("ecs", "other-region").list_container_instances(cluster=fake.CLUSTER),
+                ("InvalidSignatureException",),
+            ),
+            "an S3 request signed for another region": (
+                lambda: client("s3", "other-region").get_object(Bucket=bucket, Key=c.RUN_KEY.format(run=c.SILVER_RUN, name="code.sha256")),
+                ("AuthorizationHeaderMalformed",),
+            ),
+        }
+        problems = []
+        for name, (call, codes) in refused.items():
+            answer = aws_error(call)
+            if answer not in codes:
+                problems.append(f"{name}: answered {answer}, expected {codes[0]}")
+        accepted = {
+            "RunTask by capacity provider strategy alone": lambda: ecs.run_task(**base),
+            "GetObject of a staged input": lambda: s3.get_object(Bucket=bucket, Key=c.RUN_KEY.format(run=c.SILVER_RUN, name="code.sha256")),
+            "GetParameter of the launch hold": lambda: ssm.get_parameter(Name=c.HOLD_PARAMETER),
+        }
+        for name, call in accepted.items():
+            answer = aws_error(call)
+            if answer != "accepted":
+                problems.append(f"{name}: answered {answer}, expected acceptance")
     require(not problems, "; ".join(problems))
 
 
@@ -507,6 +690,84 @@ def cases_catalog() -> dict[str, Scenario]:
             make_rig,
         ),
     )
+
+    def no_task(rig: Any, facts: dict[str, Any]) -> None:
+        require(not rig.ecs.tasks, f"a task started although the cloud must refuse the call: {sorted(rig.ecs.tasks)}")
+        end = launch_records(rig, c.PUBLISHER_RUN, "publisher").get("end")
+        require(end is None or end["outcome"] != "succeeded", f"the launch record says succeeded: {end}")
+
+    def no_record(rig: Any, facts: dict[str, Any]) -> None:
+        require(not rig.ecs.tasks and not rig.records.objects, f"a refused read left a task or a record: {sorted(rig.records.objects)}")
+
+    def planted_run(name: str, plant: Plant, states: dict[str, str], starts: int, check: Callable[[Any, dict[str, Any]], None], reason: str) -> Scenario:
+        step = Step(
+            "ingestion_dag",
+            {"run_id": c.PUBLISHER_RUN, "mode": "real"},
+            starts,
+            family("publisher"),
+            states,
+            run_state="failed",
+            prepare=stage_publisher,
+            plant=plant,
+            check=check,
+            reason=reason,
+        )
+        return Scenario(name, (step,), make_rig)
+
+    REFUSED_BY_ECS = "launch_refused:InvalidParameterException"
+    sent_refused = {"preflight": DONE_STATE, "job": "failed", "evidence": "upstream_failed", "gate": "failed"}
+
+    def too_large(params: dict[str, Any]) -> dict[str, Any]:
+        containers = [dict(item) for item in params["overrides"]["containerOverrides"]]
+        containers[0]["environment"] = [*containers[0]["environment"], {"name": "PLANTED", "value": "v" * 9000}]
+        return {**params, "overrides": {"containerOverrides": containers}}
+
+    def digest_key(params: dict[str, Any]) -> bool:
+        return str(params.get("Key", "")).endswith("code.sha256")
+
+    planted_cases = (
+        planted_run(
+            "planted_launch_type_with_a_capacity_provider_strategy_fails_closed",
+            Plant("RunTask", lambda p: {**p, "launchType": "EC2"}),
+            sent_refused,
+            1,
+            no_task,
+            REFUSED_BY_ECS,
+        ),
+        planted_run("planted_overrides_over_the_ecs_limit_fail_closed", Plant("RunTask", too_large), sent_refused, 1, no_task, REFUSED_BY_ECS),
+        planted_run(
+            "planted_started_by_with_unlisted_characters_fails_closed",
+            Plant("RunTask", lambda p: {**p, "startedBy": p["startedBy"] + " x"}),
+            sent_refused,
+            1,
+            no_task,
+            REFUSED_BY_ECS,
+        ),
+        planted_run(
+            "planted_wrong_bucket_for_the_code_digest_fails_closed",
+            Plant("GetObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}, digest_key),
+            refused["states"],
+            0,
+            no_record,
+            "code_digest_unreadable",
+        ),
+        planted_run(
+            "planted_key_outside_the_staged_prefixes_fails_closed",
+            Plant("GetObject", lambda p: {**p, "Key": "private/" + p["Key"].rsplit("/", 1)[-1]}, digest_key),
+            refused["states"],
+            0,
+            no_record,
+            "code_digest_unreadable",
+        ),
+        planted_run(
+            "planted_wrong_bucket_for_the_launch_records_fails_closed",
+            Plant("PutObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}),
+            sent_refused | {"job": "failed"},
+            0,
+            no_task,
+            "launch record store refused the call: NoSuchBucket",
+        ),
+    )
     settle = Scenario(
         "launch_settle_dag_settles_an_unfinished_launch",
         (Step("launch_settle_dag", c.settle_params(), 0, states={"settle": DONE_STATE}, end="settled"),),
@@ -515,7 +776,8 @@ def cases_catalog() -> dict[str, Scenario]:
     )
     del b
     form = Scenario("trigger_forms_validate_in_airflow", (), make_rig, after=form_check)
-    return {item.name: item for item in (pipeline, *refusals, settle, form)}
+    conformance = Scenario("bridge_refuses_what_aws_refuses", (), make_rig, after=bridge_conformance)
+    return {item.name: item for item in (pipeline, *refusals, *planted_cases, settle, form, conformance)}
 
 
 def settle_rig() -> Any:

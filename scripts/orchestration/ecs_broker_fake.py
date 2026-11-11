@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from typing import Any
@@ -45,6 +46,56 @@ STAND_IN_CREDENTIAL = "stand-in"  # signs the requests of SdkStub, which never l
 def client_error(code: str, operation: str, message: str = "stand-in refusal") -> ClientError:
     """The error a botocore client raises for an API refusal."""
     return ClientError({"Error": {"Code": code, "Message": message}}, operation)
+
+
+STARTED_BY = re.compile(r"[A-Za-z0-9/_-]{0,128}")
+TASK_DEFINITION = re.compile(r"[A-Za-z0-9_-]{1,255}(:[0-9]+)?|arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task-definition/[A-Za-z0-9_-]{1,255}:[0-9]+")
+LAUNCH_TYPES = frozenset({"EC2", "FARGATE", "EXTERNAL", "MANAGED_INSTANCES"})
+PROPAGATE_TAGS = frozenset({"TASK_DEFINITION", "SERVICE", "NONE"})
+OVERRIDES_LIMIT = 8192  # characters of the overrides JSON, the formatting included (the bundled RunTask model)
+
+
+def refuse_run_task(message: str) -> ClientError:
+    return client_error("InvalidParameterException", "RunTask", message)
+
+
+def check_run_task(arguments: Mapping[str, Any]) -> None:
+    """Refuse a RunTask request as ECS refuses it, for the fields the launch library sends (the rules are those of the bundled ECS service model): a launch
+    type and a capacity provider strategy exclude each other, a strategy has at most six providers with weights 0 to 1000 and bases 0 to 100000, the overrides
+    hold at most 8192 characters of JSON and name each container once, ``startedBy`` holds only letters, digits, hyphens, slashes and underscores, there are
+    at most 50 tags with unique keys, and the task definition is a family with an optional revision or an ARN. Raises the error ECS answers."""
+    if "launchType" in arguments and arguments.get("capacityProviderStrategy"):
+        raise refuse_run_task("Specifying both a launch type and capacity provider strategy is not supported. Remove one and try again.")
+    if "launchType" in arguments and arguments["launchType"] not in LAUNCH_TYPES:
+        raise refuse_run_task(f"Unknown launch type {arguments['launchType']}.")
+    strategy = arguments.get("capacityProviderStrategy") or []
+    if len(strategy) > 6 or any(
+        not item.get("capacityProvider") or not 0 <= item.get("weight", 0) <= 1000 or not 0 <= item.get("base", 0) <= 100000 for item in strategy
+    ):
+        raise refuse_run_task("The capacity provider strategy is not valid.")
+    if not TASK_DEFINITION.fullmatch(str(arguments.get("taskDefinition", ""))):
+        raise refuse_run_task("The task definition is not a family name with an optional revision, or an ARN.")
+    if not STARTED_BY.fullmatch(str(arguments.get("startedBy", ""))):
+        raise refuse_run_task("startedBy allows only letters, numbers, hyphens, slashes and underscores, up to 128 characters.")
+    if arguments.get("propagateTags", "NONE") not in PROPAGATE_TAGS:
+        raise refuse_run_task("propagateTags is not a valid value.")
+    overrides = arguments.get("overrides") or {}
+    if len(json.dumps(overrides, separators=(",", ":"))) > OVERRIDES_LIMIT:
+        raise refuse_run_task(f"Container overrides length must be at most {OVERRIDES_LIMIT}.")
+    names = [item.get("name") for item in overrides.get("containerOverrides", [])]
+    if any(not name for name in names) or len(set(names)) != len(names):
+        raise refuse_run_task("Each container override names one container, once.")
+    for item in overrides.get("containerOverrides", []):
+        if any(not isinstance(pair.get("name"), str) or not pair["name"] or not isinstance(pair.get("value"), str) for pair in item.get("environment", [])):
+            raise refuse_run_task("An environment override needs a name and a string value.")
+    tags = arguments.get("tags") or []
+    keys = [item.get("key") for item in tags]
+    if (
+        len(tags) > 50
+        or len(set(keys)) != len(keys)
+        or any(not key or len(key) > 128 or len(item.get("value", "")) > 256 for key, item in zip(keys, tags, strict=True))
+    ):
+        raise refuse_run_task("The tags are not valid: at most 50, unique keys of 1 to 128 characters and values of at most 256.")
 
 
 class FakeEcs:
@@ -108,6 +159,7 @@ class FakeEcs:
 
     def run_task(self, **arguments: Any) -> dict[str, Any]:
         self._enter("run_task", arguments)
+        check_run_task(arguments)
         token = arguments.get("clientToken", "")
         started_by = arguments.get("startedBy", "")
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):

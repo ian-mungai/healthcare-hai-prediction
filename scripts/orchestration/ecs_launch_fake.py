@@ -22,7 +22,7 @@ from typing import Any
 from botocore.exceptions import ReadTimeoutError
 
 from orchestration.ecs_launch import Clock
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, REGION, FakeEcs, client_error
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, REGION, TASK_DEFINITION, FakeEcs, client_error
 
 START_TIME = 1_800_000_000.0
 
@@ -98,6 +98,8 @@ class RevisionEcs(FakeEcs):
             if name not in self.registered:
                 raise client_error("ClientException", "RunTask", "TaskDefinition not found.")
             arguments = {**arguments, "taskDefinition": match.group(1)}
+        elif self.revisions and TASK_DEFINITION.fullmatch(name) and name.split(":")[0] not in self.revisions:
+            raise client_error("ClientException", "RunTask", "TaskDefinition not found.")
         return super().run_task(**arguments)
 
 
