@@ -6,8 +6,10 @@ Each case runs ``execute`` as Airflow does, over the fake ECS API and the in-mem
 
 from __future__ import annotations
 
+import ast
 import re
 from collections.abc import Callable
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,9 +18,14 @@ from scripts.orchestration.ecs_launch_cases import CLUSTER, RUN, Interrupted, Ri
 from scripts.orchestration.ecs_launch_standin import MIRRORED_PROVIDER_VERSION, OPERATORS_CONFIG, Deferred, StandInEcsRunTaskOperator
 from scripts.quality.lock_env import pin_text
 
+ROOT = Path(__file__).resolve().parents[2]
+
 
 class StandInLaunchOperator(LaunchGuarantees, StandInEcsRunTaskOperator):
-    """The launch operator over the stand-in base: the same bases order as the provider subclass."""
+    """The launch operator over the stand-in base: the same bases order as the provider subclass, with its own ``__init__`` for the metaclass rule."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
 
 
 class StartedStandIn(StandInEcsRunTaskOperator):
@@ -157,6 +164,34 @@ def provider_pin() -> None:
     )
 
 
+def provider_shaped_subclass_needs_its_own_init() -> None:
+    """Airflow's BaseOperatorMeta wraps ``__init__`` only when it differs from the first superclass's, so the provider subclass must define one."""
+
+    class WithoutInit(LaunchGuarantees, StandInEcsRunTaskOperator):
+        pass
+
+    class WithInit(LaunchGuarantees, StandInEcsRunTaskOperator):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)
+
+    rig = Rig()
+    arguments: dict[str, Any] = {"job": spec(), "launcher": rig.launcher, "task_definition": "x", "cluster": CLUSTER, "overrides": {}}
+    error = refuses(AttributeError, lambda: WithoutInit(**arguments))
+    require("__wrapped__" in str(error), f"a subclass without its own __init__ fails as Airflow 3.3.2 does: {error}")
+    built = WithInit(**arguments)
+    require(
+        built.reattach is True and built.deferrable is False and built.wait_for_completion is True, "the subclass with its own __init__ keeps the guarantees"
+    )
+
+
+def provider_subclass_defines_init() -> None:
+    """The provider module cannot be imported here, so its source is read: ``BrokerlessEcsRunTaskOperator`` defines ``__init__`` in its own body."""
+    tree = ast.parse((ROOT / "orchestration" / "ecs_launch_provider.py").read_text(encoding="utf-8"))
+    classes = [node for node in ast.walk(tree) if isinstance(node, ast.ClassDef) and node.name == "BrokerlessEcsRunTaskOperator"]
+    require(len(classes) == 1, "the provider module defines BrokerlessEcsRunTaskOperator once")
+    require(any(isinstance(node, ast.FunctionDef) and node.name == "__init__" for node in classes[0].body), "BrokerlessEcsRunTaskOperator must define __init__")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "operator_success": success,
     "operator_failure_raises": failure_raises,
@@ -167,5 +202,7 @@ CASES: dict[str, Callable[[], None]] = {
     "operator_wait_is_bounded": wait_is_bounded,
     "operator_configured_default_deferral_is_neutralized": configured_default_deferral_is_neutralized,
     "operator_explicit_deferral_is_refused_even_when_configured": explicit_deferral_is_refused_even_when_configured,
+    "operator_provider_shaped_subclass_needs_its_own_init": provider_shaped_subclass_needs_its_own_init,
+    "operator_provider_subclass_defines_init": provider_subclass_defines_init,
     "provider_pin": provider_pin,
 }

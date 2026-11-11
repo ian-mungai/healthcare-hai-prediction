@@ -7,6 +7,7 @@ subclasses or relies on. Cases that use it are stand-in based: rerun them agains
 
 from __future__ import annotations
 
+import functools
 import logging
 from typing import Any
 from uuid import NAMESPACE_OID, UUID, uuid5
@@ -29,7 +30,32 @@ def generate_uuid(*values: str | None) -> str:
     return str(result)
 
 
-class StandInEcsRunTaskOperator:
+class StandInOperatorMeta(type):
+    """airflow/sdk/bases/operator.py ``BaseOperatorMeta.__new__`` (Airflow 3.3.2): ``__init__`` is wrapped only when it differs from the first superclass's.
+
+    A subclass with no ``__init__`` of its own is never wrapped, so the wrapper's check ``func == self.__init__.__wrapped__`` (line 579) raises AttributeError.
+    """
+
+    def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> type:
+        new_cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        if new_cls.__init__ is not new_cls.mro()[1].__init__:
+            new_cls.__init__ = mcs.apply_defaults(new_cls.__init__)
+        return new_cls
+
+    @classmethod
+    def apply_defaults(mcs, func: Any) -> Any:
+        @functools.wraps(func)
+        def wrapper(self: Any, *args: Any, **kwargs: Any) -> Any:
+            if args:
+                raise TypeError("Use keyword arguments when initializing operators")
+            if func == self.__init__.__wrapped__:  # bases/operator.py line 579: the outermost wrapped __init__ marks the end of construction
+                self._instantiated = True
+            return func(self, **kwargs)
+
+        return wrapper
+
+
+class StandInEcsRunTaskOperator(metaclass=StandInOperatorMeta):
     """The flow of ``EcsRunTaskOperator``: ``execute`` calls the four hooks in this order, and ``on_kill`` stops the task."""
 
     def __init__(

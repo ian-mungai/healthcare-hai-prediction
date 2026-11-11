@@ -6,6 +6,8 @@ of the provider operator. After any provider upgrade, re-read ``operators/ecs.py
 
 from __future__ import annotations
 
+from typing import Any
+
 from airflow.providers.amazon.aws.operators.ecs import EcsRunTaskOperator
 
 from orchestration.ecs_launch_operator import LaunchGuarantees
@@ -13,3 +15,6 @@ from orchestration.ecs_launch_operator import LaunchGuarantees
 
 class BrokerlessEcsRunTaskOperator(LaunchGuarantees, EcsRunTaskOperator):
     """``EcsRunTaskOperator`` with launch records, adoption, reattach, overlap refusal, a recorded deadline, acceptance checks and a confirmed stop."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)  # BaseOperatorMeta wraps __init__ only when it differs from the first superclass's, and the guard line needs the wrapper
