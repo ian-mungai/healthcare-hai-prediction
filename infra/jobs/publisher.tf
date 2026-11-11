@@ -22,24 +22,6 @@ variable "publisher_keys_enabled" {
   nullable    = false
 }
 
-variable "publisher_resources" {
-  description = "CPU units and memory MiB the publisher host task asks for. They are cut to the host job caps (local.host_cpu_cap and local.host_memory_cap) that every host job shares. The 8 GiB default is the Fargate-era shape; no publisher run has been measured yet, and its first run logs its peaks (scripts/resource_peaks.py)."
-  type = object({
-    cpu    = number
-    memory = number
-  })
-  default  = { cpu = 2048, memory = 8192 }
-  nullable = false
-
-  validation {
-    condition = (
-      var.publisher_resources.cpu >= 256 && var.publisher_resources.memory >= 512 &&
-      var.publisher_resources.cpu == floor(var.publisher_resources.cpu) && var.publisher_resources.memory == floor(var.publisher_resources.memory)
-    )
-    error_message = "Use whole CPU units from 256 and whole MiB from 512."
-  }
-}
-
 locals {
   publisher_selected = var.publisher_job_enabled ? toset(["publisher"]) : toset([])
   publisher_role     = "publisher_task"
@@ -68,8 +50,9 @@ locals {
     { name = "fetch", script = "timeout 1800 python -I -c '${local.layer_fetch_python}'" },
     { name = "run", script = "(cd /workspace/code && python -m scripts.acquisition.publisher_run) && ${local.host_scratch_wipe}" },
   ]
+  # Like every host revision, the init container carries the capacity binding the revision was sized from (orchestration/ecs_preflight.py checked_revision).
   publisher_containers = [
-    for index, step in local.publisher_steps : {
+    for index, step in local.publisher_steps : merge({
       name                   = step.name
       image                  = lookup(var.images, "analytics", "invalid")
       essential              = index == length(local.publisher_steps) - 1
@@ -110,7 +93,8 @@ locals {
           max-buffer-size       = "16m"
         }
       }
-    }
+      }, step.name == "init" ? { dockerLabels = { (local.host_capacity_label) = coalesce(var.host_capacity_binding, "unset") } } : {}
+    )
   ]
   # Both folders are on the host scratch volume (60 GiB default, infra/platform). The Fargate-era 200 GiB had no measurement behind it; the run 3
   # queue's recorded sizes add up to about 14.3 GiB, plus the inputs archive and the saved state.
@@ -126,8 +110,8 @@ resource "aws_ecs_task_definition" "publisher_host" {
   family                   = "${var.project_name}_${var.environment}_job_publisher_host"
   requires_compatibilities = ["EC2"]
   network_mode             = "bridge"
-  cpu                      = tostring(min(var.publisher_resources.cpu, local.host_cpu_cap))
-  memory                   = tostring(min(var.publisher_resources.memory, local.host_memory_cap))
+  cpu                      = tostring(local.host_cpu_cap)
+  memory                   = tostring(local.host_memory_cap)
   execution_role_arn       = lookup(var.job_role_arns, "execution", "")
   task_role_arn            = lookup(var.job_role_arns, local.publisher_role, "")
   container_definitions    = jsonencode(local.publisher_containers)
@@ -138,6 +122,13 @@ resource "aws_ecs_task_definition" "publisher_host" {
   runtime_platform {
     operating_system_family = "LINUX"
     cpu_architecture        = "ARM64"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = try(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0], "") == tostring(var.host_job_memory_mib)
+      error_message = "The capacity binding gives another job memory than host_job_memory_mib. Render both from the same services output with render_jobs_config."
+    }
   }
 
   dynamic "volume" {

@@ -41,7 +41,7 @@ def jobs_values(storage: dict[str, str]) -> dict[str, str]:
 
 
 def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
-    """Return the memory MiB one host job gets and the binding it comes from, read from the services stack output host_capacity_binding, or refuse."""
+    """Return the memory MiB one host job (the publisher too) gets and the binding it comes from, read from the services stack output, or refuse."""
     try:
         result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "host_capacity_binding"], timeout=120)
     except (OSError, TimeoutExpired):
@@ -112,7 +112,7 @@ def main() -> int:
             values.pop("data_bucket_name")
             directory /= "identity_probe"
         values.update(prepared)
-        if root == "jobs" and values.get("host_jobs_enabled") is True:
+        if root == "jobs" and (values.get("host_jobs_enabled") is True or values.get("publisher_job_enabled") is True):
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
         if arguments.check_plan:
             try:

@@ -40,30 +40,30 @@ variable "host_scratch_root" {
 }
 
 variable "host_job_memory_mib" {
-  description = "Memory MiB of every host job: the services stack output host_job_memory_mib (host memory less the operating system reserve and the always-on services' reservations), rendered by scripts/infrastructure/render_jobs_config.py. One job runs at a time, so each job gets the whole room and its engines derive their limits from it."
+  description = "Memory MiB of every host job, the publisher included: the services stack output host_job_memory_mib (host memory less the operating system reserve and the always-on services' reservations), rendered by scripts/infrastructure/render_jobs_config.py. One job runs at a time, so each job gets the whole room and its engines derive their limits from it."
   type        = number
   default     = null
   nullable    = true
 
   validation {
-    condition     = var.host_job_memory_mib == null ? !var.host_jobs_enabled : (var.host_job_memory_mib >= 4096 && var.host_job_memory_mib < 32768 && var.host_job_memory_mib == floor(var.host_job_memory_mib))
-    error_message = "Host jobs need host_job_memory_mib from the services stack output: a whole number of MiB from 4096 up to below the 32768 MiB host."
+    condition     = var.host_job_memory_mib == null ? !(var.host_jobs_enabled || var.publisher_job_enabled) : (var.host_job_memory_mib >= 4096 && var.host_job_memory_mib < 32768 && var.host_job_memory_mib == floor(var.host_job_memory_mib))
+    error_message = "Host jobs and the publisher need host_job_memory_mib from the services stack output: a whole number of MiB from 4096 up to below the 32768 MiB host."
   }
 }
 
 variable "host_capacity_binding" {
-  description = "The services stack output host_capacity_binding, rendered by scripts/infrastructure/render_jobs_config.py: job_memory_mib=<host_job_memory_mib> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>. The init container of every host revision carries it as the label hai.host_capacity, and the launch preflight runs a host job only from a revision bound to the current usable-memory inputs (owner decision A, Nov 10 2026)."
+  description = "The services stack output host_capacity_binding, rendered by scripts/infrastructure/render_jobs_config.py: job_memory_mib=<host_job_memory_mib> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>. The init container of every host revision, the publisher's included, carries it as the label hai.host_capacity, and the launch preflight runs a host job only from a revision bound to the current usable-memory inputs (owner decision A, Nov 10 2026)."
   type        = string
   default     = null
   nullable    = true
 
   validation {
-    condition = var.host_capacity_binding == null ? !var.host_jobs_enabled : try(
+    condition = var.host_capacity_binding == null ? !(var.host_jobs_enabled || var.publisher_job_enabled) : try(
       [for parts in [regex("^job_memory_mib=([1-9][0-9]*) usable_memory_mib=([1-9][0-9]*) system_reserve_mib=([0-9]+) service_reservations_mib=([0-9]+)$", var.host_capacity_binding)] :
       tonumber(parts[0]) == tonumber(parts[1]) - tonumber(parts[2]) - tonumber(parts[3])][0],
       false
     )
-    error_message = "Host jobs need host_capacity_binding from the services stack output: job_memory_mib=<n> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, where the job memory is the usable memory less the reserve and the reservations."
+    error_message = "Host jobs and the publisher need host_capacity_binding from the services stack output: job_memory_mib=<n> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, where the job memory is the usable memory less the reserve and the reservations."
   }
 }
 

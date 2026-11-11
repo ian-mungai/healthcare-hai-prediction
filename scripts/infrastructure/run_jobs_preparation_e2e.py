@@ -147,9 +147,7 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
             "job_role_arns": {"execution": execution, "publisher_task": "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev"},
         }
     }
-    result = invoke(publisher)
-    published = values | publisher["variables"] | {"enabled_definitions": sorted(publisher["variables"]["enabled_definitions"])}
-    checks["publisher_inputs_render"] = result.returncode == 0 and json.loads(output.read_text()) == published
+    checks["publisher_inputs_render_in_the_host_room_cases"] = True  # the publisher takes the job room of the services stack, so _host_room_cases renders it
     for label, arn in (
         ("another_role", "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev"),
         ("wildcard_name", "arn:aws:iam::111111111111:role/example_project_job_publisher_task_*"),
@@ -298,12 +296,14 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         checks["raw_read_environment_" + label + "_is_refused"] = refused.returncode == 2
     off = invoke(bronze)
     checks["raw_read_environment_off_renders_without_the_field"] = off.returncode == 0 and "bronze_read_environment" not in json.loads(output.read_text())
-    checks.update(_host_room_cases(workspace, environment_file, prep, output, document, values))
+    checks.update(_host_room_cases(workspace, environment_file, prep, output, document, values, publisher["variables"]))
     return checks
 
 
-def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any]) -> dict[str, bool]:
-    """Host jobs get the job room that the services stack outputs; the renderer refuses a missing or unusable figure and writes nothing."""
+def _host_room_cases(
+    workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any], publisher_variables: dict[str, Any]
+) -> dict[str, bool]:
+    """Host jobs and the publisher get the job room that the services stack outputs; the renderer refuses a missing or unusable figure and writes nothing."""
     binary = workspace / "host_room_bin"
     binary.mkdir()
     tool = binary / "terraform"
@@ -366,6 +366,21 @@ def _host_room_cases(workspace: Path, environment_file: Path, prep: Path, output
     checks["host_room_refusal_asks_for_a_services_apply_not_the_usable_memory_input"] = (
         "apply the services stack" in result.stderr.lower() and "host_usable_memory_mib" not in result.stderr
     )
+    # The publisher is a host job: its revision carries the binding and its task memory is the job room, so the renderer reads the room for it alone too.
+    calls.unlink(missing_ok=True)
+    answer(json.dumps(binding), 0)
+    result = invoke(publisher_variables)
+    asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+    checks["publisher_gets_the_services_job_room_and_its_binding"] = (
+        result.returncode == 0
+        and json.loads(output.read_text()) == values | publisher_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
+        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_capacity_binding"]]
+    )
+    rendered = output.read_bytes()
+    for name, text, code in (("a_failed_services_output", "", 1), ("a_null_binding", "null", 0)):
+        answer(text, code)
+        result = invoke(publisher_variables)
+        checks["publisher_room_refuses_" + name] = result.returncode == 2 and "job room" in result.stderr and output.read_bytes() == rendered
     calls.unlink(missing_ok=True)
     answer(json.dumps(binding), 0)
     result = invoke(document["variables"])

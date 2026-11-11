@@ -1,6 +1,8 @@
 {
   "publisher": {
     "containers": ["init", "fetch", "run"],
-    "start_with_scratch_wipe": ["init"]
+    "start_with_scratch_wipe": ["init"],
+    "memory_mib": 23552,
+    "init_labels": { "hai.host_capacity": "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120" }
   }
 }

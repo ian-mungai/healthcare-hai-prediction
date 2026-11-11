@@ -26,6 +26,7 @@ SOURCES = (
     "orchestration/ecs_preflight.py",
     "config/orchestration/host_jobs.json",
     "infra/jobs/tests/host_definitions.json",
+    "infra/jobs/tests/publisher_host_definition.json",
     "infra/services/airflow.tf",
     "scripts/orchestration/airflow_mode_cases.py",
     "scripts/orchestration/run_airflow_mode_e2e.py",

@@ -19,8 +19,10 @@ variables {
     analytics = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
   log_group_name = "example_project_jobs_dev"
-  # The usable job memory the services stack outputs; the publisher asks for less, so its size is unchanged.
-  host_job_memory_mib = 23552
+  # TEST FIXTURE ONLY, not measured values: the services outputs host_job_memory_mib and host_capacity_binding for a 30720 MiB usable host. Like every
+  # host job, the publisher gets the whole job room and carries the binding.
+  host_job_memory_mib   = 23552
+  host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
 }
 
 run "default_registers_no_publisher" {
@@ -53,8 +55,8 @@ run "publisher_is_a_bridge_task_on_the_host_with_its_own_role" {
     error_message = "The publisher is an EC2 bridge task named <project>_<environment>_job_publisher_host with its own task role and no Fargate ephemeral storage."
   }
   assert {
-    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "2048" && aws_ecs_task_definition.publisher_host[0].memory == "8192"
-    error_message = "The publisher asks for 2048 CPU units and 8 GiB by default, inside the host job caps."
+    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "3072" && aws_ecs_task_definition.publisher_host[0].memory == tostring(var.host_job_memory_mib)
+    error_message = "The publisher gets the 3072 CPU units and the job memory (host_job_memory_mib) that every host job shares, so its task memory is the memory of its binding."
   }
   assert {
     condition = (
@@ -65,16 +67,79 @@ run "publisher_is_a_bridge_task_on_the_host_with_its_own_role" {
   }
 }
 
-run "publisher_resources_stay_within_the_host_job_caps" {
+run "publisher_init_container_carries_the_capacity_binding" {
   command = plan
   variables {
     publisher_job_enabled = true
-    publisher_resources   = { cpu = 4096, memory = 30720 }
   }
   assert {
-    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "3072" && aws_ecs_task_definition.publisher_host[0].memory == "23552"
-    error_message = "A larger request is cut to the host job caps that the other host jobs share: 3072 CPU units and the job room (host_job_memory_mib)."
+    condition = (
+      jsondecode(output.publisher_host_container_definitions)[0].name == "init" &&
+      jsondecode(output.publisher_host_container_definitions)[0].dockerLabels == { "hai.host_capacity" = var.host_capacity_binding } &&
+      alltrue([for container in slice(jsondecode(output.publisher_host_container_definitions), 1, 3) : !contains(keys(container), "dockerLabels")])
+    )
+    error_message = "The init container of the publisher revision carries the capacity binding it was sized from (label hai.host_capacity), which the launch preflight checks, exactly as the host jobs do; no other container carries a label."
   }
+  assert {
+    condition     = tostring(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0]) == aws_ecs_task_definition.publisher_host[0].memory
+    error_message = "The task memory of the publisher revision is the job memory of its binding, which the launch preflight requires."
+  }
+}
+
+run "publisher_definition_equals_the_fixture_the_airflow_mode_rig_reads" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+  }
+  assert {
+    condition = {
+      containers              = [for container in jsondecode(output.publisher_host_container_definitions) : container.name]
+      start_with_scratch_wipe = [for container in jsondecode(output.publisher_host_container_definitions) : container.name if startswith(container.command[0], "find /workspace /tmp -mindepth 1 -delete && ")]
+      memory_mib              = tonumber(aws_ecs_task_definition.publisher_host[0].memory)
+      init_labels             = jsondecode(output.publisher_host_container_definitions)[0].dockerLabels
+    } == jsondecode(file("${path.module}/tests/publisher_host_definition.json")).publisher
+    error_message = "The publisher definition differs from tests/publisher_host_definition.json, which the Airflow mode rig registers as the publisher's revision and passes through the launch preflight. If the change is intended, update the file to what the plan gives."
+  }
+}
+
+run "publisher_follows_the_job_room_the_services_stack_gives" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+    host_job_memory_mib   = 20480
+    host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=27648 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+  assert {
+    condition     = aws_ecs_task_definition.publisher_host[0].memory == "20480" && aws_ecs_task_definition.publisher_host[0].cpu == "3072"
+    error_message = "The publisher takes the whole job room and 3072 CPU units, whatever the room is."
+  }
+}
+
+run "publisher_needs_the_capacity_binding" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+    host_capacity_binding = null
+  }
+  expect_failures = [var.host_capacity_binding]
+}
+
+run "publisher_needs_the_job_memory" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+    host_job_memory_mib   = null
+  }
+  expect_failures = [var.host_job_memory_mib]
+}
+
+run "publisher_refuses_a_binding_for_another_job_memory" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+    host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=27648 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+  expect_failures = [aws_ecs_task_definition.publisher_host]
 }
 
 run "publisher_needs_its_task_role" {

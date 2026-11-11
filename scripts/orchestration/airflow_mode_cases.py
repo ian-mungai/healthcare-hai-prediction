@@ -114,8 +114,8 @@ LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
 DAG_ID = re.compile(r'dag_id="([a-z_]+)"')
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
 HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
-# The publisher host definition is planned on feat/run3-route-direct (infra/jobs/publisher.tf, publisher_host); its containers are pinned here until the
-# two branches stack and a Terraform test keeps this file equal to that plan.
+# The publisher host definition as infra/jobs/publisher.tf plans it (publisher_host): its containers, the label of its init container and its task memory.
+# A Terraform test (tests/publisher.tftest.hcl) keeps this file equal to that plan.
 PUBLISHER_HOST_DEFINITION = ROOT / "infra/jobs/tests/publisher_host_definition.json"
 PUBLISHER_RUN = "20261110T120000Z-ab12cd34"
 PUBLISHER_REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api"], "prior_state": None}
@@ -160,10 +160,18 @@ class StageBucket(FakeS3):
         self.objects[RUN_KEY.format(run=run, name=name)] = body if isinstance(body, bytes) else json.dumps(body).encode()
 
 
-def host_planned_containers() -> dict[str, dict[str, list[str]]]:
+def host_planned_containers() -> dict[str, dict[str, Any]]:
     """The containers of each host family as Terraform plans them: ``containers`` in order and ``start_with_scratch_wipe``, the containers whose first command
     starts with the scratch wipe (``infra/jobs/tests/host_definitions.json``, written by ``host_definitions_fixture`` from the plan)."""
     return {**json.loads(HOST_DEFINITIONS.read_text()), **json.loads(PUBLISHER_HOST_DEFINITION.read_text())}
+
+
+def planned_binding(family: str) -> tuple[int, str | None]:
+    """The task memory and the capacity label of the init container of a host revision as the rig registers it: the pinned plan where it names them (the
+    publisher's), the shared job memory and binding for the other families."""
+    name = family.removeprefix("example_dev_job_").removesuffix("_host")
+    planned = host_planned_containers()[name]
+    return planned.get("memory_mib", JOB_MEMORY), planned.get("init_labels", {"hai.host_capacity": BINDING}).get("hai.host_capacity")
 
 
 def host_definitions() -> dict[str, frozenset[str]]:
@@ -185,7 +193,7 @@ class Rig:
         self.ecs.clock = lambda: self.time.now
         table, host = preflight.load_tables(ROOT)
         self.ecs.definitions = host_definitions()
-        self.bound = {family: self.ecs.register(family, JOB_MEMORY, BINDING) for family in self.ecs.definitions}
+        self.bound = {family: self.ecs.register(family, *planned_binding(family)) for family in self.ecs.definitions}
         settings = EcsSettings(
             cluster=CLUSTER,
             family_prefix="example_dev_job_",
@@ -1908,6 +1916,27 @@ def publisher_host_definition_matches_the_job_table() -> None:
     require(table["steps"]["publisher_run"] == "publisher" and "publisher" in host["jobs"], "the publisher step or its host row is missing")
 
 
+def publisher_host_definition_passes_the_launch_preflight() -> None:
+    """The publisher host revision as Terraform plans it (the label of its init container and its task memory, pinned in publisher_host_definition.json)
+    passes the same capacity check as every host job revision, so the preflight cannot refuse a revision the jobs stack registers. The two shapes that
+    refused the first live launch are refused: a revision without the label, and one whose task memory is not the job memory of its binding."""
+    planned = json.loads(PUBLISHER_HOST_DEFINITION.read_text())["publisher"]
+    memory, label = planned["memory_mib"], planned["init_labels"]["hai.host_capacity"]
+    family = "example_dev_job_publisher_host"
+    require(label == BINDING and memory == JOB_MEMORY, f"the pinned publisher revision is not bound to the rig's capacity: {memory}, {label}")
+    rig = Rig()
+    revision, job_memory = rig.preflight.checked_revision("publisher")
+    require((revision, job_memory) == (rig.bound[family], memory), f"the planned publisher revision did not pass the check: {revision}, {job_memory}")
+    for other_memory, other_label, named in (
+        (memory, None, "carries no host capacity binding"),
+        (8192, label, f"8192 MiB of task memory, but its binding gives a job {memory} MiB"),
+    ):
+        rig = Rig()
+        rig.ecs.register(family, other_memory, other_label)
+        error = refuses(LaunchRefused, lambda check=rig.preflight.checked_revision: check("publisher"))
+        require(named in str(error), f"the refusal does not say {named!r}: {error}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
@@ -1926,6 +1955,7 @@ CASES: dict[str, Callable[[], None]] = {
     "ingestion_dag_without_a_request_launches_nothing": ingestion_dag_without_a_request_launches_nothing,
     "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,
     "publisher_host_definition_matches_the_job_table": publisher_host_definition_matches_the_job_table,
+    "publisher_host_definition_passes_the_launch_preflight": publisher_host_definition_passes_the_launch_preflight,
     "serving_request_is_checked": serving_request_is_checked,
     "code_digest_is_checked": code_digest_is_checked,
     "code_run_is_bound_once": code_run_is_bound_once,
