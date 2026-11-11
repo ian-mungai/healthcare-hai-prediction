@@ -1279,7 +1279,7 @@ def base_pin_and_extract(h: Harness) -> Check:
         q(spark, BASE_INSERT, table=ctx.fq(name))
         snapshots[name] = int(q(spark, LAST_SNAPSHOT_Q, table=ctx.fq(name)).collect()[0][0])
 
-    def commit(run: str, names: list[str], hour: int, at: dict[str, int] | None = None) -> None:
+    def commit(run: str, names: list[str], hour: int, at: dict[str, int] | None = None, base: str | None = None) -> None:
         row = {
             "run_id": run,
             "mode": MODE,
@@ -1289,14 +1289,15 @@ def base_pin_and_extract(h: Harness) -> Check:
             "backup_name": "catalog_backup_x.json",
             "backup_sha256": "c" * 64,
             "snapshot_set": {name: (at or snapshots).get(name, 1) for name in names},
+            "base_run": base,
         }
         view = publish.runs_view(ctx, row)
         spark.sql(publish.MERGE_RUN.format(table=ctx.fq(plan.runs_table), view=view))
 
     every = sorted(plan.tables)
-    commit("20261109T010000Z-0000b001", every, 1)
-    commit("20261109T030000Z-0000c001", ["feature_matrix_m1"], 3)
     base_run = "20261109T010000Z-0000b001"
+    commit(base_run, every, 1)
+    commit("20261109T030000Z-0000c001", ["feature_matrix_m1"], 3, base=base_run)
     pin_path = folder / features_input.BASE_PIN_NAME
     record = features_input.pin_base(ctx, pin_path, base_run)
     checks["the pin names the six domain matrices at the snapshots of the base run, read from the real catalog"] = record["snapshot_set"] == {
