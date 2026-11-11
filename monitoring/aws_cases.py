@@ -22,6 +22,7 @@ from monitoring import drift_cases, reader_cases
 from monitoring.drift_check import HAI_TYPES, CheckError
 from scripts.infrastructure import startup_check
 from scripts.process import run_command
+from scripts.training import lane_b_cases
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = str(ROOT / ".venv/bin/python")
@@ -110,7 +111,7 @@ def current_phase_reads_each_monitored_type(folder: Path) -> Problems:
     aws_run().baseline_phase(baseline.store, work, RUN, project=baseline.work.project)
     (folder / "feature").mkdir()
     current = reader_cases.Current(folder / "feature")
-    done = aws_run().current_phase(current.root, current.reader, work, RUN)
+    done = aws_run().current_phase(current.root, current.reader, work, RUN, features_run="latest")
     manifest = json.loads((work / "drift" / RUN / "HAI_1" / "current_manifest.json").read_text())
     problems = [] if done["types"] == ["HAI_1"] else [f"the phase covered {done['types']}"]
     if (manifest["hai_type"], manifest["population"], manifest["row_count"]) != ("HAI_1", "primary", 4):
@@ -361,6 +362,65 @@ def current_phase_environment_selects_the_aws_branch_of_the_real_reader(folder: 
     return [] if visited == [TASK_READER_VARIABLES["POLARIS_URI"], "token exchange reached"] else [f"the reader did not take the AWS branch: {visited}"]
 
 
+class NewestPublicationReader:
+    """The synthetic reader with a later publication committed after the requested model run: a request for the newest publication selects that one."""
+
+    def __init__(self, reader: Any, newest: str) -> None:
+        self.reader = reader
+        self.newest = newest
+        reader.published[newest] = {"snapshot_set": {"feature_matrix_m2": 11}, "base_run": lane_b_cases.BASE}
+        reader.heads[newest] = dict(reader.published[newest]["snapshot_set"])
+
+    def publication(self, run: str | None) -> Any:
+        return self.reader.publication(self.newest if run is None else run)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.reader, name)
+
+
+def current_cli_reads_the_model_run_it_is_given(folder: Path) -> Problems:
+    """``current --features-run <model run>`` reads that run's publication, though a later publication is the newest: the run reaches ``current_window.build``
+    and its manifest, and the reader is opened for it too."""
+    baseline, work = workspace_with_two_baselines(folder)
+    aws_run().baseline_phase(baseline.store, work, RUN, project=baseline.work.project)
+    (folder / "feature").mkdir()
+    current = reader_cases.Current(folder / "feature")
+    reader = NewestPublicationReader(current.reader, "20261111T120000Z-22222222")
+    current_window = importlib.import_module("monitoring.current_window")
+    opened: list[str] = []
+    built: list[str] = []
+    build = current_window.build
+
+    def open_reader(stack: Any, root: Path, features_run: str) -> object:
+        opened.append(features_run)
+        return reader
+
+    def spy(*arguments: Any, **keywords: Any) -> Path:
+        built.append(keywords["features_run"])
+        return build(*arguments, **keywords)
+
+    problems: Problems = []
+    with (
+        mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(current_window, "open_reader", open_reader),
+        mock.patch.object(current_window, "build", spy),
+        contextlib.redirect_stdout(io.StringIO()),
+        contextlib.redirect_stderr(io.StringIO()) as errors,
+    ):
+        try:
+            status = aws_run().main(["current", f"--run={RUN}", f"--work={work}", f"--root={current.root}", f"--features-run={lane_b_cases.PUBLICATION}"])
+        except ValueError as error:
+            status = 0
+            problems.append(f"the command read another publication than the requested {lane_b_cases.PUBLICATION}: {error}")
+    if status != 0:
+        problems.append(f"the command exited {status}: {errors.getvalue()[:300]}")
+    if opened != [lane_b_cases.PUBLICATION] or built != [lane_b_cases.PUBLICATION]:
+        problems.append(f"the requested run {lane_b_cases.PUBLICATION} reached open_reader as {opened} and current_window.build as {built}")
+    path = work / "drift" / RUN / "HAI_1" / "current_manifest.json"
+    selected = json.loads(path.read_text()).get("publication_run_id") if path.is_file() else None
+    return problems if selected == lane_b_cases.PUBLICATION else [*problems, f"the current manifest names the publication {selected}"]
+
+
 def cli_names_missing_clients(phase: str, needle: str) -> Callable[[Path], Problems]:
     def case(folder: Path) -> Problems:
         work = folder / "work"
@@ -406,6 +466,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("task_main_prepares_the_dvc_and_mlflow_environment", main_prepares_the_environment_of_the_dvc_and_mlflow_clients),
         ("task_current_phase_prepares_the_aws_feature_reader", current_phase_prepares_the_aws_feature_reader),
         ("task_current_phase_environment_selects_the_aws_reader_branch", current_phase_environment_selects_the_aws_branch_of_the_real_reader),
+        ("task_current_cli_reads_the_model_run_it_is_given", current_cli_reads_the_model_run_it_is_given),
         ("task_baseline_cli_names_missing_mlflow", cli_names_missing_clients("baseline", "mlflow")),
         ("task_current_cli_names_the_feature_image", cli_names_missing_clients("current", "feature")),
         ("task_publish_cli_refuses_a_bad_bucket_name", publish_cli_refuses_a_bad_bucket_name),

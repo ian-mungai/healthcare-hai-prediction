@@ -122,8 +122,9 @@ def baseline_phase(
     return done
 
 
-def current_phase(root: Path, reader: Any, work: Path, run: str, *, features_run: str = "latest") -> dict[str, Any]:
-    """Read the current windows of every monitored type, with the population and newest window year of its baseline."""
+def current_phase(root: Path, reader: Any, work: Path, run: str, *, features_run: str) -> dict[str, Any]:
+    """Read the current windows of every monitored type, with the population and newest window year of its baseline, from the publication ``features_run``
+    names (``latest`` for the newest one). The caller states it: a default would let a pinned run fall back to the newest publication."""
     folder = run_folder(work, run)
     if (done := read_done(folder, "current", run)) is not None:
         return done
@@ -266,7 +267,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
             elif arguments.phase == "current":
                 prepare_feature_reader(arguments.bucket, arguments.work)
-                result = current_phase(arguments.root, current_window.open_reader(stack, arguments.root, arguments.features_run), arguments.work, arguments.run)
+                reader = current_window.open_reader(stack, arguments.root, arguments.features_run)
+                result = current_phase(arguments.root, reader, arguments.work, arguments.run, features_run=arguments.features_run)
             elif arguments.phase == "check":
                 result = check_phase(arguments.work, arguments.run, config=arguments.config)
             else:
