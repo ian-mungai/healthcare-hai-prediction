@@ -15,6 +15,10 @@ sysctl_file="/etc/sysctl.d/90-platform-core-dumps.conf"
 nft_rules_file="/etc/nftables/platform_imds.nft"
 nftables_config="/etc/sysconfig/nftables.conf"
 guard_script="/usr/local/sbin/platform_imds_guard"
+docker_daemon_file="/etc/docker/daemon.json"
+docker_bridge_address="172.17.0.1/16"
+docker_bridge_subnet="172.17.0.0/16"
+bridge_rule_priority=9000
 exec >>"$log_file" 2>&1
 console_prefix="platform_boot:"
 console_flush_seconds=4
@@ -139,6 +143,36 @@ fi
 # is nofail, so on a later boot without it the job folders would land on the snapshotted data volume underneath.
 # RequiresMountsFor makes each service require the mount unit, and ExecStartPre checks the mount itself, so a start fails
 # while the scratch volume is not mounted.
+# The job containers reach the host services (Polaris on 8181, the catalog on 5100, Redis on 6379 and MLflow on 8585) at the host address, which
+# is the second interface's. Defect found in the first live run: amazon-ec2-net-utils gives that interface the policy rule "from <host address>
+# lookup 10001" (priority 10001), whose table sends everything out of the second interface, so the reply to a container left through the VPC
+# gateway instead of docker0 and the connection timed out, although the host itself and a container using the primary address connected.
+# The fix is a policy rule "to <bridge subnet> lookup main" at a priority below every rule that amazon-ec2-net-utils creates (they start at
+# 10000), so a reply to the bridge always follows the main table's docker0 route. The subnet is pinned: boot writes Docker's default
+# bridge address (bip) into the Docker daemon file, which nothing on the host sets otherwise, so the rule and docker0 agree. The guard adds
+# the rule and checks it with the firewall tables (apply, check and route), so Docker and the ECS agent do not start without it, the timer puts it back
+# within 10 seconds when a network reconfiguration drops it and stops both services when it cannot, and boot sets it again once the host
+# address is up, because the interface's own network setup can drop it. Boot fails at that step when the rule cannot be set.
+step "Pinning the job bridge subnet"
+mkdir -p "$(dirname "$docker_daemon_file")"
+run_within 30 "Pinning the job bridge subnet" python3 - "$docker_daemon_file" "$docker_bridge_address" <<'PYTHON'
+import json
+import os
+import sys
+
+path, address = sys.argv[1:3]
+try:
+    with open(path, encoding="utf-8") as handle:
+        settings = json.load(handle)
+except FileNotFoundError:
+    settings = {}
+settings["bip"] = address
+temporary = path + ".platform_tmp"
+with open(temporary, "w", encoding="utf-8") as handle:
+    json.dump(settings, handle, indent=2)
+    handle.write("\n")
+os.replace(temporary, path)
+PYTHON
 step "Writing the metadata firewall files"
 command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
@@ -157,10 +191,38 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
 {
   echo '#!/bin/bash'
   printf 'rules_file=%q\n' "$nft_rules_file"
+  printf 'bridge_address=%q\nbridge_subnet=%q\nbridge_priority=%q\n' "$docker_bridge_address" "$docker_bridge_subnet" "$bridge_rule_priority"
   cat <<'GUARD'
 # apply loads both tables in one transaction and checks them. check confirms that the metadata table and the job table
 # both exist and that user 65534 cannot connect to the metadata service (curl status 7 or 28). enforce loads both tables
-# again when either is missing and stops the ECS agent and Docker when it cannot.
+# again when either is missing and stops the ECS agent and Docker when it cannot. route alone sets the job bridge routing rule.
+# The bridge rule sends a reply to a job container through the main table (docker0), ahead of the numbered tables of amazon-ec2-net-utils.
+# docker0, once it exists, must hold the pinned address, or the rule would name another subnet.
+bridge_rule_present() {
+  local rules
+  rules=$(timeout --kill-after=5 10 ip -4 rule show) || return 1
+  awk -v priority="$bridge_priority:" -v subnet="$bridge_subnet" '$1 == priority && $2 == "from" && $3 == "all" && $4 == "to" && $5 == subnet && $6 == "lookup" && $7 == "main" { found = 1 } END { exit !found }' <<<"$rules"
+}
+bridge_rule_first() {
+  local rules
+  rules=$(timeout --kill-after=5 10 ip -4 rule show) || return 1
+  awk -v limit="$bridge_priority" '{ priority = $1; sub(/:$/, "", priority); table = ""; for (i = 1; i < NF; i++) if ($i == "lookup") table = $(i + 1); if (table ~ /^[0-9]+$/ && priority + 0 <= limit + 0) bad = 1 } END { exit bad }' <<<"$rules"
+}
+bridge_address_ok() {
+  local shown status=0
+  shown=$(timeout --kill-after=5 10 ip -o -4 addr show dev docker0 2>/dev/null) || status=$?
+  if [ "$status" -eq 1 ]; then return 0; fi
+  if [ "$status" -ne 0 ]; then return 1; fi
+  awk -v address="$bridge_address" '{ for (i = 1; i < NF; i++) if ($i == "inet" && $(i + 1) == address) found = 1 } END { exit !found }' <<<"$shown"
+}
+ensure_bridge_rule() {
+  bridge_address_ok || { echo "docker0 does not hold the pinned address $bridge_address; restart Docker." >&2; return 1; }
+  if ! bridge_rule_present; then
+    timeout --kill-after=5 10 ip -4 rule add to "$bridge_subnet" lookup main priority "$bridge_priority" || { echo "Could not set the routing rule for the job bridge." >&2; return 1; }
+    bridge_rule_present || { echo "The job bridge routing rule is missing after it was added." >&2; return 1; }
+  fi
+  bridge_rule_first || { echo "The job bridge routing rule is not ahead of every table rule." >&2; return 1; }
+}
 probe_blocked() {
   local status=0
   timeout --kill-after=5 10 setpriv --reuid=65534 --regid=65534 --clear-groups -- curl -s -o /dev/null --max-time 3 http://169.254.169.254/latest/meta-data/ || status=$?
@@ -169,16 +231,21 @@ probe_blocked() {
 check() {
   timeout --kill-after=5 30 nft list table inet platform_imds >/dev/null \
     && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \
-    && probe_blocked
+    && probe_blocked \
+    && bridge_address_ok \
+    && bridge_rule_present \
+    && bridge_rule_first
 }
 apply() {
   timeout --kill-after=5 30 nft -f "$rules_file" || { echo "Could not load the metadata firewall rule." >&2; return 1; }
+  ensure_bridge_rule || return 1
   check || { echo "The metadata firewall rule did not stop a non-root user." >&2; return 1; }
 }
-if [ "$#" -ne 1 ]; then echo "Usage: platform_imds_guard apply|check|enforce" >&2; exit 2; fi
+if [ "$#" -ne 1 ]; then echo "Usage: platform_imds_guard apply|check|enforce|route" >&2; exit 2; fi
 case "$1" in
   apply) apply ;;
   check) check ;;
+  route) ensure_bridge_rule ;;
   enforce)
     check && exit 0
     echo "The metadata firewall check failed; loading the rule again." >&2
@@ -187,7 +254,7 @@ case "$1" in
     timeout --kill-after=10 300 systemctl stop ecs.service docker.service docker.socket
     exit 1
     ;;
-  *) echo "Usage: platform_imds_guard apply|check|enforce" >&2; exit 2 ;;
+  *) echo "Usage: platform_imds_guard apply|check|enforce|route" >&2; exit 2 ;;
 esac
 GUARD
 } >"$guard_script"
@@ -346,6 +413,9 @@ while :; do
   sleep "$interface_poll_seconds"
 done
 log "The host address $interface_ip is up on $interface_id."
+# The network setup of the new interface can drop the bridge routing rule (amazon-ec2-net-utils adds its own rule for the address), so the rule
+# is set and checked again here, before the services start, and a host that cannot set it does not join the cluster.
+run_within 60 "Setting the routing rule for the job bridge" "$guard_script" route
 deadline=$((SECONDS + 600))
 until run_within 60 "Attaching the data volume" aws ec2 attach-volume --region "$region" --volume-id "$volume" --instance-id "$instance" --device /dev/xvdf >/dev/null; do
   if ((SECONDS >= deadline)); then echo "The data volume did not attach within 600 seconds."; exit 1; fi

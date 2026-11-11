@@ -166,7 +166,14 @@ BOOT_PATHS = {
     "nft_rules_file": "nftables/platform_imds.nft",
     "nftables_config": "nftables.conf",
     "guard_script": "sbin/platform_imds_guard",
+    "docker_daemon_file": "docker/daemon.json",
 }
+# The job bridge: Docker's default bridge subnet, which boot pins in the Docker daemon file, and the rule that sends replies to it through the main table.
+BOOT_BRIDGE_ADDRESS = "172.17.0.1/16"
+BOOT_BRIDGE_SUBNET = "172.17.0.0/16"
+BOOT_BRIDGE_RULE_PRIORITY = 9000
+# The lowest priority amazon-ec2-net-utils uses for the rule of a hot-plugged interface; the bridge rule must come before it.
+BOOT_NET_UTILS_PRIORITY = 10000
 BOOT_VALUES = {
     "region": "eu-west-1",
     "cluster_name": "example_project_cluster_dev",
@@ -374,12 +381,46 @@ import os, sys
 from pathlib import Path
 state = Path(os.environ["BOOT_STATE"])
 arguments = sys.argv[1:]
-if arguments[:5] != ["-o", "-4", "addr", "show", "to"] or len(arguments) != 6:
-    sys.exit(f"ip stand-in: unsupported arguments {arguments}")
+rules = state / "ip_rules"
 # The operating system shows the address once the interface is attached (or was already attached), unless a case keeps it down.
 attached = (state / "interface_up").exists() or os.environ.get("BOOT_INTERFACE_HOLDER") == "i-0123456789abcdef0"
-if attached and not os.environ.get("BOOT_ADDRESS_NEVER_UP"):
-    print(f"3: ens6    inet {arguments[5]}/24 brd 10.40.0.255 scope global ens6")
+def added():
+    return rules.read_text(encoding="utf-8").splitlines() if rules.exists() else []
+def listing():
+    # The kernel lists the policy rules by priority. amazon-ec2-net-utils adds the rule of a hot-plugged interface when the interface comes up.
+    lines = ["0:\tfrom all lookup local", "32766:\tfrom all lookup main", "32767:\tfrom all lookup default"]
+    if attached:
+        lines.append("10001:\tfrom " + os.environ["BOOT_INTERFACE_ADDRESS"] + " lookup 10001")
+    if os.environ.get("BOOT_IP_LOW_TABLE_RULE"):
+        lines.append("5000:\tfrom all lookup 10001")
+    return sorted([*lines, *added()], key=lambda line: int(line.split(":")[0]))
+if arguments[:5] == ["-o", "-4", "addr", "show", "to"] and len(arguments) == 6:
+    # Network setup of the new interface drops the rules that it does not manage (systemd-networkd does this to foreign rules), once.
+    if attached and os.environ.get("BOOT_IP_FLUSH_ON_ATTACH") and not (state / "ip_flushed").exists():
+        (state / "ip_flushed").touch()
+        rules.unlink(missing_ok=True)
+    if attached and not os.environ.get("BOOT_ADDRESS_NEVER_UP"):
+        print(f"3: ens6    inet {arguments[5]}/24 brd 10.40.0.255 scope global ens6")
+elif arguments == ["-o", "-4", "addr", "show", "dev", "docker0"]:
+    address = os.environ.get("BOOT_DOCKER0_ADDRESS")
+    if not address:
+        sys.exit('Device "docker0" does not exist.')
+    print(f"5: docker0    inet {address} brd 172.17.255.255 scope global docker0")
+elif arguments == ["-4", "rule", "show"]:
+    print("\\n".join(listing()))
+elif arguments[:3] == ["-4", "rule", "add"] and len(arguments) == 9 and arguments[3] == "to" and arguments[5:8] == ["lookup", "main", "priority"]:
+    if os.environ.get("BOOT_IP_RULE_FAIL"):
+        sys.exit("RTNETLINK answers: Operation not permitted")
+    line = f"{arguments[8]}:\tfrom all to {arguments[4]} lookup main"
+    if line in added():
+        sys.exit("RTNETLINK answers: File exists")
+    rules.write_text("".join(entry + "\\n" for entry in [*added(), line]), encoding="utf-8")
+else:
+    sys.exit(f"ip stand-in: unsupported arguments {arguments}")
+""",
+    "python3": """
+import os, sys
+os.execv(sys.executable, [sys.executable, "-I", *sys.argv[1:]])
 """,
     "nft": """
 import json, os, sys
@@ -1813,7 +1854,7 @@ def misplace_dependency(template: str) -> str:
     return template.replace(correct, misplaced)
 
 
-def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str], console: str = "file") -> Path:
+def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str], console: str = "file", seed_files: dict[str, str] | None = None) -> Path:
     """Create a temporary host root with stand-in commands, a data volume device, the image's kernel defaults and a console.
 
     The console is a writable file, a directory (the script cannot open it) or a named pipe with no reader (opening it for writing blocks).
@@ -1836,6 +1877,9 @@ def prepare_host_root(root: Path, template: str, stub_overrides: dict[str, str],
     for volume in ("volume", "scratch"):
         (root / "devices" / f"nvme-Amazon_Elastic_Block_Store_{BOOT_IDS[volume].replace('-', '')}").touch()
     (root / "fstab").touch()
+    for relative, content in (seed_files or {}).items():
+        (root / relative).parent.mkdir(parents=True, exist_ok=True)
+        (root / relative).write_text(content, encoding="utf-8")
     if console == "file":
         (root / BOOT_PATHS["console_device"]).touch()
     elif console == "directory":
@@ -2091,6 +2135,7 @@ def boot_host(
     gnu_timeout: str,
     console: str = "file",
     exit_grace: float = CONSOLE_EXIT_GRACE,
+    seed_files: dict[str, str] | None = None,
 ) -> tuple[Path, dict[str, str], dict[str, Any], Any]:
     """Run the boot script once in its own temporary host root and return the root, the stand-in environment, the step and the result.
 
@@ -2098,7 +2143,7 @@ def boot_host(
     the launch session was still open. The step's duration is the script's own.
     """
     root = evidence.temporary / name
-    script = prepare_host_root(root, template, stub_overrides, console)
+    script = prepare_host_root(root, template, stub_overrides, console, seed_files)
     environment = {
         "PATH": f"{root / 'tools'}:/usr/bin:/bin",
         "BOOT_TIMEOUT_LOG": str(root / "deadlines.log"),
@@ -2451,6 +2496,73 @@ def replace_once(text: str, old: str, new: str) -> str:
     return text.replace(old, new)
 
 
+# Success cases that check the bridge rule and the Docker daemon file only, not the whole firewall chain.
+BOOT_BRIDGE_PLAIN_CASES = {"boot_bridge_rule_dropped_when_the_address_comes_up", "boot_docker_daemon_file_keeps_other_settings"}
+# Files that exist on the image before boot, by case: the Docker daemon file with a setting of its own.
+BOOT_SEED_FILES = {"boot_docker_daemon_file_keeps_other_settings": {BOOT_PATHS["docker_daemon_file"]: '{"log-driver": "json-file", "bip": "10.99.0.1/16"}\n'}}
+
+
+def bridge_rules(root: Path) -> list[str]:
+    """Return the policy rules that the stand-in holds for the job bridge: the lines the boot script and the guard added."""
+    return read_lines(root / "state" / "ip_rules")
+
+
+def bridge_rule_problems(root: Path, log: str, name: str) -> list[str]:
+    """Name what a boot that ended well did wrong with the job bridge: an empty list means the subnet is pinned and the rule is set once, in time and first."""
+    problems: list[str] = []
+    expected = [f"{BOOT_BRIDGE_RULE_PRIORITY}:\tfrom all to {BOOT_BRIDGE_SUBNET} lookup main"]
+    if bridge_rules(root) != expected:
+        problems.append(f"the rules are {bridge_rules(root)} instead of {expected}")
+    if BOOT_BRIDGE_RULE_PRIORITY >= BOOT_NET_UTILS_PRIORITY:
+        problems.append("the rule does not come before the rules of amazon-ec2-net-utils")
+    daemon = root / BOOT_PATHS["docker_daemon_file"]
+    try:
+        settings = json.loads(daemon.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        settings = {}
+    if settings.get("bip") != BOOT_BRIDGE_ADDRESS:
+        problems.append("the Docker daemon file does not pin the bridge address")
+    if name in BOOT_SEED_FILES and settings.get("log-driver") != "json-file":
+        problems.append("the Docker daemon file lost a setting that was there")
+    marks = [log.find(text) for text in ("is up on", "Setting the routing rule for the job bridge", "Attaching the data volume")]
+    if min(marks) < 0 or not marks[0] < marks[1] < marks[2]:
+        problems.append("the rule was not set after the host address came up and before the volumes")
+    return problems
+
+
+def check_bridge_rule(evidence: Evidence, step: dict[str, Any], root: Path, log: str, name: str) -> None:
+    """Require the bridge subnet pinned in the Docker daemon file and the routing rule in place after a good boot."""
+    problems = bridge_rule_problems(root, log, name)
+    step["bridge_rule_problems"] = problems
+    evidence.check(step, "job_bridge_pinned_and_routed_before_the_volumes", not problems)
+
+
+def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
+    """Drop the bridge rule as a network reconfiguration does: the timer check must put it back once, and stop Docker when it cannot."""
+    state = root / "state"
+    watch = unit_command(root, "platform_imds_watch.service", "ExecStart=")
+    rule = f"{BOOT_BRIDGE_RULE_PRIORITY}:\tfrom all to {BOOT_BRIDGE_SUBNET} lookup main"
+    step, result = evidence.run("bridge_rule_dropped_both_tables_loaded", watch, root, environment)
+    evidence.check(step, "tables_and_rule_loaded", result.returncode == 0 and bridge_rules(root) == [rule])
+    (state / "ip_rules").unlink()
+    step, result = evidence.run("bridge_rule_dropped_timer_check", watch, root, environment)
+    evidence.check(step, "timer_noticed_the_missing_bridge_rule", result.returncode == 0 and "loading the rule again" in result.stderr)
+    evidence.check(step, "timer_put_the_rule_back_once", bridge_rules(root) == [rule])
+    step, result = evidence.run("bridge_rule_present_timer_check", watch, root, environment)
+    evidence.check(step, "second_check_changes_nothing", result.returncode == 0 and not result.stderr and bridge_rules(root) == [rule])
+    guard = str(root / BOOT_PATHS["guard_script"])
+    step, result = evidence.run("bridge_rule_added_twice", [guard, "route"], root, environment)
+    evidence.check(step, "route_is_idempotent", result.returncode == 0 and bridge_rules(root) == [rule])
+    failing = {**environment, "BOOT_IP_RULE_FAIL": "1"}
+    (state / "ip_rules").unlink()
+    (state / "systemctl.log").write_text("", encoding="utf-8")
+    step, result = evidence.run("bridge_rule_dropped_and_cannot_be_set", watch, root, failing)
+    evidence.check(step, "timer_failed", result.returncode != 0 and "Could not set the routing rule for the job bridge." in result.stderr)
+    evidence.check(step, "containers_stopped", read_lines(state / "systemctl.log")[-1].split()[:3] == ["stop", "ecs.service", "docker.service"])
+    step, result = evidence.run("bridge_rule_missing_start_refused", [str(root / "tools" / "systemctl"), "start", "docker.service"], root, failing)
+    evidence.check(step, "start_refused", result.returncode != 0 and "Could not set the routing rule for the job bridge." in result.stderr)
+
+
 def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
     """Run the host boot script against stand-in system commands; a stalled or failed step must stop the boot in time."""
     template = (REPO_ROOT / BOOT_TEMPLATE).read_text(encoding="utf-8")
@@ -2531,6 +2643,11 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         ),
         "boot_host_address_never_up": ({}, {"BOOT_ADDRESS_NEVER_UP": "1"}, "The host address did not come up within 6 seconds."),
         "boot_primary_interface_unreadable": ({}, {"BOOT_PRIMARY_INTERFACE_FAIL": "1"}, "The primary network interface ID could not be read."),
+        "boot_bridge_rule_dropped_when_the_address_comes_up": ({}, {"BOOT_IP_FLUSH_ON_ATTACH": "1"}, None),
+        "boot_docker_daemon_file_keeps_other_settings": ({}, {}, None),
+        "boot_bridge_rule_cannot_be_set": ({}, {"BOOT_IP_RULE_FAIL": "1"}, "Could not set the routing rule for the job bridge."),
+        "boot_bridge_rule_behind_a_table_rule": ({}, {"BOOT_IP_LOW_TABLE_RULE": "1"}, "The job bridge routing rule is not ahead of every table rule."),
+        "boot_docker_bridge_has_another_subnet": ({}, {"BOOT_DOCKER0_ADDRESS": "10.99.0.1/16"}, "docker0 does not hold the pinned address"),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2562,7 +2679,9 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             if name == "boot_with_the_step_lost_in_a_substitution"
             else template
         )
-        root, environment, step, result = boot_host(evidence, bash, name, case_template, stub_overrides, case_environment, gnu_timeout)
+        root, environment, step, result = boot_host(
+            evidence, bash, name, case_template, stub_overrides, case_environment, gnu_timeout, seed_files=BOOT_SEED_FILES.get(name)
+        )
         log = (root / "boot.log").read_text(encoding="utf-8") if (root / "boot.log").exists() else ""
         config = (root / "ecs.config").read_text(encoding="utf-8") if (root / "ecs.config").exists() else ""
         deadlines = read_lines(root / "deadlines.log")
@@ -2647,12 +2766,14 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             )
             evidence.check(step, "timer_started", "enable --now platform_imds_watch.timer" in read_lines(root / "state" / "systemctl.log"))
             check_interface_attachment(evidence, step, name, calls, deadlines, log)
+            check_bridge_rule(evidence, step, root, log, name)
             if planted:
                 run_planted_dependency_defect(evidence, root, environment)
-            elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS:
+            elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS and name not in BOOT_BRIDGE_PLAIN_CASES:
                 run_firewall_cases(evidence, root, environment)
                 run_job_table_loss_case(evidence, root, environment)
                 run_later_start_cases(evidence, root, environment)
+                run_bridge_rule_cases(evidence, root, environment)
         else:
             evidence.check(step, "boot_failed", result.returncode not in (0, None))
             evidence.check(step, "failure_reported", message in log)
