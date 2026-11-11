@@ -4,31 +4,11 @@
     "sha256": "d15851bb7c686cb360de0bc8549aaaf8d96803a67d91c566771247366dd54b4d"
   },
   "downloads": "data/acquisition_planning/hcai_util_2018_2025_downloads.json",
-  "individual_owner_redact": [
-    "FAC_PAR_CORP_NAME",
-    "FAC_PAR_CORP_CITY",
-    "FAC_PAR_CORP_ZIP"
-  ],
   "model_eligible": false,
-  "not_personal": [
-    "FAC_NAME",
-    "FAC_PAR_CORP_NAME",
-    "EMSA_TRAUMA_DESIGNATION",
-    "EMSA_TRAUMA_DESIGNATION_PEDIATRIC"
-  ],
-  "redact": [
-    "FAC_STR_ADDR",
-    "FAC_PHONE",
-    "FAC_ADMIN_NAME",
-    "FAC_PAR_CORP_BUS_ADDR",
-    "REPT_PREP_NAME",
-    "REV_REPT_PREP_NAME"
-  ],
   "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
-  "replacement": "[REDACTED]",
-  "scope": "Extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 and the 2025 preliminary file; originals on this Mac only; abstracted sheet CSVs only in S3; columns checked on capture.",
+  "scope": "Collect the 2018-2024 annual files and the 2025 preliminary file; store each workbook whole under raw/ as published; bronze redacts the person cells at load ([REDACTED], not pseudonyms); sheets checked on capture.",
   "source_id": "HCAI_UTIL",
-  "version": 1,
+  "version": 2,
   "years": [
     {
       "bytes": 637002,

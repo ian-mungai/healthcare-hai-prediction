@@ -1,9 +1,8 @@
-"""Frozen scope and privacy checks for CMS Hospital All Owners releases (C067, C068).
+"""Frozen scope and checks for CMS Hospital All Owners releases.
 
-Each original names individual owners, so it stays in an owner-only folder on this Mac or, on the run 3 task, in the
-task's temporary workspace until the unit ends. S3 receives only a
-derived CSV of organisation owner rows, without name, title or street-address columns; kept cells are unchanged
-except owner organisation or DBA names that contain an individual owner's whole name, which are redacted.
+All the data is public. Under plan version 2 each release is stored whole under raw/ as published, and its receipt records that it names
+individual owners, whom bronze pseudonymizes at load. Captures stored under plan version 1 hold a derived CSV of organisation owner rows
+rebuilt from an original kept on the Mac; they keep verifying with the version 1 rules below.
 Failure modes: data/acquisition_planning/cms_owners_failure_modes.md.
 """
 
@@ -72,11 +71,14 @@ HEADERS = {
     ],
 }
 V2_FIRST_PERIOD = "2025-04-01"
+# Plan version 1 only: the columns and the redaction of the stored derived captures, kept so those captures keep verifying.
 PERSONAL = ["FIRST NAME - OWNER", "MIDDLE NAME - OWNER", "LAST NAME - OWNER", "TITLE - OWNER"]
 DROPPED = [*PERSONAL, "ADDRESS LINE 1 - OWNER", "ADDRESS LINE 2 - OWNER", "CITY - OWNER", "ZIP CODE - OWNER"]
 REDACTABLE = ["ORGANIZATION NAME - OWNER", "DOING BUSINESS AS NAME - OWNER"]
 TEXT_COLUMNS = {"OTHER TYPE TEXT - OWNER"}
 REPLACEMENT = "[REDACTED]"
+V1_ARTIFACTS = {"derived/organisation_owners.csv", "evidence/download_proof.json", "references/scope.json"}
+PSEUDONYMIZE_AT_LOAD = "Names individual owners as published; bronze pseudonymizes the person fields at load."
 
 
 def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
@@ -122,8 +124,8 @@ def load_plan(path: Path | None = None) -> dict:
     path = PLAN_PATH if path is None else path
     plan = read_json(path)
     require(read_json(path.with_suffix(".lock.json"))["plan_sha256"] == canonical_hash(plan), "CMS owners plan lock differs")
-    require(plan["source_id"] == SOURCE_ID and plan["model_eligible"] is False and plan["version"] == 1, "CMS owners plan hold differs")
-    require(plan["headers"] == HEADERS and plan["dropped_columns"] == DROPPED and plan["replacement"] == REPLACEMENT, "CMS owners plan layout differs")
+    require(plan["source_id"] == SOURCE_ID and plan["model_eligible"] is False and plan["version"] == 2, "CMS owners plan hold differs")
+    require(plan["headers"] == HEADERS and not {"dropped_columns", "replacement"} & set(plan), "CMS owners plan layout differs")
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "CMS owners registry differs")
     source = next(s for s in load_registry(expected_sha256=plan["registry_sha256"])["sources"] if s["source_id"] == SOURCE_ID)
     routes = {r["route_id"]: r["url"] for r in source["file_routes"]}
@@ -154,8 +156,34 @@ def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
     return any(words[i : i + n] in names for n in range(2, longest + 1) for i in range(len(words) - n + 1))
 
 
+def check_raw(raw: bytes, release: dict) -> dict:
+    """Check that a release is the published shape and count its rows; the bytes are stored unchanged."""
+    text, encoding = decode(raw)
+    table = list(csv.reader(io.StringIO(text, newline=""), strict=True))
+    header = HEADERS[release["layout"]]
+    require(bool(table) and table[0] == header, "CMS owners header differs")
+    require(len(table) > 1, "CMS owners release has no rows")
+    index = {column: i for i, column in enumerate(header)}
+    flags = flag_columns(release["layout"])
+    for row in table[1:]:
+        require(len(row) == len(header), "CMS owners row shape differs")
+        require(row[index["TYPE - OWNER"]] in {"I", "O"}, "CMS owners type differs")
+        require(row[index["ENROLLMENT ID"]] != "", "CMS owners row has no enrollment ID")
+        require(all(row[index[c]] in {"Y", "N", ""} for c in flags), "CMS owners flag value differs")
+    individuals = sum(row[index["TYPE - OWNER"]] == "I" for row in table[1:])
+    return {
+        "rows_read": len(table) - 1,
+        "individual_rows": individuals,
+        "organisation_rows": len(table) - 1 - individuals,
+        "enrollments": len({row[index["ENROLLMENT ID"]] for row in table[1:]}),
+        "encoding": encoding,
+        "layout": release["layout"],
+        "model_eligible": False,
+    }
+
+
 def derive(raw: bytes, release: dict) -> tuple[bytes, dict]:
-    """Organisation owner rows only; refuse schema, type or leftover-personal-data defects."""
+    """Plan version 1: organisation owner rows only; refuse schema, type or leftover-personal-data defects."""
     text, encoding = decode(raw)
     table = list(csv.reader(io.StringIO(text, newline=""), strict=True))
     header = HEADERS[release["layout"]]
@@ -212,7 +240,7 @@ def derive(raw: bytes, release: dict) -> tuple[bytes, dict]:
 
 
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
-    """Rebuild the derived file from the local original; check the artifact set, bindings and holds."""
+    """Check the artifact set, bindings and holds: a version 2 capture holds the release as published, a version 1 capture its derived CSV."""
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "CMS owners storage source differs")
@@ -226,7 +254,47 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(len(matches) == 1, "CMS owners capture release not in its plan")
     release = matches[0]
     paths = {a["storage_path"] for a in receipt["artifacts"]}
-    require(paths == {"derived/organisation_owners.csv", "evidence/download_proof.json", "references/scope.json"}, "CMS owners artifact set differs")
+    if paths == V1_ARTIFACTS:
+        verify_version_1(receipt, lineage, root, release)
+    else:
+        verify_version_2(receipt, lineage, root, release, plan, paths)
+    period = receipt["measurement_periods"]
+    require(
+        len(period) == 1 and (period[0]["start_date"], period[0]["end_date"]) == (release["period_start"], release["period_end"]), "CMS owners period differs"
+    )
+
+
+def verify_version_2(receipt: dict, lineage: dict, root: Path, release: dict, plan: dict, paths: set[str]) -> None:
+    """The release stored whole, its proof and scope; the receipt says the public file names people."""
+    raw_path = f"raw/{stored_name(release)}"
+    require(lineage["plan_sha256"] == canonical_hash(plan), "CMS owners capture plan differs")
+    require(paths == {raw_path, "evidence/download_proof.json", "references/scope.json"}, "CMS owners artifact set differs")
+    require(not (root / "derived").exists(), "CMS owners snapshot holds a derived copy")
+    raw = (root / raw_path).read_bytes()
+    proof = read_json(root / "evidence/download_proof.json")
+    require(digest(raw) == lineage["expected_sha256"] == proof["sha256"] and len(raw) == proof["bytes"], "CMS owners release hash differs")
+    statistics = check_raw(raw, release)
+    require(proof["statistics"] == statistics and proof["requested_url"] == release["url"], "CMS owners download proof differs")
+    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "CMS owners stored scope differs")
+    acq = receipt["acquisition"]
+    require(
+        acq["requested_url"] == release["url"] and acq["http_status"] == 200 and acq["retrieved_at_utc"] == proof["retrieved_at_utc"],
+        "CMS owners route differs",
+    )
+    require(receipt["schema_profile"]["native_headers"] == HEADERS[release["layout"]], "CMS owners schema profile differs")
+    require(receipt["schema_profile"]["row_count"] == statistics["rows_read"], "CMS owners schema profile differs")
+    governance = receipt["governance"]
+    require(
+        governance["access_class"] == "public"
+        and governance["contains_pii"] is True
+        and PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"]
+        and governance["license_or_terms_url"] == TERMS_URL,
+        "CMS owners governance differs",
+    )
+
+
+def verify_version_1(receipt: dict, lineage: dict, root: Path, release: dict) -> None:
+    """Plan version 1: rebuild the derived file from the original kept on the Mac."""
     require(not (root / "raw").exists() and not (root / "audit").exists(), "CMS owners snapshot holds original bytes")
     proof = read_json(root / "evidence/download_proof.json")
     collection = root.parents[2]
@@ -249,7 +317,3 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(receipt["schema_profile"]["native_headers"] == kept_columns(release["layout"]), "CMS owners schema profile differs")
     require(receipt["schema_profile"]["row_count"] == statistics["organisation_rows_kept"], "CMS owners schema profile differs")
     require(receipt["governance"]["contains_pii"] is False and receipt["governance"]["license_or_terms_url"] == TERMS_URL, "CMS owners governance differs")
-    period = receipt["measurement_periods"]
-    require(
-        len(period) == 1 and (period[0]["start_date"], period[0]["end_date"]) == (release["period_start"], release["period_end"]), "CMS owners period differs"
-    )

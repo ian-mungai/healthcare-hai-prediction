@@ -1,8 +1,9 @@
-"""Capture the HCAI annual utilization workbooks locally and store abstracted sheet CSVs only, with verified S3 storage.
+"""Capture the HCAI annual utilization workbooks and store each one whole under raw/ as published, with verified S3 storage.
 
-Offline by default. ``--fetch`` downloads missing originals through the reviewed signed redirect into an owner-only
-local folder that never enters a snapshot or S3; ``--execute`` stores one abstracted CSV per sheet, the download proof
-and the scope. Each year is independent: one that fails is held and named, and the others continue.
+All the data is public. Offline by default. ``--fetch`` downloads missing workbooks through the reviewed signed redirect into the
+collection's downloads folder; ``--execute`` stores the workbook as published, the download proof and the scope. The receipt records that
+the workbook names administrators and report preparers, whose cells bronze redacts at load. Each year is independent: one that fails is
+held and named, and the others continue.
 """
 
 import argparse
@@ -24,18 +25,12 @@ from scripts.acquisition.history_redirects import install_redirect
 from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
-from scripts.acquisition.store_cms_owners import private
 from scripts.acquisition.transport import Limits, download
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/hcai_util_2018_2025"
-TRANSFORMATIONS = [
-    "One CSV per workbook sheet, cells as stored in the workbook (Excel date serials and error text kept).",
-    "Facility street address and phone, administrator, preparer and revision-preparer names and parent business address replaced with [REDACTED].",
-    "On rows whose licensee type is Investor - Individual, parent name, city and ZIP code also replaced.",
-    "Any other cell containing an administrator, preparer or individual owner's name replaced with [REDACTED].",
-]
+DOWNLOADS = "downloads"
 
 
 def completed_download(folder: Path, entry: dict) -> tuple[Path, dict] | None:
@@ -49,20 +44,16 @@ def completed_download(folder: Path, entry: dict) -> tuple[Path, dict] | None:
 
 
 def fetch(entry: dict, root: Path, allowed: bool, opener: Any, limits: Limits) -> tuple[Path, dict]:
-    """Reuse a verified original, or download one through the reviewed redirect into private_original/<year>/."""
-    top = root / "private_original"
-    folder = top / str(entry["year"])
+    """Reuse a verified download, or download the workbook through the reviewed redirect into downloads/<year>/."""
+    folder = root / DOWNLOADS / str(entry["year"])
     found = completed_download(folder, entry) if folder.exists() else None
     if found is not None:
         return found
     require(allowed, "HCAI utilization original not captured; run with --fetch")
     install_redirect(entry["url"], entry["redirect_target"])
     folder.mkdir(parents=True, exist_ok=True)
-    private(folder, top)
     run = folder / f"run_{len(list(folder.glob('run_*'))) + 1:02}"
-    result = download(entry["url"], run, f"hcai_util_{entry['year']}.xlsx", "xlsx", "data", limits, opener=opener)
-    for path in run.rglob("*"):
-        private(path, top)
+    result = download(entry["url"], run, contract.stored_name(entry), "xlsx", "data", limits, opener=opener)
     require(result.complete, "HCAI utilization download failed")
     found = completed_download(folder, entry)
     if found is None:
@@ -70,12 +61,13 @@ def fetch(entry: dict, root: Path, allowed: bool, opener: Any, limits: Limits) -
     return found
 
 
-def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Path, root: Path) -> Path:
-    """Write the abstracted sheets, download proof, scope and receipt; the original stays outside the snapshot."""
+def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Path) -> Path:
+    """Write the workbook as published, its download proof, the scope and the receipt."""
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "HCAI utilization base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == contract.SOURCE_ID)
-    files, statistics = contract.derive(original.read_bytes(), entry)
+    raw = original.read_bytes()
+    statistics = contract.check_raw(raw, entry)
     proof = {
         "requested_url": entry["url"],
         "resolved_url": meta["resolved_url"],
@@ -84,15 +76,14 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
         "http_status": meta["http_status"],
         "sha256": meta["sha256"],
         "bytes": meta["byte_count"],
-        "original_path": original.relative_to(root).as_posix(),
-        "original_retention": "This Mac only, owner-only; names people; never uploaded; deleted at collection closeout after user confirmation",
         "statistics": statistics,
-        "transformations": TRANSFORMATIONS,
     }
     snapshot = branch / "capture"
-    roles = contract.roles(entry["sheets"])
-    items = [(name, files[name], roles[name]) for name in roles]
-    items += [("evidence/download_proof.json", encoded_json(proof), "export_receipt"), ("references/scope.json", encoded_json(plan), "layout")]
+    items = [
+        (f"raw/{contract.stored_name(entry)}", raw, "data"),
+        ("evidence/download_proof.json", encoded_json(proof), "export_receipt"),
+        ("references/scope.json", encoded_json(plan), "layout"),
+    ]
     for name, body, _ in items:
         write_once(snapshot / name, body)
     kind = "preliminary" if entry["preliminary"] else "final"
@@ -101,7 +92,7 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
         "release": {
             "advertised_history": "Hospital Annual Utilization Report, annual workbooks on data.chhs.ca.gov",
             "dataset_version": None,
-            "observed_history": f"{entry['title']}; {kind}; abstracted sheets only; measure and linkage holds preserved",
+            "observed_history": f"{entry['title']}; {kind}; stored whole as published; measure and linkage holds preserved",
             "publisher_release_label": entry["title"],
             "publisher_updated_at": None,
             "release_date": None,
@@ -120,14 +111,11 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
         "governance": {
             "access_class": "public",
             "contains_phi": False,
-            "contains_pii": False,
+            "contains_pii": True,
             "credential_reference": None,
             "credentials_required": False,
             "license_or_terms_url": contract.TERMS_URL,
-            "use_restrictions": [
-                "Attribute HCAI; this is a project-transformed derivative, marked as modified and not official data.",
-                "Personal details were removed under the user's public-business-data exception; never re-identify or publish them.",
-            ],
+            "use_restrictions": ["Attribute HCAI; the workbook is stored unchanged.", contract.REDACT_AT_LOAD],
         },
     }
     stamp = meta["retrieved_at_utc"].replace("-", "").replace(":", "")[:15] + "Z"
@@ -142,10 +130,9 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
         tool_version="1.0.0",
         pagination={"required": False, "strategy": "One workbook per report year", "page_count": 1, "termination_verified": True, "deduplication_keys": []},
     )
-    receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, False) for i, (name, _, role) in enumerate(items, 1)]
+    # The workbook is the published response; the proof and the scope are files this capture writes.
+    receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, i == 1) for i, (name, _, role) in enumerate(items, 1)]
     receipt["schema_profile"].update(
-        encoding="utf-8",
-        delimiter=",",
         native_headers=entry["header"],
         schema_fingerprint_sha256=canonical_hash(entry["header"]),
         row_count=statistics["hospitals"]["Page 1-6"],
@@ -155,21 +142,19 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
     receipt["quality_profile"].update(
         parse_status="passed_with_warnings",
         pagination_complete=True,
-        checks_passed=["recorded_original_hash", "sheet_names", "exact_data_header", "personal_columns_reviewed", "no_contact_details_after_redaction"],
+        checks_passed=["recorded_original_hash", "sheet_names", "exact_data_header", "no_cell_beyond_the_header", "hospital_count"],
         warnings=[
             "Acquisition checks only. Definitions by year, hospital identity, joins and model eligibility remain unreviewed.",
-            f"Redacted cells: {statistics['redacted_cells']}; copied-name cells: {statistics['copied_name_cells']}; "
-            f"individual-owner rows: {statistics['individual_owner_rows']}.",
+            "The workbook names administrators and report preparers; bronze redacts their cells at load.",
             "Rows 2-4 of the data sheets are publisher label rows, not hospitals; dates are Excel serial numbers.",
             *(["Preliminary data: HCAI will revise it; a replacement file needs a new plan."] if entry["preliminary"] else []),
-            "Derived files: " + " ".join(TRANSFORMATIONS),
         ],
     )
     receipt["lineage"]["extraction_or_query"] = json.dumps(
         {
             "mode": "hcai_util_workbook",
             "route_id": f"HCAI_UTIL:workbook:{entry['year']}:{entry['resource_id']}",
-            "scope": f"HCAI hospital annual utilization {entry['year']} ({kind}), abstracted sheets",
+            "scope": f"HCAI hospital annual utilization {entry['year']} ({kind}), as published",
             "year_id": entry["id"],
             "plan_sha256": canonical_hash(plan),
             "registry_sha256": canonical_hash(registry),
@@ -190,7 +175,7 @@ def make_receipt(plan: dict, entry: dict, original: Path, meta: dict, branch: Pa
 
 
 def verify_local(path: Path) -> dict:
-    """Verify every abstracted sheet against the local original without network or mutation."""
+    """Verify the capture against its plan without network or mutation."""
     receipt = read_json(path)
     validate_receipt(receipt, receipt_validator(), path.parent)
     source = next(s for s in load_registry()["sources"] if s["source_id"] == contract.SOURCE_ID)
@@ -246,7 +231,7 @@ def execute(
     if not receipt_path.exists():
         contract.require_code()
         original, meta = fetch(entry, root, allow_fetch, opener, limits or Limits())
-        receipt_path = make_receipt(plan, entry, original, meta, branch, root)
+        receipt_path = make_receipt(plan, entry, original, meta, branch)
     receipt = verify_local(receipt_path)
     require(json.loads(receipt["lineage"]["extraction_or_query"])["year_id"] == entry["id"], "HCAI utilization selected year differs from receipt")
     done_path = branch / "completed.json"

@@ -1,7 +1,8 @@
-"""Capture ONC's meaningful-use attestation file locally and store hospital rows only, with verified S3 storage.
+"""Capture ONC's meaningful-use attestation file and store it whole under raw/ as published, with verified S3 storage.
 
-Offline by default. ``--fetch`` downloads the original into an owner-only local folder that never enters a snapshot
-or S3; ``--execute`` stores the derived CSV, download proof and scope.
+All the data is public. Offline by default. ``--fetch`` downloads the file into the collection's downloads folder; ``--execute`` stores
+the file as published, its download proof and the scope. The receipt records that the file names clinicians, whom bronze pseudonymizes
+at load.
 """
 
 import argparse
@@ -22,19 +23,13 @@ from scripts.acquisition.dataset_layout import source_folder
 from scripts.acquisition.legacy_versions import plan_matches
 from scripts.acquisition.s3_store import AwsCli, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require
-from scripts.acquisition.store_cms_owners import private
 from scripts.acquisition.transport import Limits, download
 from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/onc_mu_attestation"
-FILE_NAME = "mu_report.csv"
-MAC_RETENTION = "This Mac only, owner-only; contains clinician NPIs; never uploaded; deleted at collection closeout after user confirmation"
-TASK_RETENTION = "Run 3 task workspace only, owner-only; contains clinician NPIs; never uploaded; removed when the unit ended"
-TRANSFORMATIONS = [
-    "Kept rows whose Provider_Type is Hospital; dropped eligible-professional (clinician) rows and the clinician-only Specialty column.",
-    "Other kept cells unchanged; written as UTF-8 CSV with LF line endings.",
-]
+FILE_NAME = contract.FILE_NAME
+DOWNLOADS = "downloads"
 
 
 def completed_download(folder: Path, plan: dict) -> tuple[Path, dict] | None:
@@ -48,19 +43,16 @@ def completed_download(folder: Path, plan: dict) -> tuple[Path, dict] | None:
 
 
 def fetch(plan: dict, root: Path, allowed: bool, opener: Any, limits: Limits | None) -> tuple[Path, dict]:
-    """Reuse the verified original, or download it into private_original/ within the plan's raised limits."""
-    top = root / "private_original"
+    """Reuse the verified download, or download the file into downloads/ within the plan's raised limits."""
+    top = root / DOWNLOADS
     found = completed_download(top, plan) if top.exists() else None
     if found is not None:
         return found
     require(allowed, "ONC meaningful-use original not captured; run with --fetch")
     top.mkdir(parents=True, exist_ok=True)
-    private(top, top)
     run = top / f"run_{len(list(top.glob('run_*'))) + 1:02}"
     bounds = limits or Limits(attempts=3, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
     result = download(plan["url"], run, FILE_NAME, "csv", "data", bounds, opener=opener)
-    for path in run.rglob("*"):
-        private(path, top)
     require(result.complete, "ONC meaningful-use download failed")
     found = completed_download(top, plan)
     if found is None:
@@ -68,12 +60,12 @@ def fetch(plan: dict, root: Path, allowed: bool, opener: Any, limits: Limits | N
     return found
 
 
-def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Path, retention: str = MAC_RETENTION) -> Path:
-    """Write the derived CSV, download proof, scope and receipt; the original stays outside the snapshot."""
+def make_receipt(plan: dict, original: Path, meta: dict, branch: Path) -> Path:
+    """Write the file as published, its download proof, the scope and the receipt."""
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "ONC meaningful-use base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == contract.SOURCE_ID)
-    derived, statistics = contract.derive(original, plan)
+    statistics = contract.check_raw(original, plan)
     proof = {
         "requested_url": plan["url"],
         "resolved_url": meta["resolved_url"],
@@ -81,14 +73,11 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
         "http_status": meta["http_status"],
         "sha256": meta["sha256"],
         "bytes": meta["byte_count"],
-        "original_path": original.relative_to(root).as_posix(),
-        "original_retention": retention,
         "statistics": statistics,
-        "transformations": TRANSFORMATIONS,
     }
     snapshot = branch / "capture"
     files = (
-        ("derived/hospital_attestations.csv", derived, "data"),
+        (f"raw/{FILE_NAME}", original.read_bytes(), "data"),
         ("evidence/download_proof.json", encoded_json(proof), "export_receipt"),
         ("references/scope.json", encoded_json(plan), "layout"),
     )
@@ -99,7 +88,7 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
         "release": {
             "advertised_history": "EHR Products Used for Meaningful Use Attestation, April 2011 - September 2017",
             "dataset_version": None,
-            "observed_history": "Medicare meaningful-use attestations with certified products; hospital rows only; not Promoting Interoperability",
+            "observed_history": "Medicare meaningful-use attestations with certified products, stored whole as published; not Promoting Interoperability",
             "publisher_release_label": "MU_REPORT",
             "publisher_updated_at": None,
             "release_date": None,
@@ -118,12 +107,13 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
         "governance": {
             "access_class": "public",
             "contains_phi": False,
-            "contains_pii": False,
+            "contains_pii": True,
             "credential_reference": None,
             "credentials_required": False,
             "license_or_terms_url": contract.TERMS_URL,
             "use_restrictions": [
-                "Project-transformed subset: hospital rows only, not the official file.",
+                "Public ONC file stored unchanged.",
+                contract.PSEUDONYMIZE_AT_LOAD,
                 "Medicare meaningful use, not Promoting Interoperability; do not join to C071-C074 without a definition review.",
             ],
         },
@@ -139,34 +129,34 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
         tool_version="1.0.0",
         pagination={"required": False, "strategy": "One CSV", "page_count": 1, "termination_verified": True, "deduplication_keys": []},
     )
-    receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, False) for i, (name, _, role) in enumerate(files, 1)]
-    columns = [c for c in plan["header"] if c not in contract.DROPPED]
+    # The file is the published response; the proof and the scope are files this capture writes.
+    receipt["artifacts"] = [artifact(snapshot / name, snapshot, role, i, i == 1) for i, (name, _, role) in enumerate(files, 1)]
+    columns = plan["header"]
     receipt["schema_profile"].update(
-        encoding="utf-8",
+        encoding=statistics["encoding"],
         delimiter=",",
         native_headers=columns,
         schema_fingerprint_sha256=canonical_hash(columns),
-        row_count=statistics["hospital_rows_kept"],
-        parsed_row_count=statistics["hospital_rows_kept"],
+        row_count=statistics["rows_read"],
+        parsed_row_count=statistics["rows_read"],
         native_identifier_fields=["NPI", "CCN", "EHR_Certification_Number", "EHR_Product_CHP_Id"],
     )
     receipt["quality_profile"].update(
         parse_status="passed_with_warnings",
         blank_identifier_rows=0,
         pagination_complete=True,
-        checks_passed=["recorded_original_hash", "exact_header", "provider_type_hospital_or_ep", "no_specialty_on_hospital_rows", "row_counts_add_up"],
+        checks_passed=["recorded_original_hash", "exact_header", "provider_type_hospital_or_ep", "ccn_on_hospital_rows", "required_program_years"],
         warnings=[
             "Acquisition checks only. Definitions, hospital identity and model eligibility remain unreviewed; C071-C074 holds kept.",
-            f"Original read as {statistics['encoding']}; {statistics['clinician_rows_dropped']} clinician rows dropped.",
+            f"Read as {statistics['encoding']}; {statistics['clinician_rows']} clinician rows, which bronze pseudonymizes at load.",
             "Program year 2017 is partial; program years 2018-2022 are in neither ONC file.",
-            "Derived file: " + " ".join(TRANSFORMATIONS),
         ],
     )
     receipt["lineage"]["extraction_or_query"] = json.dumps(
         {
             "mode": "onc_mu_hospital",
             "route_id": "ONC_PI:file:mu_report",
-            "scope": "ONC meaningful-use attestations 2011-2017, hospital rows",
+            "scope": "ONC meaningful-use attestations 2011-2017, as published",
             "file_id": plan["id"],
             "plan_sha256": canonical_hash(plan),
             "registry_sha256": canonical_hash(registry),
@@ -186,7 +176,7 @@ def make_receipt(plan: dict, original: Path, meta: dict, branch: Path, root: Pat
 
 
 def verify_local(path: Path) -> dict:
-    """Verify the derived CSV against the local original without network or mutation."""
+    """Verify the capture against its plan without network or mutation."""
     receipt = read_json(path)
     validate_receipt(receipt, receipt_validator(), path.parent)
     source = next(s for s in load_registry()["sources"] if s["source_id"] == contract.SOURCE_ID)
@@ -241,7 +231,6 @@ def execute(
     outputs: dict,
     opener: Any = None,
     limits: Limits | None = None,
-    retention: str = MAC_RETENTION,
 ) -> dict:
     """Run the integrated capture/storage path; a valid completion performs no writes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()), "ONC meaningful-use selected plan differs")
@@ -253,7 +242,7 @@ def execute(
         if not receipt_path.exists():
             contract.require_code()
             original, meta = fetch(plan, root, allow_fetch, opener, limits)
-            receipt_path = make_receipt(plan, original, meta, branch, root, retention)
+            receipt_path = make_receipt(plan, original, meta, branch)
         receipt = verify_local(receipt_path)
         done_path = branch / "completed.json"
         if done_path.exists():

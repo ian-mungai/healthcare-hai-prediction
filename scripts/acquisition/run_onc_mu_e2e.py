@@ -1,4 +1,8 @@
-"""Repeatable synthetic ONC meaningful-use capture-to-S3 verification, without live downloads or credentials."""
+"""Repeatable synthetic ONC meaningful-use capture-to-S3 verification, without live downloads or credentials.
+
+All the data is public: a capture stores the file whole under raw/ as published and records that it names clinicians, whom bronze
+pseudonymizes at load. Captures stored under plan version 1 (hospital rows only, original on the Mac) keep verifying.
+"""
 
 import argparse
 import copy
@@ -6,7 +10,6 @@ import csv
 import io
 import json
 import shutil
-import stat
 import sys
 import tempfile
 from contextlib import suppress
@@ -28,7 +31,7 @@ from scripts.acquisition.transport import Limits
 DOWNLOADS_PATH = "config/acquisition/e2e_inputs/onc_download.json"
 
 HEADER = read_json(REPO_ROOT / DOWNLOADS_PATH)["header"]
-# Synthetic clinician identifiers; they must never reach a snapshot or S3.
+# Synthetic clinician identifiers; the published file holds them, so the stored file does too.
 CLINICIAN_NPIS = ["1999999991", "1999999992"]
 LIMITS = Limits(attempts=1, timeout_seconds=5, max_seconds=30)
 
@@ -101,11 +104,6 @@ def locked(root: Path, data: bytes) -> tuple[dict, Path]:
     return plan, path
 
 
-def outside_private(run: Path) -> str:
-    """Everything outside the private original folder, as text."""
-    return "\n".join(p.read_bytes().decode("utf-8", "ignore") for p in run.rglob("*") if p.is_file() and "private_original" not in p.parts)
-
-
 def exercise(root: Path) -> list[dict]:
     """Use production orchestration with a synthetic file and versioned fake storage."""
     data = body()
@@ -131,32 +129,31 @@ def exercise(root: Path) -> list[dict]:
         receipt_path = run / "batches" / plan["id"] / "capture/receipt.json"
         scenario("offline_receipt_replay", lambda: verify_local(receipt_path))
 
-        def original_private() -> None:
-            originals = list((run / "private_original").rglob("*.csv"))
-            require(len(originals) == 1 and originals[0].read_bytes() == data, "Original not kept unchanged locally")
-            require(stat.S_IMODE(originals[0].stat().st_mode) == 0o600, "Original is not owner-only")
-            require(not (receipt_path.parent / "raw").exists() and not (receipt_path.parent / "audit").exists(), "Snapshot holds original bytes")
-            text = outside_private(run)
-            require(not any(n in text for n in CLINICIAN_NPIS) and "Family Practice" not in text, "Clinician data outside the private original")
+        def stored_whole() -> None:
+            capture = receipt_path.parent
+            paths = {item["storage_path"] for item in read_json(receipt_path)["artifacts"]}
+            require(paths == {f"raw/{contract.FILE_NAME}", "evidence/download_proof.json", "references/scope.json"}, f"Artifact set differs: {paths}")
+            require((capture / "raw" / contract.FILE_NAME).read_bytes() == data, "The file is not stored as published")
+            require(not (run / "private_original").exists() and not (capture / "derived").exists(), "A private folder or a derived copy was made")
+            stats = read_json(capture / "evidence/download_proof.json")["statistics"]
+            require((stats["rows_read"], stats["clinician_rows"], stats["hospital_rows"], stats["encoding"]) == (12, 6, 6, "cp1252"), f"Counts: {stats}")
 
-        scenario("original_local_owner_only_and_outside_snapshot", original_private)
+        scenario("file_stored_whole_as_published", stored_whole)
 
-        def derived_content() -> None:
-            table = list(csv.reader(io.StringIO((receipt_path.parent / "derived/hospital_attestations.csv").read_text())))
-            require(table[0] == [c for c in HEADER if c != "Specialty"] and len(table) == 7, "Derived rows or columns differ")
-            require(all(r[table[0].index("Provider_Type")] == "Hospital" for r in table[1:]), "Clinician rows kept")
-            stats = read_json(receipt_path.parent / "evidence/download_proof.json")["statistics"]
-            require((stats["rows_read"], stats["clinician_rows_dropped"], stats["hospital_rows_kept"], stats["encoding"]) == (12, 6, 6, "cp1252"), "Counts")
+        def public_with_names() -> None:
+            receipt = read_json(receipt_path)
+            governance = receipt["governance"]
+            require(governance["access_class"] == "public" and governance["contains_pii"] is True, "Governance does not say the public file names people")
+            require(contract.PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"], "The bronze pseudonymization restriction is missing")
+            require(receipt["schema_profile"]["native_headers"] == HEADER, "The schema profile is not the published header")
 
-        scenario("derived_hospital_rows_only_without_specialty", derived_content)
+        scenario("receipt_records_public_names_pseudonymized_in_bronze", public_with_names)
         scenario("capture_and_version_verified_storage", lambda: execute(plan, run, True, True, client, OUTPUTS, web, LIMITS))
 
-        def stored_clean() -> None:
-            stored = "\n".join(o["body"].decode("utf-8", "ignore") for o in client.objects.values())
-            require(not any(n in stored for n in CLINICIAN_NPIS) and "Family Practice" not in stored, "S3 received clinician data")
-            require(not any("private_original" in k or k.endswith("mu_report.csv") for k in client.objects), "S3 received the original")
-
-        scenario("s3_holds_no_clinician_data_or_original", stored_clean)
+        scenario(
+            "s3_holds_the_file_as_published",
+            lambda: require(any(o["body"] == data for o in client.objects.values()), "S3 does not hold the file as published"),
+        )
         before, objects, requests = inventory(run), copy.deepcopy(client.objects), web.requests
 
         def repeat() -> None:
@@ -166,7 +163,8 @@ def exercise(root: Path) -> list[dict]:
         scenario("repeat_one_no_effects", repeat)
         scenario("repeat_two_no_effects", repeat)
         scenario("replay_without_network", lambda: execute(plan, run, False, True, client, OUTPUTS, Offline(b""), LIMITS))
-        derive_scenarios(scenario, plan, root)
+        check_scenarios(scenario, plan, root)
+        version_1_scenario(scenario, plan, root, data)
         fetch_scenarios(scenario, plan, root, data)
         corrupt_scenarios(scenario, receipt_path, data)
         storage_scenarios(scenario, plan, root, run, client, web)
@@ -190,18 +188,17 @@ def exercise(root: Path) -> list[dict]:
     return scenarios
 
 
-def derive_scenarios(scenario: Any, plan: dict, root: Path) -> None:
-    """Every content defect named in the failure modes stops the capture."""
+def check_scenarios(scenario: Any, plan: dict, root: Path) -> None:
+    """A file that is not the published shape stops the capture."""
     h = {c: i for i, c in enumerate(HEADER)}
 
     def check(data: bytes) -> None:
-        path = root / f"derive_{len(list(root.glob('derive_*')))}.csv"
+        path = root / f"check_{len(list(root.glob('check_*')))}.csv"
         path.write_bytes(data)
-        contract.derive(path, plan)
+        contract.check_raw(path, plan)
 
     cases = [
         ("unknown_provider_type", body(lambda t: t[1].__setitem__(h["Provider_Type"], "Group")), "provider type differs"),
-        ("hospital_row_with_specialty", body(lambda t: t[1].__setitem__(h["Specialty"], "Surgery")), "carries a specialty"),
         ("hospital_row_without_ccn", body(lambda t: t[1].__setitem__(h["CCN"], "")), "has no CCN"),
         ("program_year_missing", body(lambda t: t.__delitem__(slice(1, 3))), "program years missing"),
         ("header_differs", body(lambda t: t[0].__setitem__(0, "Provider_NPI")), "header differs"),
@@ -211,12 +208,41 @@ def derive_scenarios(scenario: Any, plan: dict, root: Path) -> None:
         scenario(name, lambda data=data: check(data), error)
 
     def utf8() -> None:
-        path = root / "derive_utf8.csv"
+        path = root / "check_utf8.csv"
         path.write_bytes(b"\xef\xbb\xbf" + body().decode("cp1252").encode())
-        _, stats = contract.derive(path, plan)
-        require(stats["encoding"] == "utf-8-sig", "UTF-8 not detected")
+        require(contract.check_raw(path, plan)["encoding"] == "utf-8-sig", "UTF-8 not detected")
 
     scenario("utf8_with_bom_read_and_recorded", utf8)
+
+
+def version_1_scenario(scenario: Any, plan: dict, root: Path, data: bytes) -> None:
+    """A capture stored under plan version 1 keeps verifying: its derived CSV is rebuilt from the original kept on the Mac."""
+
+    def stored_version_1() -> None:
+        from scripts.acquisition.capture import receipt_validator
+
+        collection = root / "version_1"
+        capture = collection / "batches" / plan["id"] / "capture"
+        kept = collection / "private_original" / "run_01" / "attempt_01" / contract.FILE_NAME
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes(data)
+        derived, statistics = contract.derive(kept, plan)
+        proof = {"requested_url": plan["url"], "sha256": plan["sha256"], "original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
+        write_once(capture / "derived/hospital_attestations.csv", derived)
+        write_once(capture / "evidence/download_proof.json", encoded_json(proof))
+        write_once(capture / "references/scope.json", encoded_json(plan))
+        receipt = {
+            "snapshot_status": "acquired_unvalidated",
+            "artifacts": [{"storage_path": name} for name in sorted(contract.V1_ARTIFACTS)],
+            "acquisition": {"requested_url": plan["url"], "http_status": 200},
+            "schema_profile": {"row_count": statistics["hospital_rows_kept"]},
+            "governance": {"contains_pii": False},
+        }
+        lineage = {"file_id": plan["id"], "plan_sha256": canonical_hash(plan), "model_eligible": False, "registry_sha256": plan["registry_sha256"]}
+        lineage |= {"code_sha256": contract.collector_code_hashes(), "schema_sha256": canonical_hash(receipt_validator().schema)}
+        contract.verify_capture(receipt, {"source_id": contract.SOURCE_ID}, lineage, capture, False)
+
+    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, root: Path, data: bytes) -> None:
@@ -237,7 +263,7 @@ def fetch_scenarios(scenario: Any, plan: dict, root: Path, data: bytes) -> None:
 
 
 def corrupt_scenarios(scenario: Any, receipt_path: Path, data: bytes) -> None:
-    """Replay refuses tampered artifacts, originals, lineage and governance, even when hashes are resealed."""
+    """Replay refuses tampered files, lineage and governance, even when hashes are resealed."""
     collection = receipt_path.parents[3]
 
     def corrupt(kind: str) -> None:
@@ -246,38 +272,34 @@ def corrupt_scenarios(scenario: Any, receipt_path: Path, data: bytes) -> None:
         target = target_root / receipt_path.relative_to(collection).parent
         receipt = read_json(target / "receipt.json")
         lineage = json.loads(receipt["lineage"]["extraction_or_query"])
-        original = next((target_root / "private_original").rglob("*.csv"))
-        if kind == "resealed_csv_with_clinician":
-            path = target / "derived/hospital_attestations.csv"
-            path.write_bytes(path.read_bytes() + CLINICIAN_NPIS[0].encode() + b"\n")
+        stored = target / "raw" / contract.FILE_NAME
+        if kind == "resealed_changed_file":
+            stored.write_bytes(data + b"\r\n")
             for item in receipt["artifacts"]:
-                if item["storage_path"] == "derived/hospital_attestations.csv":
-                    item["sha256"], item["byte_count"] = fingerprint(path)
-        elif kind == "original_changed":
-            original.write_bytes(data + b"\r\n")
-        elif kind == "original_deleted":
-            original.unlink()
-        elif kind == "original_copied_into_snapshot":
-            (target / "raw").mkdir()
-            (target / "raw" / original.name).write_bytes(original.read_bytes())
+                if item["storage_path"] == f"raw/{contract.FILE_NAME}":
+                    item["sha256"], item["byte_count"] = fingerprint(stored)
+        elif kind == "stored_file_deleted":
+            stored.unlink()
+        elif kind == "derived_copy_added":
+            (target / "derived").mkdir()
+            (target / "derived" / "hospital_attestations.csv").write_bytes(b"x\n")
         elif kind == "model_promotion":
             lineage["model_eligible"] = True
         elif kind == "unreviewed_code":
             lineage["code_sha256"] = {"bad": "0" * 64}
-        elif kind == "pii_governance":
-            receipt["governance"]["contains_pii"] = True
+        elif kind == "names_hidden_in_governance":
+            receipt["governance"]["contains_pii"] = False
         receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
         (target / "receipt.json").write_bytes(encoded_json(receipt))
         verify_local(target / "receipt.json")
 
     for kind, error in [
-        ("resealed_csv_with_clinician", "derived CSV differs"),
-        ("original_changed", "original hash differs"),
-        ("original_deleted", "No such file"),
-        ("original_copied_into_snapshot", "holds original bytes"),
+        ("resealed_changed_file", "file hash differs"),
+        ("stored_file_deleted", "Artifact is missing"),
+        ("derived_copy_added", "holds a derived copy"),
         ("model_promotion", "hold differs"),
         ("unreviewed_code", "Unreviewed ONC meaningful-use"),
-        ("pii_governance", "governance differs"),
+        ("names_hidden_in_governance", "governance differs"),
     ]:
         scenario(kind, lambda kind=kind: corrupt(kind), error)
 
@@ -326,7 +348,7 @@ def main() -> None:
     passed = all(s["passed"] for s in scenarios)
     report = {
         "status": "passed" if passed else "failed",
-        "feature": "ONC meaningful-use attestations: original kept locally, hospital rows only through versioned S3 storage",
+        "feature": "ONC meaningful-use attestations: the file stored whole under raw/ as published, through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": contract.collector_code_hashes(),

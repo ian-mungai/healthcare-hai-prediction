@@ -8,7 +8,7 @@ from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_
 
 CATALOGUE_PATH = "data/acquisition_planning/cms_owners_20260929/cms_catalogue_entries_20260929.json"
 HEADER_LINES_PATH = "data/acquisition_planning/cms_owners_20260929/release_header_lines.json"
-APPROVAL = "All 44 releases; organisation owner rows only to S3; each original stays on this Mac only."
+APPROVAL = "All 44 releases, each stored whole under raw/ as published; bronze pseudonymizes the individual owners at load."
 
 
 def releases(catalogue: dict, registry: dict, header_lines: dict | None = None) -> list[dict]:
@@ -38,12 +38,10 @@ def build(catalogue: dict, header_lines: dict | None = None, expected: int = 44)
     selected = releases(catalogue, registry, header_lines)
     require(len(selected) == expected, "CMS owners release count differs from the approval")
     return {
-        "version": 1,
+        "version": 2,
         "source_id": contract.SOURCE_ID,
         "scope": APPROVAL,
         "headers": contract.HEADERS,
-        "dropped_columns": contract.DROPPED,
-        "replacement": contract.REPLACEMENT,
         "catalogue": CATALOGUE_PATH,
         "registry_sha256": canonical_hash(registry),
         "model_eligible": False,

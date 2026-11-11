@@ -121,7 +121,7 @@
       },
       "california_hcai/hospital_utilization": {
         "class": "Public",
-        "reason": "HCAI annual utilization workbooks name administrators and report preparers. Under plan version 2 each workbook is stored as published and bronze pseudonymizes the person fields at load; earlier captures replace personal columns with [REDACTED]. Public research data (owner, decision 158)."
+        "reason": "HCAI annual utilization workbooks name administrators and report preparers. Under plan version 2 each workbook is stored as published and bronze redacts the person cells at load ([REDACTED], not pseudonyms); earlier captures replace personal columns with [REDACTED]. Public research data (owner, decision 158)."
       },
       "illinois/hospital_report_card": {
         "class": "Public",

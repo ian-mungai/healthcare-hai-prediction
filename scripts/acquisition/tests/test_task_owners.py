@@ -1,11 +1,10 @@
-"""Owner decisions 132 and 133: the CMS owners units run on the task. The original lives only in the task's workspace and only the filtered copy reaches S3."""
+"""The CMS owners and ONC units run on the task like any unit: all the data is public, so each release is stored whole under raw/ as published."""
 
 from __future__ import annotations
 
 import dataclasses
 import io
 import json
-import logging
 import urllib.request
 import urllib.response
 from email.message import Message
@@ -22,12 +21,11 @@ from scripts.acquisition import redownload as harness
 from scripts.acquisition import store_cms_owners as collector
 from scripts.acquisition import store_onc_mu as onc_collector
 from scripts.acquisition.run_cms_owners_e2e import LIMITS, PEOPLE, Web, synthetic_plan
-from scripts.acquisition.run_onc_mu_e2e import CLINICIAN_NPIS, locked
 from scripts.acquisition.run_onc_mu_e2e import body as onc_body
+from scripts.acquisition.run_onc_mu_e2e import locked
 from scripts.acquisition.run_redownload_e2e import Fixture
 from scripts.acquisition.s3_store import StorageError, encoded_json, write_once
 from scripts.acquisition.source_registry import read_json
-from scripts.acquisition.tests.leak_check import channel_leaks, tree_leaks
 from scripts.acquisition.tests.task_fixture import task_run
 from tests.support import check
 
@@ -157,101 +155,48 @@ def stored_unit(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, bodie
 def run_task(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, bodies: dict, bucket: TaskS3, web: Web | None = None) -> tuple[harness.Run, dict, dict]:
     fixture = Fixture(folder)
     entry, release = stored_unit(monkeypatch, folder, plan, bodies, fixture)
-    run = task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket), task_filtered=True)
+    run = task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket))
     return run, entry, release
 
 
-def clean_of_names(root: Path, channels: dict[str, bytes | str]) -> None:
-    for name in NAMES:
-        check(tree_leaks(name, root) == [], f"a name reached {tree_leaks(name, root)}")
-        check(channel_leaks(name, channels) == [], f"a name reached {channel_leaks(name, channels)}")
-
-
-def originals_under(root: Path) -> list[Path]:
-    return [path for path in root.rglob("*") if path.is_file() and "private_original" in path.parts]
-
-
-def test_the_task_stores_only_the_filtered_copy_under_raw_and_keeps_no_original(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owners: Any, capfd: pytest.CaptureFixture, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_the_task_stores_the_owners_release_whole_under_raw_with_no_switch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owners: Any) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    caplog.set_level(logging.DEBUG)
     plan, bodies = owners
     bucket = TaskS3()
     run, entry, release = run_task(monkeypatch, tmp_path, plan, bodies, bucket)
     summary = harness.execute(run)
-    check(summary["outcomes"] == {"exact_match": 1}, f"the fresh derived copy matches the stored one: {summary}")
+    check(summary["outcomes"] == {"exact_match": 1}, f"the fresh release matches the stored one: {summary}")
     check(bool(bucket.objects) and all(key.startswith("raw/") for key in bucket.objects), f"keys outside raw/: {sorted(bucket.objects)}")
-    derived = (tmp_path / "stored_owners" / "batches" / release["id"] / "capture/derived/organisation_owners.csv").read_bytes()
-    check(any(data == derived for _, data, _ in bucket.objects.values()), "the filtered copy is stored")
     original = bodies[release["url"]]
-    check(not any(data == original for _, data, _ in bucket.objects.values()), "the original is not stored")
-    for name in NAMES:
-        check(
-            channel_leaks(name, {key: data for key, (_, data, _) in bucket.objects.items()} | {"keys": str(sorted(bucket.objects))}) == [],
-            "a stored object holds a name",
-        )
-    check(originals_under(run.state_root) == [], "no original remains in the workspace")
-    captured = capfd.readouterr()
-    clean_of_names(run.state_root, {"summary": str(summary), "stdout": captured.out, "stderr": captured.err, "log": caplog.text})
-    proofs = [json.loads(data) for key, (_, data, _) in bucket.objects.items() if key.endswith("download_proof.json")]
+    check(any(data == original for _, data, _ in bucket.objects.values()), "the release is stored as published")
+    receipts = [json.loads(data) for key, (_, data, _) in bucket.objects.items() if key.endswith("/receipt.json")]
     check(
-        len(proofs) == 1 and proofs[0]["sha256"] == harness.digest(original) and proofs[0]["bytes"] == len(original),
-        "metadata of the original stays as the inventory",
+        len(receipts) == 1
+        and receipts[0]["governance"]["contains_pii"] is True
+        and contract.PSEUDONYMIZE_AT_LOAD in receipts[0]["governance"]["use_restrictions"],
+        "the receipt says the public release names people and bronze pseudonymizes them",
     )
-    check(proofs[0]["original_retention"] == collector.TASK_RETENTION, f"the proof states where the original lived: {proofs[0]['original_retention']}")
+    proofs = [json.loads(data) for key, (_, data, _) in bucket.objects.items() if key.endswith("download_proof.json")]
+    check(len(proofs) == 1 and proofs[0]["sha256"] == harness.digest(original) and "original_retention" not in proofs[0], "the proof names the stored release")
+    check(not any("private_original" in path.parts for path in run.state_root.rglob("*")), "no private folder is made")
     check(harness.execute(dataclasses.replace(run, cache={}))["attempted"] == 0, "the real outcome survives a restart's recomputation")
 
 
-@pytest.mark.parametrize("failure", ["bad bytes", "parse error with a name", "storage refused", "removal of leftovers"])
-def test_a_failing_unit_leaves_no_original_and_no_name(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owners: Any, capfd: pytest.CaptureFixture, caplog: pytest.LogCaptureFixture, failure: str
-) -> None:
+@pytest.mark.parametrize("failure", ["bad bytes", "storage refused"])
+def test_a_failing_owners_unit_is_blocked_and_stores_no_release(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owners: Any, failure: str) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    caplog.set_level(logging.DEBUG)
     plan, bodies = owners
     bucket = TaskS3(refuse_puts=failure == "storage refused")
     web = Web(dict(bodies))
     run, entry, release = run_task(monkeypatch, tmp_path, plan, bodies, bucket, web)
     if failure == "bad bytes":
         web.bodies[release["url"]] = bodies[release["url"]].replace(b"ENROLLMENT ID", b"OTHER ID")
-    if failure == "parse error with a name":
-
-        def refuse(raw: bytes, chosen: dict) -> Any:
-            raise ValueError(f"cell holds {NAMES[0]}")
-
-        monkeypatch.setattr(contract, "derive", refuse)
-    if failure == "removal of leftovers":
-        harness.execute(run, max_units=0)
-        left = run.state_root / "collectors/cms_owners_org/private_original" / release["id"] / "run_01/attempt_01"
-        left.mkdir(parents=True)
-        (left / "left.csv").write_text(NAMES[0])
-        (left / "transport.json").write_text("{}")
     summary = harness.execute(run)
-    if failure == "removal of leftovers":
-        check(summary["outcomes"] == {"exact_match": 1}, f"a crash leftover does not block the unit: {summary}")
-    else:
-        check(summary["outcomes"] == {"blocked": 1}, f"the unit is blocked: {summary}")
-    check(originals_under(run.state_root) == [], "no original remains in the workspace")
-    captured = capfd.readouterr()
-    clean_of_names(run.state_root, {"summary": str(summary), "stdout": captured.out, "stderr": captured.err, "log": caplog.text})
-    if failure != "removal of leftovers":
-        check(not any(key.endswith(".csv") and b"Example" in data for key, (_, data, _) in bucket.objects.items()), "no original reached S3")
+    check(summary["outcomes"] == {"blocked": 1}, f"the unit is blocked: {summary}")
+    check(not any(key.endswith(".csv") for key in bucket.objects), "no release reached S3")
 
 
-def test_the_task_without_the_flag_lists_the_owners_unit_and_fetches_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, owners: Any) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    plan, bodies = owners
-    web = Web(bodies)
-    fixture = Fixture(tmp_path)
-    entry, _ = stored_unit(monkeypatch, tmp_path, plan, bodies, fixture)
-    run = task_run(tmp_path, fixture, opener=opener(web), task_storage=storage(TaskS3()))
-    summary = harness.execute(run)
-    check(summary["attempted"] == 0 and summary["not_attempted"]["task_filtered"] == [entry["snapshot_id"]], f"the unit is named: {summary}")
-    check(web.requests == 0, "nothing was fetched")
-
-
-def test_task_storage_refuses_anything_but_its_three_reads_and_writes_and_any_original(tmp_path: Path) -> None:
+def test_task_storage_refuses_anything_but_its_three_reads_and_writes(tmp_path: Path) -> None:
     client = storage(TaskS3())
     with pytest.raises(StorageError):
         client.call("sts", "get-caller-identity")
@@ -260,11 +205,6 @@ def test_task_storage_refuses_anything_but_its_three_reads_and_writes_and_any_or
     (tmp_path / "plain.csv").write_text("a")
     with pytest.raises(StorageError):
         client.call("s3api", "put-object", ["--key", "other/a", "--body", str(tmp_path / "plain.csv"), "--if-none-match", "*"])
-    original = tmp_path / "private_original" / "release" / "owners.csv"
-    original.parent.mkdir(parents=True)
-    original.write_text(NAMES[0])
-    with pytest.raises(StorageError):
-        client.call("s3api", "put-object", ["--key", "raw/a", "--body", str(original), "--if-none-match", "*"])
 
 
 @pytest.fixture
@@ -300,73 +240,33 @@ def onc_task(monkeypatch: pytest.MonkeyPatch, folder: Path, plan: dict, data: by
         "flags": [],
     }
     fixture.entries.append(entry)
-    return task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket), task_filtered=True), entry
+    return task_run(folder, fixture, opener=opener(web or Web(bodies)), task_storage=storage(bucket)), entry
 
 
-def clean_of_clinicians(root: Path, channels: dict[str, bytes | str]) -> None:
-    for npi in CLINICIAN_NPIS:
-        check(tree_leaks(npi, root) == [], f"a clinician identifier reached {tree_leaks(npi, root)}")
-        check(channel_leaks(npi, channels) == [], f"a clinician identifier reached {channel_leaks(npi, channels)}")
-
-
-def test_the_task_stores_only_the_hospital_rows_of_the_onc_file_under_raw_and_keeps_no_original(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, onc: Any, capfd: pytest.CaptureFixture, caplog: pytest.LogCaptureFixture
-) -> None:
+def test_the_task_stores_the_onc_file_whole_under_raw_with_no_switch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, onc: Any) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    caplog.set_level(logging.DEBUG)
     plan, data = onc
     bucket = TaskS3()
     run, _entry = onc_task(monkeypatch, tmp_path, plan, data, bucket)
     summary = harness.execute(run)
-    check(summary["outcomes"] == {"exact_match": 1}, f"the fresh derived copy matches the stored one: {summary}")
+    check(summary["outcomes"] == {"exact_match": 1}, f"the fresh file matches the stored one: {summary}")
     check(bool(bucket.objects) and all(key.startswith("raw/") for key in bucket.objects), f"keys outside raw/: {sorted(bucket.objects)}")
-    check(not any(stored == data for _, stored, _ in bucket.objects.values()), "the original is not stored")
-    for npi in CLINICIAN_NPIS:
-        check(channel_leaks(npi, {key: stored for key, (_, stored, _) in bucket.objects.items()}) == [], "a stored object holds a clinician identifier")
-    check(originals_under(run.state_root) == [], "no original remains in the workspace")
-    captured = capfd.readouterr()
-    clean_of_clinicians(run.state_root, {"summary": str(summary), "stdout": captured.out, "stderr": captured.err, "log": caplog.text})
-    proofs = [json.loads(stored) for key, (_, stored, _) in bucket.objects.items() if key.endswith("download_proof.json")]
-    check(len(proofs) == 1 and proofs[0]["original_retention"] == onc_collector.TASK_RETENTION, "the proof states where the original lived")
+    check(any(stored == data for _, stored, _ in bucket.objects.values()), "the file is stored as published")
+    receipts = [json.loads(stored) for key, (_, stored, _) in bucket.objects.items() if key.endswith("/receipt.json")]
+    check(len(receipts) == 1 and receipts[0]["governance"]["contains_pii"] is True, "the receipt says the public file names people")
+    check(not any("private_original" in path.parts for path in run.state_root.rglob("*")), "no private folder is made")
     check(harness.execute(dataclasses.replace(run, cache={}))["attempted"] == 0, "the real outcome survives a restart's recomputation")
 
 
-@pytest.mark.parametrize("failure", ["changed bytes", "parse error with an identifier", "storage refused", "removal of leftovers"])
-def test_a_failing_onc_unit_leaves_no_original_and_no_identifier(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, onc: Any, capfd: pytest.CaptureFixture, caplog: pytest.LogCaptureFixture, failure: str
-) -> None:
+@pytest.mark.parametrize("failure", ["changed bytes", "storage refused"])
+def test_a_failing_onc_unit_is_blocked_and_stores_no_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, onc: Any, failure: str) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    caplog.set_level(logging.DEBUG)
     plan, data = onc
     bucket = TaskS3(refuse_puts=failure == "storage refused")
     web = Web({plan["url"]: data})
     run, _entry = onc_task(monkeypatch, tmp_path, plan, data, bucket, web)
     if failure == "changed bytes":
         web.bodies[plan["url"]] = data + b'"changed"'
-    if failure == "parse error with an identifier":
-
-        def refuse(path: Path, chosen: dict) -> Any:
-            raise ValueError(f"row holds {CLINICIAN_NPIS[0]}")
-
-        monkeypatch.setattr(onc_contract, "derive", refuse)
-    if failure == "removal of leftovers":
-        harness.execute(run, max_units=0)
-        left = run.state_root / "collectors/onc_mu_hospital/private_original/run_01/attempt_01"
-        left.mkdir(parents=True)
-        (left / "left.csv").write_text(CLINICIAN_NPIS[0])
     summary = harness.execute(run)
-    check(summary["outcomes"] == ({"exact_match": 1} if failure == "removal of leftovers" else {"blocked": 1}), f"outcome: {summary}")
-    check(originals_under(run.state_root) == [], "no original remains in the workspace")
-    captured = capfd.readouterr()
-    clean_of_clinicians(run.state_root, {"summary": str(summary), "stdout": captured.out, "stderr": captured.err, "log": caplog.text})
-    if failure != "removal of leftovers":
-        check(not any(key.endswith(".csv") for key in bucket.objects), "no copy reached S3")
-
-
-def test_the_task_without_the_flag_lists_the_onc_unit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, onc: Any) -> None:
-    monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/")
-    plan, data = onc
-    run, entry = onc_task(monkeypatch, tmp_path, plan, data, TaskS3())
-    run.task_filtered = False
-    summary = harness.execute(run)
-    check(summary["attempted"] == 0 and summary["not_attempted"]["task_filtered"] == [entry["snapshot_id"]], f"the unit is named: {summary}")
+    check(summary["outcomes"] == {"blocked": 1}, f"outcome: {summary}")
+    check(not any(key.endswith(".csv") for key in bucket.objects), "no file reached S3")

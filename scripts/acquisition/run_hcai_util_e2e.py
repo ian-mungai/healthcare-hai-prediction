@@ -5,7 +5,6 @@ import copy
 import io
 import json
 import shutil
-import stat
 import sys
 import tempfile
 import zipfile
@@ -213,17 +212,6 @@ def synthetic_plan(root: Path) -> tuple[dict, Path, dict[str, bytes]]:
     return plan, path, {y["url"]: body for y in plan["years"]}
 
 
-def leaked(text: str) -> bool:
-    """True when any synthetic person's name, phone or street address appears, in any case or spacing."""
-    flat = contract.normalized(text)
-    return any(contract.normalized(p) in flat for p in [*PEOPLE, "Pat Example", "Pat Q. Example"]) or "010 0001" in flat or "example way" in flat
-
-
-def outside_private(run: Path) -> str:
-    """Everything outside the private original folder, as text."""
-    return "\n".join(p.read_bytes().decode("utf-8", "ignore") for p in run.rglob("*") if p.is_file() and "private_original" not in p.parts)
-
-
 def exercise(root: Path) -> list[dict]:
     """Use production orchestration with synthetic workbooks and versioned fake storage."""
     plan, plan_path, bodies = synthetic_plan(root)
@@ -256,45 +244,30 @@ def exercise(root: Path) -> list[dict]:
         receipt_path = run / "batches" / last["id"] / "capture/receipt.json"
         scenario("offline_receipt_replay", lambda: verify_local(receipt_path))
 
-        def original_private() -> None:
-            originals = list((run / "private_original").rglob("*.xlsx"))
-            require(len(originals) == 1 and originals[0].read_bytes() == bodies[last["url"]], "Original not kept unchanged locally")
-            require(stat.S_IMODE(originals[0].stat().st_mode) == 0o600, "Original is not owner-only")
+        def stored_whole() -> None:
             capture = receipt_path.parent
-            require(not (capture / "raw").exists() and not (capture / "audit").exists(), "Snapshot holds original bytes")
-            require(not leaked(outside_private(run)), "Personal detail outside the private original")
+            name = contract.stored_name(last)
+            paths = {item["storage_path"] for item in read_json(receipt_path)["artifacts"]}
+            require(paths == {f"raw/{name}", "evidence/download_proof.json", "references/scope.json"}, f"Artifact set differs: {paths}")
+            require((capture / "raw" / name).read_bytes() == bodies[last["url"]], "The workbook is not stored as published")
+            require(not (run / "private_original").exists() and not (capture / "sheets").exists(), "A private folder or a derived copy was made")
+            stats = read_json(capture / "evidence/download_proof.json")["statistics"]
+            require(stats["hospitals"] == {"Page 1-6": 3, "NonResp 1-6": 1} and stats["preliminary"] is True, f"Counts: {stats}")
 
-        scenario("original_local_owner_only_and_outside_snapshot", original_private)
+        scenario("workbook_stored_whole_as_published", stored_whole)
 
-        def redactions() -> None:
-            import csv
+        def public_with_names() -> None:
+            governance = read_json(receipt_path)["governance"]
+            require(governance["access_class"] == "public" and governance["contains_pii"] is True, "Governance does not say the public file names people")
+            require(contract.REDACT_AT_LOAD in governance["use_restrictions"], "The bronze redaction restriction is missing")
 
-            rows = list(csv.reader(io.StringIO((receipt_path.parent / "sheets/page_1_6.csv").read_text())))
-            h = {c: i for i, c in enumerate(rows[0])}
-            one, owner, copied = rows[5], rows[6], rows[7]
-            for c in contract.REDACT:
-                require(one[h[c]] in {contract.REPLACEMENT, ""}, f"{c} not redacted")
-            require(one[h["FAC_NAME"]] == "SYNTHETIC GENERAL HOSPITAL" and one[h["FAC_PAR_CORP_NAME"]] == "SYNTHETIC HEALTH SYSTEM", "Business names lost")
-            require([owner[h[c]] for c in contract.OWNER_REDACT] == [contract.REPLACEMENT] * 3 and owner[h["FAC_PAR_CORP_STATE"]] == "CA", "Owner rule")
-            require(copied[h["FAC_NAME"]] == contract.REPLACEMENT and copied[h["EQUIP_DESC"]] == contract.REPLACEMENT, "Copied names kept")
-            require(owner[h["EQUIP_DESC"]] == "#N/A" and one[h["FAC_OP_PER_BEGIN_DT"]] == "43101" and rows[1][-1] == "label note", "Published values changed")
-            stats = read_json(receipt_path.parent / "evidence/download_proof.json")["statistics"]
-            require(
-                stats["hospitals"] == {"Page 1-6": 3, "NonResp 1-6": 1}
-                and stats["contact_detail_cells"] == 0
-                and stats["individual_owner_rows"] == 1
-                and stats["preliminary"] is True,
-                "Counts",
-            )
-
-        scenario("personal_owner_and_copied_names_redacted_values_kept", redactions)
+        scenario("receipt_records_public_names_redacted_in_bronze", public_with_names)
         scenario("capture_and_version_verified_storage", lambda: execute(plan, last, run, True, True, client, OUTPUTS, web, LIMITS))
 
-        def stored_clean() -> None:
-            stored = "\n".join(o["body"].decode("utf-8", "ignore") for o in client.objects.values())
-            require(not leaked(stored) and not any(k.endswith(".xlsx") or "private_original" in k for k in client.objects), "S3 received personal data")
-
-        scenario("s3_holds_no_personal_data_or_original", stored_clean)
+        scenario(
+            "s3_holds_the_workbook_as_published",
+            lambda: require(any(o["body"] == bodies[last["url"]] for o in client.objects.values()), "S3 does not hold the workbook as published"),
+        )
         before, objects, requests = inventory(run), copy.deepcopy(client.objects), web.requests
 
         def repeat() -> None:
@@ -304,7 +277,8 @@ def exercise(root: Path) -> list[dict]:
         scenario("repeat_one_no_effects", repeat)
         scenario("repeat_two_no_effects", repeat)
         scenario("replay_without_network", lambda: execute(plan, last, run, False, True, client, OUTPUTS, Offline({}), LIMITS))
-        derive_scenarios(scenario, last)
+        check_scenarios(scenario, last)
+        version_1_scenario(scenario, plan, last, root, bodies[last["url"]])
         fetch_scenarios(scenario, plan, first, root, bodies)
         corrupt_scenarios(scenario, receipt_path, bodies[last["url"]])
         storage_scenarios(scenario, plan, first, last, root, run, client, web)
@@ -338,8 +312,8 @@ def exercise(root: Path) -> list[dict]:
     return scenarios
 
 
-def derive_scenarios(scenario: Any, entry: dict) -> None:
-    """Every content defect named in the failure modes stops that year."""
+def check_scenarios(scenario: Any, entry: dict) -> None:
+    """A workbook that is not the published shape stops that year."""
 
     def data_edit(change: Any) -> Any:
         return lambda book: change(book["Page 1-6"])
@@ -352,20 +326,7 @@ def derive_scenarios(scenario: Any, entry: dict) -> None:
 
         return change
 
-    def drop_column(name: str) -> Any:
-        def change(book: dict) -> None:
-            for sheet in contract.DATA_SHEETS:
-                i = book[sheet][0].index(name)
-                for row in book[sheet]:
-                    del row[i]
-
-        return change
-
-    widened = entry | {"header": [*HEADER, "CONTACT_EMAIL"]}
-    narrowed = entry | {"header": [c for c in HEADER if c != "REV_REPT_PREP_NAME"]}
     cases: list[tuple[str, dict, bytes, str]] = [
-        ("unreviewed_personal_column", widened, workbook(sheet_rows(add_column("CONTACT_EMAIL"))), "unreviewed personal-looking column"),
-        ("redaction_column_missing", narrowed, workbook(sheet_rows(drop_column("REV_REPT_PREP_NAME"))), "redaction column missing"),
         ("header_differs_from_plan", entry, workbook(sheet_rows(add_column("NEW_MEASURE"))), "cell beyond the header"),
         ("sheets_differ", entry, workbook(sheet_rows(lambda b: b.pop("Crosswalk"))), "sheets differ"),
         ("formula_cell", entry, workbook(sheet_rows(), formula=True), "contains formulas"),
@@ -375,25 +336,40 @@ def derive_scenarios(scenario: Any, entry: dict) -> None:
         ("not_a_workbook", entry, b"<html><body>error</body></html>", "not a workbook package"),
     ]
     for name, plan_entry, raw, error in cases:
-        scenario(name, lambda plan_entry=plan_entry, raw=raw: contract.derive(raw, plan_entry), error)
+        scenario(name, lambda plan_entry=plan_entry, raw=raw: contract.check_raw(raw, plan_entry), error)
 
-    def contacts_removed() -> None:
-        def edit(book: dict) -> None:
-            book["Tips"].append(["Ask someone@example.org"])
-            book["Page 1-6"][5][-1] = "call " + PHONE_TWO
-            book["Page 1-6"][7][book["Page 1-6"][0].index("FAC_PAR_CORP_NAME")] = "billing@example.org"
 
-        files, stats = contract.derive(workbook(sheet_rows(edit)), entry)
-        text = b"".join(files.values()).decode()
-        require(stats["contact_detail_cells"] == 3 and "example.org" not in text and PHONE_TWO not in text, "Contact details kept")
+def version_1_scenario(scenario: Any, plan: dict, entry: dict, root: Path, original: bytes) -> None:
+    """A capture stored under plan version 1 keeps verifying: its abstracted sheets are rebuilt from the original kept on the Mac."""
 
-    scenario("contact_details_in_other_fields_redacted", contacts_removed)
+    def stored_version_1() -> None:
+        from scripts.acquisition.capture import receipt_validator
 
-    def label_numbers_not_names() -> None:
-        files, stats = contract.derive(workbook(sheet_rows()), entry)
-        require(stats["copied_name_cells"] == 2 and b"1.7" in files["sheets/page_1_6.csv"], "Label-row numbers treated as names")
+        collection = root / "version_1"
+        capture = collection / "batches" / entry["id"] / "capture"
+        kept = collection / "private_original" / str(entry["year"]) / "run_01" / "attempt_01" / contract.stored_name(entry)
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes(original)
+        files, statistics = contract.derive(original, entry)
+        for name, content in files.items():
+            write_once(capture / name, content)
+        proof = {"requested_url": entry["url"], "sha256": entry["sha256"], "original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
+        write_once(capture / "evidence/download_proof.json", encoded_json(proof))
+        write_once(capture / "references/scope.json", encoded_json(plan))
+        year = entry["year"]
+        receipt = {
+            "snapshot_status": "acquired_unvalidated",
+            "artifacts": [{"storage_path": name} for name in [*contract.roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"]],
+            "acquisition": {"requested_url": entry["url"], "http_status": 200},
+            "governance": {"contains_pii": False, "license_or_terms_url": contract.TERMS_URL},
+            "measurement_periods": [{"start_date": f"{year}-01-01", "end_date": f"{year}-12-31"}],
+        }
+        lineage = {"year_id": entry["id"], "plan_sha256": canonical_hash(plan), "expected_sha256": entry["sha256"], "model_eligible": False}
+        lineage |= {"registry_sha256": plan["registry_sha256"], "access_release_sha256": plan["access_release"]["sha256"]}
+        lineage |= {"code_sha256": contract.collector_code_hashes(), "schema_sha256": canonical_hash(receipt_validator().schema)}
+        contract.verify_capture(receipt, {"source_id": contract.SOURCE_ID}, lineage, capture, False)
 
-    scenario("label_row_numbers_are_not_names", label_numbers_not_names)
+    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, entry: dict, root: Path, bodies: dict[str, bytes]) -> None:
@@ -420,7 +396,7 @@ def fetch_scenarios(scenario: Any, plan: dict, entry: dict, root: Path, bodies: 
 
 
 def corrupt_scenarios(scenario: Any, receipt_path: Path, original_bytes: bytes) -> None:
-    """Replay refuses tampered sheets, originals, lineage and governance, even when hashes are resealed."""
+    """Replay refuses tampered files, lineage and governance, even when hashes are resealed."""
     collection = receipt_path.parents[3]
 
     def corrupt(kind: str) -> None:
@@ -429,24 +405,17 @@ def corrupt_scenarios(scenario: Any, receipt_path: Path, original_bytes: bytes) 
         target = target_root / receipt_path.relative_to(collection).parent
         receipt = read_json(target / "receipt.json")
         lineage = json.loads(receipt["lineage"]["extraction_or_query"])
-        original = next((target_root / "private_original").rglob("*.xlsx"))
-
-        def reseal(relative: str) -> None:
+        stored = next((target / "raw").glob("*.xlsx"))
+        if kind == "resealed_changed_workbook":
+            stored.write_bytes(original_bytes + b"\0")
             for item in receipt["artifacts"]:
-                if item["storage_path"] == relative:
-                    item["sha256"], item["byte_count"] = fingerprint(target / relative)
-
-        if kind == "resealed_sheet_with_name":
-            path = target / "sheets/page_1_6.csv"
-            path.write_bytes(path.read_bytes() + b"Lee Sample\n")
-            reseal("sheets/page_1_6.csv")
-        elif kind == "original_changed":
-            original.write_bytes(original_bytes + b"\0")
-        elif kind == "original_deleted":
-            original.unlink()
-        elif kind == "original_copied_into_snapshot":
-            (target / "raw").mkdir()
-            (target / "raw" / original.name).write_bytes(original.read_bytes())
+                if item["storage_path"] == f"raw/{stored.name}":
+                    item["sha256"], item["byte_count"] = fingerprint(stored)
+        elif kind == "stored_workbook_deleted":
+            stored.unlink()
+        elif kind == "derived_copy_added":
+            (target / "sheets").mkdir()
+            (target / "sheets" / "page_1_6.csv").write_bytes(b"x\n")
         elif kind == "model_promotion":
             lineage["model_eligible"] = True
         elif kind == "unreviewed_code":
@@ -455,22 +424,21 @@ def corrupt_scenarios(scenario: Any, receipt_path: Path, original_bytes: bytes) 
             lineage["plan_sha256"] = "0" * 64
         elif kind == "access_release_binding":
             lineage["access_release_sha256"] = "0" * 64
-        elif kind == "pii_governance":
-            receipt["governance"]["contains_pii"] = True
+        elif kind == "names_hidden_in_governance":
+            receipt["governance"]["contains_pii"] = False
         receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
         (target / "receipt.json").write_bytes(encoded_json(receipt))
         verify_local(target / "receipt.json")
 
     for kind, error in [
-        ("resealed_sheet_with_name", "derived sheet differs"),
-        ("original_changed", "original hash differs"),
-        ("original_deleted", "No such file"),
-        ("original_copied_into_snapshot", "holds original bytes"),
+        ("resealed_changed_workbook", "workbook hash differs"),
+        ("stored_workbook_deleted", "Artifact is missing"),
+        ("derived_copy_added", "holds a derived copy"),
         ("model_promotion", "hold differs"),
         ("unreviewed_code", "Unreviewed HCAI utilization"),
         ("wrong_plan", "plan differs"),
         ("access_release_binding", "access release binding differs"),
-        ("pii_governance", "governance differs"),
+        ("names_hidden_in_governance", "governance differs"),
     ]:
         scenario(kind, lambda kind=kind: corrupt(kind), error)
 
@@ -531,7 +499,7 @@ def main() -> None:
     passed = all(s["passed"] for s in scenarios)
     report = {
         "status": "passed" if passed else "failed",
-        "feature": "HCAI utilization workbooks: original kept locally, abstracted sheet CSVs through versioned S3 storage",
+        "feature": "HCAI utilization workbooks: each workbook stored whole under raw/ as published, through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": contract.collector_code_hashes(),

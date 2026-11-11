@@ -1,4 +1,4 @@
-"""Write the locked plan for ONC's meaningful-use attestation file, once, from the recorded private download."""
+"""Write the locked plan for ONC's meaningful-use attestation file, once, from the recorded download."""
 
 import sys
 
@@ -7,13 +7,13 @@ from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json
 
 DOWNLOADS_PATH = "data/acquisition_planning/onc_mu_downloads.json"
-APPROVAL = "Collect hospital rows only as a separate Medicare meaningful-use 2011-2017 series; the original stays on this Mac."
+APPROVAL = "Store the Medicare meaningful-use 2011-2017 file whole under raw/ as published; bronze pseudonymizes the clinicians at load."
 
 
 def build(record: dict) -> dict:
     """Bind the file to its recorded download; no network access."""
     plan = {
-        "version": 1,
+        "version": 2,
         "source_id": contract.SOURCE_ID,
         "scope": APPROVAL,
         "series": "Medicare meaningful use 2011-2017 (not Promoting Interoperability; C071-C074 holds kept)",
@@ -21,8 +21,6 @@ def build(record: dict) -> dict:
         "sha256": record["sha256"],
         "bytes": record["bytes"],
         "header": record["header"],
-        "hospital_value": contract.HOSPITAL,
-        "dropped_columns": contract.DROPPED,
         "limits": {"max_bytes": contract.MAX_BYTES, "max_seconds": contract.MAX_SECONDS},
         "downloads": DOWNLOADS_PATH,
         "registry_sha256": canonical_hash(load_registry()),

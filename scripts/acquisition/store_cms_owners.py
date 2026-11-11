@@ -1,9 +1,8 @@
-"""Capture CMS Hospital All Owners releases locally and store organisation owner rows only, with verified S3 storage.
+"""Capture CMS Hospital All Owners releases and store each one whole under raw/ as published, with verified S3 storage.
 
-Offline by default. ``--fetch`` downloads missing originals into an owner-only folder that never enters a snapshot or S3;
-``--execute`` stores the derived CSV, download proof and scope. Each release is independent: one that fails is held and
-named, never partly stored, and the others continue. On the run 3 task the folder is the task's temporary workspace and
-the harness removes the original when the unit ends.
+All the data is public. Offline by default. ``--fetch`` downloads missing releases into the collection's downloads folder; ``--execute``
+stores the release as published, its download proof and the scope. The receipt records that the release names individual owners, whom
+bronze pseudonymizes at load. Each release is independent: one that fails is held and named, never partly stored, and the others continue.
 """
 
 import argparse
@@ -29,22 +28,7 @@ from scripts.infrastructure.render_project_config import load_configuration
 
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/cms_hospital_owners"
-MAC_RETENTION = "This Mac only, owner-only; names individual owners; never uploaded; deleted at collection closeout after user confirmation"
-TASK_RETENTION = "Run 3 task workspace only, owner-only; names individual owners; never uploaded; removed when the unit ended"
-TRANSFORMATIONS = [
-    "Kept rows with TYPE - OWNER = O; dropped name, title, street address, city and ZIP columns.",
-    "Replaced owner organisation or DBA names containing an individual owner's whole name with [REDACTED].",
-    "Other kept cells unchanged; written as UTF-8 CSV with LF line endings.",
-]
-
-
-def private(path: Path, top: Path) -> None:
-    """Owner-only permissions on the original and every folder up to the private root."""
-    path.chmod(0o600 if path.is_file() else 0o700)
-    for parent in path.parents:
-        if not parent.is_relative_to(top):
-            break
-        parent.chmod(0o700)
+DOWNLOADS = "downloads"
 
 
 def completed_download(folder: Path, name: str) -> tuple[Path, dict] | None:
@@ -58,20 +42,16 @@ def completed_download(folder: Path, name: str) -> tuple[Path, dict] | None:
 
 
 def fetch(release: dict, root: Path, allowed: bool, opener: Any, limits: Limits) -> tuple[Path, dict]:
-    """Reuse a verified original, or download one into private_original/; failures stay there as failed attempts."""
-    top = root / "private_original"
-    folder = top / release["id"]
+    """Reuse a verified download, or download the release into downloads/; failures stay there as failed attempts."""
+    folder = root / DOWNLOADS / release["id"]
     name = contract.stored_name(release)
     found = completed_download(folder, name)
     if found is not None:
         return found
     require(allowed, "CMS owners original not captured; run with --fetch")
     folder.mkdir(parents=True, exist_ok=True)
-    private(folder, top)
     run = folder / f"run_{len(list(folder.glob('run_*'))) + 1:02}"
     result = download(release["url"], run, name, "csv", "data", limits, opener=opener)
-    for path in run.rglob("*"):
-        private(path, top)
     require(result.complete, "CMS owners download failed")
     found = completed_download(folder, name)
     if found is None:
@@ -79,13 +59,13 @@ def fetch(release: dict, root: Path, allowed: bool, opener: Any, limits: Limits)
     return found
 
 
-def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: Path, root: Path, retention: str = MAC_RETENTION) -> Path:
-    """Write the derived CSV, download proof, scope and receipt; the original stays outside the snapshot."""
+def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: Path) -> Path:
+    """Write the release as published, its download proof, the scope and the receipt."""
     registry, validator = load_registry(expected_sha256=plan["registry_sha256"]), receipt_validator()
     require(plan["registry_sha256"] == canonical_hash(registry), "CMS owners base registry changed")
     source = next(s for s in registry["sources"] if s["source_id"] == contract.SOURCE_ID)
     raw = original.read_bytes()
-    derived, statistics = contract.derive(raw, release)
+    statistics = contract.check_raw(raw, release)
     proof = {
         "requested_url": release["url"],
         "resolved_url": meta["resolved_url"],
@@ -94,14 +74,11 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         "media_type": meta["media_type"],
         "sha256": meta["sha256"],
         "bytes": meta["byte_count"],
-        "original_path": original.relative_to(root).as_posix(),
-        "original_retention": retention,
         "statistics": statistics,
-        "transformations": TRANSFORMATIONS,
     }
     snapshot = branch / "capture"
     files = (
-        ("derived/organisation_owners.csv", derived, "data"),
+        (f"raw/{contract.stored_name(release)}", raw, "data"),
         ("evidence/download_proof.json", encoded_json(proof), "export_receipt"),
         ("references/scope.json", encoded_json(plan), "layout"),
     )
@@ -112,7 +89,7 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         "release": {
             "advertised_history": "Hospital All Owners, monthly releases on data.cms.gov",
             "dataset_version": None,
-            "observed_history": f"{release['title']}; organisation owner rows only; C067/C068 holds preserved",
+            "observed_history": f"{release['title']}; stored whole as published",
             "publisher_release_label": release["title"],
             "publisher_updated_at": None,
             "release_date": None,
@@ -131,14 +108,11 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         "governance": {
             "access_class": "public",
             "contains_phi": False,
-            "contains_pii": False,
+            "contains_pii": True,
             "credential_reference": None,
             "credentials_required": False,
             "license_or_terms_url": contract.TERMS_URL,
-            "use_restrictions": [
-                "Project-transformed subset of a CMS file: organisation owner rows only, not an official CMS file.",
-                "Individual owners are removed; never re-link this file to individual owners.",
-            ],
+            "use_restrictions": ["Public CMS file stored unchanged.", contract.PSEUDONYMIZE_AT_LOAD],
         },
     }
     stamp = meta["retrieved_at_utc"].replace("-", "").replace(":", "")[:15] + "Z"
@@ -152,16 +126,17 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         tool_version="1.0.0",
         pagination={"required": False, "strategy": "One CSV per monthly release", "page_count": 1, "termination_verified": True, "deduplication_keys": []},
     )
-    snapshot_files = [artifact(snapshot / name, snapshot, role, i, False) for i, (name, _, role) in enumerate(files, 1)]
+    # The release is the published response; the proof and the scope are files this capture writes.
+    snapshot_files = [artifact(snapshot / name, snapshot, role, i, i == 1) for i, (name, _, role) in enumerate(files, 1)]
     receipt["artifacts"] = snapshot_files
-    columns = contract.kept_columns(release["layout"])
+    columns = contract.HEADERS[release["layout"]]
     receipt["schema_profile"].update(
-        encoding="utf-8",
+        encoding=statistics["encoding"],
         delimiter=",",
         native_headers=columns,
         schema_fingerprint_sha256=canonical_hash(columns),
-        row_count=statistics["organisation_rows_kept"],
-        parsed_row_count=statistics["organisation_rows_kept"],
+        row_count=statistics["rows_read"],
+        parsed_row_count=statistics["rows_read"],
         native_identifier_fields=["ENROLLMENT ID", "ASSOCIATE ID", "ASSOCIATE ID - OWNER"],
         native_date_fields=["ASSOCIATION DATE - OWNER"],
     )
@@ -169,21 +144,19 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
         parse_status="passed_with_warnings",
         blank_identifier_rows=0,
         pagination_complete=True,
-        checks_passed=["exact_published_header", "owner_type_i_or_o", "no_personal_name_on_kept_rows", "flag_values_y_n_blank", "row_counts_add_up"],
+        checks_passed=["exact_published_header", "owner_type_i_or_o", "enrollment_id_present", "flag_values_y_n_blank"],
         warnings=[
             "Acquisition checks only. Owner roll-up to hospitals, definitions and model eligibility remain unreviewed.",
-            f"Original read as {statistics['encoding']}; {statistics['individual_rows_dropped']} individual owner rows dropped, "
-            f"{statistics['redacted_name_cells']} organisation name cells redacted because they contain an individual owner's name.",
+            f"Read as {statistics['encoding']}; {statistics['individual_rows']} individual owner rows, which bronze pseudonymizes at load.",
             "Missing percentages are not zero; one hospital may have several owner rows.",
             "Private-equity and REIT flags exist only from the April 2025 release; they are never inferred for earlier releases.",
-            "Derived file: " + " ".join(TRANSFORMATIONS),
         ],
     )
     receipt["lineage"]["extraction_or_query"] = json.dumps(
         {
             "mode": "cms_owners_org",
             "route_id": release["route_id"],
-            "scope": f"CMS Hospital All Owners {release['period_start']}, organisation owner rows",
+            "scope": f"CMS Hospital All Owners {release['period_start']}, as published",
             "release_id": release["id"],
             "plan_sha256": canonical_hash(plan),
             "registry_sha256": canonical_hash(registry),
@@ -203,7 +176,7 @@ def make_receipt(plan: dict, release: dict, original: Path, meta: dict, branch: 
 
 
 def verify_local(path: Path) -> dict:
-    """Verify the derived CSV against the local original without network or mutation."""
+    """Verify the capture against its plan without network or mutation."""
     receipt = read_json(path)
     validate_receipt(receipt, receipt_validator(), path.parent)
     source = next(s for s in load_registry()["sources"] if s["source_id"] == contract.SOURCE_ID)
@@ -259,7 +232,6 @@ def execute(
     outputs: dict,
     opener: Any = None,
     limits: Limits | None = None,
-    retention: str = MAC_RETENTION,
 ) -> dict:
     """Run the integrated capture/storage path for one release; a valid completion performs no writes."""
     require(canonical_hash(plan) == canonical_hash(contract.load_plan()) and release in plan["releases"], "CMS owners selected plan or release differs")
@@ -268,7 +240,7 @@ def execute(
     if not receipt_path.exists():
         contract.require_code()
         original, meta = fetch(release, root, allow_fetch, opener, limits or Limits())
-        receipt_path = make_receipt(plan, release, original, meta, branch, root, retention)
+        receipt_path = make_receipt(plan, release, original, meta, branch)
     receipt = verify_local(receipt_path)
     require(json.loads(receipt["lineage"]["extraction_or_query"])["release_id"] == release["id"], "CMS owners selected release differs from receipt")
     done_path = branch / "completed.json"

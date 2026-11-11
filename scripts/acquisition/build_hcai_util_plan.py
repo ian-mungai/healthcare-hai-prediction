@@ -12,8 +12,8 @@ from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES
 
 DOWNLOADS_PATH = "data/acquisition_planning/hcai_util_2018_2025_downloads.json"
 APPROVAL = (
-    "Extend the 2012-2017 public-business-data exception to the 2018-2025 annual files; collect 2018-2024 "
-    "and the 2025 preliminary file; originals on this Mac only; abstracted sheet CSVs only in S3; columns checked on capture."
+    "Collect the 2018-2024 annual files and the 2025 preliminary file; store each workbook whole under raw/ as published; "
+    "bronze redacts the person cells at load ([REDACTED], not pseudonyms); sheets checked on capture."
 )
 
 
@@ -45,13 +45,9 @@ def build(downloads: dict, min_hospitals: int = contract.MIN_HOSPITALS) -> dict:
         years.append(entry | {"id": contract.year_id(entry)})
     release = contract.RELEASE_PATH
     return {
-        "version": 1,
+        "version": 2,
         "source_id": contract.SOURCE_ID,
         "scope": APPROVAL,
-        "redact": contract.REDACT,
-        "not_personal": contract.NOT_PERSONAL,
-        "individual_owner_redact": contract.OWNER_REDACT,
-        "replacement": contract.REPLACEMENT,
         "access_release": {"path": release, "sha256": digest((REPO_ROOT / release).read_bytes())},
         "downloads": DOWNLOADS_PATH,
         "registry_sha256": canonical_hash(load_registry()),

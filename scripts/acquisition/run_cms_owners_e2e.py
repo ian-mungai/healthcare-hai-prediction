@@ -1,4 +1,8 @@
-"""Repeatable synthetic CMS Hospital All Owners capture-to-S3 verification, without live downloads or credentials."""
+"""Repeatable synthetic CMS Hospital All Owners capture-to-S3 verification, without live downloads or credentials.
+
+All the data is public: a capture stores the release whole under raw/ as published and records that it names individual owners, whom bronze
+pseudonymizes at load. Captures stored under plan version 1 (organisation rows only, original on the Mac) keep verifying.
+"""
 
 import argparse
 import copy
@@ -6,7 +10,6 @@ import csv
 import io
 import json
 import shutil
-import stat
 import sys
 import tempfile
 from contextlib import suppress
@@ -30,7 +33,7 @@ CATALOGUE_PATH = "config/acquisition/e2e_inputs/cms_catalogue.json"
 HEADER_LINES_PATH = "config/acquisition/e2e_inputs/cms_headers.json"
 
 PERIODS = ["2022-11-01", "2025-03-01", "2025-04-01", "2026-08-01"]
-# Synthetic individuals; their names must never reach the snapshot or S3.
+# Synthetic individuals; the published file names them, so the stored file does too.
 PEOPLE = [("Alex", "Q", "Example"), ("Robin", "", "Sample")]
 LIMITS = Limits(attempts=1, timeout_seconds=5, max_seconds=30)
 
@@ -119,19 +122,6 @@ def synthetic_plan(root: Path) -> tuple[dict, Path, dict[str, bytes]]:
     return plan, path, {r["url"]: body(r["layout"]) for r in plan["releases"]}
 
 
-def snapshot_text(run: Path) -> str:
-    """Everything outside the private original folder, as text, for leak checks."""
-    return "\n".join(p.read_bytes().decode("utf-8", "ignore") for p in run.rglob("*") if p.is_file() and "private_original" not in p.parts)
-
-
-def leaked(text: str) -> bool:
-    """True when any synthetic individual's whole name or title appears, in any case or spacing."""
-    flat = contract.normalized(text)
-    return any(
-        contract.normalized(" ".join(p for p in person if p)) in flat or contract.normalized(f"{person[0]} {person[2]}") in flat for person in PEOPLE
-    ) or ("director" in flat)
-
-
 def exercise(root: Path) -> list[dict]:
     """Use production orchestration with synthetic releases and versioned fake storage."""
     plan, plan_path, bodies = synthetic_plan(root)
@@ -165,47 +155,32 @@ def exercise(root: Path) -> list[dict]:
         receipt_path = run / "batches" / v2["id"] / "capture/receipt.json"
         scenario("offline_receipt_replay", lambda: verify_local(receipt_path))
 
-        def original_private() -> None:
-            originals = [p for p in (run / "private_original").rglob("*.csv")]
-            require(len(originals) == 1 and originals[0].read_bytes() == bodies[v2["url"]], "Original not kept unchanged locally")
-            require(stat.S_IMODE(originals[0].stat().st_mode) == 0o600, "Original is not owner-only")
-            require(
-                all(stat.S_IMODE(p.stat().st_mode) == 0o700 for p in originals[0].parents if p.is_relative_to(run / "private_original")),
-                "Folder is not owner-only",
-            )
+        def original_stored_whole() -> None:
             capture = receipt_path.parent
-            require(not (capture / "raw").exists() and not (capture / "audit").exists(), "Snapshot holds original bytes")
-            require(not leaked(snapshot_text(run)), "Individual name outside the private original")
+            paths = {item["storage_path"] for item in read_json(receipt_path)["artifacts"]}
+            require(paths == {f"raw/{contract.stored_name(v2)}", "evidence/download_proof.json", "references/scope.json"}, f"Artifact set differs: {paths}")
+            require((capture / "raw" / contract.stored_name(v2)).read_bytes() == bodies[v2["url"]], "The release is not stored as published")
+            require(not (run / "private_original").exists() and not (capture / "derived").exists(), "A private folder or a derived copy was made")
+            stats = read_json(capture / "evidence/download_proof.json")["statistics"]
+            require((stats["rows_read"], stats["individual_rows"], stats["organisation_rows"]) == (5, 2, 3), f"Counts differ: {stats}")
 
-        scenario("original_local_owner_only_and_outside_snapshot", original_private)
+        scenario("original_stored_whole_as_published", original_stored_whole)
 
-        def derived_content() -> None:
-            rows = list(csv.reader(io.StringIO((receipt_path.parent / "derived/organisation_owners.csv").read_text())))
-            require(rows[0] == contract.kept_columns("v2") and not set(contract.DROPPED) & set(rows[0]), "Derived columns differ")
-            require(len(rows) == 4 and all(r[rows[0].index("TYPE - OWNER")] == "O" for r in rows[1:]), "Individual rows kept")
-            names = [r[rows[0].index("ORGANIZATION NAME - OWNER")] for r in rows[1:]]
-            require(names == ["SYNTHETIC HEALTH PARTNERS LLC", contract.REPLACEMENT, "ROBINSON SAMPLES INC"], "Name redaction differs")
-            require(rows[3][rows[0].index("DOING BUSINESS AS NAME - OWNER")] == contract.REPLACEMENT, "DBA name redaction differs")
-            require(rows[2][rows[0].index("PERCENTAGE OWNERSHIP")] == "" and "PRIVATE EQUITY COMPANY - OWNER" in rows[0], "Published values changed")
-            proof = read_json(receipt_path.parent / "evidence/download_proof.json")
-            stats = proof["statistics"]
-            require(
-                (stats["rows_read"], stats["individual_rows_dropped"], stats["organisation_rows_kept"], stats["redacted_name_cells"]) == (5, 2, 3, 2),
-                "Counts differ",
-            )
+        def public_with_names() -> None:
+            receipt = read_json(receipt_path)
+            governance = receipt["governance"]
+            require(governance["access_class"] == "public" and governance["contains_pii"] is True, "Governance does not say the public file names people")
+            require(contract.PSEUDONYMIZE_AT_LOAD in governance["use_restrictions"], "The bronze pseudonymization restriction is missing")
+            require(receipt["schema_profile"]["native_headers"] == contract.HEADERS["v2"], "The schema profile is not the published header")
 
-        scenario("derived_organisation_rows_only_names_redacted", derived_content)
+        scenario("receipt_records_public_names_pseudonymized_in_bronze", public_with_names)
         scenario("capture_and_version_verified_storage", lambda: execute(plan, v2, run, True, True, client, OUTPUTS, web, LIMITS))
 
-        def stored_clean() -> None:
-            stored = "\n".join(o["body"].decode("utf-8", "ignore") for o in client.objects.values())
-            require(
-                not leaked(stored)
-                and not any("private_original" in key or key.endswith(".csv") and "organisation_owners" not in key for key in client.objects),
-                "S3 received individual data",
-            )
+        def stored_as_published() -> None:
+            require(any(o["body"] == bodies[v2["url"]] for o in client.objects.values()), "S3 does not hold the release as published")
+            require(all(key.startswith("raw/") or not key.startswith("private") for key in client.objects), "An object left the storage layout")
 
-        scenario("s3_holds_no_individual_data", stored_clean)
+        scenario("s3_holds_the_release_as_published", stored_as_published)
         before, objects, requests = inventory(run), copy.deepcopy(client.objects), web.requests
 
         def repeat() -> None:
@@ -218,11 +193,12 @@ def exercise(root: Path) -> list[dict]:
 
         def older_layout() -> None:
             result = execute(plan, v1, root / "v1", True, True, client, OUTPUTS, web, LIMITS)
-            header = (root / "v1" / "batches" / v1["id"] / "capture/derived/organisation_owners.csv").read_text().splitlines()[0]
-            require(result["status"] == "stored" and "PRIVATE EQUITY" not in header and "REIT" not in header, "Older layout gained flags")
+            stored = (root / "v1" / "batches" / v1["id"] / "capture/raw" / contract.stored_name(v1)).read_bytes()
+            require(result["status"] == "stored" and stored == bodies[v1["url"]], "Older layout not stored as published")
 
-        scenario("older_layout_stored_without_invented_flags", older_layout)
-        derive_scenarios(scenario, v1, v2)
+        scenario("older_layout_stored_as_published", older_layout)
+        check_scenarios(scenario, v1, v2)
+        version_1_scenario(scenario, v2, root, bodies[v2["url"]])
         fetch_scenarios(scenario, plan, v2, root, bodies)
         corrupt_scenarios(scenario, receipt_path, bodies[v2["url"]])
         storage_scenarios(scenario, plan, v1, v2, root, run, client, web)
@@ -259,8 +235,8 @@ def exercise(root: Path) -> list[dict]:
     return scenarios
 
 
-def derive_scenarios(scenario: Any, v1: dict, v2: dict) -> None:
-    """Every content defect named in the failure modes stops that release."""
+def check_scenarios(scenario: Any, v1: dict, v2: dict) -> None:
+    """A release that is not the published shape stops that release: header, row width, owner type, flag values and enrollment ID."""
 
     def row_edit(index: int, column: str, value: str, layout: str = "v2") -> Any:
         header = contract.HEADERS[layout]
@@ -268,11 +244,9 @@ def derive_scenarios(scenario: Any, v1: dict, v2: dict) -> None:
 
     cases: list[tuple[str, dict, bytes, str]] = [
         ("unknown_owner_type", v2, body("v2", row_edit(3, "TYPE - OWNER", "X")), "type differs"),
-        ("organisation_row_with_first_name", v2, body("v2", row_edit(3, "FIRST NAME - OWNER", "Kim")), "carries a personal name"),
-        ("organisation_row_with_title", v2, body("v2", row_edit(3, "TITLE - OWNER", "OFFICER")), "carries a personal name"),
         ("flag_value_changed", v2, body("v2", row_edit(3, "REIT - OWNER", "Yes")), "flag value differs"),
         ("blank_enrollment_id", v2, body("v2", row_edit(4, "ENROLLMENT ID", "")), "no enrollment ID"),
-        ("no_organisation_rows", v2, body("v2", lambda t: t.__delitem__(slice(3, 6))), "no organisation rows"),
+        ("no_rows", v2, body("v2", lambda t: t.__delitem__(slice(1, 6))), "has no rows"),
         ("short_row", v2, body("v2", lambda t: t[3].pop()), "row shape differs"),
         ("new_layout_in_old_period", v1, body("v2"), "header differs"),
         ("old_layout_in_new_period", v2, body("v1"), "header differs"),
@@ -280,14 +254,48 @@ def derive_scenarios(scenario: Any, v1: dict, v2: dict) -> None:
         ("html_instead_of_csv", v2, b"<html><body>error</body></html>", "header differs"),
     ]
     for name, release, raw, error in cases:
-        scenario(name, lambda release=release, raw=raw: contract.derive(raw, release), error)
+        scenario(name, lambda release=release, raw=raw: contract.check_raw(raw, release), error)
 
     def windows_1252() -> None:
-        raw = body("v2", row_edit(3, "ORGANIZATION NAME - OWNER", "CAFÉ HEALTH LLC"), encoding="cp1252")
-        derived, stats = contract.derive(raw, v2)
-        require(stats["encoding"] == "cp1252" and "CAFÉ HEALTH LLC" in derived.decode(), "Windows-1252 text lost")
+        stats = contract.check_raw(body("v2", row_edit(3, "ORGANIZATION NAME - OWNER", "CAFÉ HEALTH LLC"), encoding="cp1252"), v2)
+        require(stats["encoding"] == "cp1252", "Windows-1252 not recorded")
 
     scenario("windows_1252_decoded_and_recorded", windows_1252)
+
+
+def version_1_scenario(scenario: Any, release: dict, root: Path, original: bytes) -> None:
+    """A capture stored under plan version 1 keeps verifying: its derived CSV is rebuilt from the original kept on the Mac."""
+
+    def stored_version_1() -> None:
+        collection = root / "version_1"
+        capture = collection / "batches" / release["id"] / "capture"
+        kept = collection / "private_original" / release["id"] / "run_01" / "attempt_01" / contract.stored_name(release)
+        kept.parent.mkdir(parents=True)
+        kept.write_bytes(original)
+        derived, statistics = contract.derive(original, release)
+        proof = {"requested_url": release["url"], "retrieved_at_utc": "2026-09-29T00:00:00+00:00", "sha256": fingerprint(kept)[0], "bytes": len(original)}
+        proof |= {"original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
+        plan = contract.load_plan()
+        for relative, content in (("derived/organisation_owners.csv", derived), ("evidence/download_proof.json", encoded_json(proof))):
+            write_once(capture / relative, content)
+        write_once(capture / "references/scope.json", encoded_json(plan))
+        receipt = {
+            "snapshot_status": "acquired_unvalidated",
+            "artifacts": [{"storage_path": name} for name in ("derived/organisation_owners.csv", "evidence/download_proof.json", "references/scope.json")],
+            "acquisition": {"requested_url": release["url"], "http_status": 200, "retrieved_at_utc": proof["retrieved_at_utc"]},
+            "schema_profile": {"native_headers": contract.kept_columns(release["layout"]), "row_count": statistics["organisation_rows_kept"]},
+            "governance": {"contains_pii": False, "license_or_terms_url": contract.TERMS_URL},
+            "measurement_periods": [{"start_date": release["period_start"], "end_date": release["period_end"]}],
+        }
+        lineage = {"release_id": release["id"], "plan_sha256": canonical_hash(plan), "expected_sha256": proof["sha256"], "model_eligible": False}
+        lineage |= {"code_sha256": contract.collector_code_hashes(), "registry_sha256": plan["registry_sha256"]}
+        from scripts.acquisition.capture import receipt_validator
+
+        lineage["schema_sha256"] = canonical_hash(receipt_validator().schema)
+        source = {"source_id": contract.SOURCE_ID}
+        contract.verify_capture(receipt, source, lineage, capture, False)
+
+    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, release: dict, root: Path, bodies: dict[str, bytes]) -> None:
@@ -313,7 +321,7 @@ def fetch_scenarios(scenario: Any, plan: dict, release: dict, root: Path, bodies
 
 
 def corrupt_scenarios(scenario: Any, receipt_path: Path, original_bytes: bytes) -> None:
-    """Replay refuses tampered artifacts, originals, lineage and governance, even when hashes are resealed."""
+    """Replay refuses tampered files, lineage and governance, even when hashes are resealed."""
     collection = receipt_path.parents[3]
 
     def corrupt(kind: str) -> None:
@@ -322,45 +330,44 @@ def corrupt_scenarios(scenario: Any, receipt_path: Path, original_bytes: bytes) 
         target = target_root / receipt_path.relative_to(collection).parent
         receipt = read_json(target / "receipt.json")
         lineage = json.loads(receipt["lineage"]["extraction_or_query"])
-        original = next((target_root / "private_original").rglob("*.csv"))
+        stored = next((target / "raw").glob("*.csv"))
 
-        def reseal(relative: str) -> None:
+        def reseal(path: Path) -> None:
             for item in receipt["artifacts"]:
-                if item["storage_path"] == relative:
-                    item["sha256"], item["byte_count"] = fingerprint(target / relative)
+                if item["storage_path"] == path.relative_to(target).as_posix():
+                    item["sha256"], item["byte_count"] = fingerprint(path)
 
-        if kind == "resealed_csv_with_individual":
-            path = target / "derived/organisation_owners.csv"
-            path.write_bytes(path.read_bytes() + b"Alex Example\n")
-            reseal("derived/organisation_owners.csv")
-        elif kind == "original_changed":
-            original.write_bytes(original_bytes + b"\r\n")
-        elif kind == "original_deleted":
-            original.unlink()
-        elif kind == "original_copied_into_snapshot":
-            (target / "raw").mkdir()
-            (target / "raw" / original.name).write_bytes(original.read_bytes())
+        if kind == "resealed_changed_release":
+            stored.write_bytes(original_bytes + b"\r\n")
+            reseal(stored)
+        elif kind == "stored_release_deleted":
+            stored.unlink()
+        elif kind == "derived_copy_added":
+            (target / "derived").mkdir()
+            (target / "derived" / "organisation_owners.csv").write_bytes(b"x\n")
         elif kind == "model_promotion":
             lineage["model_eligible"] = True
         elif kind == "unreviewed_code":
             lineage["code_sha256"] = {"bad": "0" * 64}
         elif kind == "wrong_plan":
             lineage["plan_sha256"] = "0" * 64
-        elif kind == "pii_governance":
-            receipt["governance"]["contains_pii"] = True
+        elif kind == "names_hidden_in_governance":
+            receipt["governance"]["contains_pii"] = False
+        elif kind == "pseudonymization_restriction_dropped":
+            receipt["governance"]["use_restrictions"] = [item for item in receipt["governance"]["use_restrictions"] if item != contract.PSEUDONYMIZE_AT_LOAD]
         receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
         (target / "receipt.json").write_bytes(encoded_json(receipt))
         verify_local(target / "receipt.json")
 
     for kind, error in [
-        ("resealed_csv_with_individual", "derived CSV differs"),
-        ("original_changed", "original hash differs"),
-        ("original_deleted", "No such file"),
-        ("original_copied_into_snapshot", "holds original bytes"),
+        ("resealed_changed_release", "release hash differs"),
+        ("stored_release_deleted", "Artifact is missing"),
+        ("derived_copy_added", "holds a derived copy"),
         ("model_promotion", "hold differs"),
         ("unreviewed_code", "Unreviewed CMS owners"),
         ("wrong_plan", "plan differs"),
-        ("pii_governance", "governance differs"),
+        ("names_hidden_in_governance", "governance differs"),
+        ("pseudonymization_restriction_dropped", "governance differs"),
     ]:
         scenario(kind, lambda kind=kind: corrupt(kind), error)
 
@@ -413,7 +420,7 @@ def main() -> None:
     passed = all(s["passed"] for s in scenarios)
     report = {
         "status": "passed" if passed else "failed",
-        "feature": "CMS Hospital All Owners capture: original kept locally, organisation rows only through versioned S3 storage",
+        "feature": "CMS Hospital All Owners capture: the release stored whole under raw/ as published, through versioned S3 storage",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
         "code_sha256": contract.collector_code_hashes(),

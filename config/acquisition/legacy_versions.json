@@ -38,20 +38,6 @@
         "canonical_sha256": "236b5a6cdc509af9d4a79152779746a830871712b28c213e33c3ac50b35f0eb1"
       }
     ],
-    "36f9cbf752aaccf9c874fb908d7a5f5e9ce4acc4315afb2dcb0f69bfc9c16eaf": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/cms_owners_plan.json",
-        "sha256": "5a392b0df15aebc22b41a2660d68e7c05357a53d8779ca337baefb2f52cdbfdc",
-        "canonical_sha256": "3b95dcb514941116f73e086eacb12f193f4938f9c8bc7b28db2f07a7c9d78be4"
-      }
-    ],
-    "5b37db3f2bfc29dbb4b8517a3909470c39ea749194ff24c52afee29b7d93e11a": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hcai_util_2018_2025_plan.json",
-        "sha256": "314e131ab8fd079403d86872d38f531734a143df23c40ad88baadb2ca1ca74eb",
-        "canonical_sha256": "87f2dd1b1a1a7598f4ab00f986ec231f4e4aad2579a4c699bb49572c43199e7a"
-      }
-    ],
     "aead13b4dee39d121c01c662fe7a4606aa3114b84a24d8747c27ad4468691a36": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_api_plan.json",
@@ -73,13 +59,6 @@
         "canonical_sha256": "0be6a6a9947420f2bf10e9669a1dd74cbbe2e589850ce85991fdf7c3ba4317b6"
       }
     ],
-    "41de149f07afb98c1cc6c74133bf17096553116f03fa4e48c012dd60ac1aa821": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/onc_mu_hospital_plan.json",
-        "sha256": "43537a1ce21272b04ea0571229ebe4707efe86289a6b778bbca54a8e1461c534",
-        "canonical_sha256": "bfb44953b6b67d187f20bb0c2913c224b31f4da091d314193a972b243cb33d31"
-      }
-    ],
     "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/wonder_export_plan.json",
@@ -92,6 +71,42 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/bls_api_plan.json",
         "sha256": "061f8635c6ef61e369e66a6dfd81eca1f14c60426438e0fecfc93fd89239ec6d",
         "canonical_sha256": "d44d7af5335b83e3c05b7ee23a6eb81eb8c018fc829effbcd249b1ad9d4ad32f"
+      }
+    ],
+    "ba963fa434d0cb069b9dc111bad5409490c9ead86b29674eb03419e87f5970cd": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/cms_owners_plan.json",
+        "sha256": "610e2ae2c0b0d88c4f2f9a09c99c1c4321790c731b4ef09e7a81ddfd86b17e7c",
+        "canonical_sha256": "36f9cbf752aaccf9c874fb908d7a5f5e9ce4acc4315afb2dcb0f69bfc9c16eaf"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/cms_owners_plan.json",
+        "sha256": "5a392b0df15aebc22b41a2660d68e7c05357a53d8779ca337baefb2f52cdbfdc",
+        "canonical_sha256": "3b95dcb514941116f73e086eacb12f193f4938f9c8bc7b28db2f07a7c9d78be4"
+      }
+    ],
+    "e3da237639d307206cc47cf6848d2ecd61677b688e8321ac7b3265d7a680988c": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/onc_mu_hospital_plan.json",
+        "sha256": "7030486860ec2604c6fffe2b0a8fd2e15e56c5c0db32b533f529b9c336dade23",
+        "canonical_sha256": "41de149f07afb98c1cc6c74133bf17096553116f03fa4e48c012dd60ac1aa821"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/onc_mu_hospital_plan.json",
+        "sha256": "43537a1ce21272b04ea0571229ebe4707efe86289a6b778bbca54a8e1461c534",
+        "canonical_sha256": "bfb44953b6b67d187f20bb0c2913c224b31f4da091d314193a972b243cb33d31"
+      }
+    ],
+    "bf1a7bd65a7d227753be539b388054ae1ff2bdac54af07a43966e7739c9483ba": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/hcai_util_2018_2025_plan.json",
+        "sha256": "e91f49f8ef9609f6ca92769e35ac5f686baa05f2f3769543991514b0a398b45b",
+        "canonical_sha256": "5b37db3f2bfc29dbb4b8517a3909470c39ea749194ff24c52afee29b7d93e11a"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hcai_util_2018_2025_plan.json",
+        "sha256": "314e131ab8fd079403d86872d38f531734a143df23c40ad88baadb2ca1ca74eb",
+        "canonical_sha256": "87f2dd1b1a1a7598f4ab00f986ec231f4e4aad2579a4c699bb49572c43199e7a"
       }
     ]
   },

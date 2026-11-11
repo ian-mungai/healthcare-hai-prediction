@@ -1,8 +1,10 @@
-"""Frozen scope, workbook reading and privacy abstraction for the HCAI annual utilization workbooks, 2018-2025.
+"""Frozen scope, workbook reading and checks for the HCAI annual utilization workbooks, 2018-2025.
 
-The public-business-data exception for 2012-2017 was extended to these years. Each
-original names administrators and report preparers, so it stays on this Mac only; S3 receives one abstracted CSV
-per sheet. Failure modes: data/acquisition_planning/hcai_util_2018_2025_failure_modes.md.
+All the data is public. Under plan version 2 each workbook is stored whole under raw/ as published; its receipt records that it names
+administrators and report preparers, whose cells bronze redacts at load ([REDACTED]; the sheets have no pseudonym column).
+Captures stored under plan version 1 hold one abstracted CSV per
+sheet, rebuilt from an original kept on the Mac; they keep verifying with the version 1 rules below.
+Failure modes: data/acquisition_planning/hcai_util_2018_2025_failure_modes.md.
 """
 
 import csv
@@ -25,6 +27,8 @@ CODE_ENTRY = "scripts.acquisition.store_hcai_util"
 RELEASE_PATH = "config/acquisition/access_releases_20260929.json"
 SOURCE_ID = "HCAI_UTIL"
 TERMS_URL = "https://data.chhs.ca.gov/pages/terms"
+REDACT_AT_LOAD = "Names administrators and report preparers as published; bronze redacts the person cells at load ([REDACTED])."
+# Plan version 1 only: the redaction of the stored abstracted captures, kept so those captures keep verifying.
 REPLACEMENT = "[REDACTED]"
 REDACT = ["FAC_STR_ADDR", "FAC_PHONE", "FAC_ADMIN_NAME", "FAC_PAR_CORP_BUS_ADDR", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
 NAME_SOURCES = ["FAC_ADMIN_NAME", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
@@ -58,6 +62,11 @@ def year_id(entry: dict) -> str:
     return canonical_hash({"year": entry["year"], "url": entry["url"], "sha256": entry["sha256"], "bytes": entry["bytes"]})
 
 
+def stored_name(entry: dict) -> str:
+    """The workbook's file name in the capture."""
+    return f"hcai_util_{entry['year']}.xlsx"
+
+
 def slug(sheet: str) -> str:
     """A storage-safe file name for a sheet."""
     return re.sub(r"[^a-z0-9]+", "_", sheet.lower()).strip("_")
@@ -68,9 +77,8 @@ def load_plan(path: Path | None = None) -> dict:
     path = PLAN_PATH if path is None else path
     plan = read_json(path)
     require(read_json(path.with_suffix(".lock.json"))["plan_sha256"] == canonical_hash(plan), "HCAI utilization plan lock differs")
-    require(plan["source_id"] == SOURCE_ID and plan["model_eligible"] is False and plan["version"] == 1, "HCAI utilization plan hold differs")
-    rules = {"redact": REDACT, "not_personal": NOT_PERSONAL, "individual_owner_redact": OWNER_REDACT, "replacement": REPLACEMENT}
-    require(all(plan[k] == v for k, v in rules.items()), "HCAI utilization plan rules differ")
+    require(plan["source_id"] == SOURCE_ID and plan["model_eligible"] is False and plan["version"] == 2, "HCAI utilization plan hold differs")
+    require(not {"redact", "not_personal", "individual_owner_redact", "replacement"} & set(plan), "HCAI utilization plan rules differ")
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "HCAI utilization registry differs")
     release = plan["access_release"]
     require(
@@ -249,8 +257,25 @@ def check_columns(header: list[str]) -> None:
     require(all(c in header for c in [*REDACT, *OWNER_REDACT, "LICEE_TOC", "FAC_NO"]), "HCAI redaction column missing")
 
 
+def check_raw(raw: bytes, entry: dict) -> dict:
+    """Check that a workbook is the published shape and count its hospitals; the bytes are stored unchanged."""
+    book = read_workbook(raw)
+    require(list(book) == entry["sheets"], "HCAI workbook sheets differ")
+    hospital_counts: dict[str, int] = {}
+    for sheet in DATA_SHEETS:
+        rows = book[sheet]
+        header = rows[0][: len(entry["header"])]
+        require(header == entry["header"], "HCAI data header differs")
+        index = {c: i for i, c in enumerate(header)}
+        for number, row in enumerate(rows):
+            require(all(v == "" for v in row[len(header) :]) or 1 <= number <= LABEL_ROWS, "HCAI cell beyond the header")
+        hospital_counts[sheet] = sum(row[index["FAC_NO"]].strip() != "" for row in rows[LABEL_ROWS + 1 :])
+    require(hospital_counts["Page 1-6"] >= entry["min_hospitals"], "HCAI data sheet has too few hospitals")
+    return {"hospitals": hospital_counts, "preliminary": entry["preliminary"], "model_eligible": False}
+
+
 def derive(raw: bytes, entry: dict) -> tuple[dict[str, bytes], dict]:
-    """One abstracted CSV per sheet, or a fixed public reason to stop the year."""
+    """Plan version 1: one abstracted CSV per sheet, or a fixed public reason to stop the year."""
     book = read_workbook(raw)
     require(list(book) == entry["sheets"], "HCAI workbook sheets differ")
     names: set[tuple[str, ...]] = set()
@@ -336,8 +361,38 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     matches = [y for y in plan["years"] if y["id"] == lineage["year_id"]]
     require(len(matches) == 1, "HCAI utilization capture year not in its plan")
     entry = matches[0]
-    expected = {*roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"}
-    require({a["storage_path"] for a in receipt["artifacts"]} == expected, "HCAI utilization artifact set differs")
+    paths = {a["storage_path"] for a in receipt["artifacts"]}
+    if paths == {*roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"}:
+        verify_version_1(receipt, lineage, root, entry)
+    else:
+        require(lineage["plan_sha256"] == canonical_hash(plan), "HCAI utilization capture plan differs")
+        require(paths == {f"raw/{stored_name(entry)}", "evidence/download_proof.json", "references/scope.json"}, "HCAI utilization artifact set differs")
+        require(not (root / "sheets").exists(), "HCAI utilization snapshot holds a derived copy")
+        raw = (root / "raw" / stored_name(entry)).read_bytes()
+        proof = read_json(root / "evidence/download_proof.json")
+        require(
+            digest(raw) == entry["sha256"] == lineage["expected_sha256"] == proof["sha256"] and len(raw) == entry["bytes"],
+            "HCAI utilization workbook hash differs",
+        )
+        require(proof["statistics"] == check_raw(raw, entry) and proof["requested_url"] == entry["url"], "HCAI utilization download proof differs")
+        require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "HCAI utilization stored scope differs")
+        acq = receipt["acquisition"]
+        require(acq["requested_url"] == entry["url"] and acq["http_status"] == 200, "HCAI utilization route differs")
+        governance = receipt["governance"]
+        require(
+            governance["access_class"] == "public"
+            and governance["contains_pii"] is True
+            and REDACT_AT_LOAD in governance["use_restrictions"]
+            and governance["license_or_terms_url"] == TERMS_URL,
+            "HCAI utilization governance differs",
+        )
+    period = receipt["measurement_periods"]
+    year = entry["year"]
+    require(len(period) == 1 and (period[0]["start_date"], period[0]["end_date"]) == (f"{year}-01-01", f"{year}-12-31"), "HCAI utilization period differs")
+
+
+def verify_version_1(receipt: dict, lineage: dict, root: Path, entry: dict) -> None:
+    """Plan version 1: rebuild every abstracted sheet from the original kept on the Mac."""
     require(not (root / "raw").exists() and not (root / "audit").exists(), "HCAI utilization snapshot holds original bytes")
     proof = read_json(root / "evidence/download_proof.json")
     collection = root.parents[2]
@@ -357,6 +412,3 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(
         receipt["governance"]["contains_pii"] is False and receipt["governance"]["license_or_terms_url"] == TERMS_URL, "HCAI utilization governance differs"
     )
-    period = receipt["measurement_periods"]
-    year = entry["year"]
-    require(len(period) == 1 and (period[0]["start_date"], period[0]["end_date"]) == (f"{year}-01-01", f"{year}-12-31"), "HCAI utilization period differs")

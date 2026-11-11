@@ -103,3 +103,9 @@ config scripts/orchestration/run_publish_contracts.py -- the check requires the 
 flag orchestration/training_render.py -- the promotion job's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
 flag scripts/lakehouse/layer_acceptance.py -- the layer acceptance report's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
 flag config/aws/owner_command_lists.json -- the owner command lists call the layer acceptance report's own --approval flag; it is unrelated to the removed unused_files apply step -- permanent
+config scripts/acquisition/cms_owners_contract.py -- the retained version 1 verification reads the version 1 plan keys dropped_columns, which captures stored under version 1 still name -- expires-when path-absent:scripts/acquisition/cms_owners_contract.py
+config scripts/acquisition/onc_mu_contract.py -- the retained version 1 verification reads the version 1 plan keys dropped_columns and hospital_value, which captures stored under version 1 still name -- expires-when path-absent:scripts/acquisition/onc_mu_contract.py
+config scripts/acquisition/hcai_util_contract.py -- the version 2 plan check refuses the removed version 1 plan keys by name, so a plan that still carries them stops -- expires-when path-absent:scripts/acquisition/hcai_util_contract.py
+config scripts/acquisition/pseudonymize.py -- dropped_columns is the owner-side tool's own statistics key, unrelated to the removed plan key -- expires-when path-absent:scripts/acquisition/pseudonymize.py
+config scripts/acquisition/run_pseudonymize_e2e.py -- dropped_columns is the owner-side tool's own statistics key, unrelated to the removed plan key -- expires-when path-absent:scripts/acquisition/run_pseudonymize_e2e.py
+config scripts/training/mediation.py -- dropped_columns is a local name for the model columns left out, unrelated to the removed plan key -- expires-when path-absent:scripts/training/mediation.py

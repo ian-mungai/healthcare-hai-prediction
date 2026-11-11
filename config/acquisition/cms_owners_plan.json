@@ -1,15 +1,5 @@
 {
   "catalogue": "data/acquisition_planning/cms_owners_20260929/cms_catalogue_entries_20260929.json",
-  "dropped_columns": [
-    "FIRST NAME - OWNER",
-    "MIDDLE NAME - OWNER",
-    "LAST NAME - OWNER",
-    "TITLE - OWNER",
-    "ADDRESS LINE 1 - OWNER",
-    "ADDRESS LINE 2 - OWNER",
-    "CITY - OWNER",
-    "ZIP CODE - OWNER"
-  ],
   "headers": {
     "v1": [
       "ENROLLMENT ID",
@@ -488,8 +478,7 @@
       "url": "https://data.cms.gov/sites/default/files/2026-08/c07d8f27-bd6c-409b-b0f5-958c71923ce9/Hospital_All_Owners_2026.07.31.csv"
     }
   ],
-  "replacement": "[REDACTED]",
-  "scope": "All 44 releases; organisation owner rows only to S3; each original stays on this Mac only.",
+  "scope": "All 44 releases, each stored whole under raw/ as published; bronze pseudonymizes the individual owners at load.",
   "source_id": "CMS_OWNERS",
-  "version": 1
+  "version": 2
 }
