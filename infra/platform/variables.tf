@@ -158,3 +158,16 @@ variable "allow_destructive_teardown" {
   default     = false
   nullable    = false
 }
+
+variable "alert_email" {
+  description = "The one address bootstrap subscribes to the run-failure alerts topic, supplied from .env. Empty creates no subscription. The address is not a secret value but it names a person, so the input is sensitive and stays out of plan output."
+  type        = string
+  default     = ""
+  nullable    = false
+  sensitive   = true
+
+  validation {
+    condition     = var.alert_email == "" || (length(var.alert_email) <= 254 && can(regex("^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\\.[A-Za-z0-9-]+)+$", var.alert_email)))
+    error_message = "Set ALERT_EMAIL to empty or one plain address such as name@example.org, without a display name, spaces, a list or a scheme."
+  }
+}
