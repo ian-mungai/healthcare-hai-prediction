@@ -2,7 +2,7 @@
 
     .venv/bin/python -m scripts.lakehouse.run_layer_acceptance_e2e --out <NEW_DIRECTORY>
 
-Every approval, signature and owner identity in this suite is SYNTHETIC and stays in its isolated SYNTHETIC fixture folder.
+Every run, code digest, launch record and instance ID in this suite is SYNTHETIC and stays in its isolated SYNTHETIC fixture folder.
 The records have the shapes the driver writes (``layer_run.bundle``, ``gold_export.export_sealed``, ``gold_publish.publish_candidates``,
 ``reconcile_candidates``, ``catalog_backup``, ``commit_receipt``, ``silver_publish.record_committed``, ``feast_job.apply`` and
 ``feast_materialize.run_materialize``) with the tables of the frozen publish contract.
@@ -22,7 +22,7 @@ import re
 import shutil
 import sys
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,7 +46,7 @@ SILVER_RUN, OTHER_SILVER_RUN, GOLD_RUN, OTHER_GOLD_RUN, FEATURES_RUN, OTHER_FEAT
 ACCOUNT = "111111111111"
 INPUTS = 1500  # more than one page of 1000, so the page structure of the digest is exercised
 MARKER = "9x<bad>-fingerprint"
-SYNTHETIC_OWNER = "SYNTHETIC fixture owner"
+HOST = "i-0123456789abcdef0"
 ReportChange = Callable[[dict[str, Any]], object]
 
 
@@ -325,9 +325,25 @@ def build_records(env: Env) -> None:
     overrides = job_overrides_for(item.layer, run, item.code_sha256, env.producer.spec.run if env.producer else "")
     # describe-tasks lists every container of the task definition: init and the guard have no override and appear by name only
     write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"], {"name": "guard"}]})
-    write(root / "approval.json", {"schema": 1, "layer": item.layer, "run_id": run, "code_sha256": item.code_sha256, "approved_at": "2026-10-31T16:50:00Z"})
+    write_launch_records(env, task_arn(env))
+    (root / "code.sha256").write_text(item.code_sha256 + "\n")
     write(root / "running.json", {"taskArns": []})
-    write(root / "host.json", {"desired_capacity": 0, "group_instances": 0, "active_container_instances": 0, "services": {}})
+    write(root / "host.json", {"desired_capacity": 1, "group_instances": [HOST], "container_instances": [HOST]})  # the host runs while the evidence step does
+
+
+def task_arn(env: Env) -> str:
+    return f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/example_project_cluster_dev/{h(env.spec.tag, 'task')[:32]}"
+
+
+def write_launch_records(env: Env, arn: str) -> None:
+    """The write-once records of the direct ECS launch as ``orchestration.ecs_launch.parse_record`` validates them: the claim of the run and job, then the
+    started and end records of its one attempt."""
+    run, layer, folder = env.spec.run, env.spec.layer, env.root / "launch"
+    common = {"schema_version": 1, "run_id": run, "job": layer, "attempt": 1, "at": "2026-10-31T10:00:00Z"}
+    bound = {"code_digest": env.spec.code_sha256, "request_hash": "0" * 64, "input_run": env.producer.spec.run if env.producer else "latest"}
+    write(folder / "claim.json", {**common, "event": "claim", "bound": bound, "deadline_seconds": 21600, "acceptance": ["publish"], "need": {}})
+    write(folder / "01/started.json", {**common, "event": "started", "task_arn": arn, "job_started_at": "2026-10-31T10:01:00Z"})
+    write(folder / "01/end.json", {**common, "event": "end", "outcome": "succeeded", "exit_code": 0, "reason": "the task finished"})
 
 
 def write_describe(env: Env, overrides: dict[str, Any], definition: str | None = None) -> None:
@@ -336,14 +352,13 @@ def write_describe(env: Env, overrides: dict[str, Any], definition: str | None =
     containers.append(
         {"name": "guard", "lastStatus": "STOPPED", "exitCode": 0}
     )  # the guard container of the task definition, stopped by ECS when the last phase ended
-    task = h(env.spec.tag, "task")[:32]
     write(
         env.root / "describe.json",
         {
             "failures": [],
             "tasks": [
                 {
-                    "taskArn": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/example_project_cluster_dev/{task}",
+                    "taskArn": task_arn(env),
                     "taskDefinitionArn": definition or f"arn:aws:ecs:us-west-2:{ACCOUNT}:task-definition/example_project_dev_job_{layer}:7",
                     "createdAt": "2026-10-31T10:00:00.000000-07:00",
                     "lastStatus": "STOPPED",
@@ -357,28 +372,28 @@ def write_describe(env: Env, overrides: dict[str, Any], definition: str | None =
     )
 
 
-def run_cli(arguments: list[str], variables: Mapping[str, str] | None = None) -> tuple[int, str, str]:
+def run_cli(arguments: list[str]) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
-    old = {key: os.environ.pop(key, None) for key in ("CONFIRM_APPROVE", "CONFIRM_SIGN")}
-    os.environ.update(variables or {})
-    try:
-        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                code = acceptance.main(arguments)
-            except SystemExit as stop:
-                code = int(stop.code or 0)
-            except Exception as crash:  # a crash is not a refusal: it is one failed check with the exit code 70
-                code = 70
-                err.write(f"crashed: {type(crash).__name__}\n")
-    finally:
-        for key in old:
-            os.environ.pop(key, None)
-        os.environ.update({key: value for key, value in old.items() if value is not None})
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = acceptance.main(arguments)
+        except SystemExit as stop:
+            code = int(stop.code or 0)
+        except Exception as crash:  # a crash is not a refusal: it is one failed check with the exit code 70
+            code = 70
+            err.write(f"crashed: {type(crash).__name__}\n")
     return code, out.getvalue(), err.getvalue()
 
 
 def report_arguments(env: Env, out: Path) -> list[str]:
-    files = {"approval": "approval.json", "describe": "describe.json", "evidence": "evidence", "before": "before.json", "after": "after.json"}
+    files = {
+        "code-digest": "code.sha256",
+        "describe": "describe.json",
+        "evidence": "evidence",
+        "launch-records": "launch",
+        "before": "before.json",
+        "after": "after.json",
+    }
     files |= {"running-tasks": "running.json", "host-status": "host.json"}
     arguments = ["report", "--layer", env.spec.layer, "--run", env.spec.run, "--out", str(out)]
     for flag, name in files.items():
@@ -396,19 +411,13 @@ def accept(env: Env) -> tuple[int, list[str], str]:
     return code, sorted(name for name, ok in document.get("checks", {}).items() if not ok), printed + error + (out.read_text() if out.is_file() else "")
 
 
-def sign(env: Env) -> int:
-    out = env.root / "qualification.json"
-    text = f"sign-{env.spec.layer}-{env.spec.run}-{digest(out)[:12]}"
-    return run_cli(["sign", "--report", str(out), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": text})[0]
-
-
-def make(work: Path, name: str, item: Spec, producer: Env | None = None, signed: bool = True) -> Env:
-    """Build a run, check it and sign it, as the owner does for the silver run before gold."""
+def make(work: Path, name: str, item: Spec, producer: Env | None = None, checked: bool = True) -> Env:
+    """Build a run and check it, as the evidence step does for the silver run before gold."""
     env = Env(work / name, item, producer)
     build_records(env)
-    if signed:
+    if checked:
         code, failed, _ = accept(env)
-        if code != 0 or failed or sign(env) != 0:
+        if code != 0 or failed:
             raise RuntimeError(f"the good {name} run does not pass: {failed}")
     return env
 
@@ -469,10 +478,11 @@ def scenario(work: Path, layer: str, label: str, tables: tuple[str, ...] | None 
 
 
 NAMES = {
-    "approved": "the owner approved this run ID before the task was created",
-    "task": "the task is this run's: its definition, its overrides and the approved code digest",
+    "digest": "the staged code digest is the run's: its run records, its launch claim and its task carry it",
+    "launch": "the launch records are this run's one launch: the claim binds the input run, the started record names the described task and the end succeeded",
+    "task": "the task is this run's: its definition, its overrides and the staged code digest",
     "exits": "every container of the task exited 0 and the task stopped",
-    "identity": "the run records belong to this run and layer in real mode, with the approved code",
+    "identity": "the run records belong to this run and layer in real mode, with the staged code",
     "sets": "every table set equals the frozen publish contract",
     "namespace": "the records name the layer's own namespace in real mode",
     "export": "the export is this run's: run, sealed identity, consumer result and manifest hashes agree",
@@ -486,11 +496,11 @@ NAMES = {
     "bronze": "H3: the pinned table set is the silver-declared bronze tables of the run's revision",
     "pin": "H3: the gold pin is complete: its run, mode, namespace and the silver contract's tables",
     "producer_set": "H3: the pin names the silver run and its complete snapshot set",
-    "signed": "the silver producer is signed: its report passed, covers its record and matches its signature",
+    "passed": "the silver producer passed: its report passed and covers its record",
     "features_record": "the features record equals the commit",
     "features_pin": "H3: the features pin is complete: its run, mode, namespace and the gold contract's tables",
     "features_producer_set": "H3: the pin names the gold run and its complete snapshot set",
-    "features_signed": "the gold producer is signed: its report passed, covers its record and matches its signature",
+    "features_passed": "the gold producer passed: its report passed and covers its record",
     "feast_apply": "Feast applied this run's publication: its run, namespace, table count and snapshot set",
     "feast_materialize": "Feast loaded this run's publication into the online store: its run, snapshot set and a positive entity count",
     "same": "H2: the input object versions are the same before and after the task",
@@ -498,7 +508,7 @@ NAMES = {
     "scope": "the task added versions only under the layer's prefixes and its own run prefix",
     "removed": "the task removed no version",
     "running": "no task of the job is left running",
-    "host": "the host is stopped and verified: no capacity, group instance or container instance",
+    "host": "the host runs alone: its group desired capacity is at most 1 and its one instance is the only active container instance",
 }
 
 
@@ -539,15 +549,39 @@ def common_cases() -> list[Case]:
             (NAMES["task"],),
         ),
         (
-            "approved code that is not the code the run unpacked",
-            lambda e, o: edit(e.root / "approval.json", lambda d: d.update(code_sha256="e" * 64)),
-            (NAMES["identity"], NAMES["task"]),
+            "a staged code digest that is not the code the run unpacked",
+            lambda e, o: e.root.joinpath("code.sha256").write_text("e" * 64 + "\n"),
+            (NAMES["identity"], NAMES["task"], NAMES["digest"]),
         ),
         (
-            "a run approved after its task was created",
-            lambda e, o: edit(e.root / "approval.json", lambda d: d.update(approved_at="2026-10-31T18:00:00Z")),
-            (NAMES["approved"],),
+            "a staged code digest that is not a digest",
+            lambda e, o: e.root.joinpath("code.sha256").write_text("not a digest\n"),
+            (NAMES["identity"], NAMES["digest"]),
         ),
+        (
+            "a launch claim bound to other code",
+            lambda e, o: edit(e.root / "launch/claim.json", lambda d: d["bound"].update(code_digest="d" * 64)),
+            (NAMES["digest"],),
+        ),
+        (
+            "a launch claim bound to another input run",
+            lambda e, o: edit(e.root / "launch/claim.json", lambda d: d["bound"].update(input_run="20261030T000000Z-00000000")),
+            (NAMES["launch"],),
+        ),
+        ("a launch claim of another run", lambda e, o: edit(e.root / "launch/claim.json", lambda d: d.update(run_id=o.spec.run)), (NAMES["launch"],)),
+        ("a launch claim of another job", lambda e, o: edit(e.root / "launch/claim.json", lambda d: d.update(job="train")), (NAMES["launch"],)),
+        (
+            "a launch that started another task",
+            lambda e, o: edit(e.root / "launch/01/started.json", lambda d: d.update(task_arn=d["task_arn"][:-1] + "0")),
+            (NAMES["launch"],),
+        ),
+        (
+            "a launch that did not succeed",
+            lambda e, o: edit(e.root / "launch/01/end.json", lambda d: d.update(outcome="failed", exit_code=1)),
+            (NAMES["launch"],),
+        ),
+        ("an end record of another attempt", lambda e, o: edit(e.root / "launch/01/end.json", lambda d: d.update(attempt=2)), (NAMES["launch"],)),
+        ("an end record of another run", lambda e, o: edit(e.root / "launch/01/end.json", lambda d: d.update(run_id=o.spec.run)), (NAMES["launch"],)),
         (
             "a container exited nonzero",
             lambda e, o: edit(e.root / "describe.json", lambda d: d["tasks"][0]["containers"][3].update(exitCode=1)),
@@ -653,7 +687,21 @@ def common_cases() -> list[Case]:
         ),
         ("a version disappeared", lambda e, o: edit(e.root / "after.json", lambda d: d["versions"].pop(-3)), (NAMES["removed"],)),
         ("a task of the job is still running", lambda e, o: write(e.root / "running.json", {"taskArns": ["arn:other"]}), (NAMES["running"],)),
-        ("the host is still on", lambda e, o: edit(e.root / "host.json", lambda d: d.update(group_instances=1)), (NAMES["host"],)),
+        ("a group desired capacity of two", lambda e, o: edit(e.root / "host.json", lambda d: d.update(desired_capacity=2)), (NAMES["host"],)),
+        (
+            "a second container instance",
+            lambda e, o: edit(e.root / "host.json", lambda d: d["container_instances"].append("i-0fedcba9876543210")),
+            (NAMES["host"],),
+        ),
+        (
+            "a container instance that is not the host",
+            lambda e, o: edit(e.root / "host.json", lambda d: d.update(container_instances=["i-0fedcba9876543210"])),
+            (NAMES["host"],),
+        ),
+        ("no container instance", lambda e, o: edit(e.root / "host.json", lambda d: d.update(container_instances=[])), (NAMES["host"],)),
+        ("a second group instance", lambda e, o: edit(e.root / "host.json", lambda d: d["group_instances"].append("i-0fedcba9876543210")), (NAMES["host"],)),
+        ("a host status without its instance lists", lambda e, o: edit(e.root / "host.json", lambda d: d.pop("container_instances")), (NAMES["host"],)),
+        ("a host status with a text capacity", lambda e, o: edit(e.root / "host.json", lambda d: d.update(desired_capacity="1")), (NAMES["host"],)),
     ]
 
 
@@ -691,7 +739,7 @@ def features_cases() -> list[Case]:
         (
             "a features pin that names another gold run",
             lambda e, o: edit(e.evidence / pin, lambda d: d.update(source_run_id=OTHER_GOLD_RUN)),
-            (NAMES["features_producer_set"], NAMES["features_signed"], NAMES["task"]),
+            (NAMES["features_producer_set"], NAMES["features_passed"], NAMES["task"]),
         ),
         (
             "a features task that names another input run",
@@ -706,28 +754,27 @@ def features_cases() -> list[Case]:
             ),
             (NAMES["task"],),
         ),
-        ("an unsigned gold producer", lambda e, o: e.source.root.joinpath("qualification.signed.json").unlink(), (NAMES["features_signed"],)),
         (
-            "a gold report changed after it was signed",
-            lambda e, o: e.source.root.joinpath("qualification.json").write_text(e.source.root.joinpath("qualification.json").read_text() + " "),
-            (NAMES["features_signed"],),
+            "a gold producer report that failed",
+            lambda e, o: edit(e.source.root / "qualification.json", lambda d: d.update(passed=False)),
+            (NAMES["features_passed"],),
         ),
         (
-            "a gold commit record changed after it was signed",
+            "a gold commit record changed after the gold report",
             lambda e, o: edit(e.source.evidence / commit, lambda d: d.update(note="x")),
-            (NAMES["features_signed"],),
+            (NAMES["features_passed"],),
         ),
         (
-            "a gold candidates record changed after it was signed",
+            "a gold candidates record changed after the gold report",
             lambda e, o: edit(e.source.evidence / "publish/candidates.json", lambda d: d.update(note="x")),
-            (NAMES["features_signed"],),
+            (NAMES["features_passed"],),
         ),
         (
             "a gold commit that is not committed",
             lambda e, o: edit(e.source.evidence / commit, lambda d: d.update(state="pending")),
             (NAMES["features_producer_set"],),
         ),
-        ("matching empty gold snapshot sets", empty_gold_sets, (NAMES["features_pin"], NAMES["features_signed"])),
+        ("matching empty gold snapshot sets", empty_gold_sets, (NAMES["features_pin"], NAMES["features_passed"])),
         ("the features record of another run", lambda e, o: copy_from(e, o, "features_snapshot.json"), (NAMES["features_record"],)),
         (
             "the features record names another namespace",
@@ -774,7 +821,7 @@ def layer_cases(layer: str) -> list[Case]:
         (
             "a gold pin that names another silver run",
             lambda e, o: edit(e.evidence / gold_input, lambda d: d.update(source_run_id=OTHER_SILVER_RUN)),
-            (NAMES["producer_set"], NAMES["signed"], NAMES["task"]),
+            (NAMES["producer_set"], NAMES["passed"], NAMES["task"]),
         ),
         (
             "a gold task that names another input run",
@@ -789,21 +836,16 @@ def layer_cases(layer: str) -> list[Case]:
             ),
             (NAMES["task"],),
         ),
-        ("an unsigned silver producer", lambda e, o: e.source.root.joinpath("qualification.signed.json").unlink(), (NAMES["signed"],)),
+        ("a silver producer report that failed", lambda e, o: edit(e.source.root / "qualification.json", lambda d: d.update(passed=False)), (NAMES["passed"],)),
         (
-            "a silver report changed after it was signed",
-            lambda e, o: e.source.root.joinpath("qualification.json").write_text(e.source.root.joinpath("qualification.json").read_text() + " "),
-            (NAMES["signed"],),
-        ),
-        (
-            "a silver record changed after it was signed",
+            "a silver record changed after the silver report",
             lambda e, o: edit(e.source.evidence / "silver_snapshot.json", lambda d: d.update(note="x")),
-            (NAMES["signed"],),
+            (NAMES["passed"],),
         ),
         (
             "matching empty snapshot sets",
             lambda e, o: empty_sets(e, gold_input),
-            (NAMES["pin"], NAMES["signed"]),
+            (NAMES["pin"], NAMES["passed"]),
         ),
     ]
 
@@ -817,7 +859,6 @@ def cases(work: Path, layer: str) -> dict[str, bool]:
         code, failed, printed = accept(env)
         refused = code == 1 and not (env.root / "qualification.json").exists()  # an input that cannot be read ends the command with a fixed error and no report
         checks[f"{layer}: {label}"] = (set(expected) <= set(failed) or refused) and code == 1 and MARKER not in printed
-        checks[f"{layer}: {label}: nothing is signed"] = (sign(env) == 1) if (env.root / "qualification.json").exists() else True
     return checks
 
 
@@ -895,82 +936,15 @@ def dynamic_report_checks(document: dict[str, Any]) -> None:
     document["checks"] = {f"SYNTHETIC dynamic assertion {index}: {name}": value for index, (name, value) in enumerate(document["checks"].items())}
 
 
-def signing_report_cases(work: Path) -> dict[str, bool]:
-    checks: dict[str, bool] = {}
-    variants: list[tuple[str, ReportChange | None]] = [
-        ("complete checks", None),
-        ("valid dynamic check labels", dynamic_report_checks),
-        *report_check_defects(),
-    ]
-    for layer in acceptance.LAYERS:
-        for label, change in variants:
-            env, _ = scenario(work, layer, f"signing {label}")
-            code, failed, _ = accept(env)
-            if code != 0 or failed:
-                raise RuntimeError(f"the SYNTHETIC {layer} signing control does not pass: {failed}")
-            path = env.root / "qualification.json"
-            document = json.loads(path.read_text())
-            if change is not None:
-                change(document)
-            write(path, document)
-            raw = path.read_bytes()
-            confirmation = f"sign-{layer}-{env.spec.run}-{digest(path)[:12]}"
-            code, _, error = run_cli(["sign", "--report", str(path), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": confirmation})
-            signature = path.with_suffix(".signed.json")
-            positive = label in ("complete checks", "valid dynamic check labels")
-            if positive:
-                signed = json.loads(signature.read_text()) if signature.is_file() else {}
-                checks[f"{layer}: signing accepts {label}"] = (
-                    code == 0
-                    and signed.get("report_sha256") == digest(path)
-                    and signed.get("confirmation") == confirmation
-                    and signed.get("owner") == SYNTHETIC_OWNER
-                )
-            else:
-                checks[f"{layer}: signing refuses passed true with {label}"] = (
-                    code == 1 and "only a report that passed is signed" in error and not signature.exists()
-                )
-            checks[f"{layer}: signing {label} preserves report bytes"] = path.read_bytes() == raw
-        env, _ = scenario(work, layer, "signing stale digest confirmation")
-        code, failed, _ = accept(env)
-        if code != 0 or failed:
-            raise RuntimeError(f"the SYNTHETIC {layer} stale-confirmation control does not pass: {failed}")
-        path = env.root / "qualification.json"
-        stale = f"sign-{layer}-{env.spec.run}-{digest(path)[:12]}"
-        path.write_bytes(path.read_bytes() + b" ")
-        raw = path.read_bytes()
-        code, _, error = run_cli(["sign", "--report", str(path), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": stale})
-        checks[f"{layer}: signing refuses a stale digest confirmation"] = (
-            code == 1 and "set CONFIRM_SIGN" in error and not path.with_suffix(".signed.json").exists() and path.read_bytes() == raw
-        )
-    return checks
-
-
-def replace_synthetic_signed_report(env: Env, change: ReportChange) -> None:
-    """Bind changed SYNTHETIC producer bytes to a fixture signature so dependency tests reach semantic validation independently of the signing gate."""
-    path = env.root / "qualification.json"
-    edit(path, change)
-    document = json.loads(path.read_text())
-    report_sha256 = digest(path)
-    write(
-        path.with_suffix(".signed.json"),
-        {
-            "schema": 1,
-            "report_sha256": report_sha256,
-            "owner": SYNTHETIC_OWNER,
-            "signed_at": "2026-11-02T00:00:00Z",
-            "confirmation": f"sign-{document['layer']}-{document['run_id']}-{report_sha256[:12]}",
-        },
-    )
-
-
-def signed_dependency_cases(work: Path) -> dict[str, bool]:
+def passed_dependency_cases(work: Path) -> dict[str, bool]:
+    """The report of the layer below must have passed and must cover the records that this layer reads from it. No signature is read."""
     checks: dict[str, bool] = {}
     for layer in ("gold", "features"):
         below = "silver" if layer == "gold" else "gold"
-        expected = NAMES["signed" if layer == "gold" else "features_signed"]
+        expected = NAMES["passed" if layer == "gold" else "features_passed"]
         covered = ("silver_snapshot.json",) if layer == "gold" else ("publish/commit.json", "publish/candidates.json")
-        reports: list[tuple[str, ReportChange]] = [
+        variants: list[tuple[str, ReportChange | None]] = [
+            ("complete checks", None),
             ("valid dynamic check labels", dynamic_report_checks),
             *report_check_defects(),
             ("a failed summary", lambda d: d.update(passed=False)),
@@ -978,36 +952,27 @@ def signed_dependency_cases(work: Path) -> dict[str, bool]:
             ("another report run", lambda d: d.update(run_id="20261030T000000Z-00000000")),
             *[(f"a wrong covered hash for {name}", lambda d, key=name: d["file_sha256"].update({key: "0" * 64})) for name in covered],
         ]
-        variants: list[tuple[str, ReportChange | None, ReportChange | None]] = [("complete checks", None, None)]
-        variants += [(label, change, None) for label, change in reports]
-        variants += [
-            ("a stale signature digest", None, lambda d: d.update(report_sha256="0" * 64)),
-            ("a wrong signature confirmation", None, lambda d: d.update(confirmation="sign-other")),
-            ("a blank signature owner", None, lambda d: d.update(owner=" ")),
-        ]
-        for label, report_change, signature_change in variants:
-            env, _ = scenario(work, layer, f"signed dependency {label}")
-            producer = env.source
-            if report_change is not None:
-                replace_synthetic_signed_report(producer, report_change)
-            if signature_change is not None:
-                edit(producer.root / "qualification.signed.json", signature_change)
-            report_path, signature_path = producer.root / "qualification.json", producer.root / "qualification.signed.json"
-            raw = report_path.read_bytes(), signature_path.read_bytes()
+        for label, change in variants:
+            env, _ = scenario(work, layer, f"{below} dependency {label}")
+            report_path = env.source.root / "qualification.json"
+            if change is not None:
+                edit(report_path, change)
+            raw = report_path.read_bytes()
             code, failed, _ = accept(env)
             result_path = env.root / "qualification.json"
             result = json.loads(result_path.read_text()) if result_path.is_file() else {}
             positive = label in ("complete checks", "valid dynamic check labels")
-            checks[f"{layer}: signed {below} dependency with {label}"] = (
+            checks[f"{layer}: {below} dependency with {label}"] = (
                 code == (0 if positive else 1) and failed == ([] if positive else [expected]) and result.get("passed") is positive
             )
-            hashes = result.get("file_sha256", {})
-            checks[f"{layer}: {label} reaches the signed dependency reader"] = (
-                expected in result.get("checks", {})
-                and hashes.get("input/report") == digest(report_path)
-                and hashes.get("input/signature") == digest(signature_path)
-            )
-            checks[f"{layer}: {label} preserves signed dependency bytes"] = raw == (report_path.read_bytes(), signature_path.read_bytes())
+            checks[f"{layer}: {label} reaches the dependency reader"] = expected in result.get("checks", {}) and result.get("file_sha256", {}).get(
+                "input/report"
+            ) == digest(report_path)
+            checks[f"{layer}: {label} preserves the {below} report bytes"] = raw == report_path.read_bytes()
+        env, _ = scenario(work, layer, f"{below} dependency without a report")
+        env.source.root.joinpath("qualification.json").unlink()
+        code, _, _ = accept(env)
+        checks[f"{layer}: a missing {below} report is refused and no report is written"] = code == 1 and not (env.root / "qualification.json").exists()
     return checks
 
 
@@ -1019,19 +984,23 @@ def good_cases(work: Path) -> dict[str, bool]:
     for env in (silver, gold, features):
         layer = env.spec.layer
         report = json.loads((env.root / "qualification.json").read_text())
-        signature = json.loads((env.root / "qualification.signed.json").read_text())
         consumed = set(report["file_sha256"])
         wanted = {f"publish/{name}.json" for name in ("candidates", "reconcile", "backup", "commit", "consumer_result")} | {
             "layer_run.json",
             "publish/export/manifest.json",
-            "approval",
+            "code_digest",
             "describe",
+            "launch/claim.json",
+            "launch/01/started.json",
+            "launch/01/end.json",
             "before",
             "after",
+            "running_tasks",
+            "host_status",
         }
         wanted |= {
             "silver": {"pins.json", "silver_snapshot.json"},
-            "gold": {"silver_pins.json", "input/silver_snapshot.json", "input/report", "input/signature"},
+            "gold": {"silver_pins.json", "input/silver_snapshot.json", "input/report"},
             "features": {
                 "gold_pins.json",
                 "features_snapshot.json",
@@ -1040,25 +1009,16 @@ def good_cases(work: Path) -> dict[str, bool]:
                 "input/publish/commit.json",
                 "input/publish/candidates.json",
                 "input/report",
-                "input/signature",
             },
         }[layer]
-        checks[f"{layer}: the good run passes every check and is signed"] = report["passed"] is True and signature["report_sha256"] == digest(
-            env.root / "qualification.json"
+        checks[f"{layer}: the good run passes every check with no approval and no signature"] = (
+            report["passed"] is True and "approval" not in consumed and not env.root.joinpath("qualification.signed.json").exists()
         )
         checks[f"{layer}: the report hashes every consumed record ({sorted(wanted - consumed)})"] = wanted <= consumed
         checks[f"{layer}: each hash is the hash of the file's bytes"] = all(
             report["file_sha256"][name] == digest(env.evidence / name) for name in wanted if (env.evidence / name).is_file()
         )
-        code, _, _ = run_cli(
-            ["sign", "--report", str(env.root / "qualification.json"), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": signature["confirmation"]}
-        )
-        checks[f"{layer}: a second signature is refused"] = code == 1
-        wrong = env.root / "wrong.json"
-        wrong.write_text((env.root / "qualification.json").read_text())
-        checks[f"{layer}: a wrong confirmation does not sign"] = (
-            run_cli(["sign", "--report", str(wrong), "--owner", SYNTHETIC_OWNER], {"CONFIRM_SIGN": "sign-other"})[0] == 1
-        )
+        checks[f"{layer}: a second report to the same path is refused"] = run_cli(report_arguments(env, env.root / "qualification.json"))[0] == 1
     return checks
 
 
@@ -1131,13 +1091,11 @@ def input_cases(work: Path) -> dict[str, bool]:
 
 def command_cases(work: Path) -> dict[str, bool]:
     env, _ = scenario(work, "silver", "commands")
-    code = "a" * 64
-    approval = env.root / "new_approval.json"
-    approve = ["approve", "--layer", "silver", "--run", SILVER_RUN, "--code-sha256", code, "--out", str(approval)]
-    checks = {"approve: without the typed text nothing is written": run_cli(approve)[0] == 1 and not approval.exists()}
-    text = f"approve-silver-{SILVER_RUN}-{code[:12]}"
-    checks["approve: the typed text writes the approval"] = run_cli(approve, {"CONFIRM_APPROVE": text})[0] == 0 and approval.exists()
-    checks["approve: a second approval does not overwrite"] = run_cli(approve, {"CONFIRM_APPROVE": text})[0] == 1
+    approval, signed = env.root / "new_approval.json", env.root / "qualification.json"
+    approve = ["approve", "--layer", "silver", "--run", SILVER_RUN, "--code-sha256", "a" * 64, "--out", str(approval)]
+    checks = {"approve: the owner step is gone and writes nothing": run_cli(approve)[0] == 2 and not approval.exists()}
+    checks["sign: the owner step is gone"] = run_cli(["sign", "--report", str(signed), "--owner", "SYNTHETIC owner"])[0] == 2
+    checks["report: the approval flag is gone"] = run_cli([*report_arguments(env, env.root / "with_approval.json"), "--approval", str(approval)])[0] == 2
     tracked, outside = ROOT / "docs/layer_acceptance_report_must_not_exist.json", Path(tempfile.gettempdir()) / "layer_acceptance_outside_the_repository.json"
     checks["report: a path that Git tracks is refused"] = run_cli(report_arguments(env, tracked))[0] == 1 and not tracked.exists()
     checks["report: a path outside the repository is refused"] = run_cli(report_arguments(env, outside))[0] == 1 and not outside.exists()
@@ -1244,8 +1202,7 @@ def main() -> int:
     try:
         with mock.patch.object(acceptance, "ignored", lambda path: str(path).startswith(str(work))):
             results["good"] = group("good", good_cases, work)
-            results["signing reports"] = group("signing reports", signing_report_cases, work)
-            results["signed dependencies"] = group("signed dependencies", signed_dependency_cases, work)
+            results["passed dependencies"] = group("passed dependencies", passed_dependency_cases, work)
             for layer in acceptance.LAYERS:
                 results[f"defects {layer}"] = group(f"defects {layer}", cases, work, layer)
             results["inputs"] = group("inputs", input_cases, work)

@@ -1,33 +1,36 @@
-"""The owner's acceptance of a layer publish by hand: the run approval, the task result, the evidence checks and the signed local report.
+"""The automatic acceptance report of a layer publish: the task result, the evidence checks and the local report. No approval record and no signature.
 
-Run from the repository root with files that the owner saved from AWS read calls. Nothing here calls AWS.
+The DAG evidence step writes the report itself (``orchestration.airflow_steps.evidence_step``) from AWS reads. The same checks run from the command line on
+files that were saved from AWS read calls. Nothing here calls AWS.
 
-    python -m scripts.lakehouse.layer_acceptance approve --layer silver --run <RUN_ID> --code-sha256 <SHA256> --out <FILE>
     python -m scripts.lakehouse.layer_acceptance task --layer silver --describe <FILE>
     python -m scripts.lakehouse.layer_acceptance plan --layer silver --run <RUN_ID> --log <FILE>
-    python -m scripts.lakehouse.layer_acceptance report --layer silver --run <RUN_ID> --approval <FILE> --describe <FILE> --evidence <DIR>
-        --before <FILE> --after <FILE> --running-tasks <FILE> --host-status <FILE> [--input-evidence <DIR> --input-report <FILE>] --out <FILE>
-    CONFIRM_SIGN=<TEXT THAT REPORT PRINTS> python -m scripts.lakehouse.layer_acceptance sign --report <FILE> --owner <NAME>
+    python -m scripts.lakehouse.layer_acceptance report --layer silver --run <RUN_ID> --code-digest <FILE> --describe <FILE> --evidence <DIR>
+        --launch-records <DIR> --before <FILE> --after <FILE> --running-tasks <FILE> --host-status <FILE>
+        [--input-evidence <DIR> --input-report <FILE>] --out <FILE>
 
-``approve`` records the owner's approval of the run ID and the code digest before the task starts, after the owner types the confirmation text it prints.
 ``task`` requires one stopped task whose every container ran to a zero exit. ``plan`` reads the saved log events of the dry run publish stream and requires
 the one plan line of this run, with no unknown state, catalog error or blocked publish.
 
-``report`` checks the evidence of the run against the frozen publish contract of the code revision the run unpacked (read with ``git show``, so a later edit
-changes nothing). It repeats the acceptance rules of the layer driver on the uploaded files, so a driver defect cannot vouch for itself. Every table set and
-namespace equals the contract. The task is this run's real task: its definition, its overrides and the approved code digest. The export is this run's: the run
-ID, the sealed identity and the consumer result, manifest and candidate hashes agree. The rows and content fingerprints, the commit record that follows the
-backup and the reconcile and names every snapshot ID, the pinned table set (H3) and the input listing before and after (H2) are checked. The listing digest
-is computed again in the way the driver computes it and compared with the pin. Every object version the task added lies under a prefix the layer writer role
-may write. A gold report also needs the signed silver report and its records, and a features report the signed gold report and its records: the producer is
-accepted only with a matching signature. The features pin must be complete and equal the commit of the signed gold run (H3). The input check of features cannot
-read the gold ``publish_runs`` row, because this command reads saved files, so it reads the commit record that the signed gold report covers. A features report
-also requires the two Feast records to name this run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
+``report`` binds the run to the staged code digest (the ``code.sha256`` of ``lakehouse/run_stage/<run>/inputs/``) and to the launch records of the run
+(``lakehouse/launch_records/<run>/<job>/``: the claim, then the started and end records of its attempt). It checks the evidence of the run against the frozen
+publish contract of the code revision the run unpacked (read with ``git show``, so a later edit changes nothing). It repeats the acceptance rules of the
+layer driver on the uploaded files, so a driver defect cannot vouch for itself. Every table set and namespace equals the contract. The task is this run's real
+task: its definition, its overrides and the staged code digest. The launch claim binds the same digest and the input run, the started record names the
+described task and the end record is ``succeeded``. The export is this run's: the run ID, the sealed identity and the consumer result, manifest and candidate
+hashes agree. The rows and content fingerprints, the commit record that follows the backup and the reconcile and names every snapshot ID, the pinned table
+set (H3) and the input listing before and after (H2) are checked. The listing digest is computed again in the way the driver computes it and compared with
+the pin. Every object version the task added lies under a prefix the layer writer role may write. A gold report also needs the passed silver report and its
+records, and a features report the passed gold report and its records: a producer is accepted when its report passed and covers the records read here. The
+features pin must be complete and equal the commit of the gold run (H3). The input check of features cannot read the gold ``publish_runs`` row, because this
+command reads saved files, so it reads the commit record that the gold report covers. A features report also requires the two Feast records to name this
+run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
+
+The report runs on the host, so the host check holds what is true while the host runs: the group desired capacity is at most 1, no task of the job family is
+left running and the group's one instance is the only active container instance. The host stop is proven by ``host_session stop`` (``host_off_verified``).
 
 Inputs are regular files that are not links, within a size limit, and every record is a JSON object. Errors are fixed texts that echo nothing from an input.
-The report names the SHA-256 of every file it read, computed from the bytes it parsed. It is written only to a Git-ignored path. A report that passed is
-signed with ``sign``: the owner sets ``CONFIRM_SIGN`` to the text that ``report`` printed, which names the layer, the run and the digest of the report. The
-signature is that typed confirmation beside the report digest and the owner's name. It uses no key. Signed reports stay local."""
+The report names the SHA-256 of every file it read, computed from the bytes it parsed. The command writes it only to a Git-ignored path."""
 
 from __future__ import annotations
 
@@ -292,18 +295,15 @@ def report_passed(document: Mapping[str, Any]) -> bool:
 def producer_checks(
     records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None
 ) -> dict[str, bool]:
-    """The pin is complete and names the run of the layer below, and that run is signed: its report passed, covers its record and matches its signature."""
+    """The pin is complete and names the run of the layer below, and that run passed: its report passed and covers its record."""
     below = PRODUCER[layer]
     if folder is None or report_path is None:
-        raise AcceptanceError(f"a {layer} report needs the {below} records and the signed {below} report")
+        raise AcceptanceError(f"a {layer} report needs the {below} records and the {below} report")
     tables, namespace = contract(below, revision)
     source = pinned.get("source_run_id")
     snapshots = mapping(pinned.get("snapshot_set"))
     named, covered = producer_records(records, layer, folder, source, namespace, snapshots)
     report = records.load(report_path, "input/report")
-    signature = records.load(report_path.with_suffix(".signed.json"), "input/signature")
-    digest = records.sha256["input/report"]
-    owner = signature.get("owner")
     return {
         f"H3: the {layer} pin is complete: its run, mode, namespace and the {below} contract's tables": (
             pinned.get("run_id"),
@@ -315,13 +315,9 @@ def producer_checks(
         and set(snapshots) == tables
         and all(count(value) and value > 0 for value in snapshots.values()),
         f"H3: the pin names the {below} run and its complete snapshot set": named,
-        f"the {below} producer is signed: its report passed, covers its record and matches its signature": report_passed(report)
+        f"the {below} producer passed: its report passed and covers its record": report_passed(report)
         and (report.get("layer"), report.get("run_id")) == (below, source)
-        and all(mapping(report.get("file_sha256")).get(name) == records.sha256[f"input/{name}"] for name in covered)
-        and signature.get("report_sha256") == digest
-        and signature.get("confirmation") == f"sign-{below}-{source}-{digest[:12]}"
-        and isinstance(owner, str)
-        and bool(owner.strip()),
+        and all(mapping(report.get("file_sha256")).get(name) == records.sha256[f"input/{name}"] for name in covered),
     }
 
 
@@ -364,7 +360,7 @@ def features_checks(records: Records, run: str, namespace: str, folder: Path, sn
 
 
 def evidence_checks(
-    records: Records, layer: str, run: str, folder: Path, approval: Mapping[str, Any], arguments: argparse.Namespace
+    records: Records, layer: str, run: str, folder: Path, staged: str, arguments: argparse.Namespace
 ) -> tuple[dict[str, bool], dict[str, dict[str, Any]], dict[str, Any]]:
     """The acceptance rules of the layer driver on the uploaded run records, with the frozen publish contract as the reference for every set."""
     identity = records.load_in(folder, "layer_run.json")
@@ -395,14 +391,14 @@ def evidence_checks(
         }
     sets = [set(cand), set(rec), set(man), set(snapshot_set)]
     checks = {
-        "the run records belong to this run and layer in real mode, with the approved code": (
+        "the run records belong to this run and layer in real mode, with the staged code": (
             identity.get("run_id"),
             identity.get("layer"),
             identity.get("mode"),
         )
         == (run, layer, "real")
-        and bool(SHA256.fullmatch(str(approval.get("code_sha256"))))
-        and identity.get("code_sha256") == approval.get("code_sha256"),
+        and bool(SHA256.fullmatch(staged))
+        and identity.get("code_sha256") == staged,
         "every table set equals the frozen publish contract": all(item == tables for item in sets) and bool(tables),
         "the records name the layer's own namespace in real mode": (candidates.get("mode"), candidates.get("namespace")) == ("real", namespace),
         "the export is this run's: run, sealed identity, consumer result and manifest hashes agree": bool(SHA256.fullmatch(str(sealed)))
@@ -504,11 +500,20 @@ def plan_problems(layer: str, run: str, document: Any) -> list[str]:
 
 
 def host_problems(status: Any) -> list[str]:
-    """What is wrong with the output of ``host_session status`` for a stopped host. The texts are fixed."""
-    keys = ("desired_capacity", "group_instances", "active_container_instances")
+    """What is wrong with the host facts of the running host. The texts are fixed.
+
+    The report runs on the host, so the host is on: the group's desired capacity is at most 1, the group holds its one instance and that instance is the only
+    active container instance of the cluster. The host stop is proven by ``host_session stop`` (``host_off_verified``), not by this report."""
+    keys = ("desired_capacity", "group_instances", "container_instances")
     if not isinstance(status, dict) or any(key not in status for key in keys):
-        return ["the host status lacks its capacity counts"]
-    return [f"{key} is not 0" for key in keys if status[key] != 0]
+        return ["the host status lacks its capacity facts"]
+    desired, group, containers = (status[key] for key in keys)
+    lists = (group, containers)
+    if not all(isinstance(item, list) and all(isinstance(entry, str) and entry for entry in item) for item in lists):
+        return ["the host status lists its instances in the wrong form"]
+    problems = [] if type(desired) is int and 0 <= desired <= 1 else ["the group desired capacity is not at most 1"]
+    problems += [] if len(group) == 1 else ["the group does not hold exactly its one host instance"]
+    return [*problems, *([] if sorted(containers) == sorted(group) else ["the only active container instance is not the host itself"])]
 
 
 def ignored(path: Path) -> bool:
@@ -529,32 +534,48 @@ def now() -> str:
     return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def approve(layer: str, run: str, code_sha256: str, out: Path, confirmation: str) -> dict[str, Any]:
-    if not RUN_ID.fullmatch(run) or not SHA256.fullmatch(code_sha256):
-        raise AcceptanceError("the run ID or the code digest has the wrong form")
-    wanted = f"approve-{layer}-{run}-{code_sha256[:12]}"
-    if confirmation != wanted:
-        raise AcceptanceError(f"set CONFIRM_APPROVE to {wanted} to approve this run ID and code digest")
-    record = {"schema": 1, "layer": layer, "run_id": run, "code_sha256": code_sha256, "approved_at": now()}
-    write_json(out, record)
-    return record
+def staged_digest(records: Records, path: Path) -> str:
+    """The text of the staged ``code.sha256``: one SHA-256 and an optional line end. Another text is no digest and fails the checks that name it."""
+    raw = read_bytes(path)
+    records.sha256["code_digest"] = hashlib.sha256(raw).hexdigest()
+    return raw.decode("utf-8", "replace").strip()
+
+
+def launch_checks(records: Records, layer: str, run: str, folder: Path, staged: str, task: Mapping[str, Any], input_run: str) -> dict[str, bool]:
+    """The launch records of the run and job bind the run to the staged code digest, the input run and the described task."""
+    claim = records.load(folder_file(folder, "claim.json"), "launch/claim.json")
+    attempt = claim.get("attempt")
+    attempt_folder = f"{attempt:02d}" if type(attempt) is int and 0 < attempt < 100 else "00"
+    started, ended = (
+        records.load(folder_file(folder, f"{attempt_folder}/{event}.json"), f"launch/{attempt_folder}/{event}.json") for event in ("started", "end")
+    )
+    bound = mapping(claim.get("bound"))
+    named = all((item.get("run_id"), item.get("job"), item.get("attempt")) == (run, layer, attempt) for item in (claim, started, ended))
+    return {
+        "the staged code digest is the run's: its run records, its launch claim and its task carry it": bool(SHA256.fullmatch(staged))
+        and bound.get("code_digest") == staged,
+        "the launch records are this run's one launch: the claim binds the input run, the started record names the described task and the end succeeded": named
+        and claim.get("event") == "claim"
+        and bound.get("input_run") == (input_run or "latest")
+        and started.get("event") == "started"
+        and started.get("task_arn") == task.get("taskArn")
+        and ended.get("event") == "end"
+        and ended.get("outcome") == "succeeded",
+    }
 
 
 def report(arguments: argparse.Namespace) -> dict[str, Any]:
     layer, run = arguments.layer, arguments.run
     records = Records()
-    approval, described = records.load(arguments.approval, "approval"), records.load(arguments.describe, "describe")
-    evidence, summary, found = evidence_checks(records, layer, run, arguments.evidence, approval, arguments)
+    staged = staged_digest(records, arguments.code_digest)
+    described = records.load(arguments.describe, "describe")
+    evidence, summary, found = evidence_checks(records, layer, run, arguments.evidence, staged, arguments)
     tasks = described.get("tasks")
     task = tasks[0] if isinstance(tasks, list) and len(tasks) == 1 and isinstance(tasks[0], dict) else {}
-    created, approved = moment(task.get("createdAt")), moment(approval.get("approved_at"))
-    checks = {
-        "the owner approved this run ID before the task was created": (approval.get("layer"), approval.get("run_id")) == (layer, run)
-        and created is not None
-        and approved is not None
-        and approved < created,
-        "the task is this run's: its definition, its overrides and the approved code digest": task_is_this_runs(
-            layer, run, task, str(approval.get("code_sha256")), str(found["identity"].get("code_run")), found["input_run"]
+    checks = launch_checks(records, layer, run, arguments.launch_records, staged, task, found["input_run"])
+    checks |= {
+        "the task is this run's: its definition, its overrides and the staged code digest": task_is_this_runs(
+            layer, run, task, staged, str(found["identity"].get("code_run")), found["input_run"]
         ),
         "every container of the task exited 0 and the task stopped": not task_problems(layer, described),
     }
@@ -562,7 +583,7 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
     checks |= listing_checks(layer, run, records, arguments, found["identity"].get("input_listing"))
     running = records.load(arguments.running_tasks, "running_tasks")
     checks["no task of the job is left running"] = running.get("taskArns") == []
-    checks["the host is stopped and verified: no capacity, group instance or container instance"] = not host_problems(
+    checks["the host runs alone: its group desired capacity is at most 1 and its one instance is the only active container instance"] = not host_problems(
         records.load(arguments.host_status, "host_status")
     )
     return {
@@ -574,68 +595,42 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
         "checks": checks,
         "tables": summary,
         "file_sha256": dict(sorted(records.sha256.items())),
-        "limits": "Owner-saved read results only. The report does not prove the catalog state it did not read.",
+        "limits": "Staged records and read-only AWS results only. The report does not prove the catalog state it did not read.",
     }
-
-
-def sign(report_path: Path, owner: str, confirmation: str) -> dict[str, Any]:
-    raw = read_bytes(report_path)
-    digest = hashlib.sha256(raw).hexdigest()
-    try:
-        document = mapping(json.loads(raw))
-    except ValueError:
-        raise AcceptanceError("the report is not JSON") from None
-    if not report_passed(document) or not RUN_ID.fullmatch(str(document.get("run_id"))) or document.get("layer") not in LAYERS:
-        raise AcceptanceError("only a report that passed is signed")
-    wanted = f"sign-{document['layer']}-{document['run_id']}-{digest[:12]}"
-    if confirmation != wanted or not owner.strip() or len(owner) > 100 or not owner.isprintable():
-        raise AcceptanceError(f"set CONFIRM_SIGN to {wanted} and name the owner")
-    signature = {"schema": 1, "report_sha256": digest, "owner": owner.strip(), "signed_at": now(), "confirmation": wanted}
-    write_json(report_path.with_suffix(".signed.json"), signature)
-    return signature
 
 
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     steps = cli.add_subparsers(dest="step", required=True)
-    for name in ("approve", "task", "report", "plan"):
+    for name in ("task", "report", "plan"):
         step = steps.add_parser(name)
         step.add_argument("--layer", required=True, choices=LAYERS)
         if name != "task":
             step.add_argument("--run", required=True)
-    steps.choices["approve"].add_argument("--code-sha256", required=True)
-    steps.choices["approve"].add_argument("--out", required=True, type=Path)
     steps.choices["task"].add_argument("--describe", required=True, type=Path)
     steps.choices["plan"].add_argument("--log", required=True, type=Path)
-    for flag in ("approval", "describe", "evidence", "before", "after", "running-tasks", "host-status", "out"):
+    for flag in ("code-digest", "describe", "evidence", "launch-records", "before", "after", "running-tasks", "host-status", "out"):
         steps.choices["report"].add_argument(f"--{flag}", required=True, type=Path)
     steps.choices["report"].add_argument("--input-evidence", type=Path)
     steps.choices["report"].add_argument("--input-report", type=Path)
-    signing = steps.add_parser("sign")
-    signing.add_argument("--report", required=True, type=Path)
-    signing.add_argument("--owner", required=True)
     return cli
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser().parse_args(argv)
+    result: dict[str, Any]
     try:
-        if arguments.step == "approve":
-            result = approve(arguments.layer, arguments.run, arguments.code_sha256, arguments.out, os.environ.get("CONFIRM_APPROVE", ""))
-        elif arguments.step == "task":
+        if arguments.step == "task":
             result = {"problems": task_problems(arguments.layer, read_json(arguments.describe))}
             result["passed"] = not result["problems"]
         elif arguments.step == "plan":
             result = {"problems": plan_problems(arguments.layer, arguments.run, read_json(arguments.log))}
             result["passed"] = not result["problems"]
-        elif arguments.step == "report":
+        else:
             if not ignored(arguments.out):
-                raise AcceptanceError("the report path must be ignored by Git: signed reports stay local")
+                raise AcceptanceError("the report path must be ignored by Git: reports stay local")
             result = report(arguments)
             write_json(arguments.out, result)
-            result["sign_with"] = f"sign-{arguments.layer}-{arguments.run}-{hashlib.sha256(arguments.out.read_bytes()).hexdigest()[:12]}"
-        else:
-            result = sign(arguments.report, arguments.owner, os.environ.get("CONFIRM_SIGN", ""))
     except AcceptanceError as error:
         sys.stderr.write(f"layer acceptance {arguments.step}: {error}\n")
         return 1
