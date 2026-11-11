@@ -68,7 +68,7 @@ class Handler(BaseHTTPRequestHandler):
             content_type = "text/xml"
         else:
             request = json.loads(body or "{}")
-            name = str(request.get("SecretId") or request.get("Name") or "")
+            name = str(request.get("SecretId") or request.get("Name") or (request.get("Names") or [""])[0])
             server.calls.append(target.rpartition(".")[2])
             if server.gated:
                 # The caller is inside its guard: hold the answer until the case releases this arrival, so the order of the answers is the case's.
@@ -78,6 +78,8 @@ class Handler(BaseHTTPRequestHandler):
                 gate.wait(30)
             if target.endswith("GetSecretValue"):
                 answer: dict[str, Any] = {"Name": name, "VersionId": "v1", "SecretString": server.marker, "VersionStages": ["AWSCURRENT"]}
+            elif target.endswith("GetParameters"):
+                answer = {"Parameters": [{"Name": name, "Type": "SecureString", "Value": server.marker, "Version": 1}], "InvalidParameters": []}
             else:
                 answer = {"Parameter": {"Name": name, "Type": "SecureString", "Value": server.marker, "Version": 1}}
             payload = json.dumps(answer).encode()
@@ -212,7 +214,7 @@ def test_secret_read_leaves_no_value_in_debug_logs(site: str, tmp_path: Path) ->
     with loopback(marker) as server, debug_logging() as captured:
         value = SITES[site](server, tmp_path)
     check(value == marker, f"{site}: the read must still return the value")
-    check(any(call in {"GetSecretValue", "GetParameter"} for call in server.calls), f"{site}: the secret call must have reached the server")
+    check(any(call in {"GetSecretValue", "GetParameter", "GetParameters"} for call in server.calls), f"{site}: the secret call must have reached the server")
     check(marker not in captured.text(), f"{site}: the SDK logged the secret value")
     check(all(marker not in repr(record.__dict__) for record in captured.records), f"{site}: a log record carries the secret value")
 

@@ -4,7 +4,7 @@
     {
       "Sid": "ReadPseudonymKeyAtLoad",
       "Effect": "Allow",
-      "Action": ["ssm:GetParameter"],
+      "Action": ["ssm:GetParameters"],
       "Resource": ["${PSEUDONYM_KEY_ARN}"]
     }
   ]

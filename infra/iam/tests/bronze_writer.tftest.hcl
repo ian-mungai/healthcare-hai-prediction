@@ -153,7 +153,7 @@ run "bronze_rendered_storage_scope" {
       jsondecode(aws_iam_policy.bronze_writer["pseudonym_key"].policy).Statement == [{
         Sid      = "ReadPseudonymKeyAtLoad"
         Effect   = "Allow"
-        Action   = ["ssm:GetParameter"]
+        Action   = ["ssm:GetParameters"]
         Resource = ["arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1"]
       }] &&
       aws_iam_role_policy_attachment.bronze_writer["pseudonym_key"].role == aws_iam_role.bronze_writer[0].name

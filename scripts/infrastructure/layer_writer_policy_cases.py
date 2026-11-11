@@ -92,8 +92,8 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             for action in (*WRITER_ACTIONS, "s3:DeleteObjectVersion"):
                 add(f"{layer} payload refusal {root} {action}", layer, action, payload, False)
             add(f"{layer} payload other digest path {root}", layer, "s3:GetObjectVersion", f"{BUCKET}/{root}bronze_objects/other/" + "ab" * 32, False)
-        add(f"{layer} pseudonym key read", layer, "ssm:GetParameter", KEY_PARAMETER, layer == "bronze")
-        for action in ("ssm:PutParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
+        add(f"{layer} pseudonym key read", layer, "ssm:GetParameters", KEY_PARAMETER, layer == "bronze")
+        for action in ("ssm:PutParameter", "ssm:GetParameter", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
             add(f"{layer} pseudonym key excludes {action}", layer, action, KEY_PARAMETER, False)
         for candidate in (
             other_version("v2"),
@@ -104,7 +104,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             KEY_PARAMETER.replace("us-west-2", "eu-west-1"),
             KEY_PARAMETER.replace("healthcare_hai_prediction", "other_project"),
         ):
-            add(f"{layer} pseudonym key boundary {candidate}", layer, "ssm:GetParameter", candidate, False)
+            add(f"{layer} pseudonym key boundary {candidate}", layer, "ssm:GetParameters", candidate, False)
         for suffix in ("data/input.csv", "manifests/collection.json"):
             add(f"{layer} source other bucket {suffix}", layer, "s3:GetObjectVersion", f"{OTHER_BUCKET}/cms/hospitals/{suffix}", False)
         add(f"{layer} source list other bucket", layer, "s3:ListBucketVersions", OTHER_BUCKET, False, {"s3:prefix": ("cms/hospitals/",)})
@@ -164,7 +164,8 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
                 add(f"execution parameter boundary {candidate}", "execution_delta", "ssm:GetParameters", candidate, False)
     add("execution excludes administrator", "execution_delta", "ssm:GetParameters", PARAMETER + "polaris_root_secret", False)
     for actor in ("project", "reader", "execution_delta"):
-        add(f"{actor} excludes pseudonym key", actor, "ssm:GetParameter", KEY_PARAMETER, False)
+        for action in ("ssm:GetParameter", "ssm:GetParameters"):
+            add(f"{actor} excludes pseudonym key {action}", actor, action, KEY_PARAMETER, False)
 
     for layer in LAYERS:
         role = f"arn:aws:iam::111111111111:role/example_project_job_write_{layer}_task_dev"
@@ -364,6 +365,7 @@ def verify(root: Path, base: dict[str, dict[str, Any]], output: Path) -> tuple[l
                 ("key_prefix_wildcard", "Resource", [KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*")]),
                 ("key_write", "Action", [*statement["Action"], "ssm:PutParameter"]),
                 ("key_path_read", "Action", [*statement["Action"], "ssm:GetParametersByPath"]),
+                ("key_single_read", "Action", [*statement["Action"], "ssm:GetParameter"]),
             ]
         for label, field, value in variants:
             changed = copy.deepcopy(documents)

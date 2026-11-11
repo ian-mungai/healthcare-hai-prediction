@@ -258,26 +258,34 @@ STAND_IN_CREDENTIAL = "stand-in"
 
 
 class StandInParameters:
-    """A Parameter Store client stand-in with the one call the key reader makes."""
+    """A Parameter Store client stand-in with the one call the key reader makes: GetParameters, as the bronze task role may only make that call."""
 
     def __init__(
-        self, values: dict[str, str], failure: Exception | None = None, parameter_type: str = "SecureString", returned_name: str | None = None
+        self,
+        values: dict[str, str],
+        failure: Exception | None = None,
+        parameter_type: str = "SecureString",
+        returned_name: str | None = None,
+        extra_invalid: tuple[str, ...] = (),
+        extra_parameter: bool = False,
     ) -> None:
         self.values, self.failure, self.parameter_type, self.returned_name = values, failure, parameter_type, returned_name
+        self.extra_invalid, self.extra_parameter = extra_invalid, extra_parameter
         self.calls: list[tuple[str, bool]] = []
 
-    def get_parameter(self, Name: str, WithDecryption: bool) -> dict:
-        """Record the request, then fail, miss or answer as configured."""
-        self.calls.append((Name, WithDecryption))
+    def get_parameters(self, Names: list[str], WithDecryption: bool) -> dict:
+        """Record each requested name, then fail or answer as configured. A name that does not exist comes back under InvalidParameters, not as an error."""
+        self.calls.extend((name, WithDecryption) for name in Names)
         if self.failure is not None:
             raise self.failure
-        if Name not in self.values:
-            raise ClientError({"Error": {"Code": "ParameterNotFound", "Message": "missing"}}, "GetParameter")
-        return {"Parameter": {"Name": self.returned_name or Name, "Type": self.parameter_type, "Value": self.values[Name]}}
+        found = [{"Name": self.returned_name or name, "Type": self.parameter_type, "Value": self.values[name]} for name in Names if name in self.values]
+        if self.extra_parameter:
+            found.append({"Name": "/stand-in/other", "Type": self.parameter_type, "Value": "other"})
+        return {"Parameters": found, "InvalidParameters": [name for name in Names if name not in self.values] + list(self.extra_invalid)}
 
 
 class SsmHandler(BaseHTTPRequestHandler):
-    """Answers the Parameter Store JSON protocol for GetParameter on the loopback address."""
+    """Answers the Parameter Store JSON protocol for GetParameters on the loopback address."""
 
     def log_message(self, format: str, *args: Any) -> None:
         return
@@ -287,11 +295,15 @@ class SsmHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         stand_in = cast(SsmStandIn, self.server)
         stand_in.requests.append((self.headers.get("X-Amz-Target", ""), body))
-        value = stand_in.values.get(body.get("Name"))
+        names = body.get("Names", [])
         status, payload = (
-            (400, {"__type": "ParameterNotFound", "message": "missing"})
-            if value is None
-            else (200, {"Parameter": {"Name": body["Name"], "Type": "SecureString", "Value": value, "Version": 1}})
+            200,
+            {
+                "Parameters": [
+                    {"Name": name, "Type": "SecureString", "Value": stand_in.values[name], "Version": 1} for name in names if name in stand_in.values
+                ],
+                "InvalidParameters": [name for name in names if name not in stand_in.values],
+            },
         )
         raw = json.dumps(payload).encode()
         self.send_response(status)
@@ -515,7 +527,7 @@ def check_key_errors(run: Run) -> None:
         ensure(not (folder / "derivative").exists() and sorted(p.name for p in folder.iterdir()) == [], f"{name} left files behind")
     absent = StandInParameters({})
     expect_error("key_missing", lambda: module.transform(run.original, run.case_dir("absent") / "d", OWNER_POLICY, "v1", module.parameter_store_reader(absent)))
-    denied = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "GetParameter")
+    denied = ClientError({"Error": {"Code": "AccessDeniedException", "Message": "denied"}}, "GetParameters")
     expect_error(
         "key_read_failed",
         lambda: module.transform(run.original, run.case_dir("denied") / "d", OWNER_POLICY, "v1", module.parameter_store_reader(StandInParameters({}, denied))),
@@ -929,7 +941,7 @@ def check_sdk_logging(run: Run) -> None:
     try:
         session = boto3.Session(aws_access_key_id=STAND_IN_CREDENTIAL, aws_secret_access_key=STAND_IN_CREDENTIAL, region_name="us-west-2")
         client = session.client("ssm", endpoint_url=f"http://{LOOPBACK}:{server.server_address[1]}", config=Config(**module.CLIENT_OPTIONS))
-        client.get_parameter(Name=module.PARAMETER_PREFIX + "v1", WithDecryption=True)
+        client.get_parameters(Names=[module.PARAMETER_PREFIX + "v1"], WithDecryption=True)
         ensure(any(KEYS["v1"] in line for line in records), "control: the SDK did not log the response body, so this case proves nothing")
         records.clear()
         folder = run.case_dir("sdk_logging")
@@ -938,7 +950,10 @@ def check_sdk_logging(run: Run) -> None:
         ensure(contract == run.make("sdk_logging_reference"), "the SDK read gave another result")
         ensure(logging.root.manager.disable == saved[2], "the read left the logging switch changed")
         ensure(
-            server.requests[-1][0] == "AmazonSSM.GetParameter" and server.requests[-1][1]["WithDecryption"] is True, "the request did not ask for decryption"
+            server.requests[-1][0] == "AmazonSSM.GetParameters"
+            and server.requests[-1][1]["WithDecryption"] is True
+            and server.requests[-1][1]["Names"] == [module.PARAMETER_PREFIX + "v1"],
+            "the request was not one decrypting read of the one key parameter",
         )
         expect_error("key_missing", partial(module.transform, run.original, folder / "other", OWNER_POLICY, "v2", module.parameter_store_reader(client)))
         ensure(not [line for line in records if KEYS["v1"] in line], "a log line holds the key after a missing read")
@@ -959,6 +974,8 @@ def check_parameter_checks(run: Run) -> None:
         "plain_string": StandInParameters({name: KEYS["v1"]}, parameter_type="String"),
         "string_list": StandInParameters({name: KEYS["v1"]}, parameter_type="StringList"),
         "other_name": StandInParameters({name: KEYS["v1"]}, returned_name=module.PARAMETER_PREFIX + "v2"),
+        "invalid_alongside": StandInParameters({name: KEYS["v1"]}, extra_invalid=(module.PARAMETER_PREFIX + "v2",)),
+        "second_parameter": StandInParameters({name: KEYS["v1"]}, extra_parameter=True),
     }.items():
         folder = run.case_dir("parameter_" + label)
         expect_error(

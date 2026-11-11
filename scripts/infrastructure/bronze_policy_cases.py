@@ -116,11 +116,11 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     check("s3:ListBucketVersions", BUCKET, False, prefix="example/not_mapped/")
     check("s3:ListBucket", BUCKET, False, prefix="")
     check("s3:GetBucketLocation", BUCKET, False)
-    check("ssm:GetParameter", KEY_PARAMETER, True)
-    for action in ("ssm:PutParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
+    check("ssm:GetParameters", KEY_PARAMETER, True)
+    for action in ("ssm:PutParameter", "ssm:GetParameter", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
         check(action, KEY_PARAMETER, False)
-    check("ssm:GetParameter", other_version("v2"), False)
-    check("ssm:GetParameter", KEY_PARAMETER.replace("pseudonym_key_v1", "broker_token"), False)
+    check("ssm:GetParameters", other_version("v2"), False)
+    check("ssm:GetParameters", KEY_PARAMETER.replace("pseudonym_key_v1", "broker_token"), False)
     return sorted(failures)
 
 
@@ -220,7 +220,8 @@ def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
                 json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
             ),
         ),
-        ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameter"', '"ssm:GetParameter", "ssm:PutParameter"')),
+        ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:PutParameter"')),
+        ("key_single_read_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameters"', '"ssm:GetParameters", "ssm:GetParameter"')),
         ("key_version_wildcard", ("bronze_writer_pseudonym_key", "${PSEUDONYM_KEY_ARN}", KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*"))),
     )
     results = []

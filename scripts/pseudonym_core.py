@@ -232,20 +232,26 @@ def load_key(version: str, reader: KeyReader) -> bytes:
 
 
 def parameter_store_reader(client: Any) -> KeyReader:
-    """A reader over a Parameter Store client: one SecureString per key version, read with decryption at use and checked for type and name."""
+    """A reader over a Parameter Store client: one SecureString per key version, read with decryption at use and checked for type and name.
+
+    The read is GetParameters for the one name, the only read call the bronze task role is granted. A name that does not exist comes back under
+    InvalidParameters and reads as a missing key. Any other reply that names an invalid parameter, or does not hold exactly the requested parameter, is
+    refused with a fixed code. The value is never part of an error.
+    """
 
     def read(version: str) -> str | None:
         name = PARAMETER_PREFIX + version
         try:
             with quiet_sdk_logs():
-                parameter = client.get_parameter(Name=name, WithDecryption=True)["Parameter"]
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
-                return None
+                reply = client.get_parameters(Names=[name], WithDecryption=True)
+            parameters, invalid = reply["Parameters"], reply["InvalidParameters"]
+        except (BotoCoreError, ClientError, KeyError, TypeError):
             raise PseudonymizationError("key_read_failed") from None
-        except (BotoCoreError, KeyError, TypeError):
-            raise PseudonymizationError("key_read_failed") from None
-        require(isinstance(parameter, dict), "key_read_failed")
+        require(isinstance(parameters, list) and isinstance(invalid, list), "key_read_failed")
+        if not parameters and invalid == [name]:
+            return None
+        require(not invalid and len(parameters) == 1 and isinstance(parameters[0], dict), "key_parameter_invalid")
+        parameter = parameters[0]
         require(parameter.get("Type") == "SecureString" and parameter.get("Name") == name, "key_parameter_invalid")
         value = parameter.get("Value")
         return value if isinstance(value, str) else None
