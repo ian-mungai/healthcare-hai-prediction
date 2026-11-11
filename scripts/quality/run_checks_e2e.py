@@ -1291,6 +1291,11 @@ def account_field(account: str) -> str:
     return f'CONFIG = {{"account_id": "{account}"}}\n'
 
 
+def account_conditional(first: str, second: str) -> str:
+    """An assignment that evaluates to ``second``, whatever the first account literal says."""
+    return f'account_id = "{first}" if False else "{second}"\n'
+
+
 def account_cases() -> list[Case]:
     """The exemption cases: the one synthetic ID passes in both contexts and every other 12-digit ID is flagged in both."""
     cases = [
@@ -1301,6 +1306,48 @@ def account_cases() -> list[Case]:
             "privacy-scan",
             False,
             {"infra/policy.json": f'{{"Resource": ["{account_arn(EXEMPT_ACCOUNT)}", "{account_arn(OTHER_ACCOUNTS["all-two"])}"]}}\n'},
+        ),
+        Case(
+            "exempt account first in a conditional assignment",
+            "privacy-scan",
+            False,
+            {"tests/test_config.py": account_conditional(EXEMPT_ACCOUNT, OTHER_ACCOUNTS["all-two"])},
+        ),
+        Case(
+            "exempt account ARN beside a bare other account",
+            "privacy-scan",
+            False,
+            {"infra/policy.json": f'{{"Resource": "{account_arn(EXEMPT_ACCOUNT)}", "Other": "{OTHER_ACCOUNTS["all-two"]}"}}\n'},
+        ),
+        Case(
+            "exempt account twice on one line",
+            "privacy-scan",
+            True,
+            {"tests/test_config.py": account_conditional(EXEMPT_ACCOUNT, EXEMPT_ACCOUNT)},
+        ),
+        Case(
+            "exempt account with a decimal number beside it",
+            "privacy-scan",
+            True,
+            {"tests/test_config.py": f'ACCOUNT, RATIO = "{EXEMPT_ACCOUNT}", 0.{OTHER_ACCOUNTS["sequential"]}\n'},
+        ),
+        Case(
+            "exempt account ARN with a UUID resource",
+            "privacy-scan",
+            True,
+            {"infra/policy.json": f'{{"Resource": "arn:aws:autoscaling:eu-west-1:{EXEMPT_ACCOUNT}:group:00000000-0000-0000-0000-{"0" * 12}:name"}}\n'},
+        ),
+        Case(
+            "synthetic account declared in .env is exempt",
+            "privacy-scan",
+            True,
+            {".env": f"AWS_ACCOUNT_ID={EXEMPT_ACCOUNT}\n", "tests/test_config.py": account_field(EXEMPT_ACCOUNT)},
+        ),
+        Case(
+            "real account declared in .env",
+            "privacy-scan",
+            False,
+            {".env": f"AWS_ACCOUNT_ID={OTHER_ACCOUNTS['all-two']}\n", "scripts/deploy.sh": f"echo {OTHER_ACCOUNTS['all-two']}\n"},
         ),
     ]
     for label, account in OTHER_ACCOUNTS.items():
@@ -2453,6 +2500,9 @@ BLOCK_REASONS = {
     "all-zero account ID field": "tests/test_config.py:1: AWS account ID",
     "all-two account ARN": "infra/policy.json:1: AWS account ID",
     "all-two account ID field": "tests/test_config.py:1: AWS account ID",
+    "exempt account first in a conditional assignment": "tests/test_config.py:1: AWS account ID",
+    "exempt account ARN beside a bare other account": "infra/policy.json:1: AWS account ID",
+    "real account declared in .env": "scripts/deploy.sh:1: value declared in .env",
     "value declared in .env": "scripts/deploy.sh:1: value declared in .env",
     "profile label in another file": "scripts/deploy.sh:1: value declared in .env",
     "bucket named after the project": "scripts/deploy.sh:1: value declared in .env",
@@ -3182,6 +3232,7 @@ def account_probe(repo: Path) -> tuple[set[str], str]:
     probes = {"exempt_arn": account_arn(EXEMPT_ACCOUNT), "exempt_field": account_field(EXEMPT_ACCOUNT).strip()}
     probes |= {f"{label}_{kind}": text(account) for label, account in OTHER_ACCOUNTS.items() for kind, text in (("arn", account_arn), ("field", account_field))}
     probes["mixed"] = f"{account_arn(EXEMPT_ACCOUNT)} {account_arn(OTHER_ACCOUNTS['all-two'])}"
+    probes["conditional"] = account_conditional(EXEMPT_ACCOUNT, OTHER_ACCOUNTS["all-two"]).strip()
     write(repo, {f"probe/{name}.txt": text + "\n" for name, text in probes.items()})
     result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "privacy-scan", "--all"], cwd=repo)
     output = result.stdout + result.stderr
@@ -3189,21 +3240,34 @@ def account_probe(repo: Path) -> tuple[set[str], str]:
 
 
 def run_account_plant_case() -> tuple[bool, str]:
-    """The scan flags every probe but the exempt ones; a planted regression that exempts any 12 digits is caught by the same probe."""
-    expected = {"all-zero_arn", "all-zero_field", "all-two_arn", "all-two_field", "sequential_arn", "sequential_field", "mixed"}
+    """The scan flags every probe but the exempt ones; each planted regression is caught by the same probe.
+
+    The first plant exempts any 12 digits, in the match check and in the second-literal check. The second plant keeps the match check but
+    stops the second-literal check from counting any number, so only the conditional probe slips through.
+    """
+    expected = {"all-zero_arn", "all-zero_field", "all-two_arn", "all-two_field", "sequential_arn", "sequential_field", "mixed", "conditional"}
+    exempt_any = ("== SYNTHETIC_ACCOUNT_ID", ".isdigit()")
+    count_none = ("number != SYNTHETIC_ACCOUNT_ID", "number.isdigit() is False")
+    plants = {"any 12 digits exempt": [exempt_any, count_none], "second literal ignored": [count_none]}
     with tempfile.TemporaryDirectory(prefix="hai_account_plant_") as scratch:
         repo = scratch_repo(Path(scratch), Case("account plant", "privacy-scan", True))
         real, real_output = account_probe(repo)
         source = repo / "scripts" / "quality" / "repo_checks.py"
         text = source.read_text()
-        planted = text.replace("== SYNTHETIC_ACCOUNT_ID", ".isdigit()")
-        if planted == text:
-            return False, "the plant did not apply: the exemption comparison is not where this case expects it\n"
-        source.write_text(planted)
-        caught, _ = account_probe(repo)
         leaked = any(account in real_output for account in OTHER_ACCOUNTS.values())  # The fix hint names the exempt ID on purpose.
-        ok = real == expected and caught != expected and not leaked
-        return ok, f"flagged by the real scan: {sorted(real)}; flagged with the planted regression: {sorted(caught)}; value leaked={leaked}\n"
+        ok = real == expected and not leaked
+        detail = f"flagged by the real scan: {sorted(real)}; value leaked={leaked}\n"
+        for label, replacements in plants.items():
+            planted = text
+            for old, new in replacements:
+                planted = planted.replace(old, new)
+            if any(old not in text for old, _ in replacements):
+                return False, f"the plant '{label}' did not apply: the comparison is not where this case expects it\n"
+            source.write_text(planted)
+            caught, _ = account_probe(repo)
+            ok = ok and caught != expected
+            detail += f"flagged with the plant '{label}': {sorted(caught)}\n"
+        return ok, detail
 
 
 # Each sample runs the check directly, without --warn: (name, files, articles, expected exit, marker in the output).

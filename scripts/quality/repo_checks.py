@@ -197,8 +197,11 @@ PRIVACY_PATTERNS = {
     "aws-account": ("AWS account ID", re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:(\d{12}):|(?i:account[_ -]?id)\W{1,4}(\d{12})\b")),
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
-# The one synthetic account ID that code and tests may use. Any other 12-digit ID in an ARN or after an account id label is flagged.
+# The one synthetic account ID that code and tests may use. Any other 12-digit ID in an ARN or after an account id label is flagged, and so is
+# any other 12-digit number on a line that holds an account match (a conditional that ends in a real account).
 SYNTHETIC_ACCOUNT_ID = "111111111111"
+TWELVE_DIGITS = re.compile(r"(?<![\w.])\d{12}(?!\w)")
+UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
 WRITING_RULE = (
     f"{POLICY}: writing check. It checks the Oxford comma, date format, time-bound words, dashes, semicolons, slashes, internal references, "
@@ -1628,6 +1631,8 @@ def env_values() -> list[str]:
         value = value.strip().strip("\"'")
         named = value.lower().replace("_", "-")
         if ENV_VALUE_KEYS.search(key.strip().upper()) and len(value) >= 4 and not line.lstrip().startswith("#") and named not in public:
+            if "ACCOUNT" in key.strip().upper() and value == SYNTHETIC_ACCOUNT_ID:
+                continue
             values.append(value)
     return values
 
@@ -1641,11 +1646,20 @@ def exempt_match(kind: str, match: re.Match[str]) -> bool:
     return False
 
 
+def other_twelve_digits(line: str) -> bool:
+    """Whether a line holds a 12-digit number other than the synthetic account ID, which an account match must not hide.
+
+    The last group of a UUID can be 12 digits (a resource ID in an ARN), so UUIDs are not counted.
+    """
+    return any(number != SYNTHETIC_ACCOUNT_ID for number in TWELVE_DIGITS.findall(UUID.sub("", line)))
+
+
 def line_privacy(line: str, values: list[str]) -> list[str]:
     """Return the privacy finding types on one line."""
     kinds = []
     for kind, (_, pattern) in PRIVACY_PATTERNS.items():
-        if any(not exempt_match(kind, match) for match in pattern.finditer(line)):
+        matches = list(pattern.finditer(line))
+        if any(not exempt_match(kind, match) for match in matches) or (kind == "aws-account" and matches and other_twelve_digits(line)):
             kinds.append(kind)
     if any(value in line for value in values):
         kinds.append("env-value")
