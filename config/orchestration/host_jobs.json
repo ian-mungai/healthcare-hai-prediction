@@ -63,8 +63,7 @@
   "dags": {
     "silver_transform_dag": "silver",
     "gold_transform_dag": "gold",
-    "features_transform_dag": "features",
-    "feature_store_dag": "features",
+    "features_base_dag": "features",
     "drift_monitoring_dag": "drift",
     "training_dag": "train",
     "model_promotion_dag": "promote",

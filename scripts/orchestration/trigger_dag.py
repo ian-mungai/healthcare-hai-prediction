@@ -6,11 +6,11 @@ Usage::
 
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
-    .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_transform_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_base_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
 
-A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features and feature store the
+A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features base the
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
@@ -43,8 +43,8 @@ from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, A
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 # The producer-run parameter each workflow's form requires, by workflow.
-PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_transform_dag": "gold_snapshot_run", "feature_store_dag": "gold_snapshot_run"}
-DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS)
+PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_base_dag": "gold_snapshot_run"}
+DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *TRAINING_DAGS)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)

@@ -2802,8 +2802,7 @@ OFFLINE_RUN = "20261015T000000Z-0a0a0a0a"
 OFFLINE_OTHER_RUN = "20261015T000001Z-0b0b0b0b"
 OFFLINE_SILVER = ["--dag", "silver_transform_dag", "--mode", "real"]
 OFFLINE_GOLD = ["--dag", "gold_transform_dag", "--mode", "real"]
-OFFLINE_FEATURES = ["--dag", "features_transform_dag", "--mode", "real"]
-OFFLINE_STORE = ["--dag", "feature_store_dag", "--mode", "real"]
+OFFLINE_FEATURES = ["--dag", "features_base_dag", "--mode", "real"]
 
 
 class FakeClock:
@@ -2943,7 +2942,6 @@ def trigger_refusals() -> dict[str, bool]:
         "a gold run reading the latest silver snapshot": [*OFFLINE_GOLD, "--silver-snapshot-run", "latest"],
         "a features run without its gold snapshot run": OFFLINE_FEATURES,
         "a features run reading the latest gold snapshot": [*OFFLINE_FEATURES, "--gold-snapshot-run", "latest"],
-        "a feature store run without its gold snapshot run": OFFLINE_STORE,
         "a gold snapshot run on a gold run": [*OFFLINE_GOLD, "--silver-snapshot-run", OFFLINE_RUN, "--gold-snapshot-run", OFFLINE_OTHER_RUN],
         "a silver snapshot run on a features run": [*OFFLINE_FEATURES, "--gold-snapshot-run", OFFLINE_RUN, "--silver-snapshot-run", OFFLINE_OTHER_RUN],
     }
@@ -2957,8 +2955,7 @@ def trigger_refusals() -> dict[str, bool]:
     complete = {
         "silver_transform_dag": [],
         "gold_transform_dag": ["--silver-snapshot-run", OFFLINE_OTHER_RUN],
-        "features_transform_dag": ["--gold-snapshot-run", OFFLINE_OTHER_RUN],
-        "feature_store_dag": ["--gold-snapshot-run", OFFLINE_OTHER_RUN],
+        "features_base_dag": ["--gold-snapshot-run", OFFLINE_OTHER_RUN],
         "training_dag": [],
         "model_promotion_dag": ["--hai-type", "HAI_1", "--model-version", "3"],
     }
@@ -3010,7 +3007,6 @@ def trigger_runs() -> dict[str, bool]:
     features = drive_trigger(
         [*OFFLINE_FEATURES, "--gold-snapshot-run", OFFLINE_OTHER_RUN, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock())
     )
-    store = drive_trigger([*OFFLINE_STORE, "--gold-snapshot-run", OFFLINE_OTHER_RUN, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock()))
     pinned = drive_trigger(
         [*OFFLINE_GOLD, "--silver-snapshot-run", OFFLINE_OTHER_RUN, "--run-id", OFFLINE_RUN, "--wait-seconds", "60"], FakeAirflow(FakeClock())
     )
@@ -3022,11 +3018,10 @@ def trigger_runs() -> dict[str, bool]:
         "the run ID is generated only when none is given": len(posted) == 1
         and trigger_dag.RUN_ID.fullmatch(posted[0]["body"]["dag_run_id"]) is not None
         and posted[0]["body"]["conf"] == {"run_id": posted[0]["body"]["dag_run_id"], "mode": "real"},
-        "a features run and a feature store run send the gold snapshot run they publish from": all(
-            next(item for item in found["requests"] if item["method"] == "POST")["body"]["conf"]
-            == {"run_id": OFFLINE_RUN, "mode": "real", "gold_snapshot_run": OFFLINE_OTHER_RUN}
-            for found in (features, store)
-        ),
+        "a features base run sends the gold snapshot run it publishes from": next(item for item in features["requests"] if item["method"] == "POST")["body"][
+            "conf"
+        ]
+        == {"run_id": OFFLINE_RUN, "mode": "real", "gold_snapshot_run": OFFLINE_OTHER_RUN},
         "a gold run keeps the pinned snapshot": next(item for item in pinned["requests"] if item["method"] == "POST")["body"]["conf"]["silver_snapshot_run"]
         == OFFLINE_OTHER_RUN,
         "a failed run exits 1 and prints the state failed and the task states": failed["exit_code"] == 1

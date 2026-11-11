@@ -146,7 +146,7 @@ def chain_runs_in_order_after_the_gate() -> None:
     require(loaded["dag"].settings["schedule"] is None and loaded["dag"].settings["catchup"] is False, "the chain has a calendar schedule")
     require(
         [nodes[name].settings["trigger_dag_id"] for name in order[1:]]
-        == ["silver_transform_dag", "gold_transform_dag", "features_transform_dag", "drift_monitoring_dag"],
+        == ["silver_transform_dag", "gold_transform_dag", "features_base_dag", "drift_monitoring_dag"],
         "wrong DAGs",
     )
     for name in order[1:]:

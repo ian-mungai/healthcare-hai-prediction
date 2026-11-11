@@ -60,6 +60,8 @@ CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
 CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
+# The feature set a DAG's features job builds (the FEATURE_SET of its containers). A DAG that names none cannot launch the features job.
+FEATURE_SETS = {"features_base_dag": "base"}
 NO_STAGED_CODE = "0" * 64  # the bound code digest of a job that fetches no staged code
 CAPACITY_LABEL = "hai.host_capacity"  # the label of a host revision's init container that binds it to the host capacity (infra/jobs/host.tf)
 HOST_JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"  # the host job cap in MiB that the services stack renders into every Airflow container (host_job_cap_mib)
@@ -68,6 +70,14 @@ BINDING_FORM = re.compile(
     r"job_memory_mib=(?P<job>[1-9][0-9]*) (?P<inputs>usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+)) "
     r"service_reservations_mib=(?P<services>[0-9]+)"
 )  # the label of a host revision, the services output host_capacity_binding
+
+
+def feature_set_of(dag_id: str) -> str:
+    """The feature set the features job of ``dag_id`` builds; a DAG that names none is refused, so the job never runs a set by default."""
+    try:
+        return FEATURE_SETS[dag_id]
+    except KeyError:
+        raise LaunchRefused(f"the DAG {dag_id} names no feature set for the features job") from None
 
 
 class S3Reader(Protocol):
@@ -718,6 +728,7 @@ class Preflight:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
+            "FEATURE_SET": lambda: feature_set_of(request.dag_id),
             **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},
         }
         containers, log_container = self.containers(job)

@@ -44,9 +44,11 @@ BASE_REVISION = "75f348719b03054e62d887390b4c438ff62ef5ff"
 RUN_SECONDS = 120
 RUN = "20261022T120000Z-0a1b2c3d"
 GOLD_RUN = "20261021T110000Z-1a2b3c4d"
-FEATURES_DAG = "features_transform_dag"
+FEATURES_DAG = "features_base_dag"
+BASE_DAG = FEATURES_DAG
+# The feature store DAG and the step DAG of the single features run are gone; their step chains stay as the work the broker's templates cover.
 STORE_DAG = "feature_store_dag"
-# Design section 1.1: the work chain of each DAG; the tail (catalog_release, final_gate, release_run) comes from dag_runtime.build_tasks.
+# The work chain of each broker route; the tail (catalog_release, final_gate, release_run) is the broker's own.
 FEATURES_CHAIN = (
     "acquire_run",
     "catalog_up",
@@ -1637,7 +1639,7 @@ def work_steps(dag: str) -> tuple[str, ...] | None:
 
 
 # Gold maintenance runs as the last phase of every gold job (owner decision, Nov 5 2026), so its DAG left the graph.
-RETIRED_DAGS = frozenset({"gold_maintenance_dag"})
+RETIRED_DAGS = frozenset({"gold_maintenance_dag", "features_transform_dag", "feature_store_dag"})
 
 
 def build_tasks_family(dag: str) -> str | None:
@@ -1650,12 +1652,11 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     """E01 (LB24, LB25, LB26, LB27, regression R4): chains, DAG files, parameters, runtime routing and the supervisor's DAG list."""
     checks: Checks = {}
     base = base_module("graph_base", "orchestration/graph.py", scratch)
-    for dag, chain in ((FEATURES_DAG, FEATURES_CHAIN), (STORE_DAG, STORE_CHAIN)):
-        checks[f"{dag}_chain"] = graph.PIPELINE_CHAINS.get(dag) == chain
-        checks[f"{dag}_work_steps"] = work_steps(dag) == chain
-        checks[f"{dag}_family"] = build_tasks_family(dag) == FAMILIES[dag]
-        if dag in graph.PIPELINE_CHAINS:
-            checks[f"{dag}_reference_valid"] = graph.validate_transform_graph(graph.reference_graph(dag), dag) == []
+    checks[f"{BASE_DAG}_collapsed"] = (
+        BASE_DAG in graph.COLLAPSED_DAGS and BASE_DAG not in graph.PIPELINE_CHAINS and graph.requirements(BASE_DAG)[0] == graph.COLLAPSED_UPSTREAM
+    )
+    checks[f"{BASE_DAG}_reference_valid"] = graph.validate_transform_graph(graph.reference_graph(BASE_DAG), BASE_DAG) == []
+    checks["old_features_dags_gone"] = not any((ROOT / "dags" / f"{dag}.py").exists() for dag in ("features_transform_dag", "feature_store_dag"))
     for dag, chain in base.PIPELINE_CHAINS.items():
         if dag in RETIRED_DAGS:  # retired on purpose: it must be gone, not unchanged
             checks[f"{dag}_retired"] = dag not in graph.PIPELINE_CHAINS
@@ -1665,19 +1666,11 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
             continue
         checks[f"{dag}_unchanged"] = graph.PIPELINE_CHAINS.get(dag) == chain
     checks["transform_dag_unchanged"] = graph.requirements("transform_dag") == base.requirements("transform_dag")
-    features_dag = (ROOT / "dags" / f"{FEATURES_DAG}.py").read_text() if (ROOT / "dags" / f"{FEATURES_DAG}.py").is_file() else ""
+    features_dag = (ROOT / "dags" / f"{BASE_DAG}.py").read_text() if (ROOT / "dags" / f"{BASE_DAG}.py").is_file() else ""
     checks["features_params"] = all(
         text in features_dag
         for text in (
             '"run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
-            '"mode": Param("real", type="string", enum=["real"])',
-            '"gold_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
-        )
-    )
-    store_dag = (ROOT / "dags" / f"{STORE_DAG}.py").read_text() if (ROOT / "dags" / f"{STORE_DAG}.py").is_file() else ""
-    checks["store_params"] = all(
-        text in store_dag
-        for text in (
             '"mode": Param("real", type="string", enum=["real"])',
             '"gold_snapshot_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")',
         )
@@ -1688,7 +1681,9 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     )
     gold_dag = (ROOT / "dags/gold_transform_dag.py").read_text()
     checks["runtime_assets"] = (
-        re.search(r'ASSETS = \{"features_commit": "features"\}', runtime) is not None and 'build_job_chain("pin_silver", asset="gold")' in gold_dag
+        re.search(r'ASSETS = \{"features_commit": "features"\}', runtime) is not None
+        and 'build_job_chain("pin_silver", asset="gold")' in gold_dag
+        and 'build_job_chain("pin_gold", asset="features")' in features_dag
     )
     supervisor = (ROOT / "scripts/orchestration/supervisor.py").read_text()
     match = re.search(r"PIPELINE_DAGS = \(([^)]*)\)", supervisor)
@@ -1697,7 +1692,6 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         "silver_transform_dag",
         "gold_transform_dag",
         FEATURES_DAG,
-        STORE_DAG,
         "training_dag",
         "model_promotion_dag",
     } == names

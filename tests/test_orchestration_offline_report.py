@@ -34,8 +34,7 @@ PIPELINE_DAGS = (
     "serving_deploy_dag",
     "silver_transform_dag",
     "gold_transform_dag",
-    "features_transform_dag",
-    "feature_store_dag",
+    "features_base_dag",
 )
 IMAGE_CHECK = "image labels, user and top layers"
 DAG_CHECK = "every DAG file imports in the image with no error or cycle"
@@ -274,7 +273,7 @@ def test_exact_split_pipeline_inventory_is_required(boundary: ImageBoundary, dam
         document["pipeline_graphs"] = {}
     else:
         if damage in {"partial", "replacement"}:
-            document["pipeline_graphs"].pop("feature_store_dag")
+            document["pipeline_graphs"].pop("features_base_dag")
         if damage in {"replacement", "unexpected"}:
             document["pipeline_graphs"]["synthetic_unexpected_dag"] = {"present": True, "violations": []}
     boundary.transport.attempt.stdout = _stdout(document)
@@ -282,7 +281,7 @@ def test_exact_split_pipeline_inventory_is_required(boundary: ImageBoundary, dam
     detail = json.dumps(failures).lower()
     check("pipeline" in detail or "dag" in detail, "the refusal identifies the split pipeline inventory")
     if damage in {"partial", "replacement"}:
-        check("feature_store_dag" in detail, "the refusal identifies the omitted declared split DAG")
+        check("features_base_dag" in detail, "the refusal identifies the omitted declared split DAG")
     _released(boundary)
 
 

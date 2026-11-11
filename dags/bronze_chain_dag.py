@@ -33,7 +33,7 @@ RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 CHAIN = (
     ("silver", "silver_transform_dag", None),
     ("gold", "gold_transform_dag", "silver_snapshot_run"),
-    ("features", "features_transform_dag", "gold_snapshot_run"),
+    ("features", "features_base_dag", "gold_snapshot_run"),
     ("drift", "drift_monitoring_dag", None),
 )
 POLL_SECONDS = 60

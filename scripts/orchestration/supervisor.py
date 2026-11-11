@@ -66,8 +66,7 @@ TRANSFORM_DAG = "transform_dag"
 PIPELINE_DAGS = (
     "silver_transform_dag",
     "gold_transform_dag",
-    "features_transform_dag",
-    "feature_store_dag",
+    "features_base_dag",
     "training_dag",
     "model_promotion_dag",
 )

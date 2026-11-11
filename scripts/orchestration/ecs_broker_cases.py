@@ -255,7 +255,7 @@ def gold_job_gets_its_input_run() -> None:
 def chain_is_closed_until_the_first_publishes_are_signed() -> None:
     with rig(signed=None) as current:
         gate = request("chain_gate", run=SILVER_RUN, dag="bronze_chain_dag")
-        for closed in (gate, silver_request(), gold_request(), request("pin_gold", run=FEATURES_RUN, dag="features_transform_dag", input_run=GOLD_RUN)):
+        for closed in (gate, silver_request(), gold_request(), request("pin_gold", run=FEATURES_RUN, dag="features_base_dag", input_run=GOLD_RUN)):
             raises(SubmissionRefused, partial(current.client.submit, closed))
         require(not current.ecs.calls, "a chain job reached the cloud before the first publishes were signed")
         require(wait_for(current, current.client.submit(request("guard"))).state == State.SUCCEEDED, "training must not wait for the chain record")
@@ -296,7 +296,7 @@ def each_chain_step_needs_the_one_before_to_have_passed() -> None:
         wait_for(current, current.client.submit(silver_request()))
         current.ecs.plan = {"validate": 1}
         require(wait_for(current, current.client.submit(gold_request())).state == State.FAILED, "gold did not fail its acceptance check")
-        features = request("pin_gold", run=FEATURES_RUN, dag="features_transform_dag", input_run=GOLD_RUN)
+        features = request("pin_gold", run=FEATURES_RUN, dag="features_base_dag", input_run=GOLD_RUN)
         raises(SubmissionRefused, lambda: current.client.submit(features))
         require(len(current.ecs.tasks) == 2, "features started after gold failed")
 

@@ -46,7 +46,7 @@ EXPECTED_UPSTREAM: dict[str, frozenset[str]] = {
 EXPECTED_RULES = {"run_record": "none_failed_min_one_success", "catalog_release": "all_done", "final_gate": "all_done", "release_run": "all_done"}
 # The DAGs that are one chain of a job's own tasks, launched through the direct ECS launch library (``dag_runtime.build_job_chain``). The DAGs of
 # ``PIPELINE_CHAINS`` still have one task per step.
-COLLAPSED_DAGS = frozenset({"silver_transform_dag", "gold_transform_dag", "serving_deploy_dag", "model_promotion_dag"})
+COLLAPSED_DAGS = frozenset({"silver_transform_dag", "gold_transform_dag", "features_base_dag", "serving_deploy_dag", "model_promotion_dag"})
 COLLAPSED_UPSTREAM = {
     "preflight": frozenset(),
     "job": frozenset({"preflight"}),
@@ -55,28 +55,6 @@ COLLAPSED_UPSTREAM = {
 }
 PIPELINE_CHAINS = {
     "training_dag": TRAINING_STEPS,
-    "features_transform_dag": (
-        "acquire_run",
-        "catalog_up",
-        "snapshot_project",
-        "reserve_gold",
-        "pin_gold",
-        "read_gold",
-        "features_build",
-        "features_validate",
-        "seal_features",
-        "features_export",
-        "features_candidates",
-        "features_reconcile",
-        "features_backup",
-        "features_commit",
-        "record_features_snapshot",
-        "online_store_up",
-        "feast_apply",
-        "feast_materialize",
-        "run_record",
-    ),
-    "feature_store_dag": ("acquire_run", "catalog_up", "online_store_up", "feast_apply", "feast_materialize", "run_record"),
 }
 # Every shipped DAG that the graph rules cover: the step chains, then the one-job chains.
 GRAPH_DAGS = (*PIPELINE_CHAINS, *sorted(COLLAPSED_DAGS))

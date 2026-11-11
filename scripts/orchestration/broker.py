@@ -86,7 +86,7 @@ CHECKPOINT_HASHES = (VALIDATED_SHA_INPUT,)
 FIXTURE_PIN_BYTES = 512 * 1024**2
 RUN_FOLDER = ("data", "analytics", "dbt", "runs")
 # A real run of these DAGs starts only after the owner's go for exactly that run: ``<state>/approvals/<dag_id>/<run_id>.json`` (design 1.6).
-APPROVAL_SCOPES = {"features_transform_dag": "real_publish"}
+APPROVAL_SCOPES = {"features_base_dag": "real_publish"}
 APPROVAL_FOLDER = "approvals"
 RELEASE_ACTIONS = frozenset({"catalog_release", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected"})
 APPROVAL_KEYS = frozenset({"run_id", "dag_id", "scope", "approved_on"})
