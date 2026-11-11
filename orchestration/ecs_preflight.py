@@ -29,7 +29,7 @@ from jsonschema import Draft202012Validator
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
-from orchestration.promotion_chain import RecordRefused, challenger_named
+from orchestration.promotion_chain import RecordRefused, challenger_named, stored_decision
 from orchestration.training_contract import (
     FEATURE_DAGS,
     LAUNCH_LANES,
@@ -38,6 +38,7 @@ from orchestration.training_contract import (
     chain_parameters_for,
     model_features_run_id,
     parameters_for,
+    record_key,
     serving_parameters_for,
     trained_run_id,
     training_run_id,
@@ -224,15 +225,16 @@ def serving_values(
     """The values of the serve container for a closed launch request: the infection type and the mode, canary or stable.
 
     The request names no version, share or lifetime. A canary deploys the challenger of the type's research record in the research run the launch publishes
-    from, at the share and for the lifetime the job table fixes. A stable deploy names none and has no expiry: the serve job writes the Production version
-    alone, which it reads from the registry. A request with any other key, a canary without a research run and a type with no challenger are refused. The
-    container receives the derived request and reads nothing else.
+    from, at the share and for the lifetime the job table fixes, and the derived request names that research run so the job gives every deployment of one
+    research canary the expiry of the first. A canary whose stored check result is a hold is refused: a held canary gets no new traffic. A stable deploy names
+    none and has no expiry: the serve job writes the Production version alone, which it reads from the registry. A request with any other key, a canary without
+    a research run and a type with no challenger are refused. The container receives the derived request and reads nothing else.
     """
     try:
         closed = serving_parameters_for(request)
     except ValueError as error:
         raise TaskRefused(f"serving_request_refused: {error}") from None
-    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0, "canary_ttl_hours": None}
+    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0, "canary_ttl_hours": None, "research_run": None}
     if closed["deploy_mode"] == "canary":
         if research_run is None:
             raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
@@ -242,7 +244,15 @@ def serving_values(
             raise TaskRefused(f"serving_candidate_refused: {error}") from None
         if named is None:
             raise TaskRefused(f"serving_candidate_refused: the research record of {closed['hai_type']} has no challenger to deploy")
-        derived |= {"candidate_version": named[1], "percent": canary_percent, "canary_ttl_hours": canary_ttl_hours}
+        try:
+            held = read(record_key("canary", research_run, closed["hai_type"])) is not None and (
+                stored_decision(read, research_run, closed["hai_type"], named[0], named[1]) == "hold"
+            )
+        except (RecordRefused, ValueError) as error:
+            raise TaskRefused(f"serving_canary_record_refused: {error}") from None
+        if held:
+            raise TaskRefused(f"serving_canary_held: the canary check of {closed['hai_type']} in {research_run} held it, so it gets no new traffic")
+        derived |= {"candidate_version": named[1], "percent": canary_percent, "canary_ttl_hours": canary_ttl_hours, "research_run": research_run}
     body = json.dumps(derived, sort_keys=True, separators=(",", ":"))
     return {"SERVING_REQUEST": body, "SERVING_REQUEST_SHA256": hashlib.sha256(body.encode()).hexdigest()}
 

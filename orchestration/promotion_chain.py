@@ -119,9 +119,14 @@ def challenger_of(read: Read, research_run: str, base_run: str, hai_type: str) -
 
 def canary_decision(read: Read, research_run: str, challenger: Challenger) -> str:
     """The stored decision of the type's canary check, which must name this research run, type, model and version."""
-    key = record_key("canary", research_run, challenger.hai_type)
+    return stored_decision(read, research_run, challenger.hai_type, challenger.model, challenger.version)
+
+
+def stored_decision(read: Read, research_run: str, hai_type: str, model: str, version: str) -> str:
+    """The stored decision, promote or hold, of the canary check of one research run, type, model and version."""
+    key = record_key("canary", research_run, hai_type)
     document = parse(read, key)
-    expected = {"research_run": research_run, "hai_type": challenger.hai_type, "model": challenger.model, "version": challenger.version}
+    expected = {"research_run": research_run, "hai_type": hai_type, "model": model, "version": version}
     other = {name: document.get(name) for name in expected if document.get(name) != expected[name]}
     if other:
         raise RecordRefused(f"{key} is of another candidate: {other}")

@@ -2,8 +2,9 @@
 
 ``active/<HAI type>.json`` is the record the service reads. ``history/<HAI type>/<deployment id>.json`` is written once per deployment before the
 active record moves, so a deploy that stops between the two writes finishes on its retry. The active record is replaced only when its current token is
-the one the writer read (a compare and swap). The file store serves the local lane and the cases. The S3 store is the AWS one and runs only in the
-serving image.
+the one the writer read (a compare and swap). ``canaries/<HAI type>/<research run>-<version>.json`` binds one research canary to the lifetime of its first
+deployment: it is written once and never replaced, so a later deployment of the same canary reads the first expiry back. The file store serves the local
+lane and the cases. The S3 store is the AWS one and runs only in the serving image.
 """
 
 from __future__ import annotations
@@ -35,6 +36,10 @@ class ManifestStore(Protocol):
     def put_history(self, hai_type: str, deployment_id: str, body: bytes) -> None: ...
 
     def replace_active(self, hai_type: str, body: bytes, expected_token: str | None) -> None: ...
+
+    def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
+        """Store ``body`` as the binding of one research canary unless one exists, and return the binding that stands: the first one written."""
+        ...
 
 
 def token_of(body: bytes) -> str:
@@ -85,6 +90,16 @@ class FileManifestStore:
                 raise ManifestConflict("the active deployment changed since it was read")
             self._write(self.root / "active" / f"{hai_type}.json", body)
 
+    def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
+        path = self.root / "canaries" / hai_type / f"{research_run}-{version}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with (self.root / "canaries" / ".lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            if path.exists():
+                return path.read_bytes()
+            self._write(path, body)
+            return body
+
 
 class S3ManifestStore:
     """The AWS store: conditional writes by ETag. Not run offline. The check before a replace leaves a short window, closed by the DAG's single active run."""
@@ -130,3 +145,16 @@ class S3ManifestStore:
             if error.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
                 raise ManifestConflict("the active deployment changed since it was read") from None
             raise
+
+    def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
+        key = self._key("canaries", hai_type, f"{research_run}-{version}.json")
+        try:
+            self.client.put_object(Bucket=self.bucket, Key=key, Body=body, IfNoneMatch="*", ContentType="application/json")
+        except self.client.exceptions.ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in ("PreconditionFailed", "ConditionalRequestConflict"):
+                raise
+            existing = self._get(key)
+            if existing is None:
+                raise ManifestConflict("the binding of this research canary could not be read back") from None
+            return existing[1]
+        return body

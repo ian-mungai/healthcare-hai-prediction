@@ -1,9 +1,10 @@
 """The ``serve_deploy`` job: deploy the request the launch derived and print the result. It runs in the training image, which holds the MLflow client and boto3.
 
 The launch preflight checks the closed request the promotion chain or the form passed (the HAI type and the mode, canary or stable) and derives the rest: the
-candidate version from the type's research record, and the share and the lifetime from the job table. The task gets the derived request in SERVING_REQUEST and
-nothing else names a version or a lifetime. The run id is the deployment id. A canary is written with the job's clock as its write time and the lifetime as its
-expiry. The job reads the production alias and never moves it. A stable request writes the production version alone, with no expiry. After a write the active
+candidate version from the type's research record, and the share and the lifetime from the job table. The request also names the research run of the candidate.
+The task gets the derived request in SERVING_REQUEST and nothing else names a version or a lifetime. The run id is the deployment id. The first deployment of a
+research canary is written with the job's clock as its write time and the lifetime as its expiry, and every later deployment of that canary keeps those two
+times. The job reads the production alias and never moves it. A stable request writes the production version alone, with no expiry. After a write the active
 deployment is read back, and the job fails unless it is the one written.
 A refusal exits with code 2 and a message that names the reason.
 """
@@ -29,8 +30,8 @@ def main() -> int:
     try:
         startup_check.check_phase("serve", "serve")
         request = json.loads(os.environ["SERVING_REQUEST"])
-        if not isinstance(request, dict) or set(request) != {"hai_type", "deploy_mode", "candidate_version", "percent", "canary_ttl_hours"}:
-            raise ValueError("the request names the HAI type, the mode, the candidate version, the percent and the lifetime")
+        if not isinstance(request, dict) or set(request) != {"hai_type", "deploy_mode", "candidate_version", "percent", "canary_ttl_hours", "research_run"}:
+            raise ValueError("the request names the HAI type, the mode, the candidate version, the percent, the lifetime and the research run")
         uri = os.environ["MODEL_API_MANIFEST_URI"]
         if not uri.startswith("s3://"):
             raise ValueError("MODEL_API_MANIFEST_URI must be an s3:// URI")
@@ -47,6 +48,7 @@ def main() -> int:
             deployment_id=args.run,
             canary_ttl_hours=request["canary_ttl_hours"],
             now=int(time.time()),
+            research_run=request["research_run"],
         )
     except (deploy.DeployRefused, startup_check.StartupCheckError, ValueError, KeyError, OSError, TypeError) as error:
         sys.stderr.write(f"serve_deploy refused: {error}\n")
