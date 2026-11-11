@@ -274,6 +274,14 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
                 )
         return found
 
+    wildcard_container_instance_list = [
+        (
+            "owner_policies/airflow_launch_jobs.json",
+            '"Action": "ecs:ListContainerInstances",\n      "Resource": "${CLUSTER_ARN}"',
+            '"Action": "ecs:ListContainerInstances",\n      "Resource": "*",\n      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }',
+        )
+    ]
+
     containers = ("init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload")
     silver_scope = ["--scope", "silver"]
     features_scope = ["--scope", "features"]
@@ -335,6 +343,15 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "Terraform stops naming the layer storage policy",
             offline_run(planted(no_layer_policy)),
             lambda r: expect(r, 1) + ([] if "no longer names owner_policies/job_writer_layer_storage.json" in r.out else ["attachment not named"]),
+        ),
+        (
+            "live whole table names the container instance list that needs a cluster key",
+            "ecs:ListContainerInstances on every resource with an ecs:cluster condition, which AWS never satisfies",
+            live_run(planted(wildcard_container_instance_list)),
+            lambda r: (
+                expect(r, 1, FAIL=1)
+                + ([] if any(line.startswith("FAIL airflow_launch ecs:ListContainerInstances ") for line in r.out.splitlines()) else ["list row not named"])
+            ),
         ),
         (
             "live silver scope real tree",

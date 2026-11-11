@@ -194,9 +194,13 @@ def job_cases() -> list[Case]:
     add("list tasks in the cluster", "ecs:ListTasks", "*", True, cluster_only)
     add("list tasks in another cluster", "ecs:ListTasks", "*", False, {"ecs:cluster": (OTHER_CLUSTER_ARN,)})
     add("list tasks without a cluster", "ecs:ListTasks", "*", False)
-    add("list container instances in the cluster", "ecs:ListContainerInstances", "*", True, cluster_only)
-    add("list container instances in another cluster", "ecs:ListContainerInstances", "*", False, {"ecs:cluster": (OTHER_CLUSTER_ARN,)})
-    add("list container instances without a cluster", "ecs:ListContainerInstances", "*", False)
+    # AWS names the cluster ARN as the resource of ListContainerInstances and supplies no ecs:cluster key for it, so the cases give it the way AWS does.
+    add("list container instances of the cluster, as AWS evaluates it", "ecs:ListContainerInstances", CLUSTER_ARN, True)
+    add("list container instances of another cluster", "ecs:ListContainerInstances", OTHER_CLUSTER_ARN, False)
+    add("list container instances of the cluster name in another account", "ecs:ListContainerInstances", CLUSTER_ARN.replace(ACCOUNT, "999999999999"), False)
+    add("list container instances of the cluster name in another region", "ecs:ListContainerInstances", CLUSTER_ARN.replace(REGION, "eu-north-1"), False)
+    add("list container instances of every cluster", "ecs:ListContainerInstances", "*", False, cluster_only)
+    add("list container instances of every cluster without a cluster key", "ecs:ListContainerInstances", "*", False)
     add("describe a container instance of the cluster", "ecs:DescribeContainerInstances", container_instance(), True, cluster_only)
     add("describe a container instance of another cluster", "ecs:DescribeContainerInstances", container_instance("another_cluster"), False, cluster_only)
     add(
@@ -457,7 +461,8 @@ class Resource(NamedTuple):
 
 
 GET = frozenset({"s3:GetObject"})
-LISTS = frozenset({"ecs:ListTasks", "ecs:ListContainerInstances"})
+LISTS = frozenset({"ecs:ListTasks"})
+CLUSTER_LISTS = frozenset({"ecs:ListContainerInstances"})  # the cluster ARN is its resource and AWS supplies no ecs:cluster key for it
 DESCRIBE_DEFINITIONS = frozenset({"ecs:DescribeTaskDefinition"})  # no resource-level permission: the request names "*"
 # Every condition of every grant met at once, so that only the action and the resource decide.
 PERMISSIVE: Context = {
@@ -484,6 +489,8 @@ RESOURCES = (
     Resource("task of the cluster", task(), frozenset({"ecs:TagResource", "ecs:StopTask", "ecs:DescribeTasks"}), NONE),
     Resource("task of another cluster", task("another_cluster"), NONE, NONE),
     Resource("cluster-wide list", "*", LISTS | DESCRIBE_DEFINITIONS, NONE),
+    Resource("the project cluster", CLUSTER_ARN, CLUSTER_LISTS, CLUSTER_LISTS),
+    Resource("another cluster", OTHER_CLUSTER_ARN, NONE, NONE),
     Resource("container instance of the cluster", container_instance(), frozenset({"ecs:DescribeContainerInstances"}), NONE),
     Resource("container instance of another cluster", container_instance("another_cluster"), NONE, NONE),
     Resource("task role of a named family", role("job_train_task"), frozenset({"iam:PassRole"}), NONE),
@@ -929,7 +936,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("ecs:StopTask", (tasks,), tagged_tasks),
         Grant("ecs:DescribeTasks", (tasks,), tagged_tasks),
         Grant("ecs:ListTasks", ("*",), cluster),
-        Grant("ecs:ListContainerInstances", ("*",), cluster),
+        Grant("ecs:ListContainerInstances", (CLUSTER_ARN,), {}),
         Grant("ecs:DescribeTaskDefinition", ("*",), {"StringEquals": {"aws:RequestedRegion": [REGION]}}),
         Grant("ecs:DescribeContainerInstances", (f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/*",), cluster),
         Grant("iam:PassRole", roles, {"StringEquals": {"iam:PassedToService": [ECS_TASKS]}}),

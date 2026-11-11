@@ -649,10 +649,7 @@
     {
       "role": "airflow_launch",
       "action": "ecs:ListContainerInstances",
-      "resource": "*",
-      "context": {
-        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
-      }
+      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
     },
     {
       "role": "airflow_launch",

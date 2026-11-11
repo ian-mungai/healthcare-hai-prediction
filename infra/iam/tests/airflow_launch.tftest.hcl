@@ -269,16 +269,16 @@ run "the_launch_role_never_passes_itself_or_the_broker_role" {
   }
 }
 
-run "no_statement_holds_a_wildcard_action_or_resource_except_the_cluster_lists_and_the_revision_read" {
+run "no_statement_holds_a_wildcard_action_or_resource_except_the_task_list_and_the_revision_read" {
   command = plan
 
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
       !contains(flatten([statement.Action]), "*") && !anytrue([for action in flatten([statement.Action]) : endswith(action, ":*")]) &&
-      (contains(["ListClusterTasks", "ListClusterContainerInstances", "DescribeHostJobRevisions"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
+      (contains(["ListClusterTasks", "DescribeHostJobRevisions"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
     ])
-    error_message = "Only the two cluster lists and the revision read take a resource wildcard. No action is a wildcard."
+    error_message = "Only the task list and the revision read take a resource wildcard. The container instance list names the cluster ARN. No action is a wildcard."
   }
 
   # ecs:DescribeTaskDefinition takes no resource-level permission, so the preflight's read of the latest host revision (host launch capacity binding,
@@ -307,9 +307,9 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadHostJobCap"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadHostJobCap", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
     ])
-    error_message = "Each launch, stop, describe, list and pass grant carries a condition. Only the three reads of fixed objects go without one."
+    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the three reads of fixed objects and the container instance list, which names the cluster ARN, go without one."
   }
 
   assert {
@@ -341,12 +341,13 @@ run "container_instance_checks_stay_in_the_cluster" {
   assert {
     condition = (
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ListClusterContainerInstances"][0] == "ecs:ListContainerInstances" &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition if statement.Sid == "ListClusterContainerInstances"][0] == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } } &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ListClusterContainerInstances"][0] == "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" &&
+      !anytrue([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : can(statement.Condition) if statement.Sid == "ListClusterContainerInstances"]) &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "DescribeClusterContainerInstances"][0] == "ecs:DescribeContainerInstances" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "DescribeClusterContainerInstances"][0] == "arn:aws:ecs:eu-west-1:111111111111:container-instance/example_project_cluster_dev/*" &&
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition if statement.Sid == "DescribeClusterContainerInstances"][0] == { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
     )
-    error_message = "The fit check lists and describes the container instances of the project cluster and no other cluster, with no action beyond those two."
+    error_message = "The fit check lists the container instances on the project cluster ARN (AWS supplies no ecs:cluster key for that call, so the statement holds no condition) and describes those of the cluster, with no action beyond those two."
   }
 }
 

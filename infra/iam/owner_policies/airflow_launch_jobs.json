@@ -37,8 +37,7 @@
       "Sid": "ListClusterContainerInstances",
       "Effect": "Allow",
       "Action": "ecs:ListContainerInstances",
-      "Resource": "*",
-      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+      "Resource": "${CLUSTER_ARN}"
     },
     {
       "Sid": "DescribeHostJobRevisions",
