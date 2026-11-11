@@ -103,6 +103,11 @@
       "why": "reviewed: collect_provider lists the provider spool folder with os.listdir (orchestration/lineage.py:732), the folder CompletionWorker passes (:804) and supervisor.py:235 names self.state / \"lineage_provider\", a run-time state folder"
     },
     {
+      "module": "orchestration/raw_lineage.py",
+      "pattern": null,
+      "why": "reviewed: replay_acquisition lists the acquisition state folder with glob at orchestration/raw_lineage.py:266 on (state_root / \"jobs\"), a run-time state folder that the caller passes; no repository folder is listed"
+    },
+    {
       "module": "orchestration/training_render.py",
       "pattern": null,
       "why": "reviewed: build lists the copied code of one run with iterdir at orchestration/training_render.py:52 on (folder / \"code\"), where folder is inp.run_folder (:31), the launcher's run folder; no repository folder is listed"
@@ -193,9 +198,19 @@
       "why": "reviewed: versions globs v*.metadata.json in the metadata folder of a table (scripts/features/fixture_catalog.py:63; warehouse / namespace / table / \"metadata\", :58), a Hadoop-catalog warehouse the run creates"
     },
     {
+      "module": "scripts/infrastructure/run_e2e.py",
+      "pattern": "^infra/[a-z_]+/[^/]+[.]tf$|^infra/[^/]+[.]tf$",
+      "why": "reviewed: resource_types reads the Terraform files of the storage and iam stacks with glob at scripts/infrastructure/run_e2e.py:1428 (REPO_ROOT / \"infra\" / stack, called for storage and iam at :2843); the other sites list the stand-in tools folder (:1832) and the evidence output folder and temporary workspace of the run (:689, :707, :993, :2963, :2970), which are run-time folders"
+    },
+    {
       "module": "scripts/infrastructure/sts_stand_in.py",
       "pattern": null,
       "why": "reviewed: history_bytes lists home / \".aws\" / \"cli\" / \"history\" with rglob (scripts/infrastructure/sts_stand_in.py:249), the AWS command history of a temporary home folder"
+    },
+    {
+      "module": "scripts/infrastructure/systemd_model.py",
+      "pattern": null,
+      "why": "reviewed: the unit model lists the drop-in files and unit files of the units folder it is given with glob and iterdir at scripts/infrastructure/systemd_model.py:76, :104 and :105 (self.units, set at :113 from the caller's argument), a stand-in folder that the infrastructure E2E builds in its workspace; no repository folder is listed"
     },
     {
       "module": "scripts/lakehouse/catalog_journal.py",
@@ -326,6 +341,16 @@
       "module": "scripts/lakehouse/silver_quality.py",
       "pattern": "^data_contracts/great_expectations/.*\\.json$",
       "why": "reviewed: load_suites globs *.json in each suites folder (scripts/lakehouse/silver_quality.py:167) that validate receives from --suites (:226); the launcher mounts only folders inside data_contracts/great_expectations (orchestration/launcher.py:2208)"
+    },
+    {
+      "module": "scripts/orchestration/airflow_mode_cases.py",
+      "pattern": "^dags/[^/]+[.]py$",
+      "why": "reviewed: the DAG cases list the shipped DAG files with glob at scripts/orchestration/airflow_mode_cases.py:1366, :1905 and :2045 on (ROOT / \"dags\") and read each match; no other folder is listed"
+    },
+    {
+      "module": "scripts/orchestration/ecs_lineage_cases.py",
+      "pattern": "^data_contracts/openlineage/[^/]+[.]json$",
+      "why": "reviewed: the lineage cases list the OpenLineage schema files with glob at scripts/orchestration/ecs_lineage_cases.py:132 and :650 on SPEC_FOLDER (ROOT / \"data_contracts\" / \"openlineage\", set at :35) and read each match; no other folder is listed"
     },
     {
       "module": "scripts/orchestration/in_image_checks.py",
