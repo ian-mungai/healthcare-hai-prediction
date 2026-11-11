@@ -38,7 +38,9 @@
     "feature_service",
     "feature_set",
     "feature_set_schema_sha256",
-    "base_run"
+    "base_run",
+    "base_snapshot_set",
+    "base_snapshot_set_sha256"
   ],
   "properties": {
     "schema_version": {
@@ -472,6 +474,21 @@
     "base_run": {
       "type": "string",
       "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"
+    },
+    "base_snapshot_set": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+      },
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 1
+      }
+    },
+    "base_snapshot_set_sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
     }
   }
 }

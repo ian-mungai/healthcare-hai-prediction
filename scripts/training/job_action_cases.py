@@ -311,6 +311,8 @@ class Fixture:
                 "feature_set": self.model,
                 "feature_set_schema_sha256": feature_schema.set_schema_sha256(self.model),
                 "base_run": self.base_run,
+                "base_snapshot_set": {"int_hospital_spine": 201, "label_matrix_hai_outcomes": 202},
+                "base_snapshot_set_sha256": "7" * 64,
                 "writer_lock_sha256": "6" * 64,
                 **table_entry(self.extract, name, rows, columns),
                 "label_column": label,

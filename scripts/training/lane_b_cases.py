@@ -322,6 +322,7 @@ class SyntheticReader:
         return SimpleNamespace(
             frame=SimpleNamespace(to_pylist=lambda: self.projected(wanted)),
             publication=self.publication(PUBLICATION),
+            base=self.publication(BASE),
             feature_schema_sha256=self.schema_sha256,
             entity_count=len(self.rows),
         )
@@ -651,6 +652,22 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     cases.check(
         "extract_manifest_carries_the_base_run_of_the_publication",
         lambda: require(manifest["base_run"] == BASE, f"the manifest base_run is {manifest.get('base_run')}"),
+    )
+    cases.check(
+        "extract_manifest_pins_the_base_publication_beside_the_model_set_publication",
+        lambda: require(
+            manifest.get("base_snapshot_set") == dict(sorted(reader.published[BASE]["snapshot_set"].items()))
+            and manifest.get("base_snapshot_set_sha256") == reader.publication(BASE).snapshot_set_sha256
+            and manifest["snapshot_set"] == reader.published[PUBLICATION]["snapshot_set"],
+            f"the manifest pins {manifest.get('snapshot_set')} and {manifest.get('base_snapshot_set')}",
+        ),
+    )
+    cases.check(
+        "extract_reads_the_references_its_service_serves",
+        lambda: require(
+            set(reader.references) == set(feature_schema.service_references_in_definitions(feature_schema.render_definitions(reader.schema))["model_m1"]),
+            f"the extract asked for {sorted(reader.references)}",
+        ),
     )
     cases.check(
         "extract_holds_only_the_features_of_the_model",

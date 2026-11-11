@@ -22,6 +22,7 @@ import os
 from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -38,13 +39,15 @@ WINDOW_START = "window_start"
 
 @dataclass(frozen=True)
 class HistoricalRead:
-    """A verified historical read: the sorted result (a PyArrow table), the publication it came from and the schema digest."""
+    """A verified historical read: the sorted result (a PyArrow table), the publication it came from, the base run's publication that a model set run
+    reads its spine, labels and support tables from (None for a publication without a base run) and the schema digest."""
 
     frame: Any
     publication: reads.Publication
     feature_schema_sha256: str
     entity_count: int
     features: tuple[str, ...]
+    base: reads.Publication | None = None
 
 
 def window_start_utc(value: Any) -> datetime:
@@ -106,10 +109,18 @@ def entity_rows(windows: Mapping[str, datetime], entities: Sequence[tuple[str, d
     return sorted(checked)
 
 
+def model_view_references(schema: Mapping[str, Any]) -> set[str]:
+    """The ``<model view>:<column>`` references of every model set's predictor columns."""
+    return {
+        f"{entry['view']}:{column['name']}" for entry in schema.get("model_sets", {}).values() for column in entry["columns"] if column["role"] == "predictor"
+    }
+
+
 def checked_references(schema: Mapping[str, Any], features: Sequence[str]) -> tuple[str, ...]:
-    """The requested references, each a registered predictor or label of the schema; no repeats, and bare column names must be unique."""
+    """The requested references, each a registered predictor, a column of a model set's view or a label of the schema; no repeats, and bare column names
+    must be unique."""
     predictors, labels = reads.reference_lists(schema)
-    allowed = set(predictors) | set(labels)
+    allowed = set(predictors) | set(labels) | model_view_references(schema)
     if not features:
         raise ReadError("no feature references were requested")
     unknown = sorted({reference for reference in features if reference not in allowed})
@@ -167,7 +178,10 @@ def historical_features(
     store: Any = None,
     schema_path: Path = reads.SCHEMA_PATH,
 ) -> HistoricalRead:
-    """Read ``features`` for every spine key (or the given keys) at their own window start from one verified publication."""
+    """Read ``features`` for every spine key (or the given keys) at their own window start from one verified publication.
+
+    A model set run's publication holds only its own table, so the spine, the labels and every other table come from the publication of the base run
+    that its row names (``base``). Each table is read at the snapshot of the publication that names it, and both publications are verified around the read."""
     live = os.environ if environ is None else environ
     schema, schema_sha256 = reads.read_schema(schema_path)
     references = checked_references(schema, features)
@@ -177,20 +191,25 @@ def historical_features(
     source = catalog if catalog is not None else default_catalog(live, publication_run, register)
     publication = reads.read_publication(source, namespace, publication_run)
     view_tables = {column["view"]: name for name, table in schema["tables"].items() for column in table["columns"] if column.get("view")}
+    view_tables |= {entry["view"]: entry["table"] for entry in schema.get("model_sets", {}).values()}
     needed = {view_tables[reference.split(":", 1)[0]] for reference in references} | {reads.SPINE_TABLE}
-    missing = sorted(name for name in needed if name not in publication.snapshot_set)
+    base = reads.read_publication(source, namespace, publication.base_run) if publication.base_run is not None else None
+    held = {name: item for name in sorted(needed) for item in (base, publication) if item is not None and name in item.snapshot_set}
+    missing = sorted(needed - set(held))
     if missing:
-        raise ReadError(f"publication {publication.run_id} does not name {reads.listed(missing)}")
+        where = f"publication {publication.run_id}" + (f" and its base run {base.run_id}" if base is not None else "")
+        raise ReadError(f"{where} does not name {reads.listed(missing)}")
     feature_store = store if store is not None else default_store(live)
 
     def read() -> tuple[Any, int]:
         spine = reads.load_table(source, namespace, reads.SPINE_TABLE)
-        scan = spine.scan(selected_fields=(KEY, WINDOW_START), snapshot_id=publication.snapshot_set[reads.SPINE_TABLE])
+        scan = spine.scan(selected_fields=(KEY, WINDOW_START), snapshot_id=held[reads.SPINE_TABLE].snapshot_set[reads.SPINE_TABLE])
         rows = entity_rows(spine_windows(scan.to_arrow().to_pylist()), entities)
         pandas = importlib.import_module("pandas")
         entity_df = pandas.DataFrame({KEY: [key for key, _ in rows], EVENT_TIME: pandas.to_datetime([moment for _, moment in rows], utc=True)})
         frame = feature_store.get_historical_features(entity_df=entity_df, features=list(references)).to_arrow()
         return frame.sort_by(KEY), len(rows)
 
-    frame, count = reads.consistent_read(source, publication, read)
-    return HistoricalRead(frame, publication, schema_sha256, count, references)
+    guarded = read if base is None else partial(reads.consistent_read, source, base, read)
+    frame, count = reads.consistent_read(source, publication, guarded)
+    return HistoricalRead(frame, publication, schema_sha256, count, references, base)

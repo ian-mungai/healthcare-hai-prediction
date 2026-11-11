@@ -243,6 +243,67 @@ def case_e17_base_run(c: Checker) -> None:
     c.refused("a base run that is not a run ID is refused", lambda: reads.read_publication(bad, namespace), "base_run")
 
 
+def case_e17_base_history(c: Checker) -> None:
+    """A model set run reads its own table together with the spine, labels and support tables of its base run's publication; both publications are
+    verified around the read and both come back, and a table the base publication lacks is refused by name."""
+    namespace = "features_e2e"
+    schema = synthetic_schema()
+    schema["model_sets"] = {
+        "m1": {
+            "table": "feature_matrix_m1",
+            "view": "model_m1",
+            "service": "model_m1",
+            "online": True,
+            "label_views": ["label_hai_1", "label_hai_2"],
+            "columns": [{"name": "bed_count", "type": "bigint", "role": "predictor", "feast_type": "Int64", "source_table": "feature_matrix_window"}],
+        }
+    }
+    references = ["model_m1:bed_count", "label_hai_1:hai_1__sir__number"]
+    columns = {"run_id": "string", "committed_at": "timestamptz", "snapshot_set": "string", "base_run": "string"}
+
+    def world(base_names: set[str] | None = None) -> tuple[StubCatalog, dict[str, int]]:
+        catalog, snapshots = stub_features()
+        names = set(snapshots) if base_names is None else base_names
+        base = {name: snapshot for name, snapshot in snapshots.items() if name in names}
+        catalog.tables["feature_matrix_m1"] = StubTable("feature_matrix_m1", 4000, {"spine_key": "string", "bed_count": "long"})
+        rows = [
+            {**runs_row(RUN_A, T0, base), "base_run": None},
+            {**runs_row(RUN_B, T0 + timedelta(hours=1), {"feature_matrix_m1": 4000}), "base_run": RUN_A},
+        ]
+        catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, dict(columns), rows)
+        return catalog, base
+
+    def read(catalog: StubCatalog, store: FakeStore, folder: Path) -> historical.HistoricalRead:
+        return historical.historical_features(
+            references, environ={"FEAST_NAMESPACE": namespace}, catalog=catalog, store=store, schema_path=write_schema(folder, schema), publication_run=RUN_B
+        )
+
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw, fake_pandas():
+        folder = Path(raw)
+        catalog, base = world()
+        store = FakeStore()
+        result = read(catalog, store, folder)
+        c.check("the model set publication is the one read", result.publication.run_id == RUN_B and result.publication.base_run == RUN_A)
+        c.check(
+            "the base publication comes back with its snapshots",
+            result.base is not None and result.base.run_id == RUN_A and dict(result.base.snapshot_set) == base,
+        )
+        c.check("Feast was called once with the requested references", len(store.calls) == 1 and store.calls[0][1] == references)
+        c.check("the spine was read at the base publication's snapshot", catalog.tables[reads.SPINE_TABLE].scans == [base[reads.SPINE_TABLE]])
+        lacking, _ = world(set(base) - {"label_matrix_hai_outcomes"})
+        c.refused("a base publication without a needed table is refused by name", lambda: read(lacking, FakeStore(), folder), "label_matrix_hai_outcomes")
+        no_spine, _ = world(set(base) - {reads.SPINE_TABLE})
+        c.refused("a base publication without the spine is refused by name", lambda: read(no_spine, FakeStore(), folder), reads.SPINE_TABLE)
+        moved, _ = world()
+        moved.tables["label_matrix_hai_outcomes"].main = 4
+        called = FakeStore()
+        c.refused("a base table that moved is refused before the read", lambda: read(moved, called, folder), "before the read")
+        c.check("Feast was not called after a refused base check", called.calls == [])
+        away, _ = world()
+        away.tables[reads.RUNS_TABLE].rows = [{**runs_row(RUN_B, T0, {"feature_matrix_m1": 4000}), "base_run": RUN_C}]
+        c.refused("a base run the catalog does not hold is refused", lambda: read(away, FakeStore(), folder), "exactly one")
+
+
 def case_e17_before(c: Checker) -> None:
     """LC4: a table whose main differs from the row is refused before the read, and the read does not run."""
     catalog, snapshots = stub_features()
@@ -2147,6 +2208,7 @@ def case_e17_history(c: Checker) -> None:
 LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E17_select": (case_e17_select, "LC1 LC2 LC3 LH7"),
     "E17_base_run": (case_e17_base_run, "LC1"),
+    "E17_base_history": (case_e17_base_history, "LC4 LC6"),
     "E17_before": (case_e17_before, "LC4"),
     "E17_during": (case_e17_during, "LC5 LC8 LC9"),
     "E17_tables": (case_e17_tables, "LC6"),

@@ -124,9 +124,12 @@ def register(catalog: RegisteringCatalog, namespace: str, table: str, path: Path
 
 
 def register_publication(catalog: RegisteringCatalog, warehouse: Path, namespace: str, run_id: str | None = None) -> Publication:
-    """Register ``publish_runs`` and then every table of the selected publication (the head row, or ``run_id``); returns the publication."""
+    """Register ``publish_runs`` and then every table of the selected publication (the head row, or ``run_id``) and of its base run; returns the publication."""
     register(catalog, namespace, reads.RUNS_TABLE, current_metadata(warehouse, namespace, reads.RUNS_TABLE))
     publication = reads.read_publication(catalog, namespace, run_id)
     for table, snapshot_id in sorted(publication.snapshot_set.items()):
         register(catalog, namespace, table, metadata_for(warehouse, namespace, table, snapshot_id))
+    if publication.base_run is not None:
+        for table, snapshot_id in sorted(reads.read_publication(catalog, namespace, publication.base_run).snapshot_set.items()):
+            register(catalog, namespace, table, metadata_for(warehouse, namespace, table, snapshot_id))
     return publication

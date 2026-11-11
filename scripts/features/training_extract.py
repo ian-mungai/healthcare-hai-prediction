@@ -373,14 +373,14 @@ def extract(
             f"the Feast feature service {service} differs from the reviewed lists of {model} and the labels: {len(gap)} references, first {gap[0]}"
         )
     check()
-    history = reader.historical(references, publication.run_id)
-    if history.publication != publication or history.feature_schema_sha256 != reader.schema_sha256:
-        raise ExtractError("historical features came from another publication or schema")
+    history = reader.historical(tuple(expected), publication.run_id)
+    if history.publication != publication or history.base != base or history.feature_schema_sha256 != reader.schema_sha256:
+        raise ExtractError("historical features came from another publication, base publication or schema")
     historical_rows = history.frame.to_pylist()
     historical = _unique(historical_rows, "spine_key", "historical features")
     if history.entity_count != len(historical):
         raise ExtractError("historical feature entity count differs from its rows")
-    bare = {reference.split(":", 1)[1] for reference in references}
+    bare = {reference.split(":", 1)[1] for reference in expected}
     if any(not bare.issubset(row) or set(row) - bare - {"spine_key", "event_timestamp"} for row in historical_rows):
         raise ExtractError("historical feature result has missing or unexpected columns")
 
@@ -553,6 +553,8 @@ def extract(
                 "feature_set": model,
                 "feature_set_schema_sha256": feature_schema.set_schema_sha256(model, schema=reader.schema),
                 "base_run": base_run,
+                "base_snapshot_set": dict(sorted(base.snapshot_set.items())),
+                "base_snapshot_set_sha256": base.snapshot_set_sha256,
                 "writer_lock_sha256": writer_lock_sha256,
                 **file_info,
                 "label_column": label,
