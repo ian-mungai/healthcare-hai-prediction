@@ -9,7 +9,6 @@ locals {
     code_ecs_launch_operator = "orchestration/ecs_launch_operator.py"
     code_ecs_launch_provider = "orchestration/ecs_launch_provider.py"
     code_promotion_chain     = "orchestration/promotion_chain.py"
-    code_serving_contract    = "orchestration/serving_contract.py"
     code_training_approvals  = "orchestration/training_approvals.py"
     code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
     code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"

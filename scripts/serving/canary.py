@@ -13,13 +13,13 @@ import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from orchestration.serving_contract import MAX_PERCENT
 from orchestration.training_contract import HAI_TYPES
 
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 VERSION = re.compile(r"[1-9][0-9]{0,18}")
 BUCKETS = 10_000
+MAX_PERCENT = 50
 Route = Literal["stable", "canary"]
 
 

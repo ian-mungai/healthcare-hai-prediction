@@ -240,7 +240,8 @@
       "deadline_seconds": 900,
       "log_container": "serve",
       "network": "training",
-      "needs_serving_request": true,
+      "needs_serving_parameters": true,
+      "canary_percent": 10,
       "containers": {
         "fetch": [
           "RUN_ID",

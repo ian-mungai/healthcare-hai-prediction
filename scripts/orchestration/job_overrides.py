@@ -33,6 +33,10 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
     jobs = json.loads(table.read_text())["jobs"]
     if job not in jobs:
         raise OverrideError(f"{job} is not a job of the job catalog: {sorted(jobs)}")
+    if jobs[job].get("needs_serving_parameters"):
+        raise OverrideError(
+            f"the {job} job starts only through the direct launch of the promotion chain, which derives its request: no owner command builds it"
+        )
     if dry_run and job not in LAYERS:
         raise OverrideError("only the silver, gold and features jobs have a dry run")
     values = {**values, feature_sets.VARIABLE: values.get(feature_sets.VARIABLE) or feature_sets.SINGLE_PATH}  # no set given is the single path
@@ -63,7 +67,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--feature-set", default="", help="FEATURE_SET: all (the single path, the default), base or m1 to m6 for the features job")
     parser.add_argument("--mlflow-uri", default="", help="MLFLOW_TRACKING_URI: http://<host private address>:5100")
     parser.add_argument("--training-parameters", default="", help="TRAINING_PARAMETERS: the parameters of the run as one JSON string")
-    parser.add_argument("--serving-request", default="", help="SERVING_REQUEST: the staged serving_request.json of the run as one JSON string")
     parser.add_argument("--dry-run", action="store_true", help="set LAYER_DRY_RUN=1 on every container of a layer job")
     args = parser.parse_args(argv)
     values = {
@@ -75,7 +78,6 @@ def main(argv: list[str] | None = None) -> int:
         "FEATURE_SET": args.feature_set,
         "MLFLOW_TRACKING_URI": args.mlflow_uri,
         "TRAINING_PARAMETERS": args.training_parameters,
-        "SERVING_REQUEST": args.serving_request,
     }
     try:
         document = build(args.job, values, args.dry_run)

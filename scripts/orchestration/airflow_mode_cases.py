@@ -8,8 +8,8 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 1. A DAG file or the DAG runtime reaches a broker client, or a step reaches anything but the launch library (``dags_hold_no_broker_client``).
 2. The pool applies only where the deployment names it, and every task that launches a job takes it (``pool_only_when_configured``).
 3. Each gate refuses before any record or ECS call: real mode, the previous job's success, the training parameters, the
-   promotion approval, the staged bronze and serving requests, the staged code digest (``gates_refuse_before_any_cloud_call`` and the request and digest
-   cases). A staged input that is not ready yet is waited for within a bound. A ``LaunchUnavailable`` of the library is never repeated by the step
+   promotion approval, the staged bronze request, the closed serving request, the staged code digest (``gates_refuse_before_any_cloud_call`` and the request
+   and digest cases). A staged input that is not ready yet is waited for within a bound. A ``LaunchUnavailable`` of the library is never repeated by the step
    (``unavailable_is_bounded``).
 4. A chain step and the chain gate run without a signed record, and the gate binds the chain's code runs (``chain_runs_without_a_signed_record``).
    A run binds its code run once, an unreadable binding is not read as missing, and the drift run binds its training run (``code_run_is_bound_once``).
@@ -79,7 +79,7 @@ from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, Launc
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import training_run_id
+from orchestration.training_contract import record_key, research_run_id, training_run_id
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
@@ -94,7 +94,6 @@ from scripts.orchestration.ecs_run_fixtures import (
     INVENTORY,
     PROMOTE_RUN,
     SERVE_RUN,
-    SERVING_REQUEST,
     SILVER_RUN,
     TRAIN_PARAMS,
     collections_of_table_map,
@@ -218,10 +217,10 @@ class Rig:
             code_runs=preflight.S3CodeRuns(self.stage, BUCKET),
             clock=lambda: self.time.now,
             bronze_request=preflight.bronze_request_reader(self.stage, BUCKET, collections_of_table_map()),
-            serving_request=preflight.serving_request_reader(self.stage, BUCKET),
             host_capacity=capacity,
             task_definition=self.adapter.task_definition,
             host_job_cap=self.read_host_cap,
+            read_record=steps.object_reader(self.stage, BUCKET),
         )
         self.preflight.host_launch_hold = lambda: "clear"  # no services apply is running; held_rig puts the production hold reader here
         self.services = steps.LaunchServices(
@@ -703,17 +702,52 @@ def bronze_request_is_checked_and_bound() -> None:
         require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
 
 
-def serving_request_is_checked() -> None:
+SERVE_BASE = "20261109T000000Z-b45e0001"
+SERVE_RESEARCH = research_run_id(SERVE_BASE)
+SERVE_FORM = {"run_id": SERVE_RUN, "mode": "real", "hai_type": "HAI_1", "deploy_mode": "stable", "research_run": "latest"}
+SERVE_CANARY = {**SERVE_FORM, "deploy_mode": "canary", "research_run": SERVE_RESEARCH}
+
+
+def research_record_of(rig: Rig, challenger: dict[str, Any] | None, hai_type: str = "HAI_1") -> None:
+    """Store a research record the way the research phase does, naming ``challenger`` (or none) as the type's challenger."""
+    document = {"schema": 1, "hai_type": hai_type, "base_run": SERVE_BASE, "runs": {}, "promotion": {"challenger": challenger}}
+    rig.stage.objects[record_key("research", SERVE_RESEARCH, hai_type)] = json.dumps(document).encode()
+
+
+def serving_request_is_closed_and_derived() -> None:
+    """The launch form carries the infection type and the mode and nothing else. The preflight derives the candidate version of a canary from the type's
+    research record, fixes the share from the job table and gives a stable deploy no version, so no request can name a version or a share."""
     rig = Rig()
-    params = {"run_id": SERVE_RUN, "mode": "real"}
-    with world(rig, "serving_deploy_dag", params) as current:
-        refuses(LaunchUnavailable, lambda: current.step("serve_deploy"))
-        for bad in (b"[]", {**SERVING_REQUEST, "percent": 90}, {**SERVING_REQUEST, "extra": 1}):
-            rig.stage.stage(SERVE_RUN, "serving_request.json", bad)
-            refuses(LaunchRefused, lambda: current.step("serve_deploy"))
-        rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
-        require(current.step("serve_deploy") == "succeeded", "a good serving request did not run")
-        require(json.loads(rig.environment()["serve"]["SERVING_REQUEST"]) == SERVING_REQUEST, "the checked request did not reach the container")
+    challenger = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
+    with world(rig, "serving_deploy_dag", SERVE_CANARY) as current:
+        for name, record in (("no research record", None), ("a type without a challenger", {"challenger": None})):
+            if record is not None:
+                research_record_of(rig, None)
+            error = refuses(LaunchRefused, lambda: current.step("serve_deploy"))
+            require("serving_candidate_refused" in str(error), f"{name}: {error}")
+        require(not rig.ecs.calls, "a canary with no candidate reached the cloud")
+        research_record_of(rig, challenger)
+        require(current.step("serve_deploy") == "succeeded", "a canary of the research record's challenger did not run")
+        derived = json.loads(rig.environment()["serve"]["SERVING_REQUEST"])
+        require(derived == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10}, f"the derived request is {derived}")
+    with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "research_run": "latest"}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("serve_deploy"))
+        require("names none" in str(error), f"a canary without a research run: {error}")
+    stable_run = "20261030T120000Z-5e5e5e5f"
+    rig.stage_runs(stable_run)
+    with world(rig, "serving_deploy_dag", {**SERVE_FORM, "run_id": stable_run}) as current:
+        require(current.step("serve_deploy") == "succeeded", "a stable deploy did not run")
+        derived = json.loads(rig.environment(1)["serve"]["SERVING_REQUEST"])
+        require(derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0}, f"the derived stable request is {derived}")
+    before = rig.tasks_started()
+    for extra in ({"candidate_version": "9"}, {"percent": 40}, {"candidate_version": "9", "percent": 40}, {"deploy_mode": "rollback"}):
+        training = {"hai_type": "HAI_1", "deploy_mode": "canary", **extra}
+        request = SubmissionRequest(
+            "serve_deploy", "20261030T120000Z-5e5e5e60", "real", 1, "serving_deploy_dag", "serve_deploy", "manual__test", SERVE_RESEARCH, training=training
+        )
+        rig.stage_runs(request.run_id)
+        refuses(LaunchRefused, partial(rig.preflight.prepare, request))
+    require(rig.tasks_started() == before, "a request that named a version or a share reached the cloud")
 
 
 def code_digest_is_checked() -> None:
@@ -1484,12 +1518,11 @@ def collapsed_job_dags_are_one_chain() -> None:
     evidence (the launch record says the job passed) and gate (runs after a failure, fails the DAG run unless the three passed, carries the asset)."""
     graph = importlib.import_module("orchestration.graph")
     rig = Rig()
-    rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
     plan: tuple[tuple[str, dict[str, Any], str, str, list[str]], ...] = (
         ("silver_transform_dag", SILVER, "silver", SILVER_RUN, []),
         ("gold_transform_dag", GOLD, "gold", GOLD_RUN, ["gold"]),
         ("model_promotion_dag", PROMOTE_PARAMS, "promote", PROMOTE_RUN, []),
-        ("serving_deploy_dag", {"run_id": SERVE_RUN, "mode": "real"}, "serve", SERVE_RUN, []),
+        ("serving_deploy_dag", SERVE_FORM, "serve", SERVE_RUN, []),
     )
     for dag_id, params, job, run, assets in plan:
         before = rig.tasks_started()
@@ -1860,14 +1893,13 @@ def graph_rules_cover_the_feature_dags() -> None:
 
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
-    rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
     plan = (
         (
             "model_promotion_dag.py",
             "model_promotion_dag",
             {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"},
         ),
-        ("serving_deploy_dag.py", "serving_deploy_dag", {"run_id": SERVE_RUN, "mode": "real"}),
+        ("serving_deploy_dag.py", "serving_deploy_dag", SERVE_FORM),
     )
     for file, dag_id, params in plan:
         with world(rig, dag_id, params) as current:
@@ -1877,7 +1909,7 @@ def promotion_and_serving_dags_run_end_to_end() -> None:
     require(rig.tasks_started() == 2, f"one task per job was expected: {rig.tasks_started()} tasks")
     for run, job in ((PROMOTE_RUN, "promote"), (SERVE_RUN, "serve")):
         require((rig.end(run, job) or {}).get("outcome") == "succeeded", f"{job} has no success record")
-    with world(rig, "serving_deploy_dag", {"run_id": SERVE_RUN, "mode": "real"}) as current:
+    with world(rig, "serving_deploy_dag", SERVE_FORM) as current:
         current.run_dag("serving_deploy_dag.py")
     require(rig.tasks_started() == 2, "a second run of the same serving DAG run launched again")
 
@@ -2359,7 +2391,7 @@ CASES: dict[str, Callable[[], None]] = {
     "publisher_request_is_refused_before_any_cloud_read": publisher_request_is_refused_before_any_cloud_read,
     "publisher_host_definition_matches_the_job_table": publisher_host_definition_matches_the_job_table,
     "publisher_host_definition_passes_the_launch_preflight": publisher_host_definition_passes_the_launch_preflight,
-    "serving_request_is_checked": serving_request_is_checked,
+    "serving_request_is_closed_and_derived": serving_request_is_closed_and_derived,
     "code_digest_is_checked": code_digest_is_checked,
     "code_run_is_bound_once": code_run_is_bound_once,
     "control_step_launches_nothing": control_step_launches_nothing,

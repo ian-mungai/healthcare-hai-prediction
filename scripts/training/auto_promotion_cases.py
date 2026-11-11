@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from orchestration import training_contract
 from scripts.training import auto_promotion
 from scripts.training.lane_b_cases import Cases, require
 
@@ -118,23 +119,20 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     folder.mkdir(parents=True)
 
     def plans_canary_and_promotion() -> None:
-        result = auto_promotion.plan(RESEARCH, 10)
-        require(result["canary"] == {"hai_type": "HAI_1", "candidate_version": "4", "percent": 10, "deploy_mode": "canary"}, f"canary: {result.get('canary')}")
+        result = auto_promotion.plan(RESEARCH)
+        require(result["canary"] == {"hai_type": "HAI_1", "deploy_mode": "canary"}, f"canary: {result.get('canary')}")
         require(result["promotion"] == {"hai_type": "HAI_1", "model_version": "4", "promotion_mode": "promote"}, f"promotion: {result.get('promotion')}")
 
     def plans_nothing_without_a_challenger() -> None:
         record = {**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger": None}}
-        require(auto_promotion.plan(record, 10) == {"hai_type": "HAI_1", "challenger": None}, "a type without a challenger got a plan")
+        require(auto_promotion.plan(record) == {"hai_type": "HAI_1", "challenger": None}, "a type without a challenger got a plan")
 
     def refuses_ineligible_challengers() -> None:
         for challenger in ({"model": "m3", "version": "4", "verdict": "pass"}, {"model": "m2", "version": "4", "verdict": "fail:minimum_improvement"}):
             raises(
-                lambda challenger=challenger: auto_promotion.plan({**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger": challenger}}, 10),
+                lambda challenger=challenger: auto_promotion.plan({**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger": challenger}}),
                 "challenger",
             )
-
-    def refuses_a_canary_share_outside_the_serving_contract() -> None:
-        raises(lambda: auto_promotion.plan(RESEARCH, 51), "percent")
 
     def canary_passes() -> None:
         require(judged(REPORT) == {"decision": "promote", "failed": []}, f"a clean canary was held: {judged(REPORT)}")
@@ -230,12 +228,27 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         raises(lambda: auto_promotion.notify(client, "arn", "HAI_1", "approved", "x"), "outcome")
         require(len(sent) == 1, "a refused notice was sent")
 
+    def notice_says_what_happened() -> None:
+        """Each outcome has its own words: promoted means promoted and rolled out, and a promotion whose release or rollout failed never reads as promoted."""
+        canary = {"failed": ["within_time_limit"]}
+        said = {outcome: auto_promotion.notice_detail(RESEARCH, canary, outcome) for outcome in training_contract.PROMOTION_OUTCOMES}
+        require("serves it alone" in said["promoted"], f"promoted: {said['promoted']}")
+        require("failed" in said["promoted_not_rolled_out"] and "earlier deployment" in said["promoted_not_rolled_out"], f"not rolled out: {said}")
+        require("stays a challenger" in said["held"] and "within_time_limit" in said["held"], f"held: {said['held']}")
+        require(said["promoted"] != said["promoted_not_rolled_out"], "a failed rollout reads as a completed one")
+        sent: list[dict[str, Any]] = []
+        client = SimpleNamespace(publish=lambda **kwargs: sent.append(kwargs) or {"MessageId": "m-2"})
+        topic = "arn:aws:sns:example-region:example-account:alerts"
+        require(auto_promotion.notify(client, topic, "HAI_1", "promoted_not_rolled_out", said["promoted_not_rolled_out"]) == "m-2", "no message ID")
+        require(sent[0]["Subject"] == "model promoted_not_rolled_out: HAI_1", f"subject: {sent[0]['Subject']}")
+
     def command_line() -> None:
         research, report = folder / "research.json", folder / "report.json"
         research.write_text(json.dumps(RESEARCH))
         report.write_text(json.dumps(REPORT))
-        code, out, _ = command(["plan", "--research", str(research), "--percent", "10"])
+        code, out, _ = command(["plan", "--research", str(research)])
         require(code == 0 and json.loads(out)["promotion"]["model_version"] == "4", f"plan: {code} {out}")
+        require(json.loads(out)["canary"] == {"hai_type": "HAI_1", "deploy_mode": "canary"}, f"the canary request names more than the type and the mode: {out}")
         with_predictions = {**RESEARCH, "promotion": {**RESEARCH["promotion"], "challenger_predictions": OFFLINE}}
         research.write_text(json.dumps(with_predictions))
         report.write_text(json.dumps(REPORT))
@@ -244,9 +257,6 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         research.write_text(json.dumps(RESEARCH))
         code, _, error = command(["verdict", "--report", str(report), "--research", str(research)])
         require(code == 2 and "offline predictions" in error, f"a research record without offline predictions judged a canary: {code} {error}")
-        research.write_text(json.dumps(RESEARCH))
-        code, _, error = command(["plan", "--research", str(research), "--percent", "99"])
-        require(code == 2 and json.loads(error)["failure"] == "ValueError", f"refusal: {code} {error}")
 
     def record_refuses_a_candidate_of_another_identity() -> None:
         """The reviewer's scenario: a research record and its replay from one tracking store certify version 3 of another store, which holds another run."""
@@ -319,7 +329,6 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     cases.check("auto_promotion_plans_the_canary_and_the_promotion_of_a_challenger", plans_canary_and_promotion)
     cases.check("auto_promotion_plans_nothing_without_a_challenger", plans_nothing_without_a_challenger)
     cases.check("auto_promotion_refuses_an_ineligible_challenger", refuses_ineligible_challengers)
-    cases.check("auto_promotion_refuses_a_canary_share_outside_the_serving_contract", refuses_a_canary_share_outside_the_serving_contract)
     cases.check("auto_promotion_canary_checks_pass_a_clean_canary", canary_passes)
     cases.check("auto_promotion_canary_checks_hold_a_failed_or_thin_canary", canary_holds)
     cases.check("auto_promotion_canary_result_is_bound_to_the_version_and_its_run", record_binds_the_result_to_the_candidate)
@@ -366,4 +375,5 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
     cases.check("auto_promotion_release_calls_the_feast_release_command", release_calls_the_feast_command)
     cases.check("auto_promotion_release_failure_is_visible", release_failure_is_visible)
     cases.check("auto_promotion_notice_reaches_the_alerts_topic", notice_reaches_the_topic)
+    cases.check("auto_promotion_notice_says_what_happened", notice_says_what_happened)
     cases.check("auto_promotion_command_line_prints_one_json_line_or_refuses", command_line)

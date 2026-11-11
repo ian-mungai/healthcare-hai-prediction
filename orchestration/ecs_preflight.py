@@ -26,10 +26,10 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 
-from orchestration import serving_contract
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
+from orchestration.promotion_chain import RecordRefused, challenger_named
 from orchestration.training_contract import (
     FEATURE_DAGS,
     LAUNCH_LANES,
@@ -38,6 +38,7 @@ from orchestration.training_contract import (
     chain_parameters_for,
     model_features_run_id,
     parameters_for,
+    serving_parameters_for,
     trained_run_id,
     training_run_id,
 )
@@ -50,7 +51,6 @@ DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 BRONZE_REQUEST_BYTES = 4096
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
-SERVING_REQUEST_BYTES = 4096
 APPROVAL_BYTES = 4096
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
@@ -218,36 +218,31 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
-def serving_request_reader(s3: S3Reader, bucket: str) -> Callable[[str], dict[str, str]]:
-    """Read and check the run's staged ``serving_request.json`` and return the values of the serve container.
+def serving_values(request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None]) -> dict[str, str]:
+    """The values of the serve container for a closed launch request: the infection type and the mode, canary or stable.
 
-    The file is the closed record of ``orchestration.serving_contract``: the HAI type, the mode, the candidate version and the percent. A file that is not
-    staged yet is retryable, a file that fails a check is refused. The container receives the checked request and never reads the bucket for it.
+    The request names no version and no share. A canary deploys the challenger of the type's research record in the research run the launch publishes from,
+    at the share the job table fixes. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry. A
+    request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived request and
+    reads nothing else.
     """
-
-    def read(run_id: str) -> dict[str, str]:
+    try:
+        closed = serving_parameters_for(request)
+    except ValueError as error:
+        raise TaskRefused(f"serving_request_refused: {error}") from None
+    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0}
+    if closed["deploy_mode"] == "canary":
+        if research_run is None:
+            raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
         try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{serving_contract.REQUEST_FILE}")["Body"].read(
-                SERVING_REQUEST_BYTES + 1
-            )
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                raise TaskUnavailable("serving_request_not_staged") from None
-            raise TaskUnavailable("serving_request_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("serving_request_unreadable") from None
-        if len(body) > SERVING_REQUEST_BYTES:
-            raise TaskRefused("serving_request_too_large")
-        try:
-            document = json.loads(body)
-            if not isinstance(document, dict):
-                raise ValueError("the request is not an object")
-            checked = serving_contract.parameters_for("serving_deploy_dag", document)
-        except ValueError as error:
-            raise TaskRefused(f"serving_request_refused: {error}") from None
-        return {"SERVING_REQUEST": json.dumps(checked, sort_keys=True, separators=(",", ":")), "SERVING_REQUEST_SHA256": hashlib.sha256(body).hexdigest()}
-
-    return read
+            named = challenger_named(read, research_run, closed["hai_type"])
+        except (RecordRefused, ValueError) as error:
+            raise TaskRefused(f"serving_candidate_refused: {error}") from None
+        if named is None:
+            raise TaskRefused(f"serving_candidate_refused: the research record of {closed['hai_type']} has no challenger to deploy")
+        derived |= {"candidate_version": named[1], "percent": canary_percent}
+    body = json.dumps(derived, sort_keys=True, separators=(",", ":"))
+    return {"SERVING_REQUEST": body, "SERVING_REQUEST_SHA256": hashlib.sha256(body.encode()).hexdigest()}
 
 
 # Launch hold during services applies (owner A, Nov 10 2026): the owner command around every services apply writes HELD_PREFIX... before it
@@ -485,7 +480,7 @@ class Preflight:
         host_job_cap: Callable[[], str | None],
         host_launch_hold: Callable[[], str | None] | None = None,
         bronze_request: Callable[[str], dict[str, str]] | None = None,
-        serving_request: Callable[[str], dict[str, str]] | None = None,
+        read_record: Callable[[str], bytes | None] | None = None,
     ) -> None:
         self.jobs: Mapping[str, Any] = table["jobs"]
         self.steps: Mapping[str, str | None] = table["steps"]
@@ -496,11 +491,11 @@ class Preflight:
         self.code_runs = code_runs
         self.clock = clock
         self.bronze_request = bronze_request
-        self.serving_request = serving_request
         self.host_capacity = host_capacity
         self.task_definition = task_definition
         self.host_job_cap = host_job_cap
         self.host_launch_hold = host_launch_hold
+        self.read_record = read_record
 
     def containers(self, job: str) -> tuple[dict[str, list[str]], str]:
         """The containers of the job's host task definition and the one whose log is read: the host table's where it names them, else the job table's."""
@@ -580,15 +575,12 @@ class Preflight:
             raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed")
 
     def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
-        """The values fixed once for a launch: the checked bronze and serving requests read once, the publisher's checked run kind and capture root, and the
-        absolute deadline of the task."""
+        """The values fixed once for a launch: the checked bronze request read once, the publisher's checked run kind and capture root, the serving request
+        derived from the closed launch request, and the absolute deadline of the task."""
         row = self.jobs[job]
         names = {name for variables in self.containers(job)[0].values() for name in variables}
         values: dict[str, str] = {}
-        readers = (
-            ("needs_bronze_request", self.bronze_request, "bronze"),
-            ("needs_serving_request", self.serving_request, "serving"),
-        )
+        readers = (("needs_bronze_request", self.bronze_request, "bronze"),)
         for needed, reader, label in readers:
             if row.get(needed):
                 if reader is None:
@@ -596,6 +588,10 @@ class Preflight:
                 values |= self.read(reader, request.run_id)
         if row.get("needs_publisher_run_request"):
             values |= require_publisher_request(request)
+        if row.get("needs_serving_parameters"):
+            if self.read_record is None:
+                raise LaunchRefused("serving_records_not_configured")
+            values |= self.read(serving_values, request.training or {}, request.input_run_id, int(row["canary_percent"]), self.read_record)
         if DEADLINE_VARIABLE in names:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(row["deadline_seconds"]))
         return values

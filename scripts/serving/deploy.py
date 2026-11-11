@@ -1,10 +1,11 @@
 """The serving deploy action: write the active deployment of one HAI type from the production alias and an optional candidate.
 
-It reads the registry and never moves an alias. Promotion is the owner's, through the promotion DAG. A canary deploy names a candidate version and a
-share. A rollback names none and writes a deployment with the stable version only. The deployment id is the run id, and each deployment carries a sequence
-number one above the one it replaces. A retry with the same parameters is a no-op while that deployment is active. It finishes the deployment if it stopped
-before the active write, and it is refused once a later deployment replaced it. A retry with other parameters is refused. Every refusal
-happens before any write.
+It reads the registry and never moves an alias. The promotion chain moves it through the promote job. A canary deploy names a candidate version and a share. A
+stable deploy names none and writes a deployment with the production version only: it removes any canary and ends a promotion's rollout. The deployment id
+is the run id, and each deployment carries a sequence number one above the one it replaces. A retry with the same parameters is a no-op while that
+deployment is active. It finishes the deployment if it stopped before the active write, and it is refused once a later deployment replaced it. A retry with
+other parameters is refused. Every refusal happens before any write. After a write the deploy reads the active deployment back and succeeds only when it is
+the one written.
 """
 
 from __future__ import annotations
@@ -48,16 +49,16 @@ def run(
     mode: str,
     deployment_id: str,
 ) -> Outcome:
-    if mode not in ("canary", "rollback"):
-        raise DeployRefused("the mode must be canary or rollback")
+    if mode not in ("canary", "stable"):
+        raise DeployRefused("the mode must be canary or stable")
     if hai_type not in HAI_TYPES or not RUN_ID.fullmatch(deployment_id):
         raise DeployRefused("the HAI type or the deployment id is malformed")
     contract = json.loads(CONTRACT.read_text())
     name = contract["registered_models"][hai_type]
     production = _production(registry, name)
-    if mode == "rollback":
+    if mode == "stable":
         if candidate_version is not None or percent != 0:
-            raise DeployRefused("a rollback names no candidate and no percent")
+            raise DeployRefused("a stable deploy names no candidate and no percent")
     else:
         if candidate_version is None or not re.fullmatch(r"[1-9][0-9]{0,18}", candidate_version):
             raise DeployRefused("a canary names a candidate version")
@@ -86,7 +87,23 @@ def run(
         raise DeployRefused(str(error)) from None
     except ManifestConflict as error:
         raise DeployRefused(str(error)) from None
+    _confirm(manifests, hai_type, deployment)
     return Outcome("written", deployment)
+
+
+def _confirm(manifests: ManifestStore, hai_type: str, wanted: Deployment) -> None:
+    """Read the active deployment back and refuse unless it is the one just written: the same id, stable version, candidate and percent."""
+    stored = manifests.read_active(hai_type)
+    found = _parse(stored.body) if stored is not None else None
+    if found is None or (found.deployment_id, found.stable_version, found.candidate_version, found.percent) != (
+        wanted.deployment_id,
+        wanted.stable_version,
+        wanted.candidate_version,
+        wanted.percent,
+    ):
+        raise DeployRefused(
+            f"the active deployment is not the one written for {wanted.deployment_id}: it reads back as {None if found is None else found.deployment_id}"
+        )
 
 
 def _parse(raw: bytes) -> Deployment | None:
@@ -112,6 +129,7 @@ def _retry(
         manifests.replace_active(hai_type, prior.dump(), None if current is None else current.token)
     except ManifestConflict as error:
         raise DeployRefused(str(error)) from None
+    _confirm(manifests, hai_type, prior)
     return Outcome("written", prior)
 
 

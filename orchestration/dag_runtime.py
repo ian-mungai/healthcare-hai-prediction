@@ -20,7 +20,7 @@ from typing import Any
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for
+from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for, serving_parameters_for
 
 LOG = logging.getLogger(__name__)
 RESEARCH_DAG = "research_dag"
@@ -29,6 +29,9 @@ STEP_TIMEOUT = timedelta(hours=26)
 SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
 # A model set's features DAG builds from the base run that the base DAG published: its form names that run, not a gold run.
 MODEL_SELECTIONS = {"pin_gold": "base_snapshot_run"}
+# The serving deployment's form names the research run whose record names the candidate of a canary.
+SERVING_DAG = "serving_deploy_dag"
+SERVING_SELECTIONS = {"serve_deploy": "research_run"}
 ASSETS = {"features_commit": "features"}
 # The time limits of the one-job chain's tasks that start no job.
 PREFLIGHT_TIMEOUT = timedelta(minutes=30)
@@ -56,6 +59,8 @@ def launch_pool() -> str:
 
 def selections_of(dag_id: str) -> dict[str, str]:
     """The DAG parameter that names the producer run of each template's job in ``dag_id``."""
+    if dag_id == SERVING_DAG:
+        return SERVING_SELECTIONS
     return MODEL_SELECTIONS if dag_id in FEATURE_DAGS else SELECTIONS
 
 
@@ -70,6 +75,8 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
     if instance.dag_id == RESEARCH_DAG:
         raw = {name: params[name] for name in ("base_run", "population", "hai_types", "mlflow")}
         training = parameters_for(RESEARCH_DAG, raw, LAUNCH_LANES)  # the research step runs on AWS: mlflow=local is refused by name
+    elif instance.dag_id == SERVING_DAG:
+        training = serving_parameters_for({name: params[name] for name in ("hai_type", "deploy_mode")})  # a closed request: no version and no share
     elif instance.dag_id in DAGS:
         names = (
             ("features_run", "population", "hai_types", "trigger", "mlflow", "model")

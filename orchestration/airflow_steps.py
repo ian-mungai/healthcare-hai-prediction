@@ -41,7 +41,6 @@ from orchestration.ecs_preflight import (
     host_cap_reader,
     load_tables,
     s3_digest_reader,
-    serving_request_reader,
     ssm_launch_hold_reader,
 )
 from orchestration.interface import SubmissionRequest
@@ -153,11 +152,11 @@ def services() -> LaunchServices:
         code_runs=S3CodeRuns(s3, bucket),
         clock=clock.wall,
         bronze_request=bronze_request_reader(s3, bucket, collections),
-        serving_request=serving_request_reader(s3, bucket),
         host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
         host_job_cap=cap,
         host_launch_hold=hold,
+        read_record=object_reader(s3, bucket),
     )
     return LaunchServices(
         preflight,
@@ -348,7 +347,8 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
     training = request.training or {}
 
     def launch_step_of(template: str, run: str, parameters: dict[str, Any]) -> None:
-        step = replace(request, template=template, run_id=run, input_run_id=None, training=parameters)
+        # The serve step derives its candidate from the research record of the run it deploys from, so it names that run as its input.
+        step = replace(request, template=template, run_id=run, input_run_id=request.run_id if template == "serve_deploy" else None, training=parameters)
         try:
             found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
             spec = prepared(found, step)

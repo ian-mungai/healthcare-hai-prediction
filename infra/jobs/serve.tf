@@ -1,5 +1,5 @@
 variable "serve_enabled" {
-  description = "Register the serve task that the direct launch starts for serving_deploy_dag. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
+  description = "Register the serve task that the direct launch starts for serving_deploy_dag and for the promotion chain of research_dag. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -62,9 +62,9 @@ variable "serve_resources" {
 }
 
 locals {
-  # Two steps after the volume hand-over: fetch the run's code, then deploy. The deploy step logs in to MLflow as the train step does. The checked request arrives in
-  # SERVING_REQUEST, which the launch preflight read once from the staged record, and the tool reads it from there. The time limit is shorter than the job deadline, so the
-  # task ends itself first, and every MLflow request has its own short limit.
+  # Two steps after the volume hand-over: fetch the run's code, then deploy. The deploy step logs in to MLflow as the train step does. The derived request arrives in
+  # SERVING_REQUEST, which the launch preflight built from the closed launch request (the type and the mode), and the tool reads it from there. The time limit is
+  # shorter than the job deadline, so the task ends itself first, and every MLflow request has its own short limit.
   serve_phase = "cd /workspace/code && timeout 600 python -m scripts.serving.deploy_job --run \"$RUN_ID\""
   serve_steps = [
     { name = "init", script = "chown 10001:10001 /workspace /tmp", secrets = [], variables = [] },

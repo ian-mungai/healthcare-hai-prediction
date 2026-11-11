@@ -87,8 +87,9 @@ def parse(read: Read, key: str) -> dict[str, Any]:
     return document
 
 
-def challenger_of(read: Read, research_run: str, base_run: str, hai_type: str) -> Challenger | None:
-    """The challenger in the type's research record, or None for a type without one. A record that does not name a promotable candidate is refused."""
+def challenger_named(read: Read, research_run: str, hai_type: str) -> tuple[str, str] | None:
+    """The model and version of the challenger in the type's research record, or None for a type without one. A record that does not name a promotable
+    candidate is refused."""
     key = record_key("research", research_run, hai_type)
     document = parse(read, key)
     if document.get("hai_type") != hai_type:
@@ -100,7 +101,13 @@ def challenger_of(read: Read, research_run: str, base_run: str, hai_type: str) -
     model, version = (challenger.get("model"), challenger.get("version")) if isinstance(challenger, dict) else (None, None)
     if model not in PROMOTION_MODELS or not isinstance(version, str) or not version:
         raise RecordRefused(f"{key} names a challenger that is not a promotable model and version")
-    return Challenger(hai_type, str(model), version, model_features_run_id(base_run, str(model)))
+    return str(model), version
+
+
+def challenger_of(read: Read, research_run: str, base_run: str, hai_type: str) -> Challenger | None:
+    """The challenger in the type's research record, or None for a type without one."""
+    named = challenger_named(read, research_run, hai_type)
+    return None if named is None else Challenger(hai_type, named[0], named[1], model_features_run_id(base_run, named[0]))
 
 
 def canary_decision(read: Read, research_run: str, challenger: Challenger) -> str:

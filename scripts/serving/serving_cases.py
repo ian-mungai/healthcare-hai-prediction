@@ -471,7 +471,7 @@ def case_rollback(c: Checker) -> None:
     """A rollback deployment removes the canary after the next refresh, releases its model and leaves the production alias untouched."""
     with world(count=40, percent=50) as w:
         c.check("the canary serves before the rollback", {ask(w, key).body["served_by"] for key in hospital_keys(40)} == {"stable", "canary"})
-        outcome = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=RUN_2)
+        outcome = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_2)
         c.check("the rollback writes a deployment with no candidate", outcome.status == "written" and outcome.deployment.candidate_version is None)
         c.check(
             "a request before the refresh time still sees the old deployment",
@@ -537,7 +537,7 @@ def case_deploy(c: Checker) -> None:
             "a rollback with a candidate is refused",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=0, mode="rollback", deployment_id=RUN_2
+                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=0, mode="stable", deployment_id=RUN_2
                 )
             ),
         )
@@ -658,13 +658,44 @@ def case_deploy_job(c: Checker) -> None:
         c.check(f"{label} exits 2 with the refusal message and writes nothing", code == 2 and "serve_deploy refused" in err and not fresh.objects and not out)
     code, _, err = run_deploy_job(client, registry, RUN_1, {**environment, "SERVING_REQUEST": json.dumps({**request, "percent": 30})})
     c.check("a retry under the same id with another request is refused", code == 2 and "serve_deploy refused" in err and client.objects == before)
-    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
-        path = Path(folder) / "serving_request.json"
-        path.write_text(json.dumps(request))
-        fresh = S3Client()
-        code, out, err = run_deploy_job(fresh, registry, RUN_3, {"MODEL_API_MANIFEST_URI": environment["MODEL_API_MANIFEST_URI"]}, ["--request", str(path)])
-        c.check("a request file still works", code == 0 and json.loads(out or "{}").get("status") == "written")
+    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable"}
+    fresh = S3Client()
+    code, out, err = run_deploy_job(fresh, registry, RUN_3, environment | {"SERVING_REQUEST": json.dumps(stable)})
+    printed = json.loads(out) if out.strip() else {}
+    c.check(
+        "a stable request writes the production version alone",
+        code == 0 and printed.get("stable_version") == PRODUCTION and printed.get("candidate_version") is None and printed.get("percent") == 0,
+    )
+    code, out, err = run_deploy_job(fresh, registry, RUN_3, environment | {"SERVING_REQUEST": json.dumps(stable)}, ["--request", "request.json"])
+    c.check("the job takes no request file", code == 2 and "unrecognized arguments" in err and not out)
     c.check("no run moved the production alias", registry.alias_writes == 0)
+
+
+class LostWrite(manifests.FileManifestStore):
+    """A manifest store whose active write is acknowledged and never lands, as a lost write the deploy has to notice."""
+
+    def replace_active(self, hai_type: str, body: bytes, token: str | None) -> Any:
+        return None
+
+
+def case_deploy_verifies_the_active_version(c: Checker) -> None:
+    """A deploy reports success only when the active deployment read back is the one it wrote, with the production version as stable and no candidate."""
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        store = LostWrite(Path(folder))
+        refused = rejected(
+            lambda: deploy.run(registry=Registry(), manifests=store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1)
+        )
+        c.check("a stable deploy whose active write did not land is refused", refused and store.read_active(HAI) is None)
+    with world(deployment=False) as w:
+        outcome = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1)
+        active = w.store.read_active(HAI)
+        read_back = canary.Deployment.parse(active.body) if active is not None else None
+        c.check(
+            "a stable deploy leaves the production version active with no candidate",
+            outcome.status == "written"
+            and read_back is not None
+            and (read_back.stable_version, read_back.candidate_version, read_back.percent) == (PRODUCTION, None, 0),
+        )
 
 
 def case_images(c: Checker) -> None:
@@ -743,7 +774,7 @@ def case_deploy_order(c: Checker) -> None:
             )
 
         def rollback_run(run: str) -> deploy.Outcome:
-            return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=run)
+            return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=run)
 
         canary_run(RUN_1)
         rollback_run(RUN_2)
@@ -1226,7 +1257,7 @@ def case_previous_record_format(c: Checker) -> None:
         w.clock.now += 31.0
         reply = ask(w)
         c.check("a fresh service serves from a previous-format active record", reply.status == 200 and w.api.health().status == 200)
-        later = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=RUN_2)
+        later = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_2)
         c.check("a deploy over it is numbered 2 and writes the current format", later.status == "written" and later.deployment.sequence == 2)
         c.check(
             "a retry of the previous-format deployment is refused as replaced",
@@ -1236,7 +1267,7 @@ def case_previous_record_format(c: Checker) -> None:
                 )
             ),
         )
-        again = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="rollback", deployment_id=RUN_2)
+        again = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_2)
         c.check("a retry of the new deployment changes nothing", again.status == "unchanged")
     with world(deployment=False) as w:
         w.store.put_history(HAI, RUN_1, old)
@@ -1290,34 +1321,25 @@ def refused_row() -> bool:
 
 
 def case_dag(c: Checker) -> None:
-    """serving_deploy_dag: a closed parameter set, one job chain and no way to ask for the AWS route or a promotion."""
-    from orchestration import graph, serving_contract
+    """serving_deploy_dag: a closed request of the HAI type and the mode alone, one job chain and no way to name a version, a share or the AWS route."""
+    from orchestration import graph, training_contract
 
-    ok = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary"}
-    c.check("a complete parameter set is accepted", serving_contract.parameters_for("serving_deploy_dag", ok) == ok)
+    ok = {"hai_type": HAI, "deploy_mode": "canary"}
+    c.check("a closed request is accepted", training_contract.serving_parameters_for(ok) == ok)
+    c.check("a stable request is accepted", training_contract.serving_parameters_for(ok | {"deploy_mode": "stable"})["deploy_mode"] == "stable")
     for name, bad in {
+        "a candidate version": ok | {"candidate_version": CANDIDATE},
+        "a percent": ok | {"percent": 10},
+        "a version and a percent": ok | {"candidate_version": CANDIDATE, "percent": 10},
         "an extra parameter": ok | {"alias": "production"},
-        "a missing parameter": {key: value for key, value in ok.items() if key != "percent"},
+        "a missing mode": {"hai_type": HAI},
+        "a missing type": {"deploy_mode": "canary"},
         "an unknown HAI type": ok | {"hai_type": "HAI_9"},
-        "a percent over the limit": ok | {"percent": 51},
-        "a string percent": ok | {"percent": "10"},
-        "a boolean percent": ok | {"percent": True},
-        "a zero version": ok | {"candidate_version": "0"},
+        "the retired rollback mode": ok | {"deploy_mode": "rollback"},
         "an unknown mode": ok | {"deploy_mode": "promote"},
+        "a list": [ok],
     }.items():
-        c.check(f"{name} is refused", rejected(serving_contract.parameters_for, "serving_deploy_dag", bad))
-    c.check(
-        "a rollback names no candidate",
-        serving_contract.parameters_for("serving_deploy_dag", {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "rollback"})[
-            "deploy_mode"
-        ]
-        == "rollback",
-    )
-    c.check("a rollback with a candidate is refused", rejected(serving_contract.parameters_for, "serving_deploy_dag", ok | {"deploy_mode": "rollback"}))
-    c.check(
-        "the chain runs the deploy between the run and its record",
-        serving_contract.SERVING_STEPS == ("acquire_run", "snapshot_serving", "serve_deploy", "run_record"),
-    )
+        c.check(f"{name} is refused", rejected(training_contract.serving_parameters_for, bad))
     c.check(
         "the graph rules know the DAG as one job chain",
         "serving_deploy_dag" in graph.COLLAPSED_DAGS and "serving_deploy_dag" not in graph.PIPELINE_CHAINS,
@@ -1327,6 +1349,11 @@ def case_dag(c: Checker) -> None:
     c.check(
         "the DAG file builds one job chain of the serve job through the shared runtime",
         [ast.unparse(call) for call in calls if getattr(call.func, "id", "") in ("build_tasks", "build_job_chain")] == ["build_job_chain('serve_deploy')"],
+    )
+    form = (ROOT / "dags/serving_deploy_dag.py").read_text()
+    c.check(
+        "the form asks for the type, the mode and the research run to deploy from, and names no version or share",
+        all(f'"{name}": Param' in form for name in ("hai_type", "deploy_mode", "research_run")) and "candidate_version" not in form and "percent" not in form,
     )
     dag_ids = [kw.value.value for call in calls for kw in call.keywords if kw.arg == "dag_id" and isinstance(kw.value, ast.Constant)]
     c.check(
@@ -1651,6 +1678,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "rollback": (case_rollback, "canary deploy"),
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
+    "deploy_verifies_the_active_version": (case_deploy_verifies_the_active_version, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "images_and_repositories": (case_images, "deploy aws"),
     "parameter_names_agree": (case_parameter_names, "iam services"),

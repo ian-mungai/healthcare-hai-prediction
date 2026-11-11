@@ -23,6 +23,10 @@
       "additionalProperties": {
         "type": "object",
         "additionalProperties": false,
+        "dependentRequired": {
+          "needs_serving_parameters": ["canary_percent"],
+          "canary_percent": ["needs_serving_parameters"]
+        },
         "required": [
           "deadline_seconds",
           "log_container",
@@ -102,9 +106,15 @@
             "const": true,
             "description": "The run names its kind (bootstrap or monthly) and its capture root as launch parameters and stages nothing but its code archive. The direct launch preflight checks them before it starts the Run 3 publisher task, binds every attempt to their digest and passes them to the run container"
           },
-          "needs_serving_request": {
+          "needs_serving_parameters": {
             "const": true,
-            "description": "The run stages serving_request.json beside its code archive. The broker reads and checks it before it starts the task, binds every attempt to the first one it checked and passes the request to the serve container"
+            "description": "The launch form carries a closed serving request: the infection type and the mode, canary or stable. The launch preflight derives the candidate version from the type's research record and fixes the canary share from canary_percent, so the serve container receives a checked request and no caller names a version or a share"
+          },
+          "canary_percent": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "description": "The share of hospital-windows a canary deployment receives, fixed here and never named by a caller. A job with needs_serving_parameters must set it"
           }
         }
       }

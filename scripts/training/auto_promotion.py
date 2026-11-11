@@ -1,12 +1,13 @@
 """Automatic promotion: a challenger that passed the promotion rule goes to the canary, the canary checks decide the full rollout, the owner is told.
 
-    python -m scripts.training.auto_promotion plan --research research_HAI_1.json --percent 10
+    python -m scripts.training.auto_promotion plan --research research_HAI_1.json
     python -m scripts.training.auto_promotion verdict --report replay_report.json --research research_HAI_1.json
     python -m scripts.training.auto_promotion record --report replay_report.json --research research_HAI_1.json
     python -m scripts.training.auto_promotion release --model m2 --features-run <run ID>
     python -m scripts.training.auto_promotion notify --hai-type HAI_1 --outcome promoted --detail <text>
 
-``plan`` reads the research record of a type and prints the parameters of the canary deployment and of the promotion, or ``{"challenger": null}``. ``verdict``
+``plan`` reads the research record of a type and prints the closed request of the canary deployment (the type and the mode canary: the launch derives the
+version and the share) and the parameters of the promotion, or ``{"challenger": null}``. ``verdict``
 judges the replay report of the canary with the owner's pass rule and the offline predictions of the research record, and prints ``promote`` or ``hold``
 with the failed checks. ``record`` does the same and, on a pass, tags the challenger's version with the result, bound to the version and its model run
 (``MLFLOW_TRACKING_URI``); the ``promote`` action refuses a version without it. Both refuse, by the name in ``code``, a replay of another infection type than
@@ -28,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from orchestration import serving_contract, training_contract
+from orchestration import training_contract
 from scripts.process import run_command
 from scripts.serving import compare, replay
 from scripts.training import job_inputs, promote, registry, run_tracking
@@ -89,8 +90,8 @@ def check_candidate(store: Any, record: Mapping[str, Any], name: str, version: A
         )
 
 
-def plan(record: Mapping[str, Any], percent: int) -> dict[str, Any]:
-    """Return the canary deployment (at ``percent`` of the hospital-windows) and the promotion that follow from a research record, or no challenger."""
+def plan(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Return the closed canary request and the promotion that follow from a research record, or no challenger."""
     challenger = record["promotion"]["challenger"]
     if record.get("schema") != 1 or record.get("hai_type") not in training_contract.HAI_TYPES:
         raise PlanRefused("the research record has another schema or no known HAI type")
@@ -101,9 +102,7 @@ def plan(record: Mapping[str, Any], percent: int) -> dict[str, Any]:
     return {
         "hai_type": record["hai_type"],
         "challenger": challenger,
-        "canary": serving_contract.parameters_for(
-            "serving_deploy_dag", {"hai_type": record["hai_type"], "candidate_version": challenger["version"], "percent": percent, "deploy_mode": "canary"}
-        ),
+        "canary": training_contract.serving_parameters_for({"hai_type": record["hai_type"], "deploy_mode": "canary"}),
         "promotion": {"hai_type": record["hai_type"], "model_version": challenger["version"], "promotion_mode": "promote"},
     }
 
@@ -190,7 +189,9 @@ def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, o
     challenger = record["promotion"]["challenger"]
     candidate = f"{challenger['model']} version {challenger['version']}"
     if outcome == "promoted":
-        return f"{candidate} is the Production model."
+        return f"{candidate} is the Production model and the API serves it alone."
+    if outcome == "promoted_not_rolled_out":
+        return f"{candidate} is the Production model, but its release or rollout failed, so the API still serves the earlier deployment."
     reason = (
         "no canary result was stored" if canary is None else f"the canary failed {', '.join(canary['failed'])}" if canary["failed"] else "the canary passed"
     )
@@ -228,7 +229,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     planned = commands.add_parser("plan")
     planned.add_argument("--research", type=Path, required=True)
-    planned.add_argument("--percent", type=int, required=True, help="the share of hospital-windows the canary receives, 1 to 50")
     for command in ("verdict", "record"):
         judged = commands.add_parser(command)
         judged.add_argument("--report", type=Path, required=True)
@@ -243,7 +243,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "plan":
-            result: Any = plan(json.loads(arguments.research.read_bytes()), arguments.percent)
+            result: Any = plan(json.loads(arguments.research.read_bytes()))
         elif arguments.command in ("verdict", "record"):
             record = json.loads(arguments.research.read_bytes())
             challenger = record["promotion"]["challenger"]

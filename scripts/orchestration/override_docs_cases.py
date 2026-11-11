@@ -26,7 +26,6 @@ VALUES = {
     "POLARIS_URI": "http://10.0.0.5:8181/api/catalog",
     "MLFLOW_TRACKING_URI": "http://10.0.0.5:5100",
     "TRAINING_PARAMETERS": '{"mlflow": "aws"}',
-    "SERVING_REQUEST": '{"request": "synthetic"}',
     "BRONZE_DRY_RUN": "1",
     "BRONZE_INVENTORY_SHA256": "cd" * 32,
     "BRONZE_REQUEST_SHA256": "ef" * 32,
@@ -58,6 +57,8 @@ def a_job_variable_without_a_sample_fails_the_check() -> None:
 
 def check_overrides(table: dict) -> None:
     for job, row in table.items():
+        if row.get("needs_serving_parameters"):
+            continue
         needed = {variable for variables in row["containers"].values() for variable in variables}
         unknown = needed - set(VALUES) - {job_overrides.DRY_RUN_VARIABLE}
         require(not unknown, f"the {job} job needs {sorted(unknown)}, which have no sample value here: add one so its overrides are checked")
@@ -66,6 +67,18 @@ def check_overrides(table: dict) -> None:
             built = {item["name"]: [pair["name"] for pair in item["environment"]] for item in document["containerOverrides"]}
             wanted = {container: [*variables, *([job_overrides.DRY_RUN_VARIABLE] if dry_run else [])] for container, variables in row["containers"].items()}
             require(built == wanted, f"the {job} overrides fill {built}, the task needs {wanted}")
+
+
+def the_generator_builds_no_serving_request() -> None:
+    """The serve job's request is derived by the launch from a closed request, so no owner command builds it."""
+    serving = [job for job, row in job_table().items() if row.get("needs_serving_parameters")]
+    require(serving == ["serve"], f"the jobs that take a serving request are {serving}")
+    try:
+        job_overrides.build("serve", dict(VALUES))
+    except job_overrides.OverrideError as error:
+        require("direct launch" in str(error), f"the refusal does not name the launch: {error}")
+    else:
+        require(False, "the serve job's overrides were built by hand")
 
 
 def the_generator_refuses_a_missing_value_by_name() -> None:
@@ -93,6 +106,7 @@ def the_generator_refuses_a_missing_value_by_name() -> None:
 
 CASES: dict[str, Callable[[], None]] = {
     "the_generator_fills_every_variable_of_every_job": the_generator_fills_every_variable_of_every_job,
+    "the_generator_builds_no_serving_request": the_generator_builds_no_serving_request,
     "the_generator_refuses_a_missing_value_by_name": the_generator_refuses_a_missing_value_by_name,
     "a_job_variable_without_a_sample_fails_the_check": a_job_variable_without_a_sample_fails_the_check,
 }

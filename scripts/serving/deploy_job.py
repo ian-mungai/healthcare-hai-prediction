@@ -1,8 +1,9 @@
-"""The ``serve_deploy`` job: read the owner's staged request, deploy and print the result. It runs in the training image, which holds the MLflow client
-and boto3.
+"""The ``serve_deploy`` job: deploy the request the launch derived and print the result. It runs in the training image, which holds the MLflow client and boto3.
 
-The request holds the HAI type, the mode, the candidate version and the percent. The AWS task gets it checked in SERVING_REQUEST, which the preflight read once
-from the staged record. A hand run may name a file with ``--request``. The run id is the deployment id. The job reads the production alias and never moves it.
+The launch preflight checks the closed request the promotion chain or the form passed (the HAI type and the mode, canary or stable) and derives the rest: the
+candidate version from the type's research record and the share from the job table. The task gets the derived request in SERVING_REQUEST and nothing else
+names a version. The run id is the deployment id. The job reads the production alias and never moves it. A stable request writes the production version
+alone. After the write the active deployment is read back, and the job fails unless it is the one written.
 A refusal exits with code 2 and a message that names the reason.
 """
 
@@ -13,9 +14,7 @@ import importlib
 import json
 import os
 import sys
-from pathlib import Path
 
-from orchestration import serving_contract
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.serving import deploy, manifests
@@ -24,12 +23,12 @@ from scripts.serving import deploy, manifests
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", required=True)
-    parser.add_argument("--request", type=Path, help="a request file; without it the request is read from SERVING_REQUEST")
     args = parser.parse_args()
     try:
         startup_check.check_phase("serve", "serve")
-        raw = json.loads(args.request.read_text() if args.request else os.environ["SERVING_REQUEST"])
-        request = serving_contract.parameters_for("serving_deploy_dag", raw)
+        request = json.loads(os.environ["SERVING_REQUEST"])
+        if not isinstance(request, dict) or set(request) != {"hai_type", "deploy_mode", "candidate_version", "percent"}:
+            raise ValueError("the request names the HAI type, the mode, the candidate version and the percent")
         uri = os.environ["MODEL_API_MANIFEST_URI"]
         if not uri.startswith("s3://"):
             raise ValueError("MODEL_API_MANIFEST_URI must be an s3:// URI")
