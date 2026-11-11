@@ -201,11 +201,13 @@
         "baseline": [
           "RUN_ID",
           "MLFLOW_TRACKING_URI",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "FEATURE_SET"
         ],
         "current": [
           "RUN_ID",
-          "POLARIS_URI"
+          "POLARIS_URI",
+          "INPUT_RUN_ID"
         ],
         "check": [
           "RUN_ID"

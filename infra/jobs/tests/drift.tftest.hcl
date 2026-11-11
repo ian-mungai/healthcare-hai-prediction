@@ -125,12 +125,12 @@ run "drift_commands_and_environment" {
   assert {
     condition = (
       jsondecode(output.drift_container_definitions)[1].command == ["python -I /opt/hai/fetch_code.py"] &&
-      jsondecode(output.drift_container_definitions)[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\""] &&
-      jsondecode(output.drift_container_definitions)[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\""] &&
+      jsondecode(output.drift_container_definitions)[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\" --model \"$FEATURE_SET\""] &&
+      jsondecode(output.drift_container_definitions)[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\" --features-run \"$INPUT_RUN_ID\""] &&
       jsondecode(output.drift_container_definitions)[4].command == ["cd /workspace/code && python -m monitoring.aws_run check --run \"$RUN_ID\""] &&
       jsondecode(output.drift_container_definitions)[5].command == ["cd /workspace/code && python -m monitoring.aws_run publish --run \"$RUN_ID\""]
     )
-    error_message = "The fetch step runs the script baked into the image. The other four run the phases of the fetched code."
+    error_message = "The fetch step runs the script baked into the image. The other four run the phases of the fetched code, the baseline phase for the model of the run and the current phase for its model run."
   }
 
   assert {
@@ -147,8 +147,8 @@ run "drift_commands_and_environment" {
   assert {
     condition = (
       toset([for variable in jsondecode(output.drift_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
+      toset([for variable in jsondecode(output.drift_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]) &&
+      toset([for variable in jsondecode(output.drift_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]) &&
       toset([for variable in jsondecode(output.drift_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"]) &&
       toset([for variable in jsondecode(output.drift_container_definitions)[5].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"])
     )
@@ -212,8 +212,8 @@ run "drift_run_task_contract" {
       output.drift_run_task.network_source == "training_network output of the IAM stack" &&
       output.drift_run_task.container_environment == {
         fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-        baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI"]
-        current  = ["RUN_ID", "POLARIS_URI"]
+        baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]
+        current  = ["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]
         check    = ["RUN_ID"]
         publish  = ["RUN_ID"]
       }

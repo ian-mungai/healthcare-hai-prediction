@@ -81,12 +81,13 @@ variable "drift_resources" {
 locals {
   drift_run_variables = {
     fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI"]
-    current  = ["RUN_ID", "POLARIS_URI"]
+    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]
+    current  = ["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]
     check    = ["RUN_ID"]
     publish  = ["RUN_ID"]
   }
-  drift_phase = "cd /workspace/code && python -m monitoring.aws_run %s --run \"$RUN_ID\""
+  # The baseline phase gates the model named in FEATURE_SET and the current phase reads the model run named in INPUT_RUN_ID (the set the drift check covers).
+  drift_phase = "cd /workspace/code && python -m monitoring.aws_run %s --run \"$RUN_ID\"%s"
   # Fargate bind mounts are created owned by root, and the job user is 10001. The init step runs first as root, with only the capability to change owners
   # (Fargate lets a container drop default capabilities but not add one), and hands the two volumes to the job user.
   drift_init_drop = ["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
@@ -96,12 +97,12 @@ locals {
     {
       name    = "baseline"
       image   = "training"
-      script  = format(local.drift_phase, "baseline")
+      script  = format(local.drift_phase, "baseline", " --model \"$FEATURE_SET\"")
       secrets = [{ name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.drift_mlflow_password_name}" }]
     },
-    { name = "current", image = "feature_store", script = format(local.drift_phase, "current"), secrets = local.reader_parameters },
-    { name = "check", image = "drift", script = format(local.drift_phase, "check"), secrets = [] },
-    { name = "publish", image = "training", script = format(local.drift_phase, "publish"), secrets = [] },
+    { name = "current", image = "feature_store", script = format(local.drift_phase, "current", " --features-run \"$INPUT_RUN_ID\""), secrets = local.reader_parameters },
+    { name = "check", image = "drift", script = format(local.drift_phase, "check", ""), secrets = [] },
+    { name = "publish", image = "training", script = format(local.drift_phase, "publish", ""), secrets = [] },
   ]
   drift_containers = var.drift_enabled ? [
     for index, step in local.drift_steps : {
