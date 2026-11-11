@@ -98,6 +98,7 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "MANIFEST_PREFIX": "serving/deployments",
         "CODE_REVISION": "0123456789abcdef0123456789abcdef01234567",
         "PLAN": "silver_step.tfplan",
+        "TOKEN": "example-host:4242:20261031T120000Z:0123abcd",
         "OWNER": "Example Owner",
         "ANALYTICS_IMAGE": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:{'d' * 64}",
     }

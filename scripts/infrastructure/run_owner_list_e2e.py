@@ -236,6 +236,15 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
         and "CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies" in code_body
         and "host_code_fetch_task" in code_body
     )
+    # The services stack is applied only while the host runs: with no instance the ECS deployment circuit breaker rolls every service back
+    # (project guide, Services apply). So in the code list every services apply comes after the host start, and the code is staged before it.
+    commands = [(index, line.strip()) for index, line in enumerate(code_body.splitlines())]
+    services_applies = [index for index, line in commands if line.startswith("bash scripts/infrastructure/terraform.sh --services") and " apply " in line]
+    host_starts = [index for index, line in commands if line.startswith(".venv/bin/python -m scripts.infrastructure.host_session start")]
+    stagings = [index for index, line in commands if line.startswith(".venv/bin/python -m scripts.lakehouse.code_archive build")]
+    checks["the code list starts the host before every services apply"] = bool(services_applies and host_starts) and min(host_starts) < min(services_applies)
+    checks["the code list stages the code before it starts the host"] = bool(stagings and host_starts) and max(stagings) < min(host_starts)
+    checks["the code list resolves a failed services apply with the apply lock token"] = "services_apply resolve" in code_body and "--token" in code_body
     for heading in (SILVER, GOLD, FEATURES, CODE):
         problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)
