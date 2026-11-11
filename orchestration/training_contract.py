@@ -41,7 +41,19 @@ def research_run_id(base_run: str) -> str:
     return f"{base_run[:16]}-{hashlib.sha256(f'research:{base_run}'.encode()).hexdigest()[:8]}"
 
 
-CHAIN_STEPS = ("canary", "promote", "notice")
+CHAIN_STEPS = ("canary", "promote", "release", "notice")
+# The records of one infection type that the research run and the steps after it store, under ``research/<research run>/<kind>_<type>.json`` in the data
+# bucket: the research record, the replay report of its canary, the canary check's result and the owner notice's receipt.
+RECORD_KINDS = ("research", "replay", "canary", "notice")
+
+
+def record_key(kind: str, research_run: str, hai_type: str) -> str:
+    """The data bucket key of one record of a type after a research run."""
+    if kind not in RECORD_KINDS:
+        raise ValueError(f"kind must be one of {', '.join(RECORD_KINDS)}")
+    if hai_type not in HAI_TYPES or not re.fullmatch(RUN_ID, research_run):
+        raise ValueError("a record names a research run ID and a supported HAI type")
+    return f"research/{research_run}/{kind}_{hai_type}.json"
 
 
 def chain_run_id(research_run: str, hai_type: str, step: str) -> str:

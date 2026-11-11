@@ -137,6 +137,18 @@ def run_checks(output: Path) -> int:
                 case(f"chain_run_id_refuses_{name}", name in str(error))
             else:
                 case(f"chain_run_id_refuses_{name}", False)
+        case(
+            "record_keys_sit_under_the_research_run",
+            [training_contract.record_key(kind, research, "HAI_3") for kind in training_contract.RECORD_KINDS]
+            == [f"research/{research}/{kind}_HAI_3.json" for kind in ("research", "replay", "canary", "notice")],
+        )
+        for name, arguments in (("kind", ("report", research, "HAI_1")), ("type", ("canary", research, "HAI_9")), ("run", ("canary", "latest", "HAI_1"))):
+            try:
+                training_contract.record_key(*arguments)
+            except ValueError:
+                case(f"record_key_refuses_{name}", True)
+            else:
+                case(f"record_key_refuses_{name}", False)
         feature_run = training_contract.model_features_run_id(base, "m2")
         drift_run = training_contract.model_drift_run_id(feature_run)
         case(

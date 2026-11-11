@@ -2414,10 +2414,11 @@ def scenarios(cases: Any, folder: Path) -> None:
     log_run_cases(cases, folder / "log_run")
     promotion_cases.gate_cases(cases)
     promotion_check_cases(cases, folder / "promotion")
-    from scripts.training import auto_promotion_cases, aws_run_cases, research_cases
+    from scripts.training import auto_promotion_cases, aws_run_cases, promotion_chain_cases, research_cases
 
     research_cases.research_cases(cases, folder / "research")
     auto_promotion_cases.auto_promotion_cases(cases, folder / "auto_promotion")
+    promotion_chain_cases.promotion_chain_cases(cases, folder / "promotion_chain")
     aws_run_cases.scenarios(cases, folder / "aws_run")
     resource_peak_cases(cases, folder / "resource_peaks")
 

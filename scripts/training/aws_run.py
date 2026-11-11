@@ -1,6 +1,6 @@
 """Run one phase of a training run inside an AWS task.
 
-    python -m scripts.training.aws_run prepare|extract|train|promote|research --run <run ID> [--mode real|fixture] [--work /workspace]
+    python -m scripts.training.aws_run prepare|extract|train|promote|research|canary|notify --run <run ID> [--mode real|fixture] [--work /workspace]
 
 The task definition chains three containers on one shared ``/workspace``. A fetch container has already downloaded ``code.tar.gz`` of the run, checked
 ``CODE_SHA256`` and unpacked it to ``<work>/code``. Every phase runs from that folder, so the modules it imports are the bytes the record names.
@@ -14,6 +14,12 @@ The task definition chains three containers on one shared ``/workspace``. A fetc
 - ``research`` (training image, a separate task): checks the research parameters (``research_dag``), records the code identity and runs the ``research`` action,
   which reads the finished MLflow runs of m1, m2 and m4 on one ``base_run``, runs RQ1 and RQ4 and sets the one ``challenger`` alias of each type. It stores
   ``research/<run>/research_<type>.json`` once. It moves no production alias.
+- ``canary`` (training image, a separate task of the promote family): judges the canary of one type's challenger from
+  ``research/<research run>/replay_<type>.json`` with the owner's pass rule, tags the registry version with the result on a pass and stores
+  ``canary_<type>.json`` once. A failed or missing replay is a stored hold, not a failed phase. ``TRAINING_PARAMETERS`` names the research run and the type
+  (``training_contract.chain_parameters_for``).
+- ``notify`` (training image, a separate task of the promote family): publishes the outcome of one type's challenger to the alerts topic
+  ``ALERTS_TOPIC_ARN`` and stores ``notice_<type>.json`` once. It moves no alias and tags nothing.
 - ``promote`` (training image, a separate task): records the code identity and the promotion parameters, then runs the ``promote`` action. It moves the
   ``production`` alias of one registered model to the version the parameters name. The rule and the canary decide first (``auto_promotion``). Before the
   alias moves, the action takes the lease of the model (``promote/models/<model>/lease-<generation>.json``, one run at a time, create-only) and stores the
@@ -45,6 +51,8 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
+from botocore.exceptions import BotoCoreError, ClientError
+
 from orchestration import code_digest, mlflow_service, training_contract
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
@@ -53,11 +61,12 @@ from scripts.training import job, promote_lease, promote_receipt
 from scripts.training.job_failure import EXIT_FAILED
 from scripts.training.step_records import verify_done
 
-PHASES = ("prepare", "extract", "train", "promote", "research")
+PHASES = ("prepare", "extract", "train", "promote", "research", "canary", "notify")
 ARCHIVE = "code.tar.gz"
 COMMIT = re.compile(r"[a-f0-9]{40}")
 TRACKING_URI = re.compile(rf"http://(?:10\.[0-9]{{1,3}}|172\.(?:1[6-9]|2[0-9]|3[01])|192\.168)\.[0-9]{{1,3}}\.[0-9]{{1,3}}:{mlflow_service.PORT}")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
+TOPIC = re.compile(r"arn:aws:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}")
 ENVIRONMENT_DEFAULTS = {
     "MLFLOW_DISABLE_TELEMETRY": "true",
     "DO_NOT_TRACK": "true",
@@ -275,6 +284,139 @@ def publish_research(work: Path, run: str, destination: str, hai_types: Sequence
             raise StepFailed("research", EXIT_FAILED, "record_conflict", f"{key} already holds another record")
 
 
+def sns_client() -> Any:
+    """The notification client of the task role, with short time limits."""
+    config = importlib.import_module("botocore.config").Config(connect_timeout=3, read_timeout=5, retries={"max_attempts": 2, "mode": "standard"})
+    return importlib.import_module("boto3").client("sns", region_name=required("AWS_REGION"), config=config)
+
+
+def chain_record(client: Any, destination: str, kind: str, parameters: dict[str, Any]) -> dict[str, Any] | None:
+    """Read one stored record of the type after the research run, or None when it is not stored; a record that is not a JSON object is refused."""
+    key = training_contract.record_key(kind, parameters["research_run"], parameters["hai_type"])
+    try:
+        body = promote_receipt.read(client, destination, key)
+        document = None if body is None else json.loads(body)
+    except promote_receipt.ReceiptError as error:
+        raise RunRefused(str(error)) from None
+    except ValueError:
+        raise RunRefused(f"{key} is not JSON") from None
+    if document is not None and not isinstance(document, dict):
+        raise RunRefused(f"{key} is not a JSON object")
+    return document
+
+
+def research_record(client: Any, destination: str, parameters: dict[str, Any]) -> dict[str, Any]:
+    """The research record of the type, which must name its type and a challenger: the steps after research judge and announce that challenger only."""
+    record = chain_record(client, destination, "research", parameters)
+    if record is None:
+        raise RunRefused(f"the research record of {parameters['hai_type']} is not stored for the research run {parameters['research_run']}")
+    if record.get("hai_type") != parameters["hai_type"]:
+        raise RunRefused(f"the research record is of {record.get('hai_type')}, not of {parameters['hai_type']}")
+    challenger = (record.get("promotion") or {}).get("challenger")
+    if not isinstance(challenger, dict) or not challenger.get("model") or not challenger.get("version"):
+        raise RunRefused(f"the research record of {parameters['hai_type']} has no challenger")
+    return record
+
+
+def store_chain_record(client: Any, destination: str, step: str, kind: str, parameters: dict[str, Any], document: dict[str, Any]) -> None:
+    """Store a record once; a second store accepts the same bytes and refuses other bytes, so a rerun cannot change a result."""
+    key = training_contract.record_key(kind, parameters["research_run"], parameters["hai_type"])
+    body = (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    try:
+        created = promote_receipt.put_once(client, destination, key, body)
+        stored = body if created else promote_receipt.read(client, destination, key)
+    except promote_receipt.ReceiptError as error:
+        raise StepFailed(step, EXIT_FAILED, "record_upload_failed", str(error)) from None
+    if stored != body:
+        raise StepFailed(step, EXIT_FAILED, "record_conflict", f"{key} already holds another record")
+
+
+def chain_phase(work: Path, run: str, step: str) -> tuple[dict[str, Any], str]:
+    """The checks and records the canary check and the owner notice share: the step's closed parameters, the code identity and the data bucket."""
+    try:
+        parameters = training_contract.chain_parameters_for(step, parse_json("TRAINING_PARAMETERS"), ("aws",))
+    except ValueError as error:
+        raise RunRefused(f"an AWS {step} needs its closed parameters with mlflow=aws: {error}") from None
+    destination = bucket()
+    task_environment(work)
+    record_code(work, run)
+    write_once(work / "training_parameters.json", json.dumps(parameters) + "\n")
+    return parameters, destination
+
+
+def canary(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
+    """Judge the canary of the type's challenger from the replay report stored for the research run and store the result once.
+
+    A pass tags the registry version with the result bound to the version and its model run, which the ``promote`` action requires. A replay that failed a
+    check, or that was never stored, is a hold: the result is stored with its reasons and the phase succeeds, so the decision, not the phase, carries the
+    outcome. A replay, record or version that do not name one candidate are refused (``auto_promotion.CandidateRefused``) and nothing is tagged.
+    """
+    auto_promotion = importlib.import_module("scripts.training.auto_promotion")
+    parameters, destination = chain_phase(work, run, "canary_check")
+    uri = os.environ.get("MLFLOW_TRACKING_URI", "")
+    if not TRACKING_URI.fullmatch(uri):
+        raise RunRefused(f"MLFLOW_TRACKING_URI must be http://<private IPv4 address>:{mlflow_service.PORT}. It is {uri or 'not set'}")
+    for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
+        required(name)
+    client = promote_receipt.s3_client()
+    record = research_record(client, destination, parameters)
+    report = chain_record(client, destination, "replay", parameters)
+    if report is None:
+        decision: dict[str, Any] = {"decision": "hold", "failed": ["replay_report_missing"]}
+    else:
+        try:
+            decision = auto_promotion.record_canary(importlib.import_module("scripts.training.run_tracking").open_store(uri), record, report)
+        except (auto_promotion.CandidateRefused, ValueError, KeyError) as error:
+            raise RunRefused(f"the canary of {parameters['hai_type']} names no single candidate: {error}") from None
+    store_chain_record(client, destination, "canary", "canary", parameters, auto_promotion.canary_result(parameters["research_run"], record, decision))
+    step = {"step": "canary", "code": 0, "resumed": False, "decision": decision["decision"]}
+    sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
+    return [step]
+
+
+def notify(work: Path, run: str, mode: str) -> list[dict[str, Any]]:
+    """Tell the owner through the alerts topic what became of the type's challenger, once.
+
+    The receipt is stored after the publish, create-only, so a rerun finds it and publishes nothing. A task that dies between the publish and the receipt
+    publishes the notice again on its retry: the notice is at-least-once, and the receipt holds the message ID of the one that was stored.
+    """
+    auto_promotion = importlib.import_module("scripts.training.auto_promotion")
+    parameters, destination = chain_phase(work, run, "owner_notice")
+    topic = required("ALERTS_TOPIC_ARN")
+    if not TOPIC.fullmatch(topic):
+        raise RunRefused("ALERTS_TOPIC_ARN is not an SNS topic ARN")
+    client = promote_receipt.s3_client()
+    record = research_record(client, destination, parameters)
+    receipt = chain_record(client, destination, "notice", parameters)
+    if receipt is not None:
+        if receipt.get("outcome") != parameters["outcome"]:
+            raise StepFailed("notify", EXIT_FAILED, "record_conflict", f"the owner was told {receipt.get('outcome')}, not {parameters['outcome']}")
+        step = {"step": "notify", "code": 0, "resumed": True}
+    else:
+        detail = auto_promotion.notice_detail(record, chain_record(client, destination, "canary", parameters), parameters["outcome"])
+        try:
+            message_id = auto_promotion.notify(sns_client(), topic, parameters["hai_type"], parameters["outcome"], detail)
+        except (RuntimeError, OSError, ValueError, ClientError, BotoCoreError) as error:
+            raise StepFailed("notify", EXIT_FAILED, "publish_failed", f"{type(error).__name__}: {error}") from None
+        store_chain_record(
+            client,
+            destination,
+            "notify",
+            "notice",
+            parameters,
+            {
+                "schema": 1,
+                "research_run": parameters["research_run"],
+                "hai_type": parameters["hai_type"],
+                "outcome": parameters["outcome"],
+                "message_id": message_id,
+            },
+        )
+        step = {"step": "notify", "code": 0, "resumed": False}
+    sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
+    return [step]
+
+
 def publish_receipt(work: Path, run: str, destination: str) -> None:
     """Store the receipt of the promote step in the data bucket, so it outlives the task, then close the lease of the model.
 
@@ -382,7 +524,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not re.fullmatch(training_contract.RUN_ID, values.run):
         sys.stderr.write(json.dumps({"phase": values.phase, "failure": "refused", "detail": "the run ID has another form"}) + "\n")
         return EXIT_FAILED
-    handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote, "research": research}[values.phase]
+    handler = {"prepare": prepare, "extract": extract, "train": train, "promote": promote, "research": research, "canary": canary, "notify": notify}[
+        values.phase
+    ]
     try:
         startup_check.check_phase("promote" if values.phase == "promote" else "train", values.phase)
     except startup_check.StartupCheckError as refusal:
@@ -401,7 +545,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except StepFailed as failure:
         sys.stderr.write(json.dumps({"phase": values.phase, "step": failure.step, "failure": failure.failure, "detail": failure.detail}, sort_keys=True) + "\n")
         return failure.code
-    if values.phase not in ("train", "promote", "research"):
+    if values.phase not in ("train", "promote", "research", "canary", "notify"):
         for step in steps:
             sys.stdout.write(json.dumps(step, sort_keys=True) + "\n")
     return 0

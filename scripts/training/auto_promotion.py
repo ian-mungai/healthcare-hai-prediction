@@ -35,7 +35,7 @@ from scripts.training import job_inputs, promote, registry, run_tracking
 
 RELEASE_SECONDS = 1800.0
 MAX_RELATIVE_DIFFERENCE = 1e-6
-OUTCOMES = ("promoted", "held", "rolled_back")
+OUTCOMES = training_contract.PROMOTION_OUTCOMES
 
 
 class PlanRefused(ValueError):
@@ -169,6 +169,32 @@ def record_canary(store: Any, record: Mapping[str, Any], report: Mapping[str, An
         for key, value in promote.canary_tags(number, str(version.run_id)).items():
             store.set_model_version_tag(name, number, key, value)
     return result
+
+
+def canary_result(research_run: str, record: Mapping[str, Any], decision: Mapping[str, Any]) -> dict[str, Any]:
+    """The stored result of a canary check: the decision and its failed checks, bound to the research run, the type and the challenger it judged."""
+    challenger = record["promotion"]["challenger"]
+    return {
+        "schema": 1,
+        "research_run": research_run,
+        "hai_type": record["hai_type"],
+        "model": challenger["model"],
+        "version": str(challenger["version"]),
+        "decision": decision["decision"],
+        "failed": list(decision["failed"]),
+    }
+
+
+def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, outcome: str) -> str:
+    """What the owner reads about a type's challenger: the model and version, and for a hold the failed checks of the canary or that none was stored."""
+    challenger = record["promotion"]["challenger"]
+    candidate = f"{challenger['model']} version {challenger['version']}"
+    if outcome == "promoted":
+        return f"{candidate} is the Production model."
+    reason = (
+        "no canary result was stored" if canary is None else f"the canary failed {', '.join(canary['failed'])}" if canary["failed"] else "the canary passed"
+    )
+    return f"{candidate} stays a challenger: {reason}."
 
 
 def schema_changed(promoted_tags: Mapping[str, str], online_tags: Mapping[str, str] | None) -> bool:
