@@ -1,14 +1,17 @@
 """Run the delivered alert email owner blocks as written, against stand-in tools, and check what each one does.
 
 Every ``sh`` block of the bootstrap and teardown lists must run as pasted: no placeholder, no value filled in by hand, a ``bash`` heredoc that stops at the
-first failure and prints no account number. The cases write the block text to a file in a scratch repository root and run it with ``bash``. The scratch root
-has a ``.env``, the stack folders and a stand-in ``aws``, ``terraform``, wrapper and ``.venv/bin/python`` first on the PATH (``owner_list_stand_ins``). Only
-the terminal device is replaced: the block reads the confirmation token from ``/dev/tty``, so the cases point that one path at a file. A run of the unchanged
-block starts in a new session without a terminal and must stop before any AWS call.
+first failure, checks the status of every read before it acts on the result and prints status words only. The cases write the block text to a file in a
+scratch repository root and run it with ``bash``. The scratch root has a ``.env``, the stack folders and a stand-in ``aws``, ``terraform``, wrapper and
+``.venv/bin/python`` first on the PATH (``owner_list_stand_ins``). Only the terminal device is replaced: the block reads the confirmation token from
+``/dev/tty``, so the cases point that one path at a file. A run of the unchanged block starts in a new session without a terminal and must stop before any AWS
+call. Every run of every block adds its terminal output to one list, and one check holds that list to status words: no ARN, topic name, account number
+(masked or not), address, subscription identifier or typed value.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sys
@@ -24,8 +27,18 @@ STAND_INS = Path(world.__file__).resolve()
 ADDRESS = "owner@example.org"
 OTHER_ADDRESS = "someone@example.org"
 TYPED = "0123456789abcdef0123456789abcdef"
+# A valid SHA-256 whose hex digits hold a run of twelve decimal digits, so a mask of account numbers corrupts it.
+NUMERIC_DIGEST = hashlib.sha256(b"synthetic-policy-plan-2").hexdigest()
 PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
-ACCOUNT_DIGITS = re.compile(r"\d{12}")
+IDENTIFIERS = (
+    re.compile(r"arn:"),
+    re.compile(r"\d{12}"),
+    re.compile(r"\*{12}"),
+    re.compile(r"@example\.org"),
+    re.compile(r"example_project_"),
+    re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"),
+    re.compile(r"topic_arn"),
+)
 SHIMS = {
     "bin/aws": 'exec "$STAND_IN_PYTHON" "$STAND_IN_SCRIPT" aws "$@"',
     "bin/terraform": 'exec "$STAND_IN_PYTHON" "$STAND_IN_SCRIPT" terraform "$@"',
@@ -51,11 +64,17 @@ def pick(section: str, *needles: str) -> str:
     return found[0] if found else ""
 
 
-class Scratch:
-    """A scratch repository root with the stand-in tools and a world that a case sets up."""
+def leaks(output: str) -> list[str]:
+    """The identifiers that a block printed: anything that is not a status word."""
+    return [pattern.pattern for pattern in IDENTIFIERS if pattern.search(output)] + ([TYPED] if TYPED in output else [])
 
-    def __init__(self, root: Path, address: str | None = ADDRESS) -> None:
+
+class Scratch:
+    """A scratch repository root with the stand-in tools and a world that a case sets up. Every run adds its terminal output to ``sink``."""
+
+    def __init__(self, root: Path, sink: list[str], address: str | None = ADDRESS) -> None:
         self.root = root
+        self.sink = sink
         for name, body in SHIMS.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -95,6 +114,7 @@ class Scratch:
         self.state["tf"].append(address)
         self.state["tf_arn"][address] = arn
         self.write()
+        (self.root / "infra/alerts/terraform.tfstate").write_text("{}\n")
 
     def set(self, **values: object) -> None:
         self.read()
@@ -117,22 +137,21 @@ class Scratch:
             "STAND_IN_SCRIPT": str(STAND_INS),
             "FAKE_TTY_IN": str(self.root / "tty_in"),
             "FAKE_TTY_OUT": str(self.root / "tty_out"),
+            "BLOCK_FILE": str(file),
         }
         if admin:
             environment["ADMIN_PROFILE"] = "example_admin"
-        environment["BLOCK_FILE"] = str(file)
         result = run_command("bash", ["-c", 'bash "$BLOCK_FILE"'], cwd=self.root, env=environment, timeout=timeout, own_session=True, errors="replace")
-        calls = self.read()["calls"][before:]
-        return result.returncode, result.stdout + result.stderr, calls
+        output = result.stdout + result.stderr
+        self.sink.append(output)
+        return result.returncode, output, self.read()["calls"][before:]
 
     def tty_out(self) -> str:
         return (self.root / "tty_out").read_text()
 
-
-def clean(output: str, *, digits: bool = True, arn: bool = False) -> bool:
-    """The output holds no account number, no address, no token and, when asked, no ARN."""
-    leaked = ADDRESS in output or TYPED in output or (digits and ACCOUNT_DIGITS.search(output)) or (arn and "arn:aws" in output)
-    return not leaked
+    def log(self) -> str:
+        path = self.root / "plans/alert_email/last_run.log"
+        return path.read_text() if path.is_file() else ""
 
 
 def syntax_check(file: Path) -> CompletedProcess[str]:
@@ -141,7 +160,7 @@ def syntax_check(file: Path) -> CompletedProcess[str]:
 
 
 def static_checks(sections: dict[str, str]) -> dict[str, bool]:
-    """Every block is a complete, placeholder-free bash heredoc with the failure handling and the number mask."""
+    """Every block is a complete, placeholder-free bash heredoc with the failure handling, the log and the number mask."""
     checks: dict[str, bool] = {}
     blocks = [(name, block) for name, section in sections.items() for block in fences(section)]
     checks["the alert email lists hold shell blocks"] = len(blocks) >= 19
@@ -155,14 +174,21 @@ def static_checks(sections: dict[str, str]) -> dict[str, bool]:
             (Path(folder) / f"inner_{number}.sh").write_text(inner)
             inner_syntax = syntax_check(Path(folder) / f"inner_{number}.sh")
             wrapped = block.startswith("bash <<'EOF'\n") and block.endswith("\nEOF\n")
-            handled = "set -Eeuo pipefail" in block and "trap '" in block and " ERR" in block and "mask() { sed -E 's/[0-9]{12}/************/g'; }" in block
-            checks[f"{label} runs as pasted: a bash heredoc with failure handling and the account mask, no placeholder, valid syntax"] = (
-                wrapped and handled and not PLACEHOLDER.search(block) and syntax.returncode == 0 and inner_syntax.returncode == 0 and "| mask" in block
+            handled = (
+                "set -Eeuo pipefail" in block
+                and "trap '" in block
+                and " ERR" in block
+                and "mask() { sed -E 's/[0-9]{12}/************/g'; }" in block
+                and 'run </dev/null 2>&1 | mask >>"$LOG"' in block
+                and "say() {" in block
+            )
+            checks[f"{label} runs as pasted: a bash heredoc with failure handling, a masked log and status words, no placeholder, valid syntax"] = (
+                wrapped and handled and not PLACEHOLDER.search(block) and syntax.returncode == 0 and inner_syntax.returncode == 0
             )
     return checks
 
 
-def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
+def bootstrap_cases(section: str, sink: list[str]) -> tuple[dict[str, bool], list[str]]:
     checks: dict[str, bool] = {}
     calls: list[str] = []
     policy_plan = pick(section, "manage_policies plan")
@@ -182,25 +208,39 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
     def case(label: str, ok: bool) -> None:
         checks[f"alert block run: {label}"] = bool(ok)
 
+    def no_call(called: list[str], word: str) -> bool:
+        return not [item for item in called if word in item]
+
     # The whole first bootstrap, block by block, from nothing in AWS to two confirmed subscriptions.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder))
+        scratch = Scratch(Path(folder), sink)
         code, output, called = scratch.run(policy_apply)
         calls += called
-        case("a policy apply without a saved plan stops and applies nothing", code != 0 and not scratch.read()["policy_applied"] and "Step failed" in output)
+        case(
+            "a policy apply without a saved digest stops and applies nothing",
+            code != 0 and not scratch.read()["policy_applied"] and "no saved plan digest" in output,
+        )
         code, output, called = scratch.run(policy_plan, admin=False)
         calls += called
         case("a block without ADMIN_PROFILE stops before any command", code != 0 and not called and "ADMIN_PROFILE" in output)
         code, output, called = scratch.run(policy_plan)
         calls += called
-        digest = (scratch.root / "plans/alert_email/policy_plan.txt").read_text() if (scratch.root / "plans/alert_email/policy_plan.txt").is_file() else ""
+        saved = scratch.root / "plans/alert_email/policy_digest.txt"
         case(
-            "the policy plan prints the digest and saves it without an account number",
-            code == 0 and "Plan digest:" in output and clean(output) and clean(digest),
+            "the policy plan stores the digest exactly as printed and prints the steps without identifiers",
+            code == 0
+            and saved.is_file()
+            and saved.read_text().strip() == world.DIGEST
+            and "UPDATE POLICY" in output
+            and "NOTE" not in output
+            and "saved in plans/alert_email/policy_digest.txt" in output,
         )
         code, output, called = scratch.run(policy_apply)
         calls += called
-        case("the policy apply uses the digest of the saved plan", code == 0 and scratch.read()["policy_applied"] and clean(output))
+        case(
+            "the policy apply passes the stored digest to the reviewed apply",
+            code == 0 and scratch.read()["policy_applied"] and any(f"--digest {world.DIGEST}" in item for item in called),
+        )
         for label, block in (
             ("the platform plan", platform_plan),
             ("the platform apply", platform_apply),
@@ -209,22 +249,26 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
         ):
             code, output, called = scratch.run(block)
             calls += called
-            case(f"{label} runs as pasted and prints no account number", code == 0 and clean(output))
+            case(f"{label} runs as pasted", code == 0)
         code, output, called = scratch.run(status)
         calls += called
-        case(
-            "the adoption status block reports no hand subscription and prints no value",
-            code == 0 and "no subscription of the address" in output and clean(output, arn=True),
-        )
+        case("the adoption status block reports no hand subscription", code == 0 and "no subscription of the address" in output)
         code, output, called = scratch.run(importing)
         calls += called
-        case("the import block imports nothing when there is nothing to adopt", code == 0 and not scratch.read()["tf"] and clean(output, arn=True))
+        case("the import block imports nothing when there is nothing to adopt", code == 0 and not scratch.read()["tf"])
         code, output, called = scratch.run(alerts_plan)
         calls += called
-        case("the alerts plan adds both subscriptions", code == 0 and output.count("will be created") == 2 and clean(output))
+        case(
+            "the alerts plan prints both planned subscriptions as resource changes and keeps its details in a masked log",
+            code == 0
+            and output.count("will be created") == 2
+            and "************" in scratch.log()
+            and not re.search(r"\d{12}", scratch.log())
+            and "topic_arn" in scratch.log(),
+        )
         code, output, called = scratch.run(alerts_apply)
         calls += called
-        case("the alerts apply creates both subscriptions as pending", code == 0 and len(scratch.read()["tf"]) == 2 and clean(output))
+        case("the alerts apply creates both subscriptions as pending", code == 0 and len(scratch.read()["tf"]) == 2)
         code, output, called = scratch.run(verify)
         case("the verification stops while a subscription is pending", code != 0 and "PendingConfirmation" in output)
         # The owner clicks the link of the alerts email: that subscription is confirmed without authentication, which the project user may remove.
@@ -237,7 +281,7 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
         confirmed = [row for row in scratch.read()["aws"][world.BUDGET_TOPIC] if row["status"] == "confirmed" and row["authenticated"]]
         case(
             "the confirmation block confirms the budget subscription with authentication and prints a status only",
-            code == 0 and len(confirmed) == 1 and "confirmed with authentication" in output and clean(output, arn=True) and TYPED not in scratch.tty_out(),
+            code == 0 and len(confirmed) == 1 and "confirmed with authentication" in output and TYPED not in scratch.tty_out() and TYPED not in scratch.log(),
         )
         confirm_calls = [item for item in called if "confirm-subscription" in item]
         attribute_calls = [item for item in called if "get-subscription-attributes" in item]
@@ -250,17 +294,36 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
             "--authenticate-on-unsubscribe true" in confirm_calls[0] and TYPED in confirm_calls[0],
         )
         code, output, called = scratch.run(verify)
-        case("the verification passes with both subscriptions confirmed", code == 0 and clean(output, arn=True))
+        case("the verification passes with both subscriptions confirmed", code == 0)
         code, output, called = scratch.run(confirm, tty=False)
         calls += called
         case(
             "a repeat without a terminal skips the confirmation, as the subscription is already authenticated",
-            code == 0 and not [c for c in called if "confirm-subscription" in c],
+            code == 0 and no_call(called, "confirm-subscription"),
         )
+
+    # A plan digest whose hex digits hold twelve decimal digits is stored and applied exactly.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink)
+        scratch.set(digest=NUMERIC_DIGEST)
+        case("the test digest holds a run of twelve decimal digits", bool(re.search(r"\d{12}", NUMERIC_DIGEST)))
+        code, output, called = scratch.run(policy_plan)
+        calls += called
+        saved = scratch.root / "plans/alert_email/policy_digest.txt"
+        case("a digest with a twelve digit run is stored unmasked", code == 0 and saved.is_file() and saved.read_text().strip() == NUMERIC_DIGEST)
+        code, output, called = scratch.run(policy_apply)
+        calls += called
+        case(
+            "a digest with a twelve digit run reaches the reviewed apply and the policy is applied",
+            code == 0 and scratch.read()["policy_applied"] and any(f"--digest {NUMERIC_DIGEST}" in item for item in called),
+        )
+        saved.write_text("12345\n")
+        code, output, called = scratch.run(policy_apply)
+        case("a stored digest that is not 64 hex characters stops the apply before any command", code != 0 and no_call(called, "manage_policies"))
 
     # A failed confirmation must end the block, whatever the attribute of another subscription says.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder))
+        scratch = Scratch(Path(folder), sink)
         scratch.subscribe(world.BUDGET_TOPIC, "pending", False, "2")
         (scratch.root / "tty_in").write_text("expired-token\n")
         scratch.subscribe(world.ALERTS_TOPIC, "confirmed", True, "9")
@@ -268,12 +331,7 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
         calls += called
         case(
             "a failed confirmation (expired token) ends the block with no attribute read and no success text",
-            code != 0
-            and not [c for c in called if "get-subscription-attributes" in c]
-            and "confirmed with authentication" not in output
-            and "true" not in output.replace("authenticate", "")
-            and "Step failed" in output
-            and clean(output, arn=True),
+            code != 0 and no_call(called, "get-subscription-attributes") and "confirmed with authentication" not in output and "Step failed" in output,
         )
         (scratch.root / "tty_in").write_text(f"{TYPED}\n")
         scratch.set(confirm_ignores_flag=True)
@@ -287,29 +345,23 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
         scratch.set(confirm_ignores_flag=False, aws={world.BUDGET_TOPIC: []})
         scratch.subscribe(world.BUDGET_TOPIC, "pending", False, "2")
         code, output, called = scratch.run(confirm)
-        case("an empty token ends the block before the confirmation", code != 0 and not [c for c in called if "confirm-subscription" in c])
+        case("an empty token ends the block before the confirmation", code != 0 and no_call(called, "confirm-subscription"))
         code, output, called = scratch.run(confirm, tty=False)
-        case("the unchanged block without a terminal stops before the confirmation call", code != 0 and not [c for c in called if "confirm-subscription" in c])
+        case("the unchanged block without a terminal stops before the confirmation call", code != 0 and no_call(called, "confirm-subscription"))
 
     # A hand budget subscription confirmed from the link has no authentication: it is not adopted, it is removed, and a new one is confirmed.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder))
+        scratch = Scratch(Path(folder), sink)
         hand_alerts = scratch.subscribe(world.ALERTS_TOPIC, "confirmed", False, "3")
         scratch.subscribe(world.BUDGET_TOPIC, "confirmed", False, "4")
         code, output, called = scratch.run(status)
         calls += called
-        case(
-            "the status block flags a hand budget subscription without authentication",
-            code == 0 and "was not confirmed with authentication" in output and clean(output, arn=True),
-        )
+        case("the status block flags a hand budget subscription without authentication", code == 0 and "was not confirmed with authentication" in output)
         code, output, called = scratch.run(importing)
         calls += called
         case(
             "the import block adopts the confirmed alerts subscription and leaves the unauthenticated budget one",
-            code == 0
-            and scratch.read()["tf"] == [world.ALERTS_ADDRESS]
-            and scratch.state["tf_arn"] == {world.ALERTS_ADDRESS: hand_alerts}
-            and clean(output, arn=True),
+            code == 0 and scratch.read()["tf"] == [world.ALERTS_ADDRESS] and scratch.state["tf_arn"] == {world.ALERTS_ADDRESS: hand_alerts},
         )
         code, output, called = scratch.run(importing)
         calls += called
@@ -318,22 +370,16 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
             code == 0 and "already managed" in output and scratch.read()["tf"] == [world.ALERTS_ADDRESS],
         )
         code, output, called = scratch.run(confirm)
-        case(
-            "the confirmation block refuses a confirmed budget subscription without authentication",
-            code != 0 and not [c for c in called if "confirm-subscription" in c],
-        )
+        case("the confirmation block refuses a confirmed budget subscription without authentication", code != 0 and no_call(called, "confirm-subscription"))
         code, output, called = scratch.run(removal)
         calls += called
-        case(
-            "the removal block removes it with the administrator and says so without a value",
-            code == 0 and not scratch.read()["aws"][world.BUDGET_TOPIC] and clean(output, arn=True),
-        )
+        case("the removal block removes it with the administrator", code == 0 and not scratch.read()["aws"][world.BUDGET_TOPIC])
         code, output, called = scratch.run(alerts_plan)
         case("the alerts plan then adds the budget subscription only", code == 0 and output.count("will be created") == 1 and "budget" in output)
 
     # A hand budget subscription that was confirmed with authentication is adopted and needs no new confirmation.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder))
+        scratch = Scratch(Path(folder), sink)
         scratch.subscribe(world.BUDGET_TOPIC, "confirmed", True, "5")
         code, output, called = scratch.run(importing)
         calls += called
@@ -345,18 +391,71 @@ def bootstrap_cases(section: str) -> tuple[dict[str, bool], list[str]]:
         code, output, called = scratch.run(status)
         case("a subscription of another address is not reported as the owner's", code == 0 and "alerts topic: no subscription of the address" in output)
 
+    # A failed read stops a block before any branch acts on it: the reviewer's exit 255 case and the reads that follow the same rule.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink)
+        budget = scratch.subscribe(world.BUDGET_TOPIC, "confirmed", True, "5")
+        scratch.set(fail_attribute_read=True)
+        for label, block in (
+            ("the removal block", removal),
+            ("the status block", status),
+            ("the import block", importing),
+            ("the confirmation block", confirm),
+            ("the verification", verify),
+        ):
+            code, output, called = scratch.run(block)
+            calls += called
+            case(
+                f"a failed authentication read (exit 255) stops {label}: no unsubscribe, no import, no confirmation, no success text",
+                code != 0
+                and no_call(called, "unsubscribe")
+                and no_call(called, "terraform -chdir=infra/alerts import")
+                and no_call(called, "confirm-subscription")
+                and "Step failed" in output
+                and "removed" not in output
+                and "imported" not in output
+                and len(scratch.read()["aws"][world.BUDGET_TOPIC]) == 1
+                and not scratch.state["tf"],
+            )
+        scratch.set(fail_attribute_read=False, attribute_value="None")
+        code, output, called = scratch.run(removal)
+        case(
+            "an authentication read that prints neither true nor false stops the removal block and keeps the subscription",
+            code != 0 and no_call(called, "unsubscribe") and len(scratch.read()["aws"][world.BUDGET_TOPIC]) == 1,
+        )
+        scratch.set(attribute_value=None, fail_list=True)
+        for label, block in (
+            ("the status block", status),
+            ("the removal block", removal),
+            ("the import block", importing),
+            ("the confirmation block", confirm),
+            ("the verification", verify),
+        ):
+            code, output, called = scratch.run(block)
+            calls += called
+            case(
+                f"a failed subscription listing stops {label} before any change",
+                code != 0 and no_call(called, "unsubscribe") and no_call(called, "terraform -chdir=infra/alerts import") and "Step failed" in output,
+            )
+        scratch.set(fail_list=False)
+        scratch.own(world.BUDGET_ADDRESS, budget)
+        scratch.set(fail_state_list=True)
+        code, output, called = scratch.run(importing)
+        calls += called
+        case(
+            "a failed state read stops the import block before any import",
+            code != 0 and no_call(called, "terraform -chdir=infra/alerts import") and "Step failed" in output,
+        )
+
     # An empty ALERT_EMAIL has nothing to subscribe.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder), address=None)
+        scratch = Scratch(Path(folder), sink, address=None)
         code, output, called = scratch.run(status)
-        case(
-            "an empty ALERT_EMAIL ends a block with nothing to do and no AWS call",
-            code == 0 and "ALERT_EMAIL is empty" in output and not [c for c in called if c.startswith("aws")],
-        )
+        case("an empty ALERT_EMAIL ends a block with nothing to do and no AWS call", code == 0 and "ALERT_EMAIL is empty" in output and no_call(called, "aws "))
     return checks, calls
 
 
-def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
+def teardown_cases(section: str, sink: list[str]) -> tuple[dict[str, bool], list[str]]:
     checks: dict[str, bool] = {}
     calls: list[str] = []
     state_list = pick(section, "state list")
@@ -369,9 +468,12 @@ def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
     def case(label: str, ok: bool) -> None:
         checks[f"alert teardown run: {label}"] = bool(ok)
 
+    def no_call(called: list[str], word: str) -> bool:
+        return not [item for item in called if word in item]
+
     for budget_status in ("confirmed", "pending"):
         with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-            scratch = Scratch(Path(folder))
+            scratch = Scratch(Path(folder), sink)
             alerts = scratch.subscribe(world.ALERTS_TOPIC, "confirmed", False, "7")
             budget = scratch.subscribe(world.BUDGET_TOPIC, budget_status, budget_status == "confirmed", "8")
             scratch.own(world.ALERTS_ADDRESS, alerts)
@@ -386,14 +488,16 @@ def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
             action = "removes the subscription" if budget_status == "confirmed" else "reports the pending row and removes nothing"
             case(
                 f"{label}: the administrator block {action}",
-                code == 0 and (not held if budget_status == "confirmed" else len(held) == 1 and "pending" in output) and clean(output, arn=True),
+                code == 0 and (not held if budget_status == "confirmed" else len(held) == 1 and "pending" in output),
             )
             code, output, called = scratch.run(plan)
-            plan_without_drop = output
             calls += called
-            case(f"{label}: without the state step the destroy plan holds the budget entry, so the apply is denied", "budget" in plan_without_drop)
+            case(f"{label}: without the state step the destroy plan holds the budget entry, so the apply is denied", "budget" in output)
             code, output, called = scratch.run(apply)
-            case(f"{label}: and that apply fails", code != 0 and "AccessDenied" in output and world.BUDGET_ADDRESS in scratch.read()["tf"])
+            case(
+                f"{label}: and that apply fails",
+                code != 0 and "AccessDenied" in scratch.log() and world.BUDGET_ADDRESS in scratch.read()["tf"],
+            )
             code, output, called = scratch.run(drop)
             calls += called
             case(f"{label}: the state block drops the budget instance", code == 0 and scratch.read()["tf"] == [world.ALERTS_ADDRESS])
@@ -403,7 +507,7 @@ def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
             calls += called
             case(
                 f"{label}: the destroy plan holds the platform alerts subscription only",
-                code == 0 and output.count("will be destroyed") == 1 and "budget" not in output and clean(output),
+                code == 0 and output.count("will be destroyed") == 1 and "budget" not in output,
             )
             code, output, called = scratch.run(apply)
             calls += called
@@ -411,10 +515,7 @@ def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
             code, output, called = scratch.run(verify)
             calls += called
             if budget_status == "confirmed":
-                case(
-                    f"{label}: the verification finds no subscription left",
-                    code == 0 and "No subscription of the address is left" in output and clean(output, arn=True),
-                )
+                case(f"{label}: the verification finds no subscription left", code == 0 and "No subscription of the address is left" in output)
             else:
                 case(
                     f"{label}: the verification reports the pending row and withholds completion with exit code 3",
@@ -424,10 +525,47 @@ def teardown_cases(section: str) -> tuple[dict[str, bool], list[str]]:
                 code, output, called = scratch.run(verify)
                 case(f"{label}: a later run after the row expires reports completion", code == 0 and "No subscription of the address is left" in output)
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
-        scratch = Scratch(Path(folder))
+        scratch = Scratch(Path(folder), sink)
         scratch.subscribe(world.BUDGET_TOPIC, "confirmed", True, "9")
         code, output, called = scratch.run(verify)
         case("the verification fails while a confirmed subscription is left", code != 0 and "confirmed subscription is left" in output)
+
+    # A failed state read stops the block: it never counts as an empty state, and the budget entry stays for the owner.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink)
+        alerts = scratch.subscribe(world.ALERTS_TOPIC, "confirmed", False, "7")
+        budget = scratch.subscribe(world.BUDGET_TOPIC, "pending", False, "8")
+        scratch.own(world.ALERTS_ADDRESS, alerts)
+        scratch.own(world.BUDGET_ADDRESS, budget)
+        scratch.set(fail_state_list=True)
+        code, output, called = scratch.run(drop)
+        calls += called
+        case(
+            "a failed state read (invalid state file) stops the state block: no state change and no claim that there is nothing to drop",
+            code != 0 and "nothing to drop" not in output and "Step failed" in output and no_call(called, "state rm") and len(scratch.read()["tf"]) == 2,
+        )
+        code, output, called = scratch.run(state_list)
+        calls += called
+        case("a failed state read stops the state list block", code != 0 and "Step failed" in output and "no subscription" not in output)
+        scratch.set(fail_state_list=False, fail_list=True)
+        code, output, called = scratch.run(removal)
+        calls += called
+        case(
+            "a failed subscription listing stops the administrator block before any unsubscribe",
+            code != 0 and no_call(called, "unsubscribe") and "Step failed" in output,
+        )
+        code, output, called = scratch.run(verify)
+        case("a failed subscription listing stops the teardown verification", code != 0 and "No subscription of the address is left" not in output)
+    # A stack that never had a state has no subscription to drop.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = Scratch(Path(folder), sink)
+        code, output, called = scratch.run(drop)
+        case(
+            "a stack without a state file has nothing to drop and the block succeeds",
+            code == 0 and "nothing to drop" in output and no_call(called, "terraform"),
+        )
+        code, output, called = scratch.run(state_list)
+        case("a stack without a state file reports that it holds no subscription", code == 0 and "no state" in output)
     return checks, calls
 
 
@@ -438,43 +576,63 @@ def cases(text: str) -> tuple[dict[str, bool], list[str]]:
     checks = static_checks({"bootstrap": bootstrap, "teardown": teardown})
     results: dict[str, bool] = {}
     calls: list[str] = []
+    sink: list[str] = []
     for name, function, section in (("bootstrap", bootstrap_cases, bootstrap), ("teardown", teardown_cases, teardown)):
         try:
-            found, called = function(section)
+            found, called = function(section, sink)
         except (KeyError, IndexError, ValueError, OSError) as error:
             results[f"alert {name} run: the cases ran to the end ({type(error).__name__}: {error})"] = False
             continue
         results |= found
         calls += called
+    offenders = sorted({item for output in sink for item in leaks(output)})
+    label = f"every stand-in run of every block ({len(sink)} runs) printed status words only: no identifier ({offenders})"
+    results[f"alert block run: {label}"] = len(sink) >= 60 and not offenders
     return checks | results, calls
 
 
 MUTANTS = (
-    ("the attribute check of the confirmed subscription is dropped", 'test "$(authenticated "$CONFIRMED")" = true ||', "true ||"),
     (
-        "the attribute is read from another subscription than the one the confirmation returned",
-        'test "$(authenticated "$CONFIRMED")" = true',
-        f'test "$(authenticated "{world.ALERTS_TOPIC}:00000000-0000-0000-0000-000000000009")" = true',
+        "the failed attribute read is treated as false",
+        "--query Attributes.ConfirmationWasAuthenticated --output text)",
+        "--query Attributes.ConfirmationWasAuthenticated --output text || echo false)",
     ),
-    ("the confirmation ARN is printed", 'case "$CONFIRMED" in', 'printf \'%s\\n\' "$CONFIRMED"\n  case "$CONFIRMED" in'),
-    ("the typed value is printed", "unset TOKEN", "printf '%s\\n' \"$TOKEN\"\n  unset TOKEN"),
-    ("the account mask is removed", "run </dev/null 2>&1 | mask", "run </dev/null 2>&1"),
+    (
+        "the failed state read is treated as an empty state",
+        "STATE_LIST=$(terraform -chdir=infra/alerts state list); fi",
+        "STATE_LIST=$(terraform -chdir=infra/alerts state list || true); fi",
+    ),
+    ("the plan digest is stored after the mask", 'p\' <<<"$PLAN")', 'p\' <<<"$(printf \'%s\\n\' "$PLAN" | mask)")'),
+    (
+        "a plan line with an identifier is printed",
+        "OUT=$(grep -E '^ *# |^Plan:|^No changes' | grep -vE '# \\(|arn:|[0-9]{12}' || true)",
+        "OUT=$(grep -E 'topic_arn|^ *# |^Plan:' || true)",
+    ),
+    ("the identifier filter of the policy plan is dropped", "OUT=$(grep -vE 'arn:|[0-9]{12}' || true)", "OUT=$(cat)"),
+    (
+        "the attribute check of the confirmed subscription is dropped",
+        '[ "$AUTH" = true ] || { say \'The budget subscription is confirmed but ConfirmationWasAuthenticated',
+        "true || { say 'The budget subscription is confirmed but ConfirmationWasAuthenticated",
+    ),
+    ("the confirmation ARN is printed", 'case "$CONFIRMED" in', 'say "$CONFIRMED"\n  case "$CONFIRMED" in'),
+    ("the typed value is printed", "unset TOKEN", 'say "$TOKEN"\n  unset TOKEN'),
+    ("the account mask is removed", "mask() { sed -E 's/[0-9]{12}/************/g'; }", "mask() { cat; }"),
     (
         "a placeholder returns to the confirmation",
         '--profile "$ADMIN_PROFILE" --region "$REGION" --topic-arn "$BUDGET_TOPIC_ARN" --token',
         "--profile <ADMIN_PROFILE> --region <REGION> --topic-arn <BUDGET_TOPIC_ARN> --token",
     ),
-    ("the state step skips the budget instance", 'if in_state "aws_sns_topic_subscription.email[\\"budget\\"]"; then', "if false; then"),
+    ("the state step skips the budget instance", 'if grep -qxF \'aws_sns_topic_subscription.email["budget"]\' <<<"$STATE_LIST"; then', "if false; then"),
 )
 
 
 def mutant_checks(text: str) -> dict[str, bool]:
-    """Each planted defect in one delivered block must fail at least one case, so the cases test the blocks and not themselves."""
+    """Each planted defect in the delivered blocks must fail at least one case, so the cases test the blocks and not themselves."""
     checks: dict[str, bool] = {}
     for label, old, new in MUTANTS:
         if old not in text:
             checks[f"alert block mutant {label}: the planted text exists in the lists"] = False
             continue
-        results, _ = cases(text.replace(old, new, 1) if "mask" not in old else text.replace(old, new))
+        results, _ = cases(text.replace(old, new))
         checks[f"alert block mutant {label} is caught"] = not all(results.values())
     return checks

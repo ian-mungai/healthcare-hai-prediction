@@ -179,6 +179,14 @@ def alert_email_checks(text: str) -> dict[str, bool]:
         "the list says no pull request plan runs the alerts root": "no pull request plan runs it" in body
         and "GitHub plan role never reads a subscription" in body,
         "the list asks for ADMIN_PROFILE once and every block checks it": "`ADMIN_PROFILE`" in body and "`ADMIN_PROFILE`" in teardown,
+        "both lists say a block prints status words only and checks every read before it acts": all(
+            words in text_of
+            for text_of in (body, teardown)
+            for words in ("prints status words only", "checks the status of every AWS and Terraform read before it acts on the result", "last_run.log")
+        ),
+        "the list stores the plan digest before anything is masked": (
+            "stores the `Plan digest` in `plans/alert_email/policy_digest.txt` exactly as the plan printed it" in body and "before anything is masked" in body
+        ),
         "the list never opens the budget email link, because a link confirmation leaves an unsigned unsubscribe route": (
             "never open the link of the budget email" in body and "without a signed request" in body
         ),

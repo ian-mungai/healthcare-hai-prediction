@@ -6,6 +6,11 @@ subscriptions that AWS holds per topic, the resources of the alerts root state a
 in a listing, as SNS does. ConfirmSubscription with the token ``expired-token`` fails, and with any other token confirms the pending subscription of the
 topic; it sets ConfirmationWasAuthenticated only when it gets ``--authenticate-on-unsubscribe true`` (and the world does not ignore the flag). The project
 user cannot remove a subscription of the budget topic, so an apply whose plan deletes it fails.
+
+A case can make one read fail, as AWS or Terraform do: ``fail_list`` (every listing exits 255), ``fail_attribute_read`` (GetSubscriptionAttributes exits
+255 with an authorization error that names the subscription), ``attribute_value`` (GetSubscriptionAttributes prints that text instead of true or false)
+and ``fail_state_list`` (``terraform state list`` exits 1 with an invalid state file error). ``digest`` replaces the plan digest. The alerts root has a state
+file (``infra/alerts/terraform.tfstate``) once an import or an apply created something, and ``state list`` without one exits 1 as Terraform does.
 """
 
 from __future__ import annotations
@@ -45,6 +50,14 @@ def option(arguments: list[str], name: str) -> str | None:
     return arguments[arguments.index(name) + 1] if name in arguments and arguments.index(name) + 1 < len(arguments) else None
 
 
+STATE_FILE = Path("infra/alerts/terraform.tfstate")
+
+
+def touch_state() -> None:
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text("{}\n")
+
+
 def find(state: dict[str, Any], arn: str) -> tuple[str, dict[str, Any]] | None:
     return next(((topic, row) for topic, rows in state["aws"].items() for row in rows if row["arn"] == arn), None)
 
@@ -53,6 +66,8 @@ def aws(arguments: list[str], state: dict[str, Any]) -> int:
     if option(arguments, "--profile") is None or option(arguments, "--region") is None:
         return fail("the stand-in aws needs --profile and --region")
     if arguments[:2] == ["sns", "list-subscriptions-by-topic"]:
+        if state.get("fail_list"):
+            return fail("An error occurred (AuthorizationError) when calling the ListSubscriptionsByTopic operation: not authorized")
         topic = option(arguments, "--topic-arn") or ""
         rows = [
             {
@@ -67,6 +82,12 @@ def aws(arguments: list[str], state: dict[str, Any]) -> int:
         return 0
     if arguments[:2] == ["sns", "get-subscription-attributes"]:
         found = find(state, option(arguments, "--subscription-arn") or "")
+        if state.get("fail_attribute_read"):
+            denied = option(arguments, "--subscription-arn")
+            return fail(f"An error occurred (AuthorizationError) when calling GetSubscriptionAttributes: not authorized on {denied}")
+        if state.get("attribute_value") is not None and found is not None:
+            sys.stdout.write(f"{state['attribute_value']}\n")
+            return 0
         if found is None:
             return fail("An error occurred (NotFound) when calling the GetSubscriptionAttributes operation: Subscription does not exist")
         sys.stdout.write("true\n" if found[1]["authenticated"] else "false\n")
@@ -105,7 +126,11 @@ def terraform(arguments: list[str], state: dict[str, Any]) -> int:
     if rest[:1] == ["init"]:
         sys.stdout.write("Terraform has been successfully initialized!\n")
         return 0
+    if rest[:1] == ["state"] and not STATE_FILE.is_file():
+        return fail("No state file was found!", 1)
     if rest == ["state", "list"]:
+        if state.get("fail_state_list"):
+            return fail("Error: Failed to read the local state: invalid state file format", 1)
         sys.stdout.write("".join(f"{item}\n" for item in state["tf"]))
         return 0
     if rest[:2] == ["state", "rm"]:
@@ -124,6 +149,7 @@ def terraform(arguments: list[str], state: dict[str, Any]) -> int:
         state["tf"].append(address)
         state["tf_arn"][address] = identifier
         save(state)
+        touch_state()
         sys.stdout.write(f'{address}: Importing from ID "{identifier}"...\nImport successful!\n')
         return 0
     return fail(f"the stand-in terraform does not know {rest}", 1)
@@ -166,6 +192,7 @@ def wrapper(arguments: list[str], state: dict[str, Any]) -> int:
             state["tf"].append(address)
             state["tf_arn"][address] = arn
     save(state)
+    touch_state()
     sys.stdout.write("Apply complete.\n")
     return 0
 
@@ -176,13 +203,18 @@ def python_module(arguments: list[str], state: dict[str, Any]) -> int:
         if option(rest, "--admin-profile") is None:
             return fail("--admin-profile is required", 2)
         if rest[0] == "plan":
-            sys.stdout.write(f"sns policy: add two statements for {TOPIC_PREFIX}_alerts_dev\nPlan digest: {DIGEST}\n")
+            sys.stdout.write(
+                f"NOTE the project user holds grants outside this plan on arn:aws:iam::{ACCOUNT}:user/example_project\n"
+                "UPDATE POLICY    healthcare_hai_prediction_sns_policy\n"
+                "Summary: 1 change(s), 0 unchanged.\n"
+                f"Plan digest: {state.get('digest', DIGEST)}\n"
+            )
             return 0
-        if os.environ.get("CONFIRM_IAM_POLICIES") != "apply-healthcare-hai-prediction-policies" or option(rest, "--digest") != DIGEST:
+        if os.environ.get("CONFIRM_IAM_POLICIES") != "apply-healthcare-hai-prediction-policies" or option(rest, "--digest") != state.get("digest", DIGEST):
             return fail("the confirmation or the reviewed digest does not match", 2)
         state["policy_applied"] = True
         save(state)
-        sys.stdout.write("Applied the sns policy.\n")
+        sys.stdout.write(f"APPLIED   UPDATE POLICY    healthcare_hai_prediction_sns_policy: version of {TOPIC_PREFIX}_alerts_dev\nApplied 1 step(s).\n")
         return 0
     if module == "scripts.infrastructure.render_platform_config":
         return 0
