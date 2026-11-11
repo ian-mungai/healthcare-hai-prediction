@@ -13,10 +13,12 @@ The command line of ``push_images`` starts no program (the ``no_program`` case w
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import copy
 import io
 import json
+import re
 import shutil
 import sys
 import tempfile
@@ -234,6 +236,92 @@ def drift_image() -> dict[str, bool]:
             "scripts.quality.lock_env images" in text and "docker build --platform linux/arm64 --tag hai-drift:evidently0.7.23 services/drift" in text
         ),
         "the plan names the drift record command": "push_images record drift=sha256:<DIGEST>" in text,
+    }
+
+
+PUBLISHER_ENTRY = (
+    "scripts.acquisition.publisher_run",
+    "scripts.acquisition.redownload",
+    "scripts.acquisition.stored_mirror",
+    "scripts.acquisition.collect_mmd_api",
+)
+PACKAGE_OF = {"dotenv": "python-dotenv"}  # Import names that differ from their package names.
+PUBLISHER_LOCK = "services/analytics/requirements.publisher.txt"
+
+
+def module_file(name: str) -> Path | None:
+    base = REPO_ROOT.joinpath(*name.split("."))
+    return next((candidate for candidate in (base.with_suffix(".py"), base / "__init__.py") if candidate.is_file()), None)
+
+
+def publisher_imports() -> set[str]:
+    """The top-level third-party packages the publisher task imports: the closure of ``publisher_run``, the redownload harness and every plan contract
+    module the harness loads by name, read from the source with lazy imports included."""
+    harness = (REPO_ROOT / "scripts/acquisition/redownload.py").read_text(encoding="utf-8")
+    pending = [*PUBLISHER_ENTRY, *[f"scripts.acquisition.{name}" for name in re.findall(r'"(\w+_contract)"', harness)]]
+    seen: set[str] = set()
+    found: set[str] = set()
+    while pending:
+        name = pending.pop()
+        source = module_file(name)
+        if name in seen or source is None:
+            continue
+        seen.add(name)
+        for node in ast.walk(ast.parse(source.read_text(encoding="utf-8"))):
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                names = [node.module, *[f"{node.module}.{alias.name}" for alias in node.names]]
+            else:
+                continue
+            for imported in names:
+                top = imported.split(".")[0]
+                if top == "scripts":
+                    pending.append(imported)
+                elif top not in sys.stdlib_module_names:
+                    found.add(top)
+    return found
+
+
+def lock_pins(text: str) -> dict[str, str]:
+    """The ``name`` to ``version`` of each pinned requirement of an exported or hand-kept requirements text, with canonical names."""
+    return {lock_env.normalize(name): version for name, version in re.findall(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s;]+)", text, re.M)}
+
+
+def publisher_analytics_image() -> dict[str, bool]:
+    """The analytics image the publisher task runs is built with its publisher packages: the plan passes the build argument, the hashed file exists and
+    agrees with uv.lock, and every package the publisher imports comes from the analytics group or that file."""
+    config = real_config()
+    analytics = config["images"].get("analytics", {})
+    with tempfile.TemporaryDirectory(prefix="push_images_publisher_") as directory:
+        urls = push_images.repository_urls(repository_urls(Path(directory)))
+    try:
+        lines = push_images.plan(config, urls, "example_profile", "us-west-2", ["analytics"])
+    except push_images.ImagesError:
+        lines = []
+    builds = [line for line in lines if line.startswith("docker build ")]
+    lock_file = REPO_ROOT / PUBLISHER_LOCK
+    text = lock_file.read_text(encoding="utf-8") if lock_file.is_file() else ""
+    requirement_lines = [line for line in text.splitlines() if re.match(r"^[A-Za-z0-9]", line)]
+    group_pins = lock_pins(lock_env.export("analytics"))
+    pinned = lock_pins(text)
+    lock_blocks = {block for group in lock_env.groups() for _, block in lock_env.blocks(lock_env.export(group))}
+    in_lock = all(block in lock_blocks for _, block in lock_env.blocks(text))
+    overlap = pinned.keys() & group_pins.keys()
+    covered = {lock_env.normalize(PACKAGE_OF.get(name, name)) for name in publisher_imports()} <= set(group_pins) | set(pinned)
+    return {
+        "the analytics image of the list carries the publisher build argument": dict(analytics.get("build_args", {})) == {"PUBLISHER_DEPENDENCIES": "1"},
+        "the analytics build line of the plan passes it": len(builds) == 1
+        and "--build-arg PUBLISHER_DEPENDENCIES=1" in builds[0]
+        and builds[0].endswith(" services/analytics"),
+        "the hashed publisher file exists next to the Dockerfile": bool(requirement_lines),
+        "every pin of it carries a hash and installs without a source build": bool(requirement_lines)
+        and all("--hash=sha256:" in block for _, block in lock_env.blocks(text))
+        and not re.search(r"^(-e|git\+|https?:)", text, re.M),
+        "every pin of it, with its hashes, is exactly what some group of uv.lock records": bool(pinned) and in_lock,
+        "a package it shares with the analytics group has the same version": all(pinned[name] == group_pins[name] for name in overlap),
+        "it names the packages of requirements.publisher.in": {"boto3", "botocore", "defusedxml", "python-dotenv"} <= set(pinned),
+        "every third-party package the publisher imports is in the analytics group or that file": covered,
     }
 
 
@@ -510,6 +598,7 @@ CASES: dict[str, Case] = {
     "list_refusals": list_refusals,
     "plan_lines": plan_lines,
     "drift_image": drift_image,
+    "publisher_analytics_image": publisher_analytics_image,
     "plan_execution": plan_execution,
     "registry_file": registry_file,
     "record_flow": record_flow,

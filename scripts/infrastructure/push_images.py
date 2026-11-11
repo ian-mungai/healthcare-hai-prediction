@@ -270,7 +270,10 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
         local = str(image["local_tag"])
         contexts = " ".join(f"--build-context {key}={path}" for key, path in sorted(dict(image.get("build_contexts", {})).items()))
         dockerfile = f"-f {str(Path(str(image['context'])) / str(image['dockerfile']))} " if "dockerfile" in image else ""
-        lines.append(f"docker build --platform {PLATFORM} --tag {local} {dockerfile}{contexts} {image['context']}".replace("  ", " "))
+        arguments = " ".join(f"--build-arg {key}={value}" for key, value in sorted(dict(image.get("build_args", {})).items()))
+        lines.append(
+            f"docker build --platform {PLATFORM} --tag {local} {dockerfile}{contexts} {arguments} {image['context']}".replace("   ", " ").replace("  ", " ")
+        )
         tag = ""
     lines.append(f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {local}   # must print {PLATFORM}")
     if tag:

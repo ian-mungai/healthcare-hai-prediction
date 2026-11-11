@@ -63,10 +63,13 @@
       "build_contexts": {
         "hai": "services/hai"
       },
+      "build_args": {
+        "PUBLISHER_DEPENDENCIES": "1"
+      },
       "local_tag": "hai-analytics:duckdb1.5.6-dbt1.11.15",
       "tag": "duckdb1.5.6-dbt1.11.15-arm64",
       "arm64": "base and builder pins list linux/arm64",
-      "runs_as": "job task (P7b)"
+      "runs_as": "job task (P7b) and the Run 3 publisher host task, which needs the publisher packages the build argument installs"
     },
     "quality": {
       "kind": "build",
