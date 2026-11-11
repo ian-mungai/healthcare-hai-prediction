@@ -1062,6 +1062,27 @@ def job_project_cases() -> Iterator[Case]:
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
             False,
         )
+    # The jobs apply registers the publisher host task definition with the publisher task role as its task role (infra/jobs). The project user's own policy
+    # carries the grant; no separate owner policy does.
+    yield Case(
+        "publisher pass: job_publisher_task to ECS tasks",
+        request("iam:PassRole", role("job_publisher_task"), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+        True,
+        "PassPublisherTaskRole",
+    )
+    for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+        yield Case(
+            f"publisher pass: job_publisher_task to {service}",
+            request("iam:PassRole", role("job_publisher_task"), extra={"iam:PassedToService": service}, region=None),
+            False,
+        )
+    yield Case("publisher pass: job_publisher_task without a service", request("iam:PassRole", role("job_publisher_task"), region=None), False)
+    for name in ("job_publisher_task_extra", "job_publisher", "job_publisher_execution_task"):
+        yield Case(
+            f"publisher pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
     for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow", "host_code_fetch_task_extra", "host_code_fetch", "code_fetch_task"):
         yield Case(
             f"training pass: refuse {name}",
@@ -2679,6 +2700,9 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def airflow_launch_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassAirflowLaunchRole")["Condition"]
 
+    def publisher_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassPublisherTaskRole")["Condition"]
+
     def training_pass_without_code_fetch_role(documents: dict[str, dict[str, Any]]) -> None:
         statement = by_sid(documents, "iam", "PassTrainingRoles")
         statement["Resource"] = [item for item in as_list(statement["Resource"]) if item != role("host_code_fetch_task")]
@@ -2878,6 +2902,14 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "airflow launch PassRole service condition removed": (
                 "airflow launch pass: airflow_launch_task without a service",
                 airflow_launch_pass_without_service_condition,
+            ),
+            "publisher PassRole resource widened": (
+                "publisher pass: refuse job_publisher_task_extra",
+                job_resource("iam", "PassPublisherTaskRole", 0, role("job_publisher_task*")),
+            ),
+            "publisher PassRole service condition removed": (
+                "publisher pass: job_publisher_task without a service",
+                publisher_pass_without_service_condition,
             ),
             "training PassRole service condition removed": ("training pass: job_train_task without a service", training_pass_without_service_condition),
             "layer PassRole writer-family wildcard": (

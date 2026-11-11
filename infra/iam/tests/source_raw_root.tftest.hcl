@@ -199,9 +199,9 @@ run "publisher_exports_are_absent_by_default" {
   assert {
     condition = (
       !contains(keys(output.job_roles), "publisher_task") && output.publisher_role == null &&
-      output.publisher_project_delta == null && toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+      toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
     )
-    error_message = "By default no publisher role, network or grant is exported and the private job network is unchanged."
+    error_message = "By default no publisher role or network is exported and the private job network is unchanged."
   }
 }
 
@@ -226,24 +226,6 @@ run "publisher_exports_leave_the_target_role_set_untouched" {
       output.publisher_role.name == "example_project_job_publisher_task_dev" && output.publisher_job_contract.network == "host_bridge"
     )
     error_message = "The publisher role comes out of its own output for the jobs root, and the publisher runs on the host bridge network: no subnet, security group or public IP of its own."
-  }
-}
-
-run "publisher_pass_role_grant_names_only_the_publisher_role" {
-  command = plan
-
-  variables {
-    publisher_job_enabled = true
-  }
-
-  assert {
-    condition = (
-      output.publisher_project_delta.Statement[0].Action == ["iam:PassRole"] &&
-      output.publisher_project_delta.Statement[0].Resource == "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev" &&
-      output.publisher_project_delta.Statement[0].Condition.StringEquals["iam:PassedToService"] == "ecs-tasks.amazonaws.com" &&
-      length(output.publisher_project_delta.Statement) == 1
-    )
-    error_message = "The project user may pass only the publisher task role, only to ECS tasks."
   }
 }
 

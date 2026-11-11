@@ -44,13 +44,6 @@ output "publisher_role" {
   } : null
 }
 
-output "publisher_project_delta" {
-  description = "The project user's PassRole grant for the publisher task role only. Null until the class is enabled."
-  value = var.publisher_job_enabled ? jsondecode(templatefile("${path.module}/owner_policies/publisher_project_delta.json", {
-    PUBLISHER_TASK_ROLE_ARN = jsonencode("arn:aws:iam::${var.expected_account_id}:role/${local.publisher_job_role_name}")
-  })) : null
-}
-
 resource "aws_iam_role" "job_publisher" {
   count = var.publisher_job_enabled ? 1 : 0
 

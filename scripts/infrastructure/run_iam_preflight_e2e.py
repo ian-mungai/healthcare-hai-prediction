@@ -152,6 +152,13 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
             "",
         )
     ]
+    publisher_pass_removed = [
+        (
+            "policies/healthcare_hai_prediction_iam_policy.json",
+            "${PROJECT_NAME}_job_publisher_task_${ENVIRONMENT}",
+            "${PROJECT_NAME}_job_publisher_task_removed_${ENVIRONMENT}",
+        )
+    ]
     quality_pull_removed = [
         ("owner_policies/job_execution.json", '        "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_quality_${ENVIRONMENT}",\n', "")
     ]
@@ -563,6 +570,25 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
                 + reads_only(r)
                 + ([] if r.calls and r.calls[0]["operation"] == "get-caller-identity" else ["no identity check first"])
             ),
+        ),
+        (
+            "live full run names a denied publisher PassRole",
+            "the project user policy no longer names the publisher task role",
+            live_run(planted(publisher_pass_removed)),
+            lambda r: (
+                expect(r, 1, PASS=rows - 1, FAIL=1)
+                + (
+                    []
+                    if any(line.startswith("FAIL project_user iam:PassRole") and "job_publisher_task" in line for line in r.out.splitlines())
+                    else ["denied call not named"]
+                )
+            ),
+        ),
+        (
+            "offline project user loses the publisher PassRole",
+            "the project user policy no longer names the publisher task role",
+            offline_run(planted(publisher_pass_removed)),
+            lambda r: expect(r, 1) + ([] if "project_user iam:PassRole" in r.out and "job_publisher_task" in r.out else ["project user row not named"]),
         ),
         (
             "live grant removed",
