@@ -4091,6 +4091,7 @@ FAST_COMMIT_HOOKS = frozenset(
         "credential-files",
         "data-files",
         "removed-names",
+        "typecheck-importers",
         "temporary-code",
         "privacy-scan",
         "writing-check",
@@ -5180,6 +5181,18 @@ def changed_file_check_cases(scratch: Path) -> list[dict[str, Any]]:
             and names(["scripts/x.sql"]) == ["docker_calls", "ci_group_files"],
         }
     ]
+    mypy_files = [
+        step["files"]
+        for step in changed_files.steps(ROOT, ["scripts/x.py"], lambda listed: listed, lambda listed: ["scripts/y.py", "scripts/x.py"])
+        if step["name"] == "mypy"
+    ]
+    results.append(
+        {
+            "case": "changed_file_checks_add_the_importers_to_mypy",
+            "passed": mypy_files == [["scripts/x.py", "scripts/y.py"]],
+            "mypy_files": mypy_files,
+        }
+    )
     root = scratch / "changed_file_ruff"
     (root / "config/quality").mkdir(parents=True)
     (root / "config/quality/ci_groups.json").write_text(json.dumps({"pre_push": {"changed_file_seconds": 120}}))

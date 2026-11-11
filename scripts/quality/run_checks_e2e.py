@@ -103,6 +103,17 @@ OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
 FOLDER_NAME = "run" + "books"
 OLD_NOTES = "old" + "_notes.md"
+WINNOW = "win" + "now"
+SETTLE = "set" + "tle"
+FETCH_TASK = "fetch" + "_rows"
+SIGN_OFF = "--sign" + "-off"
+TRIMMED_KEY = "trimmed" + "_columns"
+RETRY_POLICY = "retry" + "_policy"
+CLOCK_ALIAS = "utc" + "_clock"
+PENDING_LIST = "config/quality/mypy_runtimes.json"
+PENDING_FIXTURE = '{"pending": {"dags/pending_dag.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}}}\n'
+LEFTOVER = "was removed but is still referenced"
+IMPORTERS_HOOK = "typecheck-importers"
 # No file under scripts/ may pin this name: the scratch repository copies those files and would then count the sample import as declared.
 UNUSED_PACKAGE = "quill" + "pad"
 UNUSED_SETTING = "OLD" + "_SETTING"
@@ -655,6 +666,23 @@ LINK_CASES = [
 
 POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
+UTIL_FUNCTION = f"def {OLD_FUNCTION}() -> int:\n    return 1\n"
+UTIL_IMPORT = f"from app.util import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n"
+NO_ATTRIBUTE = f'has no attribute "{OLD_FUNCTION}"'
+# A package named like the removed function still exists, so its documented and imported name stays valid.
+SURVIVING_PACKAGE = {
+    "app/__init__.py": "",
+    "app/rig.py": UTIL_FUNCTION,
+    f"app/{OLD_FUNCTION}/__init__.py": "KEEP: int = 7\n",
+    "app/read.py": f"from app import {OLD_FUNCTION} as {OLD_FUNCTION}\n\nRESULT: int = {OLD_FUNCTION}.KEEP\n",
+    "README.md": f"Use `{OLD_FUNCTION}`.\n",
+}
+
+
+def both_hooks(name: str, expect_pass: bool, **extra: Any) -> tuple[Case, Case]:
+    """The same change under the removed-names check and the MyPy importer check."""
+    return Case(f"{name} (removed names)", "removed-names", expect_pass, **extra), Case(f"{name} (importer types)", IMPORTERS_HOOK, expect_pass, **extra)
+
 
 CASES = [
     Case("clean file", "gitleaks", True, {"notes.md": "Nothing secret here.\n"}),
@@ -739,62 +767,275 @@ CASES = [
         },
         files={"scripts/tool.py": "import argparse\n\nP = argparse.ArgumentParser()\n"},
     ),
-    Case(
-        "function removed with its callers",
-        "removed-names",
+    *both_hooks(
+        "surviving package named like a removed function",
         True,
-        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "app/main.py": f"from util import {OLD_FUNCTION}\n\nX = {OLD_FUNCTION}()\n"},
-        files={"app/util.py": "X = 1\n", "app/main.py": "X = 1\n"},
+        committed=SURVIVING_PACKAGE,
+        files={"app/rig.py": "KEEP = 1\n"},
     ),
     Case(
-        "function moved to another file",
+        "removed function named in docs and a YAML key, nothing imports it",
         "removed-names",
         True,
-        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "README.md": f"Call `{OLD_FUNCTION}`.\n"},
-        files={"app/util.py": "X = 1\n", "app/other.py": f"def {OLD_FUNCTION}():\n    return 1\n"},
-    ),
-    Case(
-        "removed function named only in history",
-        "removed-names",
-        True,
-        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "CHANGELOG.md": f"- Removed `{OLD_FUNCTION}`.\n"},
+        committed={"app/util.py": UTIL_FUNCTION, "README.md": f"Call `{OLD_FUNCTION}`.\n", "config/policy.yaml": f"{OLD_FUNCTION}: strict\n"},
         files={"app/util.py": "X = 1\n"},
     ),
     Case(
-        "common word in prose after its function is removed",
+        "removed function still named in a pending file",
+        "removed-names",
+        False,
+        committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n"},
+        reason=f"dags/pending_dag.py:3: {OLD_FUNCTION} {LEFTOVER}",
+    ),
+    Case(
+        "removed function named in a file that imports a pending file",
+        "removed-names",
+        False,
+        committed={
+            "app/util.py": UTIL_FUNCTION,
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": "VALUE = 1\n",
+            "dags/second.py": "from dags import pending_dag\n" + UTIL_IMPORT,
+        },
+        files={"app/util.py": "X = 1\n"},
+        reason=f"dags/second.py:4: {OLD_FUNCTION} {LEFTOVER}",
+    ),
+    Case(
+        "removed function named in a typed file, left to MyPy",
         "removed-names",
         True,
-        committed={"app/main.py": "def render():\n    return 0\n", "README.md": "Render the report.\n"},
-        files={"app/main.py": "X = 1\n"},
+        committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "VALUE = 1\n", "app/main.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n"},
+    ),
+    Case(
+        "removed class named in Markdown, left to MyPy",
+        "removed-names",
+        True,
+        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "README.md": f"Use `{OLD_CLASS}`.\n"},
+        files={"app/models.py": "X = 1\n"},
     ),
     Case(
         "allowlisted reference",
         "removed-names",
         True,
-        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "docs/history.md": f"The `{OLD_CLASS}` era.\n"},
-        files={"app/models.py": "X = 1\n", ".cleanup_allowlist": "python docs/history.md -- migration notes keep the old name -- permanent\n"},
+        committed={"app/tool.py": f'P.{ADD_ARGUMENT}("{OLD_FLAG}")\n', "docs/history.md": f"The `{OLD_FLAG}` era.\n"},
+        files={"app/tool.py": "X = 1\n", ".cleanup_allowlist": "flag docs/history.md -- migration notes keep the old flag -- permanent\n"},
     ),
     Case(
-        "function named like a folder is removed",
+        "task ID removed, module assignment of the same word keeps it live",
         "removed-names",
         True,
-        committed={"app/util.py": f"def {FOLDER_NAME}():\n    return 1\n", "README.md": f"See `{FOLDER_NAME}/deploy.md`.\n"},
+        committed={"dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n', "app/live.py": f"{WINNOW} = 1\n", "README.md": f"Use `{WINNOW}`.\n"},
+        files={"dags/job.py": "TASKS = []\n"},
+    ),
+    Case(
+        "task ID removed, function of the same word keeps it live",
+        "removed-names",
+        True,
+        committed={
+            "dags/job.py": f'TASK = Operator(task_id="{SETTLE}")\n',
+            "app/live.py": f"def {SETTLE}():\n    return 1\n",
+            "README.md": f"Call `{SETTLE}`.\n",
+        },
+        files={"dags/job.py": "TASKS = []\n"},
+    ),
+    Case(
+        "task ID removed, class of the same word keeps it live",
+        "removed-names",
+        True,
+        committed={"dags/job.py": f'TASK = Operator(task_id="{SETTLE}")\n', "app/live.py": f"class {SETTLE}:\n    pass\n", "README.md": f"Use `{SETTLE}`.\n"},
+        files={"dags/job.py": "TASKS = []\n"},
+    ),
+    Case(
+        "task ID removed, import alias of the same word keeps it live",
+        "removed-names",
+        True,
+        committed={
+            "dags/job.py": f'TASK = Operator(task_id="{SETTLE}")\n',
+            "app/live.py": f"from datetime import datetime as {SETTLE}\n",
+            "README.md": f"Use `{SETTLE}`.\n",
+        },
+        files={"dags/job.py": "TASKS = []\n"},
+    ),
+    Case(
+        "task ID removed, a loop variable of the same word does not keep it live",
+        "removed-names",
+        False,
+        committed={
+            "dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n',
+            "app/lookup.py": f'for {WINNOW} in []:\n    pass\n\nTASK = dag.get_task("{WINNOW}")\n',
+        },
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:4: {WINNOW} {LEFTOVER}",
+    ),
+    Case(
+        "task ID removed, a local assignment of the same word does not keep it live",
+        "removed-names",
+        False,
+        committed={
+            "dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n',
+            "app/lookup.py": f'def sample():\n    {WINNOW} = 1\n    return dag.get_task("{WINNOW}")\n',
+        },
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:3: {WINNOW} {LEFTOVER}",
+    ),
+    Case(
+        "task ID removed, task lookup split over lines",
+        "removed-names",
+        False,
+        committed={"dags/job.py": f'TASK = Operator(task_id="{FETCH_TASK}")\n', "app/lookup.py": f'TASK = dag.get_task(\n    "{FETCH_TASK}"\n)\n'},
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:2: {FETCH_TASK} {LEFTOVER}",
+    ),
+    Case(
+        "task ID removed, conditional task lookup",
+        "removed-names",
+        False,
+        committed={
+            "dags/job.py": f'TASK = Operator(task_id="{FETCH_TASK}")\n',
+            "app/lookup.py": f'RESULT = dag.get_task("{FETCH_TASK}" if enabled else "publish")\n',
+        },
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:1: {FETCH_TASK} {LEFTOVER}",
+    ),
+    Case(
+        "task ID removed, task dictionary lookup",
+        "removed-names",
+        False,
+        committed={"dags/job.py": f'TASK = Operator(task_id="{FETCH_TASK}")\n', "app/lookup.py": f'TASK = dag.task_dict["{FETCH_TASK}"]\n'},
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:1: {FETCH_TASK} {LEFTOVER}",
+    ),
+    Case(
+        "task ID removed, task list assertion",
+        "removed-names",
+        False,
+        committed={"dags/job.py": f'TASK = Operator(task_id="{FETCH_TASK}")\n', "app/lookup.py": f'assert "{FETCH_TASK}" in dag.task_ids\n'},
+        files={"dags/job.py": "TASKS = []\n"},
+        reason=f"app/lookup.py:1: {FETCH_TASK} {LEFTOVER}",
+    ),
+    Case(
+        "flag removed, continued shell command still passes it",
+        "removed-names",
+        False,
+        committed={
+            "tools/digest.py": f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{SIGN_OFF}")\n',
+            "tools/run_report.sh": f"python tools/digest.py \\\n    {SIGN_OFF} /work/signoff.json\n",
+        },
+        files={"tools/digest.py": "import argparse\n\nP = argparse.ArgumentParser()\n"},
+        reason=f"tools/run_report.sh:2: {SIGN_OFF} {LEFTOVER}",
+    ),
+    Case(
+        "config key removed, a docstring example sits beside the reader",
+        "removed-names",
+        False,
+        committed={
+            "config/plan.yaml": f"{TRIMMED_KEY}: [a]\nregion: west\n",
+            "app/plan.py": f'"""Configuration example: {{"{TRIMMED_KEY}": ["a"]}}."""\nRESULT = PLAN["{TRIMMED_KEY}"]\n',
+        },
+        files={"config/plan.yaml": "region: west\n"},
+        reason=f"app/plan.py:2: {TRIMMED_KEY} {LEFTOVER}",
+    ),
+    Case(
+        "function removed, a YAML key of the same spelling remains",
+        "removed-names",
+        True,
+        committed={"app/util.py": f"def {RETRY_POLICY}() -> int:\n    return 1\n", "config/policy.yaml": f"{RETRY_POLICY}: strict\n"},
         files={"app/util.py": "X = 1\n"},
     ),
     Case(
-        "function removed, caller remains",
-        "removed-names",
+        "function removed with its callers",
+        IMPORTERS_HOOK,
+        True,
+        committed={"app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n", "app/main.py": "X = 1\n"},
+    ),
+    Case(
+        "function moved to another file, importer updated",
+        IMPORTERS_HOOK,
+        True,
+        committed={"app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n", "app/other.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT.replace("app.util", "app.other")},
+    ),
+    Case(
+        "function removed, sibling script imports it by package path",
+        IMPORTERS_HOOK,
         False,
-        committed={"app/util.py": f"def {OLD_FUNCTION}():\n    return 1\n", "app/main.py": f"from util import {OLD_FUNCTION}\n\nX = {OLD_FUNCTION}()\n"},
+        committed={"app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n"},
+        reason=NO_ATTRIBUTE,
+    ),
+    Case(
+        "function removed, sibling in the same package imports it by relative path",
+        IMPORTERS_HOOK,
+        False,
+        committed={"app/__init__.py": "", "app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT.replace("from app.util", "from .util")},
+        files={"app/util.py": "X = 1\n"},
+        reason=NO_ATTRIBUTE,
+    ),
+    Case(
+        "function removed, importer in another top-level folder",
+        IMPORTERS_HOOK,
+        False,
+        committed={"app/util.py": UTIL_FUNCTION, "dags/user.py": UTIL_IMPORT},
+        files={"app/util.py": "X = 1\n"},
+        reason=NO_ATTRIBUTE,
+    ),
+    Case(
+        "function removed, same-name re-export in the package",
+        IMPORTERS_HOOK,
+        False,
+        committed={
+            "app/__init__.py": f"from app.rig import {OLD_FUNCTION} as {OLD_FUNCTION}\n",
+            "app/rig.py": UTIL_FUNCTION,
+            "app/read.py": f"from app import {OLD_FUNCTION}\n\nRESULT: int = {OLD_FUNCTION}()\n",
+        },
+        files={"app/rig.py": "KEEP = 1\n"},
+        reason=NO_ATTRIBUTE,
+    ),
+    Case(
+        "module deleted, importer remains",
+        IMPORTERS_HOOK,
+        False,
+        committed={"app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT},
+        delete=["app/util.py"],
+        reason='"app.util"',
+    ),
+    Case(
+        "function parameter removed, caller still passes it",
+        IMPORTERS_HOOK,
+        False,
+        committed={"app/util.py": "def total(count: int) -> int:\n    return count\n", "app/main.py": "from app.util import total\n\nVALUE: int = total(2)\n"},
+        files={"app/util.py": "def total() -> int:\n    return 1\n"},
+        reason="Too many arguments",
+    ),
+    Case(
+        "function removed, import alias takes its place",
+        IMPORTERS_HOOK,
+        True,
+        committed={
+            "app/clock.py": f"def {CLOCK_ALIAS}() -> int:\n    return 1\n",
+            "app/use.py": f"from app.clock import {CLOCK_ALIAS}\n\nNOW = {CLOCK_ALIAS}.now()\n",
+        },
+        files={"app/clock.py": f"from datetime import datetime as {CLOCK_ALIAS}\n"},
+    ),
+    Case(
+        "function removed, importer is a pending file",
+        IMPORTERS_HOOK,
+        True,
+        committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "import hai_missing_dependency\n" + UTIL_IMPORT},
         files={"app/util.py": "X = 1\n"},
     ),
     Case(
-        "class removed, Markdown code names it",
-        "removed-names",
+        "changed file has a type error",
+        IMPORTERS_HOOK,
         False,
-        committed={"app/models.py": f"class {OLD_CLASS}:\n    pass\n", "README.md": f"Use `{OLD_CLASS}`.\n"},
-        files={"app/models.py": "X = 1\n"},
+        committed={"app/util.py": UTIL_FUNCTION},
+        files={"app/util.py": "VALUE: int = 'text'\n"},
+        reason="Incompatible types in assignment",
     ),
+    Case("documentation change only", IMPORTERS_HOOK, True, committed={"app/util.py": UTIL_FUNCTION}, files={"README.md": "A note.\n"}),
     Case(
         "config key removed, code still reads it",
         "removed-names",
@@ -1486,12 +1727,150 @@ def run_case(case: Case) -> tuple[bool, str]:
             correct = correct and all(header in output for header in WARNING_HEADERS[case.name])
         if not case.expect_pass and case.hook in ("writing-check", "privacy-scan"):
             correct = correct and POLICY_DOCUMENT in output
-        if case.hook in ("writing-check", "markdownlint", "front-matter", "markdown-links", "sqlfluff", "docs-references", "temporary-code", *CLEANUP_HOOKS):
+        if case.hook in (
+            "writing-check",
+            "markdownlint",
+            "front-matter",
+            "markdown-links",
+            "sqlfluff",
+            "docs-references",
+            "temporary-code",
+            "removed-names",
+            IMPORTERS_HOOK,
+            *CLEANUP_HOOKS,
+        ):
             correct = correct and (case.reason or BLOCK_REASONS.get(case.name, "")) in output
         if case.hook == "lint-settings" and not case.expect_pass and case.name.startswith("MyPy"):
             reason = "configuration must name a committed profile" if case.name == "MyPy generated profile" else "MyPy"
             correct = correct and reason in output
         return correct, output
+
+
+# The removed-names check and the importer check run as plain commands: planted regressions need the check's own source, not the hook wrapper.
+REMOVED_NAMES_COMMAND = ["-m", "scripts.quality.repo_checks", "removed-names"]
+IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
+# Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
+# Fields: rule, the cases that show it, the command, the source file, the marker text, its replacement and the exit code the damaged check must give.
+PLANTED_REGRESSIONS = [
+    (
+        "liveness of a bound name",
+        [case for case in CASES if case.name.startswith("task ID removed, ") and case.expect_pass],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "bound_names(files) if removed_tasks else set()",
+        "set()",
+        1,
+    ),
+    (
+        "text check only in pending files",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and ("left to MyPy" in case.name or "nothing imports it" in case.name)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if kind != "python" or path in unchecked else None',
+        "if True else None",
+        1,
+    ),
+    (
+        "pending files keep the text check",
+        [case for case in CASES if case.hook == "removed-names" and not case.expect_pass and "pending file" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'if kind != "python" or path in unchecked else None',
+        'if kind != "python" else None',
+        0,
+    ),
+    (
+        "importers of a changed module",
+        [
+            case
+            for case in CASES
+            if case.hook == IMPORTERS_HOOK
+            and not case.expect_pass
+            and case.name not in ("changed file has a type error", "function removed, same-name re-export in the package")
+        ],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "importing_files(root, base, [*present, *gone])",
+        "importing_files(root, base, [])",
+        0,
+    ),
+    (
+        "importers of a deleted module",
+        [case for case in CASES if case.name == "module deleted, importer remains"],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "importing_files(root, base, [*present, *gone])",
+        "importing_files(root, base, present)",
+        0,
+    ),
+]
+
+
+def run_planted_regression_case() -> tuple[bool, str]:
+    """Every sample passes or blocks as the real check says and flips once the rule it shows is reverted in the scratch copy of the check."""
+    python = str(ROOT / ".venv/bin/python")
+    lines, ok = [], True
+    for rule, cases, command, source, marker, replacement, planted_exit in PLANTED_REGRESSIONS:
+        for case in cases:
+            with tempfile.TemporaryDirectory(prefix="hai_planted_regression_") as scratch:
+                repo = scratch_repo(Path(scratch), case)
+                write(repo, case.files)
+                for relative in case.delete:
+                    git(repo, "rm", "-q", relative)
+                git(repo, "add", "-A")
+                real = run_command(python, command, cwd=repo, timeout=180)
+                path = repo / source
+                text = path.read_text()
+                if text.count(marker) != 1:
+                    return False, f"cannot plant the regression of the {rule}: {marker!r} is not in {source} once\n"
+                path.write_text(text.replace(marker, replacement, 1))
+                planted = run_command(python, command, cwd=repo, timeout=180)
+                caught = planted.returncode == planted_exit
+                ok = ok and real.returncode == (0 if case.expect_pass else 1) and caught
+                lines.append(f"{rule}, {case.name}: real check exit={real.returncode}; planted regression exit={planted.returncode}, caught={caught}\n")
+    return ok, "".join(lines)
+
+
+def run_importer_range_case() -> tuple[bool, str]:
+    """The importer check and the pre-push MyPy step read a pushed range: a removal in a later commit fails where an earlier file imports the name."""
+    python = str(ROOT / ".venv/bin/python")
+    with tempfile.TemporaryDirectory(prefix="hai_importer_range_") as scratch:
+        repo = scratch_repo(
+            Path(scratch),
+            Case(
+                "importer range setup",
+                IMPORTERS_HOOK,
+                True,
+                committed={"app/util.py": UTIL_FUNCTION, "app/main.py": UTIL_IMPORT, PENDING_LIST: '{"pending": {}}\n'},
+            ),
+        )
+        base = git(repo, "rev-parse", "HEAD").strip()
+        outcomes = []
+        for label, files, deleted, want in (
+            ("function removed", {"app/util.py": "X = 1\n"}, [], 1),
+            ("module deleted", {}, ["app/util.py"], 1),
+            ("function removed with its caller", {"app/util.py": "X = 1\n", "app/main.py": "Y = 1\n"}, [], 0),
+        ):
+            reset_hard(repo, base)
+            write(repo, files)
+            for relative in deleted:
+                git(repo, "rm", "-q", relative)
+            git(repo, "add", "-A")
+            git(repo, "commit", "-q", "-m", "refactor: change the helper")
+            head = git(repo, "rev-parse", "HEAD").strip()
+            hook = run_command(python, IMPORTERS_COMMAND, cwd=repo, env={**os.environ, "PRE_COMMIT_FROM_REF": base, "PRE_COMMIT_TO_REF": head}, timeout=180)
+            step = run_command(python, ["-m", "scripts.quality.ci_changed_files", "--from", base, "--to", head, "--only", "mypy"], cwd=repo, timeout=180)
+            blocked = want == 1
+            good = hook.returncode == want and step.returncode == want and (not blocked or ("app/main.py" in hook.stdout and "FAIL mypy" in step.stdout))
+            outcomes.append(
+                (
+                    good,
+                    f"{'ok' if good else 'WRONG'} {label}: hook exit {hook.returncode}, pre-push step exit {step.returncode}, expected {want}\n"
+                    + hook.stdout
+                    + step.stdout,
+                )
+            )
+    return all(good for good, _ in outcomes), "".join(text for _, text in outcomes)
 
 
 def run_range_case() -> tuple[bool, str]:
@@ -1653,19 +2032,19 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
 def run_workflow_range_case() -> tuple[bool, str]:
     """Run the actual workflow shell and selector on divergent branches, pushes and missing history."""
     with tempfile.TemporaryDirectory(prefix="hai_workflow_range_") as scratch:
-        function = "upstream" + "_added_value"
-        removed = "branch" + "_removed_value"
+        function = "--upstream" + "-added-value"
+        removed = "--branch" + "-removed-value"
         api = "scripts/acquisition/range_sample.py"
-        original = f"def {removed}():\n    return 1\n"
-        repo = scratch_repo(Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.py": f"{removed}()\n"}))
+        original = f'import argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("{removed}")\n'
+        repo = scratch_repo(Path(scratch), Case("workflow range setup", "commit-msg", True, committed={api: original, "caller.sh": f"run {removed}\n"}))
         ancestor = git(repo, "rev-parse", "HEAD").strip()
         git(repo, "checkout", "-qb", "topic")
-        write(repo, {"README.md": f"# Example\n\n`{function}()` is named in this branch.\n"})
+        write(repo, {"README.md": f"# Example\n\n`{function}` is named in this branch.\n"})
         git(repo, "add", "--", "README.md")
         git(repo, "commit", "-qm", "docs: describe the branch")
         head = git(repo, "rev-parse", "HEAD").strip()
         git(repo, "checkout", "-q", "main")
-        write(repo, {api: original + f"\ndef {function}():\n    return 2\n"})
+        write(repo, {api: original + f'P.{ADD_ARGUMENT}("{function}")\n'})
         git(repo, "add", "--", api)
         git(repo, "commit", "-qm", "feat: add a name on main")
         base = git(repo, "rev-parse", "HEAD").strip()
@@ -1678,7 +2057,7 @@ def run_workflow_range_case() -> tuple[bool, str]:
         ]
         write(repo, {api: "VALUE = 1\n"})
         git(repo, "add", "--", api)
-        git(repo, "commit", "-qm", "refactor: remove a branch function")
+        git(repo, "commit", "-qm", "refactor: remove a branch flag")
         deleted = git(repo, "rev-parse", "HEAD").strip()
         results.append(workflow_range_case(repo, "real_branch_removal_is_rejected", "pull_request", base, deleted, ancestor, 1, f"{removed} was removed"))
         reset_hard(repo, head)
@@ -2686,6 +3065,8 @@ def main() -> int:
             ("writing samples", run_writing_case),
             ("writing kinds", run_writing_kinds_case),
             ("allowlist expiry", run_allowlist_expiry_case),
+            ("planted regressions of the removed-name and importer checks", run_planted_regression_case),
+            ("importer check on a pushed range", run_importer_range_case),
             ("typecheck import closure", run_typecheck_import_case),
             ("typecheck pending manifest", run_typecheck_manifest_case),
             ("typecheck cold caches", run_typecheck_cold_case),

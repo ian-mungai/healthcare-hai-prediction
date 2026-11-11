@@ -3,7 +3,8 @@
 They read only the files the pushed range changed and take a few minutes:
 
 - ``ruff_format`` and ``ruff_check`` on the changed Python files;
-- ``mypy`` on the changed Python files that the type check covers (the files in ``config/quality/mypy_runtimes.json`` under ``pending`` wait for their runtime);
+- ``mypy`` on the changed Python files that the type check covers (the files in ``config/quality/mypy_runtimes.json`` under ``pending`` wait for their runtime)
+  and on every covered file that imports a changed or deleted module (scripts/quality/typecheck_importers.py), so a removed Python name fails where it is used;
 - ``sqlfluff`` on the changed dbt SQL files;
 - ``docker_calls``, the Docker-call guard, and ``ci_group_files``, the guard of the check group files, which run for every range.
 
@@ -22,13 +23,13 @@ import argparse
 import json
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
-from scripts.quality import typecheck
+from scripts.quality import typecheck, typecheck_importers
 
 CONFIG = Path("config/quality/ci_groups.json")
 GIT_SECONDS = 120
@@ -48,17 +49,36 @@ def covered_by_mypy(files: list[str]) -> list[str]:
     return [path for path in files if path not in waiting]
 
 
-def steps(root: Path, files: list[str], covered: Callable[[list[str]], list[str]] = covered_by_mypy) -> list[dict[str, Any]]:
-    """The checks for the changed files: name and the files each reads. A check with no file to read is left out."""
+def deleted_in_range(root: Path, start: str, end: str) -> list[str]:
+    """The paths deleted from ``start`` to ``end``, a rename counting as a deletion of its old path."""
+    result = run_command("git", ["-C", str(root), "diff", "--name-only", "--no-renames", "--diff-filter=D", start, end], timeout=GIT_SECONDS, check=True)
+    return [line for line in result.stdout.splitlines() if line]
+
+
+def no_importers(paths: list[str]) -> list[str]:
+    return []
+
+
+def steps(
+    root: Path,
+    files: list[str],
+    covered: Callable[[list[str]], list[str]] = covered_by_mypy,
+    importers: Callable[[list[str]], list[str]] = no_importers,
+) -> list[dict[str, Any]]:
+    """The checks for the changed files: name and the files each reads. A check with no file to read is left out.
+
+    ``importers`` returns the covered files that import the given changed Python paths; MyPy reads them with the changed files that it covers.
+    """
     python = [path for path in files if path.endswith(".py")]
     sql = [path for path in files if path.startswith("dbt/") and path.endswith(".sql")]
     chosen: list[dict[str, Any]] = []
     if python:
         chosen.append({"name": "ruff_format", "files": python})
         chosen.append({"name": "ruff_check", "files": python})
-        typed = covered(python)
-        if typed:
-            chosen.append({"name": "mypy", "files": typed})
+    typed = covered(python) if python else []
+    typed += [path for path in importers(python) if path not in typed]
+    if typed:
+        chosen.append({"name": "mypy", "files": typed})
     if sql:
         chosen.append({"name": "sqlfluff", "files": [f"./{path}" for path in sql]})
     chosen.append({"name": "docker_calls", "files": []})
@@ -95,10 +115,19 @@ def run_step(root: Path, step: dict[str, Any], seconds: int) -> dict[str, Any]:
     return {"name": step["name"], "exit": code, "seconds": round(time.monotonic() - started, 1), "output": text, "error": error}
 
 
-def run(root: Path, files: list[str], only: str = "") -> int:
+def run(root: Path, files: list[str], only: str = "", base: str = "HEAD", deleted: Sequence[str] = ()) -> int:
     config = json.loads((root / CONFIG).read_text(encoding="utf-8"))
     seconds = int(config["pre_push"]["changed_file_seconds"])
-    chosen = [step for step in steps(root, files) if not only or step["name"] == only]
+    removed = [path for path in deleted if path.endswith(".py")]
+
+    def importers(python: list[str]) -> list[str]:
+        return typecheck_importers.covered(typecheck_importers.importing_files(root, base, [*python, *removed]))
+
+    try:
+        chosen = [step for step in steps(root, files, importers=importers if only in ("", "mypy") else no_importers) if not only or step["name"] == only]
+    except (ValueError, OSError, SyntaxError, TimeoutExpired) as error:
+        sys.stdout.write(f"changed-file checks: the import graph failed: {error}\n")
+        return 1
     sys.stdout.write(f"changed-file checks: {len(files)} changed files, checks {', '.join(step['name'] for step in chosen) or 'none'}\n")
     sys.stdout.flush()
     with ThreadPoolExecutor(max_workers=max(1, len(chosen))) as pool:
@@ -123,14 +152,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--only", default="", choices=("", *NAMES))
     args = parser.parse_args(argv)
     root = args.root.resolve()
+    deleted: list[str] = []
     if args.file:
         files = args.file
     elif args.start and args.end:
         files = changed_in_range(root, args.start, args.end)
+        deleted = deleted_in_range(root, args.start, args.end)
     else:
         sys.stderr.write("give --from and --to, or at least one --file\n")
         return 2
-    return run(root, files, args.only)
+    return run(root, files, args.only, args.start or "HEAD", deleted)
 
 
 if __name__ == "__main__":

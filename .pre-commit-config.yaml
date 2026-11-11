@@ -66,6 +66,13 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: typecheck-importers
+        name: MyPy on the changed Python files and the files that import them
+        entry: .venv/bin/python -m scripts.quality.typecheck_importers
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       - id: temporary-code
         # The list of temporary files is config/quality/temporary_code.json; temporary code may import permanent code, never the reverse.
         name: Permanent code never imports, calls or reads temporary code

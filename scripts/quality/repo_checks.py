@@ -77,7 +77,6 @@ PY_TOP_LEVEL = re.compile(r"^(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)", 
 PY_ASSIGNED = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)", re.MULTILINE)
 # Environment variables a shell script, workflow or rendered template still uses: $NAME, ${NAME}, vars.NAME, secrets.NAME, env.NAME.
 ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A-Z0-9_]*)\b")
-PYTHON_REFERENCE_SUFFIXES = {".py", ".yaml", ".yml", ".toml", ".cfg", ".ini"}
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 TASK_ID = re.compile(r"""task_id\s*=\s*["']([\w.-]+)["']""")
@@ -549,15 +548,17 @@ def search_view(kind: str, path: str, lines: list[str]) -> list[str] | None:
 
     Scripts, flags and dependencies: every line. Environment variables: Markdown and .env.example, where people read
     them. Code names: code and config files, plus Markdown code spans and fences, so "the main branch" in prose is not a
-    reference. Python names skip quoted strings and attribute access (``parser.parse_args()``) in Python files and are
-    not searched in Terraform, SQL, JSON or shell files. Terraform skips ``from =`` lines: moved and removed blocks name
-    old addresses on purpose.
+    reference. Python names are searched only in the Python files MyPy does not cover (see ``removed_names``), skipping
+    comments, docstrings, quoted strings and attribute access (``parser.parse_args()``). Terraform skips ``from =``
+    lines: moved and removed blocks name old addresses on purpose.
     """
     suffix, name = Path(path).suffix, Path(path).name
     if kind in ("script", "flag", "dependency"):
         return lines
     if kind == "env":
         return lines if suffix == ".md" or name == ".env.example" else None
+    if kind == "python":
+        return python_code(lines)
     if suffix == ".md":
         view, fence = [], False
         for line in lines:
@@ -569,11 +570,6 @@ def search_view(kind: str, path: str, lines: list[str]) -> list[str] | None:
         return view
     if suffix not in CODE_SUFFIXES and name not in CODE_NAMES:
         return None
-    if kind == "python":
-        if suffix not in PYTHON_REFERENCE_SUFFIXES:
-            return None
-        if suffix == ".py":
-            return python_code(lines)
     if kind == "terraform" and suffix == ".tf":
         return ["" if re.match(r"^\s*from\s*=", line) else line for line in lines]
     return lines
@@ -597,16 +593,6 @@ def python_code(lines: list[str]) -> list[str]:
     return view
 
 
-def python_reference(name: str) -> re.Pattern[str]:
-    """Return the pattern for a removed Python name outside Python files: a call, import or dotted path, or the bare
-    name when it looks like an identifier (``_`` or a capital), so a removed ``docs`` does not match the commit type."""
-    word = re.escape(name)
-    contexts = [rf"(?<![\w./-]){word}\((?![^)\s]*\)!?:\s)", rf"\bimport\b[^\n]*\b{word}\b", rf"[.:]{word}\b"]
-    if re.search(r"_|[A-Z]", name):
-        contexts.append(rf"(?<![\w./-]){word}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
-    return re.compile("|".join(contexts))
-
-
 def config_key(line: str) -> str | None:
     """Return the key a YAML, TOML, JSON or INI line defines, or None for comments and other lines."""
     if line.lstrip().startswith(("#", ";", "//")):
@@ -623,6 +609,30 @@ def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
             names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := REQUIREMENT.match(line))}
         elif Path(path).name == "pyproject.toml":
             names |= {re.sub(r"[-_.]+", "-", match.group(1).lower()) for line in lines if (match := PYPROJECT_REQUIREMENT.match(line))}
+    return names
+
+
+def bound_names(files: dict[str, list[str]]) -> set[str]:
+    """Return the names the current Python code binds: every function, class and import alias, and each module-level assignment.
+
+    A loop variable or an assignment inside a function binds nothing at module level, so it never keeps a removed word live.
+    """
+    names: set[str] = set()
+    for path, lines in files.items():
+        if not path.endswith(".py"):
+            continue
+        try:
+            tree = ast.parse("\n".join(lines), filename=path)
+        except SyntaxError:
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                names.add(node.name)
+            elif isinstance(node, ast.Import | ast.ImportFrom):
+                names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
+        for node in tree.body:
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign | ast.AugAssign) else []
+            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
     return names
 
 
@@ -651,7 +661,9 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     python_now = set(PY_DEFINITION.findall(code_now)) | set(PY_ASSIGNED.findall(code_now))
     for name in gone(set(PY_TOP_LEVEL.findall(code_removed)), python_now):
         kinds["python"][name] = re.compile(rf"(?<![\w./-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
-    for name in gone(set(TASK_ID.findall(code_removed)), set(TASK_ID.findall(code_now))):
+    removed_tasks = set(TASK_ID.findall(code_removed)) - set(TASK_ID.findall(code_now))
+    # The same word still defined as a function, class, import or module-level assignment is a live name of its own, not a task reference.
+    for name in gone(removed_tasks, bound_names(files) if removed_tasks else set()):
         kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
     config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))}
     # Keys of a deleted or untracked config file are often data fields the code still writes; only edited files count.
@@ -1000,25 +1012,41 @@ def terraform_unused() -> list[Finding]:
     return findings
 
 
+def mypy_uncovered_files() -> set[str]:
+    """Return the Python files MyPy does not cover: the ``pending`` files of config/quality/mypy_runtimes.json and the files that import them."""
+    from scripts.quality import typecheck  # Loaded only here: the other runners that copy this check do not copy MyPy's selector.
+
+    config = Path("config/quality/mypy_runtimes.json")
+    pending = json.loads(config.read_text())["pending"] if config.is_file() else {}
+    try:
+        return set(typecheck.pending_by_import(typecheck.source_files(), pending))
+    except SyntaxError as error:
+        raise SystemExit(f"removed-names: cannot read the import graph of the pending files: {error}") from error
+
+
 def removed_names() -> list[Finding]:
     """A name the change removed is no longer referenced in any file that describes current behavior.
 
-    Kinds: scripts, command-line flags, environment variables, Python functions and classes, config keys, Terraform
-    declarations, dbt models, Airflow task IDs and dependencies. Code names match code and config files and only the
-    code spans and fences of Markdown, so a removed ``main`` does not flag "the main branch" in prose.
+    Kinds: scripts, command-line flags, environment variables, config keys, Terraform declarations, dbt models, Airflow
+    task IDs and dependencies. Code names match code and config files and only the code spans and fences of Markdown, so
+    a removed ``main`` does not flag "the main branch" in prose. A task ID word that the code still defines as a function,
+    class, import alias or module-level assignment is a live name, not a leftover. Python functions, classes and modules
+    are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
+    Only the Python files MyPy does not cover keep a text check for them, until they join MyPy.
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
     files = reference_files()
-    for kind, names in removed_definitions(removed, deleted, files).items():
+    kinds = removed_definitions(removed, deleted, files)
+    unchecked = mypy_uncovered_files() if kinds["python"] else set()
+    for kind, names in kinds.items():
         for name, pattern in sorted(names.items()):
             for path, lines in files.items():
-                view = search_view(kind, path, lines)
+                view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
                 if view is None or any(entry_kind == kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
                     continue
-                matcher = python_reference(name) if kind == "python" and not path.endswith(".py") else pattern
                 for number, line in enumerate(view, 1):
-                    if matcher.search(line):
+                    if pattern.search(line):
                         fix = f"remove or update the reference, or add '{kind} {path} -- <why the reference stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
                         findings.append(Finding(f"{path}:{number}", f"{name} was removed but is still referenced", CLEANUP_RULE, fix))
     return findings
