@@ -21,9 +21,41 @@ def model_training_run_id(drift_run: str, model: str) -> str:
     return f"{drift_run[:16]}-{hashlib.sha256(f'training:{model}:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
+def model_drift_run_id(features_run: str) -> str:
+    """The run ID of the drift check of one model set's run: the same for a retry of that run. The chain gate binds it to the bronze run's staged code."""
+    return f"{features_run[:16]}-{hashlib.sha256(f'drift:{features_run}'.encode()).hexdigest()[:8]}"
+
+
 def model_features_run_id(base_run: str, model: str) -> str:
     """The run ID of one model set's features run for a base run: the same for a retry of that model, another for every other model."""
     return f"{base_run[:16]}-{hashlib.sha256(f'features:{model}:{base_run}'.encode()).hexdigest()[:8]}"
+
+
+def trained_run_id(base_run: str, model: str) -> str:
+    """The run ID of the training run of one model on a base run, as the features, drift and training DAGs chain it: the same for a retry of that run."""
+    return model_training_run_id(model_drift_run_id(model_features_run_id(base_run, model)), model)
+
+
+def research_run_id(base_run: str) -> str:
+    """The run ID of the research run of a base run: the same for a retry, so a base is researched once."""
+    return f"{base_run[:16]}-{hashlib.sha256(f'research:{base_run}'.encode()).hexdigest()[:8]}"
+
+
+CHAIN_STEPS = ("canary", "promote", "notice")
+
+
+def chain_run_id(research_run: str, hai_type: str, step: str) -> str:
+    """The run ID of one step of one infection type's promotion chain after a research run: the same for a retry, another for every other type and step.
+
+    The launch library records one launch for each job and run, so each launching step of the chain has a run of its own.
+    """
+    if step not in CHAIN_STEPS:
+        raise ValueError(f"step must be one of {', '.join(CHAIN_STEPS)}")
+    if hai_type not in HAI_TYPES:
+        raise ValueError(f"type must be one of {', '.join(HAI_TYPES)}")
+    if not re.fullmatch(RUN_ID, research_run):
+        raise ValueError("run must be a research run ID")
+    return f"{research_run[:16]}-{hashlib.sha256(f'chain:{step}:{hai_type}:{research_run}'.encode()).hexdigest()[:8]}"
 
 
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
@@ -145,6 +177,39 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] =
         raise ValueError("mlflow=aws is not built on the Mac route. It runs only as an AWS task. Use mlflow=local")
     if raw["mlflow"] not in lanes:
         raise ValueError(f"mlflow must be {' or '.join(lanes)}")
+    return dict(raw)
+
+
+CHAIN_PARAMETER_KEYS = {
+    "canary_check": {"research_run", "hai_type", "mlflow"},
+    "owner_notice": {"research_run", "hai_type", "outcome", "mlflow"},
+}
+PROMOTION_OUTCOMES = ("promoted", "held", "rolled_back")
+
+
+def chain_parameters_for(step: str, raw: Mapping[str, Any], lanes: tuple[str, ...] = LAUNCH_LANES) -> dict[str, Any]:
+    """Validate the closed parameter set of a launching step of the promotion chain that research_dag runs after its research task.
+
+    ``canary_check`` and ``owner_notice`` name the research run, the infection type and (for the notice) the outcome. ``promote`` is the promotion of one
+    version, as ``model_promotion_dag`` takes it, and the chain never rolls back. Every step runs on AWS, so the MLflow lane is aws.
+    """
+    if step == "promote":
+        checked = parameters_for("model_promotion_dag", raw, lanes)
+        if checked["promotion_mode"] != "promote":
+            raise ValueError("the promotion chain only promotes")
+        return checked
+    if step not in CHAIN_PARAMETER_KEYS:
+        raise ValueError("chain parameters belong only to the canary check, the promotion and the owner notice")
+    if set(raw) != CHAIN_PARAMETER_KEYS[step]:
+        raise ValueError(f"{step} parameters must name {', '.join(sorted(CHAIN_PARAMETER_KEYS[step]))}")
+    if not isinstance(raw["research_run"], str) or not re.fullmatch(RUN_ID, raw["research_run"]):
+        raise ValueError("research_run must be a research run ID")
+    if raw["hai_type"] not in HAI_TYPES:
+        raise ValueError("hai_type must be a supported HAI type")
+    if step == "owner_notice" and raw["outcome"] not in PROMOTION_OUTCOMES:
+        raise ValueError(f"outcome must be one of {', '.join(PROMOTION_OUTCOMES)}")
+    if raw["mlflow"] != "aws" or "aws" not in lanes:
+        raise ValueError("every step of the promotion chain runs on AWS: name mlflow=aws")
     return dict(raw)
 
 

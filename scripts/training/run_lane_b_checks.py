@@ -117,6 +117,61 @@ def run_checks(output: Path) -> int:
         case("model_run_ids_differ_per_model", len(set(ids.values())) == len(ids))
         case("model_run_id_is_stable_for_a_retry", ids["m3"] == training_contract.model_training_run_id(drift, "m3"))
         case("model_run_id_has_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in ids.values()))
+        base = "20261109T000000Z-b45e0001"
+        research = training_contract.research_run_id(base)
+        case("research_run_id_has_the_run_form", re.fullmatch(training_contract.RUN_ID, research) is not None and research != base)
+        case("research_run_id_is_stable_for_a_retry", research == training_contract.research_run_id(base))
+        case("research_run_id_differs_per_base", research != training_contract.research_run_id("20261109T000000Z-b45e0002"))
+        chain = {
+            (hai_type, step): training_contract.chain_run_id(research, hai_type, step)
+            for hai_type in training_contract.HAI_TYPES
+            for step in training_contract.CHAIN_STEPS
+        }
+        case("chain_run_ids_differ_per_type_and_step", len(set(chain.values())) == len(chain) and research not in chain.values())
+        case("chain_run_ids_have_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in chain.values()))
+        case("chain_run_id_is_stable_for_a_retry", chain["HAI_2", "canary"] == training_contract.chain_run_id(research, "HAI_2", "canary"))
+        for name, arguments in (("step", (research, "HAI_1", "deploy")), ("type", (research, "HAI_9", "canary")), ("run", ("latest", "HAI_1", "canary"))):
+            try:
+                training_contract.chain_run_id(*arguments)
+            except ValueError as error:
+                case(f"chain_run_id_refuses_{name}", name in str(error))
+            else:
+                case(f"chain_run_id_refuses_{name}", False)
+        feature_run = training_contract.model_features_run_id(base, "m2")
+        drift_run = training_contract.model_drift_run_id(feature_run)
+        case(
+            "trained_run_id_is_the_run_chain_of_the_model",
+            training_contract.trained_run_id(base, "m2") == training_contract.model_training_run_id(drift_run, "m2"),
+        )
+        case("trained_run_ids_differ_per_model", len({training_contract.trained_run_id(base, item) for item in training_contract.PROMOTION_MODELS}) == 3)
+        canary = {"research_run": research, "hai_type": "HAI_1", "mlflow": "aws"}
+        notice = {**canary, "outcome": "held"}
+        promotion = {"hai_type": "HAI_1", "model_version": "3", "promotion_mode": "promote", "mlflow": "aws"}
+        launch = training_contract.LAUNCH_LANES
+        case(
+            "chain_parameters_accept_each_step",
+            all(
+                training_contract.chain_parameters_for(step, raw, launch) == raw
+                for step, raw in (("canary_check", canary), ("owner_notice", notice), ("promote", promotion))
+            ),
+        )
+        for name, step, changed_parameters in (
+            ("canary_unknown_key", "canary_check", {**canary, "outcome": "held"}),
+            ("canary_bad_run", "canary_check", {**canary, "research_run": "latest"}),
+            ("canary_bad_type", "canary_check", {**canary, "hai_type": "HAI_9"}),
+            ("canary_local_lane", "canary_check", {**canary, "mlflow": "local"}),
+            ("notice_missing_outcome", "owner_notice", canary),
+            ("notice_bad_outcome", "owner_notice", {**notice, "outcome": "approved"}),
+            ("promotion_rollback", "promote", {**promotion, "promotion_mode": "rollback"}),
+            ("promotion_bad_version", "promote", {**promotion, "model_version": "0"}),
+            ("research_step_is_not_a_chain_step", "research", canary),
+        ):
+            try:
+                training_contract.chain_parameters_for(step, changed_parameters, launch)
+            except ValueError:
+                case(f"chain_parameters_refuse_{name}", True)
+            else:
+                case(f"chain_parameters_refuse_{name}", False)
         case("service_port", mlflow_service.PORT == 5100)
         with tempfile.TemporaryDirectory(prefix="hai_training_contract_") as temporary:
             source = Path(temporary) / "source"
