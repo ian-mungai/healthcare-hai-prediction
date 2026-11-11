@@ -691,6 +691,11 @@
     {
       "role": "airflow_launch",
       "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar.gz"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/example_run/layer_run.json"
     },
     {

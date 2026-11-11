@@ -241,8 +241,24 @@ def job_cases() -> list[Case]:
     add("read the retired promotion approval", "s3:GetObject", f"{STAGE}/promotion_approval.json", False)
     add("write a promotion approval", "s3:PutObject", f"{STAGE}/promotion_approval.json", False)
     add("read an approval of another name", "s3:GetObject", f"{STAGE}/approval.json", False)
-    for key in ("code.tar.gz", "other.json", "../code.sha256"):
+    for key in ("other.json", "../code.sha256"):
         add(f"read inputs/{key} through the main policy", "s3:GetObject", f"{STAGE}/{key}", False)
+    # The staged code archive (owner A, Nov 11 2026): the acceptance report reads the publish contract from the archive it checks against code.sha256.
+    add("read the staged code archive", "s3:GetObject", f"{STAGE}/code.tar.gz", True)
+    add(
+        "read the staged code archive of another run",
+        "s3:GetObject",
+        f"{STAGE.replace('20261030T100000Z-abcdef01', '20261031T100000Z-01234567')}/code.tar.gz",
+        True,
+    )
+    for key in ("code.tar.gz.bak", "code.tar", "other.tar.gz", "code.tar.gz/part", "x/code.tar.gz", "Code.tar.gz"):
+        add(f"read {key} below the staged inputs", "s3:GetObject", f"{STAGE}/{key}", False)
+    add("read a code archive outside the inputs folder", "s3:GetObject", f"{STAGE.removesuffix('/inputs')}/code.tar.gz", False)
+    add("read a code archive below another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/other_stage/run/inputs/code.tar.gz", False)
+    add("read the staged code archive in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code.tar.gz", False)
+    add("write the staged code archive", "s3:PutObject", f"{STAGE}/code.tar.gz", False, ONCE)
+    add("delete the staged code archive", "s3:DeleteObject", f"{STAGE}/code.tar.gz", False)
+    add("read an earlier version of the staged code archive", "s3:GetObjectVersion", f"{STAGE}/code.tar.gz", False)
     add("read a gold table", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet", False)
     add("read a digest in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/run_stage/run/inputs/code.sha256", False)
     add("write a digest", "s3:PutObject", f"{STAGE}/code.sha256", False)
@@ -410,7 +426,7 @@ def request_cases() -> list[tuple[Any, ...]]:
     return [
         ("read the staged bronze request", "s3:GetObject", f"{STAGE}/bronze_request.json", True),
         ("read the staged serving request", "s3:GetObject", f"{STAGE}/serving_request.json", True),
-        ("read the code archive", "s3:GetObject", f"{STAGE}/code.tar.gz", False),
+        ("read the code archive (inside the staged code archive grant)", "s3:GetObject", f"{STAGE}/code.tar.gz", True),
         ("read a request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/bronze/inputs/bronze_request.json", False),
         ("read a serving request under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/serving/deployments/inputs/serving_request.json", False),
         (
@@ -547,7 +563,8 @@ RESOURCES = (
     Resource("retired promotion approval", f"{STAGE}/promotion_approval.json", NONE, NONE),
     Resource("staged bronze request", f"{STAGE}/bronze_request.json", GET, GET),
     Resource("staged serving request", f"{STAGE}/serving_request.json", GET, GET),
-    Resource("staged code archive", f"{STAGE}/code.tar.gz", NONE, NONE),
+    Resource("staged code archive", f"{STAGE}/code.tar.gz", GET, GET),
+    Resource("staged code archive sibling", f"{STAGE}/code.tar.gz.bak", NONE, NONE),
     Resource("staged code run binding", CODE_RUN, frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("drift record while drift is not named", DRIFT_RECORD, NONE, NONE),
     Resource("bronze run record", BRONZE_RECORD, GET, GET),
@@ -713,6 +730,7 @@ WIDENING_ACTIONS = {
     "ListCodeRunBindings": ("s3:ListBucketMultipartUploads",),
     "ReadDriftRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
     "ReadLayerRunRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
+    "ReadStagedCodeArchive": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
     "ListLakehouseVersions": ("s3:ListBucket", "s3:ListBucketMultipartUploads"),
     "DescribeHostGroup": ("autoscaling:SetDesiredCapacity", "autoscaling:UpdateAutoScalingGroup"),
 }
@@ -777,6 +795,14 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "ReadLaunchHoldAndApplyLock_a_parameter_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}/healthcare_hai_prediction/*")),
         ("jobs", "ReadLaunchHoldAndApplyLock_a_name_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}{HOLD}*")),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("jobs", "ReadStagedCodeArchive_every_input", replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("jobs", "ReadStagedCodeArchive_every_staged_object", replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/lakehouse/run_stage/*")),
+        (
+            "jobs",
+            "ReadStagedCodeArchive_a_suffix_wildcard",
+            replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/code.tar.gz*"),
+        ),
+        ("jobs", "ReadStagedCodeArchive_the_whole_bucket", replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/*")),
         ("jobs", "ReadLayerRunRecords_every_lakehouse_object", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/lakehouse/*")),
         ("jobs", "ReadLayerRunRecords_the_whole_bucket", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/*")),
         ("jobs", "ReadLayerRunRecords_a_sibling_prefix", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/lakehouse/layer_runs*")),
@@ -981,7 +1007,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
     staged = (f"{stage}/code.sha256", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
     staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs/*/check.json",) if "bronze" in named else ()
     staged += (f"{stage}/code_run.json",)
-    staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs/*",)
+    staged += (f"{stage}/code.tar.gz", f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs/*")
     staged += (f"arn:aws:s3:::{BUCKET}/drift/*",) if "drift" in named else ()
     tagged_tasks: Conditions = {"StringEquals": {"aws:ResourceTag/HaiJob": named}}
     return [

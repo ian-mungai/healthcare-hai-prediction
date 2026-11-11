@@ -69,6 +69,12 @@
       ]
     },
     {
+      "Sid": "ReadStagedCodeArchive",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/*/inputs/code.tar.gz"
+    },
+    {
       "Sid": "ReadLayerRunRecords",
       "Effect": "Allow",
       "Action": "s3:GetObject",

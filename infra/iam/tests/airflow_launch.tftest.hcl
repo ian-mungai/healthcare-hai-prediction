@@ -307,9 +307,9 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadLayerRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadStagedCodeArchive", "ReadLayerRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
     ])
-    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the four reads of run records, logs and parameters and the container instance list, which names the cluster ARN, go without one."
+    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the five reads of run records, the code archive, logs and parameters and the container instance list, which names the cluster ARN, go without one."
   }
 
   assert {
@@ -333,6 +333,16 @@ run "the_acceptance_report_reads_run_records_lists_lakehouse_versions_and_descri
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadLayerRunRecords"][0] == "Allow"
     )
     error_message = "The run record read is s3:GetObject alone on the objects below lakehouse/layer_runs/."
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadStagedCodeArchive"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadStagedCodeArchive"][0] == "s3:GetObject" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadStagedCodeArchive"][0] == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/code.tar.gz" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadStagedCodeArchive"][0] == "Allow"
+    )
+    error_message = "The code archive read is s3:GetObject alone on the staged code.tar.gz of a run, which the acceptance report checks against code.sha256."
   }
 
   assert {
