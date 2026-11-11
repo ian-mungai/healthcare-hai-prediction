@@ -181,8 +181,12 @@ def release_set(
     loader: feast_sets.OnlineLoader | None = None,
     newest_run: Callable[[str], str] | None = None,
     production: Callable[[], Mapping[str, str | None]] | None = None,
+    direct: bool = False,
 ) -> dict[str, Any]:
     """Release the held online load of a run: ``--release <SET> <RUN_ID> [--mode real|publish_fixture]``. A repeat returns the first release record.
+
+    With ``direct`` a run that has no hold is accepted when its own load record is a successful load of the set in the request's mode (``feast_sets.release``);
+    the command line never sets it.
 
     The release is refused while a Production model of the set is on another schema (``feast_sets.release``); the Production records are read from S3."""
     parser = argparse.ArgumentParser(description="Load a held model set run online and record the release.", prog="feast_materialize")
@@ -204,6 +208,7 @@ def release_set(
             loader=loader or feast_sets.refusing_loader,
             newest_run=newest_run,
             production=production,
+            direct_mode=args.mode if direct else None,
         )
     from scripts.features import feast_aws
 
@@ -229,6 +234,7 @@ def release_set(
             loader=loader if loader is not None else set_loader,
             newest_run=newest_run if newest_run is not None else (lambda name: feast_sets.newest_set_run(catalog, reads.NAMESPACES[args.mode], name, document)),
             production=production if production is not None else feast_sets.production_reader(settings, feature_set),
+            direct_mode=args.mode if direct else None,
         )
 
 

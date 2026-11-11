@@ -41,6 +41,7 @@ from scripts.training import production_record, promote_lease, promote_receipt
 
 HOLD_NAME = "online_hold.json"
 RELEASE_NAME = "online_release.json"
+MATERIALIZE_NAME = "feast_materialize.json"
 SNAPSHOT_RECORD = "features_snapshot.json"
 RUN_PREFIX = "lakehouse/layer_runs/features"
 PRECONDITION_CODES = ("PreconditionFailed", "ConditionalRequestConflict")
@@ -427,11 +428,49 @@ def set_materialize(
     return record
 
 
+def check_newest(feature_set: str, run: str, newest_run: Callable[[str], str]) -> None:
+    """Refuse a run that is not the newest committed run of its set: its table is no longer the set's data."""
+    newest = newest_run(feature_set)
+    if newest != run:
+        raise ReadError(f"run {run} is not the newest committed run of set {feature_set} ({newest}): its held load is superseded")
+
+
+def check_production(feature_set: str, run: str, set_hash: str, production: Callable[[], Mapping[str, str | None]]) -> None:
+    """Refuse while any Production model of the set is on another schema than the run's, and while a promotion is unresolved (``production`` raises)."""
+    differing = {hai_type: value for hai_type, value in sorted(production().items()) if value != set_hash}
+    if differing:
+        named = ", ".join(f"{hai_type} ({value or 'no schema hash'})" for hai_type, value in differing.items())
+        raise ReadError(
+            f"set {feature_set} stays held: the Production models of {named} are on another schema than run {run} ({set_hash}); "
+            "release it once every Production model of the set is trained on this schema"
+        )
+
+
 def record_problems(record: Mapping[str, Any], expected: Mapping[str, Any], text_fields: Sequence[str]) -> list[str]:
     """The fields of a stored record that do not equal what is expected, and the text fields that are missing or empty, by name."""
     problems = [name for name, value in expected.items() if record.get(name) != value]
     problems += [name for name in text_fields if not isinstance(record.get(name), str) or not record[name]]
     return sorted(set(problems))
+
+
+def direct_load_record(feature_set: str, run: str, mode: str, set_hash: str, holds: HoldStore) -> dict[str, Any]:
+    """The ``feast_materialize.json`` of a run that loaded the set online itself, or a refusal that names the fields that do not fit the request.
+
+    The record must be the successful load that ``set_materialize`` writes: its set, run, mode, step and set schema hash equal the request's, its base run is a
+    run ID and its load ID is text."""
+    record = holds.read(MATERIALIZE_NAME, run)
+    if record is None:
+        raise ReadError(f"run {run} has no online hold record and no {MATERIALIZE_NAME}, so there is nothing to release")
+    expected = {"step": "materialize", "feature_set": feature_set, "run_id": run, "mode": mode, "online": feature_sets.LOAD, "set_schema_sha256": set_hash}
+    problems = record_problems(record, expected, ("load_id", "base_run"))
+    if not problems and not reads.RUN_ID.fullmatch(record["base_run"]):
+        problems = ["base_run"]
+    if problems:
+        raise ReadError(
+            f"run {run} has no online hold record and its {MATERIALIZE_NAME} is not a successful load of set {feature_set} for this request "
+            f"(fields that do not fit: {', '.join(problems)}), so there is nothing to release"
+        )
+    return record
 
 
 def release(
@@ -444,6 +483,7 @@ def release(
     loader: OnlineLoader,
     newest_run: Callable[[str], str],
     production: Callable[[], Mapping[str, str | None]],
+    direct_mode: str | None = None,
 ) -> dict[str, Any]:
     """Load the held run of a set online and record the release. A run that was released returns its release record and loads nothing again.
 
@@ -454,12 +494,21 @@ def release(
 
     A cached release record is returned only when it is this hold's: its set, run, base run and set schema hash equal the hold's and it names a load.
     A set loader that can recover (``SetLoader``) is asked for a finished load of the request before it loads: a retry after the load finished and the receipt
-    write failed records that load and loads nothing again."""
+    write failed records that load and loads nothing again.
+
+    A run without a hold is accepted when ``direct_mode`` is given and the run's own ``feast_materialize.json`` is a successful load of the set in that mode
+    (the run's schema equalled the Production model's, so nothing was held). It is checked like a held run (newest run, Production models) and loads nothing;
+    the record returned is that load record."""
     if feature_sets.checked(feature_set) not in feature_sets.MODEL_SETS or not schema["model_sets"][feature_set]["online"]:
         raise ReadError(f"set {feature_set} is not an online model set: only m1, m2 and m4 have a held online load")
     hold = holds.read(HOLD_NAME, run)
     if hold is None:
-        raise ReadError(f"run {run} has no online hold record, so there is nothing to release")
+        if direct_mode is None:
+            raise ReadError(f"run {run} has no online hold record, so there is nothing to release")
+        loaded = direct_load_record(feature_set, run, direct_mode, feature_schema.set_schema_sha256(feature_set, schema=schema), holds)
+        check_newest(feature_set, run, newest_run)
+        check_production(feature_set, run, str(loaded["set_schema_sha256"]), production)
+        return loaded
     if hold.get("feature_set") != feature_set:
         raise ReadError(f"the hold of run {run} belongs to set {hold.get('feature_set')}, not to set {feature_set}")
     if hold.get("run_id") != run:
@@ -467,19 +516,11 @@ def release(
     released = holds.read(RELEASE_NAME, run)
     if released is not None:
         return bound_release(released, hold, feature_set, run)
-    newest = newest_run(feature_set)
-    if newest != run:
-        raise ReadError(f"run {run} is not the newest committed run of set {feature_set} ({newest}): its held load is superseded")
+    check_newest(feature_set, run, newest_run)
     set_hash = feature_schema.set_schema_sha256(feature_set, schema=schema)
     if hold.get("set_schema_sha256") != set_hash:
         raise ReadError(f"the schema of set {feature_set} changed since run {run} was held")
-    differing = {hai_type: value for hai_type, value in sorted(production().items()) if value != set_hash}
-    if differing:
-        named = ", ".join(f"{hai_type} ({value or 'no schema hash'})" for hai_type, value in differing.items())
-        raise ReadError(
-            f"set {feature_set} stays held: the Production models of {named} are on another schema than run {run} ({set_hash}); "
-            "release it once every Production model of the set is trained on this schema"
-        )
+    check_production(feature_set, run, set_hash, production)
     request = LoadRequest(feature_set, run, str(hold["base_run"]), set_hash)
     recovered = loader.recover(request) if isinstance(loader, SetLoader) else None
     load_id = recovered if recovered else loader(request)

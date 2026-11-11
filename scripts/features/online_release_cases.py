@@ -20,6 +20,7 @@ from typing import Any
 from scripts.features import feast_job, feast_sets
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker
+from scripts.features.publication_reads import ReadError
 
 BASE_RUN, HELD_RUN = "20261110T010000Z-0000b001", "20261110T020000Z-0000a001"
 OLD_HASH = "0" * 64
@@ -100,11 +101,18 @@ def case_e33_not_held(c: Checker) -> None:
     with tempfile.TemporaryDirectory(prefix="online_release_cases_") as raw:
         holds = feast_sets.FolderHoldStore(Path(raw))
         online = Online()
-        holds.write_new("feast_materialize.json", loaded_run, {"feature_set": "m4", "run_id": loaded_run, "online": "load", "set_schema_sha256": mine})
+        loaded_receipt(holds, schema, sha, "m4", loaded_run)
 
         def release(model: str, run: str) -> dict[str, Any]:
             return online_release.release_promoted(
-                model, run, schema=(schema, sha), holds=holds, loader=online.load, newest_run=lambda name: run, production=lambda: {"HAI_1": mine}
+                model,
+                run,
+                mode="publish_fixture",
+                schema=(schema, sha),
+                holds=holds,
+                loader=online.load,
+                newest_run=lambda name: run,
+                production=lambda: {"HAI_1": mine},
             )
 
         result = release("m4", loaded_run)
@@ -112,7 +120,7 @@ def case_e33_not_held(c: Checker) -> None:
         c.refused("a run with neither a hold nor a load record is refused by name", lambda: release("m4", blank_run), "no online hold")
         holds.write_new("feast_materialize.json", blank_run, {"feature_set": "m4", "run_id": blank_run, "online": "hold"})
         c.refused("a run whose record says hold but has no hold file is refused", lambda: release("m4", blank_run), "no online hold")
-        holds.write_new("feast_materialize.json", "20261110T050000Z-0000a002", {"feature_set": "m2", "run_id": "20261110T050000Z-0000a002", "online": "load"})
+        loaded_receipt(holds, schema, sha, "m2", "20261110T050000Z-0000a002")
         c.refused("a load record of another set is refused", lambda: release("m4", "20261110T050000Z-0000a002"), "no online hold")
         for offline in ("m3", "m5", "m6"):
             c.refused(f"{offline} is offline only and is refused", lambda offline=offline: release(offline, loaded_run), "not an online model set")
@@ -162,6 +170,103 @@ def case_e33_command(c: Checker) -> None:
         c.check("a name that is not a model set exits 1", code == 1 and "not a model set" in err)
         code, _, err = run(["--model", "m1", "--features-run", "latest"])
         c.check("a run that is not a run ID exits 1 and loads nothing", code == 1 and "run ID" in err and len(online.loads) == 1)
+
+
+def loaded_receipt(holds: feast_sets.HoldStore, schema: dict[str, Any], sha: str, model: str, run: str, /, **changes: Any) -> dict[str, Any]:
+    """The ``feast_materialize.json`` of a loaded run as ``set_materialize`` writes it, with ``changes`` applied (``None`` drops a field)."""
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256(model, schema=schema)
+    settings = feast_job.JobSettings("materialize", run, "publish_fixture", Path("/nonexistent"), "/nonexistent/registry.pb", "")
+    record = feast_sets.set_materialize(
+        settings,
+        model,
+        schema=schema,
+        schema_sha256=sha,
+        base_run=BASE_RUN,
+        production=lambda: [mine],
+        loader=lambda request: "load-direct-1",
+        holds=holds,
+    )
+    for name, value in changes.items():
+        if value is None:
+            record.pop(name, None)
+        else:
+            record[name] = value
+    holds.write_new(feast_sets.MATERIALIZE_NAME, run, record)
+    return record
+
+
+def case_e33_not_held_checked(c: Checker) -> None:
+    """A run that loaded itself is not held only when its load record is complete and its run is current: the release checks apply."""
+    online_release: Any = importlib.import_module("scripts.features.online_release")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
+    newer = "20261110T090000Z-0000a005"
+    online = Online()
+    calls: dict[str, int] = {"newest": 0, "production": 0}
+
+    def unresolved() -> dict[str, str | None]:
+        raise ReadError("the promotion of model-a (HAI_1) is unresolved: lease generation 2 is open")
+
+    with tempfile.TemporaryDirectory(prefix="online_release_cases_") as raw:
+        counter = [0]
+
+        def attempt(model: str = "m4", newest: str | None = None, production: Any = None, mode: str = "publish_fixture", **changes: Any) -> dict[str, Any]:
+            counter[0] += 1
+            run = f"20261110T03{counter[0]:02d}00Z-0000a004"
+            holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+            loaded_receipt(holds, schema, sha, "m4", run, **{name: (run if value == "RUN" else value) for name, value in changes.items()})
+
+            def newest_run(name: str) -> str:
+                calls["newest"] += 1
+                return run if newest is None else newest
+
+            def read_production() -> dict[str, str | None]:
+                calls["production"] += 1
+                return {"HAI_1": mine} if production is None else production()
+
+            return online_release.release_promoted(
+                model, run, mode=mode, schema=(schema, sha), holds=holds, loader=online.load, newest_run=newest_run, production=read_production
+            )
+
+        good = attempt()
+        c.check(
+            "a complete load record of a current run is not held and names its load", good["outcome"] == "not_held" and good.get("load_id") == "load-direct-1"
+        )
+        c.check("the answer names the set, the run and the base run", good["feature_set"] == "m4" and good.get("base_run") == BASE_RUN and "run_id" in good)
+        c.check("the check read the newest run and the Production models once each", calls == {"newest": 1, "production": 1})
+        c.refused("a superseded run is refused, as for a held run", lambda: attempt(newest=newer), "superseded")
+        c.refused("an unresolved promotion is refused", lambda: attempt(production=unresolved), "unresolved")
+        c.refused(
+            "a Production model on another schema is refused by infection type", lambda: attempt(production=lambda: {"HAI_1": mine, "HAI_2": OLD_HASH}), "HAI_2"
+        )
+        c.refused("a load record of another schema is refused", lambda: attempt(set_schema_sha256=OLD_HASH), "set_schema_sha256")
+        c.refused("a load record without a load ID is refused", lambda: attempt(load_id=None), "load_id")
+        c.refused("a load record with an empty load ID is refused", lambda: attempt(load_id=""), "load_id")
+        c.refused("a load record of another mode is refused", lambda: attempt(mode="real"), "mode")
+        c.refused("a load record of another run is refused", lambda: attempt(run_id=newer), "run_id")
+        c.refused("a load record of another set is refused", lambda: attempt(feature_set="m2"), "feature_set")
+        c.refused("a load record that says hold is refused", lambda: attempt(online="hold"), "no online hold")
+        c.refused("a load record without a base run is refused", lambda: attempt(base_run=None), "base_run")
+        c.refused("a load record of another step is refused", lambda: attempt(step="apply"), "step")
+        counter[0] += 1
+        run = f"20261110T03{counter[0]:02d}00Z-0000a004"
+        holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+        holds.write_new(feast_sets.MATERIALIZE_NAME, run, {"feature_set": "m4", "run_id": run, "online": "load"})
+        c.refused(
+            "the three-field record that the old shortcut accepted is refused",
+            lambda: online_release.release_promoted(
+                "m4",
+                run,
+                mode="publish_fixture",
+                schema=(schema, sha),
+                holds=holds,
+                loader=online.load,
+                newest_run=lambda name: run,
+                production=lambda: {"HAI_1": mine},
+            ),
+            "load_id",
+        )
+        c.check("no refusal and no answer loaded anything online", online.loads == [])
 
 
 def case_e33_cached_release(c: Checker) -> None:

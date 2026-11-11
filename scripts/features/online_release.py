@@ -7,12 +7,15 @@ A model set whose schema differs from the Production model's is published offlin
 rollout, it calls ``release_promoted`` (or this command) with the model and the run that trained it. The result is one of
 
 - ``released``: the held run was loaded online, once, and the release was recorded beside the hold;
-- ``already_released``: an earlier call did it, nothing is loaded again and the first release's load is named;
-- ``not_held``: the run was loaded online by its own Feast phase (its schema equalled the Production model's), so there is nothing to release.
+- ``already_released``: an earlier call did it, nothing is loaded again and the first release's load is named. The stored release record must be this hold's
+  (its set, run, base run and schema hash) and name a load, or it is refused;
+- ``not_held``: the run was loaded online by its own Feast phase (its schema equalled the Production model's), so there is nothing to release. Its
+  ``feast_materialize.json`` must be that successful load (set, run, mode, schema hash, base run and load ID) and the run must pass the checks of a release.
 
 Every other case is refused by name and loads nothing: a set that is offline only (m3, m5, m6) or not a model set, a run with neither a hold nor a load record,
-a run that is not the set's newest, and a set while any Production model of it is on another schema (``feast_sets.release``). The set decides what is online, so
-the caller does not compare schemas itself. Records hold names, counts and hashes only.
+a run that is not the set's newest, an unresolved promotion, and a set while any Production model of it is on another schema (``feast_sets.release``). The set
+decides what is online, so the caller does not compare schemas itself. A release retried after its load finished and its receipt write failed records the
+load the ready marker holds and loads nothing again. Records hold names, counts and hashes only.
 """
 
 from __future__ import annotations
@@ -28,7 +31,6 @@ from scripts.features import feast_job, feast_materialize, feast_sets, feature_s
 from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
 
-MATERIALIZE_RECORD = "feast_materialize.json"
 RELEASED, ALREADY_RELEASED, NOT_HELD = "released", "already_released", "not_held"
 
 
@@ -65,11 +67,7 @@ def release_promoted(
     if not document["model_sets"][model]["online"]:
         raise ReadError(f"set {model} is not an online model set: only m1, m2 and m4 have a held online load")
     store = holds if holds is not None else default_holds(features_run, mode, live)
-    if store.read(feast_sets.HOLD_NAME, features_run) is None:
-        loaded = store.read(MATERIALIZE_RECORD, features_run)
-        if loaded is not None and loaded.get("online") == feature_sets.LOAD and loaded.get("feature_set") == model and loaded.get("run_id") == features_run:
-            return {"outcome": NOT_HELD, "feature_set": model, "run_id": features_run}
-        raise ReadError(f"run {features_run} has no online hold record and did not load set {model} online, so there is nothing to release")
+    held = store.read(feast_sets.HOLD_NAME, features_run) is not None
     first = store.read(feast_sets.RELEASE_NAME, features_run) is None
     record = feast_materialize.release_set(
         ["--release", model, features_run, "--mode", mode],
@@ -79,11 +77,10 @@ def release_promoted(
         loader=loader,
         newest_run=newest_run,
         production=production,
+        direct=True,
     )
-    return {
-        "outcome": RELEASED if first else ALREADY_RELEASED,
-        **{key: record[key] for key in ("feature_set", "run_id", "base_run", "load_id") if key in record},
-    }
+    outcome = NOT_HELD if not held else RELEASED if first else ALREADY_RELEASED
+    return {"outcome": outcome, **{key: record[key] for key in ("feature_set", "run_id", "base_run", "load_id") if key in record}}
 
 
 def main(argv: Sequence[str] | None = None, environ: MutableMapping[str, str] | None = None, **injected: Any) -> int:
