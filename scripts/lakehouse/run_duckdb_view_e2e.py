@@ -164,7 +164,7 @@ def scenarios() -> dict[str, bool]:
             "duckdb_helper",
             "extensions",
             [],
-            {"mounts": [], "sql": "SELECT * FROM read_csv('/home/analytics/extensions.csv');", "flags": ["-csv", "-noheader"]},
+            {"mounts": [], "sql": "SELECT * FROM read_csv('/opt/analytics_home/extensions.csv');", "flags": ["-csv", "-noheader"]},
             checkout=REPO_ROOT,
         ).stdout
     finally:

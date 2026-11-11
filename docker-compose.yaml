@@ -224,7 +224,7 @@ services:
       - ./services/analytics/resources.sql:/opt/analytics/resources.sql:ro
       - ./services/analytics/bronze.sql:/opt/analytics/bronze.sql:ro
       # Saved UI notebooks live in the ignored data/ folder, so they survive the container.
-      - ./data/analytics/ui:/home/analytics/.duckdb/extension_data/ui
+      - ./data/analytics/ui:/opt/analytics_home/.duckdb/extension_data/ui
     ports:
       # The DuckDB UI has no login: reachable from this Mac only, through the relay in the image.
       - "127.0.0.1:4213:4214"

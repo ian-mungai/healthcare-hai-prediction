@@ -24,16 +24,16 @@ ENV PATH=/opt/venv/bin:${PATH}
 ENV DBT_SEND_ANONYMOUS_USAGE_STATS=false \
     DBT_VERSION_CHECK=false
 
-# Run as an unprivileged user; its home holds the extensions, and the code and AWS profile are mounted at run time.
-RUN useradd --create-home --uid 10002 analytics
+# Run as an unprivileged user; its home, /opt/analytics_home outside /home, holds the extensions, and the code and AWS profile are mounted at run time.
+RUN useradd --create-home --home-dir /opt/analytics_home --uid 10002 analytics
 USER 10002
 RUN duckdb -c "INSTALL iceberg; INSTALL httpfs; INSTALL avro; INSTALL aws; INSTALL ui;" \
-    && duckdb -c "COPY (SELECT extension_name, extension_version, install_mode FROM duckdb_extensions() WHERE installed AND extension_name IN ('iceberg', 'httpfs', 'avro', 'aws', 'ui') ORDER BY 1) TO '/home/analytics/extensions.csv'" \
-    && cat /home/analytics/extensions.csv
+    && duckdb -c "COPY (SELECT extension_name, extension_version, install_mode FROM duckdb_extensions() WHERE installed AND extension_name IN ('iceberg', 'httpfs', 'avro', 'aws', 'ui') ORDER BY 1) TO '/opt/analytics_home/extensions.csv'" \
+    && cat /opt/analytics_home/extensions.csv
 
 # The AWS jobs run as another user with an empty home. They load the same extensions from one shared read-only directory that the profile names.
 USER 0
-RUN cp -R /home/analytics/.duckdb/extensions /opt/duckdb-extensions \
+RUN cp -R /opt/analytics_home/.duckdb/extensions /opt/duckdb-extensions \
     && mkdir -p /opt/duckdb \
     && mv /opt/duckdb-extensions /opt/duckdb/extensions \
     && chown -R root:root /opt/duckdb \
