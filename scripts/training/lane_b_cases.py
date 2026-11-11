@@ -115,6 +115,7 @@ def fixture(root: Path) -> dict[str, Any]:
                 "type": "bigint" if name == "bed_count" else "varchar",
                 "role": "predictor",
                 "view": "feature_matrix_hospital_window",
+                "feast_type": "Int64" if name == "bed_count" else "String",
                 "pivot": {"copy": name},
             }
         )
@@ -123,6 +124,7 @@ def fixture(root: Path) -> dict[str, Any]:
         "type": "double",
         "role": "predictor",
         "view": "feature_matrix_hospital",
+        "feast_type": "Float64",
         "pivot": {"match": {"measure_control": "C001"}},
     }
     second: dict[str, Any] = {
@@ -130,6 +132,7 @@ def fixture(root: Path) -> dict[str, Any]:
         "type": "double",
         "role": "predictor",
         "view": "feature_matrix_hospital",
+        "feast_type": "Float64",
         "pivot": {"match": {"measure_control": "C002"}},
     }
     labels = [
@@ -138,29 +141,44 @@ def fixture(root: Path) -> dict[str, Any]:
             "type": "double" if field == "sir__number" else "varchar",
             "role": "weight" if field == "predicted__number" else "label",
             "view": f"label_hai_{number}",
+            "feast_type": "String" if field == "alignment_status__category" else "Float64",
         }
         for number in range(1, 7)
         for field in ("sir__number", "alignment_status__category", "predicted__number")
     ]
+    listed_groups = [column for column in groups if column["name"] not in feature_schema.SERVICE_GROUP_ATTRIBUTES]
     schema: dict[str, Any] = {
         "schema": 1,
         "tables": {
             "feature_matrix_hospital_window": {"role": "predictor", "columns": groups},
             "feature_matrix_hospital": {"role": "predictor", "columns": [predictor, second]},
-            "label_matrix_hai_outcomes": {"role": "label", "columns": labels},
+            "label_matrix_hai_outcomes": {
+                "role": "label",
+                "columns": labels,
+                "label_views": {
+                    f"label_hai_{number}": [column["name"] for column in labels if column["view"] == f"label_hai_{number}"] for number in range(1, 7)
+                },
+            },
         },
         "servable": sorted(f"{column['view']}:{column['name']}" for column in [*groups, predictor, second]),
-        # Each model set's table and ordered columns: the extract records the schema hash of the set it trained on (feature_schema.set_schema_sha256).
+        # Each model set as the generator writes it: its table, view and service, the online flag and the ordered columns of its feature list.
         "model_sets": {
             f"m{number}": {
                 "table": f"feature_matrix_m{number}",
-                "columns": [{"name": column["name"], "type": column["type"]} for column in [*groups, predictor, *([second] if number > 1 else [])]],
+                "view": f"model_m{number}",
+                "service": f"model_m{number}",
+                "online": number in (1, 2, 4),
+                "label_views": [f"label_hai_{label}" for label in range(1, 7)],
+                "columns": [
+                    {"name": column["name"], "type": column["type"], "role": "predictor", "feast_type": column["feast_type"], "source_table": column["view"]}
+                    for column in [*listed_groups, predictor, *([second] if number > 1 else [])]
+                ],
             }
             for number in range(1, 7)
         },
     }
     (root / "data_contracts/features/feature_schema.json").write_bytes(extract.canonical(schema) + b"\n")
-    refs = [f"{predictor['view']}:{predictor['name']}"]
+    refs = [*(f"{column['view']}:{column['name']}" for column in listed_groups), f"{predictor['view']}:{predictor['name']}"]
     (root / "config/training/feature_lists/m1_ols.json").write_bytes(extract.canonical({"references": refs}) + b"\n")
     (root / "config/training/feature_lists/rq4_reduced.json").write_bytes(extract.canonical({"references": refs}) + b"\n")
     (root / "config/training/feature_lists/m2_elastic_net.json").write_bytes(
@@ -315,17 +333,10 @@ class SyntheticReader:
         return rows
 
     def service_references(self, name: str) -> tuple[str, ...]:
-        """Return what the stand-in Feast service of a model serves: the lists of the model, the group attributes and the label of every type."""
+        """Return what the generated Feast service of a model serves: the definitions the generator writes for the schema, read as references."""
         self.services_read.append(name)
-        model = name.removeprefix("model_")
-        listed = {
-            ref
-            for slot in training_contract.MODEL_LISTS[model]
-            for ref in json.loads((self.root / f"config/training/feature_lists/{slot}.json").read_bytes())["references"]
-        }
-        groups = {f"feature_matrix_hospital_window:{column}" for column in extract.GROUP_COLUMNS}
-        labels = {f"label_hai_{n}:hai_{n}__{field}" for n in range(1, 7) for field in ("sir__number", "alignment_status__category", "predicted__number")}
-        return tuple(sorted(({*listed, *groups, *labels, *self.service_extra}) - set(self.service_dropped)))
+        generated = feature_schema.service_references_in_definitions(feature_schema.render_definitions(self.schema))[name]
+        return tuple(sorted(({*generated, *self.service_extra}) - set(self.service_dropped)))
 
     def consistent(self, publication: Any, operation: Callable[[], Any]) -> Any:
         """Reject support-head movement around the consumed scans."""
@@ -659,8 +670,10 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
         ),
     )
     for name, change, reason in (
-        ("extract_service_with_an_extra_feature_refused", {"service_extra": ("feature_matrix_hospital:c002__score__number",)}, "feature service"),
-        ("extract_service_missing_a_feature_refused", {"service_dropped": ("feature_matrix_hospital:c001__score__number",)}, "feature service"),
+        ("extract_service_with_an_extra_feature_refused", {"service_extra": ("model_m1:c002__score__number",)}, "feature service"),
+        ("extract_service_missing_a_feature_refused", {"service_dropped": ("model_m1:c001__score__number",)}, "feature service"),
+        ("extract_service_missing_a_group_attribute_refused", {"service_dropped": ("feature_matrix_hospital_window:state_code",)}, "feature service"),
+        ("extract_service_missing_the_county_attribute_refused", {"service_dropped": ("feature_matrix_hospital_window:county_fips",)}, "feature service"),
     ):
         serving = SyntheticReader(source)
         for attribute, value in change.items():

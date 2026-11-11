@@ -362,9 +362,13 @@ def extract(
         raise ExtractError(f"the feature reader selected another publication than base run {base_run}")
     if any(name not in base.snapshot_set for name in SUPPORT_TABLES):
         raise ExtractError(f"base run {base_run} lacks a required training support snapshot")
+    try:
+        expected = feature_schema.service_references(reader.schema, model, references)
+    except feature_schema.SchemaError as error:
+        raise ExtractError(str(error)) from None
     served = reader.service_references(service)
-    if set(served) != set(references) or len(served) != len(references):
-        gap = sorted(set(served) ^ set(references))
+    if set(served) != set(expected) or len(served) != len(expected):
+        gap = sorted(set(served) ^ set(expected))
         raise ExtractError(
             f"the Feast feature service {service} differs from the reviewed lists of {model} and the labels: {len(gap)} references, first {gap[0]}"
         )
