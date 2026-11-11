@@ -1319,9 +1319,21 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
     layout = online.set_layout("m1")
     rows = [{"spine_key": key, "event_timestamp": T0 + timedelta(days=index)} for index, key in enumerate(KEYS)]
 
-    def scenario(tamper: Callable[[Any], None] | None) -> tuple[Any, list[Any], Any, dict[str, Any], dict[str, Any], dict[str, Any]]:
-        """One failed release, an optional change of the online store, a retry and a repeat; returns the server, the loads, the holds and the three outcomes."""
+    def scenario(
+        tamper: Callable[[Any], None] | None, during: Callable[[Any], None] | None = None
+    ) -> tuple[Any, list[Any], Any, dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """One failed release, an optional change of the online store, a retry and a repeat; returns the server, the loads, the holds and the three outcomes.
+
+        ``during`` runs once, when the retry opens the publication catalog after it read the ready marker: a change of the store between the two reads."""
         server = make()
+        pending: list[Callable[[Any], None]] = []
+
+        @contextlib.contextmanager
+        def session() -> Iterator[Any]:
+            if pending:
+                pending.pop()(server)
+            yield catalog
+
         catalog = feast_cases.StubCatalog()
         catalog.tables[table] = feast_cases.StubTable(table, 4001, {"spine_key": "string", "event_timestamp": "timestamptz"}, rows)
         catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(run, T0, {table: 4001})])
@@ -1335,7 +1347,7 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
             feast_cases.fixture_settings(Path("/nonexistent")),
             {},
             schema=(schema, sha),
-            session=lambda: contextlib.nullcontext(catalog),
+            session=session,
             control=server.client(online.CONTROL_DB),
             features=server.client(layout.feature_db),
             hooks_for=hooks_for,
@@ -1363,9 +1375,11 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
             release()
             failed: dict[str, Any] = {}
         except ReceiptFault:
-            failed = {"fault": True, "loads": len(loads)}
+            failed = {"fault": True, "loads": len(loads), "first_load": server.read_hash(online.CONTROL_DB, layout.marker_key).get("load_id")}
         if tamper is not None:
             tamper(server)
+        if during is not None:
+            pending.append(during)
         retried = release()
         repeated = release()
         return server, loads, holds, {**failed, "marker": server.read_hash(online.CONTROL_DB, layout.marker_key)}, retried, repeated
@@ -1402,6 +1416,26 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
     def restarted(server: Any) -> None:
         server.restart()
 
+    def new_load_id(server: Any) -> None:
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"load_id": "load-other"})
+
+    for label, during in (
+        ("an online store restarted while the retry read the publication", restarted),
+        ("a marker of another load ID while the retry read the publication", new_load_id),
+    ):
+        fresh, loads, holds, failed, retried, repeated = scenario(None, during)
+        receipt = holds.read("online_release.json", run) or {}
+        marker = fresh.read_hash(online.CONTROL_DB, layout.marker_key)
+        c.check(f"{label}: the retry takes the normal path and loads once more", len(loads) == 2 and retried["outcome"] == "released")
+        c.check(
+            f"{label}: the receipt names the load that the retry made, not the first load",
+            receipt.get("load_id") == retried["load_id"] == marker.get("load_id") != failed["first_load"],
+        )
+        c.check(
+            f"{label}: the store holds that load: a ready marker and entities",
+            marker.get("state") == "ready" and fresh.client(layout.feature_db).dbsize() > 0,
+        )
+        c.check(f"{label}: the repeat after that loads nothing", len(loads) == 2 and repeated["outcome"] == "already_released")
     for label, tamper in (
         ("an incomplete load (marker loading)", mark_loading),
         ("a marker of another run", other_run),

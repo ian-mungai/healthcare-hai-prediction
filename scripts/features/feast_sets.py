@@ -244,7 +244,8 @@ def online_loader(
 ) -> SetLoader:
     """The online load of one set: the protocol of ``online_protocol`` with the set's own database and marker, so a load flushes and marks nothing else.
 
-    The result also recovers a finished load (``SetLoader.recover``): the set's marker is ``ready`` for the run, set schema hash and publication digest."""
+    The result also recovers a finished load (``SetLoader.recover``): the set's marker is ``ready`` for the run, set schema hash and publication digest,
+    and it is still that same ready marker when read again after the publication is read."""
 
     def load(request: LoadRequest) -> str:
         document, _ = schema if schema is not None else reads.read_schema()
@@ -276,19 +277,30 @@ def online_loader(
 
     def recover(request: LoadRequest) -> str | None:
         layout = online.set_layout(request.feature_set)
-        marker = online.read_marker(control if control is not None else online.connect(environ, online.CONTROL_DB), layout.marker_key)
-        load_id = marker.get("load_id", "")
-        if (
-            marker.get("state") != "ready"
-            or not online.SAFE_TEXT.fullmatch(load_id)
-            or marker.get("feature_run_id") != request.run
-            or marker.get("feature_schema_sha256") != request.set_schema_sha256
-        ):
+        client = control if control is not None else online.connect(environ, online.CONTROL_DB)
+
+        def ready_marker() -> dict[str, str] | None:
+            marker = online.read_marker(client, layout.marker_key)
+            load_id = marker.get("load_id", "")
+            if (
+                marker.get("state") != "ready"
+                or not online.SAFE_TEXT.fullmatch(load_id)
+                or marker.get("feature_run_id") != request.run
+                or marker.get("feature_schema_sha256") != request.set_schema_sha256
+            ):
+                return None
+            return marker
+
+        first = ready_marker()
+        if first is None:
             return None
         opened = session() if session is not None else feast_job.catalog_session(settings, environ)
         with opened as catalog:
             publication = reads.read_publication(catalog, reads.NAMESPACES[settings.mode], request.run)
-        return load_id if marker.get("snapshot_set_sha256") == publication.snapshot_set_sha256 else None
+        if first.get("snapshot_set_sha256") != publication.snapshot_set_sha256:
+            return None
+        # The store can restart or be reloaded while the catalog is read: only a marker that is still the same ready load is recovered.
+        return first["load_id"] if ready_marker() == first else None
 
     return SetLoader(load, recover)
 
