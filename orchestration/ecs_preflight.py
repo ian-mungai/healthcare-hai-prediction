@@ -36,6 +36,7 @@ from orchestration.training_contract import (
     MODELS,
     PROMOTION_MODELS,
     chain_parameters_for,
+    chain_run_id,
     model_features_run_id,
     parameters_for,
     serving_parameters_for,
@@ -219,28 +220,34 @@ def derived_run_id(parent_run: str, layer: str) -> str:
 
 
 def serving_values(request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None]) -> dict[str, str]:
-    """The values of the serve container for a closed launch request: the infection type and the mode, canary or stable.
+    """The values of the serve container for a closed launch request: the infection type and the mode, canary, stable or withdraw.
 
     The request names no version and no share. A canary deploys the challenger of the type's research record in the research run the launch publishes from,
-    at the share the job table fixes. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry. A
-    request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived request and
-    reads nothing else.
+    at the share the job table fixes. A withdraw names that challenger and the canary deployment of the research run's chain, so the job removes that canary
+    and no other. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry. A request with any other
+    key, a canary or withdraw without a research run and a type with no challenger are refused. The container receives the derived request and reads nothing
+    else.
     """
     try:
         closed = serving_parameters_for(request)
     except ValueError as error:
         raise TaskRefused(f"serving_request_refused: {error}") from None
-    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0}
-    if closed["deploy_mode"] == "canary":
+    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0, "canary_deployment_id": None}
+    if closed["deploy_mode"] != "stable":
         if research_run is None:
             raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
         try:
             named = challenger_named(read, research_run, closed["hai_type"])
+            canary_run = chain_run_id(research_run, closed["hai_type"], "canary_deploy")
         except (RecordRefused, ValueError) as error:
             raise TaskRefused(f"serving_candidate_refused: {error}") from None
         if named is None:
             raise TaskRefused(f"serving_candidate_refused: the research record of {closed['hai_type']} has no challenger to deploy")
-        derived |= {"candidate_version": named[1], "percent": canary_percent}
+        derived["candidate_version"] = named[1]
+        if closed["deploy_mode"] == "canary":
+            derived["percent"] = canary_percent
+        else:
+            derived["canary_deployment_id"] = canary_run
     body = json.dumps(derived, sort_keys=True, separators=(",", ":"))
     return {"SERVING_REQUEST": body, "SERVING_REQUEST_SHA256": hashlib.sha256(body.encode()).hexdigest()}
 

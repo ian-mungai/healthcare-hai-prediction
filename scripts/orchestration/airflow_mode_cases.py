@@ -79,7 +79,7 @@ from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, Launc
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import record_key, research_run_id, training_run_id
+from orchestration.training_contract import chain_run_id, record_key, research_run_id, training_run_id
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
@@ -729,7 +729,18 @@ def serving_request_is_closed_and_derived() -> None:
         research_record_of(rig, challenger)
         require(current.step("serve_deploy") == "succeeded", "a canary of the research record's challenger did not run")
         derived = json.loads(rig.environment()["serve"]["SERVING_REQUEST"])
-        require(derived == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10}, f"the derived request is {derived}")
+        require(
+            derived == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10, "canary_deployment_id": None},
+            f"the derived request is {derived}",
+        )
+    withdraw_run = "20261030T120000Z-5e5e5e61"
+    rig.stage_runs(withdraw_run)
+    with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "deploy_mode": "withdraw", "run_id": withdraw_run}) as current:
+        require(current.step("serve_deploy") == "succeeded", "a withdraw of the research record's challenger did not run")
+        derived = json.loads(rig.environment(1)["serve"]["SERVING_REQUEST"])
+        bound = chain_run_id(SERVE_RESEARCH, "HAI_1", "canary_deploy")
+        wanted = {"hai_type": "HAI_1", "deploy_mode": "withdraw", "candidate_version": "4", "percent": 0, "canary_deployment_id": bound}
+        require(derived == wanted, f"the derived withdraw request is {derived}")
     with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "research_run": "latest"}) as current:
         error = refuses(LaunchRefused, lambda: current.step("serve_deploy"))
         require("names none" in str(error), f"a canary without a research run: {error}")
@@ -737,8 +748,11 @@ def serving_request_is_closed_and_derived() -> None:
     rig.stage_runs(stable_run)
     with world(rig, "serving_deploy_dag", {**SERVE_FORM, "run_id": stable_run}) as current:
         require(current.step("serve_deploy") == "succeeded", "a stable deploy did not run")
-        derived = json.loads(rig.environment(1)["serve"]["SERVING_REQUEST"])
-        require(derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0}, f"the derived stable request is {derived}")
+        derived = json.loads(rig.environment(2)["serve"]["SERVING_REQUEST"])
+        require(
+            derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_deployment_id": None},
+            f"the derived stable request is {derived}",
+        )
     before = rig.tasks_started()
     for extra in ({"candidate_version": "9"}, {"percent": 40}, {"candidate_version": "9", "percent": 40}, {"deploy_mode": "rollback"}):
         training = {"hai_type": "HAI_1", "deploy_mode": "canary", **extra}
