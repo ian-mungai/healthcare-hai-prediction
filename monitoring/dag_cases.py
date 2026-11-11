@@ -377,6 +377,25 @@ def with_gate(s3: MemoryS3, **changes: Any) -> MemoryS3:
     return s3
 
 
+def with_marker(s3: MemoryS3, **changes: Any) -> MemoryS3:
+    """The bucket with top-level fields of the marker changed, as a marker written by another version would hold."""
+    key = (BUCKET, f"drift/{DRIFT_RUN}/_complete.json")
+    s3.objects[key] = json.dumps({**json.loads(s3.objects[key]), **changes}).encode()
+    return s3
+
+
+def no_production_model_changed_to_an_unsupported_reason() -> MemoryS3:
+    """A valid no-Production marker whose reason, decision and gate all say ``artifact_missing``, a reason the gate never accepts."""
+    s3 = bucket_with([], unmonitored={"HAI_1": "no_production_model"})
+    with_marker(s3, unmonitored={"HAI_1": "artifact_missing"})
+    return with_gate(s3, decisions={"HAI_1": {"train": False, "reason": "artifact_missing"}}, train=False)
+
+
+def valid_marker() -> MemoryS3:
+    """A model with no Production model for HAI_1 and a quiet record for HAI_2."""
+    return bucket_with([record("HAI_2")], unmonitored={"HAI_1": "no_production_model"})
+
+
 def decision_repeats(folder: Path) -> Problems:
     with loaded_dag() as module:
         s3 = bucket_with([record("HAI_1", triggered=True)])
@@ -444,6 +463,56 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         (
             "dag_refuses_a_gate_that_trains_a_quiet_type",
             refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1")]), train_types=["HAI_1"], train=True)),
+        ),
+        ("dag_refuses_an_unsupported_unmonitored_reason", refuses("artifact_missing", no_production_model_changed_to_an_unsupported_reason)),
+        (
+            "dag_refuses_a_gate_without_its_decisions",
+            refuses("inconsistent", lambda: with_gate(bucket_with([], unmonitored={"HAI_1": "no_production_model"}), decisions={}, train=False)),
+        ),
+        (
+            "dag_refuses_a_marker_that_monitors_a_type_without_a_record",
+            refuses("monitored", lambda: with_marker(bucket_with([record("HAI_1")]), monitored=["HAI_1", "HAI_2"])),
+        ),
+        (
+            "dag_refuses_a_record_of_a_type_the_marker_does_not_monitor",
+            refuses("monitored", lambda: with_marker(bucket_with([record("HAI_1"), record("HAI_2")]), monitored=["HAI_1"])),
+        ),
+        (
+            "dag_refuses_a_type_named_monitored_and_unmonitored",
+            refuses("names a type twice", lambda: with_marker(bucket_with([record("HAI_1")]), unmonitored={"HAI_1": "no_production_model"})),
+        ),
+        (
+            "dag_refuses_an_unknown_unmonitored_type",
+            refuses("unknown type", lambda: with_marker(bucket_with([record("HAI_1")]), unmonitored={"HAI_9": "no_production_model"})),
+        ),
+        ("dag_refuses_a_train_flag_that_contradicts_the_types", refuses("inconsistent", lambda: with_gate(valid_marker(), train=False))),
+        ("dag_refuses_a_train_flag_on_a_gate_that_trains_nothing", refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1")]), train=True))),
+        (
+            "dag_refuses_a_decision_that_trains_a_quiet_type",
+            refuses(
+                "inconsistent",
+                lambda: with_gate(
+                    valid_marker(), decisions={"HAI_1": {"train": True, "reason": "no_production_model"}, "HAI_2": {"train": True, "reason": "drifted"}}
+                ),
+            ),
+        ),
+        (
+            "dag_refuses_a_decision_with_another_reason",
+            refuses(
+                "inconsistent",
+                lambda: with_gate(
+                    valid_marker(), decisions={"HAI_1": {"train": True, "reason": "drifted"}, "HAI_2": {"train": False, "reason": "not_drifted"}}
+                ),
+            ),
+        ),
+        (
+            "dag_refuses_skip_reasons_that_differ_from_the_decisions",
+            refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1")]), skip_reasons={})),
+        ),
+        ("dag_refuses_a_gate_of_another_schema", refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1")]), schema=2))),
+        (
+            "dag_refuses_a_gate_that_trains_a_type_no_record_covers",
+            refuses("inconsistent", lambda: with_gate(valid_marker(), train_types=["HAI_1", "HAI_3"])),
         ),
         ("dag_refuses_a_record_of_another_run", refuses("another run", lambda: bucket_with(stale))),
         ("dag_refuses_a_run_without_its_marker", refuses("not complete", lambda: bucket_with([record("HAI_1")], marker=False))),

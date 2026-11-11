@@ -3,9 +3,10 @@
 Each ``features_m<n>_dag`` starts this DAG once its set is published, with the model and the run of that set (``features_run``). One step launches the drift
 task on AWS through the direct ECS launch library. The task covers the six HAI types of that model and publishes its records and the gate's decision to
 ``s3://<data bucket>/drift/<run>/``, with the marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker,
-a record of another run, a changed or inconsistent record, a marker without the gate's decision, a decision of another model and a decision that does not
-match the records. It builds at most one request for ``training_dag``: the model's own training run for the types the gate trains (the model drifted, its
-feature schema changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
+a record of another run, a changed or inconsistent record, a marker without the gate's decision, a decision of another model, a marker whose monitored types
+are not the types of its records and a decision that differs in any field from the one the gate rule (``decide_drift_gate``) gives for the marker's types and
+records. It builds at most one request for ``training_dag``: the model's own training run for the types the gate trains (the model drifted, its feature schema
+changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
 ``trigger=drift:<this run>``. A type the gate skips is logged with its reason. The trigger is mapped over that list, so a model that does not train starts
 nothing. The training run id and the trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of
 a retrained model is automatic through the promotion rule and the canary."""
@@ -22,7 +23,7 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration import dag_runtime
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, model_training_run_id, parameters_for
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, GateRefused, decide_drift_gate, model_training_run_id, parameters_for
 
 LOG = logging.getLogger(__name__)
 MARKER = "_complete.json"
@@ -78,27 +79,33 @@ def read_marker(s3: Any, bucket: str, drift_run: str) -> tuple[dict[str, Any], l
 
 
 def gate_types(marker: dict[str, Any], model: str, records: list[dict[str, Any]]) -> tuple[list[str], dict[str, str]]:
-    """Return the types the marker's gate decision trains for ``model`` and the reason of each type it skips, after checking that the decision belongs to
-    this model and matches the records: every drifted type and every type without a baseline trains, and no quiet monitored type does."""
+    """Return the types the marker's gate decision trains for ``model`` and the reason of each type it skips. The reader recomputes the decision with the rule
+    of the drift task (``decide_drift_gate``) from the marker's monitored types, the reasons of its unmonitored types and the records, and refuses a marker
+    whose monitored types are not the types of its records, whose inputs the rule refuses (an unknown or unsupported reason, a type named twice, a missing
+    record) or whose decision differs from the recomputed one in any field."""
     gate = marker.get("gate")
     if not isinstance(gate, dict) or gate.get("kind") != "drift_gate":
         raise RuntimeError(f"the marker holds no gate decision of {model}: the drift task of this run did not gate a model")
     if marker.get("model") != model or gate.get("model") != model:
         raise RuntimeError(f"the gate decision belongs to another model, {marker.get('model')}, not {model}")
-    types, decisions, unmonitored = gate.get("train_types"), gate.get("decisions"), marker.get("unmonitored")
-    if not isinstance(types, list) or not isinstance(decisions, dict) or not isinstance(unmonitored, dict):
-        raise RuntimeError("the gate decision is inconsistent: it names no types to train, no decisions or no unmonitored types")
-    monitored = {record["hai_type"]: record["triggered"] for record in records}
-    drifted = {hai_type for hai_type, triggered in monitored.items() if triggered}
+    monitored, unmonitored = marker.get("monitored"), marker.get("unmonitored")
     if (
-        types != sorted(set(types), key=lambda name: HAI_TYPES.index(name) if name in HAI_TYPES else len(HAI_TYPES))
-        or not set(types) <= set(HAI_TYPES)
-        or not drifted | set(unmonitored) <= set(types)
-        or any(monitored.get(hai_type) is False or hai_type not in monitored | unmonitored for hai_type in types)
+        not isinstance(monitored, list)
+        or not isinstance(unmonitored, dict)
+        or not all(isinstance(item, str) for item in (*monitored, *unmonitored, *unmonitored.values()))
     ):
-        raise RuntimeError(f"the gate decision is inconsistent with the drift records: it trains {types}, the records drifted {sorted(drifted)}")
-    skipped = {hai_type: str(item.get("reason")) for hai_type, item in sorted(decisions.items()) if isinstance(item, dict) and not item.get("train")}
-    return types, skipped
+        raise RuntimeError("the marker names its monitored types as a list and its unmonitored types as a dictionary of reasons")
+    held = {record["hai_type"]: record for record in records}
+    if sorted(monitored) != sorted(held):
+        raise RuntimeError(f"the marker monitors {sorted(monitored)} and its drift records are of {sorted(held)}: it must hold one record per monitored type")
+    try:
+        expected = decide_drift_gate(model, {"monitored": monitored, "unmonitored": unmonitored}, held)
+    except GateRefused as error:
+        raise RuntimeError(f"the marker's monitored and unmonitored types do not support a gate decision: {error}") from None
+    if gate != expected:
+        raise RuntimeError(f"the gate decision is inconsistent with the drift records: it holds {gate}, the records give {expected}")
+    decisions: dict[str, dict[str, Any]] = expected["decisions"]
+    return expected["train_types"], {hai_type: str(item["reason"]) for hai_type, item in sorted(decisions.items()) if not item["train"]}
 
 
 def training_requests(drift_run: str, mlflow: str, model: str, features_run: str, types: list[str]) -> list[dict[str, Any]]:
