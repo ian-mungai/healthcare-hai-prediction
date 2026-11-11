@@ -45,6 +45,8 @@ class Cloud:
 
     def put_object(self, **arguments: Any) -> dict:
         check(arguments["IfNoneMatch"] == "*", "a state is created once")
+        if arguments["Key"] in self.objects:
+            raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "synthetic"}}, "PutObject")
         self.puts.append(arguments["Key"])
         self.objects[arguments["Key"]] = arguments["Body"]
         return {"VersionId": "v1"}
@@ -165,6 +167,51 @@ def test_the_state_is_saved_even_when_the_harness_stops(monkeypatch: pytest.Monk
     with pytest.raises(ValueError, match="stopped"):
         publisher_run.main(environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound}, cloud.factory)
     check(any(key.startswith("raw/run3_state/") for key in cloud.puts), "the records of a stopped run are kept for the next task")
+    check(f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json" in cloud.objects, "a stopped run still names its final state")
+
+
+def finished_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Cloud, dict[str, str], str]:
+    stage, digest = staged()
+    cloud = Cloud(stage)
+    bound = hashlib.sha256(b"{}").hexdigest()
+
+    def saved_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
+        fill_state(args.state_root, ["x"])
+        return harness.Run(args.queue, args.state_root)
+
+    monkeypatch.setattr(harness, "run_from", saved_run)
+    monkeypatch.setattr(harness, "execute", lambda *_args, **_kwargs: {"attempted": 0})
+    environ = environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound}
+    publisher_run.main(environ, cloud.factory)
+    return cloud, environ, bound
+
+
+def test_a_finished_task_names_its_final_state_at_a_key_fixed_by_the_queue_and_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cloud, _, bound = finished_task(monkeypatch, tmp_path)
+    states = [key for key in cloud.puts if key.startswith(f"raw/run3_state/{bound}/")]
+    record = json.loads(cloud.objects[f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json"])
+    check(set(record) == {"run_id", "queue_sha256", "state"} and record["run_id"] == RUN_ID and record["queue_sha256"] == bound, str(record))
+    check(record["state"]["key"] == states[-1], "the record names the last state the task saved")
+    check(record["state"]["version_id"] == "v1" and record["state"]["sha256"] == hashlib.sha256(cloud.objects[states[-1]]).hexdigest(), str(record))
+    check(cloud.puts[-1] == f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json", "the run record is written after the final state")
+
+
+def test_the_run_record_leaves_the_latest_state_check_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    cloud, environ, bound = finished_task(monkeypatch, tmp_path)
+    final = json.loads(cloud.objects[f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json"])["state"]
+    publisher_run.require_latest(cloud, final, environ)
+
+
+def test_a_run_record_is_written_once(tmp_path: Path) -> None:
+    cloud = Cloud({})
+    environ = environment(tmp_path, "0" * 64)
+    state = {"key": f"raw/run3_state/{QUEUE_SHA256}/a.tar.gz", "version_id": "v1", "sha256": "b" * 64}
+    key = publisher_run.save_run_record(cloud, state, environ)
+    publisher_run.save_run_record(cloud, state, environ)
+    check(cloud.puts.count(key) == 1, "a repeat with the same record creates nothing")
+    with pytest.raises(publisher_run.PublisherError, match="run record"):
+        publisher_run.save_run_record(cloud, state | {"sha256": "c" * 64}, environ)
+    check(json.loads(cloud.objects[key])["state"]["sha256"] == "b" * 64, "the first record is never replaced")
 
 
 @pytest.mark.parametrize("missing", ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256"])

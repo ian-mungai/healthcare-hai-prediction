@@ -4,6 +4,8 @@ The inputs are one archive staged beside the code archive. The launch (orchestra
 the job, so a changed archive stops the job before anything runs. A task's workspace ends with the task, so the outcomes and the BLS request ledger travel
 between tasks in a saved state. It holds those records only: no fresh file, no diagnostic and no original can enter it. BLS needs more than one day, so run 3
 takes more than one task.
+At the end each task writes one run record that names its final state, at a key fixed by the queue digest and the run ID, so a check finds it without
+listing. The run records sit beside the states, never among them, because the next task takes the largest key under the state prefix as the latest state.
 """
 
 from __future__ import annotations
@@ -20,6 +22,8 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+
+from botocore.exceptions import ClientError
 
 from scripts import resource_peaks
 from scripts.acquisition import redownload as harness
@@ -120,6 +124,27 @@ def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> dic
         ServerSideEncryption="AES256",
     )
     return {"key": key, "version_id": str(reply.get("VersionId", "")), "sha256": digest}
+
+
+def run_record_key(environment: Mapping[str, str]) -> str:
+    return f"{RAW_ROOT}run3_runs/{environment['PUBLISHER_QUEUE_SHA256']}/publisher/{environment['RUN_ID']}.json"
+
+
+def save_run_record(s3: Any, state: Mapping[str, str], environment: Mapping[str, str]) -> str:
+    """Create the run's one record of its final state. The same record again creates nothing; a different one stops the job and is never replaced."""
+    body = json.dumps(
+        {"run_id": environment["RUN_ID"], "queue_sha256": environment["PUBLISHER_QUEUE_SHA256"], "state": dict(state)}, sort_keys=True, separators=(",", ":")
+    ).encode()
+    key = run_record_key(environment)
+    named = {"Bucket": environment["DATA_BUCKET_NAME"], "ExpectedBucketOwner": environment["EXPECTED_ACCOUNT_ID"], "Key": key}
+    try:
+        s3.put_object(**named, Body=body, IfNoneMatch="*", ServerSideEncryption="AES256")
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") not in {"PreconditionFailed", "412", "ConditionalRequestConflict", "409"}:
+            raise
+        if s3.get_object(**named)["Body"].read() != body:
+            raise PublisherError("This run already has a run record that names another state.") from None
+    return key
 
 
 def approved_prior(environment: Mapping[str, str]) -> dict[str, str] | None:
@@ -235,7 +260,9 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
             harness.resume_source(run, source, "resumed by the staged publisher request")
         emit(harness.execute(run, allow_network=True, log=progress))
     finally:
-        emit({"state": save_state(s3, state_root, env)})
+        final = save_state(s3, state_root, env)
+        emit({"state": final})
+        emit({"run_record": save_run_record(s3, final, env)})
 
 
 if __name__ == "__main__":
