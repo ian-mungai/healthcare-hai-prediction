@@ -21,6 +21,11 @@ def model_training_run_id(drift_run: str, model: str) -> str:
     return f"{drift_run[:16]}-{hashlib.sha256(f'training:{model}:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
+def model_features_run_id(base_run: str, model: str) -> str:
+    """The run ID of one model set's features run for a base run: the same for a retry of that model, another for every other model."""
+    return f"{base_run[:16]}-{hashlib.sha256(f'features:{model}:{base_run}'.encode()).hexdigest()[:8]}"
+
+
 HAI_TYPES = tuple(f"HAI_{index}" for index in range(1, 7))
 MODEL_LISTS = {
     "m1": ("m1_ols", "rq4_reduced"),
@@ -31,6 +36,7 @@ MODEL_LISTS = {
     "m6": ("m6_fixed_effects",),
 }
 MODELS = tuple(MODEL_LISTS)
+FEATURE_DAGS = {f"features_{model}_dag": model for model in MODELS}
 PROMOTION_MODELS = ("m1", "m2", "m4")
 MEDIATION_MODELS = ("m2",)
 OFFLINE_ACTIONS = ("guard", "fit", "mediation", "hac_validate", "smoke")

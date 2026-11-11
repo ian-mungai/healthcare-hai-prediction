@@ -1652,8 +1652,11 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
     """E01 (LB24, LB25, LB26, LB27, regression R4): chains, DAG files, parameters, runtime routing and the supervisor's DAG list."""
     checks: Checks = {}
     base = base_module("graph_base", "orchestration/graph.py", scratch)
+    triggers = {name: frozenset({"gate"}) for name in graph.TRIGGERS[BASE_DAG]}  # the base DAG starts the six model DAGs behind its gate
     checks[f"{BASE_DAG}_collapsed"] = (
-        BASE_DAG in graph.COLLAPSED_DAGS and BASE_DAG not in graph.PIPELINE_CHAINS and graph.requirements(BASE_DAG)[0] == graph.COLLAPSED_UPSTREAM
+        BASE_DAG in graph.COLLAPSED_DAGS
+        and BASE_DAG not in graph.PIPELINE_CHAINS
+        and graph.requirements(BASE_DAG)[0] == {**graph.COLLAPSED_UPSTREAM, **triggers}
     )
     checks[f"{BASE_DAG}_reference_valid"] = graph.validate_transform_graph(graph.reference_graph(BASE_DAG), BASE_DAG) == []
     checks["old_features_dags_gone"] = not any((ROOT / "dags" / f"{dag}.py").exists() for dag in ("features_transform_dag", "feature_store_dag"))

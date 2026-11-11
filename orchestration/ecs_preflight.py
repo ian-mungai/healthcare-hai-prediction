@@ -33,7 +33,7 @@ from orchestration import serving_contract
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import LAUNCH_LANES, parameters_for, training_run_id
+from orchestration.training_contract import FEATURE_DAGS, LAUNCH_LANES, MODELS, model_features_run_id, parameters_for, training_run_id
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
@@ -61,7 +61,7 @@ CHAIN_LAYERS = ("silver", "gold", "features", "drift")
 CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
 # The feature set a DAG's features job builds (the FEATURE_SET of its containers). A DAG that names none cannot launch the features job.
-FEATURE_SETS = {"features_base_dag": "base"}
+FEATURE_SETS = {"features_base_dag": "base", **FEATURE_DAGS}
 NO_STAGED_CODE = "0" * 64  # the bound code digest of a job that fetches no staged code
 CAPACITY_LABEL = "hai.host_capacity"  # the label of a host revision's init container that binds it to the host capacity (infra/jobs/host.tf)
 HOST_JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"  # the host job cap in MiB that the services stack renders into every Airflow container (host_job_cap_mib)
@@ -560,8 +560,9 @@ class Preflight:
         cap = self.host_cap(job, self.require_capacity(job))
         self.require_no_hold(job)
         row = self.jobs[job]
-        if row.get("after"):
-            self.require_passed(job, row["after"], request.input_run_id)
+        after = job if request.dag_id in FEATURE_DAGS else row.get("after")  # a model set builds from the passed features job of its base run
+        if after:
+            self.require_passed(job, after, request.input_run_id)
         if row.get("needs_training_parameters"):
             try:
                 parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
@@ -577,11 +578,15 @@ class Preflight:
         return replace(spec, task_definition=revision, need=need)
 
     def record_chain(self, bronze_run: str) -> None:
-        """Bind each layer run that derives from the bronze run, and the training run of the last one, to the bronze run's staged code."""
+        """Bind each layer run that derives from the bronze run, each model set's features run of the base run, and the training run of the last layer, to the
+        bronze run's staged code."""
         run = bronze_run
         for layer in CHAIN_LAYERS:
             run = derived_run_id(run, layer)
             self.code_runs.bind(run, bronze_run)
+            if layer == "features":
+                for model in MODELS:
+                    self.code_runs.bind(model_features_run_id(run, model), bronze_run)
         self.code_runs.bind(training_run_id(run), bronze_run)
 
     def require_passed(self, job: str, after: str, input_run: str | None) -> None:

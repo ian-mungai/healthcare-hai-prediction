@@ -20,12 +20,14 @@ from typing import Any
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import DAGS, LAUNCH_LANES, parameters_for
+from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for
 
 LOG = logging.getLogger(__name__)
 STEP_TIMEOUT = timedelta(hours=26)
 # The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
 SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
+# A model set's features DAG builds from the base run that the base DAG published: its form names that run, not a gold run.
+MODEL_SELECTIONS = {"pin_gold": "base_snapshot_run"}
 ASSETS = {"features_commit": "features"}
 # The time limits of the one-job chain's tasks that start no job.
 PREFLIGHT_TIMEOUT = timedelta(minutes=30)
@@ -48,11 +50,17 @@ def launch_pool() -> str:
     return name
 
 
+def selections_of(dag_id: str) -> dict[str, str]:
+    """The DAG parameter that names the producer run of each template's job in ``dag_id``."""
+    return MODEL_SELECTIONS if dag_id in FEATURE_DAGS else SELECTIONS
+
+
 def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
     """The request of the current task's fixed template."""
     params = context["params"]
-    selected = params.get(SELECTIONS[template], "latest") if template in SELECTIONS else "latest"
     instance = context["ti"]
+    selections = selections_of(instance.dag_id)
+    selected = params.get(selections[template], "latest") if template in selections else "latest"
     training = None
     mode = str(params["mode"])
     if instance.dag_id in DAGS:
@@ -91,7 +99,7 @@ def launch_module() -> Any:
 def run_step(template: str) -> str:
     """Run the current task's fixed template through the direct ECS launch library and return its successful state."""
     context = get_current_context()
-    return str(launch_module().launch_step(step_request(template, context), context, SELECTIONS))
+    return str(launch_module().launch_step(step_request(template, context), context, selections_of(context["ti"].dag_id)))
 
 
 def collapsed_step(kind: str, template: str) -> Any:
@@ -99,7 +107,7 @@ def collapsed_step(kind: str, template: str) -> Any:
     context = get_current_context()
     steps = launch_module()
     run = {"preflight": steps.preflight_step, "job": steps.job_step, "evidence": steps.evidence_step}[kind]
-    return run(step_request(template, context), context, SELECTIONS)
+    return run(step_request(template, context), context, selections_of(context["ti"].dag_id))
 
 
 def build_job_chain(template: str, asset: str | None = None) -> Any:

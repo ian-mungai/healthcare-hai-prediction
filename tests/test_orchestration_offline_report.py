@@ -35,6 +35,12 @@ PIPELINE_DAGS = (
     "silver_transform_dag",
     "gold_transform_dag",
     "features_base_dag",
+    "features_m1_dag",
+    "features_m2_dag",
+    "features_m3_dag",
+    "features_m4_dag",
+    "features_m5_dag",
+    "features_m6_dag",
 )
 IMAGE_CHECK = "image labels, user and top layers"
 DAG_CHECK = "every DAG file imports in the image with no error or cycle"
@@ -227,7 +233,7 @@ def test_literal_inventory_matches_the_declared_producers() -> None:
     if not isinstance(chains, ast.Dict) or any(key is None for key in chains.keys) or not isinstance(collapsed, ast.Call) or len(collapsed.args) != 1:
         raise AssertionError("the producer declares split DAG names without importing Airflow")
     declared_dags = {ast.literal_eval(key) for key in chains.keys if key is not None} | set(ast.literal_eval(collapsed.args[0]))
-    check(declared_dags == set(PIPELINE_DAGS), "the independent seven-DAG inventory matches PIPELINE_CHAINS and COLLAPSED_DAGS")
+    check(declared_dags == set(PIPELINE_DAGS), "the independent thirteen-DAG inventory matches PIPELINE_CHAINS and COLLAPSED_DAGS")
 
 
 @pytest.mark.parametrize("transform_present", [False, True], ids=["split", "transform"])

@@ -71,6 +71,7 @@ from types import ModuleType, SimpleNamespace
 from typing import Any
 from unittest import mock
 
+import jinja2
 from botocore.exceptions import ClientError
 
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
@@ -111,7 +112,7 @@ FEATURES_RUN = "20261104T100000Z-feed5eed"
 OTHER_RUN = "20261104T110000Z-0f0f0f0f"
 RUN_KEY = "lakehouse/run_stage/{run}/inputs/{name}"
 LAUNCH_MOUNT = re.compile(r'=\s*"orchestration/([A-Za-z0-9_]+\.py)"')
-DAG_ID = re.compile(r'dag_id="([a-z_]+)"')
+DAG_ID = re.compile(r'dag_id="([a-z0-9_]+)"')
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
 HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
 # The publisher host definition as infra/jobs/publisher.tf plans it (publisher_host): its containers, the label of its init container and its task memory.
@@ -128,6 +129,7 @@ JOB_MEMORY = 23552
 CAPACITY = "usable_memory_mib=30720 system_reserve_mib=2048"
 BINDING = f"job_memory_mib={JOB_MEMORY} {CAPACITY} service_reservations_mib=5120"
 NOMINAL_BINDING = "job_memory_mib=25600 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=5120"
+TRIGGER_MODULE = "airflow.providers.standard.operators.trigger_dagrun"
 
 
 class StageBucket(FakeS3):
@@ -294,6 +296,7 @@ class World:
         self.states: dict[str, str] = {}
         self.results: dict[str, Any] = {}
         self.built: list[Operator] = []
+        self.dag_settings: dict[str, Any] = {}
 
     def enter(self, task_id: str, attempt: int = 1) -> None:
         def get_task_states(dag_id: str, task_ids: list[str], run_ids: list[str]) -> dict[str, dict[str, str]]:
@@ -335,16 +338,26 @@ class World:
             return decorate
 
         forms: list[dict[str, Any]] = []
+        dag_settings = self.dag_settings
+        dag_settings.clear()
 
         class FormDag(Dag):
             def __init__(self, **settings: Any) -> None:
                 super().__init__(**settings)
                 forms.append(settings.get("params", {}))
+                dag_settings.clear()
+                dag_settings.update(settings)
+
+        def trigger(**settings: Any) -> Operator:
+            node = Operator(**settings)
+            built.append(node)
+            return node
 
         with (
             mock.patch.object(sys.modules["airflow.sdk"], "task", task),
             mock.patch.object(sys.modules["airflow.sdk"], "DAG", FormDag),
             mock.patch.object(self.runtime, "task", task),
+            mock.patch.object(sys.modules[TRIGGER_MODULE], "TriggerDagRunOperator", trigger),
         ):
             runpy.run_path(str(ROOT / "dags" / dag_file))
         for form in forms:  # Airflow fills a parameter the trigger leaves out with the form's default, and refuses the trigger before any task runs
@@ -388,7 +401,11 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
     ):
         setattr(sdk, name, value)
     previous = sys.modules.pop("orchestration.dag_runtime", None)
-    modules = {"airflow": ModuleType("airflow"), "airflow.sdk": sdk}
+    modules: dict[str, Any] = {
+        name: ModuleType(name) for name in ("airflow", "airflow.providers", "airflow.providers.standard", "airflow.providers.standard.operators")
+    }
+    modules["airflow.sdk"] = sdk
+    modules[TRIGGER_MODULE] = SimpleNamespace(TriggerDagRunOperator=lambda **settings: Operator(**settings))
     try:
         with mock.patch.dict(sys.modules, modules):
             runtime = importlib.import_module("orchestration.dag_runtime")
@@ -1572,6 +1589,231 @@ def features_job_names_its_feature_set() -> None:
     require("feature set" in str(error) and rig.tasks_started() == started, f"a DAG that names no feature set launched the features job: {error}")
 
 
+BASE_RUN_PARAMETER = "base_snapshot_run"
+MODEL_DAGS = {f"features_{model}_dag": model for model in ("m1", "m2", "m3", "m4", "m5", "m6")}
+FEATURE_CONTAINERS = {"pin", "build", "validate", "export", "publish", "upload", "feast"}
+
+
+def base_run_passed(rig: Rig, base_fails: bool = False) -> tuple[str, str]:
+    """Run the chain gate, silver, gold and the features base DAG over the rig and return the gold run and the base run that its features job published.
+    With ``base_fails`` the base DAG's job fails instead, and the base DAG is left to the caller to run again for its states."""
+    layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
+    silver = layers(BRONZE_RUN, "silver")
+    gold = layers(silver, "gold")
+    base = layers(gold, "features")
+    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    for dag_id, params in (
+        ("silver_transform_dag", {"run_id": silver}),
+        ("gold_transform_dag", {"run_id": gold, "silver_snapshot_run": silver}),
+        ("features_base_dag", {"run_id": base, GOLD_RUN_PARAMETER: gold}),
+    ):
+        if base_fails and dag_id == "features_base_dag":
+            return gold, base
+        with world(rig, dag_id, params) as current:
+            current.run_dag(f"{dag_id}.py")
+            require(current.results.get("gate") == "accepted", f"{dag_id} did not pass: {current.results}")
+    return gold, base
+
+
+def model_run(base: str, model: str) -> str:
+    return str(importlib.import_module("orchestration.training_contract").model_features_run_id(base, model))
+
+
+def model_dags_are_one_chain_each() -> None:
+    """Each model DAG is the one-job features chain for its set: one ECS task, every features container told FEATURE_SET=<model> and the base run as the
+    producer run, the graph rules accepted, and no asset carried (the base DAG's gate carries the features asset)."""
+    graph = importlib.import_module("orchestration.graph")
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    for dag_id, model in MODEL_DAGS.items():
+        run = model_run(base, model)
+        before = rig.tasks_started()
+        with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+            states = current.run_dag(f"{dag_id}.py")
+            nodes = {node.task_id: node for node in current.built}
+            require(list(nodes) == COLLAPSED_TASKS, f"{dag_id} is not preflight, job, evidence and gate: {list(nodes)}")
+            violations = graph.validate_transform_graph(task_graph(current), dag_id)
+            require(not violations, f"{dag_id} breaks the graph rules: {violations}")
+            require(not any(node.settings.get("outlets") for node in nodes.values()), f"{dag_id} carries an asset: the base DAG's gate carries it")
+            failed = {name: current.results[name] for name, state in states.items() if state != "success"}
+            require(not failed and current.results["gate"] == "accepted", f"{dag_id} did not pass: {failed}")
+        require(rig.tasks_started() == before + 1, f"{dag_id} started {rig.tasks_started() - before} tasks, not one")
+        named = {container: values["FEATURE_SET"] for container, values in rig.environment(before).items() if "FEATURE_SET" in values}
+        require(set(named) == FEATURE_CONTAINERS and set(named.values()) == {model}, f"{dag_id}'s containers did not all get FEATURE_SET={model}: {named}")
+        require(rig.environment(before)["pin"]["INPUT_RUN_ID"] == base, f"{dag_id}'s pin container did not get the base run as its input run")
+        require((rig.end(run, "features") or {}).get("outcome") == "succeeded", f"{dag_id} left no success record for its run")
+    require((rig.end(base, "features") or {}).get("outcome") == "succeeded", "a model run changed the base run's record")
+
+
+def model_dag_takes_its_base_run() -> None:
+    """A model DAG's form requires the base run it builds from (a run ID, never latest) and a trigger without it is refused before any launch."""
+    for dag_id in MODEL_DAGS:
+        declared = form_parameter(f"{dag_id}.py", BASE_RUN_PARAMETER)
+        require(declared is not None, f"{dag_id} declares no {BASE_RUN_PARAMETER} parameter")
+        arguments, settings = declared or ([], {})
+        pattern = str(settings.get("pattern", ""))
+        require(not arguments and settings.get("type") == "string", f"{dag_id}: the base run must be required, with no default: {declared}")
+        require(
+            bool(pattern)
+            and re.fullmatch(pattern.strip("^$"), FEATURES_RUN) is not None
+            and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + FEATURES_RUN)),
+            f"{dag_id}: the form's pattern does not accept exactly a run ID: {pattern}",
+        )
+        rig = Rig()
+        with world(rig, dag_id, {"run_id": OTHER_RUN, "mode": "real"}) as current:
+            error = refuses(FormRefused, partial(current.run_dag, f"{dag_id}.py"))
+            require(BASE_RUN_PARAMETER in str(error) and not current.states, f"{dag_id} without a base run was not refused at the form: {error}")
+        require(not rig.ecs.calls and not rig.records.calls, f"{dag_id} reached ECS or the launch records without a base run")
+
+
+def model_dag_needs_the_base_job_to_pass() -> None:
+    """A model run launches only when the features job of its base run passed. The gold run passing is not enough, and a run that never ran is refused
+    before any ECS call or launch record."""
+    rig = Rig()
+    gold, base = base_run_passed(rig)
+    started = rig.tasks_started()
+    refused_runs = {"a gold run": gold, "a run that never ran": OTHER_RUN}
+    for label, producer in refused_runs.items():
+        run = model_run(base, "m1")
+        with world(rig, "features_m1_dag", {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: producer}) as current:
+            states = current.run_dag("features_m1_dag.py")
+            refused = [str(result) for result in current.results.values() if "needs the features job" in str(result)]
+            require(states.get("gate") == "failed" and bool(refused), f"{label} as the base run was not refused by the preflight: {current.results}")
+    require(rig.tasks_started() == started, "a model run with a base run that never passed started a task")
+
+
+def model_run_code_is_bound() -> None:
+    """The chain gate binds every model run of the chain to the bronze run's staged code, so a model launch fetches that code. A model run no chain gate
+    bound has no staged code of its own and is refused before any ECS call."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    for model in MODEL_DAGS.values():
+        key = RUN_KEY.format(run=model_run(base, model), name="code_run.json")
+        require(key in rig.stage.objects and json.loads(rig.stage.objects[key]) == {"code_run": BRONZE_RUN}, f"the {model} run is not bound to the bronze code")
+    before = rig.tasks_started()
+    with world(rig, "features_m2_dag", {"run_id": model_run(base, "m2"), "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+        current.run_dag("features_m2_dag.py")
+    require(rig.environment(before)["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the model run fetches its own code, not its bronze run's")
+    unbound = Rig()
+    _, other_base = base_run_passed(unbound)
+    started = unbound.tasks_started()
+    with world(unbound, "features_m2_dag", {"run_id": OTHER_RUN, "mode": "real", BASE_RUN_PARAMETER: other_base}) as current:
+        states = current.run_dag("features_m2_dag.py")
+        require(states.get("preflight") == "failed" and states.get("gate") == "failed", f"an unbound model run was not refused: {states} {current.results}")
+    require(unbound.tasks_started() == started, "an unbound model run started a task")
+
+
+def rendered(settings: dict[str, Any], dag_settings: dict[str, Any], base: str) -> dict[str, Any]:
+    """The templated fields of a trigger as Airflow renders them: the base DAG's macros and its ``params``."""
+    environment = jinja2.Environment(undefined=jinja2.StrictUndefined, autoescape=True)
+    context = {"params": SimpleNamespace(run_id=base, mode="real"), **dag_settings["user_defined_macros"]}
+    return {
+        "trigger_run_id": environment.from_string(settings["trigger_run_id"]).render(**context),
+        "conf": {name: environment.from_string(value).render(**context) for name, value in settings["conf"].items()},
+    }
+
+
+def base_dag_triggers_six_model_dags() -> None:
+    """A published base run starts the six model DAGs and none waits: the triggers follow only the gate, name each model's DAG and derived run, pass the
+    base run, skip a run that exists and never reset one. A failed base job starts none."""
+    rig = Rig()
+    gold, base = base_run_passed(rig)
+    with world(rig, "features_base_dag", {"run_id": base, GOLD_RUN_PARAMETER: gold}) as current:
+        states = current.run_dag("features_base_dag.py")
+        nodes = {node.task_id: node for node in current.built}
+        triggers = {name: node for name, node in nodes.items() if name.startswith("trigger_")}
+        require(set(triggers) == {f"trigger_{model}" for model in MODEL_DAGS.values()}, f"the base DAG's triggers are {sorted(triggers)}")
+        for model in MODEL_DAGS.values():
+            node = triggers[f"trigger_{model}"]
+            require([before.task_id for before in node.upstream] == ["gate"], f"trigger_{model} does not follow only the gate")
+            require(node.settings["trigger_dag_id"] == f"features_{model}_dag", f"trigger_{model} starts {node.settings['trigger_dag_id']}")
+            require(node.settings["wait_for_completion"] is False, f"trigger_{model} waits for its DAG: one model's failure must not stop the base DAG")
+            require(node.settings["skip_when_already_exists"] is True and node.settings["reset_dag_run"] is False, f"trigger_{model} may restart a run")
+            sent = rendered(node.settings, current.dag_settings, base)
+            require(
+                sent["conf"] == {"run_id": model_run(base, model), "mode": "real", BASE_RUN_PARAMETER: base},
+                f"trigger_{model} sends {sent['conf']}",
+            )
+            require(
+                sent["trigger_run_id"].endswith(model_run(base, model)) and model in sent["trigger_run_id"],
+                f"trigger_{model}'s run id is {sent['trigger_run_id']}",
+            )
+            require(states[f"trigger_{model}"] == "success", f"trigger_{model} did not run after a passed base run: {states}")
+    failed = Rig()
+    gold, base = base_run_passed(failed, base_fails=True)
+    failed.ecs.plan = {"validate": 3}
+    with world(failed, "features_base_dag", {"run_id": base, GOLD_RUN_PARAMETER: gold}) as current:
+        states = current.run_dag("features_base_dag.py")
+        require(states.get("gate") == "failed", f"the base DAG did not fail with its job: {states}")
+        started = [name for name, state in states.items() if name.startswith("trigger_") and state != "upstream_failed"]
+        require(not started, f"a failed base run still started model DAGs: {started}")
+
+
+def one_model_failure_stops_only_its_dag() -> None:
+    """A model DAG that fails fails only its own run: its gate fails and its job is not launched again, while the other five model runs and the base run
+    keep their success records."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    outcomes: dict[str, str] = {}
+    for dag_id, model in MODEL_DAGS.items():
+        run = model_run(base, model)
+        rig.ecs.plan = {"validate": 3} if model == "m3" else {}
+        with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+            outcomes[model] = current.run_dag(f"{dag_id}.py")["gate"]
+    require(outcomes == {model: ("failed" if model == "m3" else "success") for model in MODEL_DAGS.values()}, f"the gates ended {outcomes}")
+    ends = {model: (rig.end(model_run(base, model), "features") or {}).get("outcome") for model in MODEL_DAGS.values()}
+    require(ends == {model: ("failed" if model == "m3" else "succeeded") for model in MODEL_DAGS.values()}, f"the launch records are {ends}")
+    require((rig.end(base, "features") or {}).get("outcome") == "succeeded", "a failed model run changed the base run's record")
+
+
+def model_dags_share_the_host_pool() -> None:
+    """Every model DAG's job task takes the one-slot host jobs pool where the deployment names it, so the six model jobs run one at a time; no other
+    task of the DAG takes it."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    for dag_id in MODEL_DAGS:
+        with (
+            world(rig, dag_id, {"run_id": OTHER_RUN, "mode": "real", BASE_RUN_PARAMETER: base}) as current,
+            mock.patch.dict("os.environ", {"HAI_LAUNCH_POOL": "host_jobs"}),
+        ):
+            current.run_dag(f"{dag_id}.py")
+            pools = {node.task_id: node.settings.get("pool") for node in current.built}
+            require(pools == {"preflight": None, "job": "host_jobs", "evidence": None, "gate": None}, f"{dag_id}'s tasks take the pools {pools}")
+
+
+def graph_rules_cover_the_feature_dags() -> None:
+    """The graph rules accept the six model DAGs as one-job chains and the base DAG as a one-job chain with its six triggers behind the gate, and refuse a
+    base DAG with a missing, extra or misplaced trigger."""
+    graph = importlib.import_module("orchestration.graph")
+    triggers = [f"trigger_{model}" for model in MODEL_DAGS.values()]
+    for dag_id in (*MODEL_DAGS, "features_base_dag"):
+        require(dag_id in graph.COLLAPSED_DAGS and dag_id in graph.GRAPH_DAGS, f"{dag_id} is not a graph-checked one-job DAG")
+        require(graph.validate_transform_graph(graph.reference_graph(dag_id), dag_id) == [], f"the reference graph of {dag_id} is refused")
+    reference = graph.reference_graph("features_base_dag")
+    require(
+        set(triggers) <= set(reference) and all(reference[name].upstream == frozenset({"gate"}) for name in triggers), "the base reference has no six triggers"
+    )
+
+    def rules(broken: dict[str, Any]) -> set[str]:
+        return {violation.rule for violation in graph.validate_transform_graph(broken, "features_base_dag")}
+
+    require("missing_task" in rules({name: node for name, node in reference.items() if name != "trigger_m4"}), "a base DAG without trigger_m4 was accepted")
+    require("unexpected_task" in rules({**reference, "trigger_m7": graph.TaskNode(frozenset({"gate"}))}), "a base DAG with a seventh trigger was accepted")
+    require(
+        "upstream" in rules({**reference, "trigger_m2": graph.TaskNode(frozenset({"job"}))}), "a trigger that follows the job instead of the gate was accepted"
+    )
+    require(
+        "leaf" in rules({**reference, "trigger_m1": graph.TaskNode(frozenset({"gate"})), "tail": graph.TaskNode(frozenset({"trigger_m1"}))}),
+        "a tail task after a trigger was accepted",
+    )
+    rig = Rig()
+    gold, base = base_run_passed(rig)
+    with world(rig, "features_base_dag", {"run_id": base, GOLD_RUN_PARAMETER: gold}) as current:
+        current.run_dag("features_base_dag.py")
+        require(graph.validate_transform_graph(task_graph(current), "features_base_dag") == [], "the shipped base DAG breaks the graph rules")
+
+
 def promotion_and_serving_dags_run_end_to_end() -> None:
     rig = Rig()
     rig.stage.stage(SERVE_RUN, "serving_request.json", SERVING_REQUEST)
@@ -1988,6 +2230,14 @@ CASES: dict[str, Callable[[], None]] = {
     "collapsed_job_dags_are_one_chain": collapsed_job_dags_are_one_chain,
     "base_dag_takes_its_gold_run": base_dag_takes_its_gold_run,
     "features_job_names_its_feature_set": features_job_names_its_feature_set,
+    "model_dags_are_one_chain_each": model_dags_are_one_chain_each,
+    "model_dag_takes_its_base_run": model_dag_takes_its_base_run,
+    "model_dag_needs_the_base_job_to_pass": model_dag_needs_the_base_job_to_pass,
+    "model_run_code_is_bound": model_run_code_is_bound,
+    "base_dag_triggers_six_model_dags": base_dag_triggers_six_model_dags,
+    "one_model_failure_stops_only_its_dag": one_model_failure_stops_only_its_dag,
+    "model_dags_share_the_host_pool": model_dags_share_the_host_pool,
+    "graph_rules_cover_the_feature_dags": graph_rules_cover_the_feature_dags,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,
