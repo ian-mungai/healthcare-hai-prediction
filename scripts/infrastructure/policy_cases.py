@@ -49,6 +49,17 @@ CONTAINER_INSTANCE = arn("ecs", f"container-instance/{P}_cluster_{E}/0123456789a
 LOG_GROUP = arn("logs", f"log-group:{P}_jobs_{E}")
 TOPIC = arn("sns", f"{P}_alerts_{E}")
 BUDGET_TOPIC = arn("sns", f"{P}_budget_alerts_{E}")
+# A subscription ARN is its topic ARN, a colon and an identifier. IAM matches GetSubscriptionAttributes and Unsubscribe on that ARN, so a pattern that ends
+# in ":*" after the topic name reaches the subscriptions of that one topic.
+SUBSCRIPTION_ID = "01234567-89ab-cdef-0123-456789abcdef"
+SUBSCRIPTION = f"{TOPIC}:{SUBSCRIPTION_ID}"
+BUDGET_SUBSCRIPTION = f"{BUDGET_TOPIC}:{SUBSCRIPTION_ID}"
+# Alert address subscription (owner A, Nov 11 2026): the platform stack subscribes the owner's address to the alerts topic, so the project user subscribes,
+# reads a subscription and removes it on that one topic. The subscription actions that an email subscription needs are verified in the live bootstrap.
+ALERT_SUBSCRIBE_STATEMENT = "SubscribeToAlertTopic"
+ALERT_SUBSCRIPTION_STATEMENT = "ManageAlertTopicSubscriptions"
+ALERT_SUBSCRIBE_ACTIONS = ("Subscribe",)
+ALERT_SUBSCRIPTION_ACTIONS = ("GetSubscriptionAttributes", "Unsubscribe")
 ALARM = arn("cloudwatch", f"alarm:{P}_run_failed_{E}")
 SCHEDULE = arn("dlm", "policy/policy-0123456789abcdef0")
 VOLUME = arn("ec2", "volume/vol-0123456789abcdef0")
@@ -279,6 +290,9 @@ def approved_requests() -> dict[str, list[Request]]:
     add("secretsmanager", "GetSecretValue", arn("secretsmanager", "secret:bls_api_key-AbCdEf"), region=None)
     add("secretsmanager", "DescribeSecret", arn("secretsmanager", "secret:jev_api_key-AbCdEf"), region=None)
     add("sns", "CreateTopic", TOPIC, region=None, **tagged)
+    add("sns", "Subscribe", TOPIC, region=None)
+    add("sns", "GetSubscriptionAttributes", SUBSCRIPTION, region=None)
+    add("sns", "Unsubscribe", SUBSCRIPTION, region=None)
     for action in ("DeleteTopic", "GetTopicAttributes", "SetTopicAttributes", "ListTagsForResource", "TagResource", "UntagResource"):
         add("sns", action, TOPIC, region=None, tags={"DataClassification": "x"} if action.endswith("agResource") else None)
     for name in (*PARAMETERS, *READ_ONLY_PARAMETERS):
@@ -1198,6 +1212,50 @@ def launch_hold_cases() -> Iterator[Case]:
         yield Case(f"parameter grants: refuse kms:{action}", request(f"kms:{action}", key), False)
 
 
+def alert_subscription_cases() -> Iterator[Case]:
+    """The alerts topic subscription that the platform stack manages: subscribe on the topic, read and remove on the topic or its subscriptions, nothing else
+    on that topic and no subscription action on any other topic, region or account."""
+    for action in ALERT_SUBSCRIBE_ACTIONS:
+        yield Case(f"alert subscription: allow sns:{action} on the alerts topic", request(f"sns:{action}", TOPIC, region=None), True, ALERT_SUBSCRIBE_STATEMENT)
+        yield Case(f"alert subscription: refuse sns:{action} on a subscription of the alerts topic", request(f"sns:{action}", SUBSCRIPTION, region=None), False)
+    for action in ALERT_SUBSCRIPTION_ACTIONS:
+        for label, resource in (("a subscription of the alerts topic", SUBSCRIPTION), ("the alerts topic", TOPIC)):
+            yield Case(
+                f"alert subscription: allow sns:{action} on {label}", request(f"sns:{action}", resource, region=None), True, ALERT_SUBSCRIPTION_STATEMENT
+            )
+    topics = {
+        "the budget topic": BUDGET_TOPIC,
+        "a longer topic name": arn("sns", f"{P}_alerts_{E}_extra"),
+        "a topic name with a suffix": arn("sns", f"{P}_alerts_{E}2"),
+        "a topic without the environment": arn("sns", f"{P}_alerts"),
+        "the alerts topic of another environment": arn("sns", f"{P}_alerts_prod"),
+        "the alerts topic of another project": arn("sns", f"other_project_alerts_{E}"),
+        "the alerts topic in another region": TOPIC.replace(f":{R}:", ":eu-west-2:"),
+        "the alerts topic of another account": TOPIC.replace(f":{A}:", ":222222222222:"),
+    }
+    for action in (*ALERT_SUBSCRIBE_ACTIONS, *ALERT_SUBSCRIPTION_ACTIONS):
+        for label, topic in topics.items():
+            yield Case(f"alert subscription: refuse sns:{action} on {label}", request(f"sns:{action}", topic, region=None), False)
+            if action in ALERT_SUBSCRIPTION_ACTIONS:
+                yield Case(
+                    f"alert subscription: refuse sns:{action} on a subscription of {label}",
+                    request(f"sns:{action}", f"{topic}:{SUBSCRIPTION_ID}", region=None),
+                    False,
+                )
+    for action in (
+        "Publish",
+        "SetSubscriptionAttributes",
+        "ConfirmSubscription",
+        "AddPermission",
+        "RemovePermission",
+        "ListSubscriptionsByTopic",
+    ):
+        for label, resource in (("the alerts topic", TOPIC), ("a subscription of the alerts topic", SUBSCRIPTION)):
+            yield Case(f"alert subscription: refuse sns:{action} on {label}", request(f"sns:{action}", resource, tags=TAG, region=None), False)
+    for action in ("ListTopics", "ListSubscriptions"):
+        yield Case(f"alert subscription: refuse sns:{action}", request(f"sns:{action}", "*"), False)
+
+
 def openmetadata_password_cases() -> Iterator[Case]:
     """The catalog password setup under the project user: put and read exactly the two password names, nothing wider, no listing and no key use."""
     for name in OPENMETADATA_PASSWORDS:
@@ -1933,6 +1991,29 @@ def delivery_cases() -> Iterator[Case]:
     yield from wide("launches an instance", "ec2:RunInstances", INSTANCE)
     yield from wide("terminates an instance", "ec2:TerminateInstances", INSTANCE)
     yield from wide("publishes to the alert topic", "sns:Publish", TOPIC)
+    yield Case(
+        "delivery allowed: boundary reads the attributes of an alert subscription",
+        request("sns:GetSubscriptionAttributes", SUBSCRIPTION),
+        True,
+        None,
+        DELIVERY_WIDE,
+    )
+    yield Case(
+        "delivery allowed: boundary reads the attributes of the alerts topic as a subscription",
+        request("sns:GetSubscriptionAttributes", TOPIC),
+        True,
+        None,
+        DELIVERY_WIDE,
+    )
+    for label, resource in (("a subscription of the alerts topic", SUBSCRIPTION), ("the alerts topic", TOPIC)):
+        for action in ("sns:Subscribe", "sns:Unsubscribe", "sns:SetSubscriptionAttributes", "sns:ConfirmSubscription"):
+            yield from wide(f"changes {label} with {action}", action, resource)
+    for label, resource in (
+        ("a subscription of the budget topic", BUDGET_SUBSCRIPTION),
+        ("a subscription of a longer alerts topic name", f"{TOPIC}_extra:{SUBSCRIPTION_ID}"),
+        ("a subscription of the alerts topic of another project", f"{TOPIC.replace(P, 'other_project')}:{SUBSCRIPTION_ID}"),
+    ):
+        yield from wide(f"reads the attributes of {label}", "sns:GetSubscriptionAttributes", resource)
 
 
 def coverage_requests(statement: dict[str, Any], tag_context: dict[str, tuple[str, ...]]) -> Iterator[Request]:
@@ -2035,7 +2116,12 @@ def forbidden_cases() -> Iterator[Case]:
         for action in actions:
             if action.endswith(("_other", "_shell")):
                 continue
-            topics = (TOPIC, BUDGET_TOPIC) if service == "sns" and action in ("Publish", "Subscribe", "Unsubscribe") else (resources[service],)
+            topics = (resources[service],)
+            if service == "sns" and action == "Publish":
+                topics = (TOPIC, BUDGET_TOPIC)
+            elif service == "sns" and action in (*ALERT_SUBSCRIBE_ACTIONS, *ALERT_SUBSCRIPTION_ACTIONS):
+                # The alerts topic takes these three actions (alert_subscription_cases); every other topic still refuses them.
+                topics = (BUDGET_TOPIC, arn("sns", f"{P}_other_topic_{E}"))
             for resource in topics:
                 yield Case(
                     f"forbidden {service}:{action} on {resource.rsplit(':', 1)[-1][:40]}", request(f"{service}:{action}", resource, tags=TAG, extra=rich), False
@@ -2381,6 +2467,7 @@ def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from aws_polaris_pair_cases()
     yield from openmetadata_password_cases()
     yield from launch_hold_cases()
+    yield from alert_subscription_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()
@@ -2557,6 +2644,33 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
 
     def topic_wildcard(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sns", "ManageAlertTopic")["Resource"] = f"arn:aws:sns:{R}:{A}:{P}_*"
+
+    def subscribe_on_project_topics(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = f"arn:aws:sns:{R}:{A}:{P}_*"
+
+    def subscribe_on_every_topic(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = "*"
+
+    def subscriptions_of_project_topics(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIPTION_STATEMENT)["Resource"] = [f"arn:aws:sns:{R}:{A}:{P}_*", f"arn:aws:sns:{R}:{A}:{P}_*:*"]
+
+    def subscriptions_of_every_topic(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIPTION_STATEMENT)["Resource"] = "*"
+
+    def subscriptions_match_topic_prefix(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIPTION_STATEMENT)["Resource"] = [f"{TOPIC}*", f"{TOPIC}*:*"]
+
+    def subscribe_removed(documents: dict[str, dict[str, Any]]) -> None:
+        drop(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)
+
+    def subscriptions_removed(documents: dict[str, dict[str, Any]]) -> None:
+        drop(documents, "sns", ALERT_SUBSCRIPTION_STATEMENT)
+
+    def subscription_attributes_set(documents: dict[str, dict[str, Any]]) -> None:
+        add_action(documents, "sns", ALERT_SUBSCRIPTION_STATEMENT, "sns:SetSubscriptionAttributes")
+
+    def subscribe_also_publishes(documents: dict[str, dict[str, Any]]) -> None:
+        add_action(documents, "sns", ALERT_SUBSCRIBE_STATEMENT, "sns:Publish")
 
     def tag_change_allowed(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "logs", "DenyChangingProjectTag", "DenyRemovingProjectTag")
@@ -3255,6 +3369,22 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "delivery refused: reads a platform state key with the suffix .backup",
             delivery_add_resource("ReadProjectTerraformState", f"{STATE_KEYS[0]}*"),
         ),
+        "delivery defect: the subscription read reaches the subscriptions of every project topic": (
+            "delivery refused: reads the attributes of a subscription of the budget topic",
+            delivery_resource("ReadAlertSubscriptions", [f"arn:aws:sns:{R}:{A}:{P}_*", f"arn:aws:sns:{R}:{A}:{P}_*:*"]),
+        ),
+        "delivery defect: the subscription read matches a longer topic name": (
+            "delivery refused: reads the attributes of a subscription of a longer alerts topic name",
+            delivery_resource("ReadAlertSubscriptions", [f"{TOPIC}*", f"{TOPIC}*:*"]),
+        ),
+        "delivery defect: the boundary lacks the alert subscription read": (
+            "delivery allowed: boundary reads the attributes of an alert subscription",
+            delivery_remove_resource("ReadAlertSubscriptions", f"{P}_alerts_{E}:*"),
+        ),
+        "delivery defect: the boundary lets a delivery role subscribe": (
+            "delivery refused: changes the alerts topic with sns:Subscribe",
+            delivery_extra_statement("SubscribeAgain", "sns:Subscribe", TOPIC),
+        ),
         "delivery defect: the boundary lacks a shared secret": (
             "delivery allowed: boundary describes the shared secret jev_api_key",
             delivery_remove_resource("ReadProjectMetadata", "jev_api_key"),
@@ -3580,6 +3710,30 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "SetDesiredCapacity on any group": ("forbidden autoscaling:SetDesiredCapacity on another group", capacity_on_any_group),
         "the project user can modify the budget": ("forbidden budgets:ModifyBudget", budget_access),
         "the alert topic pattern reaches the budget topic": ("the budget topic is not the project's: sns:SetTopicAttributes", topic_wildcard),
+        "the alert subscribe statement reaches every project topic": (
+            "alert subscription: refuse sns:Subscribe on the budget topic",
+            subscribe_on_project_topics,
+        ),
+        "the alert subscribe statement reaches every topic": ("alert subscription: refuse sns:Subscribe on the budget topic", subscribe_on_every_topic),
+        "the alert subscription statement reaches the subscriptions of every project topic": (
+            "alert subscription: refuse sns:Unsubscribe on a subscription of the budget topic",
+            subscriptions_of_project_topics,
+        ),
+        "the alert subscription statement reaches every resource": (
+            "alert subscription: refuse sns:GetSubscriptionAttributes on the budget topic",
+            subscriptions_of_every_topic,
+        ),
+        "the alert subscription statement matches a longer topic name": (
+            "alert subscription: refuse sns:Unsubscribe on a subscription of a longer topic name",
+            subscriptions_match_topic_prefix,
+        ),
+        "the alert subscribe statement is removed": ("alert subscription: allow sns:Subscribe", subscribe_removed),
+        "the alert subscription statement is removed": ("alert subscription: allow sns:Unsubscribe", subscriptions_removed),
+        "the alert subscription statement also sets subscription attributes": (
+            "alert subscription: refuse sns:SetSubscriptionAttributes",
+            subscription_attributes_set,
+        ),
+        "the alert subscribe statement also publishes": ("alert subscription: refuse sns:Publish", subscribe_also_publishes),
         "the Project tag can be changed or removed later": ("logs:TagResource changes Project", tag_change_allowed),
         "image push and pull on every repository": ("ecr:PutImage in another project", ecr_cross_project),
         "parameter read by wildcard": ("parameter: read another name in the project folder", parameter_wildcard),
