@@ -161,9 +161,6 @@ class JobSpec:
     log_prefix: str = ""
     log_lines: int = 50
     task_definition: str = ""
-    # Who asked for the launch, when a caller that holds an authority says so (the promotion chain's canary deploy): written in the claim, which wins once, and
-    # checked on every later attempt, so only the launch that won the claim can be read as having come from that caller.
-    origin: Mapping[str, str] = field(default_factory=dict)
 
     @property
     def key(self) -> str:
@@ -556,8 +553,6 @@ class Launcher:
             for name, values in spec.environment.items()
         ):
             problems.append("environment")
-        if not all(isinstance(key, str) and isinstance(value, str) for key, value in spec.origin.items()):
-            problems.append("origin")
         if not all(isinstance(value, int) and value >= 0 for value in (spec.need.cpu_units, spec.need.memory_mib, spec.need.scratch_bytes)):
             problems.append("need")
         if not all(isinstance(name, str) and name for name in spec.acceptance):
@@ -579,8 +574,6 @@ class Launcher:
                     f"run {spec.run_id} job {spec.job} is bound to the {name} of its first launch ({str(first['bound'].get(name, ''))[:12]}), "
                     f"but this request has {spec.bound[name][:12]}: start a new run for a changed {name}"
                 )
-        if first.get("event") == "claim" and dict(first.get("origin", {})) != dict(spec.origin):
-            raise LaunchRefused(f"run {spec.run_id} job {spec.job} holds a claim of another origin than this request: start a new run for another caller")
 
     def put(self, event: str, attempt: int, base: Mapping[str, Any], **fields: Any) -> dict[str, Any]:
         record = {"schema_version": 1, "event": event, "run_id": base["run_id"], "job": base["job"], "attempt": attempt, "at": iso(self.clock.wall()), **fields}
@@ -758,7 +751,6 @@ class Launcher:
             "deadline_seconds": spec.deadline_seconds,
             "acceptance": list(spec.acceptance),
             "need": asdict(spec.need),
-            **({"origin": dict(spec.origin)} if spec.origin else {}),
         }
         self.store.index_family(body)  # before the claim, so a claimed launch is always in the index; an entry with no claim started nothing
         stored = self.store.put_once(body)

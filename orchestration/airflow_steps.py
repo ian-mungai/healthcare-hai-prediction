@@ -32,8 +32,6 @@ from orchestration.ecs_preflight import (
     GATE,
     HOST_JOB_CAP_SETTING,
     TABLE_MAP_FILE,
-    ChainCanary,
-    ChainWithdrawal,
     HeldCapProbe,
     InputNotReady,
     Preflight,
@@ -223,13 +221,13 @@ def with_input(launch: LaunchServices, request: SubmissionRequest, context: Mapp
     return replace(request, input_run_id=selected_input(launch.preflight, request, context["params"], selections))
 
 
-def prepared(launch: LaunchServices, request: SubmissionRequest, chain: ChainWithdrawal | ChainCanary | None = None) -> JobSpec | None:
+def prepared(launch: LaunchServices, request: SubmissionRequest) -> JobSpec | None:
     """The launch request that the preflight gates produce, or None for a step with no job. A staged input that is not there yet is retried within
     ``UNAVAILABLE_SECONDS``."""
     end = launch.clock.monotonic() + UNAVAILABLE_SECONDS
     while True:
         try:
-            return launch.preflight.prepare(request, chain)
+            return launch.preflight.prepare(request)
         except InputNotReady as error:
             if launch.clock.monotonic() + UNAVAILABLE_POLL_SECONDS > end:
                 raise InputNotReady(f"{error} (still not ready after {UNAVAILABLE_SECONDS:g} seconds)") from None
@@ -353,15 +351,7 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
         step = replace(request, template=template, run_id=run, input_run_id=request.run_id if template == "serve_deploy" else None, training=parameters)
         try:
             found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
-            # The chain's own steps take their authority here, never from a request: its canary deploy has the chain recorded as the launch's origin, and its
-            # withdraw needs a canary deploy of the chain that succeeded.
-            mode, hai_type = parameters.get("deploy_mode"), parameters.get("hai_type", "")
-            chain: ChainWithdrawal | ChainCanary | None = None
-            if template == "serve_deploy" and mode == "canary":
-                chain = found.preflight.canary_authority(request.run_id, hai_type)
-            elif template == "serve_deploy" and mode == "withdraw":
-                chain = found.preflight.withdrawal_authority(request.run_id, hai_type)
-            spec = prepared(found, step, chain)
+            spec = prepared(found, step)
             if spec is None:
                 raise LaunchRefused(f"{template} starts no ECS job")
             launch(found, spec, context)

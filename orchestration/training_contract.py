@@ -41,7 +41,7 @@ def research_run_id(base_run: str) -> str:
     return f"{base_run[:16]}-{hashlib.sha256(f'research:{base_run}'.encode()).hexdigest()[:8]}"
 
 
-CHAIN_STEPS = ("canary_deploy", "canary", "canary_withdraw", "promote", "release", "stable_deploy", "notice")
+CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
 # The records of one infection type that the research run and the steps after it store, under ``research/<research run>/<kind>_<type>.json`` in the data
 # bucket: the research record, the replay report of its canary, the canary check's result and the owner notice's receipt.
 RECORD_KINDS = ("research", "replay", "canary", "notice")
@@ -197,18 +197,14 @@ CHAIN_PARAMETER_KEYS = {
     "owner_notice": {"research_run", "hai_type", "outcome", "mlflow"},
 }
 PROMOTION_OUTCOMES = ("promoted", "promoted_not_rolled_out", "held", "rolled_back")
-# The modes the manual form offers, and every mode of a closed serving request. A withdraw is the promotion chain's own step: only its launch is accepted.
-FORM_SERVE_MODES = ("canary", "stable")
-SERVE_MODES = (*FORM_SERVE_MODES, "withdraw")
+SERVE_MODES = ("canary", "stable")
 
 
 def serving_parameters_for(raw: Any) -> dict[str, str]:
     """Validate the closed request that asks the serve family to deploy: the infection type and the mode, and nothing else.
 
     The request names no version and no share. The serve preflight derives the candidate version of a canary from the type's research record, the canary share
-    comes from the job table, and the stable version is the Production alias, which the serve job reads. A withdraw removes the canary that the type's research
-    run installed: the preflight derives the candidate and the canary deployment from the research run, and the job keeps the stable version the active
-    deployment holds. So no caller can deploy any other version.
+    comes from the job table, and the stable version is the Production alias, which the serve job reads. So no caller can deploy any other version.
     """
     if not isinstance(raw, Mapping) or set(raw) != {"hai_type", "deploy_mode"}:
         raise ValueError("a serving request names the HAI type and the mode and nothing else: the version and the share are derived")

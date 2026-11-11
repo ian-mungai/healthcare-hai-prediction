@@ -13,10 +13,8 @@ its steps, each launched once under a run of its own (``training_contract.chain_
 3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result.
 4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion.
 5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
-   active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release.
-   ``canary_withdraw`` (the mode withdraw) runs instead after a hold, a failed check or a failed canary deploy: the serve job removes this chain's own canary
-   and keeps the stable version the active deployment holds, read from the deployment the API serves and never through the Production alias, which can be
-   ahead of it. A deployment that is not this chain's canary is left as it is.
+   active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. A hold, a
+   failed check or a failed canary deploy deploys nothing more.
 6. ``owner_notice`` tells the owner what happened: ``promoted`` only when the promotion and the rollout both ended, ``promoted_not_rolled_out`` when the
    promotion stands but the release or the rollout failed, and ``held`` after a hold, a failed canary deploy or check, or a canary result that does not name
    this candidate.
@@ -173,8 +171,6 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
             return
         released = step("release", lambda: steps.release(challenger.model, challenger.features_run, run_of("release")))
         outcome = "promoted" if released and step("rollout", serve("stable", "stable_deploy")) else "promoted_not_rolled_out"
-    else:
-        step("canary withdrawal", serve("withdraw", "canary_withdraw"))
     notice = {"research_run": research_run, "hai_type": hai_type, "outcome": outcome, "mlflow": "aws"}
     step("owner notice", lambda: steps.launch("owner_notice", run_of("notice"), notice))
 

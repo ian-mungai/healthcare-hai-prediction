@@ -631,7 +631,7 @@ def run_deploy_job(client: S3Client, registry: Registry, run: str, environment: 
 
 def case_deploy_job(c: Checker) -> None:
     """The serve job as the task runs it: the checked request arrives in the environment, records go to the one fixed prefix and a refusal writes nothing."""
-    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary", "canary_deployment_id": None}
+    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary"}
     environment = {"SERVING_REQUEST": json.dumps(request), "MODEL_API_MANIFEST_URI": "s3://example-bucket/serving/deployments"}
     client, registry = S3Client(), Registry()
     code, out, err = run_deploy_job(client, registry, RUN_1, environment)
@@ -658,7 +658,7 @@ def case_deploy_job(c: Checker) -> None:
         c.check(f"{label} exits 2 with the refusal message and writes nothing", code == 2 and "serve_deploy refused" in err and not fresh.objects and not out)
     code, _, err = run_deploy_job(client, registry, RUN_1, {**environment, "SERVING_REQUEST": json.dumps({**request, "percent": 30})})
     c.check("a retry under the same id with another request is refused", code == 2 and "serve_deploy refused" in err and client.objects == before)
-    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable", "canary_deployment_id": None}
+    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable"}
     fresh = S3Client()
     code, out, err = run_deploy_job(fresh, registry, RUN_3, environment | {"SERVING_REQUEST": json.dumps(stable)})
     printed = json.loads(out) if out.strip() else {}
@@ -676,82 +676,6 @@ class LostWrite(manifests.FileManifestStore):
 
     def replace_active(self, hai_type: str, body: bytes, token: str | None) -> Any:
         return None
-
-
-def case_withdraw(c: Checker) -> None:
-    """A withdraw removes the canary a chain installed and nothing else: it keeps the stable version the active deployment holds, whatever the Production
-    alias says, and leaves any other deployment as it is."""
-    candidate_run = RUN_1
-    with world(deployment=False) as w:
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=candidate_run)
-        w.registry.aliases["production"] = CANDIDATE
-
-        def withdraw(run: str, version: str | None = CANDIDATE, canary_run: str | None = candidate_run) -> deploy.Outcome:
-            return deploy.run(
-                registry=w.registry,
-                manifests=w.store,
-                hai_type=HAI,
-                candidate_version=version,
-                percent=0,
-                mode="withdraw",
-                deployment_id=run,
-                canary_deployment_id=canary_run,
-            )
-
-        def active() -> Any:
-            stored = w.store.read_active(HAI)
-            return canary.Deployment.parse(stored.body) if stored is not None else None
-
-        before = active()
-        for label, outcome in (
-            ("another chain's canary deployment", withdraw(RUN_2, canary_run=RUN_3)),
-            ("another candidate version", withdraw(RUN_2, version="5")),
-        ):
-            c.check(f"a withdraw bound to {label} leaves the active deployment alone", outcome.status == "unchanged" and active() == before)
-        done = withdraw(RUN_2)
-        after = active()
-        c.check(
-            "a withdraw of this chain's canary keeps the stable version the deployment holds and ends the canary, with the alias ahead of it",
-            done.status == "written"
-            and after is not None
-            and (after.stable_version, after.candidate_version, after.percent, after.sequence) == (PRODUCTION, None, 0, 2)
-            and w.registry.aliases["production"] == CANDIDATE
-            and w.registry.alias_writes == 0,
-        )
-        c.check("a retry of the withdraw changes nothing", withdraw(RUN_2).status == "unchanged" and active() == after)
-        c.check("a withdraw after the canary ended changes nothing", withdraw(RUN_3).status == "unchanged" and active() == after)
-        w.clock.now += 31
-        ask(w)
-        health = w.api.health().body[HAI]
-        c.check("the API then serves the stable version alone", (health["stable"], health["candidate"]) == (PRODUCTION, None))
-    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
-        outcome = deploy.run(
-            registry=Registry(),
-            manifests=manifests.FileManifestStore(Path(folder)),
-            hai_type=HAI,
-            candidate_version=CANDIDATE,
-            percent=0,
-            mode="withdraw",
-            deployment_id=RUN_2,
-            canary_deployment_id=RUN_1,
-        )
-        c.check("a withdraw with no active deployment writes nothing", outcome.status == "unchanged" and outcome.deployment is None)
-    for label, arguments in (
-        ("no canary deployment", {"canary_deployment_id": None}),
-        ("a malformed canary deployment", {"canary_deployment_id": "x"}),
-        ("a percent", {"percent": 5}),
-        ("no candidate", {"candidate_version": None}),
-    ):
-        with tempfile.TemporaryDirectory(prefix="serving_") as folder:
-            base = {"candidate_version": CANDIDATE, "percent": 0, "canary_deployment_id": RUN_1} | arguments
-            c.check(
-                f"a withdraw with {label} is refused",
-                rejected(
-                    lambda base=base, folder=folder: deploy.run(
-                        registry=Registry(), manifests=manifests.FileManifestStore(Path(folder)), hai_type=HAI, mode="withdraw", deployment_id=RUN_2, **base
-                    )
-                ),
-            )
 
 
 class AlteredWrite(manifests.FileManifestStore):
@@ -834,7 +758,6 @@ def case_chain_rollout(c: Checker) -> None:
         recorder: Any,
         research: str = chain.RESEARCH,
         fail: tuple[str, str] | None = None,
-        after_write: bool = False,
         release_fails: bool = False,
         check_fails: bool = False,
     ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
@@ -849,16 +772,9 @@ def case_chain_rollout(c: Checker) -> None:
                 if check_fails:
                     raise promotion_chain.StepFailed("the canary check task failed")
             if step == "serve_deploy":
-                if fail == (step, params["deploy_mode"]) and not after_write:
+                if fail == (step, params["deploy_mode"]):
                     raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
-                values = ecs_preflight.serving_values(
-                    params,
-                    research,
-                    10,
-                    recorder.read,
-                    run_id=run,
-                    withdrawal=ecs_preflight.ChainWithdrawal(research, params["hai_type"]) if params["deploy_mode"] == "withdraw" else None,
-                )
+                values = ecs_preflight.serving_values(params, research, 10, recorder.read)
                 request = json.loads(values["SERVING_REQUEST"])
                 deploy.run(
                     registry=w.registry,
@@ -868,10 +784,7 @@ def case_chain_rollout(c: Checker) -> None:
                     percent=request["percent"],
                     mode=request["deploy_mode"],
                     deployment_id=run,
-                    canary_deployment_id=request["canary_deployment_id"],
                 )
-                if fail == (step, params["deploy_mode"]):
-                    raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed after its write")
             if step == "promote":
                 w.registry.aliases["production"] = params["model_version"]
 
@@ -910,7 +823,7 @@ def case_chain_rollout(c: Checker) -> None:
         "a failed rollout is reported and the notice says the promotion did not roll out",
         len(failures) == 1 and "rollout" in failures[0] and calls[-1][3]["outcome"] == "promoted_not_rolled_out" and seen["after"] == (PRODUCTION, CANDIDATE),
     )
-    ended = ["serve_deploy:canary", "canary_check", "serve_deploy:withdraw", "owner_notice"]
+    ended = ["serve_deploy:canary", "canary_check", "owner_notice"]
     for label, decision, options, expected_failures in (
         ("a missing replay report, which stores a hold", "hold", {}, 0),
         ("a missing canary result", None, {}, 1),
@@ -918,29 +831,18 @@ def case_chain_rollout(c: Checker) -> None:
     ):
         failures, calls, seen = scenario(decision, **options)
         c.check(
-            f"{label} ends the canary: no candidate traffic after a day, the stable version kept, the alias unmoved and held announced",
-            len(failures) == expected_failures
-            and names(calls) == ended
-            and calls[-1][3]["outcome"] == "held"
-            and seen["after"] == (PRODUCTION, None)
-            and seen["answers"] == {PRODUCTION}
-            and seen["alias"] == PRODUCTION
-            and "serve_deploy:stable" not in names(calls),
+            f"{label} promotes and deploys nothing more, leaves the alias and announces held",
+            len(failures) == expected_failures and names(calls) == ended and calls[-1][3]["outcome"] == "held" and seen["alias"] == PRODUCTION,
         )
     failures, calls, seen = scenario(fail=("serve_deploy", "canary"))
     c.check(
         "a canary deploy that failed before it wrote deploys nothing more and announces held",
         len(failures) == 1
         and "canary deploy" in failures[0]
-        and names(calls) == ["serve_deploy:canary", "serve_deploy:withdraw", "owner_notice"]
+        and names(calls) == ["serve_deploy:canary", "owner_notice"]
         and calls[-1][3]["outcome"] == "held"
         and seen["alias"] == PRODUCTION
         and seen["after"] == (None, None),
-    )
-    failures, calls, seen = scenario(fail=("serve_deploy", "canary"), after_write=True)
-    c.check(
-        "a withdraw the chain asks for removes a canary whose deploy failed after it wrote",
-        len(failures) == 1 and seen["after"] == (PRODUCTION, None) and seen["answers"] == {PRODUCTION} and calls[-1][3]["outcome"] == "held",
     )
     other_research = training_contract.research_run_id("20261108T000000Z-b45e0002")
     newer = {**chain.CHALLENGER, "version": "5"}
@@ -956,34 +858,6 @@ def case_chain_rollout(c: Checker) -> None:
             and "serve_deploy:stable" not in names(calls)
             and calls[-1][3]["outcome"] == "held"
             and len(failures) == 1,
-        )
-    from orchestration.ecs_adapter import TaskRefused
-
-    withdraw_run = training_contract.chain_run_id(chain.RESEARCH, HAI, "canary_withdraw")
-    read = recorder_for(chain.RESEARCH, chain.CHALLENGER).read
-    request = {"hai_type": HAI, "deploy_mode": "withdraw"}
-
-    def derives(withdrawal: Any, run: str = withdraw_run, research: str = chain.RESEARCH) -> bool:
-        try:
-            ecs_preflight.serving_values(request, research, 10, read, run_id=run, withdrawal=withdrawal)
-        except TaskRefused:
-            return False
-        return True
-
-    c.check(
-        "a withdraw derives only with the chain's authority for this type, research run and withdraw run",
-        derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, HAI))
-        and not derives(None)
-        and not derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, "HAI_2"))
-        and not derives(ecs_preflight.ChainWithdrawal(other_research, HAI))
-        and not derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, HAI), run="20261030T120000Z-5e5e5e61"),
-    )
-    with world(count=40, deployment=False) as w:
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_3)
-        failures, calls, seen = run_chain(w, recorder_for(other_research, chain.CHALLENGER, "hold"), research=other_research, fail=("serve_deploy", "canary"))
-        c.check(
-            "a canary of another chain, even of the same candidate version, is left alone by a chain whose own canary deploy failed",
-            len(failures) == 1 and seen["after"] == (PRODUCTION, CANDIDATE) and calls[-1][3]["outcome"] == "held",
         )
 
 
@@ -1616,10 +1490,7 @@ def case_dag(c: Checker) -> None:
     ok = {"hai_type": HAI, "deploy_mode": "canary"}
     c.check("a closed request is accepted", training_contract.serving_parameters_for(ok) == ok)
     c.check("a stable request is accepted", training_contract.serving_parameters_for(ok | {"deploy_mode": "stable"})["deploy_mode"] == "stable")
-    c.check(
-        "a withdraw request is a valid closed request", training_contract.serving_parameters_for(ok | {"deploy_mode": "withdraw"})["deploy_mode"] == "withdraw"
-    )
-    c.check("the manual form offers canary and stable only", training_contract.FORM_SERVE_MODES == ("canary", "stable"))
+    c.check("the closed request and the manual form offer canary and stable only", training_contract.SERVE_MODES == ("canary", "stable"))
     for name, bad in {
         "a candidate version": ok | {"candidate_version": CANDIDATE},
         "a percent": ok | {"percent": 10},
@@ -1645,10 +1516,10 @@ def case_dag(c: Checker) -> None:
     )
     form = (ROOT / "dags/serving_deploy_dag.py").read_text()
     c.check(
-        "the form asks for the type, the mode and the research run to deploy from, and names no version, share or withdraw",
+        "the form asks for the type, the mode and the research run to deploy from, and names no version or share",
         all(f'"{name}": Param' in form for name in ("hai_type", "deploy_mode", "research_run"))
-        and "FORM_SERVE_MODES" in form
-        and not any(word in form for word in ("candidate_version", "percent", "withdraw")),
+        and "SERVE_MODES" in form
+        and not any(word in form for word in ("candidate_version", "percent")),
     )
     dag_ids = [kw.value.value for call in calls for kw in call.keywords if kw.arg == "dag_id" and isinstance(kw.value, ast.Constant)]
     c.check(
@@ -1974,7 +1845,6 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
     "deploy_verifies_the_active_version": (case_deploy_verifies_the_active_version, "deploy"),
-    "withdraw": (case_withdraw, "deploy"),
     "chain_rollout": (case_chain_rollout, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "images_and_repositories": (case_images, "deploy aws"),

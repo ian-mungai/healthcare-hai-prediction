@@ -218,14 +218,11 @@ def a_challenger_is_deployed_promoted_rolled_out_and_announced() -> None:
     require(notice[3] == {**chain_parameters("owner_notice"), "outcome": "promoted"}, f"notice: {notice[3]}")
 
 
-def a_held_canary_is_withdrawn_promotes_nothing_and_tells_the_owner() -> None:
+def a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner() -> None:
     recorder = Recorder({"HAI_1": CHALLENGER}, canary="hold")
     require(recorder.run() == [], "a held canary is a result, not a failure")
-    expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("serve_withdraw", "HAI_1"), ("owner_notice", "HAI_1")]
+    expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("owner_notice", "HAI_1")]
     require(recorder.steps() == expected, f"steps: {recorder.steps()}")
-    withdraw = recorder.calls[2]
-    require(withdraw[2] == training_contract.chain_run_id(RESEARCH, "HAI_1", "canary_withdraw"), f"the withdraw run: {withdraw[2]}")
-    require(withdraw[3] == {"hai_type": "HAI_1", "deploy_mode": "withdraw"}, f"the withdraw names more than the type and the mode: {withdraw[3]}")
     require(recorder.calls[-1][3]["outcome"] == "held", f"notice: {recorder.calls[-1]}")
 
 
@@ -236,11 +233,8 @@ def a_canary_result_of_another_candidate_is_a_hold_and_a_failure() -> None:
         failures = recorder.run()
         require(len(failures) == 1 and "canary" in failures[0], f"a canary result of another candidate was not reported: {changes} {failures}")
         require(
-            ("promote", "HAI_1") not in recorder.steps()
-            and recorder.calls[-1][3]["outcome"] == "held"
-            and ("serve_stable", "HAI_1") not in recorder.steps()
-            and ("serve_withdraw", "HAI_1") in recorder.steps(),
-            f"it promoted, rolled out, left the canary or did not tell the owner: {changes} {recorder.steps()}",
+            ("promote", "HAI_1") not in recorder.steps() and recorder.calls[-1][3]["outcome"] == "held" and ("serve_stable", "HAI_1") not in recorder.steps(),
+            f"it promoted, rolled out or did not tell the owner: {changes} {recorder.steps()}",
         )
 
 
@@ -357,7 +351,7 @@ def one_types_binding_failure_stops_only_its_chain() -> None:
                 ("HAI_2", "serve_stable"),
                 ("HAI_2", "notify"),
             ],
-            f"{code}: HAI_1 was not held without a withdraw and announced, or HAI_2 did not run in full: {phases}",
+            f"{code}: HAI_1 was not held and announced, or HAI_2 did not run in full: {phases}",
         )
 
 
@@ -494,12 +488,12 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     require([item.get("serve", item.get("promote"))["RUN_ID"] for item in environments] == [RESEARCH, *runs], f"runs: {environments}")
     canary_request = json.loads(environments[1]["serve"]["SERVING_REQUEST"])
     require(
-        canary_request == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10, "canary_deployment_id": None},
+        canary_request == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10},
         f"the derived canary request: {canary_request}",
     )
     stable_request = json.loads(environments[4]["serve"]["SERVING_REQUEST"])
     require(
-        stable_request == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_deployment_id": None},
+        stable_request == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0},
         f"the derived stable request: {stable_request}",
     )
     require(json.loads(environments[5]["promote"]["TRAINING_PARAMETERS"])["outcome"] == "promoted", "the owner was not told promoted")
@@ -511,52 +505,6 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     with world(rig, "research_dag", dag_params()) as current, mock.patch.object(promotion_chain, "release_online", lambda *arguments: None):
         current.run_dag("research_dag.py")
     require(rig.tasks_started() == again, "a second run of the DAG for the same base launched again")
-
-
-def research_dag_withdraws_a_held_canary() -> None:
-    """A held canary of the research DAG's chain is withdrawn through the chain's own path: the launch carries the authority the chain took from its canary
-    deploy launch, so the withdraw task starts, and the notice says held."""
-    rig = Rig()
-    for model in training_contract.PROMOTION_MODELS:
-        trained(rig, model)
-    staged_for_the_dag(rig, canary="hold")
-    before = rig.tasks_started()
-    with world(rig, "research_dag", dag_params()) as current:
-        states = current.run_dag("research_dag.py")
-    require(set(states.values()) == {"success"}, f"the DAG did not finish: {states} {current.results}")
-    expected = [("", "research"), ("HAI_1", "serve_canary"), ("HAI_1", "canary"), ("HAI_1", "serve_withdraw"), ("HAI_1", "notify")]
-    require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
-    withdrawal = json.loads(rig.environment(before + 3)["serve"]["SERVING_REQUEST"])
-    require(
-        withdrawal["canary_deployment_id"] == training_contract.chain_run_id(RESEARCH, "HAI_1", "canary_deploy") and withdrawal["candidate_version"] == "4",
-        f"the derived withdraw request: {withdrawal}",
-    )
-    require(json.loads(rig.environment(before + 4)["promote"]["TRAINING_PARAMETERS"])["outcome"] == "held", "the owner was not told held")
-
-
-def research_dag_withdraws_nothing_beside_a_manual_canary() -> None:
-    """A manual serving launch claims the chain's canary deploy run under another research run, then the research DAG runs a held chain. The chain's own
-    canary launch is refused against that claim, so it gets no authority: no withdraw is launched and the manual canary is not touched."""
-    other = training_contract.research_run_id(OTHER_BASE)
-    rig = Rig()
-    for model in training_contract.PROMOTION_MODELS:
-        trained(rig, model)
-    staged_for_the_dag(rig, canary="hold")
-    rig.stage.objects[training_contract.record_key("research", other, "HAI_1")] = research_record("HAI_1", CHALLENGER)
-    canary_run = training_contract.chain_run_id(RESEARCH, "HAI_1", "canary_deploy")
-    rig.stage_runs(canary_run)
-    manual = {"run_id": canary_run, "mode": "real", "hai_type": "HAI_1", "deploy_mode": "canary", "research_run": other}
-    with world(rig, "serving_deploy_dag", manual) as current:
-        require(current.step("serve_deploy") == "succeeded", "the manual canary did not run")
-    before = rig.tasks_started()
-    with world(rig, "research_dag", dag_params()) as current:
-        current.run_dag("research_dag.py")
-    tasks = launched_tasks(rig, before)
-    require(("HAI_1", "serve_withdraw") not in tasks, f"the chain withdrew a canary that a manual launch installed: {tasks}")
-    require(("HAI_1", "serve_canary") not in tasks, f"the chain launched its canary beside a manual claim: {tasks}")
-    require(("HAI_1", "notify") in tasks, f"the owner was not told: {tasks}")
-    claim = rig.launcher.store.run_record(canary_run, "serve", "claim")
-    require(claim is not None and "origin" not in claim and claim["bound"]["input_run"] == other, f"the manual claim changed: {claim}")
 
 
 def research_dag_fails_after_the_notice_when_the_release_step_is_missing() -> None:
@@ -674,7 +622,7 @@ def training_dag_starts_the_research_after_its_release() -> None:
 
 CASES: dict[str, Callable[[], None]] = {
     "a_challenger_is_deployed_promoted_rolled_out_and_announced": a_challenger_is_deployed_promoted_rolled_out_and_announced,
-    "a_held_canary_is_withdrawn_promotes_nothing_and_tells_the_owner": a_held_canary_is_withdrawn_promotes_nothing_and_tells_the_owner,
+    "a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner": a_held_canary_promotes_nothing_deploys_nothing_more_and_tells_the_owner,
     "a_canary_result_of_another_candidate_is_a_hold_and_a_failure": a_canary_result_of_another_candidate_is_a_hold_and_a_failure,
     "a_missing_or_unreadable_canary_result_holds": a_missing_or_unreadable_canary_result_holds,
     "one_type_failing_stops_only_its_chain": one_type_failing_stops_only_its_chain,
@@ -688,8 +636,6 @@ CASES: dict[str, Callable[[], None]] = {
     "training_dag_starts_the_research_after_its_release": training_dag_starts_the_research_after_its_release,
     "research_dag_skips_until_three_models_trained": research_dag_skips_until_three_models_trained,
     "research_dag_runs_the_chain_for_the_challenger": research_dag_runs_the_chain_for_the_challenger,
-    "research_dag_withdraws_a_held_canary": research_dag_withdraws_a_held_canary,
-    "research_dag_withdraws_nothing_beside_a_manual_canary": research_dag_withdraws_nothing_beside_a_manual_canary,
     "research_dag_fails_after_the_notice_when_the_release_step_is_missing": research_dag_fails_after_the_notice_when_the_release_step_is_missing,
     "research_dag_refuses_the_local_lane_before_anything_runs": research_dag_refuses_the_local_lane_before_anything_runs,
     "every_promote_step_gets_its_phase": every_promote_step_gets_its_phase,
