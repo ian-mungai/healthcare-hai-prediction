@@ -197,7 +197,9 @@ CHAIN_PARAMETER_KEYS = {
     "owner_notice": {"research_run", "hai_type", "outcome", "mlflow"},
 }
 PROMOTION_OUTCOMES = ("promoted", "promoted_not_rolled_out", "held", "rolled_back")
-SERVE_MODES = ("canary", "stable", "withdraw")
+# The modes the manual form offers, and every mode of a closed serving request. A withdraw is the promotion chain's own step: only its launch is accepted.
+FORM_SERVE_MODES = ("canary", "stable")
+SERVE_MODES = (*FORM_SERVE_MODES, "withdraw")
 
 
 def serving_parameters_for(raw: Any) -> dict[str, str]:

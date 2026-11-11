@@ -851,7 +851,7 @@ def case_chain_rollout(c: Checker) -> None:
             if step == "serve_deploy":
                 if fail == (step, params["deploy_mode"]) and not after_write:
                     raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
-                values = ecs_preflight.serving_values(params, research, 10, recorder.read)
+                values = ecs_preflight.serving_values(params, research, 10, recorder.read, dag_id="research_dag", run_id=run)
                 request = json.loads(values["SERVING_REQUEST"])
                 deploy.run(
                     registry=w.registry,
@@ -1588,7 +1588,10 @@ def case_dag(c: Checker) -> None:
     ok = {"hai_type": HAI, "deploy_mode": "canary"}
     c.check("a closed request is accepted", training_contract.serving_parameters_for(ok) == ok)
     c.check("a stable request is accepted", training_contract.serving_parameters_for(ok | {"deploy_mode": "stable"})["deploy_mode"] == "stable")
-    c.check("a withdraw request is accepted", training_contract.serving_parameters_for(ok | {"deploy_mode": "withdraw"})["deploy_mode"] == "withdraw")
+    c.check(
+        "a withdraw request is a valid closed request", training_contract.serving_parameters_for(ok | {"deploy_mode": "withdraw"})["deploy_mode"] == "withdraw"
+    )
+    c.check("the manual form offers canary and stable only", training_contract.FORM_SERVE_MODES == ("canary", "stable"))
     for name, bad in {
         "a candidate version": ok | {"candidate_version": CANDIDATE},
         "a percent": ok | {"percent": 10},
@@ -1614,8 +1617,10 @@ def case_dag(c: Checker) -> None:
     )
     form = (ROOT / "dags/serving_deploy_dag.py").read_text()
     c.check(
-        "the form asks for the type, the mode and the research run to deploy from, and names no version or share",
-        all(f'"{name}": Param' in form for name in ("hai_type", "deploy_mode", "research_run")) and "candidate_version" not in form and "percent" not in form,
+        "the form asks for the type, the mode and the research run to deploy from, and names no version, share or withdraw",
+        all(f'"{name}": Param' in form for name in ("hai_type", "deploy_mode", "research_run"))
+        and "FORM_SERVE_MODES" in form
+        and not any(word in form for word in ("candidate_version", "percent", "withdraw")),
     )
     dag_ids = [kw.value.value for call in calls for kw in call.keywords if kw.arg == "dag_id" and isinstance(kw.value, ast.Constant)]
     c.check(

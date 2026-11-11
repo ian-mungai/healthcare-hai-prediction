@@ -9,7 +9,7 @@ from __future__ import annotations
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import HAI_TYPES, SERVE_MODES
+from orchestration.training_contract import FORM_SERVE_MODES, HAI_TYPES
 
 with DAG(
     dag_id="serving_deploy_dag",
@@ -21,7 +21,7 @@ with DAG(
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
         "mode": Param("real", type="string", enum=["real"]),
         "hai_type": Param(type="string", enum=list(HAI_TYPES)),
-        "deploy_mode": Param(type="string", enum=list(SERVE_MODES)),
+        "deploy_mode": Param(type="string", enum=list(FORM_SERVE_MODES)),
         # The research run whose record names the canary's candidate; a stable deploy needs none.
         "research_run": Param("latest", type="string", pattern=r"^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
     },

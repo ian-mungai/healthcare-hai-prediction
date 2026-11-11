@@ -219,20 +219,30 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
-def serving_values(request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None]) -> dict[str, str]:
+def serving_values(
+    request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None], *, dag_id: str, run_id: str
+) -> dict[str, str]:
     """The values of the serve container for a closed launch request: the infection type and the mode, canary, stable or withdraw.
 
     The request names no version and no share. A canary deploys the challenger of the type's research record in the research run the launch publishes from,
     at the share the job table fixes. A withdraw names that challenger and the canary deployment of the research run's chain, so the job removes that canary
-    and no other. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry. A request with any other
-    key, a canary or withdraw without a research run and a type with no challenger are refused. The container receives the derived request and reads nothing
-    else.
+    and no other. It is accepted only for the promotion chain's own launch: the DAG is research_dag and the run is the chain's withdraw run of the type in the
+    research run the launch publishes from. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry.
+    A request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived request and
+    reads nothing else.
     """
     try:
         closed = serving_parameters_for(request)
     except ValueError as error:
         raise TaskRefused(f"serving_request_refused: {error}") from None
     derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0, "canary_deployment_id": None}
+    if closed["deploy_mode"] == "withdraw":
+        try:
+            chain_run = research_run is not None and run_id == chain_run_id(research_run, closed["hai_type"], "canary_withdraw")
+        except ValueError:
+            chain_run = False
+        if dag_id != "research_dag" or not chain_run:
+            raise TaskRefused("serving_request_refused: a withdraw is the promotion chain's own step, and this launch is not the chain's withdraw run")
     if closed["deploy_mode"] != "stable":
         if research_run is None:
             raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
@@ -598,7 +608,13 @@ class Preflight:
         if row.get("needs_serving_parameters"):
             if self.read_record is None:
                 raise LaunchRefused("serving_records_not_configured")
-            values |= self.read(serving_values, request.training or {}, request.input_run_id, int(row["canary_percent"]), self.read_record)
+            values |= self.read(
+                partial(serving_values, dag_id=request.dag_id, run_id=request.run_id),
+                request.training or {},
+                request.input_run_id,
+                int(row["canary_percent"]),
+                self.read_record,
+            )
         if DEADLINE_VARIABLE in names:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(row["deadline_seconds"]))
         return values
