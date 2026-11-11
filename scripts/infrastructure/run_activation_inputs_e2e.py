@@ -253,7 +253,12 @@ ROWS: list[Row] = [
     Row("jobs", "layer_jobs", ["silver", "gold"], "silver"),
     Row("jobs", "images", {name: IMAGE % name for name in ("analytics", "quality", "spark")}, {"spark": "latest"}),
     Row("jobs", "train_images", {name: IMAGE % name for name in ("training", "feature_store")}, {"training": "latest"}),
-    Row("jobs", "job_role_arns", {"execution": ROLE % "job_execution", "write_silver_task": ROLE % "job_write_silver_task"}, {"write_silver_task": "x"}),
+    Row(
+        "jobs",
+        "job_role_arns",
+        {"execution": ROLE % "job_execution", "write_silver_task": ROLE % "job_write_silver_task", "publisher_task": ROLE % "job_publisher_task"},
+        {"write_silver_task": "x"},
+    ),
     Row(
         "jobs",
         "writer_parameter_names",

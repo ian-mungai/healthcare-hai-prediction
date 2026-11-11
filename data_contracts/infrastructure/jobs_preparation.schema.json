@@ -109,6 +109,10 @@
               "type": "string",
               "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
             },
+            "publisher_task": {
+              "type": "string",
+              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_job_publisher_task_(dev|prod)$"
+            },
             "write_e2e_task": {
               "type": "string",
               "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_job_write_e2e_task_(dev|prod)$"

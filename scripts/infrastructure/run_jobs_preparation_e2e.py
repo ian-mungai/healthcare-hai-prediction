@@ -139,6 +139,28 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
             checks[layer + "_writer_refuses_swapped_" + field] = (
                 result.returncode == 2 and "preparation contract" in result.stderr and output.read_bytes() == before
             )
+    execution = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
+    publisher = document | {
+        "variables": document["variables"]
+        | {
+            "publisher_job_enabled": True,
+            "job_role_arns": {"execution": execution, "publisher_task": "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev"},
+        }
+    }
+    result = invoke(publisher)
+    published = values | publisher["variables"] | {"enabled_definitions": sorted(publisher["variables"]["enabled_definitions"])}
+    checks["publisher_inputs_render"] = result.returncode == 0 and json.loads(output.read_text()) == published
+    for label, arn in (
+        ("another_role", "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev"),
+        ("wildcard_name", "arn:aws:iam::111111111111:role/example_project_job_publisher_task_*"),
+        ("wildcard_role", "arn:aws:iam::111111111111:role/*"),
+        ("other_environment", "arn:aws:iam::111111111111:role/example_project_job_publisher_task_test"),
+    ):
+        altered = copy.deepcopy(publisher)
+        altered["variables"]["job_role_arns"]["publisher_task"] = arn
+        before = output.read_bytes()
+        result = invoke(altered)
+        checks["publisher_refuses_" + label] = result.returncode == 2 and "preparation contract" in result.stderr and output.read_bytes() == before
     checks["reader_inputs_reset_after_writer_cases"] = invoke(document).returncode == 0 and output.read_bytes() == original
     unused_writer = document | {
         "variables": document["variables"] | {"job_role_arns": {"try_writer": "arn:aws:iam::111111111111:role/example_project_job_try_writer_dev"}}
