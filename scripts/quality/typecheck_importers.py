@@ -2,7 +2,9 @@
 
 A removed or renamed Python function, class or module breaks the files that import it, not the file that changed. The importers come from the import graph
 that grimp builds (scripts/quality/importer_graph.py, run by the pinned import-linter's Python), read from the tree before the change so that the importers
-of a deleted module are found too. Files that MyPy does not cover (``pending`` in config/quality/mypy_runtimes.json and the files that import them) are
+of a deleted module are found too. The graph takes the import roots the project declares (MyPy's ``mypy_path``, pytest's ``pythonpath`` and Ruff's ``src`` in
+pyproject.toml). When it cannot read them, every covered file counts as an importer, so the run falls back to whole-scope MyPy and never passes by default.
+Files that MyPy does not cover (``pending`` in config/quality/mypy_runtimes.json and the files that import them) are
 left out here; the removed-names check reads those as text.
 
     .venv/bin/python -m scripts.quality.typecheck_importers
@@ -15,9 +17,11 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import sys
 import tarfile
 import tempfile
+import tomllib
 from pathlib import Path
 
 from scripts.process import TimeoutExpired, run_command
@@ -30,17 +34,65 @@ MYPY_FLAGS = ["--check-untyped-defs", "--disallow-untyped-defs"]
 ROOT = Path(__file__).resolve().parents[2]
 GRAPH_PYTHON = str(ROOT / ".tools/import-linter/bin/python")
 GRAPH_SCRIPT = str(ROOT / "scripts/quality/importer_graph.py")
+# The pyproject.toml settings that declare import roots, and the other files that can declare them (this check reads only pyproject.toml).
+ROOT_SETTINGS = (("mypy", "mypy_path"), ("pytest", "ini_options", "pythonpath"), ("ruff", "src"))
+OTHER_CONFIGS = ("mypy.ini", ".mypy.ini", "pytest.ini", "ruff.toml", ".ruff.toml")
+SHARED_CONFIGS = ("setup.cfg", "tox.ini")
+ROOT_WORDS = ("mypy_path", "pythonpath", "[ruff")
 
 
-def module_of(path: str) -> str:
-    """The dotted module name of a Python path: ``app/util.py`` is ``app.util`` and ``app/__init__.py`` is ``app``."""
-    return path.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
+def module_of(path: str, roots: list[str]) -> str:
+    """The dotted module name of a Python path, below its import root: ``app/util.py`` is ``app.util``, ``app/__init__.py`` is ``app``, and with root
+    ``src`` the path ``src/acme/rig.py`` is ``acme.rig``."""
+    below = next((path[len(folder) + 1 :] for folder in sorted(roots, key=len, reverse=True) if path.startswith(f"{folder}/")), path)
+    return below.removesuffix(".py").removesuffix("/__init__").replace("/", ".")
 
 
-def path_of(root: Path, module: str) -> str | None:
-    """The Python file of a dotted module name in the tree at ``root``, or None when the tree holds none."""
+def path_of(root: Path, module: str, roots: list[str]) -> str | None:
+    """The Python file of a dotted module name in the tree at ``root``, below the project root or one of its import roots, or None when the tree holds none."""
     base = module.replace(".", "/")
-    return next((candidate for candidate in (f"{base}.py", f"{base}/__init__.py") if (root / candidate).is_file()), None)
+    candidates = [f"{prefix}{base}{tail}" for prefix in ("", *[f"{folder}/" for folder in roots]) for tail in (".py", "/__init__.py")]
+    return next((candidate for candidate in candidates if (root / candidate).is_file()), None)
+
+
+def declared_roots(root: Path, base: str) -> list[str]:
+    """The import root folders (other than the project root) that pyproject.toml declares, now and at revision ``base``.
+
+    Raises ValueError when a declaration cannot be read: invalid TOML, a value that is not a list of relative paths, a ``MYPYPATH`` variable or another
+    configuration file that can declare roots.
+    """
+    if os.environ.get("MYPYPATH"):
+        raise ValueError("MYPYPATH is set")
+    for name in OTHER_CONFIGS:
+        if (root / name).is_file():
+            raise ValueError(f"{name} can declare import roots")
+    for name in SHARED_CONFIGS:
+        if (root / name).is_file() and any(word in (root / name).read_text(encoding="utf-8", errors="replace") for word in ROOT_WORDS):
+            raise ValueError(f"{name} declares import roots")
+    texts = [(root / "pyproject.toml").read_text(encoding="utf-8")] if (root / "pyproject.toml").is_file() else []
+    earlier = run_command("git", ["-C", str(root), "show", f"{base}:pyproject.toml"], timeout=GIT_SECONDS)
+    if earlier.returncode == 0:
+        texts.append(earlier.stdout)
+    roots: set[str] = set()
+    for text in texts:
+        try:
+            tool = tomllib.loads(text).get("tool", {})
+        except tomllib.TOMLDecodeError as error:
+            raise ValueError(f"pyproject.toml is not valid TOML: {error}") from error
+        for keys in ROOT_SETTINGS:
+            value: object = tool
+            for key in keys:
+                value = value.get(key) if isinstance(value, dict) else None
+            if value is None:
+                continue
+            if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+                raise ValueError(f"tool.{'.'.join(keys)} must be a list of paths")
+            for item in value:
+                folder = posixpath.normpath(item)
+                if posixpath.isabs(folder) or folder.startswith("..") or "$" in folder:
+                    raise ValueError(f"tool.{'.'.join(keys)} names {item!r}, which is not a folder below the project")
+                roots.add(folder)
+    return sorted(roots - {"."})
 
 
 def changed_python(root: Path, refs: list[str]) -> tuple[list[str], list[str]]:
@@ -67,6 +119,11 @@ def importing_files(root: Path, base: str, paths: list[str]) -> list[str]:
         if base == "HEAD":
             return []  # The first commit has no earlier tree and so no importers.
         raise ValueError(f"typecheck-importers: revision {base} does not exist")
+    try:
+        roots = declared_roots(root, base)
+    except ValueError as error:
+        sys.stderr.write(f"typecheck-importers: the import roots are unreadable ({error}); every covered file is checked\n")
+        return sorted(typecheck.source_files())
     lint_tools.program("import-linter")  # Fails unless the pinned version is installed; its environment holds grimp.
     with tempfile.TemporaryDirectory(prefix="hai_importers_") as scratch:
         tree, archive = Path(scratch) / "tree", Path(scratch) / "base.tar"
@@ -74,16 +131,13 @@ def importing_files(root: Path, base: str, paths: list[str]) -> list[str]:
         run_command("git", ["-C", str(root), "archive", "--format=tar", "-o", str(archive), base, "--", "*.py"], timeout=GIT_SECONDS, check=True)
         with tarfile.open(archive) as bundle:
             bundle.extractall(tree, filter="data")
-        environment = {**os.environ, "PYTHONPATH": str(tree)}
-        result = run_command(
-            GRAPH_PYTHON,
-            ["-P", str(GRAPH_SCRIPT), "--root", str(tree), *[arg for path in paths for arg in ("--module", module_of(path))]],
-            env=environment,
-            timeout=GRAPH_SECONDS,
-        )
+        arguments = ["-P", str(GRAPH_SCRIPT), "--root", str(tree)]
+        arguments += [argument for folder in roots for argument in ("--source-root", folder)]
+        arguments += [argument for path in paths for argument in ("--module", module_of(path, roots))]
+        result = run_command(GRAPH_PYTHON, arguments, timeout=GRAPH_SECONDS)
     if result.returncode:
         raise ValueError(f"typecheck-importers: the import graph failed ({result.returncode}): {(result.stdout + result.stderr)[-1500:]}")
-    found = [path_of(root, module) for module in json.loads(result.stdout)]
+    found = [path_of(root, module, roots) for module in json.loads(result.stdout)]
     return sorted({path for path in found if path})
 
 

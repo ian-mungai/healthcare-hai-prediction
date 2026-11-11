@@ -612,27 +612,43 @@ def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
     return names
 
 
-def bound_names(files: dict[str, list[str]]) -> set[str]:
-    """Return the names the current Python code binds: every function, class and import alias, and each module-level assignment.
+def module_bindings(body: list[ast.stmt]) -> set[str]:
+    """Return the names a module's statements bind in module scope.
 
-    A loop variable or an assignment inside a function binds nothing at module level, so it never keeps a removed word live.
+    A function, class, import alias or assignment binds its name here. The blocks that open no scope (if, loops, try, with and match) are searched
+    for the same bindings, but a loop target is not a binding. The body of a function or class is never entered: its names are local to it.
     """
+    names: set[str] = set()
+    for node in body:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.Import | ast.ImportFrom):
+            names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
+        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
+        elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
+            names |= module_bindings(node.body) | module_bindings(node.orelse)
+        elif isinstance(node, ast.With | ast.AsyncWith):
+            names |= module_bindings(node.body)
+        elif isinstance(node, ast.Try | ast.TryStar):
+            names |= module_bindings(node.body) | module_bindings(node.orelse) | module_bindings(node.finalbody)
+            names |= {name for handler in node.handlers for name in module_bindings(handler.body)}
+        elif isinstance(node, ast.Match):
+            names |= {name for case in node.cases for name in module_bindings(case.body)}
+    return names
+
+
+def bound_names(files: dict[str, list[str]]) -> set[str]:
+    """Return the names the current Python code binds in module scope (see ``module_bindings``)."""
     names: set[str] = set()
     for path, lines in files.items():
         if not path.endswith(".py"):
             continue
         try:
-            tree = ast.parse("\n".join(lines), filename=path)
+            names |= module_bindings(ast.parse("\n".join(lines), filename=path).body)
         except SyntaxError:
             continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                names.add(node.name)
-            elif isinstance(node, ast.Import | ast.ImportFrom):
-                names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
-        for node in tree.body:
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target] if isinstance(node, ast.AnnAssign | ast.AugAssign) else []
-            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
     return names
 
 
@@ -662,7 +678,7 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     for name in gone(set(PY_TOP_LEVEL.findall(code_removed)), python_now):
         kinds["python"][name] = re.compile(rf"(?<![\w./-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
     removed_tasks = set(TASK_ID.findall(code_removed)) - set(TASK_ID.findall(code_now))
-    # The same word still defined as a function, class, import or module-level assignment is a live name of its own, not a task reference.
+    # The same word still bound in module scope (function, class, import alias or assignment) is a live name of its own, not a task reference.
     for name in gone(removed_tasks, bound_names(files) if removed_tasks else set()):
         kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
     config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))}
@@ -1029,8 +1045,9 @@ def removed_names() -> list[Finding]:
 
     Kinds: scripts, command-line flags, environment variables, config keys, Terraform declarations, dbt models, Airflow
     task IDs and dependencies. Code names match code and config files and only the code spans and fences of Markdown, so
-    a removed ``main`` does not flag "the main branch" in prose. A task ID word that the code still defines as a function,
-    class, import alias or module-level assignment is a live name, not a leftover. Python functions, classes and modules
+    a removed ``main`` does not flag "the main branch" in prose. A task ID word that module scope still binds (a function,
+    class, import alias or assignment, also inside a module-level if, loop, try, with or match block, never inside a function or
+    class body) is a live name, not a leftover. Python functions, classes and modules
     are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
     Only the Python files MyPy does not cover keep a text check for them, until they join MyPy.
     """

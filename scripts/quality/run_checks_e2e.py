@@ -101,7 +101,6 @@ OLD_MODEL = "stg" + "_orders"
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
 STALE_HELPER = "stale" + "_helper"
-FOLDER_NAME = "run" + "books"
 OLD_NOTES = "old" + "_notes.md"
 WINNOW = "win" + "now"
 SETTLE = "set" + "tle"
@@ -679,6 +678,21 @@ SURVIVING_PACKAGE = {
 }
 
 
+MYPY_SRC = '[tool.mypy]\npython_version = "3.12"\nexplicit_package_bases = true\nmypy_path = ["src"]\n'
+SRC_PACKAGE = {
+    "src/acme/__init__.py": "",
+    "src/acme/rig.py": UTIL_FUNCTION,
+    "src/acme/read.py": f"from acme.rig import {OLD_FUNCTION}\n\nRESULT: int = {OLD_FUNCTION}()\n",
+}
+# Each way a project declares that ``src`` holds importable packages: MyPy's path, pytest's path and Ruff's source roots.
+# The last two keep MyPy's path too, so that the type check resolves the imports.
+SOURCE_ROOT_SETTINGS = {
+    "mypy_path": MYPY_SRC,
+    "pytest pythonpath": MYPY_SRC + '\n[tool.pytest.ini_options]\npythonpath = ["src"]\n',
+    "ruff src": MYPY_SRC + '\n[tool.ruff]\nsrc = ["src"]\n',
+}
+
+
 def both_hooks(name: str, expect_pass: bool, **extra: Any) -> tuple[Case, Case]:
     """The same change under the removed-names check and the MyPy importer check."""
     return Case(f"{name} (removed names)", "removed-names", expect_pass, **extra), Case(f"{name} (importer types)", IMPORTERS_HOOK, expect_pass, **extra)
@@ -880,6 +894,46 @@ CASES = [
         files={"dags/job.py": "TASKS = []\n"},
         reason=f"app/lookup.py:3: {WINNOW} {LEFTOVER}",
     ),
+    *[
+        Case(
+            f"task ID removed, {label} does not keep it live",
+            "removed-names",
+            False,
+            committed={
+                "dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n',
+                "app/live.py": source,
+                "app/read.py": f'RESULT = TASKS["{WINNOW}"]\n',
+            },
+            files={"dags/job.py": "TASKS = []\n"},
+            reason=f"app/read.py:1: {WINNOW} {LEFTOVER}",
+        )
+        for label, source in (
+            ("a nested function of the same word", f"def outer() -> None:\n    def {WINNOW}() -> int:\n        return 1\n"),
+            ("a function-local import alias of the same word", f"def outer() -> None:\n    from datetime import datetime as {WINNOW}\n"),
+            ("a method of the same word", f"class Holder:\n    def {WINNOW}(self) -> int:\n        return 1\n"),
+            ("a function-local class of the same word", f"def outer() -> None:\n    class {WINNOW}:\n        pass\n"),
+        )
+    ],
+    *[
+        Case(
+            f"task ID removed, an assignment in a module-level {label} keeps it live",
+            "removed-names",
+            True,
+            committed={"dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n', "app/live.py": source, "README.md": f"Use `{WINNOW}`.\n"},
+            files={"dags/job.py": "TASKS = []\n"},
+        )
+        for label, source in (
+            ("if block", f"if True:\n    {WINNOW} = 1\n"),
+            ("else block", f"if False:\n    pass\nelse:\n    {WINNOW} = 1\n"),
+            ("try block", f"try:\n    {WINNOW} = 1\nexcept ImportError:\n    pass\n"),
+            ("except block", f"try:\n    import missing\nexcept ImportError:\n    {WINNOW} = 1\n"),
+            ("with block", f"with open('x') as handle:\n    {WINNOW} = 1\n"),
+            ("loop body", f"for item in []:\n    {WINNOW} = item\n"),
+            ("nested if block", f"if True:\n    if True:\n        {WINNOW} = 1\n"),
+            ("conditional import", f"if True:\n    from datetime import datetime as {WINNOW}\n"),
+            ("conditional def", f"if True:\n    def {WINNOW}() -> int:\n        return 1\n"),
+        )
+    ],
     Case(
         "task ID removed, task lookup split over lines",
         "removed-names",
@@ -1026,6 +1080,40 @@ CASES = [
         True,
         committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "import hai_missing_dependency\n" + UTIL_IMPORT},
         files={"app/util.py": "X = 1\n"},
+    ),
+    *[
+        Case(
+            f"function removed from a source-root package ({label}), importer remains",
+            IMPORTERS_HOOK,
+            False,
+            committed={**SRC_PACKAGE, "pyproject.toml": settings},
+            files={"src/acme/rig.py": "KEEP = 1\n"},
+            reason=NO_ATTRIBUTE,
+        )
+        for label, settings in SOURCE_ROOT_SETTINGS.items()
+    ],
+    Case(
+        "module deleted from a source-root package, importer remains",
+        IMPORTERS_HOOK,
+        False,
+        committed={**SRC_PACKAGE, "pyproject.toml": MYPY_SRC},
+        delete=["src/acme/rig.py"],
+        reason='"acme.rig"',
+    ),
+    Case(
+        "function removed from a source-root package with its importer",
+        IMPORTERS_HOOK,
+        True,
+        committed={**SRC_PACKAGE, "pyproject.toml": MYPY_SRC},
+        files={"src/acme/rig.py": "KEEP = 1\n", "src/acme/read.py": "VALUE = 1\n"},
+    ),
+    Case(
+        "function removed, source roots unreadable so every file is checked",
+        IMPORTERS_HOOK,
+        False,
+        committed={**SRC_PACKAGE, "pyproject.toml": MYPY_SRC + '\n[tool.ruff]\nsrc = "src"\n'},
+        files={"src/acme/rig.py": "KEEP = 1\n"},
+        reason=NO_ATTRIBUTE,
     ),
     Case(
         "changed file has a type error",
@@ -1777,6 +1865,70 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         'if kind != "python" or path in unchecked else None',
         'if kind != "python" else None',
+        0,
+    ),
+    (
+        "module scope only for task words",
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names"
+            and not case.expect_pass
+            and any(label in case.name for label in ("nested function", "method of", "function-local", "local assignment"))
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "names.add(node.name)\n",
+        "names.add(node.name)\n            names |= module_bindings(node.body)\n",
+        0,
+    ),
+    (
+        "bindings inside module-level if and loop blocks",
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names" and case.expect_pass and any(label in case.name for label in ("if block", "else block", "loop body", "conditional"))
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):",
+        "elif False:",
+        1,
+    ),
+    (
+        "bindings inside module-level try blocks",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and ("try block" in case.name or "except block" in case.name)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "elif isinstance(node, ast.Try | ast.TryStar):",
+        "elif False:",
+        1,
+    ),
+    (
+        "bindings inside module-level with blocks",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "with block" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "elif isinstance(node, ast.With | ast.AsyncWith):",
+        "elif False:",
+        1,
+    ),
+    (
+        "declared import roots",
+        [case for case in CASES if case.hook == IMPORTERS_HOOK and not case.expect_pass and "source-root package" in case.name],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "roots = declared_roots(root, base)",
+        "roots: list[str] = []",
+        0,
+    ),
+    (
+        "unreadable import roots check every file",
+        [case for case in CASES if case.hook == IMPORTERS_HOOK and "source roots unreadable" in case.name],
+        IMPORTERS_COMMAND,
+        "scripts/quality/typecheck_importers.py",
+        "return sorted(typecheck.source_files())",
+        "return []",
         0,
     ),
     (
