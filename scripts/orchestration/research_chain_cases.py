@@ -350,7 +350,6 @@ def one_types_binding_failure_stops_only_its_chain() -> None:
         require(
             phases
             == [
-                ("HAI_1", "serve_withdraw"),
                 ("HAI_1", "notify"),
                 ("HAI_2", "serve_canary"),
                 ("HAI_2", "canary"),
@@ -358,7 +357,7 @@ def one_types_binding_failure_stops_only_its_chain() -> None:
                 ("HAI_2", "serve_stable"),
                 ("HAI_2", "notify"),
             ],
-            f"{code}: HAI_1 was not withdrawn and announced, or HAI_2 did not run in full: {phases}",
+            f"{code}: HAI_1 was not held without a withdraw and announced, or HAI_2 did not run in full: {phases}",
         )
 
 
@@ -514,6 +513,27 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     require(rig.tasks_started() == again, "a second run of the DAG for the same base launched again")
 
 
+def research_dag_withdraws_a_held_canary() -> None:
+    """A held canary of the research DAG's chain is withdrawn through the chain's own path: the launch carries the authority the chain took from its canary
+    deploy launch, so the withdraw task starts, and the notice says held."""
+    rig = Rig()
+    for model in training_contract.PROMOTION_MODELS:
+        trained(rig, model)
+    staged_for_the_dag(rig, canary="hold")
+    before = rig.tasks_started()
+    with world(rig, "research_dag", dag_params()) as current:
+        states = current.run_dag("research_dag.py")
+    require(set(states.values()) == {"success"}, f"the DAG did not finish: {states} {current.results}")
+    expected = [("", "research"), ("HAI_1", "serve_canary"), ("HAI_1", "canary"), ("HAI_1", "serve_withdraw"), ("HAI_1", "notify")]
+    require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
+    withdrawal = json.loads(rig.environment(before + 3)["serve"]["SERVING_REQUEST"])
+    require(
+        withdrawal["canary_deployment_id"] == training_contract.chain_run_id(RESEARCH, "HAI_1", "canary_deploy") and withdrawal["candidate_version"] == "4",
+        f"the derived withdraw request: {withdrawal}",
+    )
+    require(json.loads(rig.environment(before + 4)["promote"]["TRAINING_PARAMETERS"])["outcome"] == "held", "the owner was not told held")
+
+
 def research_dag_fails_after_the_notice_when_the_release_step_is_missing() -> None:
     """The held online load's release step is not in the job table yet: the promotion stands, no rollout runs, the notice says the promotion did not roll
     out, and the DAG run fails by name."""
@@ -643,6 +663,7 @@ CASES: dict[str, Callable[[], None]] = {
     "training_dag_starts_the_research_after_its_release": training_dag_starts_the_research_after_its_release,
     "research_dag_skips_until_three_models_trained": research_dag_skips_until_three_models_trained,
     "research_dag_runs_the_chain_for_the_challenger": research_dag_runs_the_chain_for_the_challenger,
+    "research_dag_withdraws_a_held_canary": research_dag_withdraws_a_held_canary,
     "research_dag_fails_after_the_notice_when_the_release_step_is_missing": research_dag_fails_after_the_notice_when_the_release_step_is_missing,
     "research_dag_refuses_the_local_lane_before_anything_runs": research_dag_refuses_the_local_lane_before_anything_runs,
     "every_promote_step_gets_its_phase": every_promote_step_gets_its_phase,

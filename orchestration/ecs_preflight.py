@@ -219,17 +219,35 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
+@dataclass(frozen=True)
+class ChainWithdrawal:
+    """The promotion chain's authority to withdraw one type's canary in one research run.
+
+    It is never read from a request: the chain's own step takes it from ``Preflight.withdrawal_authority`` and hands it to ``Preflight.prepare`` in the same
+    process, so a launch that a caller describes in a serialized request cannot carry it.
+    """
+
+    research_run: str
+    hai_type: str
+
+
 def serving_values(
-    request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None], *, dag_id: str, run_id: str
+    request: Mapping[str, Any],
+    research_run: str | None,
+    canary_percent: int,
+    read: Callable[[str], bytes | None],
+    *,
+    run_id: str,
+    withdrawal: ChainWithdrawal | None = None,
 ) -> dict[str, str]:
     """The values of the serve container for a closed launch request: the infection type and the mode, canary, stable or withdraw.
 
     The request names no version and no share. A canary deploys the challenger of the type's research record in the research run the launch publishes from,
     at the share the job table fixes. A withdraw names that challenger and the canary deployment of the research run's chain, so the job removes that canary
-    and no other. It is accepted only for the promotion chain's own launch: the DAG is research_dag and the run is the chain's withdraw run of the type in the
-    research run the launch publishes from. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry.
-    A request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived request and
-    reads nothing else.
+    and no other. It is accepted only with the promotion chain's authority (``ChainWithdrawal``) for this type and research run, on the chain's withdraw run of
+    the type: a request alone never carries it. A stable deploy names none: the serve job writes the Production version alone, which it reads from the
+    registry. A request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived
+    request and reads nothing else.
     """
     try:
         closed = serving_parameters_for(request)
@@ -241,8 +259,8 @@ def serving_values(
             chain_run = research_run is not None and run_id == chain_run_id(research_run, closed["hai_type"], "canary_withdraw")
         except ValueError:
             chain_run = False
-        if dag_id != "research_dag" or not chain_run:
-            raise TaskRefused("serving_request_refused: a withdraw is the promotion chain's own step, and this launch is not the chain's withdraw run")
+        if withdrawal is None or (withdrawal.research_run, withdrawal.hai_type) != (research_run, closed["hai_type"]) or not chain_run:
+            raise TaskRefused("serving_request_refused: a withdraw is the promotion chain's own step, and this launch is not the chain's withdraw of this type")
     if closed["deploy_mode"] != "stable":
         if research_run is None:
             raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
@@ -528,7 +546,18 @@ class Preflight:
         except TaskRefused as error:
             raise LaunchRefused(str(error)) from None
 
-    def prepare(self, request: SubmissionRequest) -> JobSpec | None:
+    def withdrawal_authority(self, research_run: str, hai_type: str) -> ChainWithdrawal:
+        """The promotion chain's authority to withdraw the type's canary of a research run, given only when the launch store holds the claim of the chain's own
+        canary deploy of that type and run: the evidence that the chain started the canary it asks to withdraw. A caller that never launched it gets none."""
+        try:
+            canary_run = chain_run_id(research_run, hai_type, "canary_deploy")
+        except ValueError as error:
+            raise LaunchRefused(f"a withdraw names a research run and a supported HAI type: {error}") from None
+        if self.store.run_record(canary_run, "serve", "claim") is None:
+            raise LaunchRefused(f"a withdraw needs the chain's canary deploy launch of {hai_type} in run {research_run}, and none is recorded")
+        return ChainWithdrawal(research_run, hai_type)
+
+    def prepare(self, request: SubmissionRequest, withdrawal: ChainWithdrawal | None = None) -> JobSpec | None:
         if request.template not in self.steps:
             raise LaunchRefused(f"{request.template} has no ECS job")
         job = self.steps[request.template]
@@ -556,7 +585,7 @@ class Preflight:
                     parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
-        spec = self.spec(request, job)
+        spec = self.spec(request, job, withdrawal)
         revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
@@ -591,7 +620,7 @@ class Preflight:
         if end is None or end.get("outcome") != "succeeded":
             raise LaunchRefused(f"the {job} job needs the {after} job in run {input_run} to have passed")
 
-    def fixed_values(self, request: SubmissionRequest, job: str) -> dict[str, str]:
+    def fixed_values(self, request: SubmissionRequest, job: str, withdrawal: ChainWithdrawal | None = None) -> dict[str, str]:
         """The values fixed once for a launch: the checked bronze request read once, the publisher's checked run kind and capture root, the serving request
         derived from the closed launch request, and the absolute deadline of the task."""
         row = self.jobs[job]
@@ -609,7 +638,7 @@ class Preflight:
             if self.read_record is None:
                 raise LaunchRefused("serving_records_not_configured")
             values |= self.read(
-                partial(serving_values, dag_id=request.dag_id, run_id=request.run_id),
+                partial(serving_values, run_id=request.run_id, withdrawal=withdrawal),
                 request.training or {},
                 request.input_run_id,
                 int(row["canary_percent"]),
@@ -711,12 +740,12 @@ class Preflight:
                 "Render and apply the jobs stack so it registers a revision sized from the current services, then run again"
             )
 
-    def spec(self, request: SubmissionRequest, job: str) -> JobSpec:
+    def spec(self, request: SubmissionRequest, job: str, withdrawal: ChainWithdrawal | None = None) -> JobSpec:
         """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the
         acceptance. ``prepare`` adds the checked revision of the job's host definition."""
         row = self.jobs[job]
         code_run = self.code_runs.resolve(request.run_id)
-        fixed = self.fixed_values(request, job)
+        fixed = self.fixed_values(request, job, withdrawal)
         cache: dict[str, str] = {}
 
         def digest() -> str:

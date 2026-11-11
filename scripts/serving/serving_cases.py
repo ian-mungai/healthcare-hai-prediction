@@ -851,7 +851,14 @@ def case_chain_rollout(c: Checker) -> None:
             if step == "serve_deploy":
                 if fail == (step, params["deploy_mode"]) and not after_write:
                     raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
-                values = ecs_preflight.serving_values(params, research, 10, recorder.read, dag_id="research_dag", run_id=run)
+                values = ecs_preflight.serving_values(
+                    params,
+                    research,
+                    10,
+                    recorder.read,
+                    run_id=run,
+                    withdrawal=ecs_preflight.ChainWithdrawal(research, params["hai_type"]) if params["deploy_mode"] == "withdraw" else None,
+                )
                 request = json.loads(values["SERVING_REQUEST"])
                 deploy.run(
                     registry=w.registry,
@@ -950,6 +957,27 @@ def case_chain_rollout(c: Checker) -> None:
             and calls[-1][3]["outcome"] == "held"
             and len(failures) == 1,
         )
+    from orchestration.ecs_adapter import TaskRefused
+
+    withdraw_run = training_contract.chain_run_id(chain.RESEARCH, HAI, "canary_withdraw")
+    read = recorder_for(chain.RESEARCH, chain.CHALLENGER).read
+    request = {"hai_type": HAI, "deploy_mode": "withdraw"}
+
+    def derives(withdrawal: Any, run: str = withdraw_run, research: str = chain.RESEARCH) -> bool:
+        try:
+            ecs_preflight.serving_values(request, research, 10, read, run_id=run, withdrawal=withdrawal)
+        except TaskRefused:
+            return False
+        return True
+
+    c.check(
+        "a withdraw derives only with the chain's authority for this type, research run and withdraw run",
+        derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, HAI))
+        and not derives(None)
+        and not derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, "HAI_2"))
+        and not derives(ecs_preflight.ChainWithdrawal(other_research, HAI))
+        and not derives(ecs_preflight.ChainWithdrawal(chain.RESEARCH, HAI), run="20261030T120000Z-5e5e5e61"),
+    )
     with world(count=40, deployment=False) as w:
         deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_3)
         failures, calls, seen = run_chain(w, recorder_for(other_research, chain.CHALLENGER, "hold"), research=other_research, fail=("serve_deploy", "canary"))

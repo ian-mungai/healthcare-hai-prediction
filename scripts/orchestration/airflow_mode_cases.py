@@ -717,6 +717,18 @@ def research_record_of(rig: Rig, challenger: dict[str, Any] | None, hai_type: st
     rig.stage.objects[record_key("research", SERVE_RESEARCH, hai_type)] = json.dumps(document).encode()
 
 
+def launch_job(rig: Rig, spec: Any) -> None:
+    """Launch one job spec through the rig's operator, as a task of a DAG does, so the launch store holds its record."""
+    rig.services.operator_class(
+        task_id=spec.job,
+        job=spec,
+        launcher=lambda: rig.launcher,
+        task_definition=rig.services.definition(spec.job),
+        cluster=rig.services.cluster,
+        overrides={},
+    ).execute({"ti": SimpleNamespace(dag_id="research_dag", task_id=spec.job, run_id="manual__test", map_index=-1, try_number=1)})
+
+
 def serving_request_is_closed_and_derived() -> None:
     """The launch form carries the infection type and the mode and nothing else. The preflight derives the candidate version of a canary from the type's
     research record, fixes the share from the job table and gives a stable deploy no version, so no request can name a version or a share."""
@@ -737,29 +749,56 @@ def serving_request_is_closed_and_derived() -> None:
             f"the derived request is {derived}",
         )
     chain_dag, withdraw_run = "research_dag", chain_run_id(SERVE_RESEARCH, "HAI_1", "canary_withdraw")
+    canary_run = chain_run_id(SERVE_RESEARCH, "HAI_1", "canary_deploy")
     closed = {"hai_type": "HAI_1", "deploy_mode": "withdraw"}
 
     def withdraw_of(dag_id: str, run: str, research: str | None = SERVE_RESEARCH, training: dict[str, Any] = closed) -> SubmissionRequest:
         rig.stage_runs(run)
         return SubmissionRequest("serve_deploy", run, "real", 1, dag_id, "serve_deploy", "manual__test", research, training=training)
 
-    spec = rig.preflight.prepare(withdraw_of(chain_dag, withdraw_run))
-    derived = json.loads(spec.environment["serve"]["SERVING_REQUEST"]) if spec is not None else {}
-    bound = chain_run_id(SERVE_RESEARCH, "HAI_1", "canary_deploy")
-    wanted = {"hai_type": "HAI_1", "deploy_mode": "withdraw", "candidate_version": "4", "percent": 0, "canary_deployment_id": bound}
-    require(derived == wanted, f"the derived withdraw request is {derived}")
     before = rig.tasks_started()
     for label, request in (
+        ("the chain's own DAG and run, copied or calculated by a caller", withdraw_of(chain_dag, withdraw_run)),
         ("an invented DAG", withdraw_of("invented_dag", withdraw_run)),
         ("the serving DAG", withdraw_of("serving_deploy_dag", withdraw_run)),
         ("a run that is not the chain's withdraw", withdraw_of(chain_dag, "20261030T120000Z-5e5e5e61")),
-        ("another step's run of the chain", withdraw_of(chain_dag, chain_run_id(SERVE_RESEARCH, "HAI_1", "canary_deploy"))),
+        ("another step's run of the chain", withdraw_of(chain_dag, canary_run)),
         ("a chain run of another type", withdraw_of(chain_dag, chain_run_id(SERVE_RESEARCH, "HAI_2", "canary_withdraw"))),
         ("no research run", withdraw_of(chain_dag, withdraw_run, research=None)),
     ):
         error = refuses(LaunchRefused, partial(rig.preflight.prepare, request))
-        require("withdraw" in str(error), f"a withdraw launched by {label} was refused for another reason: {error}")
+        require("withdraw" in str(error), f"a raw withdraw launched by {label} was refused for another reason: {error}")
     require(rig.tasks_started() == before, "a refused withdraw reached the cloud")
+    error = refuses(LaunchRefused, partial(rig.preflight.withdrawal_authority, SERVE_RESEARCH, "HAI_1"))
+    require("canary" in str(error), f"the chain's authority to withdraw was given with no canary deploy launched: {error}")
+    rig.stage_runs(canary_run)
+    canary_spec = rig.preflight.prepare(
+        SubmissionRequest(
+            "serve_deploy",
+            canary_run,
+            "real",
+            1,
+            chain_dag,
+            "serve_deploy",
+            "manual__test",
+            SERVE_RESEARCH,
+            training={"hai_type": "HAI_1", "deploy_mode": "canary"},
+        )
+    )
+    launch_job(rig, canary_spec)
+    authority = rig.preflight.withdrawal_authority(SERVE_RESEARCH, "HAI_1")
+    spec = rig.preflight.prepare(withdraw_of(chain_dag, withdraw_run), authority)
+    derived = json.loads(spec.environment["serve"]["SERVING_REQUEST"]) if spec is not None else {}
+    wanted = {"hai_type": "HAI_1", "deploy_mode": "withdraw", "candidate_version": "4", "percent": 0, "canary_deployment_id": canary_run}
+    require(derived == wanted, f"the derived withdraw request is {derived}")
+    other = chain_run_id(SERVE_RESEARCH, "HAI_2", "canary_withdraw")
+    for label, request in (
+        ("another type", withdraw_of(chain_dag, other, training={"hai_type": "HAI_2", "deploy_mode": "withdraw"})),
+        ("another run", withdraw_of(chain_dag, "20261030T120000Z-5e5e5e61")),
+        ("another research run", withdraw_of(chain_dag, withdraw_run, research=research_run_id("20261108T000000Z-b45e0002"))),
+    ):
+        error = refuses(LaunchRefused, partial(rig.preflight.prepare, request, authority))
+        require("withdraw" in str(error), f"the chain's authority carried {label}: {error}")
     with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "deploy_mode": "withdraw"}) as current:
         current.strict_enum = True
         refuses(FormRefused, partial(current.run_dag, "serving_deploy_dag.py"))
@@ -770,7 +809,7 @@ def serving_request_is_closed_and_derived() -> None:
     rig.stage_runs(stable_run)
     with world(rig, "serving_deploy_dag", {**SERVE_FORM, "run_id": stable_run}) as current:
         require(current.step("serve_deploy") == "succeeded", "a stable deploy did not run")
-        derived = json.loads(rig.environment(1)["serve"]["SERVING_REQUEST"])
+        derived = json.loads(rig.environment(2)["serve"]["SERVING_REQUEST"])
         require(
             derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_deployment_id": None},
             f"the derived stable request is {derived}",
