@@ -6972,7 +6972,7 @@
         },
         {
           "file": "scripts/infrastructure/render_project_config.py",
-          "sha256": "f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
+          "sha256": "667c2413fa2bf33ac67e331487d4f13f9faa423a1b692fac58d4f206b0d9fcb7"
         },
         {
           "file": "scripts/process.py",
@@ -6983,12 +6983,12 @@
           "sha256": "9e9f986a690edb02c365bdefe6ac07d2118d00831dadb6edc276bd37ef4eeb57"
         }
       ],
-      "reason": "Run 3 redownload route on the direct ECS publisher: the key read gained a task role reader for one collector's key, the approved hosts guard and the raw root were added, each BLS request reserves in a durable ledger and captures are stored under the raw root. All the data is public, so the per-unit classification gate and the filtered switch are gone. No other collector logic for the published data changed. This collector's own E2E passed on this code. Prior versions retained. No model-use approval. Relisted once on feat/run3-route-direct-salvage (main 0bddd8c, publisher on the direct ECS launch, Run 3 whole-file intake with bronze person-field protection): the closure holds main's NBER modules that the shared code reaches; the collector's own E2E passed on this code.",
+      "reason": "Run 3 redownload route on the direct ECS publisher: the key read gained a task role reader for one collector's key, the approved hosts guard and the raw root were added, each BLS request reserves in a durable ledger and captures are stored under the raw root. All the data is public, so the per-unit classification gate and the filtered switch are gone. No other collector logic for the published data changed. This collector's own E2E passed on this code. Prior versions retained. No model-use approval. Relisted once on verify/aws-proof-20261111 (main c2f8cfe with the host cap, host private address and IAM digest work, and the Run 3 direct ECS publisher route with whole-file intake and bronze person-field protection): the closure holds main's NBER modules that the shared code reaches and the host address work's change to scripts/infrastructure/render_project_config.py; the collector's own E2E passed on this code.",
       "evidence": [
-        "data/e2e/person_fields_salvage_20261110b/code_versions_r2/bls_api.json"
+        "data/e2e/integration_20261111/relist/code_versions/bls_api.json"
       ],
       "review": "independent review of the redownload route is pending; this version is redone if the review changes this code",
-      "reviewed_on": "2026-11-10"
+      "reviewed_on": "2026-11-11"
     }
   ]
 }
