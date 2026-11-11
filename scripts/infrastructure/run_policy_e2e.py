@@ -37,6 +37,7 @@ VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
 GITHUB_OIDC = REPO_ROOT / "infra" / "iam" / "github_oidc.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
 BRONZE_TABLES = REPO_ROOT / "config" / "lakehouse" / "bronze_tables.json"
+PERSON_POLICIES = REPO_ROOT / "config" / "lakehouse" / "person_policies.json"
 # The longest values the real deployment can use, to check the managed policy size limit with them.
 LONGEST_VALUES = {
     "AWS_REGION": "ap-southeast-2",
@@ -127,11 +128,21 @@ def load_roles() -> dict[str, dict[str, Any]]:
     def parameters(*variables: str) -> str:
         return json.dumps([f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter{variable_default(name)}" for name in variables])
 
-    bronze = {"BUCKET_ARN": bucket, "TABLE_OBJECT_ARNS": objects(namespaces), "TABLE_LIST_PREFIXES": prefixes(namespaces),
-              "SOURCE_OBJECT_ARNS": json.dumps([f"{bucket}/{name}/*" for name in collections]),
-              "SOURCE_LIST_PREFIXES": json.dumps([f"{name}/*" for name in collections])}  # fmt: skip
-    bronze_test = {**bronze, "TABLE_OBJECT_ARNS": objects(test_namespaces), "TABLE_LIST_PREFIXES": prefixes(test_namespaces),
-                   "SOURCE_OBJECT_ARNS": json.dumps([f"{bucket}/{qualification}/*"]), "SOURCE_LIST_PREFIXES": json.dumps([f"{qualification}/*"])}  # fmt: skip
+    bronze = {"BUCKET_ARN": bucket, "TABLE_OBJECT_ARNS": objects(namespaces), "TABLE_LIST_PREFIXES": prefixes(namespaces)}
+    bronze_test = {**bronze, "TABLE_OBJECT_ARNS": objects(test_namespaces), "TABLE_LIST_PREFIXES": prefixes(test_namespaces)}
+    # The source reads of the bronze task are managed policies (infra/iam/bronze_writer.tf), one object policy per root; the default has the bucket root only.
+    key_version = json.loads(PERSON_POLICIES.read_text(encoding="utf-8"))["key_version"]
+    bronze_sources = {
+        "source_lists": ("bronze_writer_source_lists", {"BUCKET_ARN": bucket, "SOURCE_LIST_PREFIXES": json.dumps([f"{name}/*" for name in collections])}),
+        "source_objects_root": (
+            "bronze_writer_source_objects",
+            {"SOURCE_OBJECT_ARNS": json.dumps([*[f"{bucket}/{name}/*" for name in collections], f"{bucket}/bronze_objects/sha256/*"])},
+        ),
+        "pseudonym_key": (
+            "bronze_writer_pseudonym_key",
+            {"PSEUDONYM_KEY_ARN": f"arn:aws:ssm:{policy_cases.R}:{policy_cases.A}:parameter{variable_default('pseudonym_key_prefix')}{key_version}"},
+        ),
+    }  # fmt: skip
     e2e_names = ["silver_e2e", "gold_e2e", "features_e2e", *test_namespaces]
     e2e = {"BUCKET_ARN": bucket, "TEST_OBJECT_ARNS": objects(e2e_names), "TEST_LIST_PREFIXES": prefixes(e2e_names),
            "BRONZE_TEST_OBJECT_ARNS": objects(test_namespaces), "BRONZE_TEST_LIST_PREFIXES": prefixes(test_namespaces),
@@ -164,6 +175,7 @@ def load_roles() -> dict[str, dict[str, Any]]:
         ),  # fmt: skip
         "role/job_try_writer/try_outputs": read("job_try_writer"),
         "role/job_write_bronze_task/bronze_objects_and_versioned_sources": read("bronze_writer_storage", bronze),
+        **{f"role/job_write_bronze_task/{name}": read(template, inputs) for name, (template, inputs) in bronze_sources.items()},
         "role/job_write_e2e_task/qualification_objects_and_versioned_source": read(
             "job_writer_e2e_storage",
             {key: e2e[key] for key in ("BUCKET_ARN", "TEST_OBJECT_ARNS", "TEST_LIST_PREFIXES", "SOURCE_OBJECT_ARNS", "SOURCE_LIST_PREFIXES")},
