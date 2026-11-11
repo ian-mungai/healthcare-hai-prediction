@@ -77,8 +77,8 @@ def settle_conf(mode: str, run_id: str, launch_run: str | None, job: str | None,
     reads (the broker's jobs and the direct launch's own, such as the Run 3 publisher), so every launch the DAGs start can be settled."""
     try:
         jobs = load_tables(REPO_ROOT)[0]["jobs"]
-    except LaunchRefused as error:
-        raise TriggerError(f"refused: the job tables do not load: {error}") from None
+    except (LaunchRefused, OSError, ValueError) as error:  # a missing or unreadable file, text that is not JSON, or a table its schema refuses
+        raise TriggerError(f"refused: the job tables do not load: {type(error).__name__}: {error}") from None
     if mode != "real" or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: the settle DAG runs in real mode with a run ID of its own ({mode!r}, {run_id!r})")
     if launch_run is None or not RUN_ID.fullmatch(launch_run):

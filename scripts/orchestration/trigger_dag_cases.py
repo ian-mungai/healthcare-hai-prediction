@@ -14,7 +14,9 @@ import argparse
 import contextlib
 import io
 import json
+import shutil
 import sys
+import tempfile
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -302,6 +304,30 @@ def publisher_recovery_cases() -> dict[str, bool]:
     }
 
 
+def broken_table_cases() -> dict[str, bool]:
+    """A settle refuses, with no API call and no secret read, when the direct launch's job table is missing or is not JSON: the owner sees a refusal,
+    not a traceback."""
+    settle = ["--dag", SETTLE_DAG, "--mode", "real", "--launch-run", SILVER, "--job", "publisher", "--statement", STATEMENT, "--wait-seconds", "5"]
+
+    def refused_with(damage: Callable[[Path], None]) -> bool:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            shutil.copytree(trigger_dag.REPO_ROOT / "config/orchestration", root / "config/orchestration")
+            damage(root / "config/orchestration/direct_jobs.json")
+            api = StandIn()
+            with mock.patch.object(trigger_dag, "REPO_ROOT", root):
+                try:
+                    code, _, error, _ = invoke(api, settle)
+                except Exception:  # an exception that escapes main is the traceback this case refuses
+                    return False
+            return code == 1 and not api.calls and "refused" in error and "Traceback" not in error
+
+    return {
+        "a missing direct job table is a refusal before any request": refused_with(lambda path: path.unlink()),
+        "a direct job table that is not JSON is a refusal before any request": refused_with(lambda path: path.write_text("{not json")),
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -310,6 +336,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "trigger": trigger_cases,
     "settle DAG": settle_dag_cases,
     "publisher recovery": publisher_recovery_cases,
+    "broken job table": broken_table_cases,
 }
 
 
