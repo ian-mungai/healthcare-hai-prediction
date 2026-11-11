@@ -350,7 +350,7 @@ def settle_deletes_its_own_lock_after_clearing_the_hold() -> None:
     module = importlib.import_module("scripts.infrastructure.services_apply")
     mine = OWN_LOCK
     aws = AwsStandIn(value="held by services_apply", lock=mine)
-    with mock.patch.object(module.Steps, "wait_stable", lambda self: None):
+    with mock.patch.object(module.Steps, "wait_stable", lambda self, token: None):
         code, _, err = run_real_output(["settle", "--token", mine], aws)
     require(code == 0, f"settle with its own token failed: exit {code} {err}")
     require(aws.value == "clear" and aws.lock is None, f"settle did not clear the hold and delete its lock: {aws.value!r} {aws.lock!r}")
@@ -457,7 +457,24 @@ def resolve_cannot_clear_a_hold_another_machine_just_set() -> None:
     require(not hold_puts or (lock_ops and lock_ops[0] < aws.commands.index(hold_puts[0])), "resolve wrote the hold before touching the lock")
 
 
+def a_settle_failure_names_the_lock_token() -> None:
+    """A failed rollout or a steady-state timeout during settle keeps the hold and the lock, and the printed resolve command carries this
+    apply's lock token, so following it is not refused while the lock is held."""
+    for stable in (lambda: (_ for _ in ()).throw(RuntimeError("service airflow rollout FAILED")), lambda: False):
+        clock = Clock()
+        store = Store(clock, "held by services_apply")
+        current, module = steps(store, clock, stable)
+        try:
+            current.settle(OWN_LOCK)
+        except module.ServicesApplyError as error:
+            require(f"--token '{OWN_LOCK}'" in str(error), f"the settle failure does not give the resolve command with the token: {error}")
+        else:
+            raise AssertionError("settle returned without steady state")
+        require(store.value == "held by services_apply" and store.lock.value == OWN_LOCK, "a failed settle changed the hold or the lock")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "a_settle_failure_names_the_lock_token": a_settle_failure_names_the_lock_token,
     "settle_requires_and_checks_its_token": settle_requires_and_checks_its_token,
     "resolve_without_a_token_takes_the_lock_first": resolve_without_a_token_takes_the_lock_first,
     "resolve_cannot_clear_a_hold_another_machine_just_set": resolve_cannot_clear_a_hold_another_machine_just_set,

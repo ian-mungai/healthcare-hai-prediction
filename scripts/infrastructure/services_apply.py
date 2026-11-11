@@ -186,7 +186,7 @@ class Steps:
         except Exception as error:  # the same refusal as in wait_stable
             raise ServicesApplyError(f"the services are not stable ({type(error).__name__}). The launch hold stays set") from None
 
-    def wait_stable(self) -> None:
+    def wait_stable(self, token: str) -> None:
         """Poll until every ECS service is settled, within ``STABLE_SECONDS``; a failed rollout or the deadline raises and the hold stays."""
         end = self.clock.monotonic() + STABLE_SECONDS
         while True:
@@ -197,14 +197,14 @@ class Steps:
             except Exception as error:  # a failed rollout or a failed describe call: the services are not known to be stable
                 raise ServicesApplyError(
                     f"the services did not reach steady state ({type(error).__name__}: {str(error)[:200]}). The launch hold stays set; check the "
-                    f"services, then run {RESOLVE_COMMAND}"
+                    f"services, then run {RESOLVE_COMMAND} --token '{token}'"
                 ) from None
             if settled:
                 return
             if self.clock.monotonic() + POLL_SECONDS > end:
                 raise ServicesApplyError(
                     f"the services did not reach steady state within {STABLE_SECONDS} s. The launch hold stays set; check the services, then run "
-                    f"{RESOLVE_COMMAND}"
+                    f"{RESOLVE_COMMAND} --token '{token}'"
                 )
             self.clock.sleep(POLL_SECONDS)
 
@@ -212,7 +212,7 @@ class Steps:
         """After a successful apply: require this apply's own token on the apply lock, wait for steady state, clear the hold, then delete the lock.
         No token, a malformed one or a lock held by another token changes nothing."""
         _, token = self.require_lock(token)
-        self.wait_stable()
+        self.wait_stable(token)
         self.write(LAUNCH_HOLD_CLEAR)
         self.report("launch hold: cleared after the services reached steady state")
         self.release(token)
