@@ -196,11 +196,15 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
 
         def stand_in(program: str, args: list[str], **_: Any) -> Any:
             calls.append((program, args))
-            return SimpleNamespace(returncode=0, stderr="")
+            return SimpleNamespace(returncode=0, stderr="", stdout='{"feature_set": "m2", "outcome": "not_held", "run_id": "' + RUN + '"}\n')
 
         with mock.patch.object(auto_promotion, "run_command", side_effect=stand_in):
-            auto_promotion.release("m2", RUN)
-        require(len(calls) == 1 and calls[0][1] == ["-m", "scripts.features.feast_materialize", "--release", "m2", RUN], f"calls: {calls}")
+            outcome = auto_promotion.release("m2", RUN)
+        require(len(calls) == 1 and calls[0][1] == ["-m", "scripts.features.online_release", "--model", "m2", "--features-run", RUN], f"calls: {calls}")
+        require(outcome == "not_held", f"the release outcome was not returned: {outcome}")
+        with mock.patch.object(auto_promotion, "run_command", side_effect=stand_in):
+            code, out, _ = command(["release", "--model", "m2", "--features-run", RUN])
+        require(code == 0 and json.loads(out) == {"features_run": RUN, "outcome": "not_held", "released": "m2"}, f"release command: {code} {out}")
 
     def release_failure_is_visible() -> None:
         def failing(program: str, args: list[str], **_: Any) -> Any:

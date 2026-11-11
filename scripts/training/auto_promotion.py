@@ -12,7 +12,8 @@ with the failed checks. ``record`` does the same and, on a pass, tags the challe
 (``MLFLOW_TRACKING_URI``); the ``promote`` action refuses a version without it. Both refuse, by the name in ``code``, a replay of another infection type than
 the record's; ``record`` also refuses a registry version that is not the record's challenger (other registered model, source run, model, type, base run or
 selected training run), so a record and replay from another tracking store certify nothing. ``release`` loads the held online
-data of the model's feature set, which only a model with another feature schema than the online one needs (``schema_changed``). ``notify`` publishes the
+data of the model's feature set, which only a model with another feature schema than the online one needs (``schema_changed``); a set that has no hold
+releases nothing (``scripts.features.online_release``). ``notify`` publishes the
 outcome to the project's alerts topic named by ``ALERTS_TOPIC_ARN``. No step needs the owner's approval, and none moves an alias: the ``promote`` action does.
 """
 
@@ -175,13 +176,16 @@ def schema_changed(promoted_tags: Mapping[str, str], online_tags: Mapping[str, s
     return online_tags is None or promoted_tags["feature_list_sha256"] != online_tags["feature_list_sha256"]
 
 
-def release(model: str, features_run: str) -> None:
-    """Load the held online data of the model's feature set for the run that trained the promoted model."""
+def release(model: str, features_run: str) -> str:
+    """Load the held online data of the model's feature set for the run that trained the promoted model, after the canary's full rollout.
+
+    Returns ``released``, ``already_released`` or ``not_held`` (the run loaded online by itself): ``scripts.features.online_release`` explains each."""
     if model not in training_contract.MODELS or not re.fullmatch(training_contract.RUN_ID, features_run):
         raise ValueError("release needs a model m1 to m6 and a feature run ID")
-    done = run_command(sys.executable, ["-m", "scripts.features.feast_materialize", "--release", model, features_run], timeout=RELEASE_SECONDS)
+    done = run_command(sys.executable, ["-m", "scripts.features.online_release", "--model", model, "--features-run", features_run], timeout=RELEASE_SECONDS)
     if done.returncode != 0:
         raise RuntimeError(f"the release of {model} for {features_run} failed with exit code {done.returncode}: {done.stderr.strip()[-300:]}")
+    return str(json.loads(done.stdout)["outcome"])
 
 
 def notify(client: Any, topic_arn: str, hai_type: str, outcome: str, detail: str) -> str:
@@ -230,8 +234,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     raise ValueError("MLFLOW_TRACKING_URI is not set")
                 result = record_canary(run_tracking.open_store(uri), record, report)
         elif arguments.command == "release":
-            release(arguments.model, arguments.features_run)
-            result = {"released": arguments.model, "features_run": arguments.features_run}
+            outcome = release(arguments.model, arguments.features_run)
+            result = {"released": arguments.model, "features_run": arguments.features_run, "outcome": outcome}
         else:
             import boto3
 
