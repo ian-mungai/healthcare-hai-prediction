@@ -20,8 +20,8 @@ locals {
   }
 
   # The IAM stack names the budget alerts topic format(local.platform_name, "budget_alerts") in infra/iam/budget.tf and the platform stack names the alerts
-  # topic the same way. The project user's SNS policy names each of the two topics by its exact ARN, so a new alert topic needs its own entry in that policy
-  # (the policy E2E holds the policy to the topics Terraform creates). A topic that does not exist yet fails the apply visibly.
+  # topic the same way. The project user's SNS policy names each of the two topics by its exact ARN, and the platform and IAM Terraform tests assert that each
+  # stack's own topic ARN is in the rendered policy. A topic that does not exist yet fails the apply visibly.
   budget_topic_arn = "arn:aws:sns:${var.aws_region}:${var.expected_account_id}:${var.project_name}_budget_alerts_${var.environment}"
 
   # Whether an address is set is not a secret, the address is. An unset or empty address leaves every topic without a subscriber.

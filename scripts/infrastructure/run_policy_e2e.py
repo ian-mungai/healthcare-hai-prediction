@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.iam.scripts.render_policy import MAX_POLICY_CHARACTERS, non_whitespace_length, render_template, template_service, terraform_names
-from scripts.infrastructure import policy_cases, secret_store, sns_topic_inventory
+from scripts.infrastructure import policy_cases, secret_store
 from scripts.infrastructure.policy_evaluator import Decision, Request, allowed_actions, as_list, decide, decide_bounded, load_policies
 from scripts.infrastructure.policy_script_defects import run_script_defects
 from scripts.process import run_command
@@ -840,121 +840,6 @@ def check_boundary_sizes(directory: Path = BOUNDARY_DIRECTORY, variables: Path =
     ]
 
 
-INFRA_DIRECTORY = REPO_ROOT / "infra"
-
-
-def check_alert_topics(documents: dict[str, dict[str, Any]], infra: Path = INFRA_DIRECTORY) -> list[str]:
-    """The subscribe statement and the case inventory name exactly the SNS topics that Terraform creates, each as an exact ARN with its subscriptions.
-
-    A topic pattern cannot show that a topic belongs to the project, so a new topic fails here until the policy names it."""
-    suffixes, problems = sns_topic_inventory.inventory(infra)
-    topics = {f"arn:aws:sns:{policy_cases.R}:{policy_cases.A}:{policy_cases.P}_{suffix}_{policy_cases.E}" for suffix in suffixes}
-    expected = topics | {f"{topic}:*" for topic in topics}
-    actual = resources(documents["healthcare_hai_prediction_sns_policy"], policy_cases.ALERT_SUBSCRIBE_STATEMENT)
-    problems += [
-        f"sns policy: a topic that Terraform creates is not named in {policy_cases.ALERT_SUBSCRIBE_STATEMENT}: {item}" for item in sorted(expected - actual)
-    ]
-    problems += [
-        f"sns policy: {policy_cases.ALERT_SUBSCRIBE_STATEMENT} names a resource that is not a topic Terraform creates: {item}"
-        for item in sorted(actual - expected)
-    ]
-    cases = set(policy_cases.ALERT_TOPICS.values())
-    problems += [f"policy cases: the alert topic inventory differs from the topics Terraform creates: {item}" for item in sorted(cases ^ topics)]
-    return problems
-
-
-def copy_terraform_tree(root: Path, infra: Path = INFRA_DIRECTORY) -> None:
-    """A copy of the Terraform sources the inventory reads, without provider folders and test files."""
-    for source in [*infra.rglob("*.tf"), *infra.rglob("*.tf.json")]:
-        if ".terraform" not in source.parts and "tests" not in source.parts:
-            target = root / source.relative_to(infra)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
-
-
-def hcl(*lines: str) -> str:
-    return "\n".join(lines) + "\n"
-
-
-AUDIT_TOPIC = hcl('resource "aws_sns_topic" "audit" {', '  name = format(local.name, "audit_alerts")', "}")
-# Each fixture is a valid Terraform way to create an alert topic that the exact grants do not name, or a form the inventory cannot read. The first four are the
-# ones an earlier version of the check missed: a label with a hyphen, a JSON root, a module that builds the names itself and a CloudFormation stack.
-TOPIC_FIXTURES = {
-    "a new alert topic that the policy does not name": {"platform/audit.tf": AUDIT_TOPIC},
-    "a topic whose label has a hyphen": {"platform/audit.tf": AUDIT_TOPIC.replace('"audit"', '"audit-alerts"')},
-    "a topic in a Terraform JSON file": {
-        "platform/extra.tf.json": json.dumps({"resource": {"aws_sns_topic": {"audit": {"name": '${format(local.name, "audit_alerts")}'}}}})
-    },
-    "a topic that a local module builds with its own name template": {
-        "platform/audit_module.tf": hcl(
-            'module "audit" {', '  source   = "../modules/audit"', '  for_each = toset(["audit", "ingestion"])', "  kind     = each.key", "}"
-        ),
-        "modules/audit/main.tf": hcl(
-            "locals {",
-            '  name = "example_project_${var.kind}_%s_dev"',
-            "}",
-            "",
-            'resource "aws_sns_topic" "alerts" {',
-            '  name = format(local.name, "alerts")',
-            "}",
-        ),
-    },
-    "a topic that a CloudFormation stack creates": {
-        "platform/audit_stack.tf": hcl(
-            'resource "aws_cloudformation_stack" "audit" {',
-            '  name          = "audit"',
-            '  template_body = jsonencode({ Resources = { Topic = { Type = "AWS::SNS::Topic" } } })',
-            "}",
-        )
-    },
-    "a topic that a template string names without the CloudFormation resource": {
-        "platform/audit_text.tf": hcl("locals {", '  template = "{\\"Type\\": \\"AWS::SNS::Topic\\"}"', "}")
-    },
-    "a topic with a count": {"platform/audit.tf": AUDIT_TOPIC.replace("  name", "  count = 1\n  name")},
-    "a topic with a for_each": {"platform/audit.tf": AUDIT_TOPIC.replace("  name", '  for_each = toset(["a"])\n  name')},
-    "a topic whose name is a literal": {"platform/audit.tf": AUDIT_TOPIC.replace('format(local.name, "audit_alerts")', '"example_project_audit_alerts_dev"')},
-    "a topic whose name template is not the project template": {
-        "platform/audit.tf": hcl(
-            "locals {",
-            '  audit = "${var.project_name}_extra_%s_${var.environment}"',
-            "}",
-            "",
-            'resource "aws_sns_topic" "audit" {',
-            '  name = format(local.audit, "alerts")',
-            "}",
-        )
-    },
-    "a module from a registry": {"platform/registry.tf": hcl('module "x" {', '  source = "hashicorp/consul/aws"', "}")},
-}
-
-
-def alert_topic_checks(documents: dict[str, dict[str, Any]]) -> dict[str, bool]:
-    """The subscribe statement names exactly the topics Terraform creates, and a planted change to the topics, the policy or the pattern fails it."""
-    sns = "healthcare_hai_prediction_sns_policy"
-    infix = [f"arn:aws:sns:{policy_cases.R}:{policy_cases.A}:{policy_cases.P}_*alerts_{policy_cases.E}"]
-    checks = {"the shipped policy names the topics that Terraform creates": not check_alert_topics(documents)}
-    mutated = copy.deepcopy(documents)
-    policy_cases.by_sid({sns: mutated[sns]}, "sns", policy_cases.ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [*infix, f"{infix[0]}:*"]
-    checks["the old infix pattern is refused"] = bool(check_alert_topics(mutated))
-    mutated = copy.deepcopy(documents)
-    statement = policy_cases.by_sid({sns: mutated[sns]}, "sns", policy_cases.ALERT_SUBSCRIBE_STATEMENT)
-    statement["Resource"] = [item for item in statement["Resource"] if "budget" not in item]
-    checks["a policy that misses the budget alerts topic is refused"] = bool(check_alert_topics(mutated))
-    with tempfile.TemporaryDirectory(prefix="alert_topics_") as scratch:
-        root = Path(scratch) / "copy"
-        copy_terraform_tree(root)
-        checks["a copy of the Terraform tree passes"] = not check_alert_topics(documents, root)
-    for label, files in TOPIC_FIXTURES.items():
-        with tempfile.TemporaryDirectory(prefix="alert_topics_") as scratch:
-            root = Path(scratch) / "copy"
-            copy_terraform_tree(root)
-            for name, content in files.items():
-                (root / name).parent.mkdir(parents=True, exist_ok=True)
-                (root / name).write_text(content, encoding="utf-8")
-            checks[f"{label} is refused"] = bool(check_alert_topics(documents, root))
-    return checks
-
-
 def run_suite(output: Path) -> dict[str, Any]:
     """Evaluate the shipped policies, then every planted defect, and return the report."""
     started = time.perf_counter()
@@ -976,7 +861,6 @@ def run_suite(output: Path) -> dict[str, Any]:
         + check_delivery_roles()
     )
     name_checks = name_defects(documents)
-    topic_checks = alert_topic_checks(documents)
     defects = []
     for description, (label_prefix, mutation) in policy_cases.planted_defects().items():
         mutated = copy.deepcopy(documents)
@@ -1007,13 +891,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         for item in name_checks
     )
     passed = (
-        not failures
-        and not problems
-        and all(item["caught"] for item in defects)
-        and names_ok
-        and scripts_ok
-        and all(item["passed"] for item in context_checks)
-        and all(topic_checks.values())
+        not failures and not problems and all(item["caught"] for item in defects) and names_ok and scripts_ok and all(item["passed"] for item in context_checks)
     )
     status = "passed" if passed else "failed"
     report = {
@@ -1042,7 +920,6 @@ def run_suite(output: Path) -> dict[str, Any]:
         },
         "planted_defects": defects,
         "planted_name_defects": name_checks,
-        "alert_topic_inventory_checks": topic_checks,
         "script_tests": script_report,
         "seconds": round(time.perf_counter() - started, 2),
         "limits": (

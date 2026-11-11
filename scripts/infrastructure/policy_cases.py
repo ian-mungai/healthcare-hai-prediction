@@ -56,8 +56,8 @@ SUBSCRIPTION = f"{TOPIC}:{SUBSCRIPTION_ID}"
 BUDGET_SUBSCRIPTION = f"{BUDGET_TOPIC}:{SUBSCRIPTION_ID}"
 # Alert address subscription (owner, Nov 11 2026): the bootstrap alerts root subscribes the owner's address to every alert topic the project creates (the
 # platform alerts topic and the IAM stack's budget alerts topic), so the project user subscribes and reads the subscriptions on all of them. The policy names
-# each topic by its exact ARN: a pattern cannot show that a topic belongs to the project (check_alert_topics in run_policy_e2e holds the list to the Terraform
-# topics). Only the platform alerts topic also takes Unsubscribe: the project user holds no signed removal of the budget subscription.
+# each topic by its exact ARN: a pattern cannot show that a topic belongs to the project (the platform and IAM Terraform tests assert that each stack's own
+# topic ARN is in the rendered policy). Only the platform alerts topic also takes Unsubscribe: the project user holds no signed removal of the budget one.
 ALERT_SUBSCRIBE_STATEMENT = "SubscribeToAlertTopics"
 ALERT_UNSUBSCRIBE_STATEMENT = "UnsubscribeFromPlatformAlertTopic"
 ALERT_SUBSCRIBE_ACTIONS = ("Subscribe", "GetSubscriptionAttributes")
