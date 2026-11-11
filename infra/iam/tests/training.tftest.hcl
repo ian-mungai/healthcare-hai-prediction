@@ -186,7 +186,7 @@ run "training_roles_are_narrow" {
 
   assert {
     condition = (
-      toset(keys(aws_iam_role_policy.train_policy)) == toset(["stage_read", "features_read", "dvc_baseline", "promote_receipts"]) &&
+      toset(keys(aws_iam_role_policy.train_policy)) == toset(["stage_read", "features_read", "dvc_baseline", "promote_receipts", "research_records"]) &&
       aws_iam_role_policy.train_policy["stage_read"].policy == local.job_policy_documents.job_stage_read &&
       aws_iam_role_policy.train_policy["features_read"].policy == local.training_policy_documents.job_features_read &&
       aws_iam_role_policy.train_policy["dvc_baseline"].policy == local.training_policy_documents.job_dvc_baseline &&
@@ -319,4 +319,75 @@ run "training_without_endpoints_needs_no_endpoint_rules" {
     )
     error_message = "Turning the endpoints off removes their rules. The catalog and MLflow rules need no endpoint."
   }
+}
+
+run "the_train_role_stores_and_reads_the_research_records_only_under_research" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_iam_role_policy.train_policy["research_records"].role == aws_iam_role.train_task[0].name &&
+      jsondecode(aws_iam_role_policy.train_policy["research_records"].policy).Statement == [
+        {
+          Sid       = "CreateResearchRecords"
+          Effect    = "Allow"
+          Action    = "s3:PutObject"
+          Resource  = "arn:aws:s3:::example-project-ci-bucket/research/*"
+          Condition = { StringEquals = { "s3:if-none-match" = "*" } }
+        },
+        {
+          Sid      = "ReadResearchRecords"
+          Effect   = "Allow"
+          Action   = "s3:GetObject"
+          Resource = "arn:aws:s3:::example-project-ci-bucket/research/*"
+        },
+        {
+          Sid       = "ListResearchRecords"
+          Effect    = "Allow"
+          Action    = "s3:ListBucket"
+          Resource  = "arn:aws:s3:::example-project-ci-bucket"
+          Condition = { StringLike = { "s3:prefix" = ["research/*"] } }
+        },
+      ]
+    )
+    error_message = "The training role creates objects under research/ only when none exists (the research records, the canary results and the notice receipts), reads them back and lists the research/ prefix alone, so a missing record answers 404. It overwrites nothing and reaches no other prefix."
+  }
+
+  assert {
+    condition     = !contains(keys(aws_iam_role_policy.train_policy), "owner_notice")
+    error_message = "Without a topic the training role may publish nothing."
+  }
+}
+
+run "the_train_role_publishes_to_the_one_alerts_topic" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.train_policy["owner_notice"].role == aws_iam_role.train_task[0].name &&
+      jsondecode(aws_iam_role_policy.train_policy["owner_notice"].policy).Statement == [
+        {
+          Sid      = "PublishOwnerNotices"
+          Effect   = "Allow"
+          Action   = "sns:Publish"
+          Resource = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+        }
+      ]
+    )
+    error_message = "The training role gains one action, sns:Publish, on the one alerts topic. It cannot subscribe, create, change or read a topic, and it reaches no other topic."
+  }
+}
+
+run "the_alerts_topic_must_be_an_sns_topic_arn" {
+  command = plan
+
+  variables {
+    alerts_topic_arn = "arn:aws:sns:eu-west-1:111111111111:*"
+  }
+
+  expect_failures = [var.alerts_topic_arn]
 }

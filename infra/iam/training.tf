@@ -1,14 +1,17 @@
 locals {
   training_policy_documents = {
-    for name in ["job_dvc_baseline", "job_features_read", "mlflow_artifacts", "promote_receipts"] :
+    for name in ["job_dvc_baseline", "job_features_read", "mlflow_artifacts", "promote_receipts", "research_records"] :
     name => templatefile("${path.module}/owner_policies/${name}.json", local.job_policy_inputs)
   }
-  training_policies = var.training_prepared ? {
+  # The promote task also publishes the owner notice to the one alerts topic, once the stack is told the topic.
+  training_owner_notice = var.alerts_topic_arn == null ? {} : { owner_notice = templatefile("${path.module}/owner_policies/owner_notice.json", { ALERTS_TOPIC_ARN = var.alerts_topic_arn }) }
+  training_policies = var.training_prepared ? merge({
     stage_read       = local.job_policy_documents.job_stage_read
     features_read    = local.training_policy_documents.job_features_read
     dvc_baseline     = local.training_policy_documents.job_dvc_baseline
     promote_receipts = local.training_policy_documents.promote_receipts
-  } : {}
+    research_records = local.training_policy_documents.research_records
+  }, local.training_owner_notice) : {}
   training_endpoints = var.training_prepared && var.job_endpoints_enabled
   mlflow_parameter_values = merge(local.owner_policy_values, {
     MLFLOW_DB_PASSWORD_NAME    = var.mlflow_db_password_name
@@ -20,7 +23,7 @@ resource "aws_iam_role" "train_task" {
   count = var.training_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "job_train_task")
-  description          = "Training and promotion jobs: stage reads, the feature tables, the Feast registry, the DVC remote and the create-only promotion receipts under promote/. No lakehouse write and no mlflow/ access."
+  description          = "Training and promotion jobs: stage reads, the feature tables, the Feast registry, the DVC remote, the create-only promotion receipts under promote/ and research records under research/, and publishing to the one alerts topic. No lakehouse write and no mlflow/ access."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

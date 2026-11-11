@@ -832,3 +832,44 @@ run "record_prefix_with_a_policy_variable_is_refused" {
 
   expect_failures = [var.airflow_launch_record_prefix]
 }
+
+run "without_the_promote_family_the_launch_role_reads_no_research_record" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["drift", "serve", "train"]
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.airflow_launch_research_records) == 0
+    error_message = "Without the promote family the launch role reads no research record."
+  }
+}
+
+run "the_promote_family_reads_only_the_research_records" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["drift", "promote", "serve", "train"]
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.airflow_launch_research_records[0].role == aws_iam_role.airflow_launch_task[0].name &&
+      jsondecode(aws_iam_role_policy.airflow_launch_research_records[0].policy).Statement == [
+        {
+          Sid      = "ReadResearchRecords"
+          Effect   = "Allow"
+          Action   = ["s3:GetObject"]
+          Resource = "arn:aws:s3:::example-project-ci-bucket/research/*"
+        }
+      ]
+    )
+    error_message = "The promote family adds one get action on the research records of the data bucket to the launch role, for the research DAG's chain: no list, no write and no other prefix."
+  }
+
+  assert {
+    condition     = !contains(keys(local.airflow_launch_policy_values), "ALERTS_TOPIC_ARN") && length([for policy in aws_iam_role_policy.airflow_launch_research_records : policy.policy if strcontains(policy.policy, "sns:")]) == 0
+    error_message = "The launch role gains no notification action: only the promote task's own role publishes the owner notice."
+  }
+}

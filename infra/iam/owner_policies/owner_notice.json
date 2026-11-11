@@ -1,0 +1,11 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "PublishOwnerNotices",
+      "Effect": "Allow",
+      "Action": "sns:Publish",
+      "Resource": "${ALERTS_TOPIC_ARN}"
+    }
+  ]
+}

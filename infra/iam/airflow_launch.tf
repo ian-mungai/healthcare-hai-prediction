@@ -161,6 +161,17 @@ resource "aws_iam_role_policy" "airflow_launch_code_runs" {
   policy = templatefile("${path.module}/owner_policies/airflow_launch_code_runs.json", local.airflow_launch_policy_values)
 }
 
+# The research DAG's chain step runs in the Airflow scheduler and reads the records that the research and canary phases of the promote task store under
+# research/ (the research record of each type and the canary result), to decide which types have a challenger and which passed their canary. A launch role that
+# may start the promote family gets the get action only, as the drift records do: no list, no write and no other prefix.
+resource "aws_iam_role_policy" "airflow_launch_research_records" {
+  count = var.airflow_launch_prepared && contains(var.airflow_launch_families, "promote") ? 1 : 0
+
+  name   = "airflow_launch_research_records"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_research_records.json", local.airflow_launch_policy_values)
+}
+
 # The drift DAG's decision step runs in the Airflow scheduler and reads the records the drift task published under drift/. The scheduler runs as the launch
 # role, so a launch role that may start the drift family reads them with the same document as the drift stack's read. The control-plane role gains nothing.
 resource "aws_iam_role_policy" "airflow_launch_drift_records" {
