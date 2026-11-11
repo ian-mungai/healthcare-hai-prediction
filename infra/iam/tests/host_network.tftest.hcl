@@ -114,6 +114,11 @@ variables {
 # - a resized volume keeps its old file system size;
 # - the root volume cannot hold the images;
 # - the launch template carries more user data than EC2 accepts, so no new template version can start the host.
+# - a reply from a host service to a job container leaves through the second interface, because amazon-ec2-net-utils routes everything from the
+#   host address out of that interface (policy rule "from <host address> lookup 10001"), so a job cannot reach Polaris, the catalog, Redis or MLflow
+#   at the host address (found in the first live run); the fix needs a rule for the bridge subnet ahead of every rule of amazon-ec2-net-utils;
+# - the bridge subnet is not pinned, so the rule and docker0 can name different subnets;
+# - the rule is set once, lost when the interface's network setup or a reconfiguration drops it, and never restored, or a host that cannot set it joins the cluster.
 
 run "job_firewall_is_a_second_table_beside_the_unchanged_metadata_rule" {
   command = plan
@@ -302,9 +307,65 @@ run "docker_and_the_agent_require_the_scratch_mount_and_the_watchdog_checks_both
       for text in [
         "mountpoint_command=$(command -v mountpoint)\nfor unit in docker.service ecs.service; do\n  cat >\"$systemd_directory/$unit.d/platform_scratch_mount.conf\" <<UNIT\n[Unit]\nRequiresMountsFor=$scratch_path\n\n[Service]\nExecStartPre=$mountpoint_command -q $scratch_path\nUNIT\ndone\n",
         "run_within 60 \"Reloading systemd units for the new mounts\" systemctl daemon-reload",
-        "nft list table inet platform_imds >/dev/null \\\n    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \\\n    && probe_blocked\n"
+        "nft list table inet platform_imds >/dev/null \\\n    && timeout --kill-after=5 30 nft list table inet platform_jobs >/dev/null \\\n    && probe_blocked \\\n"
       ] : strcontains(local.host_user_data, text)
     ])
     error_message = "Docker and the ECS agent require the scratch mount at every start, systemd reloads the new fstab lines and the watchdog checks the job table beside the metadata table."
+  }
+}
+
+# The tests above pin the firewall text; this one pins the job bridge routing rule: the subnet is pinned in the Docker daemon file, the guard sets and checks the
+# rule at a priority below every rule of amazon-ec2-net-utils (10000 and above), and boot sets it again after the host address is up and before the volumes and ECS.
+run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
+  command = plan
+
+  assert {
+    condition = (
+      alltrue([
+        for text in [
+          "docker_daemon_file=\"/etc/docker/daemon.json\"",
+          "docker_bridge_address=\"172.17.0.1/16\"",
+          "docker_bridge_subnet=\"172.17.0.0/16\"",
+          "settings[\"bip\"] = address",
+          "os.replace(temporary, path)"
+        ] : strcontains(local.host_user_data, text)
+      ]) &&
+      length(split("Pinning the job bridge subnet", local.host_user_data)[0]) < length(split("Starting the metadata firewall", local.host_user_data)[0])
+    )
+    error_message = "Boot pins Docker's bridge address in the daemon file, keeping the other settings, before the firewall and Docker start."
+  }
+
+  assert {
+    condition = (
+      length(regexall("(?m)^bridge_rule_priority=[0-9]+$", local.host_user_data)) == 1 &&
+      tonumber(regex("(?m)^bridge_rule_priority=([0-9]+)$", local.host_user_data)[0]) > 0 &&
+      tonumber(regex("(?m)^bridge_rule_priority=([0-9]+)$", local.host_user_data)[0]) < 10000
+    )
+    error_message = "The bridge rule priority is below 10000, where amazon-ec2-net-utils starts its rules (the second interface's rule is at 10001)."
+  }
+
+  assert {
+    condition = alltrue([
+      for text in [
+        "bridge_priority=%q",
+        "ip -4 rule add to \"$bridge_subnet\" lookup main priority \"$bridge_priority\"",
+        "Could not set the routing rule for the job bridge.",
+        "The job bridge routing rule is not ahead of every table rule.",
+        "docker0 does not hold the pinned address",
+        "  route) ensure_bridge_rule ;;",
+        "&& bridge_rule_present \\\n    && bridge_rule_first\n}",
+        "  ensure_bridge_rule || return 1\n"
+      ] : strcontains(local.host_user_data, text)
+    ])
+    error_message = "The guard sets the bridge rule with apply and route, checks it with check (so the timer restores it and stops Docker when it cannot), and names each failure."
+  }
+
+  assert {
+    condition = (
+      length(split("is up on $interface_id", local.host_user_data)[0]) < length(split("run_within 60 \"Setting the routing rule for the job bridge\" \"$guard_script\" route", local.host_user_data)[0]) &&
+      length(split("run_within 60 \"Setting the routing rule for the job bridge\" \"$guard_script\" route", local.host_user_data)[0]) < length(split("\"Attaching the data volume\"", local.host_user_data)[0]) &&
+      length(split("Setting the routing rule for the job bridge", local.host_user_data)[0]) < length(split("ECS_CLUSTER=", local.host_user_data)[0])
+    )
+    error_message = "Boot sets the bridge rule after the host address is up and before the volumes attach and ECS_CLUSTER is written, and fails there when the rule cannot be set."
   }
 }
