@@ -383,10 +383,10 @@ def form_check(_rig: Any) -> None:
         "ingestion_dag": {"run_id": c.PUBLISHER_RUN},
         "silver_transform_dag": {"run_id": run},
         "gold_transform_dag": {"run_id": other, "silver_snapshot_run": run},
-        "features_transform_dag": {"run_id": other, "gold_snapshot_run": run},
-        "feature_store_dag": {"run_id": other, "gold_snapshot_run": run},
-        "drift_monitoring_dag": {"run_id": run},
-        "training_dag": {"run_id": run},
+        "features_base_dag": {"run_id": other, "gold_snapshot_run": run},
+        **{f"features_{model}_dag": {"run_id": other, "base_snapshot_run": run} for model in ("m1", "m2", "m3", "m4", "m5", "m6")},
+        "drift_monitoring_dag": {"run_id": run, "model": "m1"},
+        "training_dag": {"run_id": run, "model": "m1"},
         "model_promotion_dag": {"run_id": run, "hai_type": "HAI_1", "model_version": "3"},
         "serving_deploy_dag": {"run_id": run},
         "metadata_ingest_dag": {"run_id": run},
@@ -419,8 +419,8 @@ def form_check(_rig: Any) -> None:
         problems.extend(f"{dag_id} accepted {bad}" for bad in wrong if not refused(dag_id, {**conf, **bad} if bad else {}))
     for dag_id, name in (
         ("gold_transform_dag", "silver_snapshot_run"),
-        ("features_transform_dag", "gold_snapshot_run"),
-        ("feature_store_dag", "gold_snapshot_run"),
+        ("features_base_dag", "gold_snapshot_run"),
+        *((f"features_{model}_dag", "base_snapshot_run") for model in ("m1", "m2", "m3", "m4", "m5", "m6")),
     ):
         if not refused(dag_id, {**required[dag_id], name: "latest"}):
             problems.append(f"{dag_id} accepted latest for {name}")
@@ -595,8 +595,8 @@ def cases_catalog() -> dict[str, Scenario]:
     def stage_publisher(rig: Any, run: str = c.PUBLISHER_RUN) -> None:
         rig.stage.stage(run, "publisher_request.json", c.publisher_body(c.PUBLISHER_REQUEST))
 
-    def stage_store(rig: Any) -> None:
-        rig.stage_runs(c.STORE_RUN, c.OTHER_RUN)
+    def stage_other(rig: Any) -> None:
+        rig.stage_runs(c.OTHER_RUN)
 
     def family(job: str) -> str:
         return f"example_dev_job_{job}_host"
@@ -607,11 +607,19 @@ def cases_catalog() -> dict[str, Scenario]:
             Step("bronze_chain_dag", {"run_id": c.BRONZE_RUN, "mode": "real"}, 0, skip=r"run_.*|start_metadata"),
             Step("silver_transform_dag", {"run_id": silver, "mode": "real"}, 1, family("silver"), job_states()),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 1, family("gold"), job_states()),
-            Step("features_transform_dag", {"run_id": features, "mode": "real", "gold_snapshot_run": gold}, 1, family("features")),
-            Step("feature_store_dag", {"run_id": c.STORE_RUN, "mode": "real", "gold_snapshot_run": gold}, 1, family("features"), prepare=stage_store),
+            Step("features_base_dag", {"run_id": features, "mode": "real", "gold_snapshot_run": gold}, 1, family("features")),
+            *(
+                Step(
+                    f"features_{model}_dag",
+                    {"run_id": training.model_features_run_id(features, model), "mode": "real", "base_snapshot_run": features},
+                    1,
+                    family("features"),
+                )
+                for model in ("m1", "m2", "m3", "m4", "m5", "m6")
+            ),
             Step(
                 "drift_monitoring_dag",
-                {"run_id": drift, "mode": "real", "mlflow": "aws"},
+                {"run_id": drift, "mode": "real", "mlflow": "aws", "model": "m1"},
                 1,
                 family("drift"),
                 {"drift_run": DONE_STATE, "decide": DONE_STATE, "trigger_training": "skipped"},  # a quiet run maps no trigger
@@ -621,7 +629,7 @@ def cases_catalog() -> dict[str, Scenario]:
             Step("model_promotion_dag", dict(c.PROMOTE_PARAMS), 1, family("promote"), job_states(), prepare=stage_promotion),
             Step("serving_deploy_dag", {"run_id": c.SERVE_RUN, "mode": "real"}, 1, family("serve"), job_states()),
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 1, family("publisher"), job_states(), prepare=stage_publisher),
-            Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real"}, 1, family("metadata"), prepare=stage_store),
+            Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real"}, 1, family("metadata"), prepare=stage_other),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 0, family("gold"), job_states()),  # joins the launch
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), job_states()),
         ),

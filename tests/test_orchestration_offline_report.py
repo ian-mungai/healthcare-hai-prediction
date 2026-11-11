@@ -488,11 +488,11 @@ def test_a_failed_real_image_scenario_cannot_be_overwritten_by_incoming_ok(bound
 
 def test_a_dag_without_a_real_image_run_is_refused(boundary: ImageBoundary) -> None:
     document = _document()
-    document["real_dags"]["dags"].remove("feature_store_dag")
+    document["real_dags"]["dags"].remove("features_base_dag")
     boundary.transport.attempt.stdout = _stdout(document)
     failures = _failures(*_run_cli(boundary))
     check(set(failures) == {REAL_COVERAGE}, "an uncovered DAG is the intended and only failure")
-    check("feature_store_dag" in json.dumps(failures), "the refusal names the DAG that no scenario runs")
+    check("features_base_dag" in json.dumps(failures), "the refusal names the DAG that no scenario runs")
     _released(boundary)
 
 
