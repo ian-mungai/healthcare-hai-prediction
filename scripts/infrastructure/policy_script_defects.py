@@ -23,6 +23,7 @@ COPIED = (
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/secret_store.py",
     "infra/iam/variables.tf",
+    "scripts/sdk_logs.py",
     "infra/iam/openmetadata.tf",
     "infra/iam/openmetadata_persistent.tf",
     "infra/iam/job_writer_variables.tf",
