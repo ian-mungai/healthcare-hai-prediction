@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Any
 
 from botocore.exceptions import EndpointConnectionError
@@ -16,8 +17,8 @@ from botocore.exceptions import EndpointConnectionError
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, JobSpec, Launcher, LaunchRefused, LaunchUnavailable, Resources, S3LaunchStore, launch_record_prefix
 from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec, request_key
-from scripts.orchestration.ecs_broker_fake import CLUSTER, FakeEcs, FakeLogs, client_error
-from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket
+from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeLogs, client_error
+from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket, RevisionEcs
 
 RUN = "20261110T100000Z-abcdef01"
 CODE = {"run_id": "20261110T090000Z-12345678", "sha256": "c" * 64}
@@ -34,6 +35,8 @@ SETTINGS = EcsSettings(
     families=frozenset({"publisher"}),
     host_capacity_provider=HOST_PROVIDER,
 )
+# The revision of the publisher host definition that the preflight checked (registered as revision 1 by every rig).
+REVISION = f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_publisher_host:1"
 NEED = Resources(cpu_units=2048, memory_mib=8192, scratch_bytes=20 * 2**30)
 REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api", "hud_api"], "prior_state": None}
 PRIOR = {"key": "raw/run3_state/" + "b" * 64 + "/state.json", "version_id": "v1", "sha256": "d" * 64}
@@ -71,7 +74,8 @@ class Rig:
     """One fake cloud, launch bucket, stage bucket and clock."""
 
     def __init__(self) -> None:
-        self.ecs, self.logs = FakeEcs(), FakeLogs()
+        self.ecs, self.logs = RevisionEcs(), FakeLogs()
+        self.ecs.register("example_dev_job_publisher_host", NEED.memory_mib, None)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.stage = StageBucket()
         self.time = FakeClock()
@@ -83,7 +87,7 @@ class Rig:
         return Launcher(self.adapter, S3LaunchStore(self.records, BUCKET, PREFIX), probe, self.time.clock())
 
     def spec(self, attempt: int = 1) -> JobSpec:
-        return publisher_spec(self.stage, BUCKET, RUN, attempt, CODE, NEED, self.time.now)
+        return replace(publisher_spec(self.stage, BUCKET, RUN, attempt, CODE, NEED, self.time.now), task_definition=REVISION)
 
     def record(self, attempt: int, event: str) -> dict[str, Any]:
         return dict(json.loads(self.records.objects[f"{PREFIX}/{RUN}/publisher/{attempt:02d}/{event}.json"]))
@@ -130,7 +134,7 @@ def publisher_runs_on_the_host_bound_to_its_request() -> None:
     require(done.ok and done.outcome == "succeeded", f"the publisher attempt succeeds: {done}")
     sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
     require(len(sent) == 1, f"one RunTask: {len(sent)}")
-    require(sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the host task definition: {sent[0]['taskDefinition']}")
+    require(rig.ecs.sent == [REVISION], f"RunTask named the checked host revision: {rig.ecs.sent}")
     require(
         sent[0]["capacityProviderStrategy"] == [{"capacityProvider": HOST_PROVIDER, "weight": 1}] and "networkConfiguration" not in sent[0],
         f"host placement with no Fargate network: {sent[0]}",
