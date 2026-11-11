@@ -385,7 +385,7 @@ def test_a_native_xlsx_of_an_unreviewed_layout_is_refused_before_any_row_is_hand
     check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused real workbook left a rows file or a staging file")
 
 
-# Every owner type the eight real workbooks hold (2018 to 2025), spelled as published. A type outside this set stops the load.
+# Every owner type the eight real workbooks hold (2018 to 2025), spelled as published, and the blank one. A type outside this set stops the load.
 REVIEWED_TYPES = [
     "Non-Profit Corporation (including church-related)",
     "Investor - Corporation",
@@ -430,16 +430,18 @@ def test_an_owner_type_outside_the_reviewed_set_stops_the_load_before_any_row_ch
     assert_refused(tmp_path, sheet_records(rows), "owner type")
 
 
-def test_every_reviewed_owner_type_loads_and_only_the_individual_rows_lose_their_owner_cells(tmp_path: Path) -> None:
+def test_every_reviewed_owner_type_loads_and_only_the_individual_and_blank_rows_lose_their_owner_cells(tmp_path: Path) -> None:
+    """A blank type cannot show that the owner is an organisation, so it is read like the individual type; its owner name here is a person's."""
+    persons = {INDIVIDUAL: "Pell Dunmore", "": "Tomas Greywood"}
     rows = [
-        data_row(str(100 + index), owner_type, "Pell Dunmore" if owner_type == INDIVIDUAL else "Fixture Holdings LLC", "Zorba Quill", "Scanner")
+        data_row(str(100 + index), owner_type, persons.get(owner_type, "Fixture Holdings LLC"), "Zorba Quill", "Scanner")
         for index, owner_type in enumerate(REVIEWED_TYPES)
     ]
     _, after, stats = protected(tmp_path, sheet_records(rows))
     page = page_cells(after)
     redacted = [page[6 + index]["FAC_PAR_CORP_NAME"] == REPLACED for index in range(len(REVIEWED_TYPES))]
     check(
-        redacted == [owner_type == INDIVIDUAL for owner_type in REVIEWED_TYPES] and stats["person_individual_owner_rows"] == 2,
+        redacted == [owner_type in persons for owner_type in REVIEWED_TYPES] and stats["person_individual_owner_rows"] == 4,
         f"owner cells by type: {redacted}",
     )
 
@@ -549,3 +551,46 @@ def test_the_loader_reports_an_unreadable_workbook_by_its_fixed_code_only(monkey
     shown = "".join(traceback.format_exception(caught.value))
     check(SOURCE_MARKER not in str(caught.value) and SOURCE_MARKER not in shown, "the cell text reached the loader error or its traceback")
     check(str(caught.value).endswith(bronze.WORKBOOK_UNREADABLE), f"the loader error is {str(caught.value)!r}")
+
+
+BLANK_TYPES = [("empty", ""), ("null", None), ("whitespace", "\u00a0 \t")]
+
+
+def blank_type_rows(owner_type: str | None, header: list[str]) -> list[Cells]:
+    return [data_row("100", owner_type, "Pell Dunmore", "Zorba Quill", "Scanner donated by Pell Dunmore", header=header)]
+
+
+@pytest.mark.parametrize(("label", "owner_type"), BLANK_TYPES, ids=[label for label, _ in BLANK_TYPES])
+def test_a_blank_owner_type_is_read_like_the_individual_type(tmp_path: Path, label: str, owner_type: str | None) -> None:
+    fixture = sheet_records(blank_type_rows(owner_type, HEADER), tips="Questions about Pell Dunmore")
+    _, after, stats = protected(tmp_path, fixture)
+    page = page_cells(after)
+    owner = [page[6][column] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
+    check(owner == [REPLACED] * 3, f"the owner cells of a {label} type were kept: {owner}")
+    check("Pell Dunmore" not in json.dumps(after) and stats["person_individual_owner_rows"] == 2, "the owner name reached the equipment text or the Tips sheet")
+
+
+@pytest.mark.parametrize("year", sorted(YEARS))
+@pytest.mark.parametrize(("label", "owner_type"), BLANK_TYPES, ids=[label for label, _ in BLANK_TYPES])
+def test_a_native_xlsx_with_a_blank_owner_type_reaches_the_spark_read_with_the_owner_protected(
+    tmp_path: Path, year: int, label: str, owner_type: str | None
+) -> None:
+    entry = YEARS[year]
+    workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
+    write_xlsx(
+        workbook,
+        sheet_records(blank_type_rows(owner_type, entry["header"]), header=entry["header"], sheets=entry["sheets"], tips="Questions about Pell Dunmore"),
+    )
+    seen: list[dict[str, Any]] = []
+
+    def capture(_spark: Any, path: Path) -> object:
+        seen.extend(read_back(path))
+        return object()
+
+    with patch.object(bronze, "read_sheet_frame", side_effect=capture):
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+    header = entry["header"]
+    cells_ = next(record["c"] for record in seen if record["s"] == "Page 1-6" and record["w"] == 6)
+    owner = [cells_[header.index(column)] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
+    check(owner == [REPLACED] * 3, f"{year} {label}: the owner cells reached Spark as {owner}")
+    check("Pell Dunmore" not in json.dumps(seen), f"{year} {label}: the owner name survived in the equipment text or the Tips sheet")

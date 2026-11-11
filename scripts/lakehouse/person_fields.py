@@ -197,11 +197,15 @@ def owner_type_key(value: str | None) -> str:
 
 
 def is_individual_owner(owner: dict, row: dict[str, str | None]) -> bool:
-    """True for a row of an individual owner. A type that is neither blank nor in the reviewed set stops the load: the row's owner cells cannot be judged."""
+    """True for a row whose owner cells are protected: an individual owner, or a row with no owner type.
+
+    A blank, null or white space type cannot show that the owner is an organisation, so the row is read like the individual type: its owner name joins the
+    scrub names and its owner name, city and ZIP are replaced (empty cells stay empty). A type that is neither blank nor in the reviewed set stops the load.
+    """
     found = owner_type_key(row.get(owner["column"]))
-    if found == owner_type_key(owner["equals"]):
+    if not found or found == owner_type_key(owner["equals"]):
         return True
-    if found and found not in {owner_type_key(item) for item in owner["known_types"]}:
+    if found not in {owner_type_key(item) for item in owner["known_types"]}:
         raise PersonFieldError("a data row holds an owner type outside the reviewed set")
     return False
 
