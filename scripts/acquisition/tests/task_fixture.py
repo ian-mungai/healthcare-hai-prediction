@@ -1,4 +1,4 @@
-"""A synthetic run 3 in the task context: the queue, its lock and classification, the route files, the mirror and the approved hosts."""
+"""A synthetic run 3 in the task context: the queue, its lock, the route files, the mirror and the approved hosts."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ def task_run(folder: Path, fixture: Any, **fields: Any) -> harness.Run:
     document = json.loads(queue.read_bytes()) | {"run": 3}
     queue.write_bytes(json.dumps(document).encode())
     queue.with_name("queue.lock.json").write_text(json.dumps({"entries": len(fixture.entries), "queue_sha256": harness.digest(queue.read_bytes())}))
-    fixture.classify(queue)
     mirror = folder / "mirror"
     for entry in fixture.entries:
         for source in (folder / entry["receipt"]).parent.rglob("*"):

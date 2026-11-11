@@ -3,7 +3,7 @@
 The two variants are the `mmd_api` units and the `file` units that carry the flag `browser_export_moved_to_api`. Failure modes written before the code:
 
 1. A reviewed non personal MMD unit of either variant is listed as needing local data and the task never dispatches it.
-2. A personal or an unreviewed MMD unit is dispatched because the lane opened.
+2. (No longer applies: all the data is public, so no MMD unit is held back as personal or unreviewed.)
 3. The mirror leaves out a file the capture reads: the locked plan, its references, the baseline of the year or the plan template.
 4. The adapter requests no upload, so the fresh capture stays in the workspace and still counts.
 5. A refused put or a read back that differs still ends in a match.
@@ -52,7 +52,7 @@ def no_key(mode: str) -> Any:
     check(False, f"the MMD adapter asked for the key of {mode}")
 
 
-SWITCHES: dict[str, Callable[[], dict[str, Any]]] = {"both": lambda: {"task_keys": no_key, "task_filtered": True}, "none": dict}
+SWITCHES: dict[str, Callable[[], dict[str, Any]]] = {"both": lambda: {"task_keys": no_key}, "none": dict}
 
 
 class Task:
@@ -118,19 +118,6 @@ def test_the_task_dispatches_each_mmd_variant_once_and_asks_for_no_key(monkeypat
     check(second["outcomes"] == {"exact_match": 1} and first["outcomes"] == {"exact_match": 1}, f"both match: {first['outcomes']} {second['outcomes']}")
     listed = {**first.get("not_attempted", {}), **second.get("not_attempted", {})}
     check("needs_local_data" not in listed, f"no MMD unit is left as needing local data: {listed}")
-
-
-@pytest.mark.parametrize("kind", ["personal", "unreviewed"])
-def test_a_personal_or_unreviewed_mmd_unit_is_still_not_dispatched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str) -> None:
-    def hold(world: World) -> None:
-        ids = {entry["snapshot_id"] for entry in world.fixture.entries}
-        (world.fixture.personal if kind == "personal" else world.fixture.unreviewed).update(ids)
-
-    task, entries = start(monkeypatch, tmp_path, prepare=hold, **SWITCHES["both"]())
-    summary = harness.execute(task.run)
-    lane = "private_local" if kind == "personal" else "not_reviewed"
-    check(task.seen == [] and summary["attempted"] == 0, f"nothing was dispatched: {task.seen}")
-    check(sorted(summary["not_attempted"][lane]) == sorted(entry["snapshot_id"] for entry in entries.values()), f"both units are named under {lane}")
 
 
 def test_each_fresh_capture_is_stored_under_raw_and_the_outcome_names_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -20,7 +20,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition import unit_classification
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.transport import CaptureError
@@ -57,11 +56,11 @@ def copy_once(source: Path, target: Path) -> None:
     write_once(target, source.read_bytes())
 
 
-QUEUE_RECORDS = ("queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", unit_classification.NAME)
+QUEUE_RECORDS = ("queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json")
 
 
 def copy_run_records(queue_path: Path, base: Path, mirror: Path) -> None:
-    """Carry the queue, its lock, its frozen controls and review, its scope, its unit classification and every frozen input.
+    """Carry the queue, its lock, its frozen controls and review, its scope and every frozen input.
 
     The frozen inputs are checked against the queue's digests.
     """
@@ -159,7 +158,7 @@ def build(queue_path: Path, base: Path, inventory_path: Path, output: Path, buck
         units += 1
     from scripts.acquisition import redownload
 
-    runnable = (set(redownload.PLANNED) | set(PLAN_MODES)) - redownload.MANUAL_MODES - redownload.NEVER_IN_THE_TOOL
+    runnable = (set(redownload.PLANNED) | set(PLAN_MODES)) - redownload.MANUAL_MODES
     # A browser export moved to the API reads the MMD plans too, so the mode that decides is the handler's.
     copy_plan_inputs(sorted({redownload.handler_mode(item) for item in queue if item["disposition"] in ACTIVE} & runnable), base, mirror)
     index = {"bucket": bucket, "objects": dict(sorted(objects.items())), "unavailable": sorted(set(unavailable))}

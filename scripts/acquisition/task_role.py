@@ -1,8 +1,8 @@
-"""What the run 3 task does with its role: read one API key for its matching collector, and store a filtered copy under ``raw/``.
+"""What the run 3 task does with its role: read one API key for its matching collector, and store each capture whole under ``raw/``.
 
-The publisher task role reads three secrets and creates objects only under ``raw/``. Both switches are off by default. ``HAI_TASK_KEYS`` lets the task take
-the keyed units and ``HAI_TASK_FILTERED`` lets it take the CMS owners units. A key is read when a request needs it, is never cached and is never put in the
-environment. Every failure here is fixed text with no chained cause, so no provider message, key or path can reach a log, a traceback or a record.
+The publisher task role reads three secrets and creates objects only under ``raw/``. ``HAI_TASK_KEYS``, off by default, lets the task take the keyed units.
+A key is read when a request needs it, is never cached and is never put in the environment.
+Every failure here is fixed text with no chained cause, so no provider message, key or path can reach a log, a traceback or a record.
 """
 
 from __future__ import annotations
@@ -23,10 +23,8 @@ from scripts.acquisition.stored_mirror import require_task_identity
 from scripts.sdk_logs import quiet_sdk_logs
 
 KEYS_VARIABLE = "HAI_TASK_KEYS"
-FILTERED_VARIABLE = "HAI_TASK_FILTERED"
 BUCKET_VARIABLE = "DATA_BUCKET_NAME"
 KEY_OF_MODE = {"bls_api_v2": "bls_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key", "hud_api": "hud_api_key"}
-ORIGINAL_FOLDER = "private_original"
 CHUNK = 1024 * 1024
 # One create-once object per counted BLS request, shared by every task on the one key. The role cannot delete, so a task can never hand a request back.
 BLS_LEDGER_PREFIX = f"{RAW_ROOT}run3_ledger/bls/"
@@ -173,7 +171,7 @@ def _argument(arguments: list[str], name: str) -> str:
 class TaskStorage:
     """The project's storage calls with the task role, in the command line adapter's shape. It creates under ``raw/`` only and reads elsewhere only by version.
 
-    It never stores a file from the original's folder, so a wrong path cannot send an original to S3. The identity check runs when the command line builds it.
+    The identity check runs when the command line builds it.
     """
 
     checked_by_task_identity = True
@@ -212,8 +210,6 @@ class TaskStorage:
 
     def _put(self, named: dict, given: list[str]) -> dict:
         body = Path(_argument(given, "--body"))
-        if ORIGINAL_FOLDER in body.parts:
-            raise StorageError("put-object", "original_refused")
         if _argument(given, "--if-none-match") != "*":
             raise StorageError("put-object", "create_once_required")
         checksum = _argument(given, "--checksum-sha256")

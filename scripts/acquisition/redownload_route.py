@@ -14,7 +14,6 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
-from scripts.acquisition import unit_classification
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import RegistryError
@@ -37,17 +36,15 @@ class RouteFiles:
     hosts_approval: Path
 
 
-def lane_template(queue_body: bytes, classification_body: bytes) -> dict:
-    """The approval the owner reviews and signs for the person lane: the queue, its reviewed classification, what the lane takes and how many units that is."""
+def lane_template(queue_body: bytes) -> dict:
+    """The approval the owner reviews and signs for the person lane: the queue, what the lane takes and how many units that is."""
     from scripts.acquisition import redownload
 
-    classes = unit_classification.reviewed(classification_body, queue_body)
-    lanes = [redownload.lane_of(unit, classes) for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE]
+    lanes = [redownload.lane_of(unit) for unit in json.loads(queue_body)["queue"] if unit["disposition"] in ACTIVE]
     return {
         "lane": PERSON_LANE,
         "departs_from": PERSON_DEPARTURE,
         "queue_sha256": hashlib.sha256(queue_body).hexdigest(),
-        "classification_sha256": hashlib.sha256(classification_body).hexdigest(),
         "classes": sorted(PERSON_CLASSES),
         "units": sum(1 for found in lanes if found in PERSON_CLASSES),
         "approved_by": None,
@@ -55,7 +52,7 @@ def lane_template(queue_body: bytes, classification_body: bytes) -> dict:
 
 
 def write_lane_template(queue_path: Path, output: Path) -> dict:
-    document = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes())
+    document = lane_template(queue_path.read_bytes())
     write_once(output, encoded_json(document))
     return document
 
@@ -64,9 +61,9 @@ def lane_problems(queue_path: Path, approval_path: Path) -> list[str]:
     """Return why the person lane may not start. Only an approval that names this lane, queue, classes and unit count lets it."""
     try:
         approval = json.loads(approval_path.read_text(encoding="utf-8"))
-        expected = lane_template(queue_path.read_bytes(), unit_classification.classification_path(queue_path).read_bytes())
+        expected = lane_template(queue_path.read_bytes())
     except (OSError, ValueError, KeyError, TypeError, RegistryError) as error:
-        return [f"the lane approval or the unit classification is missing or unreadable: {error}"]
+        return [f"the lane approval is missing or unreadable: {error}"]
     if not isinstance(approval, dict):
         return ["the lane approval is not a record"]
     named = {key: approval.get(key) for key in expected if key != "approved_by"}
@@ -157,17 +154,6 @@ def host_problems(queue_body: bytes, hosts_path: Path, approval_path: Path) -> l
     return problems
 
 
-def classification_problems(queue_body: bytes, path: Path) -> list[str]:
-    """Return why the reviewed classification cannot govern this queue. A unit not yet reviewed is no problem here: it is named and does not run."""
-    if not path.is_file():
-        return [f"the queue has no {unit_classification.NAME}, so no unit has a reviewed classification"]
-    try:
-        unit_classification.reviewed(path.read_bytes(), queue_body)
-    except (OSError, RegistryError) as error:
-        return [str(error)]
-    return []
-
-
 def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str, hosts_path: Path, hosts_approval_path: Path) -> list[str]:
     """Return every reason run 3 cannot start yet; an empty list means the route is ready."""
     problems: list[str] = []
@@ -185,7 +171,6 @@ def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str,
     except (CaptureError, OSError, KeyError, ValueError, TypeError) as error:
         problems.append(f"the removal plan is not usable: {error}")
     problems.extend(host_problems(queue_body, hosts_path, hosts_approval_path))
-    problems.extend(classification_problems(queue_body, unit_classification.classification_path(queue_path)))
     for unit in json.loads(queue_body)["queue"]:
         if unit["snapshot_id"] in removed and unit["disposition"] in ACTIVE:
             problems.append(f"{unit['snapshot_id']} is in the queue but the plan removes it")

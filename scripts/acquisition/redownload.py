@@ -2,13 +2,16 @@
 
 The queue (``data/redownload_checks/20260929/queue.json``) fixes every unit. File units are fetched with the
 bounded downloader; plan-based units run the existing collector's capture path with a fresh root and storage
-switched off; manual units are read from a new downloads folder. Nothing here writes to S3, and a stored
-capture is never replaced: each unit ends with one write-once outcome.
+switched off; manual units are read from a new downloads folder. A stored capture is never replaced: each unit ends
+with one write-once outcome. The person lane on the owner's Mac stores each browser file that passes its checks under ``raw/``
+through the task's storage path, and saves its run binding and outcome records create-once under ``raw/run3_person/<queue sha256>/``.
+All the data is public: each raw file is stored whole as published and bronze pseudonymizes the person fields at load.
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import copy
 import fcntl
 import hashlib
@@ -26,7 +29,7 @@ import urllib.error
 import urllib.parse
 import zipfile
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -36,7 +39,7 @@ from xml.etree import ElementTree
 
 from defusedxml import ElementTree as SafeElementTree
 
-from scripts.acquisition import bls_api_transport, data_paths, restored_outcomes, stored_mirror, task_role, unit_classification
+from scripts.acquisition import bls_api_transport, data_paths, restored_outcomes, stored_mirror, task_role
 from scripts.acquisition import hud_xlsx_contract as download_metadata
 from scripts.acquisition import redownload_controls as controls
 from scripts.acquisition import redownload_route as route
@@ -44,6 +47,7 @@ from scripts.acquisition.capture import artifact_record, receipt_validator, vali
 from scripts.acquisition.collection_layout import capture_root, load_routes
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.mapped_archives import expand_tree
+from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, upload_snapshot, write_once
 from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, load_registry, read_json, require
 from scripts.acquisition.storage_controls import route_denied
@@ -51,6 +55,7 @@ from scripts.acquisition.transport import (
     APPROVED_HOSTS_APPROVAL_VARIABLE,
     APPROVED_HOSTS_VARIABLE,
     CaptureError,
+    Download,
     Limits,
     canonical_url,
     download,
@@ -96,7 +101,6 @@ class Run:
     lane_approval: Path | None = None
     task_keys: Callable[[str], Any] | None = None
     task_storage: Any = None
-    task_filtered: bool = False
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -130,35 +134,27 @@ def digest(body: bytes) -> str:
 
 @dataclass(frozen=True)
 class Accepted:
-    """The queue and the unit classification a run accepted, held as the bytes that were checked.
+    """The queue a run accepted, held as the bytes that were checked.
 
     Every read of the queue parses these bytes again, so no caller can change what the run dispatches, and nothing on disk can change it after acceptance.
     """
 
     queue_body: bytes
-    classification_body: bytes | None
-    classes: Mapping[str, str]
 
     @classmethod
-    def build(cls, queue_body: bytes, classification_body: bytes | None) -> Accepted:
-        """Accept a queue and its classification. A classification that is malformed, unsealed or made for another queue is refused here."""
-        classes = unit_classification.reviewed(classification_body, queue_body) if classification_body is not None else {}
-        return cls(queue_body, classification_body, classes)
+    def build(cls, queue_body: bytes) -> Accepted:
+        return cls(queue_body)
 
     @property
     def queue_sha256(self) -> str:
         return digest(self.queue_body)
-
-    @property
-    def classification_sha256(self) -> str | None:
-        return None if self.classification_body is None else digest(self.classification_body)
 
     def units(self) -> list[dict]:
         return json.loads(self.queue_body)["queue"]
 
 
 def accept(run: Run) -> Accepted:
-    """Read the queue, its lock, every active receipt and the classification once, and return what the run accepts."""
+    """Read the queue, its lock and every active receipt once, and return what the run accepts."""
     body = run.queue_path.read_bytes()
     lock = read_json(run.queue_path.with_name(run.queue_path.stem + ".lock.json"))
     require(digest(body) == lock["queue_sha256"], "Queue differs from its lock")
@@ -167,8 +163,7 @@ def accept(run: Run) -> Accepted:
     for unit in queue:
         if unit["disposition"] in ACTIVE:
             require(digest((receipt_file(unit, run)).read_bytes()) == unit["receipt_sha256"], "Receipt changed since the queue was frozen")
-    path = unit_classification.classification_path(run.queue_path)
-    return Accepted.build(body, path.read_bytes() if path.is_file() else None)
+    return Accepted.build(body)
 
 
 def accepted(run: Run) -> Accepted:
@@ -178,20 +173,14 @@ def accepted(run: Run) -> Accepted:
 
 
 def begin(run: Run) -> Accepted:
-    """Start of an execution: accept the files as they are now, never as an earlier call in this process saw them, and need a classification."""
+    """Start of an execution: accept the files as they are now, never as an earlier call in this process saw them."""
     run.cache["accepted"] = accept(run)
-    require(
-        run.cache["accepted"].classification_body is not None, f"The queue has no {unit_classification.NAME}; no unit may run without a reviewed classification"
-    )
     return run.cache["accepted"]
 
 
 def revalidate(run: Run) -> None:
-    """Refuse to go on if the queue or the classification on disk is no longer what the run accepted."""
-    held = accepted(run)
-    require(digest(run.queue_path.read_bytes()) == held.queue_sha256, "The queue changed after the run accepted it")
-    path = unit_classification.classification_path(run.queue_path)
-    require((path.read_bytes() if path.is_file() else None) == held.classification_body, "The unit classification changed after the run accepted it")
+    """Refuse to go on if the queue on disk is no longer what the run accepted."""
+    require(digest(run.queue_path.read_bytes()) == accepted(run).queue_sha256, "The queue changed after the run accepted it")
 
 
 def load_queue(run: Run) -> list[dict]:
@@ -232,7 +221,6 @@ def runtime_controls(run: Run) -> dict:
     scope = run_scope(run)
     return {
         "queue_sha256": accepted(run).queue_sha256,
-        "classification_sha256": accepted(run).classification_sha256,
         **({} if scope is None else {"scope_sources": scope}),
         "state_root": root_label(run),
         "code_sha256": {str(path.relative_to(REPO_ROOT)): digest(path.read_bytes()) for path in code_paths},
@@ -351,7 +339,7 @@ def resolve_context(number: int | None, *, person: bool, mirror: bool) -> str:
         raise RegistryError("A lane belongs to run 3")
     if person:
         if mirror:
-            raise RegistryError("The person lane runs on the owner's Mac only, so the originals stay off AWS")
+            raise RegistryError(PERSON_ONLY_ON_MAC)
         return route.PERSON_LANE
     if number != 3:
         return "local"
@@ -361,15 +349,11 @@ def resolve_context(number: int | None, *, person: bool, mirror: bool) -> str:
 
 
 def may_attempt(run: Run, lane: str) -> bool:
-    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only, and none takes a private or unreviewed unit."""
-    if lane in (PRIVATE, NOT_REVIEWED):
-        return False
+    """Whether this run's context may attempt a unit of the given lane. Every context takes its own lane only."""
     if run.person_lane:
         return lane in route.PERSON_CLASSES
     if run.stored_root is not None:
-        return lane == TASK or (lane == TASK_KEYED and run.task_keys is not None) or (lane == TASK_FILTERED and run.task_filtered)
-    if lane == TASK_FILTERED:
-        return False
+        return lane == TASK or (lane == TASK_KEYED and run.task_keys is not None)
     return not (on_raw_route() and (lane == TASK_KEYED or lane in route.PERSON_CLASSES))
 
 
@@ -378,7 +362,7 @@ def route_gate(run: Run) -> None:
     if json.loads(run.queue_path.read_bytes()).get("run") != 3:
         return
     if run.person_lane and (run.stored_root is not None or any(name in os.environ for name in TASK_ENVIRONMENT)):
-        raise RegistryError("The person lane runs on the owner's Mac only, so the originals stay off AWS")
+        raise RegistryError(PERSON_ONLY_ON_MAC)
     files = run.route
     if files is None:
         raise RegistryError("Run 3 needs the route files: the removal plan, its approval and record, and the approved hosts file")
@@ -436,6 +420,79 @@ def started_at(run: Run) -> datetime:
     require(record["queue_sha256"] == accepted(run).queue_sha256, "State root belongs to another queue")
     require(record.get("controls_sha256") == run.cache["controls_sha256"], "State root belongs to another reviewed implementation")
     return datetime.fromisoformat(record["started_at_utc"])
+
+
+PERSON_RECORDS = "run3_person"
+PERSON_ONLY_ON_MAC = "The person lane runs on the owner's Mac only: it checks each browser file where the browser saved them, then stores it under raw/"
+CREATE_CONFLICTS = frozenset({"412", "PreconditionFailed", "409", "ConditionalRequestConflict"})
+
+
+def browser_units(run: Run) -> set[str]:
+    """The active units of the person lane."""
+    return {
+        unit["snapshot_id"]
+        for unit in json.loads(run.queue_path.read_bytes())["queue"]
+        if unit["disposition"] in ACTIVE and lane_of(unit) in route.PERSON_CLASSES
+    }
+
+
+def person_record_names(run: Run) -> list[str]:
+    """The records the person lane saves: ``run.json``, which binds the state root to the queue, then the outcome of each of its browser units.
+
+    Only a unit of the person lane qualifies, and pauses and diagnostics are never named. The browser files themselves are stored with their captures.
+    """
+    browser = browser_units(run)
+    names = ["run.json"] if (run.state_root / "run.json").is_file() else []
+    folder = run.state_root / "outcomes"
+    if folder.is_dir():
+        names += sorted(f"outcomes/{path.name}" for path in folder.glob("*.json") if path.stem in browser and path.is_file() and not path.is_symlink())
+    return names
+
+
+def create_once(client: Any, key: str, path: Path) -> dict[str, str]:
+    """Create one object from a local file, or accept the one already there with the same bytes. Return its key, version and digest."""
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    checksum = base64.b64encode(bytes.fromhex(digest)).decode()
+    arguments = ["--key", key, "--body", str(path), "--if-none-match", "*", "--checksum-algorithm", "SHA256", "--checksum-sha256", checksum]
+    try:
+        reply = client.call("s3api", "put-object", [*arguments, "--server-side-encryption", "AES256", "--metadata", json.dumps({"sha256": digest})])
+    except StorageError as conflict:
+        if conflict.code not in CREATE_CONFLICTS:
+            raise
+        reply = client.call("s3api", "head-object", ["--key", key, "--checksum-mode", "ENABLED"])
+        require(reply.get("ChecksumSHA256") == checksum, f"The saved person lane record {key} differs from the local one and is never replaced")
+    return {"key": key, "version_id": str(reply.get("VersionId", "")), "sha256": digest}
+
+
+def save_person_records(run: Run) -> list[str]:
+    """Save the person lane's records create-once under ``raw/run3_person/<queue sha256>/`` and return their keys.
+
+    A record already saved with the same bytes counts as saved, so a repeat after a lost reply creates nothing. A different record under the same key
+    stops the lane: it is never replaced. Once every browser unit has a saved outcome, the lane's run record ``raw/run3_runs/<queue sha256>/person.json``
+    names each saved record by key, version and digest, so a check finds them without listing.
+    """
+    names = person_record_names(run)
+    # Until a browser unit has an outcome there is nothing to record, so the lane makes no AWS client at all.
+    if not any(name.startswith("outcomes/") for name in names):
+        return []
+    client = run.task_storage
+    require(client is not None, "The person lane needs its storage client, because no browser unit counts until its file and record are stored")
+    queue_sha256 = hashlib.sha256(run.queue_path.read_bytes()).hexdigest()
+    saved = {name: create_once(client, f"{RAW_ROOT}{PERSON_RECORDS}/{queue_sha256}/{name}", run.state_root / name) for name in names}
+    # A browser unit counts only when its file is stored (its outcome names the stored receipt) and its record is saved.
+    outcomes = {}
+    for name, found in saved.items():
+        if name.startswith("outcomes/"):
+            stored = read_json(run.state_root / name).get("stored")
+            if isinstance(stored, dict) and isinstance(stored.get("receipt"), dict):
+                outcomes[name.removeprefix("outcomes/").removesuffix(".json")] = {"record": found, "receipt": stored["receipt"]}
+    if "run.json" in saved and set(outcomes) == browser_units(run):
+        document = {"lane": route.PERSON_LANE, "queue_sha256": queue_sha256, "run": saved["run.json"], "outcomes": outcomes}
+        with tempfile.TemporaryDirectory(prefix="person_run_") as folder:
+            path = Path(folder) / "person.json"
+            path.write_bytes(json.dumps(document, sort_keys=True, separators=(",", ":")).encode())
+            create_once(client, f"{RAW_ROOT}run3_runs/{queue_sha256}/person.json", path)
+    return [found["key"] for found in saved.values()]
 
 
 def outcome(run: Run, snapshot_id: str) -> dict | None:
@@ -521,7 +578,7 @@ def collection_root(receipt: Path) -> Path:
 
 
 def record_private(run: Run, relative: str) -> None:
-    """Keep the list of fresh originals that hold personal details, for the closeout deletion list."""
+    """Keep the list of owner-only local files (the failure diagnostics), for the closeout deletion list."""
     path = run.state_root / "private_retention.json"
     originals = read_json(path)["originals"] if path.exists() else []
     originals = sorted(set([*originals, relative]))
@@ -607,8 +664,18 @@ def route_id_of(unit: dict, registry: dict) -> str:
     return str(next(route["route_id"] for route in source["file_routes"] if canonical_url(route.get("url") or "") == wanted))
 
 
-def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict) -> Path:
-    """Write the receipt of a fresh download beside its bytes. It keeps the stored capture's reviewed scope and states this download's own facts."""
+# The stored artifacts a fresh download repeats: its data or API pages, or for a reference capture, which holds no data, the reference document a person
+# saved. Proofs and derived files are made fresh.
+DOWNLOADED_ROLES = frozenset({"data", "api_page"})
+REFERENCE_ROLES = frozenset({"dictionary", "methodology", "layout"})
+
+
+def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict, companions: Sequence[tuple[str, bytes, str]] = ()) -> Path:
+    """Write the receipt of a fresh download beside its bytes. It keeps the stored capture's reviewed scope and states this download's own facts.
+
+    Each download takes the role of the stored artifact it repeats: data, an API page or a reference document. ``companions`` are the files this capture
+    makes itself, each at the stored artifact's path with its role, such as a fresh download proof or a CSV derived from the download.
+    """
     stored = copy.deepcopy(stored_receipt(unit, run))
     validator = receipt_validator()
     first = results[0]
@@ -617,12 +684,34 @@ def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict) -> P
     snapshot_id = f"{unit['source_id']}__{stamp}__{tag}"
     root = run.state_root / "captures" / snapshot_id
     (root / "raw").mkdir(parents=True, exist_ok=True)
+    made = {path for path, _, _ in companions}
+    kept = [item for item in stored["artifacts"] if item["storage_path"] not in made]
+    repeated = [item for item in kept if item["role"] in DOWNLOADED_ROLES] or [item for item in kept if item["role"] in REFERENCE_ROLES]
     artifacts = []
-    for index, (result, earlier) in enumerate(zip(results, [item for item in stored["artifacts"] if item["role"] in {"data", "api_page"}], strict=True), 1):
+    for index, (result, earlier) in enumerate(zip(results, repeated, strict=True), 1):
         target = root / "raw" / result.path.name
         os.link(result.path, target)
         record = artifact_record(replace(result, path=target), root, earlier["role"], index)
         artifacts.append(record | {"compression": earlier.get("compression"), "hash_scope": earlier.get("hash_scope", record["hash_scope"])})
+    for index, (relative, body, role) in enumerate(companions, len(artifacts) + 1):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        write_once(target, body)
+        made_file = Download(
+            path=target,
+            requested_url=first.requested_url,
+            resolved_url=first.resolved_url,
+            retrieved_at_utc=first.retrieved_at_utc,
+            http_status=first.http_status,
+            byte_count=len(body),
+            sha256=digest(body),
+            media_type=None,
+            complete=True,
+            failure=None,
+            partial=False,
+            attempt=1,
+        )
+        artifacts.append(artifact_record(made_file, root, role, index))
     lineage = json.loads(stored["lineage"]["extraction_or_query"])
     requests = [
         {
@@ -717,21 +806,27 @@ def reviewed_archive_mapping(unit: dict, run: Run, receipt: Path, registry: dict
     }
 
 
-def store_fresh(unit: dict, run: Run, results: list[Any]) -> dict:
-    """Store one fresh capture through the project's storage path and return its evidence."""
+def store_capture(unit: dict, run: Run, results: list[Any], companions: Sequence[tuple[str, bytes, str]] = ()) -> Path:
+    """Write one fresh capture and, with a storage client, store it through the project's storage path. Return its receipt."""
     registry = queue_approved_registry(unit, load_registry())
-    receipt = fresh_capture(unit, run, results, registry)
-    mapping = reviewed_archive_mapping(unit, run, receipt, registry)
-    upload_snapshot(receipt, [], run.task_storage, {}, registry, receipt_validator(), archive_mapping=mapping)
-    return stored_evidence(receipt)
+    receipt = fresh_capture(unit, run, results, registry, companions)
+    if run.task_storage is not None:
+        mapping = reviewed_archive_mapping(unit, run, receipt, registry)
+        upload_snapshot(receipt, [], run.task_storage, {}, registry, receipt_validator(), archive_mapping=mapping)
+    return receipt
 
 
-def stored_outcome(unit: dict, run: Run, fields: dict, results: list[Any]) -> dict:
+def store_fresh(unit: dict, run: Run, results: list[Any], companions: Sequence[tuple[str, bytes, str]] = ()) -> dict:
+    """Store one fresh capture through the project's storage path and return its evidence."""
+    return stored_evidence(store_capture(unit, run, results, companions))
+
+
+def stored_outcome(unit: dict, run: Run, fields: dict, results: list[Any], companions: Sequence[tuple[str, bytes, str]] = ()) -> dict:
     """Store a task's fresh capture under the raw root and read it back. Without that the unit is blocked, whatever the comparison found."""
     if run.task_storage is None or fields["outcome"] not in STORED_OUTCOMES:
         return fields
     try:
-        return fields | {"stored": store_fresh(unit, run, results)}
+        return fields | {"stored": store_fresh(unit, run, results, companions)}
     except (Pause, Pending, controls.BudgetExceeded):
         raise
     except Exception as error:
@@ -973,14 +1068,42 @@ def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
     if folder is None:
         raise ValueError("Manual units need the manual downloads folder")
 
-    def keep(path: Path, fields: dict) -> dict:
-        target = run.state_root / "files" / unit["snapshot_id"] / path.name
+    def keep(path: Path, fields: dict, origin: str) -> dict:
+        target = run.state_root / "files" / unit["snapshot_id"] / artifact["stored_file_name"]
         controls.writing(target, path.stat().st_size)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(path, target)
-        return fields | {"fresh_path": str(target.relative_to(run.state_root))}
+        fields = fields | {"fresh_path": str(target.relative_to(run.state_root))}
+        # The browser save becomes a download record like the task's: its own address, its recorded origin and its creation time. A browser keeps no
+        # HTTP status, so none is claimed.
+        saved = Download(
+            path=target,
+            requested_url=unit["url"],
+            resolved_url=origin,
+            retrieved_at_utc=download_metadata.download_created_at(path),
+            http_status=None,
+            byte_count=fields["fresh_bytes"],
+            sha256=fields["fresh_sha256"],
+            media_type=None,
+            complete=True,
+            failure=None,
+            partial=False,
+            attempt=1,
+            original_file_name=path.name,
+        )
+        # A reference capture keeps the proof of its save beside the document. This save gets its own proof at the same path, never the earlier one.
+        proofs = [item["storage_path"] for item in stored_receipt(unit, run)["artifacts"] if item["role"] == "export_receipt"]
+        proof = {
+            "file_name": artifact["stored_file_name"],
+            "origin_url": origin,
+            "sha256": saved.sha256,
+            "bytes": saved.byte_count,
+            "created_at_utc": saved.retrieved_at_utc,
+            "saved_by": "owner, browser",
+        }
+        return stored_outcome(unit, run, fields, [saved], [(name, encoded_json(proof), "export_receipt") for name in proofs])
 
-    changed: tuple[Path, dict] | None = None
+    changed: tuple[Path, dict, str] | None = None
     for path in sorted(item for item in folder.iterdir() if item.is_file() and not item.is_symlink()) if folder.is_dir() else []:
         if datetime.fromisoformat(download_metadata.download_created_at(path)) < started:
             continue
@@ -989,7 +1112,8 @@ def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
             origins = download_metadata.read_origin(path)
         except ValueError:
             continue
-        if not any(same_address(origin, unit["url"]) for origin in origins):
+        origin = next((item for item in origins if same_address(item, unit["url"])), None)
+        if origin is None:
             continue
         differing, excluded = compare_files(stored, path, artifact["stored_file_name"], artifact["sha256"])
         if differing and changed is not None:
@@ -997,8 +1121,8 @@ def manual_file_unit(unit: dict, run: Run, started: datetime) -> dict:
         fields = {"attempts": 1, "stored_sha256": artifact["sha256"], "fresh_sha256": fingerprint(path)[0], "fresh_bytes": path.stat().st_size}
         fields |= {"differing_data_files": differing, "excluded_parts": excluded}
         if not differing:
-            return keep(path, fields | {"outcome": "exact_match"})
-        changed = (path, fields | {"outcome": "changed_needs_review"})
+            return keep(path, fields | {"outcome": "exact_match"}, origin)
+        changed = (path, fields | {"outcome": "changed_needs_review"}, origin)
     if changed is not None:
         return keep(*changed)
     raise Pending("Manual download not in the folder yet")
@@ -1145,7 +1269,7 @@ def adapt_hud_xlsx(unit: dict, run: Run) -> Path:
 
     plan, batch = planned(unit, run)
     downloads = manual_file(run.manual_folder, batch["file_name"], run.cache["started_at"]).parent
-    return Path(collector.execute(plan, batch, fresh_root(unit, run), downloads, False, None, {})["receipt_path"])
+    return Path(collector.execute(plan, batch, fresh_root(unit, run), downloads, run.task_storage is not None, run.task_storage, {})["receipt_path"])
 
 
 def adapt_wonder(unit: dict, run: Run) -> Path:
@@ -1155,21 +1279,49 @@ def adapt_wonder(unit: dict, run: Run) -> Path:
     plan, batch = planned(unit, run)
     original = manual_file(run.manual_folder, batch["file_name"], run.cache["started_at"])
     if fingerprint(original) == (batch["sha256"], batch["bytes"]):
-        return Path(collector.execute(plan, batch, fresh_root(unit, run), original.parent, False, None, {})["receipt_path"])
-    # Every WONDER export records its own query time, so a fresh export never has the planned bytes. The collector's
-    # origin and export checks run on it here, and the comparison with the stored export decides the outcome [S21].
+        return Path(collector.execute(plan, batch, fresh_root(unit, run), original.parent, run.task_storage is not None, run.task_storage, {})["receipt_path"])
+    # Every WONDER export records its own query time, so a fresh export never has the planned bytes. The collector's origin and export checks run on it
+    # here and the comparison with the stored export decides the outcome [S21]. The export is a fresh capture of its stored receipt, in the shape the task
+    # writes, with the derived CSV, its own proof and the plan scope; the planned digest is recorded in the proof, not required.
     contract.sanitize_origins(download_metadata.read_origin(original), batch["database"])
     raw = original.read_bytes()
-    derived, _ = contract.validate_export(raw, batch, plan)
-    folder = fresh_root(unit, run) / "batches" / batch["id"] / "comparison"
-    files = {f"raw/{contract.stored_name(batch)}": raw, "derived/county_year.csv": derived}
-    for relative, body in files.items():
-        controls.writing(folder / relative, len(body))
-        write_once(folder / relative, body)
-    artifacts = [{"role": "data", "stored_file_name": Path(name).name, "storage_path": name, "sha256": digest(body)} for name, body in files.items()]
-    record = folder / "receipt.json"
-    write_once(record, encoded_json({"kind": "redownload_comparison_record", "artifacts": artifacts}))
-    return record
+    derived, statistics = contract.validate_export(raw, batch, plan)
+    kept = fresh_root(unit, run) / "batches" / batch["id"] / "browser" / contract.stored_name(batch)
+    controls.writing(kept, len(raw))
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    write_once(kept, raw)
+    saved = Download(
+        path=kept,
+        requested_url=unit["url"],
+        resolved_url=contract.ORIGIN + batch["database"],
+        retrieved_at_utc=download_metadata.download_created_at(original),
+        http_status=None,
+        byte_count=len(raw),
+        sha256=digest(raw),
+        media_type="text/tab-separated-values",
+        complete=True,
+        failure=None,
+        partial=False,
+        attempt=1,
+        original_file_name=original.name,
+    )
+    proof = {
+        "file_name": batch["file_name"],
+        "origin_urls": [contract.ORIGIN + batch["database"]],
+        "sha256": saved.sha256,
+        "bytes": saved.byte_count,
+        "planned_sha256": batch["sha256"],
+        "created_at_utc": saved.retrieved_at_utc,
+        "saved_by": "owner, browser",
+        "query": statistics["query"],
+        "statistics": statistics,
+    }
+    companions = [
+        ("derived/county_year.csv", derived, "data"),
+        ("evidence/download_proof.json", encoded_json(proof), "export_receipt"),
+        ("references/scope.json", encoded_json(plan), "layout"),
+    ]
+    return store_capture(unit, run, [saved], companions)
 
 
 def adapt_cms_owners(unit: dict, run: Run) -> Path:
@@ -1177,31 +1329,8 @@ def adapt_cms_owners(unit: dict, run: Run) -> Path:
 
     plan, release = planned(unit, run)
     limits = Limits(attempts=MAX_ATTEMPTS)
-    root = fresh_root(unit, run)
-    if run.task_storage is None:
-        return Path(collector.execute(plan, release, root, True, False, None, {}, run.opener, limits)["receipt_path"])
-    capture = partial(collector.execute, plan, release, root, True, True, run.task_storage, {}, run.opener, limits, retention=collector.TASK_RETENTION)
-    return filtered_capture(capture, root / task_role.ORIGINAL_FOLDER / release["id"], root / "batches" / release["id"])
-
-
-def filtered_capture(capture: Callable[[], dict], original: Path, snapshot: Path) -> Path:
-    """Run a task capture whose original names people. The original exists only between the two removals, and only the filtered copy reaches S3.
-
-    Failure text could quote a cell, so it is replaced with a fixed message and nothing is chained to it.
-    """
-    shutil.rmtree(original, ignore_errors=True)
-    shutil.rmtree(snapshot, ignore_errors=True)
-    try:
-        result = capture()
-    except (Pause, Pending, controls.BudgetExceeded):
-        raise
-    except Exception:
-        raise CaptureError("The filtered capture failed on the task.") from None
-    finally:
-        shutil.rmtree(original, ignore_errors=True)
-        if original.exists():
-            raise CaptureError("The original could not be removed from the task workspace.")
-    return Path(result["receipt_path"])
+    stores = run.task_storage is not None
+    return Path(collector.execute(plan, release, fresh_root(unit, run), True, stores, run.task_storage, {}, run.opener, limits)["receipt_path"])
 
 
 def adapt_hcai_util(unit: dict, run: Run) -> Path:
@@ -1209,7 +1338,8 @@ def adapt_hcai_util(unit: dict, run: Run) -> Path:
 
     plan, entry = planned(unit, run)
     limits = Limits(attempts=MAX_ATTEMPTS)
-    return Path(collector.execute(plan, entry, fresh_root(unit, run), True, False, None, {}, run.opener, limits)["receipt_path"])
+    stores = run.task_storage is not None
+    return Path(collector.execute(plan, entry, fresh_root(unit, run), True, stores, run.task_storage, {}, run.opener, limits)["receipt_path"])
 
 
 def adapt_onc_mu(unit: dict, run: Run) -> Path:
@@ -1218,20 +1348,16 @@ def adapt_onc_mu(unit: dict, run: Run) -> Path:
     plan, _ = planned(unit, run)
     # The plan raises the time and size bounds for this one large file; only the attempt count is lowered.
     limits = Limits(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
-    root = fresh_root(unit, run)
-    if run.task_storage is None:
-        return Path(collector.execute(plan, root, True, False, None, {}, run.opener, limits)["receipt_path"])
-    capture = partial(collector.execute, plan, root, True, True, run.task_storage, {}, run.opener, limits, retention=collector.TASK_RETENTION)
-    return filtered_capture(capture, root / task_role.ORIGINAL_FOLDER, root / "batches" / plan["id"])
+    stores = run.task_storage is not None
+    return Path(collector.execute(plan, fresh_root(unit, run), True, stores, run.task_storage, {}, run.opener, limits)["receipt_path"])
 
 
 # These collectors read an API key. Only the task may run them on the raw route, each with its own key, when its switch is on.
 SECRET_MODES = frozenset(task_role.KEY_OF_MODE)
-TASK, TASK_KEYED, TASK_FILTERED, PRIVATE, NOT_REVIEWED = "task", "task_keyed", "task_filtered", "private_local", "not_reviewed"
-# These collectors keep their originals only in the task's workspace and store a filtered copy under raw/, by owner decisions 132, 133 and 142.
+TASK, TASK_KEYED = "task", "task_keyed"
 STORED_OUTCOMES = frozenset({"exact_match", "changed_needs_review"})
-FILTERED_MODES = frozenset({"cms_owners_org", "onc_mu_hospital"})
-NEVER_IN_THE_TOOL = unit_classification.PERSONAL_COLLECTORS - FILTERED_MODES
+# All the data is public, so these collectors store the original whole under raw/ and run on the task like any file unit.
+PLAIN_TASK_MODES = frozenset({"file", "il_directory", "mmd_api", "cms_owners_org", "onc_mu_hospital", "hcai_util_workbook"})
 MANUAL_MODES = frozenset({"hud_xlsx", "wonder_export", "reference_download"})
 TASK_ENVIRONMENT = (
     "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
@@ -1241,29 +1367,15 @@ TASK_ENVIRONMENT = (
 )
 
 
-def lane_of(unit: dict, classes: Mapping[str, str]) -> str:
-    """The one lane that may attempt a unit. Only a unit with a reviewed non personal classification gets a working lane.
-    Anything else is listed, never silently read as empty.
-
-    ``classes`` holds the units the owner reviewed, as ``unit_classification.reviewed`` returns them. A queue flag or a collector mode decides nothing here.
-    """
-    # The collectors of originals that name people get no lane whatever an entry says, so a review mistake cannot send one to a person lane or a local run.
-    if unit["mode"] in NEVER_IN_THE_TOOL or handler_mode(unit) in NEVER_IN_THE_TOOL:
-        return PRIVATE
-    classification = classes.get(unit["snapshot_id"])
-    if classification == unit_classification.PERSONAL:
-        return PRIVATE
-    if classification != unit_classification.NON_PERSONAL:
-        return NOT_REVIEWED
+def lane_of(unit: dict) -> str:
+    """The one lane that may attempt a unit, from its mode and disposition alone. A mode with no lane is listed, never silently read as empty."""
     mode = handler_mode(unit)
     if mode in SECRET_MODES:
         return TASK_KEYED
-    if mode in FILTERED_MODES:
-        return TASK_FILTERED
     if unit["disposition"] == "approved_manual" or mode in MANUAL_MODES:
         return "needs_person"
     # Both MMD variants read public plans and references that the mirror carries and need no key, so the plain task lane takes them.
-    return TASK if mode in {"file", "il_directory", "mmd_api"} else "unclassified"
+    return TASK if mode in PLAIN_TASK_MODES else "unclassified"
 
 
 ADAPTERS: dict[str, Callable[[dict, Run], Path]] = {
@@ -1481,7 +1593,13 @@ def execute(
         except BlockingIOError:
             raise ValueError("Redownload state root already running") from None
         try:
-            return execute_locked(run, pilot, True, chosen, max_units, log)
+            # The person lane saves its records before the units, for any a lost reply left unsaved, and after them. The acquisition DAG reads them.
+            if context == route.PERSON_LANE:
+                save_person_records(run)
+            summary = execute_locked(run, pilot, True, chosen, max_units, log)
+            if context == route.PERSON_LANE:
+                save_person_records(run)
+            return summary
         finally:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
@@ -1494,7 +1612,7 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
     selected: list[dict] = []
     listed: dict[str, list[str]] = {}
     for unit in active:
-        lane = lane_of(unit, held.classes)
+        lane = lane_of(unit)
         if may_attempt(run, lane):
             selected.append(unit)
         else:
@@ -1529,6 +1647,11 @@ def execute_locked(run: Run, pilot: bool, allow_network: bool, sources: frozense
         if max_units is not None and summary["attempted"] >= max_units:
             break
         revalidate(run)
+        # An outcome is final, so a browser unit attempted without storage could never count. The lane stops before its first unit instead.
+        require(
+            not run.person_lane or run.task_storage is not None,
+            "The person lane needs its storage client, because no browser unit counts until its file is stored",
+        )
         require(used_bytes(run) + unit["bytes"] <= run.byte_cap, "Byte cap would be exceeded")
         require(shutil.disk_usage(run.state_root).free > 2 * unit["bytes"] + 2**30, "Not enough free disk space for the next unit")
         try:
@@ -1635,9 +1758,29 @@ def report(run: Run) -> dict:
         "paused_sources": sorted(paused_sources(run) & {unit["source_id"] for unit in missing}) if run.state_root.exists() else [],
         "fresh_bytes": used_bytes(run),
         "byte_measurement": "Conservative received bytes plus persisted copies; interrupted reservations remain charged; control ledgers excluded",
-        "s3_writes": 0,
+        # Each stored capture is one outcome that names its stored receipt; the task and the person lane store, a local run stores nothing.
+        "s3_writes": sum(1 for item in results.values() if item is not None and "stored" in item),
         "model_eligible": False,
     }
+
+
+def person_storage(configuration: Mapping[str, str], session_factory: Callable[[str, str], Any] | None = None) -> Any:
+    """The person lane's storage on the owner's Mac: the task's storage calls (create once under ``raw/`` only, never from an original's folder) with the
+    project profile, after the project identity check."""
+    from scripts.infrastructure.render_project_config import verify_project_identity
+
+    def boto_session(profile: str, region: str) -> Any:
+        import boto3
+
+        return boto3.session.Session(profile_name=profile, region_name=region)
+
+    verify_project_identity(dict(configuration))
+    session = (session_factory or boto_session)(configuration["aws_profile"], configuration["aws_region"])
+    names = ("data_bucket_name", "expected_account_id", "aws_region")
+    from botocore.config import Config
+
+    bounded = Config(connect_timeout=5, read_timeout=60, retries={"max_attempts": 2, "mode": "standard"})
+    return task_role.TaskStorage(session.client("s3", config=bounded), {name: configuration[name] for name in names})
 
 
 def run_from(
@@ -1648,7 +1791,7 @@ def run_from(
     paths = [args.removal_plan, args.removal_confirmation, args.hosts, args.hosts_approval]
     files = route.RouteFiles(*paths) if all(paths) else None
     mirror = stored_mirror.from_environment(environment, factory) if environment.get(stored_mirror.MIRROR_VARIABLE) else None
-    switched = {name: mirror is not None and environment.get(name) == "1" for name in (task_role.KEYS_VARIABLE, task_role.FILTERED_VARIABLE)}
+    switched = {name: mirror is not None and environment.get(name) == "1" for name in (task_role.KEYS_VARIABLE,)}
     storage = task_role.storage_from_environment(environment, factory) if mirror is not None else None
     return Run(
         queue_path=args.queue,
@@ -1663,7 +1806,6 @@ def run_from(
         lane_approval=getattr(args, "lane_approval", None),
         task_keys=partial(task_role.TaskKeys, environment=environment) if switched[task_role.KEYS_VARIABLE] else None,
         task_storage=storage,
-        task_filtered=switched[task_role.FILTERED_VARIABLE],
     )
 
 
@@ -1688,6 +1830,11 @@ def main() -> None:
     parser.add_argument("--lane-approval", type=Path, help="the owner's approval of the person lane")
     args = parser.parse_args()
     run = run_from(args, os.environ)
+    if run.person_lane and args.execute:
+        from scripts.infrastructure.render_project_config import load_configuration
+
+        verify_input(REPO_ROOT / ".env", run)
+        run.task_storage = person_storage(load_configuration(REPO_ROOT / ".env")[0])
 
     def emit(item: dict) -> None:
         sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")

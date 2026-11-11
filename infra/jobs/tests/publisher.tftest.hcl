@@ -127,6 +127,21 @@ run "publisher_containers_fetch_the_code_then_run_the_publisher" {
   }
 }
 
+run "the_key_switch_sets_its_variable_on_the_run_container_and_no_filtered_switch_exists" {
+  command = plan
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+  }
+  assert {
+    condition = (
+      contains(jsondecode(output.publisher_host_container_definitions)[2].environment, { name = "HAI_TASK_KEYS", value = "1" }) &&
+      alltrue([for container in jsondecode(output.publisher_host_container_definitions) : !contains([for variable in container.environment : variable.name], "HAI_TASK_FILTERED")])
+    )
+    error_message = "The key switch reaches the run container. All the data is public, so no container sets a filtered switch."
+  }
+}
+
 run "publisher_launch_names_the_variables_the_launch_request_sets" {
   command = plan
   variables {

@@ -303,7 +303,7 @@ def mirror_factory(service: str, region: str) -> Any:
 
 def test_the_command_line_gives_the_task_its_storage_always_and_a_key_reader_only_when_the_flag_is_on(tmp_path: Path) -> None:
     off = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path), mirror_factory)
-    check(off.task_keys is None and off.task_filtered is False, "the keys and filtered flags are off by default")
+    check(off.task_keys is None, "the keys flag is off by default")
     check(isinstance(off.task_storage, task_role.TaskStorage), "the task always stores through its storage client")
     on = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path, HAI_TASK_KEYS="1"), mirror_factory)
     keyed = on.client("hud_api")
@@ -311,8 +311,6 @@ def test_the_command_line_gives_the_task_its_storage_always_and_a_key_reader_onl
         on.task_keys is not None and isinstance(keyed, task_role.TaskKeys) and keyed.storage is on.task_storage,
         "the flag gives the task a key reader on its storage client",
     )
-    filtered = harness.run_from(cast(Any, Arguments), stored_mirror_environment(tmp_path, HAI_TASK_FILTERED="1"), mirror_factory)
-    check(filtered.task_filtered is True, "the flag opens the filtered units")
     mac = harness.run_from(cast(Any, Arguments), {"HAI_TASK_KEYS": "1"}, mirror_factory)
     check(mac.task_keys is None and mac.task_storage is None, "without a mirror the flag means nothing")
 

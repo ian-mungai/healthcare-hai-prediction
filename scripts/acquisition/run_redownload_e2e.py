@@ -24,7 +24,7 @@ from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import run_redownload_controls_e2e as control_e2e
 from scripts.acquisition import run_wonder_export_e2e as wonder_e2e
-from scripts.acquisition import task_role, unit_classification
+from scripts.acquisition import task_role
 from scripts.acquisition import wonder_export_contract as wonder_contract
 from scripts.acquisition.build_wonder_plan import build as build_wonder_plan
 from scripts.acquisition.collect_bls_api import execute as bls_execute
@@ -87,8 +87,6 @@ class Fixture:
     def __init__(self, base: Path) -> None:
         self.base = base
         self.entries: list[dict] = []
-        self.personal: set[str] = set()
-        self.unreviewed: set[str] = set()
 
     def stored(self, source: str, name: str, body: bytes, disposition: str = "direct_download", flags: list[str] | None = None, mode: str = "file") -> dict:
         sid = f"{source}__20260101T000000Z__{canonical_hash([source, name])[:32]}"
@@ -145,26 +143,7 @@ class Fixture:
         body = encoded_json({"kind": "bounded_redownload_queue", "entries": len(self.entries), "queue": self.entries})
         path.write_bytes(body)
         path.with_name(path.stem + ".lock.json").write_bytes(encoded_json({"queue_sha256": harness.digest(body), "entries": len(self.entries)}))
-        self.classify(path)
         return path
-
-    def classify(self, queue: Path) -> None:
-        """The owner's reviewed classification of this synthetic queue: every active unit non personal unless it was stored as personal or left unreviewed."""
-        document = {
-            "kind": unit_classification.KIND,
-            "queue_sha256": harness.digest(queue.read_bytes()),
-            "reviewed_by": "synthetic fixture owner",
-            "units": {
-                entry["snapshot_id"]: {
-                    "classification": unit_classification.PERSONAL if entry["snapshot_id"] in self.personal else unit_classification.NON_PERSONAL,
-                    "status": unit_classification.PROPOSED if entry["snapshot_id"] in self.unreviewed else unit_classification.REVIEWED,
-                    "source": "synthetic fixture",
-                }
-                for entry in self.entries
-                if entry["disposition"] in harness.ACTIVE
-            },
-        }
-        queue.with_name(unit_classification.NAME).write_bytes(encoded_json({**document, "classification_sha256": unit_classification.body_digest(document)}))
 
 
 def archive(members: dict[str, bytes], year: int, comment: bytes = b"", entry_comments: dict[str, bytes] | None = None) -> bytes:
@@ -212,8 +191,8 @@ def exercise(root: Path) -> list[dict]:
     busy_next = fixture.stored("DELTA", "next.csv", b"a,b\n1,2\n")
     flaky = fixture.stored("EPSILON", "flaky.csv", b"a,b\n7,8\n")
     failing = fixture.stored("ZETA", "failing.csv", b"a,b\n7,8\n")
+    # All the data is public: a file that names a person is fetched and compared like any other.
     private = fixture.stored("ETA", "people.csv", b"name\nSynthetic Person\n")
-    fixture.personal.add(private["snapshot_id"])
     duplicate = fixture.stored("ALPHA", "duplicate.csv", b"x\n", disposition="superseded_duplicate")
     dropped = fixture.stored("THETA", "dropped.csv", b"x\n", disposition="dropped")
     derived = fixture.stored("ALPHA", "derived.csv", b"x\n", disposition="derived_replay_only")
@@ -301,7 +280,7 @@ def exercise(root: Path) -> list[dict]:
     def dry_run() -> None:
         summary = harness.execute(run, allow_network=False)
         require(not web.requests and not (root / "state").exists(), "Dry run requested or wrote")
-        require(summary["active_units"] == 19 and summary["planned"] == 18, f"Dry-run counts differ: {summary}")
+        require(summary["active_units"] == 19 and summary["planned"] == 19, f"Dry-run counts differ: {summary}")
 
     scenario("dry_run_makes_no_request_and_writes_nothing", dry_run)
 
@@ -364,13 +343,13 @@ def exercise(root: Path) -> list[dict]:
 
     scenario("duplicate_dropped_and_derived_entries_never_requested", inactive)
 
-    def private_unit_is_refused() -> None:
-        require(web.count(private["url"]) == 0 and harness.outcome(run, private["snapshot_id"]) is None, "A private unit was requested or recorded")
-        require(not (root / "state" / "private" / private["snapshot_id"]).exists(), "A private original folder was created")
+    def named_person_unit_runs() -> None:
+        record = harness.outcome(run, private["snapshot_id"]) or {}
+        require(web.count(private["url"]) >= 1 and record.get("outcome") == "exact_match", "A file naming a person was not fetched and matched")
         text = "\n".join(p.read_text(errors="ignore") for p in (root / "state").rglob("*.json"))
         require("Synthetic Person" not in text, "Personal detail copied into a record")
 
-    scenario("private_unit_is_never_requested_or_recorded", private_unit_is_refused)
+    scenario("a_file_naming_a_person_is_fetched_like_any_other", named_person_unit_runs)
 
     def adapters() -> None:
         require(recorded(run, adapted["snapshot_id"])["outcome"] == "exact_match", "Collector match not recorded")

@@ -126,7 +126,6 @@ def test_every_variable_the_task_code_reads_is_set_by_the_task_definition() -> N
         *stored_mirror.REQUIRED_ENVIRONMENT,
         task_role.BUCKET_VARIABLE,
         task_role.KEYS_VARIABLE,
-        task_role.FILTERED_VARIABLE,
     }
     missing = sorted(needed - environment_names_the_task_definition_sets())
     check(missing == [], f"the task definition does not set {missing}")

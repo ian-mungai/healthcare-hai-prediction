@@ -22,13 +22,6 @@ variable "publisher_keys_enabled" {
   nullable    = false
 }
 
-variable "publisher_filtered_enabled" {
-  description = "Let the publisher job take the units whose originals stay in its workspace and whose filtered copies go under raw/."
-  type        = bool
-  default     = false
-  nullable    = false
-}
-
 variable "publisher_resources" {
   description = "CPU units and memory MiB the publisher host task asks for. They are cut to the host job caps (local.host_cpu_cap and local.host_memory_cap) that every host job shares. The 8 GiB default is the Fargate-era shape; no publisher run has been measured yet, and its first run logs its peaks (scripts/resource_peaks.py)."
   type = object({
@@ -67,8 +60,7 @@ locals {
       { name = "EXPECTED_ACCOUNT_ID", value = var.expected_account_id },
       { name = "TASK_ROLE_NAME", value = "${var.project_name}_job_publisher_task_${var.environment}" },
     ],
-    var.publisher_keys_enabled ? [{ name = "HAI_TASK_KEYS", value = "1" }] : [],
-    var.publisher_filtered_enabled ? [{ name = "HAI_TASK_FILTERED", value = "1" }] : []
+    var.publisher_keys_enabled ? [{ name = "HAI_TASK_KEYS", value = "1" }] : []
   )
   # Like every host job, init deletes what the last task left in the family's two folders, and the last phase deletes them again only after it succeeds.
   publisher_steps = [

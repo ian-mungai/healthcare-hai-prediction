@@ -344,14 +344,13 @@ def test_the_mirror_carries_the_queue_its_controls_and_every_frozen_input(tmp_pa
     document = json.loads(stored.queue.read_text())
     document["inputs_sha256"] = {"stored/frozen_input.json": sha(b'{"plan": 1}'), "notes.md": "0" * 64}
     stored.queue.write_text(json.dumps(document))
-    for name in ("queue.lock.json", "controls.json", "independent_review.json", "scope.json", "unit_classification.json"):
+    for name in ("queue.lock.json", "controls.json", "independent_review.json", "scope.json"):
         (stored.base / name).write_text(json.dumps({"name": name}))
     built = stored.build(tmp_path / "out")
     mirror = built["mirror"]
     present = {path.relative_to(mirror).as_posix() for path in mirror.rglob("*") if path.is_file()}
     check(
-        {"queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", "unit_classification.json", "stored/frozen_input.json"}
-        <= present,
+        {"queue.json", "queue.lock.json", "controls.json", "independent_review.json", "scope.json", "stored/frozen_input.json"} <= present,
         f"mirror files {present}",
     )
     check("notes.md" not in present, "mutable status documents are not carried")
