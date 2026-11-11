@@ -35,7 +35,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orchestration.ecs_launch import OWNER_STATEMENT_MIN
+from orchestration.ecs_launch import OWNER_STATEMENT_MIN, LaunchRefused
+from orchestration.ecs_preflight import DIRECT_JOBS_FILE, load_tables
 from orchestration.training_contract import DAGS as TRAINING_DAGS
 from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, parameters_for
 from scripts.infrastructure import secret_store
@@ -71,15 +72,19 @@ def new_run_id() -> str:
 
 
 def settle_conf(mode: str, run_id: str, launch_run: str | None, job: str | None, statement: str | None) -> dict[str, Any]:
-    """The validated configuration of a ``launch_settle_dag`` run: the launch's run and job from the job table and the owner's one-line statement of what
-    was checked, at least as long as the launch library requires. The DAG run has its own run ID."""
-    jobs = json.loads(JOBS_FILE.read_text())["jobs"]
+    """The validated configuration of a ``launch_settle_dag`` run: the launch's run and job from the direct launch's job table and the owner's one-line
+    statement of what was checked, at least as long as the launch library requires. The DAG run has its own run ID. The table is the one the launch
+    reads (the broker's jobs and the direct launch's own, such as the Run 3 publisher), so every launch the DAGs start can be settled."""
+    try:
+        jobs = load_tables(REPO_ROOT)[0]["jobs"]
+    except LaunchRefused as error:
+        raise TriggerError(f"refused: the job tables do not load: {error}") from None
     if mode != "real" or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: the settle DAG runs in real mode with a run ID of its own ({mode!r}, {run_id!r})")
     if launch_run is None or not RUN_ID.fullmatch(launch_run):
         raise TriggerError(f"refused: --launch-run must name the run of the launch to settle, not {launch_run!r}")
     if job not in jobs:
-        raise TriggerError(f"refused: --job must name a job of {JOBS_FILE.name}, not {job!r}")
+        raise TriggerError(f"refused: --job must name a job of {JOBS_FILE.name} or {DIRECT_JOBS_FILE.name}, not {job!r}")
     if statement is None or not OWNER_STATEMENT_MIN <= len(statement.strip()) <= STATEMENT_MAX or "\n" in statement or "\r" in statement:
         raise TriggerError(f"refused: --statement must be one line of {OWNER_STATEMENT_MIN} to {STATEMENT_MAX} characters naming what was checked")
     return {"run_id": run_id, "mode": mode, "launch_run": launch_run, "job": job, "statement": statement.strip()}

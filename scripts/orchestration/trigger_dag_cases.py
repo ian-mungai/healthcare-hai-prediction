@@ -273,6 +273,35 @@ def settle_dag_cases() -> dict[str, bool]:
     return checks
 
 
+def publisher_recovery_cases() -> dict[str, bool]:
+    """The owner list's recovery of an unfinished publisher launch: settle it through launch_settle_dag, then start a fresh ingestion run. The publisher
+    job is a job of the direct launch only (config/orchestration/direct_jobs.json), so the broker's table still does not name it."""
+    posted: list[dict[str, Any]] = []
+
+    class Records(StandIn):
+        def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+            record = super().run(dag_id, dag_run_id)
+            self.runs[dag_run_id] = "success"
+            return record
+
+        def trigger(self, dag_id: str, dag_run_id: str, conf: dict[str, Any]) -> dict[str, Any]:
+            posted.append({"dag_id": dag_id, "conf": conf})
+            return super().trigger(dag_id, dag_run_id, conf)
+
+    settle = ["--dag", SETTLE_DAG, "--mode", "real", "--launch-run", SILVER, "--job", "publisher", "--statement", STATEMENT, "--wait-seconds", "5"]
+    settled = invoke(Records(), settle)[0]
+    fresh = invoke(Records(), ["--dag", "ingestion_dag", "--mode", "real", "--run-id", RUN, "--wait-seconds", "5"])[0]
+    broker = json.loads((trigger_dag.REPO_ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]
+    return {
+        "an unfinished publisher launch is settled through the settle DAG": settled == 0
+        and bool(posted)
+        and posted[0]["dag_id"] == SETTLE_DAG
+        and posted[0]["conf"].get("job") == "publisher",
+        "a fresh ingestion run starts after the settle": fresh == 0 and len(posted) == 2 and posted[1]["dag_id"] == "ingestion_dag",
+        "the broker's job table still does not name the publisher": "publisher" not in broker,
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -280,6 +309,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "parse": parse_cases,
     "trigger": trigger_cases,
     "settle DAG": settle_dag_cases,
+    "publisher recovery": publisher_recovery_cases,
 }
 
 
