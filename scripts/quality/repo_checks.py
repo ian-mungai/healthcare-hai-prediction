@@ -179,7 +179,7 @@ PLAN_REFERENCES = (
 
 PRIVACY_RULE = f"{POLICY}: privacy scan"
 PRIVACY_FIX = (
-    "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid) or read it from configuration."
+    "replace the value with a placeholder (~, $TMPDIR, <name>, example.invalid, 111111111111 for a synthetic AWS account) or read it from configuration."
     " If it is meant to be public, add a reasoned entry to .privacy_allowlist"
 )
 ALLOWLIST = ".privacy_allowlist"
@@ -194,9 +194,11 @@ PRIVACY_PATTERNS = {
             r"|(?<![\w.])\+\d{1,3}[ -]\d{2,4}[ -]\d{3}[ -]\d{3,4}(?![\w.])"
         ),
     ),
-    "aws-account": ("AWS account ID", re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:\d{12}:|(?i:account[_ -]?id)\W{1,4}\d{12}\b")),
+    "aws-account": ("AWS account ID", re.compile(r"arn:aws[a-z-]*:[a-z0-9-]*:[a-z0-9-]*:(\d{12}):|(?i:account[_ -]?id)\W{1,4}(\d{12})\b")),
 }
 RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com", "example.org", "example.net")
+# The one synthetic account ID that code and tests may use. Any other 12-digit ID in an ARN or after an account id label is flagged.
+SYNTHETIC_ACCOUNT_ID = "111111111111"
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
 WRITING_RULE = (
     f"{POLICY}: writing check. It checks the Oxford comma, date format, time-bound words, dashes, semicolons, slashes, internal references, "
@@ -1630,15 +1632,21 @@ def env_values() -> list[str]:
     return values
 
 
+def exempt_match(kind: str, match: re.Match[str]) -> bool:
+    """Whether a privacy match is a reserved email domain or the one synthetic account ID."""
+    if kind == "email":
+        return match.group(1).lower().endswith(RESERVED_DOMAINS)
+    if kind == "aws-account":
+        return (match.group(1) or match.group(2)) == SYNTHETIC_ACCOUNT_ID
+    return False
+
+
 def line_privacy(line: str, values: list[str]) -> list[str]:
     """Return the privacy finding types on one line."""
     kinds = []
     for kind, (_, pattern) in PRIVACY_PATTERNS.items():
-        for match in pattern.finditer(line):
-            if kind == "email" and match.group(1).lower().endswith(RESERVED_DOMAINS):
-                continue
+        if any(not exempt_match(kind, match) for match in pattern.finditer(line)):
             kinds.append(kind)
-            break
     if any(value in line for value in values):
         kinds.append("env-value")
     return kinds
