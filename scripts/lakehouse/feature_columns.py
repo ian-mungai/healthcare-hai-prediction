@@ -42,6 +42,7 @@ import tempfile
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from scripts.features.feature_schema import FILTER_NAME
 from scripts.lakehouse import duckdb_bounds
 from scripts.process import TimeoutExpired, run_command
 
@@ -63,7 +64,6 @@ FILTER_FOLDER = f"{MODELS}/bridge"
 FILTER_PATH = "models/features/bridge"
 FILTER_FILE = re.compile(r"models/features/bridge/feature_bridge_[a-z0-9_]+\.sql")
 FILTER_PREFIX = "feature_bridge_"
-FILTER_NAME = re.compile(r"feature_bridge_[a-z0-9_]+")
 RUN_HOOKS = ("on-run-start", "on-run-end")
 # The one statement that makes a bridge filter table (the seed is its parameter); the raw bridge is attached as ``shell`` while it runs.
 FILTER_SQL = "select * from shell.main.bridge_measure_control where source_seed = ?"

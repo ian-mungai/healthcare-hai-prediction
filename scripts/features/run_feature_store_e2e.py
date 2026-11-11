@@ -3009,6 +3009,14 @@ def receipt_local(report: Report) -> None:
         dbt_only=dbt_only,
         without_matrix=without_matrix,
     )
+    blocked = run_tool(["-B", "-c", "import sys; sys.modules['yaml'] = None; import scripts.features.feature_validation"], 120)
+    report.case(
+        "E01",
+        "H5",
+        "the feature validator imports without PyYAML, which the quality image does not install",
+        blocked.returncode == 0,
+        stderr=blocked.stderr[-300:],
+    )
 
 
 # ----------------------------------------------------------------------------------------------------

@@ -39,7 +39,6 @@ from typing import Any
 
 from scripts.features import feature_schema
 from scripts.lakehouse import duckdb_bounds
-from scripts.lakehouse.feature_columns import FILTER_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # the code this module runs from: /workspace in the local container, <work>/code on the ECS task
 DEFAULT_SCHEMA = REPO_ROOT / "data_contracts/features/feature_schema.json"
@@ -215,7 +214,7 @@ class Checker:
         rows = self.con.execute(RECEIPT_ROWS).fetchall()
         bad = [row for row in rows if row[1] not in ("success", "pass")]
         built = {str(row[2]).split(".")[-1] for row in rows if row[0] == "model"}
-        wanted = {name for name in self.contract["publish"]["tables"] if name != INPUTS and not FILTER_NAME.fullmatch(name)}
+        wanted = {name for name in self.contract["publish"]["tables"] if name != INPUTS and not feature_schema.FILTER_NAME.fullmatch(name)}
         missing = sorted(wanted - built)
         self.expect("receipt", RECEIPT, bool(rows) and not bad and not missing, nodes=len(rows), nonpassing=len(bad), models_missing=len(missing))
 

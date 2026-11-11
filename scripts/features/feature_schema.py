@@ -46,6 +46,8 @@ SEEDS = "dbt/seeds/features"
 RULES = "data_contracts/features/feature_schema_rules.json"
 SCHEMA = "data_contracts/features/feature_schema.json"
 MATRIX_FOLDER = "dbt/models/features/matrix"
+# The bridge filter models the fixed-SQL worker builds outside dbt build; kept here because this module needs only the standard library.
+FILTER_NAME = re.compile(r"feature_bridge_[a-z0-9_]+")
 MATRIX_YAML = f"{MATRIX_FOLDER}/_feature_matrix__models.yml"
 DEFINITIONS = "feature_store/definitions.py"
 DERIVED_SEED = f"{SEEDS}/derived_fields.csv"
