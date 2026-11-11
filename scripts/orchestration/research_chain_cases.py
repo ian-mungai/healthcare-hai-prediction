@@ -534,6 +534,31 @@ def research_dag_withdraws_a_held_canary() -> None:
     require(json.loads(rig.environment(before + 4)["promote"]["TRAINING_PARAMETERS"])["outcome"] == "held", "the owner was not told held")
 
 
+def research_dag_withdraws_nothing_beside_a_manual_canary() -> None:
+    """A manual serving launch claims the chain's canary deploy run under another research run, then the research DAG runs a held chain. The chain's own
+    canary launch is refused against that claim, so it gets no authority: no withdraw is launched and the manual canary is not touched."""
+    other = training_contract.research_run_id(OTHER_BASE)
+    rig = Rig()
+    for model in training_contract.PROMOTION_MODELS:
+        trained(rig, model)
+    staged_for_the_dag(rig, canary="hold")
+    rig.stage.objects[training_contract.record_key("research", other, "HAI_1")] = research_record("HAI_1", CHALLENGER)
+    canary_run = training_contract.chain_run_id(RESEARCH, "HAI_1", "canary_deploy")
+    rig.stage_runs(canary_run)
+    manual = {"run_id": canary_run, "mode": "real", "hai_type": "HAI_1", "deploy_mode": "canary", "research_run": other}
+    with world(rig, "serving_deploy_dag", manual) as current:
+        require(current.step("serve_deploy") == "succeeded", "the manual canary did not run")
+    before = rig.tasks_started()
+    with world(rig, "research_dag", dag_params()) as current:
+        current.run_dag("research_dag.py")
+    tasks = launched_tasks(rig, before)
+    require(("HAI_1", "serve_withdraw") not in tasks, f"the chain withdrew a canary that a manual launch installed: {tasks}")
+    require(("HAI_1", "serve_canary") not in tasks, f"the chain launched its canary beside a manual claim: {tasks}")
+    require(("HAI_1", "notify") in tasks, f"the owner was not told: {tasks}")
+    claim = rig.launcher.store.run_record(canary_run, "serve", "claim")
+    require(claim is not None and "origin" not in claim and claim["bound"]["input_run"] == other, f"the manual claim changed: {claim}")
+
+
 def research_dag_fails_after_the_notice_when_the_release_step_is_missing() -> None:
     """The held online load's release step is not in the job table yet: the promotion stands, no rollout runs, the notice says the promotion did not roll
     out, and the DAG run fails by name."""
@@ -664,6 +689,7 @@ CASES: dict[str, Callable[[], None]] = {
     "research_dag_skips_until_three_models_trained": research_dag_skips_until_three_models_trained,
     "research_dag_runs_the_chain_for_the_challenger": research_dag_runs_the_chain_for_the_challenger,
     "research_dag_withdraws_a_held_canary": research_dag_withdraws_a_held_canary,
+    "research_dag_withdraws_nothing_beside_a_manual_canary": research_dag_withdraws_nothing_beside_a_manual_canary,
     "research_dag_fails_after_the_notice_when_the_release_step_is_missing": research_dag_fails_after_the_notice_when_the_release_step_is_missing,
     "research_dag_refuses_the_local_lane_before_anything_runs": research_dag_refuses_the_local_lane_before_anything_runs,
     "every_promote_step_gets_its_phase": every_promote_step_gets_its_phase,

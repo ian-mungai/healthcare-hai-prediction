@@ -231,6 +231,17 @@ class ChainWithdrawal:
     hai_type: str
 
 
+@dataclass(frozen=True)
+class ChainCanary:
+    """The promotion chain's authority to launch the canary deploy of one type in one research run, so that the launch claim records the chain as its origin.
+
+    Like ``ChainWithdrawal`` it is never read from a request: the chain's own step takes it from ``Preflight.canary_authority`` in the same process.
+    """
+
+    research_run: str
+    hai_type: str
+
+
 def serving_values(
     request: Mapping[str, Any],
     research_run: str | None,
@@ -546,18 +557,53 @@ class Preflight:
         except TaskRefused as error:
             raise LaunchRefused(str(error)) from None
 
+    def canary_authority(self, research_run: str, hai_type: str) -> ChainCanary:
+        """The promotion chain's authority to launch its canary deploy of the type in the research run, with the chain recorded as the launch's origin."""
+        try:
+            chain_run_id(research_run, hai_type, "canary_deploy")
+        except ValueError as error:
+            raise LaunchRefused(f"a chain canary names a research run and a supported HAI type: {error}") from None
+        return ChainCanary(research_run, hai_type)
+
+    def canary_origin(self, request: SubmissionRequest, chain: ChainCanary) -> dict[str, str]:
+        """The origin the claim of the chain's canary deploy records: the chain's DAG, run, research run and type. Refused unless the request is that launch."""
+        training = request.training or {}
+        if (
+            request.dag_id != "research_dag"
+            or request.template != "serve_deploy"
+            or training.get("deploy_mode") != "canary"
+            or training.get("hai_type") != chain.hai_type
+            or request.input_run_id != chain.research_run
+            or request.run_id != chain_run_id(chain.research_run, chain.hai_type, "canary_deploy")
+        ):
+            raise LaunchRefused("a chain canary is the promotion chain's own canary deploy of its type in its research run, and this launch is not")
+        return {"dag": request.dag_id, "run": request.run_id, "research_run": chain.research_run, "hai_type": chain.hai_type, "step": "canary_deploy"}
+
     def withdrawal_authority(self, research_run: str, hai_type: str) -> ChainWithdrawal:
-        """The promotion chain's authority to withdraw the type's canary of a research run, given only when the launch store holds the claim of the chain's own
-        canary deploy of that type and run: the evidence that the chain started the canary it asks to withdraw. A caller that never launched it gets none."""
+        """The promotion chain's authority to withdraw the type's canary of a research run.
+
+        It is given only for a canary the chain itself deployed: the launch store holds the claim of the chain's canary deploy of that type with the chain as
+        its origin (the chain's DAG, run, research run and type), the claim's research input is the chain's research run, and that launch ended succeeded. A
+        claim of any other launch (a manual one, under any research run) and a chain canary that failed give none.
+        """
         try:
             canary_run = chain_run_id(research_run, hai_type, "canary_deploy")
         except ValueError as error:
             raise LaunchRefused(f"a withdraw names a research run and a supported HAI type: {error}") from None
-        if self.store.run_record(canary_run, "serve", "claim") is None:
+        claim = self.store.run_record(canary_run, "serve", "claim")
+        if claim is None:
             raise LaunchRefused(f"a withdraw needs the chain's canary deploy launch of {hai_type} in run {research_run}, and none is recorded")
+        origin = {"dag": "research_dag", "run": canary_run, "research_run": research_run, "hai_type": hai_type, "step": "canary_deploy"}
+        if claim.get("origin") != origin or claim["bound"].get("input_run") != research_run:
+            raise LaunchRefused(
+                f"a withdraw removes only a canary the promotion chain deployed, and the launch of {canary_run} is not the chain's canary of {hai_type}"
+            )
+        end = {record["event"]: record for record in self.store.records(canary_run, "serve", [claim["attempt"]])}.get("end")
+        if end is None or end.get("outcome") != "succeeded":
+            raise LaunchRefused(f"a withdraw follows a chain canary deploy that succeeded, and the launch of {canary_run} did not")
         return ChainWithdrawal(research_run, hai_type)
 
-    def prepare(self, request: SubmissionRequest, withdrawal: ChainWithdrawal | None = None) -> JobSpec | None:
+    def prepare(self, request: SubmissionRequest, chain: ChainWithdrawal | ChainCanary | None = None) -> JobSpec | None:
         if request.template not in self.steps:
             raise LaunchRefused(f"{request.template} has no ECS job")
         job = self.steps[request.template]
@@ -585,7 +631,7 @@ class Preflight:
                     parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
-        spec = self.spec(request, job, withdrawal)
+        spec = self.spec(request, job, chain)
         revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
@@ -740,12 +786,13 @@ class Preflight:
                 "Render and apply the jobs stack so it registers a revision sized from the current services, then run again"
             )
 
-    def spec(self, request: SubmissionRequest, job: str, withdrawal: ChainWithdrawal | None = None) -> JobSpec:
+    def spec(self, request: SubmissionRequest, job: str, chain: ChainWithdrawal | ChainCanary | None = None) -> JobSpec:
         """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the
         acceptance. ``prepare`` adds the checked revision of the job's host definition."""
         row = self.jobs[job]
         code_run = self.code_runs.resolve(request.run_id)
-        fixed = self.fixed_values(request, job, withdrawal)
+        fixed = self.fixed_values(request, job, chain if isinstance(chain, ChainWithdrawal) else None)
+        origin = self.canary_origin(request, chain) if isinstance(chain, ChainCanary) else {}
         cache: dict[str, str] = {}
 
         def digest() -> str:
@@ -784,4 +831,5 @@ class Preflight:
             acceptance=tuple(row.get("acceptance", ())),
             log_container=log_container,
             log_prefix=job,
+            origin=origin,
         )

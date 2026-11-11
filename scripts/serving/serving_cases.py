@@ -939,7 +939,7 @@ def case_chain_rollout(c: Checker) -> None:
     )
     failures, calls, seen = scenario(fail=("serve_deploy", "canary"), after_write=True)
     c.check(
-        "a canary deploy that failed after it wrote has its canary withdrawn",
+        "a withdraw the chain asks for removes a canary whose deploy failed after it wrote",
         len(failures) == 1 and seen["after"] == (PRODUCTION, None) and seen["answers"] == {PRODUCTION} and calls[-1][3]["outcome"] == "held",
     )
     other_research = training_contract.research_run_id("20261108T000000Z-b45e0002")
