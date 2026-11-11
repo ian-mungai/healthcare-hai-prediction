@@ -29,6 +29,9 @@ OPTIONAL_PREPARATION_FLAGS = (
     "airflow_launch_prepared",
     "job_endpoints_enabled",
     "training_prepared",
+    "source_raw_root_enabled",
+    "publisher_job_enabled",
+    "publisher_keys_enabled",
     "athena_mirror_prepared",
     "monitoring_enabled",
     "broker_prepared",
@@ -49,7 +52,9 @@ OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "mod
 # Lists that may be left out: the job families the broker role and the Airflow launch role may start.
 OPTIONAL_PREPARATION_LISTS = ("broker_job_families", "airflow_launch_families")
 BROKER_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
-OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS})
+# The exact ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value.
+PUBLISHER_SECRET_NAMES = frozenset({"census_api_key", "bls_api_key", "hud_api_key"})
+OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS, "publisher_secret_arns"})
 OWNER_USER = re.compile(r"[A-Za-z0-9_+=,.@-]{1,64}")
 REGISTRY_KEY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,500}")
 MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
@@ -168,6 +173,20 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
     if not isinstance(launch_prefix, str) or len(launch_prefix) > 256 or not LAUNCH_RECORD_PREFIX.fullmatch(launch_prefix) or ".." in launch_prefix:
         raise ConfigurationError(
             "Set airflow_launch_record_prefix to a key prefix that ends with a slash, with parts of letters, digits, underscores, dots and dashes."
+        )
+    secrets = document.get("publisher_secret_arns", {})
+    if not isinstance(secrets, dict) or (
+        secrets
+        and (
+            set(secrets) != PUBLISHER_SECRET_NAMES
+            or not all(
+                isinstance(arn, str) and re.fullmatch(rf"arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{{12}}:secret:{name}-[A-Za-z0-9]{{6}}", arn)
+                for name, arn in secrets.items()
+            )
+        )
+    ):
+        raise ConfigurationError(
+            "Set publisher_secret_arns to empty or the exact ARNs of census_api_key, bls_api_key and hud_api_key in the IAM preparation file."
         )
     collection = document["bronze_qualification_collection"]
     if not isinstance(collection, str) or (collection and not COLLECTION_PATTERN.fullmatch(collection)):

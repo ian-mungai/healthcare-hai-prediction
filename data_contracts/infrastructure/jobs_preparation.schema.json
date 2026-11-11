@@ -568,6 +568,12 @@
         "bronze_job_enabled": {
           "type": "boolean"
         },
+        "publisher_job_enabled": {
+          "type": "boolean"
+        },
+        "publisher_keys_enabled": {
+          "type": "boolean"
+        },
         "bronze_resources": {
           "$ref": "#/$defs/job_resources"
         },
