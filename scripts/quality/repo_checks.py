@@ -200,6 +200,10 @@ RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com"
 # The one synthetic account ID that code and tests may use. Any other 12-digit ID in an ARN or after an account id label is flagged, and so is
 # any other 12-digit number on a line that holds an account match (a conditional that ends in a real account).
 SYNTHETIC_ACCOUNT_ID = "111111111111"
+# Two exact public values: the analytics container user's home path and the default administrator login of OpenMetadata, a product constant.
+# Near variants (another home name, another address on that domain) stay flagged.
+ANALYTICS_HOME = "/home/analytics"
+OPENMETADATA_ADMIN_EMAIL = "admin@open-metadata.org"
 TWELVE_DIGITS = re.compile(r"(?<![\w.])\d{12}(?!\w)")
 UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
@@ -1638,9 +1642,11 @@ def env_values() -> list[str]:
 
 
 def exempt_match(kind: str, match: re.Match[str]) -> bool:
-    """Whether a privacy match is a reserved email domain or the one synthetic account ID."""
+    """Whether a privacy match is a reserved email domain, the OpenMetadata admin login, the analytics home or the one synthetic account ID."""
     if kind == "email":
-        return match.group(1).lower().endswith(RESERVED_DOMAINS)
+        return match.group(1).lower().endswith(RESERVED_DOMAINS) or match.group(0).lower() == OPENMETADATA_ADMIN_EMAIL
+    if kind == "home-path":
+        return match.group(0).rstrip(".") == ANALYTICS_HOME  # The pattern takes a sentence-final period into the name.
     if kind == "aws-account":
         return (match.group(1) or match.group(2)) == SYNTHETIC_ACCOUNT_ID
     return False
