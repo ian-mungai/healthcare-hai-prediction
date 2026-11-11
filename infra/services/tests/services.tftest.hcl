@@ -1207,7 +1207,7 @@ run "container_definitions_match_the_approved_versions" {
       "airflow_dag_processor/airflow_dag_processor" = "977754372c89c9f0826a4545e69a2686b16aa2934f248357537c66970633bdab"
       "airflow_scheduler/airflow_scheduler"         = "434d2eac83bcf1cd718d0a641bc93f576a5a1d81127a96fc2a4c874fae7e9f79"
       "airflow_triggerer/airflow_triggerer"         = "956ff20e5716328c38da977a6a8d6d1933943528306a1617f63b2a3c9603dc1c"
-      "host_prepare/host_prepare"                   = "a208b8e2ca2bc45db88ede4b24aa7acdbe5b4392194ba73f3b68ac8ac03454bb"
+      "host_prepare/host_prepare"                   = "4d8c9dad92ef904aa63c94480dd49e17225cbedad17021fb0a5da1b4a25b80ca"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
       "polaris/polaris"                             = "4091249731a1ee59e36999c93cacc38ad67f1c8be37c13308b5b65f3d673e487"

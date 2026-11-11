@@ -291,10 +291,12 @@ run "host_prepare_makes_one_owned_folder_pair_per_job_family" {
   assert {
     condition = (
       strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chown 10001:10001 ")
-      && strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chmod 0700 /host/job_scratch")
+      && strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chmod 0711 /host/job_scratch\n")
+      && !strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chmod 0700 /host/job_scratch")
+      && !strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "chmod 0755 /host/job_scratch")
       && !strcontains(jsondecode(aws_ecs_task_definition.one_shot["host_prepare"].container_definitions)[0].command[0], "-R")
     )
-    error_message = "The job folders belong to the job user, the scratch folder itself is private and no command walks a tree."
+    error_message = "The job folders belong to the job user, the scratch folder itself can be traversed but not listed (0711, so the Airflow fit probe reaches each family folder through its read-only mount) and no command walks a tree."
   }
 
   assert {

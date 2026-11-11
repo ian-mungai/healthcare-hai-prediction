@@ -1,4 +1,5 @@
 locals {
+  # The scratch root is 0711 (traverse, no listing) because the Airflow fit probe reads each family folder through its read-only mount of the root.
   host_prepare_script = <<-EOT
     mkdir -p /host/postgres /host/airflow/logs /host/airflow/lineage_provider /host/repo${var.broker_enabled ? " /host/broker" : ""}${local.om_on ? " /host/opensearch" : ""}
     chown 999:999 /host/postgres${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
@@ -7,7 +8,7 @@ locals {
     chmod 0750 /host/airflow/logs /host/airflow/lineage_provider${var.broker_enabled ? " /host/broker" : ""}
     mkdir -p ${join(" ", local.host_scratch_directories)}
     chown 10001:10001 ${join(" ", local.host_scratch_directories)}
-    chmod 0700 /host/${var.host_scratch_folder}
+    chmod 0711 /host/${var.host_scratch_folder}
   EOT
 
   polaris_bootstrap_script = <<-EOT

@@ -1725,6 +1725,28 @@ def scratch_usage_counts_only_what_it_can_read() -> None:
     require(2**20 <= usage["train"] < ceiling, f"the train folder is not its readable bytes (a private folder or a link was counted): {usage['train']}")
 
 
+def scratch_usage_needs_search_permission_on_the_root() -> None:
+    """The live host failure: Airflow (uid 50000) reads the scratch root through a read-only mount. With the root at 0700 for another owner, ``is_dir``
+    on a family folder raises PermissionError, so the fit probe fails closed. With the root at 0711 (traverse without listing) the sizes come back."""
+    if os.geteuid() == 0:
+        return  # root passes every permission check, so the failure cannot be reproduced
+    steps = importlib.import_module("orchestration.airflow_steps")
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder) / "job_scratch"
+        (root / "train" / "work").mkdir(parents=True)
+        (root / "train" / "work" / "model.bin").write_bytes(b"x" * 2**20)
+        (root / "silver").mkdir()
+        try:
+            root.chmod(0o600)  # no search bit: the family folders cannot be reached
+            refuses(PermissionError, lambda: steps.scratch_usage(root, ["train", "silver"]))
+            root.chmod(0o711)  # the search bit that other users get on the host root
+            usage = steps.scratch_usage(root, ["train", "silver", "gold"])
+        finally:
+            root.chmod(0o700)
+    require(set(usage) == {"train", "silver", "gold"} and usage["silver"] == 0 and usage["gold"] == 0, f"the families are not all measured: {usage}")
+    require(usage["train"] >= 2**20, f"the train folder's bytes are not counted through a 0711 root: {usage['train']}")
+
+
 def services_build_the_session_adapter() -> None:
     """The Airflow image builds the adapter with ``EcsAdapter.from_session``: reads and RunTask go through two ECS clients, and no cloud call is made."""
     steps = importlib.import_module("orchestration.airflow_steps")
@@ -1995,6 +2017,7 @@ CASES: dict[str, Callable[[], None]] = {
     "services_come_from_named_environment": services_come_from_named_environment,
     "services_build_the_session_adapter": services_build_the_session_adapter,
     "scratch_usage_counts_only_what_it_can_read": scratch_usage_counts_only_what_it_can_read,
+    "scratch_usage_needs_search_permission_on_the_root": scratch_usage_needs_search_permission_on_the_root,
     "metadata_uses_the_host_containers": metadata_uses_the_host_containers,
     "host_definitions_hold_the_init_step_and_the_layer_guards": host_definitions_hold_the_init_step_and_the_layer_guards,
 }
