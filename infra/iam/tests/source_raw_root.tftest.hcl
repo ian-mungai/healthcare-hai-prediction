@@ -69,7 +69,8 @@ run "source_roots_default_to_the_bucket_root_only" {
 
   assert {
     condition = (
-      alltrue([for arn in jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource : !strcontains(arn, "/raw/")]) &&
+      alltrue([for arn in jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Resource : !strcontains(arn, "/raw/")]) &&
+      !contains(keys(aws_iam_policy.bronze_writer), "source_objects_raw") &&
       jsondecode(aws_iam_role_policy.job_writer_e2e_storage[0].policy).Statement[2].Resource == ["arn:aws:s3:::example-data-bucket/cms/hospitals/*"]
     )
     error_message = "Without the raw root switch, source reads stay at the bucket root."
@@ -92,15 +93,18 @@ run "source_roots_add_raw_for_the_bronze_writer_and_qualification_roles" {
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(concat(flatten([
-        for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
-        ["arn:aws:s3:::example-data-bucket/${collection}/*", "arn:aws:s3:::example-data-bucket/raw/${collection}/*"]
+      toset(concat(
+        jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Resource,
+        jsondecode(aws_iam_policy.bronze_writer["source_objects_raw"].policy).Statement[0].Resource
+        )) == toset(concat(flatten([
+          for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
+          ["arn:aws:s3:::example-data-bucket/${collection}/*", "arn:aws:s3:::example-data-bucket/raw/${collection}/*"]
       ]), ["arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*", "arn:aws:s3:::example-data-bucket/raw/bronze_objects/sha256/*"])) &&
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset(flatten([
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Condition.StringLike["s3:prefix"]) == toset(flatten([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         ["${collection}/*", "raw/${collection}/*"]
       ])) &&
-      jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Action == ["s3:GetObjectVersion"]
+      jsondecode(aws_iam_policy.bronze_writer["source_objects_raw"].policy).Statement[0].Action == ["s3:GetObjectVersion"]
     )
     error_message = "The bronze writer must read each mapped collection at the root and under raw, with version reads only."
   }

@@ -16,32 +16,68 @@ BUCKET = "arn:aws:s3:::example-data-bucket"
 PRODUCTION = ("bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check")
 TWINS = ("bronze_e2e", "bronze_dictionary_e2e", "smoke_check_e2e", "duckdb_view_check_e2e")
 PAYLOADS = "bronze_objects/sha256"
+KEY_PARAMETER = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1"
+LARGEST_BUCKET = "a" * 63  # the longest valid bucket name
+INLINE_QUOTA = 10240  # all inline policies of one role together, whitespace excluded
+MANAGED_QUOTA = 6144  # each managed policy, whitespace excluded
+
+
+MARGIN = 0.9  # each bound keeps a tenth of its quota free
 TEST_NAMESPACES = ("silver_e2e", "gold_e2e", "features_e2e", *TWINS)
 
 
-def values(names: tuple[str, ...], collections: tuple[str, ...]) -> dict[str, str]:
-    """Return synthetic Terraform-equivalent inputs for the storage template."""
-    return {
-        "BUCKET_ARN": BUCKET,
-        "TABLE_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/{name}/*" for name in names]),
+def other_version(suffix: str) -> str:
+    """The key parameter ARN with another version suffix, for requests that must be refused."""
+    return KEY_PARAMETER.removesuffix("v1") + suffix
+
+
+def load(name: str, values: dict[str, str], defect: tuple[str, str, str] | None = None) -> dict[str, Any]:
+    """Render one owner policy template. A planted defect replaces text in its template first."""
+    text = (POLICIES / f"{name}.json").read_text()
+    if defect is not None and defect[0] == name:
+        if defect[1] not in text:
+            raise ValueError(f"storage defect has no source match in {name}")
+        text = text.replace(defect[1], defect[2])
+    return dict(json.loads(Template(text).substitute(values)))
+
+
+def render(
+    names: tuple[str, ...],
+    collections: tuple[str, ...],
+    *,
+    bucket: str = BUCKET,
+    raw: bool = False,
+    defect: tuple[str, str, str] | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Render every policy of the bronze role from its exact template: the inline table policy and the managed source and key policies."""
+    roots = ("", "raw/") if raw else ("",)
+    table = {
+        "BUCKET_ARN": bucket,
+        "TABLE_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/{name}/*" for name in names]),
         "TABLE_LIST_PREFIXES": json.dumps([f"lakehouse/{name}/*" for name in names]),
-        "SOURCE_OBJECT_ARNS": json.dumps([*(f"{BUCKET}/{collection}/*" for collection in collections), f"{BUCKET}/{PAYLOADS}/*"]),
-        "SOURCE_LIST_PREFIXES": json.dumps([f"{collection}/*" for collection in collections]),
     }
+    documents = {
+        "inline": load("bronze_writer_storage", table, defect),
+        "source_lists": load(
+            "bronze_writer_source_lists",
+            {"BUCKET_ARN": bucket, "SOURCE_LIST_PREFIXES": json.dumps([f"{root}{collection}/*" for root in roots for collection in collections])},
+            defect,
+        ),
+        "key": load("bronze_writer_pseudonym_key", {"PSEUDONYM_KEY_ARN": KEY_PARAMETER}, defect),
+    }
+    for root in roots:
+        arns = [*(f"{bucket}/{root}{collection}/*" for collection in collections), f"{bucket}/{root}{PAYLOADS}/*"]
+        documents[f"source_objects_{'raw' if root else 'root'}"] = load("bronze_writer_source_objects", {"SOURCE_OBJECT_ARNS": json.dumps(arns)}, defect)
+    return documents
 
 
-def render(names: tuple[str, ...], collections: tuple[str, ...]) -> dict[str, Any]:
-    """Render the exact storage template without reading deployment configuration."""
-    return dict(json.loads(Template((POLICIES / "bronze_writer_storage.json").read_text()).substitute(values(names, collections))))
-
-
-def evaluate(document: dict[str, Any], names: tuple[str, ...], collections: tuple[str, ...]) -> list[str]:
-    """Check independently listed allowed and forbidden storage requests."""
+def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], collections: tuple[str, ...], *, raw: bool = False) -> list[str]:
+    """Check independently listed allowed and forbidden storage requests. The raw root is readable only when its switch is on."""
     failures = []
 
     def check(action: str, resource: str, allowed: bool, *, prefix: str | None = None) -> None:
         context = {} if prefix is None else {"s3:prefix": (prefix,)}
-        if decide([document], Request(action, resource, context)).allowed != allowed:
+        if decide(list(documents.values()), Request(action, resource, context)).allowed != allowed:
             failures.append(f"{action} {'allowed' if allowed else 'denied'} at {resource.removeprefix(BUCKET)}")
 
     for name in names:
@@ -63,6 +99,15 @@ def evaluate(document: dict[str, Any], names: tuple[str, ...], collections: tupl
         check("s3:ListBucketVersions", BUCKET, True, prefix=f"{collection}/manifests/")
     payload = f"{BUCKET}/{PAYLOADS}/" + "ab" * 32
     check("s3:GetObjectVersion", payload, True)
+    raw_payload = f"{BUCKET}/raw/{PAYLOADS}/" + "ab" * 32
+    check("s3:GetObjectVersion", raw_payload, raw)
+    for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
+        check(action, raw_payload, False)
+    for collection in collections:
+        check("s3:GetObjectVersion", f"{BUCKET}/raw/{collection}/objects/source.csv", raw)
+        check("s3:ListBucketVersions", BUCKET, raw, prefix=f"raw/{collection}/manifests/")
+        for action in ("s3:PutObject", "s3:DeleteObject", "s3:GetObject"):
+            check(action, f"{BUCKET}/raw/{collection}/objects/source.csv", False)
     for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
         check(action, payload, False)
     check("s3:GetObjectVersion", f"{BUCKET}/bronze_objects/other/" + "ab" * 32, False)
@@ -71,6 +116,11 @@ def evaluate(document: dict[str, Any], names: tuple[str, ...], collections: tupl
     check("s3:ListBucketVersions", BUCKET, False, prefix="example/not_mapped/")
     check("s3:ListBucket", BUCKET, False, prefix="")
     check("s3:GetBucketLocation", BUCKET, False)
+    check("ssm:GetParameter", KEY_PARAMETER, True)
+    for action in ("ssm:PutParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
+        check(action, KEY_PARAMETER, False)
+    check("ssm:GetParameter", other_version("v2"), False)
+    check("ssm:GetParameter", KEY_PARAMETER.replace("pseudonym_key_v1", "broker_token"), False)
     return sorted(failures)
 
 
@@ -83,8 +133,21 @@ def storage_policy_scope(subject: ModuleType, journal: ModuleType, out: Path) ->
     production = render(PRODUCTION, collections)
     qualification = render(TWINS, ("cms/hospitals",))
     failures = evaluate(production, PRODUCTION, collections) + evaluate(qualification, TWINS, ("cms/hospitals",))
+    failures += evaluate(render(PRODUCTION, collections, raw=True), PRODUCTION, collections, raw=True)
     require(not failures, "storage policy scope differs: " + ", ".join(failures[:3]))
-    require(len(json.dumps(production, separators=(",", ":"))) <= 10240, "bronze inline policy exceeds the IAM role policy limit")
+    largest = render(PRODUCTION, collections, bucket=f"arn:aws:s3:::{LARGEST_BUCKET}", raw=True)
+    stage = Template((POLICIES / "job_stage_read.json").read_text()).substitute(DATA_BUCKET_NAME=LARGEST_BUCKET, TASK_USER_ID="${aws:userid}")
+    inline = len(json.dumps(largest["inline"], separators=(",", ":"))) + len(json.dumps(json.loads(stage), separators=(",", ":")))
+    require(
+        inline <= int(INLINE_QUOTA * MARGIN), f"bronze inline policies together are {inline} characters at the longest bucket name, over the role quota margin"
+    )
+    for name, document in largest.items():
+        if name != "inline":
+            size = len(json.dumps(document, separators=(",", ":")))
+            require(
+                size <= int(MANAGED_QUOTA * MARGIN),
+                f"managed bronze policy {name} is {size} characters at the longest bucket name, over the managed quota margin",
+            )
     account = "1" * 12
     parameter_prefix = f"arn:aws:ssm:us-west-2:{account}:parameter/healthcare_hai_prediction/"
     pair = [parameter_prefix + "aws_polaris_bronze_client_id", parameter_prefix + "aws_polaris_bronze_client_secret"]
@@ -137,32 +200,36 @@ def storage_policy_scope(subject: ModuleType, journal: ModuleType, out: Path) ->
                 "reader extension can list a canonical prefix",
             )
     out.mkdir(parents=True, exist_ok=False)
-    (out / "production_policy.json").write_text(json.dumps(production, indent=2) + "\n")
-    (out / "qualification_policy.json").write_text(json.dumps(qualification, indent=2) + "\n")
+    for label, documents in (("production", production), ("qualification", qualification)):
+        for name, document in documents.items():
+            (out / f"{label}_{name}_policy.json").write_text(json.dumps(document, indent=2) + "\n")
     (out / "reader_policy.json").write_text(json.dumps(reader, indent=2) + "\n")
     return {"production_prefixes": list(PRODUCTION), "qualification_prefixes": list(TWINS), "source_collections": list(collections), "evaluator": "offline IAM"}
 
 
 def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
     """Require independent storage-scope assertions to catch widened or missing policy grants."""
-    source = (POLICIES / "bronze_writer_storage.json").read_text()
     defects = (
-        ("source_write_allowed", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:PutObject"'),
-        ("all_lakehouse_paths_writable", "${TABLE_OBJECT_ARNS}", json.dumps([f"{BUCKET}/lakehouse/*"])),
+        ("source_write_allowed", ("bronze_writer_source_objects", '"s3:GetObjectVersion"', '"s3:GetObjectVersion", "s3:PutObject"')),
+        ("all_lakehouse_paths_writable", ("bronze_writer_storage", "${TABLE_OBJECT_ARNS}", json.dumps([f"{BUCKET}/lakehouse/*"]))),
         (
             "dictionary_storage_missing",
-            "${TABLE_OBJECT_ARNS}",
-            json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
+            (
+                "bronze_writer_storage",
+                "${TABLE_OBJECT_ARNS}",
+                json.dumps([f"{BUCKET}/lakehouse/bronze/*", f"{BUCKET}/lakehouse/smoke_check/*", f"{BUCKET}/lakehouse/duckdb_view_check/*"]),
+            ),
         ),
+        ("key_write_allowed", ("bronze_writer_pseudonym_key", '"ssm:GetParameter"', '"ssm:GetParameter", "ssm:PutParameter"')),
+        ("key_version_wildcard", ("bronze_writer_pseudonym_key", "${PSEUDONYM_KEY_ARN}", KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_*"))),
     )
     results = []
-    for name, before, after in defects:
-        if before not in source:
-            raise ValueError(f"storage defect {name} has no source match")
-        document = json.loads(Template(source.replace(before, after)).substitute(values(PRODUCTION, ("cms/hospitals",))))
-        failures = evaluate(document, PRODUCTION, ("cms/hospitals",))
+    for name, defect in defects:
+        documents = render(PRODUCTION, ("cms/hospitals",), defect=defect)
+        failures = evaluate(documents, PRODUCTION, ("cms/hospitals",))
         folder = out / name
         folder.mkdir(parents=True, exist_ok=False)
-        (folder / "policy.json").write_text(json.dumps(document, indent=2) + "\n")
+        for label, document in documents.items():
+            (folder / f"{label}_policy.json").write_text(json.dumps(document, indent=2) + "\n")
         results.append({"defect": name, "status": "caught" if failures else "survived", "caught_by": failures})
     return results

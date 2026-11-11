@@ -30,3 +30,10 @@ variable "source_raw_root_enabled" {
   default     = false
   nullable    = false
 }
+
+variable "pseudonym_key_prefix" {
+  description = "Parameter Store name prefix of the SecureString pseudonym keys. The key version of config/lakehouse/person_policies.json is appended. Must equal PARAMETER_PREFIX in scripts/pseudonym_core.py."
+  type        = string
+  default     = "/healthcare_hai_prediction/pseudonym_key_"
+  nullable    = false
+}

@@ -143,9 +143,31 @@ run "bronze_rendered_storage_scope" {
       toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[0].Action) == toset([
         "s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"
       ]) &&
-      length(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement) == 4
+      length(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement) == 2
     )
-    error_message = "The rendered writer policy must omit table version reads and bucket-location access."
+    error_message = "The inline writer policy must hold only the table statements: no table version reads, bucket-location access, source reads or key read."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.bronze_writer["pseudonym_key"].policy).Statement == [{
+        Sid      = "ReadPseudonymKeyAtLoad"
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = ["arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1"]
+      }] &&
+      aws_iam_role_policy_attachment.bronze_writer["pseudonym_key"].role == aws_iam_role.bronze_writer[0].name
+    )
+    error_message = "The bronze task role must read exactly the pseudonym key parameter, by name, through its own managed policy, and nothing else in Parameter Store."
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_iam_policy.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists"]) &&
+      toset(keys(aws_iam_role_policy_attachment.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_lists"]) &&
+      alltrue([for attachment in aws_iam_role_policy_attachment.bronze_writer : attachment.role == aws_iam_role.bronze_writer[0].name])
+    )
+    error_message = "Without the raw root switch, the bronze role carries exactly three managed policies, each attached to it."
   }
 
   assert {
@@ -158,21 +180,22 @@ run "bronze_rendered_storage_scope" {
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Resource) == toset(concat([
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Resource) == toset(concat([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         "arn:aws:s3:::example-data-bucket/${collection}/*"
       ], ["arn:aws:s3:::example-data-bucket/bronze_objects/sha256/*"])) &&
-      jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[2].Action == ["s3:GetObjectVersion"]
+      jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Action == ["s3:GetObjectVersion"]
     )
     error_message = "The rendered source objects must match every mapped collection and the content-addressed payload prefix of the single-copy collector, and permit only version reads."
   }
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset([
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Condition.StringLike["s3:prefix"]) == toset([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) : "${collection}/*"
       ]) &&
-      jsondecode(aws_iam_role_policy.bronze_writer[0].policy).Statement[3].Action == ["s3:ListBucketVersions"]
+      jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Action == ["s3:ListBucketVersions"] &&
+      jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Resource == "arn:aws:s3:::example-data-bucket"
     )
     error_message = "The rendered source list must match every mapped collection with its trailing wildcard."
   }
@@ -213,5 +236,60 @@ run "bronze_rendered_storage_scope" {
       jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Action == ["s3:ListBucketVersions"]
     )
     error_message = "The attached reader policy must grant version reads and version listings on exactly four bronze twins."
+  }
+}
+
+# The IAM quotas count characters without whitespace: 10,240 for all inline policies of one role together and 6,144 for each managed policy.
+# The largest valid input is a 63 character bucket name with the raw root switch on. Each bound below keeps a tenth of its quota free.
+run "bronze_largest_valid_configuration_keeps_inline_policies_under_the_role_quota" {
+  command = plan
+
+  variables {
+    data_bucket_name                = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    source_raw_root_enabled         = true
+    bronze_writer_prepared          = true
+    bronze_qualification_collection = "cms/hospitals"
+    bronze_live_locations = {
+      bronze            = "s3://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/lakehouse/bronze/"
+      bronze_dictionary = "s3://aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/lakehouse/bronze_dictionary/"
+    }
+  }
+
+  assert {
+    condition     = length(var.data_bucket_name) == 63
+    error_message = "The size case must use the longest valid bucket name."
+  }
+
+  assert {
+    condition = (
+      length(jsonencode(jsondecode(aws_iam_role_policy.bronze_writer[0].policy))) +
+      length(jsonencode(jsondecode(aws_iam_role_policy.job_writer_stage["bronze"].policy))) <= 9216
+    )
+    error_message = "All inline policies of the bronze role together must stay under 9,216 characters, a tenth below the 10,240 role quota."
+  }
+
+  assert {
+    condition     = alltrue([for name, policy in aws_iam_policy.bronze_writer : length(jsonencode(jsondecode(policy.policy))) <= 5529])
+    error_message = "Every managed bronze policy must stay under 5,529 characters, a tenth below the 6,144 quota."
+  }
+
+  assert {
+    condition     = toset(keys(aws_iam_policy.bronze_writer)) == toset(["pseudonym_key", "source_objects_root", "source_objects_raw", "source_lists"])
+    error_message = "With the raw root switch on, the source object reads split by root so that each managed policy keeps its own margin."
+  }
+
+  assert {
+    condition = (
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_objects_raw"].policy).Statement[0].Resource) == toset(concat([
+        for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
+        "arn:aws:s3:::${var.data_bucket_name}/raw/${collection}/*"
+      ], ["arn:aws:s3:::${var.data_bucket_name}/raw/bronze_objects/sha256/*"])) &&
+      alltrue([for arn in jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Resource : !strcontains(arn, "/raw/")]) &&
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Condition.StringLike["s3:prefix"]) == toset(flatten([
+        for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
+        ["${collection}/*", "raw/${collection}/*"]
+      ]))
+    )
+    error_message = "The raw policy must hold every mapped collection under raw, the root policy none of them, and the list policy both roots."
   }
 }

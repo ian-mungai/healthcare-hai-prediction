@@ -10,15 +10,40 @@ locals {
   bronze_source_roots    = var.source_raw_root_enabled ? ["", "raw/"] : [""]
   bronze_parameter_names = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
   bronze_parameter_arns  = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
+  # The loader reads the pseudonym key of the version its reviewed person-field policy names, at use, with this task role (no ECS secret injection).
+  bronze_pseudonym_key_arn = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.pseudonym_key_prefix}${jsondecode(file("${path.module}/../../config/lakehouse/person_policies.json")).key_version}"
   bronze_storage_inputs = {
     BUCKET_ARN          = local.bronze_bucket_arn
     TABLE_OBJECT_ARNS   = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "${local.bronze_bucket_arn}/lakehouse/${name}/*"])
     TABLE_LIST_PREFIXES = jsonencode([for name in concat(local.bronze_namespaces, local.bronze_job_twins) : "lakehouse/${name}/*"])
-    # The single-copy collector stores payloads at bronze_objects/sha256/<digest>. Manifests name them, so the loader reads them by exact version.
-    SOURCE_OBJECT_ARNS   = jsonencode(flatten([for root in local.bronze_source_roots : concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${root}${collection}/*"], ["${local.bronze_bucket_arn}/${root}bronze_objects/sha256/*"])]))
-    SOURCE_LIST_PREFIXES = jsonencode(flatten([for root in local.bronze_source_roots : [for collection in local.bronze_collections : "${root}${collection}/*"]]))
   }
   bronze_storage_policy = templatefile("${path.module}/owner_policies/bronze_writer_storage.json", local.bronze_storage_inputs)
+  # IAM caps all inline policies of one role together at 10,240 characters and each managed policy at 6,144 (whitespace excluded). The source reads grow with
+  # the bucket name length and the raw root, so they live in managed policies, one object policy per root. Table statements stay inline.
+  bronze_managed_policies = merge(
+    {
+      pseudonym_key = {
+        description = "Read the one pseudonym key parameter of the reviewed key version, at load. No other parameter and no write."
+        document    = templatefile("${path.module}/owner_policies/bronze_writer_pseudonym_key.json", { PSEUDONYM_KEY_ARN = local.bronze_pseudonym_key_arn })
+      }
+      source_lists = {
+        description = "List source versions of each mapped collection at every enabled source root."
+        document = templatefile("${path.module}/owner_policies/bronze_writer_source_lists.json", {
+          BUCKET_ARN           = local.bronze_bucket_arn
+          SOURCE_LIST_PREFIXES = jsonencode(flatten([for root in local.bronze_source_roots : [for collection in local.bronze_collections : "${root}${collection}/*"]]))
+        })
+      }
+    },
+    {
+      # The single-copy collector stores payloads at bronze_objects/sha256/<digest>. Manifests name them, so the loader reads them by exact version.
+      for root in local.bronze_source_roots : "source_objects_${root == "" ? "root" : "raw"}" => {
+        description = "Read source object versions of each mapped collection and the content-addressed payloads, ${root == "" ? "at the bucket root" : "under raw"}."
+        document = templatefile("${path.module}/owner_policies/bronze_writer_source_objects.json", {
+          SOURCE_OBJECT_ARNS = jsonencode(concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${root}${collection}/*"], ["${local.bronze_bucket_arn}/${root}bronze_objects/sha256/*"]))
+        })
+      }
+    }
+  )
 }
 
 resource "aws_iam_role" "bronze_writer" {
@@ -57,6 +82,39 @@ resource "aws_iam_role_policy" "bronze_writer" {
   name   = "bronze_objects_and_versioned_sources"
   role   = aws_iam_role.bronze_writer[0].name
   policy = local.bronze_storage_policy
+
+  # Attach the managed source reads before the inline policy drops them, so the role keeps its reads through the apply.
+  depends_on = [aws_iam_role_policy_attachment.bronze_writer]
+
+  lifecycle {
+    precondition {
+      condition     = length(jsonencode(jsondecode(local.bronze_storage_policy))) + length(jsonencode(jsondecode(local.job_policy_documents.job_stage_read))) <= 10240
+      error_message = "The inline policies of the bronze role together are over the 10240 character quota of one role. Move statements into a managed policy."
+    }
+  }
+}
+
+resource "aws_iam_policy" "bronze_writer" {
+  for_each = var.bronze_writer_prepared ? local.bronze_managed_policies : {}
+
+  name        = format(local.platform_name, "job_write_bronze_${each.key}")
+  description = each.value.description
+  policy      = each.value.document
+  tags        = local.project_tags
+
+  lifecycle {
+    precondition {
+      condition     = length(jsonencode(jsondecode(each.value.document))) <= 6144
+      error_message = "A managed bronze policy is over the 6144 character quota of one managed policy. Split it."
+    }
+  }
+}
+
+resource "aws_iam_role_policy_attachment" "bronze_writer" {
+  for_each = aws_iam_policy.bronze_writer
+
+  role       = aws_iam_role.bronze_writer[0].name
+  policy_arn = each.value.arn
 }
 
 output "bronze_writer_contract" {

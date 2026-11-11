@@ -1,0 +1,12 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListSourceVersionsOnly",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucketVersions"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": {"StringLike": {"s3:prefix": ${SOURCE_LIST_PREFIXES}}}
+    }
+  ]
+}

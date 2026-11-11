@@ -13,19 +13,6 @@
       "Action": ["s3:ListBucket"],
       "Resource": "${BUCKET_ARN}",
       "Condition": {"StringLike": {"s3:prefix": ${TABLE_LIST_PREFIXES}}}
-    },
-    {
-      "Sid": "SourceObjectVersionsOnly",
-      "Effect": "Allow",
-      "Action": ["s3:GetObjectVersion"],
-      "Resource": ${SOURCE_OBJECT_ARNS}
-    },
-    {
-      "Sid": "ListSourceVersionsOnly",
-      "Effect": "Allow",
-      "Action": ["s3:ListBucketVersions"],
-      "Resource": "${BUCKET_ARN}",
-      "Condition": {"StringLike": {"s3:prefix": ${SOURCE_LIST_PREFIXES}}}
     }
   ]
 }
