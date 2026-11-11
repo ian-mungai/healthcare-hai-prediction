@@ -36,7 +36,9 @@ from orchestration.training_contract import (
     MODELS,
     PROMOTION_MODELS,
     chain_parameters_for,
+    model_drift_run_id,
     model_features_run_id,
+    model_training_run_id,
     parameters_for,
     record_key,
     serving_parameters_for,
@@ -68,7 +70,9 @@ CAPTURE_ROOT = re.compile(r"raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/"
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 GATE = "@gate"
 CHAIN = "chain"
-CHAIN_LAYERS = ("silver", "gold", "features", "drift")
+CHAIN_LAYERS = ("silver", "gold", "features")
+# The drift check of a model set: it checks the set of one model run, and its job needs the features job of that run to have passed.
+DRIFT_DAG = "drift_monitoring_dag"
 JOB_MODE = "real"
 # The feature set a DAG's features job builds (the FEATURE_SET of its containers). A DAG that names none cannot launch the features job.
 FEATURE_SETS = {"features_base_dag": "base", **FEATURE_DAGS}
@@ -100,6 +104,17 @@ def feature_set_of(dag_id: str) -> str:
         return FEATURE_SETS[dag_id]
     except KeyError:
         raise LaunchRefused(f"the DAG {dag_id} names no feature set for the features job") from None
+
+
+def drift_model(request: SubmissionRequest) -> str:
+    """The model whose set a drift check reads, after the gates that bind the check: a model of the contract, and a drift run that derives from the model run
+    it checks (the run the chain gate bound to the bronze code), so that no other run is checked under that name."""
+    model = (request.training or {}).get("model")
+    if model not in MODELS:
+        raise LaunchRefused(f"the drift check names {model!r}, which is not one of {', '.join(MODELS)}")
+    if request.input_run_id is None or request.run_id != model_drift_run_id(request.input_run_id):
+        raise LaunchRefused(f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks")
+    return str(model)
 
 
 class S3Reader(Protocol):
@@ -540,7 +555,8 @@ class Preflight:
         cap = self.host_cap(job, self.require_capacity(job))
         self.require_no_hold(job)
         row = self.jobs[job]
-        after = job if request.dag_id in FEATURE_DAGS else row.get("after")  # a model set builds from the passed features job of its base run
+        # A model set builds from the passed features job of its base run, and a drift check reads the passed features job of its model run.
+        after = job if request.dag_id in FEATURE_DAGS else "features" if request.dag_id == DRIFT_DAG else row.get("after")
         if after:
             self.require_passed(job, after, request.input_run_id)
         if row.get("needs_training_parameters"):
@@ -551,6 +567,8 @@ class Preflight:
                     parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
+        if request.dag_id == DRIFT_DAG:
+            drift_model(request)
         spec = self.spec(request, job)
         revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
@@ -564,16 +582,18 @@ class Preflight:
         return replace(spec, task_definition=revision, need=need)
 
     def record_chain(self, bronze_run: str) -> None:
-        """Bind each layer run that derives from the bronze run, each model set's features run of the base run, and the training run of the last layer, to the
-        bronze run's staged code."""
+        """Bind each layer run that derives from the bronze run, and for each model the runs of its chain from the base run (its set's features run, the
+        drift check of that set and the training run the check may start), to the bronze run's staged code."""
         run = bronze_run
         for layer in CHAIN_LAYERS:
             run = derived_run_id(run, layer)
             self.code_runs.bind(run, bronze_run)
             if layer == "features":
                 for model in MODELS:
-                    self.code_runs.bind(model_features_run_id(run, model), bronze_run)
-        self.code_runs.bind(training_run_id(run), bronze_run)
+                    features = model_features_run_id(run, model)
+                    drift = model_drift_run_id(features)
+                    for chained in (features, drift, model_training_run_id(drift, model)):
+                        self.code_runs.bind(chained, bronze_run)
 
     def require_passed(self, job: str, after: str, input_run: str | None) -> None:
         """Refuse a job unless the launch of the previous job in the run it publishes from ended with every acceptance check passed."""
@@ -721,6 +741,7 @@ class Preflight:
             return cache["digest"]
 
         training = json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":"))
+        names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id == DRIFT_DAG
         values: dict[str, Callable[[], str]] = {
             "RUN_ID": lambda: request.run_id,
             "CODE_RUN_ID": lambda: code_run,
@@ -729,7 +750,7 @@ class Preflight:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
-            "FEATURE_SET": lambda: feature_set_of(request.dag_id),
+            "FEATURE_SET": lambda: drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
             "PHASE": lambda: phase_of(request.template),
             **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},
         }
@@ -738,7 +759,7 @@ class Preflight:
         uses_code = any("CODE_SHA256" in names for names in containers.values())
         request_hash = fixed.get("BRONZE_REQUEST_SHA256") or fixed.get("SERVING_REQUEST_SHA256") or fixed.get("PUBLISHER_LAUNCH_SHA256")
         if not request_hash:
-            request_hash = hashlib.sha256((training if row.get("needs_training_parameters") else "").encode()).hexdigest()
+            request_hash = hashlib.sha256((training if names_a_model else "").encode()).hexdigest()
         need = self.host["jobs"][job]
         return JobSpec(
             run_id=request.run_id,

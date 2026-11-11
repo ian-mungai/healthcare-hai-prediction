@@ -1,9 +1,10 @@
-"""Run silver, gold, features and drift in order after one bronze run, with no calendar schedule.
+"""Run silver, gold and the features base in order after one bronze run, with no calendar schedule.
 
 The owner starts this DAG by hand after a new bronze snapshot, with ``run_id`` set to the run of that snapshot. A sensor that starts it comes later.
 The first task binds every layer run of the chain to the bronze run's staged code.
 Each layer then runs as a triggered DAG run and the chain waits for its success before the next layer, so a failed layer or a failed acceptance check stops
-the chain before the later layers. Every wait has a limit.
+the chain before the later layers. Every wait has a limit. The features base DAG starts the six model feature DAGs once it published, and each of those runs
+its own model's checks and training, so the chain does not wait for them and names no model.
 
 Every run ID and every DAG run ID derives from the bronze run ID. A second trigger for the same bronze run names the same DAG runs, and a DAG run that already
 exists is skipped, so a retry of one bronze snapshot starts nothing new. A failed layer is retried by clearing that layer's own DAG run.
@@ -33,11 +34,10 @@ CHAIN = (
     ("silver", "silver_transform_dag", None),
     ("gold", "gold_transform_dag", "silver_snapshot_run"),
     ("features", "features_base_dag", "gold_snapshot_run"),
-    ("drift", "drift_monitoring_dag", None),
 )
 POLL_SECONDS = 60
-# Each layer's wait ends after its own limit (a job's deadline is six hours, drift two) and the whole chain ends after the sum plus an hour for the gate.
-LAYER_LIMITS = {"silver": timedelta(hours=8), "gold": timedelta(hours=8), "features": timedelta(hours=8), "drift": timedelta(hours=3)}
+# Each layer's wait ends after its own limit (a job's deadline is six hours) and the whole chain ends after the sum plus an hour for the gate.
+LAYER_LIMITS = {"silver": timedelta(hours=8), "gold": timedelta(hours=8), "features": timedelta(hours=8)}
 CHAIN_LIMIT = sum(LAYER_LIMITS.values(), timedelta(hours=1))
 
 
@@ -94,7 +94,7 @@ def create_dag_run(dag_id: str, dag_run_id_value: str, conf: dict[str, str]) -> 
 
 def metadata_run_id(bronze_run: str) -> str:
     """The run ID of the catalog start in the chain that starts at ``bronze_run``."""
-    return derived_run_id(chain_run("drift", bronze_run), "metadata")
+    return derived_run_id(chain_run("features", bronze_run), "metadata")
 
 
 def dag_run_id(dag_id: str, run: str) -> str:
@@ -108,8 +108,6 @@ def trigger_for(index: int) -> TriggerDagRunOperator:
     conf = {"run_id": f"{{{{ chain_run('{layer}', params.run_id) }}}}", "mode": "{{ params.mode }}"}
     if parent_key is not None:
         conf[parent_key] = f"{{{{ chain_run('{CHAIN[index - 1][0]}', params.run_id) }}}}"
-    if layer == "drift":
-        conf["mlflow"] = "aws"
     return TriggerDagRunOperator(
         task_id=f"run_{layer}",
         trigger_dag_id=dag_id,
@@ -151,7 +149,7 @@ with DAG(
         previous >> current
         previous = current
 
-    # The catalog start is the last step and nothing waits for it. It runs only after the drift layer succeeded, so an upstream failure still fails the chain.
+    # The catalog start is the last step and nothing waits for it. It runs only after the features layer succeeded, so a failure upstream still fails the chain.
     # It creates the catalog DAG run through the Airflow REST API with a bounded call. A trigger operator reports success by raising an exception, which this
     # handler would swallow. An error of its own (a missing or paused catalog DAG, a refused request, no answer in time) is logged at error level and returned
     # in the task result, never raised, so the chain result does not depend on the catalog. A retried bronze run names the same DAG run, which counts as done.

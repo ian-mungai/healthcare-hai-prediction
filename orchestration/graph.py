@@ -7,7 +7,8 @@ Rules: no setup or teardown task; ``release_run`` is the only leaf; no cycle; ex
 task's upstream set follows the section 5 order with the default ``all_success`` rule; ``run_record``,
 ``catalog_release``, ``final_gate`` and ``release_run`` have the section 5 trigger rules and upstream sets. The DAGs of one job (``COLLAPSED_DAGS``) are
 the four tasks preflight, job, evidence and gate, the gate is the only leaf and it runs after a failure.
-A DAG of ``TRIGGERS`` adds one trigger task per DAG it starts, each behind the gate only, and those tasks are its leaves instead of the gate.
+A DAG of ``TRIGGERS`` adds one trigger task per DAG it starts (the base DAG its six model DAGs, a model DAG the drift check of its set), each behind the gate
+only, and those tasks are its leaves instead of the gate.
 The research DAG (``RESEARCH_DAGS``) is ready, research, chain and the gate, which runs after a failure too and is its only leaf.
 """
 
@@ -16,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orchestration.training_contract import MODELS, TRAINING_STEPS
+from orchestration.training_contract import FEATURE_DAGS, MODELS, TRAINING_STEPS
 
 WORK_CHAIN = (
     "acquire_run",
@@ -64,7 +65,8 @@ COLLAPSED_DAGS = frozenset(
     }
 )
 # The one-job DAGs that start other DAGs once their gate passed: each trigger follows the gate only, and the triggers are the leaves instead of the gate.
-TRIGGERS = {"features_base_dag": tuple(f"trigger_{model}" for model in MODELS)}
+# The base DAG starts the six model DAGs, and each model DAG starts the drift check of its own set.
+TRIGGERS = {"features_base_dag": tuple(f"trigger_{model}" for model in MODELS), **{dag_id: ("trigger_drift",) for dag_id in FEATURE_DAGS}}
 COLLAPSED_UPSTREAM = {
     "preflight": frozenset(),
     "job": frozenset({"preflight"}),

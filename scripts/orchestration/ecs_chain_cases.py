@@ -120,7 +120,7 @@ def derived_ids_are_valid_and_stable() -> None:
     ids = [loaded["chain_run"](layer, BRONZE) for layer, _, _ in loaded["CHAIN"]]
     require(all(RUN_ID.fullmatch(run) for run in ids), f"a derived run ID has the wrong shape: {ids}")
     require(all(run.startswith(BRONZE[:16]) for run in ids), "a derived run ID lost the bronze time stamp")
-    require(len(set(ids)) == 4 and BRONZE not in ids, "two layers share a run ID")
+    require(len(set(ids)) == 3 and BRONZE not in ids, "two layers share a run ID")
     require(ids == [loaded["chain_run"](layer, BRONZE) for layer, _, _ in loaded["CHAIN"]], "the run IDs are not stable")
     require(not set(ids) & {loaded["chain_run"](layer, OTHER_BRONZE) for layer, _, _ in loaded["CHAIN"]}, "two bronze runs share a layer run ID")
     require(loaded["chain_run"]("gold", BRONZE) == loaded["derived_run_id"](ids[0], "gold"), "gold does not derive from silver")
@@ -139,14 +139,13 @@ def preflight_and_dag_derive_the_same_run_ids() -> None:
 def chain_runs_in_order_after_the_gate() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
-    require(list(nodes) == ["chain_gate", "run_silver", "run_gold", "run_features", "run_drift", "start_metadata"], f"wrong tasks: {list(nodes)}")
-    order = ["chain_gate", "run_silver", "run_gold", "run_features", "run_drift"]
+    require(list(nodes) == ["chain_gate", "run_silver", "run_gold", "run_features", "start_metadata"], f"wrong tasks: {list(nodes)}")
+    order = ["chain_gate", "run_silver", "run_gold", "run_features"]
     for before, after in zip(order, order[1:], strict=False):
         require(nodes[after].upstream == [nodes[before]], f"{after} does not follow only {before}")
     require(loaded["dag"].settings["schedule"] is None and loaded["dag"].settings["catchup"] is False, "the chain has a calendar schedule")
     require(
-        [nodes[name].settings["trigger_dag_id"] for name in order[1:]]
-        == ["silver_transform_dag", "gold_transform_dag", "features_base_dag", "drift_monitoring_dag"],
+        [nodes[name].settings["trigger_dag_id"] for name in order[1:]] == ["silver_transform_dag", "gold_transform_dag", "features_base_dag"],
         "wrong DAGs",
     )
     for name in order[1:]:
@@ -165,15 +164,12 @@ def triggers_send_derived_ids() -> None:
     def run(layer: str) -> str:
         return str(loaded["chain_run"](layer, BRONZE))
 
-    rendered = {name: render(loaded, nodes[name]["trigger_run_id"], BRONZE) for name in ("run_silver", "run_gold", "run_features", "run_drift")}
+    rendered = {name: render(loaded, nodes[name]["trigger_run_id"], BRONZE) for name in ("run_silver", "run_gold", "run_features")}
     require(rendered["run_gold"] == f"chain__gold_transform_dag__{run('gold')}", f"wrong DAG run ID for gold: {rendered['run_gold']}")
     conf = {name: {key: render(loaded, value, BRONZE) for key, value in nodes[name]["conf"].items()} for name in rendered}
     require(conf["run_silver"] == {"run_id": run("silver"), "mode": "real"}, f"silver settings: {conf['run_silver']}")
     require(conf["run_gold"] == {"run_id": run("gold"), "mode": "real", "silver_snapshot_run": run("silver")}, f"gold settings: {conf['run_gold']}")
     require(conf["run_features"] == {"run_id": run("features"), "mode": "real", "gold_snapshot_run": run("gold")}, f"features settings: {conf['run_features']}")
-    require(
-        conf["run_drift"] == {"run_id": run("drift"), "mode": "real", "mlflow": "aws"}, f"drift settings (launch mode names the aws lane): {conf['run_drift']}"
-    )
 
 
 def a_retried_bronze_run_names_the_same_runs() -> None:
@@ -190,7 +186,7 @@ def waits_have_explicit_deadlines() -> None:
     loaded = load_dag()
     triggers = [node.settings for node in loaded["operators"] if node.task_id.startswith("run_")]
     limits = [settings.get("execution_timeout") for settings in triggers]
-    require(len(triggers) == 4 and all(isinstance(limit, timedelta) and limit > timedelta(0) for limit in limits), f"a layer wait has no deadline: {limits}")
+    require(len(triggers) == 3 and all(isinstance(limit, timedelta) and limit > timedelta(0) for limit in limits), f"a layer wait has no deadline: {limits}")
     run_limit = loaded["dag"].settings.get("dagrun_timeout")
     require(isinstance(run_limit, timedelta) and run_limit >= sum(limits, timedelta(0)), f"the chain run has no deadline that covers its layers: {run_limit}")
     require(loaded["dag"].settings.get("max_active_runs") == 1, "the chain may run twice at once")
@@ -214,14 +210,14 @@ def named_child_dags_exist_and_accept_the_settings() -> None:
     require(not problems, "; ".join(problems))
 
 
-def metadata_start_follows_drift_and_never_blocks_the_chain() -> None:
+def metadata_start_follows_the_features_layer_and_never_blocks_the_chain() -> None:
     loaded = load_dag()
     nodes = {node.task_id: node for node in loaded["operators"]}
     node = nodes.get("start_metadata")
     if node is None or node.function is None:
         raise AssertionError("the chain has no start_metadata task")
     settings = node.settings
-    require(node.upstream == [nodes["run_drift"]], "the catalog start does not follow only the drift layer")
+    require(node.upstream == [nodes["run_features"]], "the catalog start does not follow only the features layer")
     require(not any(node in other.upstream for other in loaded["operators"]), "a task follows the catalog start, so its failure could hold up the chain")
     require(
         settings.get("trigger_rule") in (None, "all_success"),
@@ -371,7 +367,7 @@ CASES: dict[str, Callable[[], None]] = {
     "a_retried_bronze_run_names_the_same_runs": a_retried_bronze_run_names_the_same_runs,
     "waits_have_explicit_deadlines": waits_have_explicit_deadlines,
     "named_child_dags_exist_and_accept_the_settings": named_child_dags_exist_and_accept_the_settings,
-    "metadata_start_follows_drift_and_never_blocks_the_chain": metadata_start_follows_drift_and_never_blocks_the_chain,
+    "metadata_start_follows_the_features_layer_and_never_blocks_the_chain": metadata_start_follows_the_features_layer_and_never_blocks_the_chain,
     "metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token": metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token,
     "metadata_start_treats_an_existing_run_as_done": metadata_start_treats_an_existing_run_as_done,
     "metadata_start_records_a_failed_trigger_in_the_log_and_the_result": metadata_start_records_a_failed_trigger_in_the_log_and_the_result,

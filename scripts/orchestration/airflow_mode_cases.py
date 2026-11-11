@@ -79,7 +79,7 @@ from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, Launc
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import record_key, research_run_id, training_run_id
+from orchestration.training_contract import record_key, research_run_id
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag, Operator
 from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
@@ -632,7 +632,8 @@ def local_mlflow_is_refused_visibly() -> None:
     for name in ("training_dag.py", "model_promotion_dag.py", "drift_monitoring_dag.py"):
         text = (ROOT / "dags" / name).read_text()
         require('"mlflow": Param("aws"' in text, f"{name} does not default to the aws lane")
-    require('conf["mlflow"] = "aws"' in (ROOT / "dags/bronze_chain_dag.py").read_text(), "the chain starts drift with another MLflow lane than aws")
+    for dag_id in MODEL_DAGS:
+        require('"mlflow": "aws"' in (ROOT / "dags" / f"{dag_id}.py").read_text(), f"{dag_id} starts its drift check with another MLflow lane than aws")
 
 
 FRESH_SILVER_RUN = "20261104T140000Z-f2e5f2e5"
@@ -805,15 +806,17 @@ def code_run_is_bound_once() -> None:
         fresh.stage.denied.add(RUN_KEY.format(run=SILVER_RUN, name="code_run.json"))
         error = refuses(LaunchUnavailable, lambda: current.step("pin_bronze"))
         require("binding" in str(error) and not fresh.ecs.calls, f"a denied binding read was taken for no binding: {error}")
-    drift = Rig()
-    drift.stage_runs(BRONZE_RUN)
-    with world(drift, "bronze_chain_dag", params) as current:
-        current.step("chain_gate")
-    drift_run = layers(layers(layers(layers(BRONZE_RUN, "silver"), "gold"), "features"), "drift")
-    with world(drift, "drift_monitoring_dag", {"run_id": drift_run, "mode": "real", "mlflow": "aws"}) as current:
+    chained = Rig()
+    _, features_model = model_chain_passed(chained, "m1")
+    drift_run = drift_run_of(features_model)
+    started = chained.tasks_started()
+    with world(
+        chained, "drift_monitoring_dag", {"run_id": drift_run, "mode": "real", "mlflow": "aws", "model": "m1", "features_run": features_model}
+    ) as current:
         current.step("drift_run")
-    training = json.loads(drift.stage.objects[RUN_KEY.format(run=training_run_id(drift_run), name="code_run.json")])
-    require(training == {"code_run": BRONZE_RUN}, f"the training run is not bound to the drift run's code: {training}")
+    require(chained.environment(started)["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the drift run fetches its own code, not its bronze run's")
+    training = json.loads(chained.stage.objects[RUN_KEY.format(run=training_run_of(drift_run, "m1"), name="code_run.json")])
+    require(training == {"code_run": BRONZE_RUN}, f"the training run is not bound to the bronze run's code: {training}")
 
 
 def control_step_launches_nothing() -> None:
@@ -1390,38 +1393,40 @@ def unavailable_is_bounded() -> None:
 
 
 def five_dags_run_end_to_end() -> None:
+    """The chain's three layers, one model's features DAG, its drift check and its training run, each launched once and each run bound to the bronze code."""
     rig = Rig()
     layers = importlib.import_module("orchestration.ecs_preflight").derived_run_id
     silver = layers(BRONZE_RUN, "silver")
     gold = layers(silver, "gold")
     features = layers(gold, "features")
-    drift = layers(features, "drift")
-    training = training_run_id(drift)
+    model_features = model_run(features, "m1")
+    drift = drift_run_of(model_features)
+    training = training_run_of(drift, "m1")
     with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
         require(current.step("chain_gate") == "succeeded", "the chain gate failed")
     plan = (
         ("silver_transform_dag.py", "silver_transform_dag", {"run_id": silver, "mode": "real"}, "silver", silver),
         ("gold_transform_dag.py", "gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, "gold", gold),
         ("features_base_dag.py", "features_base_dag", {"run_id": features, "mode": "real", "gold_snapshot_run": gold}, "features", features),
+        ("features_m1_dag.py", "features_m1_dag", {"run_id": model_features, "mode": "real", "base_snapshot_run": features}, "features", model_features),
     )
     for file, dag_id, params, job, run in plan:
         with world(rig, dag_id, params) as current:
             states = current.run_dag(file)
             failed = {name: state for name, state in states.items() if state != "success"}
-            last = ("gate", "accepted") if f"{dag_id}.py" in COLLAPSED_FILES else ("release_run", "released")
+            last = ("gate", "accepted") if file in COLLAPSED_FILES else ("release_run", "released")
             require(not failed and current.results[last[0]] == last[1], f"{dag_id} did not finish: {failed} {current.results}")
         end = rig.end(run, job)
         require(end is not None and end["outcome"] == "succeeded", f"{job} has no success record")
-    with world(rig, "drift_monitoring_dag", {"run_id": drift, "mode": "real", "mlflow": "aws"}) as current:
+    with world(rig, "drift_monitoring_dag", {"run_id": drift, "mode": "real", "mlflow": "aws", "model": "m1", "features_run": model_features}) as current:
         require(current.step("drift_run") == "succeeded", "the drift job did not pass")
-    with world(rig, "training_dag", {**TRAIN_PARAMS, "run_id": training}) as current:
+    with world(
+        rig, "training_dag", {**TRAIN_PARAMS, "run_id": training, "features_run": model_features, "trigger": f"drift:{drift}", "model": "m1"}
+    ) as current:
         states = current.run_dag("training_dag.py")
         failed = {name: state for name, state in states.items() if state != "success"}
         require(not failed and current.results["release_run"] == "released", f"training_dag did not finish: {failed} {current.results}")
-    require(
-        rig.tasks_started() == 5,
-        f"one task per job was expected: {rig.tasks_started()} tasks",
-    )
+    require(rig.tasks_started() == 6, f"one task per job was expected: {rig.tasks_started()} tasks")
     require(
         all((rig.end(run, job) or {}).get("outcome") == "succeeded" for run, job in ((drift, "drift"), (training, "train"))),
         "drift or training has no success record",
@@ -1512,7 +1517,14 @@ def dags_run_with_their_form_defaults() -> None:
             )
 
 
-COLLAPSED_FILES = ("silver_transform_dag.py", "gold_transform_dag.py", "features_base_dag.py", "model_promotion_dag.py", "serving_deploy_dag.py")
+COLLAPSED_FILES = (
+    "silver_transform_dag.py",
+    "gold_transform_dag.py",
+    "features_base_dag.py",
+    *(f"features_m{index}_dag.py" for index in range(1, 7)),
+    "model_promotion_dag.py",
+    "serving_deploy_dag.py",
+)
 COLLAPSED_TASKS = ["preflight", "job", "evidence", "gate"]
 PROMOTE_PARAMS = {"run_id": PROMOTE_RUN, "mode": "promote", "hai_type": "HAI_1", "model_version": "3", "mlflow": "aws"}
 
@@ -1710,6 +1722,26 @@ def model_run(base: str, model: str) -> str:
     return str(importlib.import_module("orchestration.training_contract").model_features_run_id(base, model))
 
 
+def drift_run_of(features_run: str) -> str:
+    """The drift run that checks one model run's set: derived from that run."""
+    return str(importlib.import_module("orchestration.training_contract").model_drift_run_id(features_run))
+
+
+def training_run_of(drift_run: str, model: str) -> str:
+    """The training run that a drift run starts for its model."""
+    return str(importlib.import_module("orchestration.training_contract").model_training_run_id(drift_run, model))
+
+
+def model_chain_passed(rig: Rig, model: str) -> tuple[str, str]:
+    """Run the chain through the base DAG and one model's features DAG over the rig, and return the base run and the model run that passed."""
+    _, base = base_run_passed(rig)
+    run = model_run(base, model)
+    with world(rig, f"features_{model}_dag", {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+        current.run_dag(f"features_{model}_dag.py")
+        require(current.results.get("gate") == "accepted", f"features_{model}_dag did not pass: {current.results}")
+    return base, run
+
+
 def model_dags_are_one_chain_each() -> None:
     """Each model DAG is the one-job features chain for its set: one ECS task, every features container told FEATURE_SET=<model> and the base run as the
     producer run, the graph rules accepted, and no asset carried (the base DAG's gate carries the features asset)."""
@@ -1722,7 +1754,7 @@ def model_dags_are_one_chain_each() -> None:
         with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
             states = current.run_dag(f"{dag_id}.py")
             nodes = {node.task_id: node for node in current.built}
-            require(list(nodes) == COLLAPSED_TASKS, f"{dag_id} is not preflight, job, evidence and gate: {list(nodes)}")
+            require(list(nodes) == [*COLLAPSED_TASKS, "trigger_drift"], f"{dag_id} is not preflight, job, evidence, gate and the drift trigger: {list(nodes)}")
             violations = graph.validate_transform_graph(task_graph(current), dag_id)
             require(not violations, f"{dag_id} breaks the graph rules: {violations}")
             require(not any(node.settings.get("outlets") for node in nodes.values()), f"{dag_id} carries an asset: the base DAG's gate carries it")
@@ -1781,6 +1813,10 @@ def model_run_code_is_bound() -> None:
     for model in MODEL_DAGS.values():
         key = RUN_KEY.format(run=model_run(base, model), name="code_run.json")
         require(key in rig.stage.objects and json.loads(rig.stage.objects[key]) == {"code_run": BRONZE_RUN}, f"the {model} run is not bound to the bronze code")
+        drift = drift_run_of(model_run(base, model))
+        for name, run in (("drift", drift), ("training", training_run_of(drift, model))):
+            bound = rig.stage.objects.get(RUN_KEY.format(run=run, name="code_run.json"))
+            require(bound is not None and json.loads(bound) == {"code_run": BRONZE_RUN}, f"the {model} {name} run is not bound to the bronze code")
     before = rig.tasks_started()
     with world(rig, "features_m2_dag", {"run_id": model_run(base, "m2"), "mode": "real", BASE_RUN_PARAMETER: base}) as current:
         current.run_dag("features_m2_dag.py")
@@ -1846,12 +1882,18 @@ def one_model_failure_stops_only_its_dag() -> None:
     rig = Rig()
     _, base = base_run_passed(rig)
     outcomes: dict[str, str] = {}
+    drift_checks: dict[str, str] = {}
     for dag_id, model in MODEL_DAGS.items():
         run = model_run(base, model)
         rig.ecs.plan = {"validate": 3} if model == "m3" else {}
         with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
-            outcomes[model] = current.run_dag(f"{dag_id}.py")["gate"]
+            states = current.run_dag(f"{dag_id}.py")
+            outcomes[model], drift_checks[model] = states["gate"], states["trigger_drift"]
     require(outcomes == {model: ("failed" if model == "m3" else "success") for model in MODEL_DAGS.values()}, f"the gates ended {outcomes}")
+    require(
+        drift_checks == {model: ("upstream_failed" if model == "m3" else "success") for model in MODEL_DAGS.values()},
+        f"a failed model run still started its drift check, or a passed one did not: {drift_checks}",
+    )
     ends = {model: (rig.end(model_run(base, model), "features") or {}).get("outcome") for model in MODEL_DAGS.values()}
     require(ends == {model: ("failed" if model == "m3" else "succeeded") for model in MODEL_DAGS.values()}, f"the launch records are {ends}")
     require((rig.end(base, "features") or {}).get("outcome") == "succeeded", "a failed model run changed the base run's record")
@@ -1869,7 +1911,10 @@ def model_dags_share_the_host_pool() -> None:
         ):
             current.run_dag(f"{dag_id}.py")
             pools = {node.task_id: node.settings.get("pool") for node in current.built}
-            require(pools == {"preflight": None, "job": "host_jobs", "evidence": None, "gate": None}, f"{dag_id}'s tasks take the pools {pools}")
+            require(
+                pools == {"preflight": None, "job": "host_jobs", "evidence": None, "gate": None, "trigger_drift": None},
+                f"{dag_id}'s tasks take the pools {pools}",
+            )
 
 
 def graph_rules_cover_the_feature_dags() -> None:
@@ -1902,6 +1947,145 @@ def graph_rules_cover_the_feature_dags() -> None:
     with world(rig, "features_base_dag", {"run_id": base, GOLD_RUN_PARAMETER: gold}) as current:
         current.run_dag("features_base_dag.py")
         require(graph.validate_transform_graph(task_graph(current), "features_base_dag") == [], "the shipped base DAG breaks the graph rules")
+
+
+def model_dags_trigger_their_drift_check() -> None:
+    """Each model DAG starts its own model's drift check once its set is published and its acceptance checks passed: one trigger behind the gate only, no
+    wait, a run derived from the model run (a retry names the run that exists), the model run as the features run and the aws MLflow lane."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    named: set[str] = set()
+    for dag_id, model in MODEL_DAGS.items():
+        run = model_run(base, model)
+        with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+            states = current.run_dag(f"{dag_id}.py")
+            node = {item.task_id: item for item in current.built}["trigger_drift"]
+            settings = node.settings
+            require([before.task_id for before in node.upstream] == ["gate"], f"{dag_id}'s drift trigger does not follow only the gate")
+            require(settings["trigger_dag_id"] == "drift_monitoring_dag", f"{dag_id} starts {settings['trigger_dag_id']}, not the drift DAG")
+            require(settings["wait_for_completion"] is False, f"{dag_id} waits for its drift check")
+            require(settings["skip_when_already_exists"] is True and settings["reset_dag_run"] is False, f"{dag_id} may restart a drift run")
+            sent = rendered(settings, current.dag_settings, run)
+            expected = {"run_id": drift_run_of(run), "mode": "real", "mlflow": "aws", "model": model, "features_run": run}
+            require(sent["conf"] == expected, f"{dag_id} sends {sent['conf']}, expected {expected}")
+            require(sent["trigger_run_id"].endswith(drift_run_of(run)), f"{dag_id}'s drift trigger run id is {sent['trigger_run_id']}")
+            require(states["trigger_drift"] == "success", f"{dag_id}'s drift trigger did not run after a passed set: {states}")
+            named.add(sent["trigger_run_id"])
+    require(len(named) == len(MODEL_DAGS), "two model DAGs name the same drift trigger run")
+
+
+def drift_dag_takes_its_model_and_features_run() -> None:
+    """The drift DAG's form requires the model it checks and the model run whose set it reads (a run ID, never latest): the drift job is a check of one
+    published set, not of whatever is newest."""
+    model = form_parameter("drift_monitoring_dag.py", "model")
+    require(model is not None and not model[0], f"the drift form gives the model a default: {model}")
+    declared = form_parameter("drift_monitoring_dag.py", "features_run")
+    require(declared is not None, "the drift DAG declares no features_run parameter")
+    arguments, settings = declared or ([], {})
+    pattern = str(settings.get("pattern", ""))
+    require(not arguments and settings.get("type") == "string", f"the features run must be required, with no default: {declared}")
+    require(
+        bool(pattern)
+        and re.fullmatch(pattern.strip("^$"), FEATURES_RUN) is not None
+        and not any(re.search(pattern, bad) for bad in ("latest", "", "x" + FEATURES_RUN)),
+        f"the form's pattern does not accept exactly a run ID: {pattern}",
+    )
+
+
+def drift_job_takes_its_model_and_features_run() -> None:
+    """The drift job checks one model's published set: the baseline container is told the model (FEATURE_SET) and the current-window container the model
+    run (INPUT_RUN_ID). The run's code was bound by the chain gate, so the drift launch binds nothing."""
+    rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
+    puts, started = len(rig.stage.puts), rig.tasks_started()
+    params = {"run_id": drift_run_of(run), "mode": "real", "mlflow": "aws", "model": "m2", "features_run": run}
+    with world(rig, "drift_monitoring_dag", params) as current:
+        require(current.step("drift_run") == "succeeded", "the drift job did not pass")
+    values = rig.environment(started)
+    require(values["baseline"]["FEATURE_SET"] == "m2", f"the baseline container was not told the model: {values['baseline']}")
+    require(values["current"]["INPUT_RUN_ID"] == run, f"the current-window container was not told the model run: {values['current']}")
+    require(values["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "the drift run fetches its own code, not its bronze run's")
+    require(len(rig.stage.puts) == puts, "the drift launch bound a run: the chain gate binds every run of the chain")
+    require(rig.tasks_started() == started + 1, "the drift check did not start exactly one task")
+
+
+def drift_job_needs_its_model_run_to_pass() -> None:
+    """A drift run starts only for a model run whose features job passed, with a drift run derived from that model run and a model of the contract. Each
+    refusal comes before any ECS call."""
+    rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
+    rig.stage_runs(OTHER_RUN, drift_run_of(OTHER_RUN))
+    started = rig.tasks_started()
+    params = {"mode": "real", "mlflow": "aws", "model": "m2"}
+    with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(OTHER_RUN), "features_run": OTHER_RUN}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require("needs the features job" in str(error), f"a model run that never passed was not refused by name: {error}")
+    with world(rig, "drift_monitoring_dag", {**params, "run_id": OTHER_RUN, "features_run": run}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require("derive" in str(error), f"a drift run that does not derive from its model run was not refused by name: {error}")
+    with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(run), "features_run": run, "model": "m7"}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require("m7" in str(error), f"a model outside the contract was not refused by name: {error}")
+    require(rig.tasks_started() == started, "a refused drift run started a task")
+
+
+def training_run_fits_its_model_only() -> None:
+    """A drift-started training run names one model and that model's own run: m5 trains with m5's set and m6 with m6's, each bound to the bronze code,
+    so the run fits only that model and its own tests (the research tests of m5 and m6)."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    for model in ("m5", "m6"):
+        features = model_run(base, model)
+        drift = drift_run_of(features)
+        started = rig.tasks_started()
+        params = {**TRAIN_PARAMS, "run_id": training_run_of(drift, model), "features_run": features, "trigger": f"drift:{drift}", "model": model}
+        with world(rig, "training_dag", params) as current:
+            require(current.step("guard") == "succeeded", f"the {model} training run did not launch")
+        values = rig.environment(started)
+        sent = json.loads(values["prepare"]["TRAINING_PARAMETERS"])
+        require(sent["model"] == model and sent["features_run"] == features and sent["trigger"] == f"drift:{drift}", f"the {model} run sends {sent}")
+        require(values["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, f"the {model} training run fetches its own code, not its bronze run's")
+
+
+def bronze_chain_has_no_model_less_drift_layer() -> None:
+    """The bronze chain runs silver, gold and the features base only: each model's own DAG starts its drift check. The chain gate binds no drift layer run
+    and no training run of one, and the chain DAG's text names no drift DAG."""
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    contract = importlib.import_module("orchestration.training_contract")
+    require(preflight.CHAIN_LAYERS == ("silver", "gold", "features"), f"the chain layers are {preflight.CHAIN_LAYERS}")
+    text = (ROOT / "dags/bronze_chain_dag.py").read_text()
+    require("drift" not in text, "the bronze chain DAG still names a drift layer")
+    rig = Rig()
+    with world(rig, "bronze_chain_dag", {"run_id": BRONZE_RUN, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate failed")
+    features = preflight.derived_run_id(preflight.derived_run_id(preflight.derived_run_id(BRONZE_RUN, "silver"), "gold"), "features")
+    old_drift = preflight.derived_run_id(features, "drift")
+    for run in (old_drift, contract.training_run_id(old_drift)):
+        require(RUN_KEY.format(run=run, name="code_run.json") not in rig.stage.objects, "the chain gate still binds the model-less drift layer's runs")
+
+
+def graph_rules_cover_the_model_drift_trigger() -> None:
+    """A model DAG is the one-job chain with one drift trigger behind the gate: the graph rules refuse a model DAG without it, with a second trigger, with a
+    trigger behind the job instead of the gate, or with a task after it."""
+    graph = importlib.import_module("orchestration.graph")
+    for dag_id in MODEL_DAGS:
+        reference = graph.reference_graph(dag_id)
+        require("trigger_drift" in reference and reference["trigger_drift"].upstream == frozenset({"gate"}), f"{dag_id}'s reference has no drift trigger")
+
+        def rules(broken: dict[str, Any], dag_id: str = dag_id) -> set[str]:
+            return {violation.rule for violation in graph.validate_transform_graph(broken, dag_id)}
+
+        require(
+            "missing_task" in rules({name: node for name, node in reference.items() if name != "trigger_drift"}), f"{dag_id} without its trigger was accepted"
+        )
+        require("unexpected_task" in rules({**reference, "trigger_extra": graph.TaskNode(frozenset({"gate"}))}), f"{dag_id} with a second trigger was accepted")
+        require("upstream" in rules({**reference, "trigger_drift": graph.TaskNode(frozenset({"job"}))}), f"{dag_id} with a trigger behind the job was accepted")
+        require("leaf" in rules({**reference, "tail": graph.TaskNode(frozenset({"trigger_drift"}))}), f"{dag_id} with a task after the trigger was accepted")
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    with world(rig, "features_m1_dag", {"run_id": model_run(base, "m1"), "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+        current.run_dag("features_m1_dag.py")
+        require(graph.validate_transform_graph(task_graph(current), "features_m1_dag") == [], "the shipped m1 DAG breaks the graph rules")
 
 
 def promotion_and_serving_dags_run_end_to_end() -> None:
@@ -2445,6 +2629,13 @@ CASES: dict[str, Callable[[], None]] = {
     "one_model_failure_stops_only_its_dag": one_model_failure_stops_only_its_dag,
     "model_dags_share_the_host_pool": model_dags_share_the_host_pool,
     "graph_rules_cover_the_feature_dags": graph_rules_cover_the_feature_dags,
+    "model_dags_trigger_their_drift_check": model_dags_trigger_their_drift_check,
+    "drift_dag_takes_its_model_and_features_run": drift_dag_takes_its_model_and_features_run,
+    "drift_job_takes_its_model_and_features_run": drift_job_takes_its_model_and_features_run,
+    "drift_job_needs_its_model_run_to_pass": drift_job_needs_its_model_run_to_pass,
+    "training_run_fits_its_model_only": training_run_fits_its_model_only,
+    "bronze_chain_has_no_model_less_drift_layer": bronze_chain_has_no_model_less_drift_layer,
+    "graph_rules_cover_the_model_drift_trigger": graph_rules_cover_the_model_drift_trigger,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,
