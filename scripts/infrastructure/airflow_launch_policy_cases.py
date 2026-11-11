@@ -86,6 +86,11 @@ BRONZE_RECORD = f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/check.json"
 CODE_RUN = f"{STAGE}/code_run.json"
 CODE_RUN_PREFIX = "lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/code_run.json"
 DRIFT_RECORD = f"arn:aws:s3:::{BUCKET}/drift/20261030T100000Z-abcdef01/HAI_1.json"
+LAYER_RUNS = f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs"
+LAYER_RUN_RECORD = f"{LAYER_RUNS}/silver/20261030T100000Z-abcdef01/layer_run.json"
+AUTOSCALING_GROUP = (
+    f"arn:aws:autoscaling:{REGION}:{ACCOUNT}:autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{PROJECT}_host_{ENVIRONMENT}"
+)
 
 
 def definition(family: str, revision: str = "7") -> str:
@@ -243,6 +248,37 @@ def job_cases() -> list[Case]:
     add("write a digest", "s3:PutObject", f"{STAGE}/code.sha256", False)
     add("list the bucket", "s3:ListBucket", f"arn:aws:s3:::{BUCKET}", False)
     add("read a drift record while drift is not named", "s3:GetObject", DRIFT_RECORD, False)
+    # The automatic acceptance report (owner A, Nov 11 2026): reads the layer run records, lists the lakehouse versions and describes the host group.
+    bucket = f"arn:aws:s3:::{BUCKET}"
+    for name in ("layer_run.json", "pins.json", "silver_snapshot.json", "publish/commit.json", "publish/export/manifest.json"):
+        add(f"read the layer run record {name}", "s3:GetObject", f"{LAYER_RUNS}/silver/20261030T100000Z-abcdef01/{name}", True)
+    add("read the layer run record of a gold run", "s3:GetObject", f"{LAYER_RUNS}/gold/20261031T100000Z-01234567/publish/commit.json", True)
+    add("write a layer run record", "s3:PutObject", LAYER_RUN_RECORD, False, ONCE)
+    add("delete a layer run record", "s3:DeleteObject", LAYER_RUN_RECORD, False)
+    add("read an earlier version of a layer run record", "s3:GetObjectVersion", LAYER_RUN_RECORD, False)
+    add("read a sibling of the layer run prefix", "s3:GetObject", f"{bucket}/lakehouse/layer_runs_extra/silver/run/layer_run.json", False)
+    add("read the layer run prefix as another folder name", "s3:GetObject", f"{bucket}/lakehouse/layer_run/silver/run/layer_run.json", False)
+    add("read a layer run record in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/layer_runs/silver/run/layer_run.json", False)
+    add("list the lakehouse versions", "s3:ListBucketVersions", bucket, True, {"s3:prefix": ("lakehouse/",)})
+    add("list the versions below the lakehouse prefix", "s3:ListBucketVersions", bucket, True, {"s3:prefix": ("lakehouse/silver/",)})
+    add("list the versions with no prefix", "s3:ListBucketVersions", bucket, False)
+    add("list the versions with an empty prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": ("",)})
+    add("list the versions of the whole bucket by a short prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": ("lakehouse",)})
+    add("list the versions under the metadata prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": ("metadata/",)})
+    add("list the versions under a drift prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": ("drift/",)})
+    add("list the versions of another bucket", "s3:ListBucketVersions", "arn:aws:s3:::another-bucket", False, {"s3:prefix": ("lakehouse/",)})
+    add("list the versions as an object", "s3:ListBucketVersions", f"{bucket}/lakehouse/", False, {"s3:prefix": ("lakehouse/",)})
+    add("list the lakehouse objects without versions", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/",)})
+    add("list the multipart uploads of the lakehouse", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": ("lakehouse/",)})
+    groups_context = {"aws:RequestedRegion": (REGION,)}
+    add("describe the auto scaling groups", "autoscaling:DescribeAutoScalingGroups", "*", True, groups_context)
+    add("describe the auto scaling groups in another region", "autoscaling:DescribeAutoScalingGroups", "*", False, {"aws:RequestedRegion": ("us-east-1",)})
+    add("describe the auto scaling groups with no region", "autoscaling:DescribeAutoScalingGroups", "*", False)
+    add("describe the auto scaling instances", "autoscaling:DescribeAutoScalingInstances", "*", False, groups_context)
+    add("describe the scaling activities", "autoscaling:DescribeScalingActivities", "*", False, groups_context)
+    add("set the desired capacity", "autoscaling:SetDesiredCapacity", AUTOSCALING_GROUP, False, groups_context)
+    add("update the auto scaling group", "autoscaling:UpdateAutoScalingGroup", AUTOSCALING_GROUP, False, groups_context)
+    add("terminate an instance of the group", "autoscaling:TerminateInstanceInAutoScalingGroup", AUTOSCALING_GROUP, False, groups_context)
     stream = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
     add("read a job log stream", "logs:GetLogEvents", stream, True)
     add("read a stream of another group", "logs:GetLogEvents", stream.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), False)
@@ -358,7 +394,13 @@ def record_cases() -> list[tuple[Any, ...]]:
         ("list a sibling of the record prefix", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/launch_records_extra/",)}),
         ("list the record prefix of another bucket", "s3:ListBucket", "arn:aws:s3:::another-bucket", False, {"s3:prefix": (RECORD_PREFIX,)}),
         ("list the record prefix as an object", "s3:ListBucket", f"{bucket}/{RECORD_PREFIX}", False, {"s3:prefix": (RECORD_PREFIX,)}),
-        ("list the versions under the record prefix", "s3:ListBucketVersions", bucket, False, {"s3:prefix": (RECORD_PREFIX,)}),
+        (
+            "list the versions under the record prefix (inside the lakehouse versions grant)",
+            "s3:ListBucketVersions",
+            bucket,
+            True,
+            {"s3:prefix": (RECORD_PREFIX,)},
+        ),
         ("list the multipart uploads under the record prefix", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": (RECORD_PREFIX,)}),
     ]
 
@@ -390,7 +432,7 @@ def bronze_record_cases() -> list[tuple[Any, ...]]:
         ("read the run record of a bronze run", "s3:GetObject", BRONZE_RECORD, True),
         ("read another file of a bronze run", "s3:GetObject", f"{BRONZE_RUNS}/20261030T090000Z-b0b0b0b0/report.json", False),
         ("read a check record outside a run folder", "s3:GetObject", f"{BRONZE_RUNS}/check.json", False),
-        ("read a check record under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs/silver/run/check.json", False),
+        ("read a check record under another prefix", "s3:GetObject", f"arn:aws:s3:::{BUCKET}/lakehouse/other_runs/silver/run/check.json", False),
         ("read a bronze run record in another bucket", "s3:GetObject", "arn:aws:s3:::another-bucket/lakehouse/bronze_runs/run/check.json", False),
         ("write the run record of a bronze run", "s3:PutObject", BRONZE_RECORD, False, ONCE),
         ("delete the run record of a bronze run", "s3:DeleteObject", BRONZE_RECORD, False),
@@ -415,7 +457,13 @@ def code_run_cases() -> list[tuple[Any, ...]]:
         ("list the code run binding of a run", "s3:ListBucket", bucket, True, {"s3:prefix": (CODE_RUN_PREFIX,)}),
         ("list the inputs of a run", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/20261030T100000Z-abcdef01/inputs/",)}),
         ("list the staged runs", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/run_stage/",)}),
-        ("list the versions of the code run binding", "s3:ListBucketVersions", bucket, False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
+        (
+            "list the versions of the code run binding (inside the lakehouse versions grant)",
+            "s3:ListBucketVersions",
+            bucket,
+            True,
+            {"s3:prefix": (CODE_RUN_PREFIX,)},
+        ),
         ("list the multipart uploads of the code run binding", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
         ("list the code run binding in another bucket", "s3:ListBucket", "arn:aws:s3:::another-bucket", False, {"s3:prefix": (CODE_RUN_PREFIX,)}),
         ("create the code run binding with another precondition value", "s3:PutObject", CODE_RUN, False, {"s3:if-none-match": ("etag-of-the-old-object",)}),
@@ -460,6 +508,8 @@ GET = frozenset({"s3:GetObject"})
 LISTS = frozenset({"ecs:ListTasks"})
 CLUSTER_LISTS = frozenset({"ecs:ListContainerInstances"})  # the cluster ARN is its resource and AWS supplies no ecs:cluster key for it
 DESCRIBE_DEFINITIONS = frozenset({"ecs:DescribeTaskDefinition"})  # no resource-level permission: the request names "*"
+DESCRIBE_GROUPS = frozenset({"autoscaling:DescribeAutoScalingGroups"})  # no resource-level permission: the request names "*"
+VERSIONS = frozenset({"s3:ListBucketVersions"})
 # Every condition of every grant met at once, so that only the action and the resource decide.
 PERMISSIVE: Context = {
     **run_context("train"),
@@ -484,7 +534,7 @@ RESOURCES = (
     Resource("host definition of an unnamed family", definition("features"), NONE, NONE),
     Resource("task of the cluster", task(), frozenset({"ecs:TagResource", "ecs:StopTask", "ecs:DescribeTasks"}), NONE),
     Resource("task of another cluster", task("another_cluster"), NONE, NONE),
-    Resource("cluster-wide list", "*", LISTS | DESCRIBE_DEFINITIONS, NONE),
+    Resource("cluster-wide list", "*", LISTS | DESCRIBE_DEFINITIONS | DESCRIBE_GROUPS, NONE),
     Resource("the project cluster", CLUSTER_ARN, CLUSTER_LISTS, CLUSTER_LISTS),
     Resource("another cluster", OTHER_CLUSTER_ARN, NONE, NONE),
     Resource("container instance of the cluster", container_instance(), frozenset({"ecs:DescribeContainerInstances"}), NONE),
@@ -508,7 +558,9 @@ RESOURCES = (
     Resource("record named like the decision", f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json.bak", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("decision file directly under the prefix", f"{RECORDS}decision.json", frozenset({"s3:GetObject", "s3:PutObject"}), GET),
     Resource("lakehouse table file", LAKEHOUSE_FILE, NONE, NONE),
-    Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}), NONE),
+    Resource("the data bucket", f"arn:aws:s3:::{BUCKET}", frozenset({"s3:ListBucket"}) | VERSIONS, NONE),
+    Resource("layer run record", LAYER_RUN_RECORD, GET, GET),
+    Resource("auto scaling group of the host", AUTOSCALING_GROUP, NONE, NONE),
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
     Resource("signed publish record", SIGNED_ARN, NONE, NONE),
@@ -551,6 +603,10 @@ ACTIONS = (
     "iam:PutRolePolicy",
     "iam:UpdateAssumeRolePolicy",
     "sts:AssumeRole",
+    "autoscaling:DescribeAutoScalingGroups",
+    "autoscaling:DescribeAutoScalingInstances",
+    "autoscaling:SetDesiredCapacity",
+    "autoscaling:UpdateAutoScalingGroup",
     "s3:GetObject",
     "s3:GetObjectVersion",
     "s3:PutObject",
@@ -595,7 +651,7 @@ def matrix_cases() -> list[Case]:
     rows: list[Case] = []
     for item in RESOURCES:
         for action in ACTIONS:
-            if action in LISTS | DESCRIBE_DEFINITIONS and item.resource != "*":
+            if action in LISTS | DESCRIBE_DEFINITIONS | DESCRIBE_GROUPS and item.resource != "*":
                 continue
             rows.append((f"{item.name}: {action} with every condition met", action, item.resource, action in item.allowed, PERMISSIVE))
             rows.append((f"{item.name}: {action} with no condition", action, item.resource, action in item.bare, {}))
@@ -649,13 +705,16 @@ WIDENING_ACTIONS = {
     "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
-    "ListLaunchRecords": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
+    "ListLaunchRecords": ("s3:ListBucketMultipartUploads",),
     "ReadStagedRequests": ("s3:PutObject", "s3:DeleteObject"),
     "ReadBronzeRunRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
     "ReadCodeRunBindings": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
     "BindCodeRunsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
-    "ListCodeRunBindings": ("s3:ListBucketVersions", "s3:ListBucketMultipartUploads"),
+    "ListCodeRunBindings": ("s3:ListBucketMultipartUploads",),
     "ReadDriftRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
+    "ReadLayerRunRecords": ("s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"),
+    "ListLakehouseVersions": ("s3:ListBucket", "s3:ListBucketMultipartUploads"),
+    "DescribeHostGroup": ("autoscaling:SetDesiredCapacity", "autoscaling:UpdateAutoScalingGroup"),
 }
 
 
@@ -718,6 +777,12 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "ReadLaunchHoldAndApplyLock_a_parameter_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}/healthcare_hai_prediction/*")),
         ("jobs", "ReadLaunchHoldAndApplyLock_a_name_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}{HOLD}*")),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
+        ("jobs", "ReadLayerRunRecords_every_lakehouse_object", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/lakehouse/*")),
+        ("jobs", "ReadLayerRunRecords_the_whole_bucket", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/*")),
+        ("jobs", "ReadLayerRunRecords_a_sibling_prefix", replaced(jobs, "ReadLayerRunRecords", Resource=f"{bucket}/lakehouse/layer_runs*")),
+        ("jobs", "ListLakehouseVersions_the_whole_bucket", replaced(jobs, "ListLakehouseVersions", Condition={"StringLike": {"s3:prefix": ["*"]}})),
+        ("jobs", "ListLakehouseVersions_a_short_prefix", replaced(jobs, "ListLakehouseVersions", Condition={"StringLike": {"s3:prefix": ["lakehouse*"]}})),
+        ("jobs", "ListLakehouseVersions_any_region", replaced(jobs, "DescribeHostGroup", Condition={"StringLike": {"aws:RequestedRegion": ["*"]}})),
         ("jobs", "ReadStagedRunRecords_delete_the_digest", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObject"])),
         (
             "jobs",
@@ -916,6 +981,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
     staged = (f"{stage}/code.sha256", *(f"{stage}/{REQUEST_FILES[family]}" for family in named if family in REQUEST_FILES))
     staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/bronze_runs/*/check.json",) if "bronze" in named else ()
     staged += (f"{stage}/code_run.json",)
+    staged += (f"arn:aws:s3:::{BUCKET}/lakehouse/layer_runs/*",)
     staged += (f"arn:aws:s3:::{BUCKET}/drift/*",) if "drift" in named else ()
     tagged_tasks: Conditions = {"StringEquals": {"aws:ResourceTag/HaiJob": named}}
     return [
@@ -942,6 +1008,8 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": [f"{RECORD_PREFIX}*"]}}),
         Grant("s3:PutObject", (f"{stage}/code_run.json",), {"StringEquals": {"s3:if-none-match": ["*"]}}),
         Grant("s3:ListBucket", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/run_stage/*/inputs/code_run.json"]}}),
+        Grant("s3:ListBucketVersions", (f"arn:aws:s3:::{BUCKET}",), {"StringLike": {"s3:prefix": ["lakehouse/*"]}}),
+        Grant("autoscaling:DescribeAutoScalingGroups", ("*",), {"StringEquals": {"aws:RequestedRegion": [REGION]}}),
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
         Grant(
             "ssm:GetParameter",

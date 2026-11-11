@@ -276,9 +276,9 @@ run "no_statement_holds_a_wildcard_action_or_resource_except_the_task_list_and_t
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
       !contains(flatten([statement.Action]), "*") && !anytrue([for action in flatten([statement.Action]) : endswith(action, ":*")]) &&
-      (contains(["ListClusterTasks", "DescribeHostJobRevisions"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
+      (contains(["ListClusterTasks", "DescribeHostJobRevisions", "DescribeHostGroup"], statement.Sid) || !contains(flatten([statement.Resource]), "*"))
     ])
-    error_message = "Only the task list and the revision read take a resource wildcard. The container instance list names the cluster ARN. No action is a wildcard."
+    error_message = "Only the task list, the revision read and the host group read take a resource wildcard. The container instance list names the cluster ARN. No action is a wildcard."
   }
 
   # ecs:DescribeTaskDefinition takes no resource-level permission, so the preflight's read of the latest host revision (host launch capacity binding,
@@ -307,9 +307,9 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadLayerRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
     ])
-    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the three reads of fixed objects and the container instance list, which names the cluster ARN, go without one."
+    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the four reads of run records, logs and parameters and the container instance list, which names the cluster ARN, go without one."
   }
 
   assert {
@@ -319,6 +319,48 @@ run "every_statement_but_the_reads_has_a_condition" {
       [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition.StringEquals["iam:PassedToService"] if statement.Sid == "PassNamedJobRoles"][0] == "ecs-tasks.amazonaws.com"
     )
     error_message = "The run grant is bound to the cluster, the Project tag and exactly the two tag keys, and the pass grant to ECS tasks."
+  }
+}
+
+run "the_acceptance_report_reads_run_records_lists_lakehouse_versions_and_describes_the_host_group" {
+  command = plan
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadLayerRunRecords"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadLayerRunRecords"][0] == "s3:GetObject" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadLayerRunRecords"][0] == "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/*" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadLayerRunRecords"][0] == "Allow"
+    )
+    error_message = "The run record read is s3:GetObject alone on the objects below lakehouse/layer_runs/."
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ListLakehouseVersions"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ListLakehouseVersions"][0] == "s3:ListBucketVersions" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ListLakehouseVersions"][0] == "arn:aws:s3:::example-project-ci-bucket" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition if statement.Sid == "ListLakehouseVersions"][0] == { StringLike = { "s3:prefix" = ["lakehouse/*"] } }
+    )
+    error_message = "The version listing is s3:ListBucketVersions alone on the data bucket, limited by s3:prefix to lakehouse/."
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "DescribeHostGroup"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "DescribeHostGroup"][0] == "autoscaling:DescribeAutoScalingGroups" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "DescribeHostGroup"][0] == "*" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Condition if statement.Sid == "DescribeHostGroup"][0] == { StringEquals = { "aws:RequestedRegion" = "eu-west-1" } }
+    )
+    error_message = "The host group read is autoscaling:DescribeAutoScalingGroups alone, on the only resource the action takes, in the stack's region."
+  }
+
+  assert {
+    condition = !anytrue([
+      for policy in [aws_iam_role_policy.airflow_launch_records[0].policy, aws_iam_role_policy.airflow_launch_code_runs[0].policy] :
+      anytrue([for statement in jsondecode(policy).Statement : anytrue([for action in flatten([statement.Action]) : startswith(action, "autoscaling:") || action == "s3:ListBucketVersions"])])
+    ])
+    error_message = "The three acceptance report reads sit in the one launch jobs policy and in no other policy of the role."
   }
 }
 
