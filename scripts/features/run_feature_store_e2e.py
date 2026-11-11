@@ -2972,6 +2972,43 @@ def masks_local(report: Report) -> None:
     from scripts.features.mask_cases import run
 
     run(report, ROOT)
+    receipt_local(report)
+
+
+def receipt_local(report: Report) -> None:
+    """The receipt check requires dbt success only for the models dbt builds: the bridge filters come from the fixed-SQL worker (``features_build``
+    excludes their paths from ``dbt build``) and are checked as published tables, so a dbt-only receipt passes and a missing dbt model still fails."""
+    import duckdb
+
+    from scripts.features import feature_validation
+    from scripts.features.features_build import RECEIPT_SQL
+
+    contract = json.loads((ROOT / "data_contracts/lakehouse/features_publish.json").read_text())
+    models = sorted(path.stem for path in (ROOT / columns.MODELS).rglob("*.sql") if not columns.FILTER_NAME.fullmatch(path.stem))
+
+    def level(rows: list[str]) -> str:
+        connection = duckdb.connect(":memory:")
+        try:
+            connection.execute(RECEIPT_SQL)
+            connection.executemany("insert into feature_build_receipt values (?, ?, ?)", [(f"model.hai.{name}", "model", "success") for name in rows])
+            checker = feature_validation.Checker(connection, {}, contract, "a" * 64)
+            checker.receipt()
+            return checker.record[-1]["level"]
+        finally:
+            connection.close()
+
+    bridges = [name for name in contract["publish"]["tables"] if columns.FILTER_NAME.fullmatch(name)]
+    dbt_only = level(models)
+    without_matrix = level([name for name in models if name != "feature_matrix_operations"])
+    report.case(
+        "E01",
+        "H5",
+        "the receipt passes a dbt receipt without the worker-built bridge filters and refuses one missing a dbt-built model",
+        bool(bridges) and dbt_only == "pass" and without_matrix == "fail",
+        bridges=len(bridges),
+        dbt_only=dbt_only,
+        without_matrix=without_matrix,
+    )
 
 
 # ----------------------------------------------------------------------------------------------------

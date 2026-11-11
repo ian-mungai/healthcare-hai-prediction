@@ -39,6 +39,7 @@ from typing import Any
 
 from scripts.features import feature_schema
 from scripts.lakehouse import duckdb_bounds
+from scripts.lakehouse.feature_columns import FILTER_NAME
 
 REPO_ROOT = Path(__file__).resolve().parents[2]  # the code this module runs from: /workspace in the local container, <work>/code on the ECS task
 DEFAULT_SCHEMA = REPO_ROOT / "data_contracts/features/feature_schema.json"
@@ -206,14 +207,15 @@ class Checker:
         return [(str(name), str(kind)) for name, kind in rows]
 
     def receipt(self) -> None:
-        """Check 1: the build receipt table."""
+        """Check 1: the build receipt table. Every published model dbt builds needs a passing row; the bridge filters are built by the fixed-SQL worker
+        outside ``dbt build`` (features_build excludes their paths), so the table checks cover them instead."""
         if RECEIPT not in self.tables:
             self.expect("receipt", RECEIPT, False, reason="no receipt table")
             return
         rows = self.con.execute(RECEIPT_ROWS).fetchall()
         bad = [row for row in rows if row[1] not in ("success", "pass")]
         built = {str(row[2]).split(".")[-1] for row in rows if row[0] == "model"}
-        wanted = {name for name in self.contract["publish"]["tables"] if name != INPUTS}
+        wanted = {name for name in self.contract["publish"]["tables"] if name != INPUTS and not FILTER_NAME.fullmatch(name)}
         missing = sorted(wanted - built)
         self.expect("receipt", RECEIPT, bool(rows) and not bad and not missing, nodes=len(rows), nonpassing=len(bad), models_missing=len(missing))
 
