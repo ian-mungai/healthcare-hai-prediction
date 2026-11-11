@@ -164,6 +164,19 @@ def _encoded_form(text: str) -> str:
     return urllib.parse.quote(UNRESERVED.sub(one, text), safe="!$&'()*+,;=:@/?%~-._")
 
 
+def source_identity(url: str) -> str:
+    """The source of a redirect in one spelling, for the route tables: lowercase scheme and host, no trailing dot on the host and no default port. The path
+    and query stay as they are, so only the same resource matches a route. A port that cannot be read leaves the URL unmatched."""
+    parts = urllib.parse.urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    try:
+        port = parts.port
+    except ValueError:
+        return url
+    authority = (parts.hostname or "").rstrip(".") + ("" if port in (None, DEFAULT_PORTS.get(scheme)) else f":{port}")
+    return urllib.parse.urlunsplit((scheme, authority, parts.path, parts.query, ""))
+
+
 def canonical_url(url: str) -> str:
     """The one form every route comparison uses. A host reads these spellings as one address: percent-encoded unreserved characters, the case of the scheme and
     host, a default port, dot segments, a fragment and a host's trailing dot. A repeated or trailing slash is folded too, as a match can only add a denial."""
@@ -317,15 +330,13 @@ class ReviewedRedirects(urllib.request.HTTPRedirectHandler):
         if self.unsigned_destination is not None:
             raise CaptureError("Additional redirects after a reviewed cross-host redirect are not approved.")
         require_approved(newurl)
-        # A source with a reviewed signed route keeps that exact handling; only a source without one may take its host's unsigned route.
-        route = (
-            None
-            if (self.source_url or "") in SIGNED_REDIRECT_ROUTES
-            else UNSIGNED_REDIRECT_ROUTES.get(urllib.parse.urlsplit(self.source_url or req.full_url).hostname or "")
-        )
+        # A source with a reviewed signed route keeps that exact handling; only a source without one may take its host's unsigned route. Both lookups read
+        # the source in one spelling, so another case or the default port cannot turn the signed source into an unsigned one.
+        source = source_identity(self.source_url or req.full_url)
+        route = None if source in SIGNED_REDIRECT_ROUTES else UNSIGNED_REDIRECT_ROUTES.get(urllib.parse.urlsplit(source).hostname or "")
         if route is not None and urllib.parse.urlsplit(newurl).hostname == urllib.parse.urlsplit(route).hostname:
             return self.follow_unsigned_route(req, code, newurl, route)
-        target = SIGNED_REDIRECT_ROUTES.get(self.source_url or "")
+        target = SIGNED_REDIRECT_ROUTES.get(source_identity(self.source_url)) if self.source_url else None
         if target is not None:
             parsed = urllib.parse.urlsplit(newurl)
             unsigned = urllib.parse.urlunsplit(parsed._replace(query=""))

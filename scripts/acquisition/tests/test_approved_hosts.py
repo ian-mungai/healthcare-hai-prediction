@@ -272,3 +272,31 @@ def test_an_unsigned_chhs_source_refuses_a_signed_shaped_target(monkeypatch: pyt
     handler = chhs_handler(monkeypatch, tmp_path)
     with pytest.raises(transport.CaptureError, match="reviewed redirect route"):
         handler.redirect_request(ChhsRequest(), None, 302, "Found", {}, CHHS_TARGET + SIGNED_QUERY)
+
+
+SIGNED_ALIASES = {
+    "uppercase host": SIGNED_SOURCE.replace("https://data.chhs.ca.gov/", "https://DATA.CHHS.CA.GOV/"),
+    "explicit default port": SIGNED_SOURCE.replace("https://data.chhs.ca.gov/", "https://data.chhs.ca.gov:443/"),
+    "uppercase scheme": SIGNED_SOURCE.replace("https://", "HTTPS://"),
+}
+
+
+def alias_request(url: str) -> object:
+    class AliasRequest(SignedRequest):
+        full_url = url
+
+    return AliasRequest()
+
+
+@pytest.mark.parametrize("alias", list(SIGNED_ALIASES), ids=list(SIGNED_ALIASES))
+def test_an_alias_of_the_signed_source_keeps_the_signed_handling(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, alias: str) -> None:
+    """The same resource spelled with another host case, scheme case or the default port is the signed source: its unsigned-shaped redirects under the CHHS
+    prefix are refused, and its reviewed signed redirect is followed."""
+    use_hosts(monkeypatch, tmp_path, ["data.chhs.ca.gov", "s3.amazonaws.com"])
+    source = SIGNED_ALIASES[alias]
+    refusing = transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=source)
+    with pytest.raises(transport.CaptureError, match="Signed redirect differs"):
+        refusing.redirect_request(alias_request(source), None, 302, "Found", {}, CHHS_TARGET)
+    following = transport.ReviewedRedirects({"data.chhs.ca.gov"}, source_url=source)
+    target = transport.SIGNED_REDIRECT_ROUTES[SIGNED_SOURCE] + SIGNED_QUERY
+    check(following.redirect_request(alias_request(source), None, 302, "Found", {}, target).full_url == target, "the signed route is followed for its alias")
