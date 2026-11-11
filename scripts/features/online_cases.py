@@ -1287,6 +1287,134 @@ def case_e35(c: Checker, make: Callable[[], Any]) -> None:
     )
 
 
+class ReceiptFault(Exception):
+    """The injected storage failure of the release receipt write."""
+
+
+class FailingReceiptHolds:
+    """A folder of records whose first write of the release receipt fails after the online load finished, as a storage outage between the two would."""
+
+    def __init__(self, folder: Path) -> None:
+        feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+        self.inner, self.fail_next = feast_sets.FolderHoldStore(folder), True
+
+    def read(self, name: str, run: str) -> dict[str, Any] | None:
+        return self.inner.read(name, run)
+
+    def write_new(self, name: str, run: str, document: Mapping[str, Any]) -> bool:
+        if name == "online_release.json" and self.fail_next:
+            self.fail_next = False
+            raise ReceiptFault("synthetic receipt write failure")
+        return self.inner.write_new(name, run, document)
+
+
+def case_e36(c: Checker, make: Callable[[], Any]) -> None:
+    """A release whose receipt write failed after the load finished is recovered from the ready marker, not loaded again; an incomplete load is retried."""
+    feast_sets: Any = importlib.import_module("scripts.features.feast_sets")
+    online_release: Any = importlib.import_module("scripts.features.online_release")
+    schema, sha = reads.read_schema()
+    set_hash = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    run, base = "20261109T020000Z-0000a001", "20261109T010000Z-0000b001"
+    table = schema["model_sets"]["m1"]["table"]
+    layout = online.set_layout("m1")
+    rows = [{"spine_key": key, "event_timestamp": T0 + timedelta(days=index)} for index, key in enumerate(KEYS)]
+
+    def scenario(tamper: Callable[[Any], None] | None) -> tuple[Any, list[Any], Any, dict[str, Any], dict[str, Any], dict[str, Any]]:
+        """One failed release, an optional change of the online store, a retry and a repeat; returns the server, the loads, the holds and the three outcomes."""
+        server = make()
+        catalog = feast_cases.StubCatalog()
+        catalog.tables[table] = feast_cases.StubTable(table, 4001, {"spine_key": "string", "event_timestamp": "timestamptz"}, rows)
+        catalog.tables[reads.RUNS_TABLE] = feast_cases.StubTable(reads.RUNS_TABLE, 1, {}, [feast_cases.runs_row(run, T0, {table: 4001})])
+        loads: list[Any] = []
+
+        def hooks_for(cat: Any, publication: Any, entry: Any) -> Any:
+            loads.append(SetHooks(server, f"load-{len(loads) + 1}", layout))
+            return loads[-1]
+
+        loader = feast_sets.online_loader(
+            feast_cases.fixture_settings(Path("/nonexistent")),
+            {},
+            schema=(schema, sha),
+            session=lambda: contextlib.nullcontext(catalog),
+            control=server.client(online.CONTROL_DB),
+            features=server.client(layout.feature_db),
+            hooks_for=hooks_for,
+        )
+        holds = FailingReceiptHolds(Path(tempfile.mkdtemp(prefix="receipt_fault_")))
+        holds.write_new(
+            feast_sets.HOLD_NAME,
+            run,
+            {"schema": 1, "feature_set": "m1", "run_id": run, "base_run": base, "set_schema_sha256": set_hash, "production_set_schema_sha256": ["0" * 64]},
+        )
+
+        def release() -> dict[str, Any]:
+            return online_release.release_promoted(
+                "m1",
+                run,
+                mode="publish_fixture",
+                schema=(schema, sha),
+                holds=holds,
+                loader=loader,
+                newest_run=lambda name: run,
+                production=lambda: {"HAI_1": set_hash},
+            )
+
+        try:
+            release()
+            failed: dict[str, Any] = {}
+        except ReceiptFault:
+            failed = {"fault": True, "loads": len(loads)}
+        if tamper is not None:
+            tamper(server)
+        retried = release()
+        repeated = release()
+        return server, loads, holds, {**failed, "marker": server.read_hash(online.CONTROL_DB, layout.marker_key)}, retried, repeated
+
+    server, loads, holds, first, retried, repeated = scenario(None)
+    c.check(
+        "the first release loaded the set and failed at the receipt write",
+        first.get("fault") is True and first.get("loads") == 1 and first["marker"].get("state") == "ready",
+    )
+    c.check("the retry after the failed receipt write loads nothing again", sum(h.events.count("materialize") for h in loads) == 1 and len(loads) == 1)
+    c.check(
+        "the retry says released and names the load that the ready marker holds",
+        retried["outcome"] == "released" and first["marker"].get("state") == "ready" and retried["load_id"] == first["marker"]["load_id"],
+    )
+    receipt = holds.read("online_release.json", run) or {}
+    c.check("the retry persists the receipt with that load ID", receipt.get("load_id") == first["marker"]["load_id"] and receipt.get("run_id") == run)
+    c.check("a repeat after the receipt exists loads nothing and says already released", repeated["outcome"] == "already_released" and len(loads) == 1)
+    c.check(
+        "the marker stays ready with the first load's ID", server.read_hash(online.CONTROL_DB, layout.marker_key).get("load_id") == first["marker"]["load_id"]
+    )
+
+    def mark_loading(server: Any) -> None:
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"state": "loading"})
+
+    def other_run(server: Any) -> None:
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"feature_run_id": "20261109T030000Z-0000a001"})
+
+    def other_digest(server: Any) -> None:
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"snapshot_set_sha256": "f" * 64})
+
+    def other_schema(server: Any) -> None:
+        server.write_hash(online.CONTROL_DB, layout.marker_key, {"feature_schema_sha256": "f" * 64})
+
+    def restarted(server: Any) -> None:
+        server.restart()
+
+    for label, tamper in (
+        ("an incomplete load (marker loading)", mark_loading),
+        ("a marker of another run", other_run),
+        ("a marker of another publication digest", other_digest),
+        ("a marker of another schema", other_schema),
+        ("an online store restarted after the load", restarted),
+    ):
+        _, loads, _, _, retried, repeated = scenario(tamper)
+        c.check(f"{label}: the retry takes the normal path and loads once more", len(loads) == 2 and retried["outcome"] == "released")
+        c.check(f"{label}: the repeat after that loads nothing", len(loads) == 2 and repeated["outcome"] == "already_released")
+    reset(server)
+
+
 FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] = {
     "E20": (case_e20, "LO1 D1 RS5 B9"),
     "E21": (case_e21, "LO8 LO17 D1 D9 CR5"),
@@ -1298,6 +1426,7 @@ FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] 
     "E33": (case_e33, "LO1 LO16 RS5"),
     "E34": (case_e34, "FS6"),
     "E35": (case_e35, "FS6"),
+    "E36": (case_e36, "FS6"),
     "E24_serving": (case_serving_read, "LO13 LO16"),
     "E24_materialize": (case_materialize, "LO11 D7"),
 }

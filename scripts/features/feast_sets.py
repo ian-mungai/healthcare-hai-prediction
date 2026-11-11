@@ -57,7 +57,20 @@ class LoadRequest:
 
 
 OnlineLoader = Callable[[LoadRequest], str]
+Recovery = Callable[[LoadRequest], str | None]
 Production = Callable[[], Sequence[str | None]]
+
+
+class SetLoader:
+    """The online load of a set and its recovery: ``recover`` names the load that a ready marker already holds for the request, or None when there is none.
+
+    A release that loaded the set but failed to write its receipt finds the finished load again through ``recover`` instead of loading a second time."""
+
+    def __init__(self, load: OnlineLoader, recover: Recovery) -> None:
+        self.load, self.recover = load, recover
+
+    def __call__(self, request: LoadRequest) -> str:
+        return self.load(request)
 
 
 class HoldStore(Protocol):
@@ -227,8 +240,10 @@ def online_loader(
     features: online.RedisClient | None = None,
     hooks_for: Callable[[reads.IcebergCatalog, reads.Publication, Mapping[str, Any]], online.LoadHooks] | None = None,
     settings_file: Path = feast_job.SETTINGS_FILE,
-) -> OnlineLoader:
-    """The online load of one set: the protocol of ``online_protocol`` with the set's own database and marker, so a load flushes and marks nothing else."""
+) -> SetLoader:
+    """The online load of one set: the protocol of ``online_protocol`` with the set's own database and marker, so a load flushes and marks nothing else.
+
+    The result also recovers a finished load (``SetLoader.recover``): the set's marker is ``ready`` for the run, set schema hash and publication digest."""
 
     def load(request: LoadRequest) -> str:
         document, _ = schema if schema is not None else reads.read_schema()
@@ -258,7 +273,23 @@ def online_loader(
                 )
         return result.load_id
 
-    return load
+    def recover(request: LoadRequest) -> str | None:
+        layout = online.set_layout(request.feature_set)
+        marker = online.read_marker(control if control is not None else online.connect(environ, online.CONTROL_DB), layout.marker_key)
+        load_id = marker.get("load_id", "")
+        if (
+            marker.get("state") != "ready"
+            or not online.SAFE_TEXT.fullmatch(load_id)
+            or marker.get("feature_run_id") != request.run
+            or marker.get("feature_schema_sha256") != request.set_schema_sha256
+        ):
+            return None
+        opened = session() if session is not None else feast_job.catalog_session(settings, environ)
+        with opened as catalog:
+            publication = reads.read_publication(catalog, reads.NAMESPACES[settings.mode], request.run)
+        return load_id if marker.get("snapshot_set_sha256") == publication.snapshot_set_sha256 else None
+
+    return SetLoader(load, recover)
 
 
 def base_run_of(folder: Path) -> str:
@@ -412,7 +443,10 @@ def release(
     ``newest_run`` returns the newest committed run of the set: an older held run is refused, because its table is no longer the set's data.
     ``production`` returns the schema hash of each Production model of the set by infection type (``production_reader``). While any of them differs from the
     run's schema hash the release is refused by name and the hold stays, so no model is served online features of another schema: a new schema waits until
-    every consumer of the set has promoted a model trained on it (owner decision "Shared online set release", Nov 10 2026)."""
+    every consumer of the set has promoted a model trained on it (owner decision "Shared online set release", Nov 10 2026).
+
+    A set loader that can recover (``SetLoader``) is asked for a finished load of the request before it loads: a retry after the load finished and the receipt
+    write failed records that load and loads nothing again."""
     if feature_sets.checked(feature_set) not in feature_sets.MODEL_SETS or not schema["model_sets"][feature_set]["online"]:
         raise ReadError(f"set {feature_set} is not an online model set: only m1, m2 and m4 have a held online load")
     hold = holds.read(HOLD_NAME, run)
@@ -436,7 +470,9 @@ def release(
             f"set {feature_set} stays held: the Production models of {named} are on another schema than run {run} ({set_hash}); "
             "release it once every Production model of the set is trained on this schema"
         )
-    load_id = loader(LoadRequest(feature_set, run, str(hold["base_run"]), set_hash))
+    request = LoadRequest(feature_set, run, str(hold["base_run"]), set_hash)
+    recovered = loader.recover(request) if isinstance(loader, SetLoader) else None
+    load_id = recovered if recovered else loader(request)
     record = {
         "schema": 1,
         "feature_set": feature_set,
