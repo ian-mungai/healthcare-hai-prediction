@@ -35,6 +35,7 @@ SUBSTITUTIONS = [
     "virtual clock (waits of minutes take no real time)",
     "a stand-in of the Airflow SDK and of the Amazon provider 9.36.0 operator, not the real packages (rerun the cases in the Airflow image)",
     "the shipped DAG files run task by task in order, not under a scheduler",
+    "the before listing and the acceptance report of a silver or gold job are stand-ins here; scripts.lakehouse.run_layer_report_e2e runs the real ones",
 ]
 
 

@@ -1103,64 +1103,6 @@ def command_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
-def plan_events(layer: str, **changes: Any) -> list[dict[str, str]]:
-    """The log events of a dry run publish stream: the lines the task prints, then the whole plan as one JSON line."""
-    plan: dict[str, Any] = {
-        "dry_run": True,
-        "layer": layer,
-        "run": SILVER_RUN,
-        "mode": "real",
-        "namespace": layer,
-        "summary": {"tables": 2},
-        "tables": [],
-        "blocked": [],
-        "unknown": [],
-        "catalog_error": "",
-    } | changes
-    lines = [
-        f"dry run plan for {layer} run {SILVER_RUN} (mode real, namespace {layer}): nothing was written",
-        "CREATE    silver.hospital_measures: write 10 rows",
-    ]
-    lines += [f"UNKNOWN   {item}" for item in plan["unknown"]] + [f"BLOCKED   {item}" for item in plan["blocked"]]
-    lines += [f"CATALOG   the catalog could not be read: {plan['catalog_error']}"] if plan["catalog_error"] else []
-    return [{"timestamp": "1", "message": line} for line in [*lines, "DRY_RUN_PLAN " + json.dumps(plan, sort_keys=True, separators=(",", ":"))]]
-
-
-def plan_cases(work: Path) -> dict[str, bool]:
-    """The plan check reads this run's plan from the saved log events and refuses an unknown, a catalog error, a blocked plan and another run."""
-    folder = work / "plans"
-    folder.mkdir()
-    checks: dict[str, bool] = {}
-    cases_ = {
-        "a complete plan": (plan_events("silver"), 0),
-        "an unknown table": (plan_events("silver", unknown=["silver.state_measures"]), 1),
-        "a catalog error": (plan_events("silver", catalog_error="timeout"), 1),
-        "a blocked publish": (plan_events("silver", blocked=["this run is already committed"]), 1),
-        "another run's plan": (plan_events("silver", run="20261030T000000Z-00000000"), 1),
-        "a plan for another layer": (plan_events("gold"), 1),
-        "no plan line": (plan_events("silver")[:-1], 1),
-    }
-    for label, (events, expected) in cases_.items():
-        path = folder / (re.sub("[^a-z]+", "_", label) + ".json")
-        path.write_text(json.dumps({"events": events}))
-        code, _, _ = run_cli(["plan", "--layer", "silver", "--run", SILVER_RUN, "--log", str(path)])
-        checks[f"plan: {label}"] = code == expected
-    limit = acceptance.online_entity_limit()
-    spine = "features.int_hospital_spine"
-    features_plans = {
-        "a features plan whose load fits the online store": ([{"table": spine, "rows": limit}], 0),
-        "a features plan whose load is above the memory guard": ([{"table": spine, "rows": limit + 1}], 1),
-        "a features plan that does not name the entity table": ([{"table": "features.other", "rows": 1}], 1),
-    }
-    for label, (tables, expected) in features_plans.items():
-        path = folder / (re.sub("[^a-z]+", "_", label) + ".json")
-        path.write_text(json.dumps({"events": plan_events("features", tables=tables)}))
-        code, printed, _ = run_cli(["plan", "--layer", "features", "--run", SILVER_RUN, "--log", str(path)])
-        checks[f"plan: {label}"] = code == expected and ("the online store would refuse" in printed or expected == 0 or "entity table" in printed)
-    checks["plan: the limit is the guard of the Feast job at the size of the real Redis"] = 0 < limit < 100_000
-    return checks
-
-
 def static_cases() -> dict[str, bool]:
     """The command's constants equal the files they restate."""
     writer = (ROOT / "infra/iam/job_writer.tf").read_text()
@@ -1209,7 +1151,6 @@ def main() -> int:
             results["guard"] = group("guard", guard_cases, work)
             results["host twin"] = group("host twin", host_twin_cases, work)
             results["commands"] = command_cases(work)
-            results["plan"] = plan_cases(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     passed = all(all(checks.values()) for checks in results.values())

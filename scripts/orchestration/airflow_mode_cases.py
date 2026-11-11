@@ -233,7 +233,18 @@ class Rig:
             cluster=CLUSTER,
             definition=lambda job: self.adapter.definition(job, HOST),
             clock=self.time.clock(),
+            report=steps.layer_report.ReportAccess(
+                s3=None,
+                bucket=BUCKET,
+                ecs=None,
+                autoscaling=None,
+                cluster=CLUSTER,
+                family_prefix="",
+                host_group="stand_in_host",
+                directory=Path("stand_in_reports"),
+            ),
         )
+        self.reports: list[str] = []
         self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"]))
 
     def read_host_cap(self) -> str | None:
@@ -414,6 +425,12 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
             with (
                 mock.patch.object(runtime, "get_current_context", lambda: current.context),
                 mock.patch.object(steps, "services", lambda: rig.services),
+                mock.patch.object(steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
+                mock.patch.object(
+                    steps.layer_report,
+                    "accept",
+                    lambda access, layer, run: rig.reports.append(f"report {layer} {run}") or {"report": "stand_in", "passed": True},
+                ),
             ):
                 yield current
     finally:
@@ -1849,6 +1866,18 @@ def orchestration_imports(name: str) -> set[str]:
     return found
 
 
+def script_imports(path: Path) -> set[str]:
+    """The files below ``scripts/`` that a module imports, at the top or inside a function: ``from scripts.a import b`` names ``scripts/a/b.py`` when that
+    file exists, else ``scripts/a.py``."""
+    found: set[str] = set()
+    for node in ast.walk(ast.parse(path.read_text())):
+        if isinstance(node, ast.ImportFrom) and node.module and (node.module == "scripts" or node.module.startswith("scripts.")):
+            base = node.module.replace(".", "/")
+            for alias in node.names:
+                found.add(f"{base}/{alias.name}.py" if (ROOT / base / f"{alias.name}.py").is_file() else f"{base}.py")
+    return found
+
+
 def launch_modules_are_in_the_mount_list() -> None:
     text = (ROOT / "infra/services/airflow.tf").read_text()
     mounted = set(MOUNT.findall(text)) | set(LAUNCH_MOUNT.findall(text))
@@ -1860,6 +1889,15 @@ def launch_modules_are_in_the_mount_list() -> None:
             queue.extend(orchestration_imports(name))
     lacking = sorted(f"{name}.py" for name in needed if f"{name}.py" not in mounted)
     require(not lacking, f"the launch modules {lacking} are not in the Airflow mount list")
+    wanted, queue_ = set(), [f"orchestration/{name}.py" for name in needed]
+    while queue_:
+        path = queue_.pop()
+        for imported in script_imports(ROOT / path):
+            if imported not in wanted and (ROOT / imported).is_file() and not imported.endswith("__init__.py"):
+                wanted.add(imported)
+                queue_.append(imported)
+    unmounted = sorted(path for path in wanted if f"/opt/hai/{path}" not in text and path not in text)
+    require(not unmounted, f"the scripts {unmounted} that the launch modules import are not in the Airflow mount list")
     for path in (
         "config/orchestration/ecs_broker_jobs.json",
         "config/orchestration/ecs_broker_jobs.schema.json",

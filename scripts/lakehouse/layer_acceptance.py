@@ -4,13 +4,11 @@ The DAG evidence step writes the report itself (``orchestration.airflow_steps.ev
 files that were saved from AWS read calls. Nothing here calls AWS.
 
     python -m scripts.lakehouse.layer_acceptance task --layer silver --describe <FILE>
-    python -m scripts.lakehouse.layer_acceptance plan --layer silver --run <RUN_ID> --log <FILE>
     python -m scripts.lakehouse.layer_acceptance report --layer silver --run <RUN_ID> --code-digest <FILE> --describe <FILE> --evidence <DIR>
         --launch-records <DIR> --before <FILE> --after <FILE> --running-tasks <FILE> --host-status <FILE>
         [--input-evidence <DIR> --input-report <FILE>] --out <FILE>
 
-``task`` requires one stopped task whose every container ran to a zero exit. ``plan`` reads the saved log events of the dry run publish stream and requires
-the one plan line of this run, with no unknown state, catalog error or blocked publish.
+``task`` requires one stopped task whose every container ran to a zero exit.
 
 ``report`` binds the run to the staged code digest (the ``code.sha256`` of ``lakehouse/run_stage/<run>/inputs/``) and to the launch records of the run
 (``lakehouse/launch_records/<run>/<job>/``: the claim, then the started and end records of its attempt). It checks the evidence of the run against the frozen
@@ -41,7 +39,7 @@ import os
 import re
 import stat
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -239,6 +237,9 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     }
 
 
+Reader = Callable[[str, str], str]  # (code revision, repository path) -> the file's text at that revision
+
+
 def git_text(revision: str, path: str) -> str:
     """A file as it is at the code revision the run unpacked."""
     result = run_command("git", ["show", f"{revision}:{path}"], cwd=ROOT, timeout=30)
@@ -247,30 +248,30 @@ def git_text(revision: str, path: str) -> str:
     return result.stdout
 
 
-def git_file(revision: str, path: str) -> Any:
+def git_file(revision: str, path: str, read: Reader = git_text) -> Any:
     """A JSON file as it is at the code revision the run unpacked."""
     try:
-        return json.loads(git_text(revision, path))
+        return json.loads(read(revision, path))
     except ValueError:
         raise AcceptanceError("a frozen file of the run's revision is not JSON") from None
 
 
-def contract(layer: str, revision: str) -> tuple[set[str], str]:
+def contract(layer: str, revision: str, read: Reader = git_text) -> tuple[set[str], str]:
     """The tables and the real namespace of the layer's publish contract at the run's revision."""
     try:
-        publish = git_file(revision, CONTRACT[layer])["publish"]
+        publish = git_file(revision, CONTRACT[layer], read)["publish"]
         return set(publish["tables"]), str(publish["namespaces"]["real"])
     except (KeyError, TypeError):
         raise AcceptanceError("the publish contract of the run's revision has an unexpected shape") from None
 
 
-def bronze_tables(revision: str) -> set[str]:
+def bronze_tables(revision: str, read: Reader = git_text) -> set[str]:
     """The pinned bronze tables at the run's revision, as ``pins.mapped_tables`` reads them: the mapped tables a silver source declares, and file_metadata."""
     try:
-        mapped = {entry["table"] for entry in git_file(revision, BRONZE_MAP)["tables"]}
+        mapped = {entry["table"] for entry in git_file(revision, BRONZE_MAP, read)["tables"]}
     except (KeyError, TypeError):
         raise AcceptanceError("the bronze table map of the run's revision has an unexpected shape") from None
-    return set(pins.pinned_tables(mapped, pins.declared_sources(git_text(revision, str(pins.SOURCES)))))
+    return set(pins.pinned_tables(mapped, pins.declared_sources(read(revision, str(pins.SOURCES)))))
 
 
 def producer_records(records: Records, layer: str, folder: Path, source: Any, namespace: str, snapshots: Mapping[str, Any]) -> tuple[bool, list[str]]:
@@ -293,13 +294,13 @@ def report_passed(document: Mapping[str, Any]) -> bool:
 
 
 def producer_checks(
-    records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None
+    records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None, read: Reader = git_text
 ) -> dict[str, bool]:
     """The pin is complete and names the run of the layer below, and that run passed: its report passed and covers its record."""
     below = PRODUCER[layer]
     if folder is None or report_path is None:
         raise AcceptanceError(f"a {layer} report needs the {below} records and the {below} report")
-    tables, namespace = contract(below, revision)
+    tables, namespace = contract(below, revision, read)
     source = pinned.get("source_run_id")
     snapshots = mapping(pinned.get("snapshot_set"))
     named, covered = producer_records(records, layer, folder, source, namespace, snapshots)
@@ -367,7 +368,8 @@ def evidence_checks(
     revision = str(identity.get("git_revision"))
     if not REVISION.fullmatch(revision):
         raise AcceptanceError("the run records no code revision")
-    tables, namespace = contract(layer, revision)
+    read: Reader = getattr(arguments, "frozen", git_text)
+    tables, namespace = contract(layer, revision, read)
     candidates, reconcile, backup, commit, manifest, consumer = (records.load_in(folder, name) for name in EVIDENCE_FILES[1:])
     pinned = records.load_in(folder, PIN_FILE[layer])
     sha = records.sha256
@@ -435,68 +437,15 @@ def evidence_checks(
             namespace,
         ) and record.get("snapshot_set") == snapshot_set
         checks["the records name the layer's own namespace in real mode"] &= record.get("mode") == "real" and record.get("namespace") == namespace
-        checks["H3: the pinned table set is the silver-declared bronze tables of the run's revision"] = set(pinned) == bronze_tables(revision) and all(
+        checks["H3: the pinned table set is the silver-declared bronze tables of the run's revision"] = set(pinned) == bronze_tables(revision, read) and all(
             pinned.values()
         )
     else:
-        checks |= producer_checks(records, layer, run, revision, pinned, arguments.input_evidence, arguments.input_report)
+        checks |= producer_checks(records, layer, run, revision, pinned, arguments.input_evidence, arguments.input_report, read)
         input_run = str(pinned.get("source_run_id"))
     if layer == "features":
         checks |= features_checks(records, run, namespace, folder, snapshot_set)
     return checks, summary, {"identity": identity, "input_run": input_run}
-
-
-def moment(value: Any) -> datetime | None:
-    """A time that the AWS command line prints: an ISO 8601 text with or without an offset, or a number of seconds."""
-    try:
-        parsed = datetime.fromtimestamp(float(value), UTC) if isinstance(value, int | float) else datetime.fromisoformat(str(value))
-    except (ValueError, OverflowError, OSError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
-
-
-def online_entity_limit() -> int:
-    """How many entities the Feast job accepts in the online store: its memory guard over the Redis size of the services stack and the schema's predictors."""
-    from scripts.features import online_protocol, publication_reads
-
-    size = re.search(r"maxmemory (\d+)mb", (ROOT / "infra/services/redis.tf").read_text())
-    if size is None:
-        raise AcceptanceError("infra/services/redis.tf names no maxmemory")
-    predictors, _ = publication_reads.reference_lists(publication_reads.read_schema()[0])
-    columns = len({reference.split(":", 1)[1] for reference in predictors})
-    return int(online_protocol.MEMORY_SHARE * int(size.group(1)) * (1 << 20)) // (columns * online_protocol.BYTES_PER_FIELD)
-
-
-def online_load_problems(plan: Mapping[str, Any]) -> list[str]:
-    """The Feast phase refuses a load above its memory guard only after the publish is committed. The rows of the entity table in the plan show it earlier."""
-    tables = [item for item in plan.get("tables") or [] if isinstance(item, dict)]
-    rows = [item.get("rows") for item in tables if str(item.get("table")).endswith(".int_hospital_spine")]
-    entities = rows[0] if len(rows) == 1 else None
-    if type(entities) is not int or entities < 0:
-        return ["the plan does not name the entity table of the online store"]
-    limit = online_entity_limit()
-    return [f"the online store would refuse this load: the guard accepts {limit} entities and the plan holds {entities}"] if entities > limit else []
-
-
-def plan_problems(layer: str, run: str, document: Any) -> list[str]:
-    """What is wrong with the saved log events of the dry run publish stream: the plan must be this run's, complete and not blocked. The texts are fixed."""
-    events = document.get("events") if isinstance(document, dict) else document
-    messages = [str(item.get("message", "")) if isinstance(item, dict) else str(item) for item in events or []]
-    lines = [message for message in messages if message.startswith("DRY_RUN_PLAN ")]
-    if len(lines) != 1:
-        return ["the stream does not hold exactly one plan line"]
-    try:
-        plan = mapping(json.loads(lines[0].removeprefix("DRY_RUN_PLAN ")))
-    except ValueError:
-        return ["the plan line is not JSON"]
-    problems = []
-    if (plan.get("layer"), plan.get("run"), plan.get("mode"), plan.get("namespace"), plan.get("dry_run")) != (layer, run, "real", layer, True):
-        problems.append("the plan is not the dry run of this layer and run in real mode and its own namespace")
-    problems += ["the plan lists unknown state"] if plan.get("unknown") else []
-    problems += ["the catalog could not be read"] if plan.get("catalog_error") else []
-    problems += ["the real publish would be refused"] if plan.get("blocked") else []
-    problems += [f"the log holds a {word} line" for word in ("UNKNOWN", "CATALOG", "BLOCKED") if any(message.startswith(word) for message in messages)]
-    return [*problems, *(online_load_problems(plan) if layer == "features" else [])]
 
 
 def host_problems(status: Any) -> list[str]:
@@ -602,13 +551,12 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
 def parser() -> argparse.ArgumentParser:
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0] if __doc__ else "")
     steps = cli.add_subparsers(dest="step", required=True)
-    for name in ("task", "report", "plan"):
+    for name in ("task", "report"):
         step = steps.add_parser(name)
         step.add_argument("--layer", required=True, choices=LAYERS)
         if name != "task":
             step.add_argument("--run", required=True)
     steps.choices["task"].add_argument("--describe", required=True, type=Path)
-    steps.choices["plan"].add_argument("--log", required=True, type=Path)
     for flag in ("code-digest", "describe", "evidence", "launch-records", "before", "after", "running-tasks", "host-status", "out"):
         steps.choices["report"].add_argument(f"--{flag}", required=True, type=Path)
     steps.choices["report"].add_argument("--input-evidence", type=Path)
@@ -622,9 +570,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if arguments.step == "task":
             result = {"problems": task_problems(arguments.layer, read_json(arguments.describe))}
-            result["passed"] = not result["problems"]
-        elif arguments.step == "plan":
-            result = {"problems": plan_problems(arguments.layer, arguments.run, read_json(arguments.log))}
             result["passed"] = not result["problems"]
         else:
             if not ignored(arguments.out):

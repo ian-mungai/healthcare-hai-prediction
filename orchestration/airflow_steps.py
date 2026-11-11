@@ -22,6 +22,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
+from orchestration import layer_report
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings, client_config
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_preflight import (
@@ -77,6 +78,7 @@ class LaunchServices:
     cluster: str
     definition: Callable[[str], str]
     clock: Clock
+    report: layer_report.ReportAccess | None = None
 
 
 def host_fit_probe(inner: EcsFitProbe, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> HeldCapProbe:
@@ -113,6 +115,16 @@ def services() -> LaunchServices:
         ),
     )
     scratch = Path(values["HAI_LAUNCH_SCRATCH_PATH"])
+    report = layer_report.ReportAccess(
+        s3=s3,
+        bucket=values["HAI_LAUNCH_BUCKET"],
+        ecs=adapter.ecs,
+        autoscaling=session.client("autoscaling", config=client_config()),
+        cluster=values["HAI_LAUNCH_CLUSTER"],
+        family_prefix=values["HAI_LAUNCH_FAMILY_PREFIX"],
+        host_group=os.environ.get("HAI_LAUNCH_HOST_GROUP", ""),
+        directory=Path(os.environ.get("HAI_LAUNCH_REPORT_DIR") or layer_report.DEFAULT_DIRECTORY),
+    )
     hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"], values["HAI_LAUNCH_APPLY_LOCK_PARAMETER"])
     cap = host_cap_reader(values[HOST_JOB_CAP_SETTING])
     clock = Clock()
@@ -144,7 +156,9 @@ def services() -> LaunchServices:
         host_launch_hold=hold,
         publisher_request=publisher_request_reader(s3, bucket),
     )
-    return LaunchServices(preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock)
+    return LaunchServices(
+        preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock, report
+    )
 
 
 def folder_bytes(folder: Path) -> int:
@@ -237,16 +251,34 @@ def preflight_step(request: SubmissionRequest, context: Mapping[str, Any], selec
     return job_spec(services(), request, context, selections).job
 
 
+def report_access(found: LaunchServices) -> layer_report.ReportAccess:
+    """The clients and the private folder of the layer acceptance report, or a refusal when this launch service has none."""
+    if found.report is None:
+        raise LaunchRefused("the layer acceptance report is not configured for this launch service")
+    return found.report
+
+
 def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
-    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job."""
+    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job.
+
+    A silver or gold job saves the listing of every object version under ``lakehouse/`` here, after the gates and right before the launch. This task holds the
+    slot of the one-slot launch pool, so no other run's job writes meanwhile, and the writes of another run during the wait are in the listing. A listing that
+    exists is kept. A listing that fails stops the step before the launch."""
     found = services()
-    launch(found, job_spec(found, request, context, selections), context)
+    spec = job_spec(found, request, context, selections)
+    if spec.job in layer_report.LAYERS:
+        try:
+            layer_report.save_before_listing(report_access(found), spec.job, request.run_id)
+        except layer_report.ReportError as error:
+            raise LaunchRefused(str(error)) from None
+    launch(found, spec, context)
     return "succeeded"
 
 
 def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> dict[str, Any]:
     """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed."""
-    store = services().preflight.store
+    launch_services = services()
+    store = launch_services.preflight.store
     job = job_of(request.template)
     claim = store.run_record(request.run_id, job, "claim")
     end = None
@@ -255,4 +287,12 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
     if end is None or end.get("outcome") != "succeeded":
         found = end.get("outcome") if end is not None else "no end record"
         raise LaunchRefused(f"no successful launch of {job} is recorded for run {request.run_id}: {found}")
-    return {"job": job, "run_id": request.run_id, "attempt": claim["attempt"] if claim else None, "task_arn": end.get("task_arn", "")}
+    result: dict[str, Any] = {"job": job, "run_id": request.run_id, "attempt": claim["attempt"] if claim else None, "task_arn": end.get("task_arn", "")}
+    if job in layer_report.LAYERS:
+        try:
+            accepted = layer_report.accept(report_access(launch_services), job, request.run_id)
+        except layer_report.ReportError as error:
+            raise LaunchRefused(str(error)) from None
+        result |= {"report": accepted["report"], "passed": True}
+    return result
+

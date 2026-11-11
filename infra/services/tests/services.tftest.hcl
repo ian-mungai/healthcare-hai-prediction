@@ -2881,6 +2881,18 @@ run "serving_container_definitions_match_the_approved_versions" {
   }
 }
 
+run "the_scheduler_names_the_host_group_for_the_acceptance_report" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] :
+      strcontains(aws_ecs_task_definition.service[key].container_definitions, "\"HAI_LAUNCH_HOST_GROUP\",\"value\":\"${var.project_name}_host_${var.environment}\"")
+    ])
+    error_message = "Every Airflow container names the host auto scaling group, so the evidence task describes that group and no other."
+  }
+}
+
 run "launch_mounts_are_always_present" {
   command = plan
 
@@ -2896,6 +2908,11 @@ run "launch_mounts_are_always_present" {
           "/opt/hai/config/orchestration/ecs_broker_jobs.json",
           "/opt/hai/config/orchestration/direct_jobs.json",
           "/opt/hai/scripts/lakehouse/bronze_dispatch.py",
+          "/opt/hai/orchestration/layer_report.py",
+          "/opt/hai/scripts/lakehouse/layer_acceptance.py",
+          "/opt/hai/scripts/lakehouse/pins.py",
+          "/opt/hai/scripts/lakehouse/version_listing.py",
+          "/opt/hai/scripts/process.py",
           "/opt/hai/job_scratch",
         ] : strcontains(aws_ecs_task_definition.service[key].container_definitions, path)
       ])

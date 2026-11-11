@@ -18,6 +18,11 @@ locals {
     code_bronze_tables       = "config/lakehouse/bronze_tables.json"
     code_lakehouse_init      = "scripts/lakehouse/__init__.py"
     code_bronze_dispatch     = "scripts/lakehouse/bronze_dispatch.py"
+    code_layer_report        = "orchestration/layer_report.py"
+    code_layer_acceptance    = "scripts/lakehouse/layer_acceptance.py"
+    code_lakehouse_pins      = "scripts/lakehouse/pins.py"
+    code_version_listing     = "scripts/lakehouse/version_listing.py"
+    code_process             = "scripts/process.py"
   }
 
   airflow_launch_volumes = merge({ for name, path in local.airflow_launch_files : name => "${local.code_path}/${path}" }, { job_scratch = var.airflow_launch_scratch_path })
@@ -32,9 +37,11 @@ locals {
   # name. The bucket is airflow_launch_bucket_name and the host address host_private_ip, both required once the
   # scheduler runs as the launch role; broker_jobs feeds nothing here.
   airflow_launch_environment = {
-    AWS_REGION               = var.aws_region
-    HAI_LAUNCH_POOL          = local.airflow_launch_pool
-    HAI_LAUNCH_CLUSTER       = var.cluster_name
+    AWS_REGION         = var.aws_region
+    HAI_LAUNCH_POOL    = local.airflow_launch_pool
+    HAI_LAUNCH_CLUSTER = var.cluster_name
+    # The host auto scaling group that the evidence task of a silver or gold DAG describes for the host check of the acceptance report.
+    HAI_LAUNCH_HOST_GROUP    = "${var.project_name}_host_${var.environment}"
     HAI_LAUNCH_FAMILY_PREFIX = "${var.project_name}_${var.environment}_job_"
     HAI_LAUNCH_PROJECT_TAG   = var.project_tag
     HAI_LAUNCH_LOG_GROUP     = "${var.project_name}_jobs_${var.environment}"
