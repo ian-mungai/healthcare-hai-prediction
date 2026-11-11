@@ -19,6 +19,8 @@ variables {
     analytics = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }
   log_group_name = "example_project_jobs_dev"
+  # The usable job memory the services stack outputs; the publisher asks for less, so its size is unchanged.
+  host_job_memory_mib = 23552
 }
 
 run "default_registers_no_publisher" {
@@ -70,8 +72,8 @@ run "publisher_resources_stay_within_the_host_job_caps" {
     publisher_resources   = { cpu = 4096, memory = 30720 }
   }
   assert {
-    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "3072" && aws_ecs_task_definition.publisher_host[0].memory == "16384"
-    error_message = "A larger request is cut to the host job caps that the other host jobs share."
+    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "3072" && aws_ecs_task_definition.publisher_host[0].memory == "23552"
+    error_message = "A larger request is cut to the host job caps that the other host jobs share: 3072 CPU units and the job room (host_job_memory_mib)."
   }
 }
 
