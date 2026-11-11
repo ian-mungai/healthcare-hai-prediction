@@ -146,13 +146,29 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
   assert {
     condition = (
       !strcontains(aws_iam_role_policy.job_publisher[0].policy, "Delete") &&
-      !strcontains(aws_iam_role_policy.job_publisher[0].policy, "lakehouse") &&
       strcontains(aws_iam_role_policy.job_publisher[0].policy, "s3:if-none-match") &&
       alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
-        statement.Sid == "ReadStoredPayloadVersions" ? true : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))
+        contains(["ReadStoredPayloadVersions", "ReadStagedRunInputs"], statement.Sid) ? true : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))
+      )]) &&
+      alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
+        statement.Sid == "ReadStagedRunInputs" ? true : !strcontains(jsonencode(statement), "lakehouse")
       )])
     )
-    error_message = "Outside the stored payload read the publisher role must reach only raw, create objects once and hold no delete action."
+    error_message = "Outside the stored payload read and the staged input read the publisher role must reach only raw, create objects once and hold no delete action."
+  }
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"][0].Effect == "Allow" &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"][0].Action == ["s3:GetObject"] &&
+      toset([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"][0].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/*/inputs/code.tar.gz",
+        "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/*/inputs/publisher_inputs.tar.gz",
+      ]) &&
+      !can([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"][0].Condition)
+    )
+    error_message = "The publisher task must read exactly its two staged inputs, the code archive its fetch container downloads and the publisher inputs archive its run container reads, by plain GetObject and nothing else under lakehouse."
   }
 
   assert {

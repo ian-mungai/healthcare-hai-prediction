@@ -26,6 +26,15 @@
       ]
     },
     {
+      "Sid": "ReadStagedRunInputs",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": [
+        "${BUCKET_ARN}/lakehouse/run_stage/*/inputs/code.tar.gz",
+        "${BUCKET_ARN}/lakehouse/run_stage/*/inputs/publisher_inputs.tar.gz"
+      ]
+    },
+    {
       "Sid": "ListRawVersions",
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
