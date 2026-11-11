@@ -137,6 +137,9 @@ class FakeSpark:
     def tableExists(self, name: str) -> bool:
         return self.tables
 
+    def table(self, name: str) -> Any:
+        return RunsSpark([name for name, _ in gold_publish.RUNS_COLUMNS], []).table(name)
+
     def sql(self, text: str) -> Any:
         class Frame:
             def __init__(self, rows: list[Any]) -> None:
@@ -154,12 +157,12 @@ class FakeSpark:
 
 
 def gold_run_row(
-    plan: gold_publish.Plan, mode: str = "publish_fixture", run: str = GOLD_RUN, tables: list[str] | None = None, ids: Any = None
+    plan: gold_publish.Plan, mode: str = "publish_fixture", run: str = GOLD_RUN, tables: list[str] | None = None, ids: Any = None, base_run: str | None = None
 ) -> tuple[Any, ...]:
     """A ``publish_runs`` row of the gold namespace."""
     names = tables if tables is not None else sorted(plan.tables)
     snapshot_set = ids if ids is not None else {name: 1000 + index for index, name in enumerate(names)}
-    return (run, mode, datetime(2026, 10, 14, 4, 0, tzinfo=UTC), "a" * 64, "b" * 64, "catalog_backup_x.json", "c" * 64, json.dumps(snapshot_set))
+    return (run, mode, datetime(2026, 10, 14, 4, 0, tzinfo=UTC), "a" * 64, "b" * 64, "catalog_backup_x.json", "c" * 64, json.dumps(snapshot_set), base_run)
 
 
 def pin_cases(report: Report) -> None:
@@ -1813,6 +1816,170 @@ def single_path_value_cases(report: Report, layer_run: Any) -> None:
     )
 
 
+class RunsSpark:
+    """A ``publish_runs`` table of the given columns: the schema, the column change and the selects of the runs reads, as Spark answers them.
+
+    A select that names a column the table lacks fails, as Spark's analysis does; a column the select gives as a typed null reads null."""
+
+    def __init__(self, columns: list[str], rows: list[dict[str, Any]], exists: bool = True) -> None:
+        self.columns, self.rows, self.exists, self.statements = list(columns), rows, exists, []
+        self.catalog = self
+
+    def tableExists(self, name: str) -> bool:
+        return self.exists
+
+    def table(self, name: str) -> Any:
+        return type("Frame", (), {"schema": type("Schema", (), {"fields": [Field(column, "string") for column in self.columns]})()})()
+
+    def sql(self, text: str) -> Any:
+        self.statements.append(text)
+        rows: list[tuple[Any, ...]] = []
+        if text.startswith("ALTER TABLE") and "ADD COLUMNS" in text:
+            self.columns += re.findall(r"`(\w+)` \w+", text.split("ADD COLUMNS", 1)[1])
+        elif text.startswith("CREATE TABLE"):
+            self.exists, self.columns = True, re.findall(r"`(\w+)` \w+", text)
+        elif match := re.match(r"SELECT (.+?) FROM ", text):
+            for row in self.rows:
+                values = []
+                for item in match[1].split(", "):
+                    name = item.strip("`")
+                    if item.startswith("CAST(NULL"):
+                        values.append(None)
+                    elif name in self.columns:
+                        values.append(row.get(name))
+                    else:
+                        raise RuntimeError(f"cannot resolve column {name}")
+                rows.append(tuple(values))
+        return type("Rows", (), {"collect": staticmethod(lambda: rows)})()
+
+
+def runs_column_cases(report: Report) -> None:
+    """The publish_runs table gains a nullable base_run column: a new table has it, an old table gains it by a column change and its old rows read null,
+    a model set commit writes the base run it read and every other run writes none, and the commit step receives the base pin that names it."""
+    plan = features_publish.publish_plan("publish_fixture", feature_set="m1")
+    old_columns = [name for name, _ in gold_publish.RUNS_COLUMNS if name != "base_run"]
+    old_row = {
+        "run_id": RUN,
+        "mode": "publish_fixture",
+        "committed_at": datetime(2026, 10, 14, 4, 0, tzinfo=UTC),
+        "sealed_sha256": "a" * 64,
+        "export_manifest_sha256": "b" * 64,
+        "backup_name": "catalog_backup_x.json",
+        "backup_sha256": "c" * 64,
+        "snapshot_set": json.dumps({"feature_matrix_m1": 1}),
+    }
+
+    def context(spark: RunsSpark, **options: Any) -> gold_publish.Context:
+        return gold_publish.Context(spark, plan, RUN, "publish_fixture", Path("/nonexistent"), "", needs_sealed=False, **options)
+
+    def attempt(action: Callable[[], Any]) -> Any:
+        try:
+            return action()
+        except Exception as error:
+            return error
+
+    old = RunsSpark(old_columns, [old_row])
+    unevolved = attempt(lambda: gold_publish.published_runs(context(old)))
+    report.case(
+        "R01",
+        "FS3",
+        "an old publish_runs table without base_run still reads, and its old rows read base_run as null",
+        isinstance(unevolved, list) and len(unevolved) == 1 and unevolved[0].get("base_run", "absent") is None and unevolved[0]["run_id"] == RUN,
+        error=type(unevolved).__name__ if isinstance(unevolved, Exception) else "",
+    )
+    attempt(lambda: gold_publish.ensure_runs_table(context(old)))
+    changes = [text for text in old.statements if text.startswith("ALTER TABLE")]
+    attempt(lambda: gold_publish.ensure_runs_table(context(old)))
+    after = attempt(lambda: gold_publish.published_runs(context(old)))
+    report.case(
+        "R02",
+        "FS3",
+        "the commit's table check adds base_run to an old publish_runs table once, and the old rows still read null",
+        len(changes) == 1
+        and "`base_run` STRING" in changes[0]
+        and len([text for text in old.statements if text.startswith("ALTER TABLE")]) == 1
+        and isinstance(after, list)
+        and after[0].get("base_run", "absent") is None,
+        statements=len(changes),
+    )
+    fresh = RunsSpark([], [], exists=False)
+    attempt(lambda: gold_publish.ensure_runs_table(context(fresh)))
+    report.case("R03", "FS3", "a new publish_runs table is created with base_run", "base_run" in fresh.columns, columns=len(fresh.columns))
+    backup = {"name": "catalog_backup_x.json", "backup_sha256": "c" * 64}
+    record = getattr(gold_publish, "run_record", None)
+    model_row = attempt(lambda: record(context(old, base_run=BASE_RUN_2), "b" * 64, backup, {"feature_matrix_m1": 1})) if record else None
+    plain_row = attempt(lambda: record(context(old), "b" * 64, backup, {"feature_matrix_m1": 1})) if record else None
+    report.case(
+        "R04",
+        "FS3",
+        "a model set commit's row holds the base run it read and any other run's row holds none",
+        isinstance(model_row, dict)
+        and model_row.get("base_run") == BASE_RUN_2
+        and isinstance(plain_row, dict)
+        and plain_row.get("base_run", "absent") is None
+        and set(model_row) == {name for name, _ in gold_publish.RUNS_COLUMNS},
+    )
+    with tempfile.TemporaryDirectory(prefix="runs_base_run_") as folder:
+        pin = Path(folder) / "base_pins.json"
+        pin.write_text(json.dumps({"source_run_id": BASE_RUN_2}))
+        step_base_run = getattr(features_publish, "step_base_run", None)
+        found = {
+            "commit of a model set": attempt(lambda: step_base_run("commit", pin, "m1")) if step_base_run else "no helper",
+            "record of a model set": attempt(lambda: step_base_run("record", pin, "m1")) if step_base_run else "no helper",
+            "candidates of a model set": attempt(lambda: step_base_run("candidates", pin, "m1")) if step_base_run else "no helper",
+            "commit of base": attempt(lambda: step_base_run("commit", None, "base")) if step_base_run else "no helper",
+            "commit of the single path": attempt(lambda: step_base_run("commit", None, "")) if step_base_run else "no helper",
+        }
+        report.case(
+            "R05",
+            "FS3",
+            "only the commit and record steps of a model set run read the base run from the base pin",
+            found
+            == {
+                "commit of a model set": BASE_RUN_2,
+                "record of a model set": BASE_RUN_2,
+                "candidates of a model set": None,
+                "commit of base": None,
+                "commit of the single path": None,
+            },
+            found={label: str(value) for label, value in found.items()},
+        )
+    from scripts.lakehouse import layer_run
+
+    def steps_of(feature_set: str) -> dict[str, list[str]]:
+        recorder = mock.Mock()
+        job = layer_run.Job("features", RUN, "publish_fixture", Path("/nonexistent"), input_run=BASE_RUN, feature_set=feature_set)
+        ok = mock.Mock()
+        with (
+            mock.patch.multiple(
+                layer_run,
+                sealed=lambda item: ("a" * 64, Path("/nonexistent")),
+                accepted_result=lambda item, sha: "d" * 64,
+                check_pin_tables=ok,
+                accept_reconcile=ok,
+                accept_commit=ok,
+                run_publish=recorder,
+            ),
+            mock.patch.object(layer_run.Job, "folder", Path("/nonexistent/run")),
+        ):
+            layer_run.publish(job, "bucket")
+        return {str(call.args[1][0]): [str(item) for item in call.args[1]] for call in recorder.call_args_list}
+
+    model_steps, base_steps = steps_of("m1"), steps_of("base")
+    pin_text = "/nonexistent/run/base_pins.json"
+    report.case(
+        "R06",
+        "FS3",
+        "a model set run's commit step receives its base pin, as the record step does; the other steps and a base run's steps do not",
+        "--base-pin" in model_steps.get("commit", [])
+        and pin_text in model_steps.get("commit", [])
+        and "--base-pin" in model_steps.get("record", [])
+        and not any("--base-pin" in model_steps.get(step, []) for step in ("candidates", "reconcile", "backup"))
+        and not any("--base-pin" in arguments for arguments in base_steps.values()),
+        steps=sorted(model_steps),
+    )
+
+
 def static(report: Report) -> None:
     """Every static case."""
     generator_cases(report)
@@ -1825,6 +1992,7 @@ def static(report: Report) -> None:
     contract_cases(report)
     pin_cases(report)
     base_pin_cases(report)
+    runs_column_cases(report)
     plan_cases(report)
     settings_cases(report)
     pipeline_quality_case(report)

@@ -86,12 +86,15 @@ class IcebergCatalog(Protocol):
 
 @dataclass(frozen=True)
 class Publication:
-    """One committed features set R: the ``publish_runs`` row and the snapshot ID of ``main`` that it names for each table."""
+    """One committed features set R: the ``publish_runs`` row and the snapshot ID of ``main`` that it names for each table.
+
+    ``base_run`` is the base run a model set run read; it is None for a base run, the single path and any row written before the column existed."""
 
     namespace: str
     run_id: str
     committed_at: str
     snapshot_set: Mapping[str, int]
+    base_run: str | None = None
 
     @property
     def snapshot_set_sha256(self) -> str:
@@ -144,7 +147,8 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
     The head is the newest ``committed_at``, ties broken by the larger ``run_id``: the order of the gold head query in ``gold_publish.py``.
     """
     table = load_table(catalog, namespace, RUNS_TABLE)
-    rows = table.scan(selected_fields=("run_id", "committed_at", "snapshot_set")).to_arrow().to_pylist()
+    fields = ("run_id", "committed_at", "snapshot_set", *(("base_run",) if "base_run" in iceberg_columns(table) else ()))
+    rows = table.scan(selected_fields=fields).to_arrow().to_pylist()
     if not rows:
         raise ReadError(f"{namespace}.{RUNS_TABLE} has no committed publication")
     parsed = []
@@ -156,15 +160,17 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
             committed = as_utc(row.get("committed_at"))
         except (TypeError, ValueError):
             raise ReadError(f"publish run {identity}: committed_at is not a time") from None
-        parsed.append((committed, identity, row.get("snapshot_set")))
+        parsed.append((committed, identity, row.get("snapshot_set"), row.get("base_run")))
     if run_id is None:
-        committed, identity, raw = max(parsed, key=lambda item: (item[0], item[1]))
+        committed, identity, raw, base = max(parsed, key=lambda item: (item[0], item[1]))
     else:
         matches = [item for item in parsed if item[1] == run_id]
         if len(matches) != 1:
             raise ReadError(f"{namespace}.{RUNS_TABLE} has {len(matches)} rows for run {run_id}; exactly one is required")
-        committed, identity, raw = matches[0]
-    return Publication(namespace, identity, committed.isoformat(), parse_snapshot_set(identity, raw))
+        committed, identity, raw, base = matches[0]
+    if base is not None and (not isinstance(base, str) or not RUN_ID.fullmatch(base)):
+        raise ReadError(f"publish run {identity}: base_run is not a run ID")
+    return Publication(namespace, identity, committed.isoformat(), parse_snapshot_set(identity, raw), base)
 
 
 def verify_heads(catalog: IcebergCatalog, publication: Publication, moment: str) -> None:

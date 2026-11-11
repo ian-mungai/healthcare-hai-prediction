@@ -354,11 +354,14 @@ def extract(
     publication = reader.publication(selected)
     if selected is not None and publication.run_id != selected:
         raise ExtractError("the feature reader selected another publication")
-    if any(name not in publication.snapshot_set for name in SUPPORT_TABLES):
-        raise ExtractError("the publication lacks a required training support snapshot")
-    base_run = getattr(publication, "base_run", None)
+    base_run = publication.base_run
     if not isinstance(base_run, str) or not re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", base_run):
         raise ExtractError(f"the {model} publication {publication.run_id} carries no base_run")
+    base = reader.publication(base_run)
+    if base.run_id != base_run:
+        raise ExtractError(f"the feature reader selected another publication than base run {base_run}")
+    if any(name not in base.snapshot_set for name in SUPPORT_TABLES):
+        raise ExtractError(f"base run {base_run} lacks a required training support snapshot")
     served = reader.service_references(service)
     if set(served) != set(references) or len(served) != len(references):
         gap = sorted(set(served) ^ set(references))
@@ -381,12 +384,12 @@ def extract(
         result = {}
         for table, fields in zip(SUPPORT_TABLES, (SPINE_FIELDS, VALIDATION_FIELDS, ADJACENCY_FIELDS, BUILD_FIELDS), strict=True):
             check()
-            result[table] = reader.scan(publication, table, fields)
+            result[table] = reader.scan(base, table, fields)
         return result
 
-    support = reader.consistent(publication, read_support)
+    support = reader.consistent(base, read_support)
     check()
-    build = _identity(root, publication, reader.schema_sha256, support["feature_build_inputs"])
+    build = _identity(root, base, reader.schema_sha256, support["feature_build_inputs"])
     spine = _unique(support["int_hospital_spine"], "spine_key", "population spine")
     if set(spine) != set(historical):
         raise ExtractError("population spine and historical entities have different keys")

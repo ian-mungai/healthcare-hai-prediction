@@ -81,6 +81,11 @@ class MemorySpark:
     def tableExists(self, name: str) -> bool:
         return name in self.refs or (name == self.runs_table and self.runs_exist)
 
+    def table(self, name: str) -> Any:
+        """The ``publish_runs`` schema: every column of ``RUNS_COLUMNS``."""
+        fields = [SimpleNamespace(name=column) for column, _ in RUNS_COLUMNS]
+        return SimpleNamespace(schema=SimpleNamespace(fields=fields))
+
     def createDataFrame(self, rows: list[tuple[Any, ...]], schema: str) -> Frame:
         return Frame(self, rows)
 

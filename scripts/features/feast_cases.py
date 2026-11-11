@@ -85,6 +85,7 @@ class StubTable:
         self.columns = columns or {}
         self.rows = rows or []
         self.scans: list[int | None] = []
+        self.selected: tuple[str, ...] = ()
 
     def snapshot_by_name(self, name: str) -> Any:
         return SimpleNamespace(snapshot_id=self.main) if name == "main" and self.main is not None else None
@@ -94,6 +95,7 @@ class StubTable:
 
     def scan(self, *, selected_fields: tuple[str, ...], snapshot_id: int | None = None) -> StubScan:
         self.scans.append(snapshot_id)
+        self.selected = selected_fields
         return StubScan([{key: row.get(key) for key in selected_fields} for row in self.rows])
 
 
@@ -218,6 +220,27 @@ def case_e17_select(c: Checker) -> None:
     c.refused("a named run that does not exist is refused", lambda: reads.read_publication(catalog, namespace, "20200101T000000Z-deadbeef"), "exactly one")
     publication = reads.read_publication(catalog, namespace, RUN_A)
     c.check("the publication carries its snapshot set and digest", dict(publication.snapshot_set) == good and len(publication.snapshot_set_sha256) == 64)
+
+
+def case_e17_base_run(c: Checker) -> None:
+    """The publication carries the base run its row names: a model set row names one, a base row and a row of a table that never gained the column name none."""
+    namespace = "features_e2e"
+    good = {"feature_matrix_a": 11}
+    columns = {"run_id": "string", "committed_at": "timestamptz", "snapshot_set": "string", "base_run": "string"}
+
+    def catalog_of(rows: list[dict[str, Any]], with_column: bool = True) -> StubCatalog:
+        catalog, _ = stub_features(runs=rows)
+        catalog.tables[reads.RUNS_TABLE].columns = dict(columns) if with_column else {name: kind for name, kind in columns.items() if name != "base_run"}
+        return catalog
+
+    based = catalog_of([{**runs_row(RUN_B, T0 + timedelta(hours=1), good), "base_run": RUN_A}, {**runs_row(RUN_A, T0, good), "base_run": None}])
+    c.check("a model set row gives its base run", reads.read_publication(based, namespace).base_run == RUN_A)
+    c.check("a base row gives no base run", reads.read_publication(based, namespace, RUN_A).base_run is None)
+    old = catalog_of([runs_row(RUN_A, T0, good)], with_column=False)
+    c.check("a runs table that never gained the column reads its rows with no base run", reads.read_publication(old, namespace).base_run is None)
+    c.check("the scan of an old runs table does not select the missing column", "base_run" not in old.tables[reads.RUNS_TABLE].selected)
+    bad = catalog_of([{**runs_row(RUN_B, T0, good), "base_run": "not-a-run-id"}])
+    c.refused("a base run that is not a run ID is refused", lambda: reads.read_publication(bad, namespace), "base_run")
 
 
 def case_e17_before(c: Checker) -> None:
@@ -2123,6 +2146,7 @@ def case_e17_history(c: Checker) -> None:
 
 LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E17_select": (case_e17_select, "LC1 LC2 LC3 LH7"),
+    "E17_base_run": (case_e17_base_run, "LC1"),
     "E17_before": (case_e17_before, "LC4"),
     "E17_during": (case_e17_during, "LC5 LC8 LC9"),
     "E17_tables": (case_e17_tables, "LC6"),

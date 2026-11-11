@@ -72,7 +72,9 @@ RUNS_COLUMNS = (
     ("backup_name", "STRING"),
     ("backup_sha256", "STRING"),
     ("snapshot_set", "STRING"),
+    ("base_run", "STRING"),
 )
+NULL_COLUMN = "CAST(NULL AS STRING) AS {column}"
 MERGE_RUN = "MERGE INTO {table} AS t USING {view} AS s ON t.run_id = s.run_id WHEN NOT MATCHED THEN INSERT *"
 SELECT_RUN = "SELECT {columns} FROM {table} WHERE run_id = '{run_id}'"
 SELECT_HEAD = "SELECT {columns} FROM {table} ORDER BY committed_at DESC, run_id DESC LIMIT 1"
@@ -285,6 +287,7 @@ class Context:
     create_namespace: bool = False
     needs_sealed: bool = True
     accepted_result_sha256: str = ""
+    base_run: str | None = None
 
     def __post_init__(self) -> None:
         if self.mode not in self.plan.namespaces:
@@ -381,11 +384,16 @@ def committed_run(ctx: Context) -> dict[str, Any] | None:
     """This run's ``publish_runs`` row, or None."""
     if not table_exists(ctx, ctx.plan.runs_table):
         return None
-    columns = ", ".join(quote(name) for name, _ in RUNS_COLUMNS)
-    rows = ctx.sql(SELECT_RUN, columns=columns, table=ctx.fq(ctx.plan.runs_table), run_id=ctx.run_id).collect()
+    rows = ctx.sql(SELECT_RUN, columns=runs_select(ctx), table=ctx.fq(ctx.plan.runs_table), run_id=ctx.run_id).collect()
     if not rows:
         return None
     return run_row(rows[0])
+
+
+def runs_select(ctx: Context) -> str:
+    """The select list of every ``publish_runs`` column in ``RUNS_COLUMNS`` order. A column that the table has not gained yet (an old table) reads null."""
+    present = {field.name for field in ctx.spark.table(ctx.fq(ctx.plan.runs_table)).schema.fields}
+    return ", ".join(quote(name) if name in present else NULL_COLUMN.format(column=quote(name)) for name, _ in RUNS_COLUMNS)
 
 
 def run_row(row: Any) -> dict[str, Any]:
@@ -601,9 +609,16 @@ def runs_view(ctx: Context, row: Mapping[str, Any]) -> str:
 
 
 def ensure_runs_table(ctx: Context) -> None:
+    """Create the runs table, or add the columns an older table lacks (``base_run``); old rows read null in an added column."""
+    table = ctx.fq(ctx.plan.runs_table)
     if not table_exists(ctx, ctx.plan.runs_table):
         columns = ", ".join(f"{quote(name)} {kind}" for name, kind in RUNS_COLUMNS)
-        ctx.sql(CREATE_TABLE, table=ctx.fq(ctx.plan.runs_table), columns=columns)
+        ctx.sql(CREATE_TABLE, table=table, columns=columns)
+        return
+    present = {field.name for field in ctx.spark.table(table).schema.fields}
+    missing = [f"{quote(name)} {kind}" for name, kind in RUNS_COLUMNS if name not in present]
+    if missing:
+        ctx.sql(ADD_COLUMNS, table=table, columns=", ".join(missing))
 
 
 def commit_receipt(ctx: Context, backup_sha: str, snapshot_set: Mapping[str, int]) -> dict[str, Any]:
@@ -622,6 +637,21 @@ def restore_receipt(path: Path, receipt: Mapping[str, Any]) -> str:
             raise PublishError("commit.json records another commit of this run")
         return sha
     return write_record(path, receipt)
+
+
+def run_record(ctx: Context, manifest_sha: str, backup: Mapping[str, Any], snapshot_set: Mapping[str, int]) -> dict[str, Any]:
+    """The ``publish_runs`` row of this commit. ``base_run`` is the base run a features model set run read; every other run writes none."""
+    return {
+        "run_id": ctx.run_id,
+        "mode": ctx.mode,
+        "committed_at": datetime.now(UTC).isoformat(),
+        "sealed_sha256": ctx.sealed_sha256,
+        "export_manifest_sha256": manifest_sha,
+        "backup_name": backup["name"],
+        "backup_sha256": backup["backup_sha256"],
+        "snapshot_set": dict(snapshot_set),
+        "base_run": ctx.base_run,
+    }
 
 
 def commit_publish(ctx: Context) -> dict[str, Any]:
@@ -649,6 +679,7 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
             "backup_name": backup["name"],
             "backup_sha256": backup["backup_sha256"],
             "snapshot_set": snapshot_set,
+            "base_run": ctx.base_run,
         }
         if any(existing[key] != value for key, value in identity.items()):
             raise PublishError("this run is committed with a different identity, predecessor hash or snapshot set")
@@ -675,16 +706,7 @@ def commit_publish(ctx: Context) -> dict[str, Any]:
             ctx.sql(DROP_BRANCH, table=ctx.fq(name), branch=ctx.branch)
     ctx.faults.hit("commit:before_publish_runs")
     ensure_runs_table(ctx)
-    row = {
-        "run_id": ctx.run_id,
-        "mode": ctx.mode,
-        "committed_at": datetime.now(UTC).isoformat(),
-        "sealed_sha256": ctx.sealed_sha256,
-        "export_manifest_sha256": manifest_sha,
-        "backup_name": backup["name"],
-        "backup_sha256": backup["backup_sha256"],
-        "snapshot_set": snapshot_set,
-    }
+    row = run_record(ctx, manifest_sha, backup, snapshot_set)
     ctx.spark.sql(MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=runs_view(ctx, row)))
     ctx.faults.hit("commit:after_publish_runs")
     sha = write_record(ctx.path("commit.json"), commit_receipt(ctx, backup_sha, snapshot_set))
@@ -736,8 +758,7 @@ def published_head(ctx: Context) -> dict[str, Any] | None:
     """The newest ``publish_runs`` row: a reader reads this first and then reads only the snapshot IDs it names."""
     if not table_exists(ctx, ctx.plan.runs_table):
         return None
-    columns = ", ".join(quote(name) for name, _ in RUNS_COLUMNS)
-    rows = ctx.sql(SELECT_HEAD, columns=columns, table=ctx.fq(ctx.plan.runs_table)).collect()
+    rows = ctx.sql(SELECT_HEAD, columns=runs_select(ctx), table=ctx.fq(ctx.plan.runs_table)).collect()
     return run_row(rows[0]) if rows else None
 
 
@@ -745,8 +766,7 @@ def published_runs(ctx: Context) -> list[dict[str, Any]]:
     """Every committed set, oldest first."""
     if not table_exists(ctx, ctx.plan.runs_table):
         return []
-    columns = ", ".join(quote(name) for name, _ in RUNS_COLUMNS)
-    return [run_row(row) for row in ctx.sql(SELECT_ALL_RUNS, columns=columns, table=ctx.fq(ctx.plan.runs_table)).collect()]
+    return [run_row(row) for row in ctx.sql(SELECT_ALL_RUNS, columns=runs_select(ctx), table=ctx.fq(ctx.plan.runs_table)).collect()]
 
 
 def build_store(plan: Plan, local: Path | None) -> BackupStore | None:

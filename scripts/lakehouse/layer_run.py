@@ -712,8 +712,13 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
     if client is not None:
         check_input_versions(job, bucket, client)
         check_input_objects(job, bucket, client)
+    pin_flags = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
     for step in ("candidates", "reconcile", "backup", "commit"):
-        run_publish(job, [step, *common, "--sealed-sha256", sha, "--accepted-result-sha256", accepted, "--publish-dir", job.publish_folder, *job.local_flags])
+        step_flags = pin_flags if step == "commit" else []
+        run_publish(
+            job,
+            [step, *common, "--sealed-sha256", sha, "--accepted-result-sha256", accepted, "--publish-dir", job.publish_folder, *step_flags, *job.local_flags],
+        )
         if step == "reconcile":
             accept_reconcile(job)
         if step == "backup" and client is not None:
@@ -721,7 +726,6 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
         if step == "commit":
             accept_commit(job)
     if job.layer in RECORD_FILE:
-        pin_flags = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
         run_publish(
             job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *pin_flags, *job.local_flags]
         )

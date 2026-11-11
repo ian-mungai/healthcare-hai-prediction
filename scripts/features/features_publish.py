@@ -78,6 +78,11 @@ def base_run_of(pin: Path | None, feature_set: str) -> str | None:
     return run
 
 
+def step_base_run(step: str, pin: Path | None, feature_set: str) -> str | None:
+    """The base run that a step writes into the runs table or the record: the commit and record steps of a model set run read it from the base pin."""
+    return base_run_of(pin, feature_set) if step in ("commit", "record") else None
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """Run one features publish phase or record the verified committed set."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -90,7 +95,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--record", type=Path, default=Path("/workspace/out/features_snapshot.json"))
     parser.add_argument("--local-warehouse", type=Path)
     parser.add_argument("--feature-set", default=os.environ.get(feature_sets.VARIABLE, ""), help="the set this job publishes (empty: the single path)")
-    parser.add_argument("--base-pin", type=Path, help="record: the base pin of a model set run, which names the base run it read")
+    parser.add_argument("--base-pin", type=Path, help="commit and record: the base pin of a model set run, which names the base run it read")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if args.local_warehouse is not None and (args.mode != "publish_fixture" or os.environ.get("POLARIS_URI")):
         parser.error("a local warehouse is allowed only in publish_fixture without a remote catalog")
@@ -112,9 +117,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 create_namespace=args.local_warehouse is not None,
                 needs_sealed=publishing,
                 accepted_result_sha256=args.accepted_result_sha256,
+                base_run=step_base_run(args.step, args.base_pin, args.feature_set),
             )
             if args.step == "record":
-                result = record_committed(ctx, args.record, args.feature_set, base_run_of(args.base_pin, args.feature_set))
+                result = record_committed(ctx, args.record, args.feature_set, ctx.base_run)
             else:
                 result = {"candidates": publish_candidates, "reconcile": reconcile_candidates, "backup": catalog_backup, "commit": commit_publish}[args.step](
                     ctx

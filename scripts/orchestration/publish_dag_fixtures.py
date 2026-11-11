@@ -41,6 +41,7 @@ EARLY_ROW = """    ensure_runs_table(ctx)
         "backup_name": backup["name"],
         "backup_sha256": backup["backup_sha256"],
         "snapshot_set": snapshot_set,
+        "base_run": ctx.base_run,
     }
     ctx.spark.sql(MERGE_RUN.format(table=ctx.fq(ctx.plan.runs_table), view=runs_view(ctx, early)))
 """

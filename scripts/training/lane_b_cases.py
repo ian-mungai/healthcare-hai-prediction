@@ -183,7 +183,7 @@ class Publication:
     namespace: str
     run_id: str
     snapshot_set: dict[str, int]
-    base_run: str | None = BASE
+    base_run: str | None = None
 
     @property
     def snapshot_set_sha256(self) -> str:
@@ -202,10 +202,12 @@ class SyntheticReader:
         self.service_dropped: tuple[str, ...] = ()
         self.schema = json.loads((root / "data_contracts/features/feature_schema.json").read_bytes())
         self.schema_sha256 = hashlib.sha256((root / "data_contracts/features/feature_schema.json").read_bytes()).hexdigest()
-        self.selected = Publication(
-            "features_e2e", PUBLICATION, {name: index + 1 for index, name in enumerate((*extract.SUPPORT_TABLES, "feature_matrix_hospital"))}
-        )
-        self.heads = dict(self.selected.snapshot_set)
+        # The catalog's publish_runs rows: the model set run names its base run, the base run holds the support tables and names none.
+        self.published: dict[str, dict[str, Any]] = {
+            PUBLICATION: {"snapshot_set": {"feature_matrix_m1": 9}, "base_run": BASE},
+            BASE: {"snapshot_set": {name: index + 1 for index, name in enumerate((*extract.SUPPORT_TABLES, "feature_matrix_hospital"))}, "base_run": None},
+        }
+        self.heads = {run: dict(row["snapshot_set"]) for run, row in self.published.items()}
         self.references: tuple[str, ...] = ()
         self.historical_calls = 0
         self.scans: list[dict[str, Any]] = []
@@ -277,7 +279,7 @@ class SyntheticReader:
             "feature_build_inputs": [
                 {
                     "build_key": "current",
-                    "features_run_id": PUBLICATION,
+                    "features_run_id": BASE,
                     "gold_run_id": GOLD,
                     "gold_snapshot_set_sha256": "e" * 64,
                     "feature_schema_sha256": self.schema_sha256,
@@ -287,9 +289,11 @@ class SyntheticReader:
         }
 
     def publication(self, run: str | None) -> Publication:
-        """Return the named synthetic publication."""
-        require(run in (None, PUBLICATION), "another publication was requested")
-        return self.selected
+        """Return the named run's publication, built from its publish_runs row: the base run is read from the row, never handed over."""
+        run = PUBLICATION if run is None else run
+        require(run in self.published, "another publication was requested")
+        row = self.published[run]
+        return Publication("features_e2e", run, dict(row["snapshot_set"]), row["base_run"])
 
     def historical(self, references: Sequence[str], run: str) -> Any:
         """Materialize the historical result through the helper-shaped stand-in."""
@@ -299,7 +303,7 @@ class SyntheticReader:
         wanted = {reference.split(":", 1)[1] for reference in references} | {"spine_key", "event_timestamp"}
         return SimpleNamespace(
             frame=SimpleNamespace(to_pylist=lambda: self.projected(wanted)),
-            publication=self.selected,
+            publication=self.publication(PUBLICATION),
             feature_schema_sha256=self.schema_sha256,
             entity_count=len(self.rows),
         )
@@ -325,11 +329,11 @@ class SyntheticReader:
 
     def consistent(self, publication: Any, operation: Callable[[], Any]) -> Any:
         """Reject support-head movement around the consumed scans."""
-        require(self.heads == publication.snapshot_set, "support head differs before reading")
+        require(self.heads[publication.run_id] == publication.snapshot_set, "support head differs before reading")
         result = operation()
         if self.move_support_head:
-            self.heads["int_county_adjacency"] += 1
-        require(self.heads == publication.snapshot_set, "support head differs after reading")
+            self.heads[publication.run_id]["int_county_adjacency"] += 1
+        require(self.heads[publication.run_id] == publication.snapshot_set, "support head differs after reading")
         return result
 
     def scan(self, publication: Any, table: str, fields: tuple[str, ...]) -> list[dict[str, Any]]:
@@ -388,8 +392,8 @@ def extract_command_case(source: Path, folder: Path) -> None:
         require(selected is reader and namespace == "features_e2e", "the support read selected another catalog")
 
         def scan(*, selected_fields: tuple[str, ...], snapshot_id: int) -> Any:
-            require(snapshot_id == reader.selected.snapshot_set[name], "the support scan selected another snapshot")
-            rows = reader.scan(reader.selected, name, selected_fields)
+            require(snapshot_id == reader.published[BASE]["snapshot_set"][name], "the support scan selected another snapshot")
+            rows = reader.scan(reader.publication(BASE), name, selected_fields)
             return SimpleNamespace(to_arrow=lambda: SimpleNamespace(to_pylist=lambda: rows))
 
         return SimpleNamespace(scan=scan)
@@ -570,8 +574,9 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     cases.check(
         "extract_pinned_support_scans",
         lambda: require(
-            {row["table"]: row["snapshot_id"] for row in reader.scans} == {name: reader.selected.snapshot_set[name] for name in extract.SUPPORT_TABLES},
-            "support scans did not use the selected snapshots",
+            {row["table"]: row["snapshot_id"] for row in reader.scans}
+            == {name: reader.published[BASE]["snapshot_set"][name] for name in extract.SUPPORT_TABLES},
+            "support scans did not use the snapshots pinned by the base run of the model set publication",
         ),
     )
     cases.check(
@@ -662,7 +667,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             setattr(serving, attribute, value)
         cases.refuses(name, partial(run, folder / name, serving, JsonTableStandIn()), reason)
     unbased = SyntheticReader(source)
-    unbased.selected = Publication("features_e2e", PUBLICATION, dict(unbased.selected.snapshot_set), None)
+    unbased.published[PUBLICATION]["base_run"] = None
     cases.refuses("extract_publication_without_base_run_refused", partial(run, folder / "unbased", unbased, JsonTableStandIn()), "base_run")
     cases.check(
         "extract_retry_skips_reader", lambda: require(run(output)["resumed"] and reader.historical_calls == 1, "a completed extract read the publication again")
@@ -730,7 +735,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
             "control identity",
         ),
         ("extract_schema_identity_refused", lambda item: item.tables["feature_build_inputs"][0].update(feature_schema_sha256="0" * 64), "schema"),
-        ("extract_missing_support_refused", lambda item: item.selected.snapshot_set.pop("int_county_adjacency"), "support snapshot"),
+        ("extract_missing_support_refused", lambda item: item.published[BASE]["snapshot_set"].pop("int_county_adjacency"), "support snapshot"),
         (
             "extract_psi_period_boundary_refused",
             lambda item: item.tables["int_spine_validation_measures"][0].update(period_end=date(2024, 1, 1)),
