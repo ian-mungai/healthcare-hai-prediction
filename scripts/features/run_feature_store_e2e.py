@@ -422,6 +422,9 @@ def contract_cases(report: Report) -> None:
     longs = {table["long_table"] for table in schema["tables"].values()}
     support = {"int_spine_validation_measures", "int_county_adjacency"}
     models = {path.stem for path in (ROOT / columns.MODELS).rglob("*.sql")}
+    # The six model-set tables have their own DAGs and the domain check table is read inside the base build: none is in the base contract.
+    outside = {entry["table"] for entry in schema["model_sets"].values()} | {"int_cost_report_domain_checks"}
+    models -= outside
     report.case(
         "E02",
         "H1",
@@ -434,6 +437,7 @@ def contract_cases(report: Report) -> None:
         "the contract names every feature model and the inputs table: no model stays only in the build file",
         set(contract) == models | {"feature_build_inputs"},
         unpublished=sorted(models - set(contract)),
+        outside_the_base_contract=sorted(outside),
     )
     bridge_key = json.loads((ROOT / "data_contracts/lakehouse/gold_contract.json").read_text())["publish"]["tables"]["bridge_measure_control"]["merge_key"]
     bridges = sorted(name for name in models if columns.FILTER_NAME.fullmatch(name))
