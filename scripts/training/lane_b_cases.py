@@ -20,6 +20,7 @@ from unittest import mock
 
 from orchestration import code_digest, graph, launcher, mlflow_service, training_approvals, training_contract, training_render
 from orchestration.interface import SubmissionRefused, SubmissionRequest
+from scripts.features import feature_schema
 from scripts.features import training_extract as extract
 from scripts.lakehouse import memory_budget, run_lock
 from scripts.orchestration.broker import Broker, BrokerPaths, load_templates
@@ -149,6 +150,14 @@ def fixture(root: Path) -> dict[str, Any]:
             "label_matrix_hai_outcomes": {"role": "label", "columns": labels},
         },
         "servable": sorted(f"{column['view']}:{column['name']}" for column in [*groups, predictor, second]),
+        # Each model set's table and ordered columns: the extract records the schema hash of the set it trained on (feature_schema.set_schema_sha256).
+        "model_sets": {
+            f"m{number}": {
+                "table": f"feature_matrix_m{number}",
+                "columns": [{"name": column["name"], "type": column["type"]} for column in [*groups, predictor, *([second] if number > 1 else [])]],
+            }
+            for number in range(1, 7)
+        },
     }
     (root / "data_contracts/features/feature_schema.json").write_bytes(extract.canonical(schema) + b"\n")
     refs = [f"{predictor['view']}:{predictor['name']}"]
@@ -546,6 +555,14 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
         lambda: require(
             manifest["counts"] == {"spine": 9, "population_excluded": 3, "label_excluded": 3, "weight_excluded": 0, "included": 3},
             "population, status or finite published SIR filtering changed",
+        ),
+    )
+    cases.check(
+        "extract_manifest_names_the_feature_set_and_its_schema_hash",
+        lambda: require(
+            (manifest["feature_set"], manifest["feature_set_schema_sha256"])
+            == (PARAMETERS["model"], feature_schema.set_schema_sha256(PARAMETERS["model"], schema=reader.schema)),
+            f"the manifest does not name the model's set and its schema hash: {manifest.get('feature_set')} {manifest.get('feature_set_schema_sha256')}",
         ),
     )
     weight_cases(cases, source, folder, reader, writer, manifest, run)
