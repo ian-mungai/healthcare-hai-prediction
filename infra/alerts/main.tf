@@ -29,11 +29,8 @@ locals {
   topics    = local.subscribe ? { alerts = var.alerts_topic_arn, budget = local.budget_topic_arn } : {}
 }
 
-# Each subscription stays pending until it is confirmed; Terraform cannot confirm it. The owner confirms the alerts topic subscription from the email link. The
-# administrator confirms the budget one with AuthenticateOnUnsubscribe=true (bootstrap step 10), because a subscription confirmed from the link can be deleted
-# without a signed request. An existing confirmed hand subscription is adopted with the documented terraform import step, not recreated, and a budget one only when
-# ConfirmationWasAuthenticated is true. The project user holds sns:Unsubscribe on the platform alerts topic only. The administrator removes the budget
-# subscription at teardown or when the address changes. That the project user and an unsigned caller are both refused is not verified against AWS.
+# Each subscription stays pending until the owner clicks the confirmation link in the email that AWS sends for it; Terraform cannot confirm it. The project user holds
+# sns:* on both topics and their subscriptions, so the same project profile creates the two subscriptions at bootstrap and destroys them at teardown.
 resource "aws_sns_topic_subscription" "email" {
   for_each = local.topics
 

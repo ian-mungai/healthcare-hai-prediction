@@ -251,7 +251,7 @@ run "new_template_version_is_pinned_by_number" {
 }
 
 # The project user subscribes to the budget alert topic with an exact ARN. Terraform builds the topic name, so the policy template is rendered with the stack's own values and
-# compared with the ARN built from the name. Among the resources of the subscribe statement, those that begin with the topic ARN are the topic and its subscriptions (:*) only, so a renamed topic or a look-alike name fails here.
+# compared with the ARN built from the name. Among the resources of the alert topics statement, those that begin with the topic ARN are the topic and its subscriptions (:*) only, so a renamed topic or a look-alike name fails here.
 run "budget_topic_is_named_in_the_project_sns_policy" {
   command = plan
 
@@ -260,13 +260,13 @@ run "budget_topic_is_named_in_the_project_sns_policy" {
       toset([
         for resource in flatten([
           for statement in jsondecode(replace(replace(replace(replace(file("${path.module}/policies/healthcare_hai_prediction_sns_policy.json"), "$${AWS_REGION}", var.aws_region), "$${AWS_ACCOUNT_ID}", var.expected_account_id), "$${PROJECT_NAME}", var.project_name), "$${ENVIRONMENT}", var.environment)).Statement : statement.Resource
-          if statement.Sid == "SubscribeToAlertTopics"
+          if statement.Sid == "ManageAlertTopics"
         ]) : resource
         if startswith(resource, "arn:aws:sns:${var.aws_region}:${var.expected_account_id}:${aws_sns_topic.budget_alerts.name}")
       ]) ==
       toset(["arn:aws:sns:${var.aws_region}:${var.expected_account_id}:${aws_sns_topic.budget_alerts.name}", "arn:aws:sns:${var.aws_region}:${var.expected_account_id}:${aws_sns_topic.budget_alerts.name}:*"])
     )
-    error_message = "The subscribe statement of the project user's SNS policy must name this stack's topic by its exact ARN and its subscriptions (:*) only, and no longer name that begins with it."
+    error_message = "The alert topics statement of the project user's SNS policy must name this stack's topic by its exact ARN and its subscriptions (:*) only, and no longer name that begins with it."
   }
 }
 

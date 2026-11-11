@@ -345,6 +345,18 @@ def check_delivery_roles(path: Path = GITHUB_OIDC) -> list[str]:
     return problems
 
 
+def exact_wildcard_grant(document: dict[str, Any], action: str) -> bool:
+    """The one wildcard action the policies may hold is sns:*, and only where every resource of its statements is an exact ARN or an exact ARN with ``:*``."""
+    if action != policy_cases.ALERT_WILDCARD_ACTION:
+        return False
+    return not any(
+        "*" in resource.removesuffix(":*")
+        for statement in document["Statement"]
+        if statement["Effect"] == "Allow" and action in as_list(statement["Action"])
+        for resource in as_list(statement["Resource"])
+    )
+
+
 def check_inventory(documents: dict[str, dict[str, Any]], operations: dict[str, list[Request]]) -> list[str]:
     """Policy files, allowed actions, wildcards and sizes against the approved list."""
     problems = []
@@ -361,7 +373,7 @@ def check_inventory(documents: dict[str, dict[str, Any]], operations: dict[str, 
     for name, document in sorted((name, document) for name, document in documents.items() if name in user_names):
         service = template_service(name)
         actual = allowed_actions([document])
-        wildcard = sorted(action for action in actual if "*" in action)
+        wildcard = sorted(action for action in actual if "*" in action and not exact_wildcard_grant(document, action))
         if wildcard:
             problems.append(f"{service}: wildcard actions {wildcard}")
         for sid_action in sorted(actual - approved.get(service, set())):

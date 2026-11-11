@@ -2,59 +2,16 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "CreateTaggedAlertTopic",
+      "Sid": "ManageAlertTopics",
       "Effect": "Allow",
       "Action": [
-        "sns:CreateTopic"
-      ],
-      "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
-      "Condition": {
-        "StringEquals": {
-          "aws:RequestTag/Project": "${PROJECT_NAME}"
-        },
-        "ForAnyValue:StringEquals": {
-          "aws:TagKeys": [
-            "Project"
-          ]
-        }
-      }
-    },
-    {
-      "Sid": "ManageAlertTopic",
-      "Effect": "Allow",
-      "Action": [
-        "sns:DeleteTopic",
-        "sns:GetTopicAttributes",
-        "sns:SetTopicAttributes",
-        "sns:ListTagsForResource",
-        "sns:TagResource",
-        "sns:UntagResource"
-      ],
-      "Resource": "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}"
-    },
-    {
-      "Sid": "SubscribeToAlertTopics",
-      "Effect": "Allow",
-      "Action": [
-        "sns:Subscribe",
-        "sns:GetSubscriptionAttributes"
+        "sns:*"
       ],
       "Resource": [
         "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
         "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}:*",
         "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_budget_alerts_${ENVIRONMENT}",
         "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_budget_alerts_${ENVIRONMENT}:*"
-      ]
-    },
-    {
-      "Sid": "UnsubscribeFromPlatformAlertTopic",
-      "Effect": "Allow",
-      "Action": [
-        "sns:Unsubscribe"
-      ],
-      "Resource": [
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}:*"
       ]
     },
     {
