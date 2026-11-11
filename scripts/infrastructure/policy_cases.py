@@ -54,9 +54,10 @@ BUDGET_TOPIC = arn("sns", f"{P}_budget_alerts_{E}")
 SUBSCRIPTION_ID = "01234567-89ab-cdef-0123-456789abcdef"
 SUBSCRIPTION = f"{TOPIC}:{SUBSCRIPTION_ID}"
 BUDGET_SUBSCRIPTION = f"{BUDGET_TOPIC}:{SUBSCRIPTION_ID}"
-# Alert address subscription (owner, Nov 11 2026): the bootstrap alerts root subscribes the owner's address to every alert topic the project creates (names
-# <project>_*alerts_<environment>: the platform alerts topic and the IAM stack's budget alerts topic), so the project user subscribes and reads the
-# subscriptions on all of them. Only the platform alerts topic also takes Unsubscribe: the budget alerts must never be silenced by the project user.
+# Alert address subscription (owner, Nov 11 2026): the bootstrap alerts root subscribes the owner's address to every alert topic the project creates (the
+# platform alerts topic and the IAM stack's budget alerts topic), so the project user subscribes and reads the subscriptions on all of them. The policy names
+# each topic by its exact ARN: a pattern cannot show that a topic belongs to the project (check_alert_topics in run_policy_e2e holds the list to the Terraform
+# topics). Only the platform alerts topic also takes Unsubscribe: the project user holds no signed removal of the budget subscription.
 ALERT_SUBSCRIBE_STATEMENT = "SubscribeToAlertTopics"
 ALERT_UNSUBSCRIBE_STATEMENT = "UnsubscribeFromPlatformAlertTopic"
 ALERT_SUBSCRIBE_ACTIONS = ("Subscribe", "GetSubscriptionAttributes")
@@ -1227,7 +1228,7 @@ def alert_subscription_cases() -> Iterator[Case]:
     for action in ALERT_UNSUBSCRIBE_ACTIONS:
         for kind, resource in (("the alerts topic", TOPIC), ("a subscription of the alerts topic", SUBSCRIPTION)):
             yield Case(f"alert subscription: allow sns:{action} on {kind}", request(f"sns:{action}", resource, region=None), True, ALERT_UNSUBSCRIBE_STATEMENT)
-        # The budget alerts stay with the owner: the project user can subscribe to them and can never remove a subscription.
+        # The budget alerts stay with the owner: the project user can subscribe to them and holds no signed removal of a subscription.
         for kind, resource in (("the budget alerts topic", BUDGET_TOPIC), ("a subscription of the budget alerts topic", BUDGET_SUBSCRIPTION)):
             yield Case(f"alert subscription: refuse sns:{action} on {kind}", request(f"sns:{action}", resource, region=None), False)
     topics = {
@@ -1237,6 +1238,10 @@ def alert_subscription_cases() -> Iterator[Case]:
         "a topic without the environment": arn("sns", f"{P}_alerts"),
         "a topic that is not an alert topic": arn("sns", f"{P}_other_topic_{E}"),
         "a topic that only mentions alerts": arn("sns", f"{P}_alerts_{E}_other_topic_{E}"),
+        "the alerts topic of a project whose name extends the project name": arn("sns", f"{P}_other_alerts_{E}"),
+        "a topic of that project that only ends in alerts": arn("sns", f"{P}_other_notalerts_{E}"),
+        "a topic of this project that only ends in alerts": arn("sns", f"{P}_notalerts_{E}"),
+        "the budget alerts topic of a project whose name extends the project name": arn("sns", f"{P}_other_budget_alerts_{E}"),
         "the alerts topic of another environment": arn("sns", f"{P}_alerts_prod"),
         "the budget alerts topic of another environment": arn("sns", f"{P}_budget_alerts_prod"),
         "the alerts topic of another project": arn("sns", f"other_project_alerts_{E}"),
@@ -2674,11 +2679,14 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def subscribe_matches_any_infix(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [f"arn:aws:sns:{R}:{A}:*alerts_{E}", f"arn:aws:sns:{R}:{A}:*alerts_{E}:*"]
 
+    def subscribe_matches_project_infix(documents: dict[str, dict[str, Any]]) -> None:
+        by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [topic_pattern, f"{topic_pattern}:*"]
+
     def subscribe_ignores_environment(documents: dict[str, dict[str, Any]]) -> None:
         by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [f"arn:aws:sns:{R}:{A}:{P}_*alerts_*", f"arn:aws:sns:{R}:{A}:{P}_*alerts_*:*"]
 
     def subscribe_without_subscriptions(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = topic_pattern
+        by_sid(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [TOPIC, BUDGET_TOPIC]
 
     def subscribe_removed(documents: dict[str, dict[str, Any]]) -> None:
         drop(documents, "sns", ALERT_SUBSCRIBE_STATEMENT)
@@ -3795,6 +3803,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "the alert subscribe statement matches a topic of another project": (
             "alert subscription: refuse sns:Subscribe on the alerts topic of another project",
             subscribe_matches_any_infix,
+        ),
+        "the alert subscribe statement keeps the infix pattern of the project name": (
+            "alert subscription: refuse sns:Subscribe on the alerts topic of a project whose name extends the project name",
+            subscribe_matches_project_infix,
         ),
         "the alert subscribe statement ignores the environment": (
             "alert subscription: refuse sns:Subscribe on the alerts topic of another environment",

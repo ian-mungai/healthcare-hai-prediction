@@ -840,6 +840,74 @@ def check_boundary_sizes(directory: Path = BOUNDARY_DIRECTORY, variables: Path =
     ]
 
 
+SNS_TOPIC_RESOURCE = re.compile(r'^resource "aws_sns_topic" "(\w+)" \{(.*?)^\}', re.MULTILINE | re.DOTALL)
+SNS_TOPIC_NAME = re.compile(r'^\s*name\s*=\s*format\(local\.(?:platform_)?name, "([a-z][a-z_]*)"\)\s*$', re.MULTILINE)
+INFRA_DIRECTORY = REPO_ROOT / "infra"
+
+
+def terraform_topic_names(infra: Path = INFRA_DIRECTORY) -> tuple[set[str], list[str]]:
+    """The names of the SNS topics that the Terraform roots create, as the suffix of the project name pattern, and the topics whose name cannot be read."""
+    suffixes, unreadable = set(), []
+    for path in sorted(infra.rglob("*.tf")):
+        if ".terraform" in path.parts or "tests" in path.parts:
+            continue
+        for label, body in SNS_TOPIC_RESOURCE.findall(path.read_text(encoding="utf-8")):
+            name = SNS_TOPIC_NAME.search(body)
+            if name:
+                suffixes.add(name.group(1))
+            else:
+                unreadable.append(f"{path.relative_to(infra)}: aws_sns_topic.{label}")
+    return suffixes, unreadable
+
+
+def check_alert_topics(documents: dict[str, dict[str, Any]], infra: Path = INFRA_DIRECTORY) -> list[str]:
+    """The subscribe statement and the case inventory name exactly the SNS topics that Terraform creates, each as an exact ARN with its subscriptions.
+
+    A topic pattern cannot show that a topic belongs to the project, so a new topic fails here until the policy names it."""
+    suffixes, unreadable = terraform_topic_names(infra)
+    problems = [f'the name of {item} is not format(local.name, "<suffix>"), so the topic cannot be checked against the policy' for item in unreadable]
+    topics = {f"arn:aws:sns:{policy_cases.R}:{policy_cases.A}:{policy_cases.P}_{suffix}_{policy_cases.E}" for suffix in suffixes}
+    expected = topics | {f"{topic}:*" for topic in topics}
+    actual = resources(documents["healthcare_hai_prediction_sns_policy"], policy_cases.ALERT_SUBSCRIBE_STATEMENT)
+    problems += [
+        f"sns policy: a topic that Terraform creates is not named in {policy_cases.ALERT_SUBSCRIBE_STATEMENT}: {item}" for item in sorted(expected - actual)
+    ]
+    problems += [
+        f"sns policy: {policy_cases.ALERT_SUBSCRIBE_STATEMENT} names a resource that is not a topic Terraform creates: {item}"
+        for item in sorted(actual - expected)
+    ]
+    cases = set(policy_cases.ALERT_TOPICS.values())
+    problems += [f"policy cases: the alert topic inventory differs from the topics Terraform creates: {item}" for item in sorted(cases ^ topics)]
+    return problems
+
+
+def alert_topic_checks(documents: dict[str, dict[str, Any]]) -> dict[str, bool]:
+    """The subscribe statement names exactly the topics Terraform creates, and a planted change to the topics, the policy or the pattern fails it."""
+    sns = "healthcare_hai_prediction_sns_policy"
+    infix = [f"arn:aws:sns:{policy_cases.R}:{policy_cases.A}:{policy_cases.P}_*alerts_{policy_cases.E}"]
+    checks = {"the shipped policy names the topics that Terraform creates": not check_alert_topics(documents)}
+    mutated = copy.deepcopy(documents)
+    policy_cases.by_sid({sns: mutated[sns]}, "sns", policy_cases.ALERT_SUBSCRIBE_STATEMENT)["Resource"] = [*infix, f"{infix[0]}:*"]
+    checks["the old infix pattern is refused"] = bool(check_alert_topics(mutated))
+    mutated = copy.deepcopy(documents)
+    statement = policy_cases.by_sid({sns: mutated[sns]}, "sns", policy_cases.ALERT_SUBSCRIBE_STATEMENT)
+    statement["Resource"] = [item for item in statement["Resource"] if "budget" not in item]
+    checks["a policy that misses the budget alerts topic is refused"] = bool(check_alert_topics(mutated))
+    with tempfile.TemporaryDirectory(prefix="alert_topics_") as scratch:
+        root = Path(scratch)
+        for source in (REPO_ROOT / "infra").rglob("*.tf"):
+            if ".terraform" not in source.parts and "tests" not in source.parts:
+                target = root / source.relative_to(REPO_ROOT / "infra")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+        checks["a copy of the Terraform tree passes"] = not check_alert_topics(documents, root)
+        (root / "platform" / "audit.tf").write_text('resource "aws_sns_topic" "audit" {\n  name = format(local.name, "audit_alerts")\n}\n', encoding="utf-8")
+        checks["a new alert topic that the policy does not name is refused"] = bool(check_alert_topics(documents, root))
+        (root / "platform" / "audit.tf").write_text('resource "aws_sns_topic" "audit" {\n  name = "fixed_name"\n}\n', encoding="utf-8")
+        checks["a topic name that cannot be read is refused"] = bool(check_alert_topics(documents, root))
+    return checks
+
+
 def run_suite(output: Path) -> dict[str, Any]:
     """Evaluate the shipped policies, then every planted defect, and return the report."""
     started = time.perf_counter()
@@ -861,6 +929,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         + check_delivery_roles()
     )
     name_checks = name_defects(documents)
+    topic_checks = alert_topic_checks(documents)
     defects = []
     for description, (label_prefix, mutation) in policy_cases.planted_defects().items():
         mutated = copy.deepcopy(documents)
@@ -891,7 +960,13 @@ def run_suite(output: Path) -> dict[str, Any]:
         for item in name_checks
     )
     passed = (
-        not failures and not problems and all(item["caught"] for item in defects) and names_ok and scripts_ok and all(item["passed"] for item in context_checks)
+        not failures
+        and not problems
+        and all(item["caught"] for item in defects)
+        and names_ok
+        and scripts_ok
+        and all(item["passed"] for item in context_checks)
+        and all(topic_checks.values())
     )
     status = "passed" if passed else "failed"
     report = {
@@ -920,6 +995,7 @@ def run_suite(output: Path) -> dict[str, Any]:
         },
         "planted_defects": defects,
         "planted_name_defects": name_checks,
+        "alert_topic_inventory_checks": topic_checks,
         "script_tests": script_report,
         "seconds": round(time.perf_counter() - started, 2),
         "limits": (

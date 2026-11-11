@@ -40,8 +40,10 @@
         "sns:GetSubscriptionAttributes"
       ],
       "Resource": [
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_*alerts_${ENVIRONMENT}",
-        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_*alerts_${ENVIRONMENT}:*"
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}",
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_alerts_${ENVIRONMENT}:*",
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_budget_alerts_${ENVIRONMENT}",
+        "arn:aws:sns:${AWS_REGION}:${AWS_ACCOUNT_ID}:${PROJECT_NAME}_budget_alerts_${ENVIRONMENT}:*"
       ]
     },
     {
