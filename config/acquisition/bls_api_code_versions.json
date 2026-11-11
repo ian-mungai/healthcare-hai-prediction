@@ -6738,6 +6738,257 @@
       ],
       "review": "plans/wave3_20261012/airflow_sign_in/secrets_migration_review_round2.md",
       "reviewed_on": "2026-10-21"
+    },
+    {
+      "version": 26,
+      "code_sha256": [
+        {
+          "file": "scripts/acquisition/api_fallbacks.py",
+          "sha256": "d4879dae6a87191033b5c549634a5cda80adda5bde774ae4efcbf7122317deb0"
+        },
+        {
+          "file": "scripts/acquisition/api_keys.py",
+          "sha256": "12298531fb092d214ddea6a064ccc0ff2ab8da735bb0255c22c75e8e459ad4bb"
+        },
+        {
+          "file": "scripts/acquisition/archive_review.py",
+          "sha256": "59a6b2660eb64c96c8003b6dc47b7a3535bc32b07627e99001aaca35157cb6f8"
+        },
+        {
+          "file": "scripts/acquisition/batch.py",
+          "sha256": "9599436cfdb72cbacc4655c941109cffcb57ba8ee65687d359c1b80eb5101905"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_contract.py",
+          "sha256": "1d1be8604c55376d8ca6a69d44659ca61179a498a28930f50a2bfbb2d1d4b008"
+        },
+        {
+          "file": "scripts/acquisition/bls_api_transport.py",
+          "sha256": "ab20cccad03c6543176f66af6018fcd5c80e51bd29bf84569b5d928463aabf76"
+        },
+        {
+          "file": "scripts/acquisition/capture.py",
+          "sha256": "e86c7ed23cee4b9c00968413fb06de9388da2b8bbd730fb041b41abadf5533aa"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_contract.py",
+          "sha256": "909ad5114f5eed432bc3cb5281a8cc392bad05b997950a203834b1e0cf31a556"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_api_transport.py",
+          "sha256": "867d114e2de9d1277339f0b74f77a888264ca257f3576a0b70c1bbe6428a7265"
+        },
+        {
+          "file": "scripts/acquisition/census_acs_detailed_contract.py",
+          "sha256": "eb6ee929260b10495216d941b9af5947eb0f91ea96c667407e4cba3784500052"
+        },
+        {
+          "file": "scripts/acquisition/cli_tools.py",
+          "sha256": "d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be"
+        },
+        {
+          "file": "scripts/acquisition/cms_owners_contract.py",
+          "sha256": "a18aa0eeecd68de75c211625e0c910c7ac32ae14715fb9d00c6abf861216507a"
+        },
+        {
+          "file": "scripts/acquisition/code_closure.py",
+          "sha256": "2af801c4be9a84f9d4c75a27b6334ee3f3969fffea680a9dd666cee9cd6bcc77"
+        },
+        {
+          "file": "scripts/acquisition/code_versions.py",
+          "sha256": "56faf9600a418868f5fcaf2ff7b9cc9396b626323825f7eb47d60fadc9fad687"
+        },
+        {
+          "file": "scripts/acquisition/collect_bls_api.py",
+          "sha256": "07244f038c32d9da6dd8f5b8c32b1b185b86c3e7425c131da1ee4722cb207ec4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_api.py",
+          "sha256": "c81862d8eed2b2b443db45085a520c2b6a5f69c787a697500d8e296ff9381fb4"
+        },
+        {
+          "file": "scripts/acquisition/collect_census_acs_detailed.py",
+          "sha256": "5dba2005b0522ec147047488982f084fbf828182a909dad89ee60fed0cfe3db7"
+        },
+        {
+          "file": "scripts/acquisition/collect_hud_api.py",
+          "sha256": "72777806719494b2aef64daed5eb4b57ad9593a22dcf2b131e0c52e20202d83b"
+        },
+        {
+          "file": "scripts/acquisition/collect_mmd_api.py",
+          "sha256": "8c94934dfd8edf00bc20f332b84bfa4a8ded6c7ee9ea42830923a91c67b9aa4d"
+        },
+        {
+          "file": "scripts/acquisition/collection_layout.py",
+          "sha256": "12267b4b3642b9abb16acf1a303cd668010775c5a24440118de915f0f2ceb138"
+        },
+        {
+          "file": "scripts/acquisition/collector_state.py",
+          "sha256": "9879b4137b41ef3e2adb95d371637a8f38752043d3dfe1749b21213d24856dcd"
+        },
+        {
+          "file": "scripts/acquisition/compare_mmd_api.py",
+          "sha256": "c2504c02990377ce0fbe52b18c85ee3a752637aad43e40a385d135739b364be9"
+        },
+        {
+          "file": "scripts/acquisition/county_change_pages.py",
+          "sha256": "0222909e6376be38a50c8afc4614e91d07effd9b97f60272a8eda87d2674f2f1"
+        },
+        {
+          "file": "scripts/acquisition/data_paths.py",
+          "sha256": "2113d95ad89c04c2d62ab988e4cafb5421d982ce8160918a8ced4529a5fa3b42"
+        },
+        {
+          "file": "scripts/acquisition/dataset_layout.py",
+          "sha256": "f4f2ab6d2a81e9ee387633bf37a4b5b566332e5302df9363a3094f9f8d96d4a8"
+        },
+        {
+          "file": "scripts/acquisition/echo_guard.py",
+          "sha256": "2b7e245c7cf33e1c67aea291ba601dc157be0530aeabd5209ce11d7e8bda834c"
+        },
+        {
+          "file": "scripts/acquisition/hcai_util_contract.py",
+          "sha256": "60423f9b90449a5f6385f57a9a60c3b17cdc2d7f13e8cdaec21bc669567fb32e"
+        },
+        {
+          "file": "scripts/acquisition/history_redirects.py",
+          "sha256": "c60e0949ce12fcaeb34d96005c27e52304cd23e6a514ed982179157dc24330d1"
+        },
+        {
+          "file": "scripts/acquisition/history_routes.py",
+          "sha256": "a6ca63392135043d56c9267c324278b1f38962817e49fc60f8f5aaf504cdf75e"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_contract.py",
+          "sha256": "a71873027da11e196c7042fef9d786e6294ac68960235b337fb4b53e265c1fbd"
+        },
+        {
+          "file": "scripts/acquisition/hud_api_transport.py",
+          "sha256": "ce322d9fbae092432b7ed111511bbb9a6d242744a2f9fc984d70e69936f9cafd"
+        },
+        {
+          "file": "scripts/acquisition/hud_xlsx_contract.py",
+          "sha256": "aba8eb961541d527804488cd707cba98c5186a6d341728892700f56de6cbe45c"
+        },
+        {
+          "file": "scripts/acquisition/legacy_versions.py",
+          "sha256": "7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d"
+        },
+        {
+          "file": "scripts/acquisition/mapped_archives.py",
+          "sha256": "050660740ca0c4403977a67d1d63dd6d85e895bfe81e4772286cbd77020d93f9"
+        },
+        {
+          "file": "scripts/acquisition/mmd_api_contract.py",
+          "sha256": "f5b96f4ef070f4c2c6fb40c14a279822107e1f3643ad26006d015cd6c472e217"
+        },
+        {
+          "file": "scripts/acquisition/nber_hc_contract.py",
+          "sha256": "0d2d52c8738dfbcf20ac059584c4e5cb10d36211055fd766352219097fcf3cc2"
+        },
+        {
+          "file": "scripts/acquisition/onc_mu_contract.py",
+          "sha256": "a26cdd2283027a4bddd03b6d3de72294a840150f2d45252b592aa7d415e222fa"
+        },
+        {
+          "file": "scripts/acquisition/plan_remaining.py",
+          "sha256": "ec050126249abd99851b475a76f576b141f9ea5c397623e3d8e855e6b053059f"
+        },
+        {
+          "file": "scripts/acquisition/process.py",
+          "sha256": "513147dbaa392c4860cf41476ab48c91305d5525c3990bf20faac43e3889dcd7"
+        },
+        {
+          "file": "scripts/acquisition/raw_root.py",
+          "sha256": "e67fc690eb15e93be1e11484a2b83cdfcc2b79ef7ba3bc11de2f99ba9c1d0806"
+        },
+        {
+          "file": "scripts/acquisition/redownload_controls.py",
+          "sha256": "97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7"
+        },
+        {
+          "file": "scripts/acquisition/reference_download_contract.py",
+          "sha256": "34718470b9a35ae243c23f3767c8f1d846763a879d2ca97ea05d863760c8409d"
+        },
+        {
+          "file": "scripts/acquisition/registry_additions.py",
+          "sha256": "08deadb91a9750591a3631b8deaaa10ddefbaa59ec25e0c1ff32baaf80b74ee3"
+        },
+        {
+          "file": "scripts/acquisition/reuse_capture.py",
+          "sha256": "6fd14287a568bbc60502f50a22d7689f1970330c1dfadcc5923ef5a6ceeaf543"
+        },
+        {
+          "file": "scripts/acquisition/s3_store.py",
+          "sha256": "94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2"
+        },
+        {
+          "file": "scripts/acquisition/single_copy.py",
+          "sha256": "1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8"
+        },
+        {
+          "file": "scripts/acquisition/source_metadata.py",
+          "sha256": "28de39d7e1f5b503b5c4232f4eee1b5a4419712318c1066495ad72a876865fa6"
+        },
+        {
+          "file": "scripts/acquisition/source_registry.py",
+          "sha256": "cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
+        },
+        {
+          "file": "scripts/acquisition/storage_controls.py",
+          "sha256": "ab2bb075930f286e5aaa9e483d71a386f02c24573978814a6476a3d598d36efd"
+        },
+        {
+          "file": "scripts/acquisition/store_cms_owners.py",
+          "sha256": "a42f69215e99ae64a97db9f7857fd8620818248fcde07c293878a8aa5ce580d4"
+        },
+        {
+          "file": "scripts/acquisition/store_hcai_util.py",
+          "sha256": "e1056a53734cb6e0891ec6cda44c53399b1fe18c878a7b1fb2ccb610d7b05e98"
+        },
+        {
+          "file": "scripts/acquisition/store_nber_hc.py",
+          "sha256": "dd68c5cc5d73b05628db11c035d7f42d266a0a28796587bc152f8d68ee2680b2"
+        },
+        {
+          "file": "scripts/acquisition/store_onc_mu.py",
+          "sha256": "f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea"
+        },
+        {
+          "file": "scripts/acquisition/store_reference_download.py",
+          "sha256": "024f57699ae4eb78c8ed0bacc6b885a45fee5f7cd2bd8b4f51f00c0190af5371"
+        },
+        {
+          "file": "scripts/acquisition/store_wonder_export.py",
+          "sha256": "944bc986a749bbf7ae03eabd13f78909b621c9eedbb6982566269b2706103159"
+        },
+        {
+          "file": "scripts/acquisition/transport.py",
+          "sha256": "58a30366ed975c7a069c0fe513bd8e7fb241d7abcd542251386569f870cd2684"
+        },
+        {
+          "file": "scripts/acquisition/wonder_export_contract.py",
+          "sha256": "3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643"
+        },
+        {
+          "file": "scripts/infrastructure/render_project_config.py",
+          "sha256": "f9e7c6be04951e7ecf765ed562300d4fc5864a18040d83a0c6733b512f3fe0cd"
+        },
+        {
+          "file": "scripts/process.py",
+          "sha256": "58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
+        },
+        {
+          "file": "scripts/sdk_logs.py",
+          "sha256": "9e9f986a690edb02c365bdefe6ac07d2118d00831dadb6edc276bd37ef4eeb57"
+        }
+      ],
+      "reason": "Run 3 redownload route on the direct ECS publisher: the key read gained a task role reader for one collector's key, the approved hosts guard and the raw root were added, each BLS request reserves in a durable ledger and captures are stored under the raw root. All the data is public, so the per-unit classification gate and the filtered switch are gone. No other collector logic for the published data changed. This collector's own E2E passed on this code. Prior versions retained. No model-use approval. Relisted once on feat/run3-route-direct-salvage (main 0bddd8c, publisher on the direct ECS launch, Run 3 whole-file intake with bronze person-field protection): the closure holds main's NBER modules that the shared code reaches; the collector's own E2E passed on this code.",
+      "evidence": [
+        "data/e2e/person_fields_salvage_20261110b/code_versions_r2/bls_api.json"
+      ],
+      "review": "independent review of the redownload route is pending; this version is redone if the review changes this code",
+      "reviewed_on": "2026-11-10"
     }
   ]
 }
