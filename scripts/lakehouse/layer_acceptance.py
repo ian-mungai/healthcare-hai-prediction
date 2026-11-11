@@ -43,7 +43,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse import version_listing
+from scripts.lakehouse import pins, version_listing
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -236,13 +236,18 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     }
 
 
-def git_file(revision: str, path: str) -> Any:
-    """A JSON file as it is at the code revision the run unpacked."""
+def git_text(revision: str, path: str) -> str:
+    """A file as it is at the code revision the run unpacked."""
     result = run_command("git", ["show", f"{revision}:{path}"], cwd=ROOT, timeout=30)
     if result.returncode != 0:
         raise AcceptanceError("a frozen file of the run's revision is not in this checkout")
+    return result.stdout
+
+
+def git_file(revision: str, path: str) -> Any:
+    """A JSON file as it is at the code revision the run unpacked."""
     try:
-        return json.loads(result.stdout)
+        return json.loads(git_text(revision, path))
     except ValueError:
         raise AcceptanceError("a frozen file of the run's revision is not JSON") from None
 
@@ -257,11 +262,12 @@ def contract(layer: str, revision: str) -> tuple[set[str], str]:
 
 
 def bronze_tables(revision: str) -> set[str]:
-    """The pinned bronze tables of the table map at the run's revision, as ``pins.mapped_tables`` reads them (and the file metadata table)."""
+    """The pinned bronze tables at the run's revision, as ``pins.mapped_tables`` reads them: the mapped tables a silver source declares, and file_metadata."""
     try:
-        return {entry["table"] for entry in git_file(revision, BRONZE_MAP)["tables"]} | {"file_metadata"}
+        mapped = {entry["table"] for entry in git_file(revision, BRONZE_MAP)["tables"]}
     except (KeyError, TypeError):
         raise AcceptanceError("the bronze table map of the run's revision has an unexpected shape") from None
+    return set(pins.pinned_tables(mapped, pins.declared_sources(git_text(revision, str(pins.SOURCES)))))
 
 
 def producer_records(records: Records, layer: str, folder: Path, source: Any, namespace: str, snapshots: Mapping[str, Any]) -> tuple[bool, list[str]]:
@@ -433,7 +439,9 @@ def evidence_checks(
             namespace,
         ) and record.get("snapshot_set") == snapshot_set
         checks["the records name the layer's own namespace in real mode"] &= record.get("mode") == "real" and record.get("namespace") == namespace
-        checks["H3: the pinned table set is the bronze table map of the run's revision"] = set(pinned) == bronze_tables(revision) and all(pinned.values())
+        checks["H3: the pinned table set is the silver-declared bronze tables of the run's revision"] = set(pinned) == bronze_tables(revision) and all(
+            pinned.values()
+        )
     else:
         checks |= producer_checks(records, layer, run, revision, pinned, arguments.input_evidence, arguments.input_report)
         input_run = str(pinned.get("source_run_id"))

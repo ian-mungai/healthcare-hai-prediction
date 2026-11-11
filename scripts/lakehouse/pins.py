@@ -1,4 +1,4 @@
-"""Pin the bronze snapshot every mapped table is at before a build, and check after the build that none moved.
+"""Pin the bronze snapshot every table the silver build reads is at before a build, and check after the build that none moved.
 
 Run from the repository root; the catalog script asks the launcher to run it as a ``spark_read`` attempt with the read-only principal:
 
@@ -24,9 +24,11 @@ from pathlib import Path
 from typing import Any
 
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
+SOURCES = Path("dbt/models/silver/staging/_bronze__sources.yml")
 RUNS = Path("data/analytics/dbt/runs")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}")
+SOURCE_TABLE = re.compile(r"\s*- name:\s*(\S+)\s*")
 # Iceberg's refs metadata table; every name is checked against IDENTIFIER first.
 REFS_SQL = "SELECT snapshot_id FROM {catalog}.{namespace}.{table}.refs WHERE name = 'main'"
 
@@ -35,10 +37,47 @@ class PinError(RuntimeError):
     """A table is missing or has no snapshot, a pin exists already or a pins file is malformed."""
 
 
-def mapped_tables(table_map: Path = TABLE_MAP) -> list[str]:
-    """The bronze tables of the committed table map [891]."""
+def declared_sources(text: str) -> set[str]:
+    """The table names under every ``tables:`` key of a dbt sources file, read with the standard library (the Spark image has no YAML parser)."""
+    names: set[str] = set()
+    block_indent: int | None = None
+    item_indent: int | None = None
+    for line in text.splitlines():
+        content = line.strip()
+        if not content or content.startswith("#"):
+            continue
+        indent = len(line) - len(line.lstrip())
+        if block_indent is not None and indent <= block_indent:
+            block_indent = item_indent = None
+        if block_indent is None:
+            block_indent = indent if content == "tables:" else None
+            continue
+        item_indent = indent if item_indent is None else item_indent
+        match = SOURCE_TABLE.fullmatch(line) if indent == item_indent else None
+        if match:
+            names.add(match.group(1).strip("'\""))
+    return names
+
+
+def pinned_tables(mapped: set[str], declared: set[str]) -> list[str]:
+    """The pin's table list: the mapped tables that a silver source declares, and the file metadata table."""
+    return sorted((mapped & declared) | {"file_metadata"})
+
+
+def mapped_tables(table_map: Path = TABLE_MAP, sources: Path | None = None) -> list[str]:
+    """The bronze tables to pin [891]: those in the committed table map that a silver dbt source declares, and the file metadata table.
+
+    A table that no silver source declares is not read by silver, so it is neither pinned nor needed. A declared table that bronze lacks still stops the pin.
+    """
+    sources = sources or table_map.parents[2] / SOURCES
     document = json.loads(table_map.read_text())
-    tables = sorted({entry["table"] for entry in document["tables"]} | {"file_metadata"})
+    try:
+        declared = declared_sources(sources.read_text())
+    except OSError as exc:
+        raise PinError(f"{sources} cannot be read: {type(exc).__name__}") from exc
+    if not declared:
+        raise PinError(f"{sources} declares no bronze tables")
+    tables = pinned_tables({entry["table"] for entry in document["tables"]}, declared)
     bad = [table for table in tables if not IDENTIFIER.fullmatch(table)]
     if bad:
         raise PinError(f"table map names tables that are not plain identifiers: {bad}")

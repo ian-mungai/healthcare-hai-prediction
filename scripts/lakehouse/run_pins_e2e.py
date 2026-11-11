@@ -89,6 +89,31 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     results["a malformed pins file is refused"] = refused(lambda: pins.read_pins(bad), "must be a non-empty JSON object")
     results["a malformed run ID is refused"] = refused(lambda: pins.run_path("run_a"), "is not of the form")
     results["the committed table map names only plain identifiers"] = len(pins.mapped_tables()) > 0
+    return results | source_scenarios(spark, root)
+
+
+def source_scenarios(spark: Any, root: Path) -> dict[str, bool]:
+    """The pin lists the tables a silver source declares, not every mapped table [891]."""
+    from scripts.lakehouse.session import CATALOG
+
+    checkout = root / "checkout"
+    (checkout / pins.TABLE_MAP.parent).mkdir(parents=True)
+    (checkout / pins.SOURCES.parent).mkdir(parents=True)
+    table_map = checkout / pins.TABLE_MAP
+    table_map.write_text(json.dumps({"tables": [{"table": name} for name in ("first", "second", "never_loaded")]}))
+    sources = "sources:\n  - name: bronze\n    tables:\n      - name: file_metadata\n      - name: first\n      - name: second\n"
+    (checkout / pins.SOURCES).write_text(sources)
+    tables = pins.mapped_tables(table_map)
+    results = {
+        "the pin lists the declared tables, not a mapped table no silver source declares": tables == ["file_metadata", "first", "second"],
+        "a mapped table that no source declares and bronze lacks does not stop the pin": sorted(pins.current_snapshots(spark, CATALOG, NAMESPACE, tables))
+        == tables,
+    }
+    (checkout / pins.SOURCES).write_text(sources + "      - name: never_loaded\n")
+    declared = pins.mapped_tables(table_map)
+    results["a declared table that bronze lacks stops the pin"] = refused(
+        lambda: pins.current_snapshots(spark, CATALOG, NAMESPACE, declared), "never_loaded cannot be read"
+    )
     return results
 
 

@@ -30,7 +30,7 @@ from unittest import mock
 
 from scripts.features.publication_reads import Publication
 from scripts.lakehouse import layer_acceptance as acceptance
-from scripts.lakehouse import layer_run
+from scripts.lakehouse import layer_run, pins
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,8 +72,12 @@ def revision() -> str:
 REVISION = revision()
 
 
+def frozen_text(path: str) -> str:
+    return run_command("git", ["show", f"{REVISION}:{path}"], cwd=ROOT, timeout=30).stdout
+
+
 def frozen(path: str) -> Any:
-    return json.loads(run_command("git", ["show", f"{REVISION}:{path}"], cwd=ROOT, timeout=30).stdout)
+    return json.loads(frozen_text(path))
 
 
 CONTRACT_TABLES = {
@@ -81,7 +85,9 @@ CONTRACT_TABLES = {
     "gold": sorted(frozen("data_contracts/lakehouse/gold_contract.json")["publish"]["tables"]),
     "features": sorted(frozen("data_contracts/lakehouse/features_publish.json")["publish"]["tables"]),
 }
-BRONZE_TABLES = sorted({entry["table"] for entry in frozen("config/lakehouse/bronze_tables.json")["tables"]} | {"file_metadata"})
+BRONZE_TABLES = pins.pinned_tables(
+    {entry["table"] for entry in frozen("config/lakehouse/bronze_tables.json")["tables"]}, pins.declared_sources(frozen_text(str(pins.SOURCES)))
+)
 
 
 @dataclass(frozen=True)
@@ -477,7 +483,7 @@ NAMES = {
     "commit": "publish_runs was written last: the commit record follows the backup and is committed",
     "snapshots": "the commit names every candidate snapshot ID",
     "record": "the silver record equals the commit",
-    "bronze": "H3: the pinned table set is the bronze table map of the run's revision",
+    "bronze": "H3: the pinned table set is the silver-declared bronze tables of the run's revision",
     "pin": "H3: the gold pin is complete: its run, mode, namespace and the silver contract's tables",
     "producer_set": "H3: the pin names the silver run and its complete snapshot set",
     "signed": "the silver producer is signed: its report passed, covers its record and matches its signature",
