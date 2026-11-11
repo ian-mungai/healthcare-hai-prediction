@@ -75,7 +75,11 @@ OTHER_ACCOUNTS = {"all-zero": "0" * 12, "all-two": "2" * 12, "sequential": ACCOU
 ENV_VALUE = "acme" + "-admin-profile"
 # The AWS CLI profile name of this project, a local label that .privacy_allowlist names for its one tracked file.
 PROFILE_LABEL = "healthcare_hai" + "_prediction_dev"
-PROFILE_FILE = "scripts/infrastructure/iam_preflight_policies.py"
+PROFILE_FILE = "scripts/deploy.sh"
+# The analytics container user's home and OpenMetadata's default admin login are the two exact values the scan exempts. Near variants are built
+# beside them, so this file holds no home path or address the scan would flag.
+ANALYTICS_HOME = "/ho" + "me/analytics"
+ADMIN_LOGIN = "admin" + "@" + "open-metadata.org"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
 PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, *OTHER_ACCOUNTS.values(), ENV_VALUE, PROFILE_LABEL]
@@ -2181,6 +2185,24 @@ CASES = [
     Case("temp path", "privacy-scan", False, {"notes.md": f"Scratch at {TEMP_PATH}\n"}),
     Case("personal email", "privacy-scan", False, {"notes.md": f"Ask {PERSONAL_EMAIL}\n"}),
     Case("phone number", "privacy-scan", False, {"notes.md": f"Call {PHONE}\n"}),
+    Case(
+        "analytics container home is exempt",
+        "privacy-scan",
+        True,
+        {"services/analytics/Dockerfile": f"RUN cat {ANALYTICS_HOME}/extensions.csv\n", "notes.md": f"The user home is {ANALYTICS_HOME}.\n"},
+    ),
+    Case("analytics-like home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME}2/run.log\n"}),
+    Case("another home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME[:-9]}analyst/run.log\n"}),
+    Case("analytics name under the user folder", "privacy-scan", False, {"notes.md": f"Log at {HOME_PATH.split('jdoe')[0]}analytics/run.log\n"}),
+    Case(
+        "OpenMetadata admin login is exempt",
+        "privacy-scan",
+        True,
+        {"scripts/stand_in.py": f'LOGIN = "{ADMIN_LOGIN}"\n', "notes.md": f"Sign in as {ADMIN_LOGIN}.\n"},
+    ),
+    Case("another OpenMetadata address", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN.replace('admin', 'root')}\n"}),
+    Case("longer OpenMetadata local part", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN.replace('admin', 'administrator')}\n"}),
+    Case("OpenMetadata admin login on a longer domain", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN}.evil.com\n"}),
     Case("AWS account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{AWS_ARN}"}}\n'}),
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
     *account_cases(),
@@ -2189,7 +2211,11 @@ CASES = [
         "allowlisted profile label in its tracked file",
         "privacy-scan",
         True,
-        {".env": f"AWS_PROFILE={PROFILE_LABEL}\n", PROFILE_FILE: f'OFFLINE_VALUES = {{"AWS_PROFILE": "{PROFILE_LABEL}"}}\n'},
+        {
+            ".env": f"AWS_PROFILE={PROFILE_LABEL}\n",
+            PROFILE_FILE: f"aws s3 ls --profile {PROFILE_LABEL}\n",
+            ALLOWLIST: ALLOWLIST_SOURCE + f"env-value {PROFILE_FILE} -- a profile name is a local label in this scratch case -- permanent\n",
+        },
     ),
     Case(
         "profile label in another file",
@@ -2490,6 +2516,12 @@ BLOCK_REASONS = {
     "image package imported by host code": f"app/table.py:1: {UNUSED_PACKAGE} is imported but runtime host does not declare it",
     "runtime pattern matches no file": "runtime image: worker/*.py matches no tracked Python file",
     "home path": "notes.md:1: home-directory path with a user name",
+    "analytics-like home name": "notes.md:1: home-directory path with a user name",
+    "another home name": "notes.md:1: home-directory path with a user name",
+    "analytics name under the user folder": "notes.md:1: home-directory path with a user name",
+    "another OpenMetadata address": "notes.md:1: email address",
+    "longer OpenMetadata local part": "notes.md:1: email address",
+    "OpenMetadata admin login on a longer domain": "notes.md:1: email address",
     "temp path": "notes.md:1: machine temporary path",
     "personal email": "notes.md:1: email address",
     "phone number": "notes.md:1: phone number",
