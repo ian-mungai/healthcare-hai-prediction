@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import unicodedata
 from collections.abc import Iterator
 from dataclasses import dataclass
 from functools import lru_cache
@@ -160,6 +161,11 @@ def check_sheet_columns(rule: dict, header: list[str]) -> None:
     needed = {*rule["redact_columns"], *rule["name_columns"], *owner["redact_columns"], owner["column"], owner["name_column"]}
     if not needed <= set(header):
         raise PersonFieldError("a column named by the sheet person rules is missing from a data sheet")
+    known = owner.get("known_types")
+    if not isinstance(known, list) or not known or not all(isinstance(item, str) for item in known) or owner["equals"] not in known:
+        raise PersonFieldError("the sheet person rules do not list the reviewed owner types")
+    if len({owner_type_key(item) for item in known}) != len(known):
+        raise PersonFieldError("two reviewed owner types read the same once their spelling is normalized")
 
 
 def check_sheet_rule(table: str, rule: dict) -> None:
@@ -183,6 +189,21 @@ def check_sheet_rule(table: str, rule: dict) -> None:
             check_sheet_columns(rule, header)
         except PersonFieldError as error:
             raise PersonFieldError(f"{table}: {error}") from None
+
+
+def owner_type_key(value: str | None) -> str:
+    """The owner type in one spelling: compatibility-normalized, case-folded, with every run of white space (a no-break space too) as one space."""
+    return " ".join(unicodedata.normalize("NFKC", value or "").split()).casefold()
+
+
+def is_individual_owner(owner: dict, row: dict[str, str | None]) -> bool:
+    """True for a row of an individual owner. A type that is neither blank nor in the reviewed set stops the load: the row's owner cells cannot be judged."""
+    found = owner_type_key(row.get(owner["column"]))
+    if found == owner_type_key(owner["equals"]):
+        return True
+    if found and found not in {owner_type_key(item) for item in owner["known_types"]}:
+        raise PersonFieldError("a data row holds an owner type outside the reviewed set")
+    return False
 
 
 def is_empty(value: str | None) -> bool:
@@ -230,7 +251,7 @@ def sheet_names(rule: dict, records: list[dict], headers: dict[str, list[str]]) 
             continue
         row = dict(zip(header, record["c"], strict=False))
         sources = [row.get(column) for column in rule["name_columns"]]
-        if row.get(owner["column"]) == owner["equals"]:
+        if is_individual_owner(owner, row):
             sources.append(row.get(owner["name_column"]))
         for value in sources:
             names.update(name_forms(value))
@@ -266,7 +287,7 @@ def protect_sheets(table: str, rows_path: Path, path: Path = POLICY_PATH) -> dic
         header = headers.get(record["s"])
         data_row = header is not None and record["w"] > 1 + rule["label_rows"]
         row = dict(zip(header, record["c"], strict=False)) if header is not None else {}
-        individual = data_row and row.get(owner["column"], "") == owner["equals"]
+        individual = data_row and is_individual_owner(owner, row)
         stats["person_individual_owner_rows"] += int(individual)
         targets = {*rule["redact_columns"], *(owner["redact_columns"] if individual else [])} if data_row and header is not None else set()
         cells = record["c"]

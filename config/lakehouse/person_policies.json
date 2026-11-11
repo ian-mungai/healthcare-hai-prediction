@@ -737,6 +737,17 @@
         "individual_owner": {
           "column": "LICEE_TOC",
           "equals": "Investor - Individual",
+          "known_types": [
+            "Non-Profit Corporation (including church-related)",
+            "Investor - Corporation",
+            "Investor - Limited Liability Company",
+            "District",
+            "City or County",
+            "University of California",
+            "Investor - Partnership",
+            "State",
+            "Investor - Individual"
+          ],
           "name_column": "FAC_PAR_CORP_NAME",
           "redact_columns": [
             "FAC_PAR_CORP_NAME",

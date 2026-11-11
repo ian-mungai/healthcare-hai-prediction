@@ -12,6 +12,7 @@ import copy
 import json
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -375,3 +376,102 @@ def test_a_native_xlsx_of_an_unreviewed_layout_is_refused_before_any_row_is_hand
     with pytest.raises(bronze.BronzeError, match=f"person fields: .*{match}"):
         bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
     check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused real workbook left a rows file or a staging file")
+
+
+# Every owner type the eight real workbooks hold (2018 to 2025), spelled as published. A type outside this set stops the load.
+REVIEWED_TYPES = [
+    "Non-Profit Corporation (including church-related)",
+    "Investor - Corporation",
+    "Investor - Limited Liability Company",
+    "District",
+    "City or County",
+    "University of California",
+    "Investor - Partnership",
+    "State",
+    INDIVIDUAL,
+    "",
+]
+INDIVIDUAL_SPELLINGS = [
+    INDIVIDUAL + " ",
+    " " + INDIVIDUAL,
+    INDIVIDUAL.upper(),
+    INDIVIDUAL.lower(),
+    INDIVIDUAL.replace(" ", "\u00a0"),
+    INDIVIDUAL.replace(" - ", "  -  "),
+]
+
+
+@pytest.mark.parametrize(
+    "owner_type", INDIVIDUAL_SPELLINGS, ids=["trailing space", "leading space", "upper case", "lower case", "no-break space", "double spaces"]
+)
+def test_a_respelled_individual_owner_type_still_redacts_the_owner_cells(tmp_path: Path, owner_type: str) -> None:
+    rows = [data_row("100", owner_type, "Pell Dunmore", "Zorba Quill", "Scanner donated by Pell Dunmore")]
+    _, after, stats = protected(tmp_path, sheet_records(rows))
+    page = page_cells(after)
+    check(
+        page[6]["FAC_PAR_CORP_NAME"] == page[6]["FAC_PAR_CORP_CITY"] == page[6]["FAC_PAR_CORP_ZIP"] == REPLACED, f"the owner cells of {owner_type!r} were kept"
+    )
+    check("Pell Dunmore" not in json.dumps(after) and stats["person_individual_owner_rows"] == 2, "the owner name or the owner row count is wrong")
+
+
+@pytest.mark.parametrize("owner_type", ["New ownership class", "Investor - Individual (sole)", "Individual"])
+def test_an_owner_type_outside_the_reviewed_set_stops_the_load_before_any_row_changes(tmp_path: Path, owner_type: str) -> None:
+    rows = [
+        data_row("100", CORPORATION, "Fixture Holdings LLC", "Zorba Quill", "Scanner"),
+        data_row("101", owner_type, "Pell Dunmore", "Zorba Quill", "Scanner"),
+    ]
+    assert_refused(tmp_path, sheet_records(rows), "owner type")
+
+
+def test_every_reviewed_owner_type_loads_and_only_the_individual_rows_lose_their_owner_cells(tmp_path: Path) -> None:
+    rows = [
+        data_row(str(100 + index), owner_type, "Pell Dunmore" if owner_type == INDIVIDUAL else "Fixture Holdings LLC", "Zorba Quill", "Scanner")
+        for index, owner_type in enumerate(REVIEWED_TYPES)
+    ]
+    _, after, stats = protected(tmp_path, sheet_records(rows))
+    page = page_cells(after)
+    redacted = [page[6 + index]["FAC_PAR_CORP_NAME"] == REPLACED for index in range(len(REVIEWED_TYPES))]
+    check(
+        redacted == [owner_type == INDIVIDUAL for owner_type in REVIEWED_TYPES] and stats["person_individual_owner_rows"] == 2,
+        f"owner cells by type: {redacted}",
+    )
+
+
+def test_the_reviewed_owner_types_are_listed_in_the_policy_and_include_the_individual_type() -> None:
+    owner = person_fields.read_policies(person_fields.POLICY_PATH)["tables"][TABLE]["sheet_cells"]["individual_owner"]
+    check(
+        sorted(owner["known_types"]) == sorted(REVIEWED_TYPES[:-1]) and owner["equals"] in owner["known_types"],
+        f"the reviewed owner types differ: {owner['known_types']}",
+    )
+
+
+def native_cells_at_the_spark_boundary(tmp_path: Path, owner_type: str) -> list[dict[str, Any]]:
+    """Read a real synthetic workbook through the loader and return the rows at the moment Spark would read them."""
+    workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
+    write_xlsx(workbook, sheet_records([data_row("100", owner_type, "Pell Dunmore", "Zorba Quill", "Scanner")]))
+    seen: list[dict[str, Any]] = []
+
+    def capture(_spark: Any, path: Path) -> object:
+        seen.extend(read_back(path))
+        return object()
+
+    with patch.object(bronze, "read_sheet_frame", side_effect=capture):
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+    return seen
+
+
+@pytest.mark.parametrize("owner_type", [INDIVIDUAL, INDIVIDUAL + " ", INDIVIDUAL.upper()], ids=["exact", "trailing space", "upper case"])
+def test_a_native_xlsx_reaches_the_spark_read_with_the_owner_cells_redacted_whatever_the_spelling(tmp_path: Path, owner_type: str) -> None:
+    seen = native_cells_at_the_spark_boundary(tmp_path, owner_type)
+    cells_ = next(record["c"] for record in seen if record["s"] == "Page 1-6" and record["w"] == 6)
+    owner = [cells_[HEADER.index(column)] for column in ("FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP")]
+    check(owner == [REPLACED] * 3 and "Pell Dunmore" not in json.dumps(seen), f"the owner cells reached Spark as {owner}")
+
+
+def test_a_native_xlsx_with_an_unknown_owner_type_is_refused_before_the_spark_read(tmp_path: Path) -> None:
+    workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
+    write_xlsx(workbook, sheet_records([data_row("100", "New ownership class", "Pell Dunmore", "Zorba Quill", "Scanner")]))
+    refused = patch.object(bronze, "read_sheet_frame", side_effect=AssertionError("Spark must not read an unprotected workbook"))
+    with refused, pytest.raises(bronze.BronzeError, match="person fields: .*owner type"):
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+    check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused workbook left a rows file or a staging file")
