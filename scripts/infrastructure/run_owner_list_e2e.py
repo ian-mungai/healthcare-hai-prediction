@@ -26,6 +26,7 @@ from scripts.process import run_command
 
 OWNER_LISTS = ROOT / "config/aws/owner_command_lists.json"
 CODE = "Code checkout on the host"
+ALERT = "Alert email at bootstrap"
 IAM_FLAGS = {"host_code_fetch_prepared": True}
 STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
 
@@ -151,6 +152,44 @@ DOTENV_VARIANTS = {
     ),
 }
 DOTENV_REST = (f"AWS_ACCOUNT_ID={owner_commands.ACCOUNT}", "PROJECT_NAME=example_project", "ENVIRONMENT=dev", "S3_BUCKET=example-project-data-dev")
+
+
+def alert_email_checks(text: str) -> dict[str, bool]:
+    """The alert email list: the address comes from .env, a hand subscription is imported once confirmed and before the apply, and the owner confirms."""
+    body = owner_commands.section(text, ALERT)
+    steps = steps_of(body)
+    numbers = [int(step.split(".", 1)[0]) for step in steps]
+    declared = "".join(path.read_text() for path in (ROOT / "infra/platform").glob("*.tf"))
+    address = "aws_sns_topic_subscription.alerts_email"
+    checks = {
+        "the alert email section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 4,
+        "the platform stack declares the subscription the list imports": 'resource "aws_sns_topic_subscription" "alerts_email"' in declared,
+        "the list names the .env key, and an empty key skips it": "ALERT_EMAIL" in body and "empty" in body,
+        "the list says no address is typed into a tracked file": "tracked" in body,
+    }
+
+    def index(*needles: str) -> int:
+        return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
+
+    order = [
+        ("render", index("render_platform_config")),
+        ("find", index("list-subscriptions-by-topic", "PendingConfirmation")),
+        ("import", index(f"terraform -chdir=infra/platform import '{address}[0]' <SUBSCRIPTION_ARN>")),
+        ("apply", index("terraform.sh --platform", "apply <PLAN>")),
+        ("confirm", index("The bootstrap is not complete until you do", "list-subscriptions-by-topic")),
+    ]
+    positions = [position for _, position in order]
+    checks[f"the alert email steps come in order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
+    find = index("list-subscriptions-by-topic", "PendingConfirmation")
+    checks["the list says a pending subscription has no ARN to import, so the owner confirms first"] = (
+        find >= 0 and "cannot be imported" in steps[find] and "Confirm subscription" in steps[find]
+    )
+    plan = index("terraform.sh --platform", "plan -out <PLAN>")
+    checks["the plan step stops on a create of the subscription after an import"] = (
+        plan >= 0 and "Stop on any create or destroy of the subscription" in steps[plan]
+    )
+    checks["the list states that the project user needs the subscribe permission first"] = "sns:Subscribe" in body and "administrator" in body
+    return checks
 
 
 def printed_resolve_hint(folder: Path) -> str:
@@ -288,6 +327,10 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     checks[f"{CODE}: {len(problems)} printed commands were found"] = len(problems) >= 5
     for number, (line, found) in enumerate(problems.items(), 1):
         checks[f"{CODE}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
+    problems = owner_commands.check_section(owner_commands.section(text, ALERT), folder / "alert", wrapper, {"ADMIN_PROFILE": ADMIN})
+    checks[f"{ALERT}: {len(problems)} printed commands were found"] = len(problems) >= 5
+    for number, (line, found) in enumerate(problems.items(), 1):
+        checks[f"{ALERT}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
     return checks
 
 
@@ -329,6 +372,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
     with tempfile.TemporaryDirectory(prefix="owner_list_") as folder:
         results = {
             "structure": structure_checks(text),
+            "alert_email": alert_email_checks(text),
             "commands": command_checks(text, Path(folder)),
             "mutants": mutant_checks(text, Path(folder)),
             "host": owner_list_host_cases.host_checks(text, Path(folder)),
