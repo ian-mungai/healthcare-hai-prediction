@@ -1068,10 +1068,23 @@ def case_deploy_expiry(c: Checker) -> None:
         c.check("a retry of the deployment that is active after the expiry is unchanged", again.status == "unchanged" and again.deployment.expires_at == ended)
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         run(folder=Path(folder))
+        c.check(
+            "another research canary is refused a lifetime of the candidate while the deployment of the first holds one that it cannot be shown to own",
+            rejected(lambda: run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="20261031T000000Z-bbbbbbb2")),
+        )
+        deploy.run(
+            registry=Registry(),
+            manifests=manifests.FileManifestStore(Path(folder)),
+            hai_type=HAI,
+            candidate_version=None,
+            percent=0,
+            mode="stable",
+            deployment_id=RUN_3,
+        )
         other = run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder), research="20261031T000000Z-bbbbbbb2").deployment
         c.check(
-            "another research canary has a lifetime of its own",
-            other.written_at == NOW + 5 * 3600 and other.expires_at == NOW + 5 * 3600 + TTL_HOURS * 3600 and other.sequence == 2,
+            "another research canary has a lifetime of its own once the first is replaced",
+            other.written_at == NOW + 5 * 3600 and other.expires_at == NOW + 5 * 3600 + TTL_HOURS * 3600 and other.sequence == 3,
         )
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         crashing = CrashingStore(Path(folder))
@@ -1121,6 +1134,7 @@ def case_deploy_expiry(c: Checker) -> None:
 def case_manual_run_cannot_renew(c: Checker) -> None:
     """The shipped serve form, the launch preflight and the deploy job against the manifest store: a canary has the lifetime of its first deployment, and a
     manual run under another run id for the same research canary neither renews it nor opens a new traffic window after a stored hold."""
+    from orchestration import training_contract
     from scripts.orchestration import airflow_mode_cases as air
 
     challenger = {"model": "m2", "version": CANDIDATE, "verdict": "pass", "source_run": "mlrun4"}
@@ -1203,6 +1217,152 @@ def case_manual_run_cannot_renew(c: Checker) -> None:
         rig.stage.objects[air.record_key("canary", air.SERVE_RESEARCH, HAI)] = json.dumps(changed).encode()
         passed, code, _ = submit(rig, client, registry, RUN_2, NOW + 23 * 3600)
         c.check(f"a manual run after {label} is refused and writes nothing", not passed and client.objects == before)
+
+    rig, client, registry = fresh()
+    chain_id = training_contract.chain_run_id(air.SERVE_RESEARCH, HAI, "canary_deploy")
+    old_record = canary.Deployment(HAI, chain_id, PRODUCTION, CANDIDATE, 10, 1, NOW, first_expiry).dump()
+    client.objects[f"serving/deployments/history/{HAI}/{chain_id}.json"] = ('"old1"', old_record)
+    client.objects[active_key] = ('"old2"', old_record)
+    before = dict(client.objects)
+    passed, code, _ = submit(rig, client, registry, RUN_2, first_expiry + 3600)
+    c.check(
+        "a manual run after the expiry over a deployment written before the binding existed opens no new window and writes nothing",
+        code == 2 and client.objects == before,
+    )
+    c.check("that expired canary serves the stable version alone", traffic_at(client, first_expiry + 3600) == {PRODUCTION: 200})
+    passed, code, kept = submit(rig, client, registry, RUN_3, first_expiry - 3600)
+    c.check(
+        "a manual run before that expiry keeps the first expiry", passed and code == 0 and kept.get("expires_at") == first_expiry and kept.get("sequence") == 2
+    )
+
+
+def case_canary_upgrade_state(c: Checker) -> None:
+    """Canary deployments written before the binding existed keep their lifetime: the first deployment of a research canary is found by its deterministic
+    chain id and its times carry into the new binding, a lifetime whose research canary cannot be established refuses the deploy, and nothing is written."""
+    from orchestration import training_contract
+
+    chain_id = training_contract.chain_run_id(RESEARCH, HAI, "canary_deploy")
+    first_expiry = NOW + TTL_HOURS * 3600
+
+    def old_record(deployment_id: str, written: Any, expires: Any, candidate: str = CANDIDATE, sequence: int = 1) -> bytes:
+        return canary.Deployment(HAI, deployment_id, PRODUCTION, candidate, 10, sequence, written, expires).dump()
+
+    def old_state(folder: str, history: bytes | None, active: bytes | None) -> manifests.FileManifestStore:
+        store = manifests.FileManifestStore(Path(folder))
+        if history is not None:
+            store.put_history(HAI, json.loads(history)["deployment_id"], history)
+        if active is not None:
+            store.replace_active(HAI, active, None)
+        return store
+
+    def go(folder: str, run_id: str, now: int, research: str = RESEARCH) -> deploy.Outcome:
+        return deploy.run(
+            registry=Registry(),
+            manifests=manifests.FileManifestStore(Path(folder)),
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=10,
+            mode="canary",
+            deployment_id=run_id,
+            canary_ttl_hours=TTL_HOURS,
+            now=now,
+            research_run=research,
+        )
+
+    def files(folder: str) -> dict[str, bytes]:
+        return {str(path.relative_to(folder)): path.read_bytes() for path in sorted(Path(folder).rglob("*.json"))}
+
+    chain = old_record(chain_id, NOW, first_expiry)
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        old_state(folder, chain, chain)
+        before = files(folder)
+        c.check(
+            "a fresh run after the expiry of a deployment that has no binding is refused and writes nothing",
+            all(rejected(lambda at=at: go(folder, RUN_2, at)) for at in (first_expiry, first_expiry + 3600)) and files(folder) == before,
+        )
+        kept = go(folder, RUN_2, NOW + 3 * 3600).deployment
+        binding = json.loads(files(folder)[f"canaries/{HAI}/{RESEARCH}-{CANDIDATE}.json"])
+        c.check(
+            "a fresh run before the expiry carries the first write time and expiry into the binding and the new deployment",
+            (kept.written_at, kept.expires_at, kept.sequence) == (NOW, first_expiry, 2)
+            and (binding["written_at"], binding["expires_at"], binding["deployment_id"]) == (NOW, first_expiry, chain_id),
+        )
+        c.check("the carried lifetime then ends the canary like any bound one", rejected(lambda: go(folder, RUN_3, first_expiry + 1)))
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        renewed = old_record(RUN_1, NOW + 30 * 3600, NOW + 54 * 3600, sequence=2)
+        old_state(folder, chain, None)
+        old_state(folder, renewed, renewed)
+        before = files(folder)
+        c.check(
+            "a deployment renewed before the binding existed does not hide the first lifetime of the chain deployment",
+            rejected(lambda: go(folder, RUN_2, NOW + 31 * 3600)) and files(folder) == before,
+        )
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        old_state(folder, chain, chain)
+        before = files(folder)
+        again = go(folder, chain_id, first_expiry + 3600)
+        c.check(
+            "a retry of the chain deployment that has no binding is unchanged after the expiry and writes nothing",
+            again.status == "unchanged" and (again.deployment.written_at, again.deployment.expires_at) == (NOW, first_expiry) and files(folder) == before,
+        )
+    for label, record in (
+        ("a deployment under a manual run id", old_record(RUN_1, NOW, first_expiry)),
+        ("a deployment of the candidate with a malformed expiry", old_record(RUN_1, NOW, "never")),
+    ):
+        with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+            old_state(folder, record, record)
+            before = files(folder)
+            c.check(
+                f"a run over {label} that has no binding and no chain deployment is refused, as its lifetime cannot be established, and writes nothing",
+                all(rejected(lambda at=at: go(folder, RUN_2, at)) for at in (NOW + 3600, first_expiry + 3600)) and files(folder) == before,
+            )
+            c.check(
+                f"a retry of {label} that has no binding is refused and writes nothing",
+                rejected(lambda: go(folder, RUN_1, NOW + 3600)) and files(folder) == before,
+            )
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        unclocked = old_record(RUN_1, None, None)
+        old_state(folder, unclocked, unclocked)
+        c.check("a retry of that unclocked deployment is unchanged", go(folder, RUN_1, NOW + 7200).status == "unchanged")
+        fresh = go(folder, RUN_2, NOW + 3600).deployment
+        c.check(
+            "a deployment from before any expiry holds no lifetime, so the research canary gets its own",
+            (fresh.written_at, fresh.expires_at, fresh.sequence) == (NOW + 3600, NOW + 3600 + TTL_HOURS * 3600, 2),
+        )
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        stable = canary.Deployment(HAI, RUN_1, PRODUCTION, None, 0).dump()
+        old_state(folder, stable, stable)
+        fresh = go(folder, RUN_2, NOW + 3600).deployment
+        c.check("a stable deployment holds no lifetime either", fresh.written_at == NOW + 3600 and fresh.sequence == 2)
+
+
+def case_canary_retry_identity(c: Checker) -> None:
+    """A deploy-job retry names its research canary: the saved deployment must belong to that canary's binding and keep its times, or the retry is refused."""
+    other = "20261031T000000Z-bbbbbbb2"
+    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary", "canary_ttl_hours": TTL_HOURS, "research_run": RESEARCH}
+    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable", "canary_ttl_hours": None, "research_run": None}
+    client, registry = S3Client(), Registry()
+
+    def job(run: str, body: dict[str, Any], now: int) -> tuple[int, dict[str, Any]]:
+        environment = {"SERVING_REQUEST": json.dumps(body), "MODEL_API_MANIFEST_URI": "s3://example-bucket/serving/deployments"}
+        with mock.patch.object(deploy_job.time, "time", return_value=float(now)):
+            code, out, _ = run_deploy_job(client, registry, run, environment)
+        return code, json.loads(out) if out.strip() else {}
+
+    first_expiry = NOW + TTL_HOURS * 3600
+    c.check("research A deploys its canary", job(RUN_1, request, NOW)[0] == 0)
+    c.check("a stable deploy replaces it", job(RUN_3, stable, NOW + 3600)[0] == 0)
+    later = first_expiry + 3600
+    c.check("research B deploys the same candidate with a lifetime of its own after A ended", job(RUN_2, request | {"research_run": other}, later)[0] == 0)
+    saved = json.loads(client.objects[f"serving/deployments/active/{HAI}.json"][1])
+    c.check("B's deployment holds B's times", (saved["written_at"], saved["expires_at"]) == (later, later + TTL_HOURS * 3600))
+    before = dict(client.objects)
+    code, printed = job(RUN_2, request | {"research_run": other}, later + 3600)
+    c.check("the retry naming B is unchanged", code == 0 and printed.get("status") == "unchanged" and client.objects == before)
+    code, printed = job(RUN_2, request, later + 3600)
+    c.check("the retry naming A over B's deployment is refused and writes nothing", code == 2 and not printed and client.objects == before)
+    code, printed = job(RUN_1, request, later + 3600)
+    c.check("the retry of A's replaced deployment is still refused as replaced", code == 2 and client.objects == before)
 
 
 def case_expiry_is_not_requestable(c: Checker) -> None:
@@ -2482,6 +2642,8 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "canary_expiry": (case_canary_expiry, "deploy"),
     "deploy_expiry": (case_deploy_expiry, "deploy"),
     "manual_run_cannot_renew": (case_manual_run_cannot_renew, "deploy"),
+    "canary_upgrade_state": (case_canary_upgrade_state, "deploy compatibility"),
+    "canary_retry_identity": (case_canary_retry_identity, "deploy"),
     "expiry_is_not_requestable": (case_expiry_is_not_requestable, "deploy"),
     "chain_rollout": (case_chain_rollout, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),

@@ -4,7 +4,9 @@ It reads the registry and never moves an alias. The promotion chain moves it thr
 lifetime in hours and the research run the candidate comes from, and records its write time and its expiry: the API serves the canary only until the expiry.
 The first deployment of one research canary (research run, HAI type and candidate version) stores its write time and expiry in a binding that is written once.
 Every later deployment of that canary, under any deployment id, takes the stored times and never a new lifetime, and is refused once the expiry has passed.
-A retry never extends the lifetime. A stable deploy
+A retry never extends the lifetime, and a retry names its research canary: the saved deployment must belong to that canary's binding and hold its times. A
+deployment written before the binding existed belongs to the research canary of its deterministic chain id, and no other lifetime of the candidate is
+guessed: when a lifetime exists that no research canary can be shown to own, the deploy is refused. A stable deploy
 names none and has no expiry: it writes a deployment with the production version only and ends a promotion's rollout. The deployment id is the run id, and each
 deployment carries a sequence number one above the one it replaces. A retry with the same parameters is a no-op while that deployment is active and equals the
 recorded one. It finishes the deployment if it stopped before the active write, and it is refused once a later deployment replaced it. A retry with other
@@ -20,6 +22,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
+from orchestration.training_contract import chain_run_id
 from scripts.serving.canary import HAI_TYPES, MAX_TTL_HOURS, MAX_TTL_SECONDS, RUN_ID, Deployment, DeploymentInvalid
 from scripts.serving.manifests import ManifestConflict, ManifestStore, Stored
 from scripts.training import registry as model_registry
@@ -95,9 +98,12 @@ def run(
     recorded = manifests.read_history(hai_type, deployment_id)
     try:
         if recorded is not None:
-            return _retry(manifests, hai_type, current, active, _parse(recorded), candidate_version, percent)
+            prior = _parse(recorded)
+            if research_run is not None:
+                _belongs(manifests, hai_type, research_run, candidate_version, prior)
+            return _retry(manifests, hai_type, current, active, prior, candidate_version, percent)
         if research_run is not None:
-            written_at, expires_at = _first_lifetime(manifests, deployment, research_run, now)
+            written_at, expires_at = _first_lifetime(manifests, deployment, research_run, now, active)
         deployment = Deployment(
             hai_type, deployment_id, production, candidate_version, percent, 1 if active is None else active.sequence + 1, written_at, expires_at
         )
@@ -112,22 +118,36 @@ def run(
     return Outcome("written", deployment)
 
 
-def _first_lifetime(manifests: ManifestStore, wanted: Deployment, research_run: str, now: Any) -> tuple[int, int]:
+def _first_lifetime(manifests: ManifestStore, wanted: Deployment, research_run: str, now: Any, active: Deployment | None) -> tuple[int, int]:
     """The write time and expiry of a canary deployment: the ones the first deployment of its research canary stored, which this deployment stores itself when
-    it is the first. A deployment under another id is refused once the stored expiry has passed, so no run opens a new traffic window."""
+    it is the first. A deployment under another id is refused once the stored expiry has passed, so no run opens a new traffic window. With no binding, the
+    lifetime of a deployment written before the binding existed is carried into it, and none is made up while one exists that cannot be attributed."""
+    seed = (wanted.deployment_id, wanted.written_at, wanted.expires_at)
+    if manifests.read_canary(wanted.hai_type, research_run, str(wanted.candidate_version)) is None:
+        seed = _unbound_lifetime(manifests, wanted, research_run, active) or seed
+        if seed[0] != wanted.deployment_id and now >= seed[2]:
+            raise DeployRefused(f"the lifetime of this research canary ended at {seed[2]}, so no deployment opens a new traffic window")
     document = {
         "version": 1,
         "hai_type": wanted.hai_type,
         "research_run": research_run,
         "candidate_version": wanted.candidate_version,
-        "deployment_id": wanted.deployment_id,
-        "written_at": wanted.written_at,
-        "expires_at": wanted.expires_at,
+        "deployment_id": seed[0],
+        "written_at": seed[1],
+        "expires_at": seed[2],
     }
     try:
         first: Any = json.loads(manifests.bind_canary(wanted.hai_type, research_run, str(wanted.candidate_version), _dump(document)))
     except (ValueError, ManifestConflict):
         raise DeployRefused("the binding of this research canary cannot be read") from None
+    written, expires = _check_binding(first, document)
+    if first["deployment_id"] != wanted.deployment_id and now >= expires:
+        raise DeployRefused(f"the lifetime of this research canary ended at {expires}, so no deployment opens a new traffic window")
+    return written, expires
+
+
+def _check_binding(first: Any, document: dict[str, Any]) -> tuple[int, int]:
+    """The write time and expiry of a binding, refused unless it names this canary and holds a lifetime within the bound."""
     written, expires = (first.get("written_at"), first.get("expires_at")) if isinstance(first, dict) else (None, None)
     if (
         not isinstance(first, dict)
@@ -139,9 +159,68 @@ def _first_lifetime(manifests: ManifestStore, wanted: Deployment, research_run: 
         or not 0 < expires - written <= MAX_TTL_SECONDS
     ):
         raise DeployRefused("the binding of this research canary is malformed")
-    if first["deployment_id"] != wanted.deployment_id and now >= expires:
-        raise DeployRefused(f"the lifetime of this research canary ended at {expires}, so no deployment opens a new traffic window")
     return written, expires
+
+
+def _holds_lifetime(deployment: Deployment) -> bool:
+    return deployment.written_at is not None or deployment.expires_at is not None
+
+
+def _unbound_lifetime(manifests: ManifestStore, wanted: Deployment, research_run: str, active: Deployment | None) -> tuple[str, int, int] | None:
+    """The first deployment id, write time and expiry of a research canary that has no binding because its deployment predates it, or None when no lifetime
+    of the candidate exists. The deterministic chain id of the research run names the first deployment. A lifetime held by the active deployment of the
+    candidate under another id cannot be attributed to this research canary, so it refuses the deploy."""
+    chain_id = chain_run_id(research_run, wanted.hai_type, "canary_deploy")
+    recorded = manifests.read_history(wanted.hai_type, chain_id)
+    if recorded is not None:
+        first = _parse(recorded)
+        if first is None:
+            raise DeployRefused("the first deployment of this research canary cannot be read, so its lifetime cannot be established")
+        if first.candidate_version == wanted.candidate_version and _holds_lifetime(first):
+            return chain_id, *_lifetime_of(first)
+    if active is not None and active.candidate_version == wanted.candidate_version and _holds_lifetime(active):
+        raise DeployRefused(
+            f"the active deployment {active.deployment_id} holds a lifetime of candidate {wanted.candidate_version} that no research canary is shown to own"
+        )
+    return None
+
+
+def _lifetime_of(deployment: Deployment) -> tuple[int, int]:
+    written, expires = deployment.written_at, deployment.expires_at
+    if type(written) is not int or type(expires) is not int or not 0 < expires - written <= MAX_TTL_SECONDS:
+        raise DeployRefused(f"the lifetime of deployment {deployment.deployment_id} is malformed, so it cannot be established")
+    return written, expires
+
+
+def _belongs(manifests: ManifestStore, hai_type: str, research_run: str, candidate: str | None, prior: Deployment | None) -> None:
+    """Refuse a retry unless the saved deployment belongs to the named research canary and holds the times of its lifetime: the times of its binding, or, with
+    no binding, its own when it is the first deployment of the research canary by its chain id. A deployment that holds no lifetime serves no canary traffic."""
+    if prior is None or candidate is None or not _holds_lifetime(prior):
+        return
+    raw = manifests.read_canary(hai_type, research_run, candidate)
+    if raw is not None:
+        try:
+            first: Any = json.loads(raw)
+        except ValueError:
+            raise DeployRefused("the binding of this research canary cannot be read") from None
+        written, expires = _check_binding(
+            first,
+            {
+                "version": 1,
+                "hai_type": hai_type,
+                "research_run": research_run,
+                "candidate_version": candidate,
+                "deployment_id": "",
+                "written_at": 0,
+                "expires_at": 0,
+            },
+        )
+    elif prior.deployment_id == chain_run_id(research_run, hai_type, "canary_deploy"):
+        written, expires = _lifetime_of(prior)
+    else:
+        raise DeployRefused(f"deployment {prior.deployment_id} holds a lifetime that research canary {research_run} is not shown to own")
+    if (prior.written_at, prior.expires_at) != (written, expires):
+        raise DeployRefused(f"deployment {prior.deployment_id} does not hold the lifetime of research canary {research_run}: it ended at {expires}")
 
 
 def _dump(document: dict[str, Any]) -> bytes:

@@ -37,6 +37,8 @@ class ManifestStore(Protocol):
 
     def replace_active(self, hai_type: str, body: bytes, expected_token: str | None) -> None: ...
 
+    def read_canary(self, hai_type: str, research_run: str, version: str) -> bytes | None: ...
+
     def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
         """Store ``body`` as the binding of one research canary unless one exists, and return the binding that stands: the first one written."""
         ...
@@ -89,6 +91,10 @@ class FileManifestStore:
             if (current.token if current else None) != expected_token:
                 raise ManifestConflict("the active deployment changed since it was read")
             self._write(self.root / "active" / f"{hai_type}.json", body)
+
+    def read_canary(self, hai_type: str, research_run: str, version: str) -> bytes | None:
+        path = self.root / "canaries" / hai_type / f"{research_run}-{version}.json"
+        return path.read_bytes() if path.exists() else None
 
     def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
         path = self.root / "canaries" / hai_type / f"{research_run}-{version}.json"
@@ -145,6 +151,10 @@ class S3ManifestStore:
             if error.response.get("Error", {}).get("Code") in ("PreconditionFailed", "ConditionalRequestConflict"):
                 raise ManifestConflict("the active deployment changed since it was read") from None
             raise
+
+    def read_canary(self, hai_type: str, research_run: str, version: str) -> bytes | None:
+        found = self._get(self._key("canaries", hai_type, f"{research_run}-{version}.json"))
+        return None if found is None else found[1]
 
     def bind_canary(self, hai_type: str, research_run: str, version: str, body: bytes) -> bytes:
         key = self._key("canaries", hai_type, f"{research_run}-{version}.json")
