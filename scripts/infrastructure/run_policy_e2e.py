@@ -183,6 +183,10 @@ def load_roles() -> dict[str, dict[str, Any]]:
         ),  # fmt: skip
         "role/job_write_e2e_task/qualification_storage_delta": read("bronze_writer_storage", bronze_test),
         "role/job_write_e2e_task/stage_read": stage,
+        # The promote task role is the training role: research records and the owner notice (alerts topic set). The launch role reads the records.
+        f"role/{policy_cases.TRAIN_TASK}/research_records": read("research_records"),
+        f"role/{policy_cases.TRAIN_TASK}/owner_notice": read("owner_notice", {"ALERTS_TOPIC_ARN": policy_cases.TOPIC}),
+        f"role/{policy_cases.LAUNCH_TASK}/research_records": read("airflow_launch_research_records"),
     }
 
 

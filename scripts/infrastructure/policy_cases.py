@@ -465,6 +465,118 @@ def promote_cases() -> Iterator[Case]:
             yield s3_case(f"promote records: PutObject outside promote/ {name} header={header} refused", "PutObject", name, header, False)
 
 
+TRAIN_TASK = "job_train_task"
+LAUNCH_TASK = "airflow_launch_task"
+UNBOUNDED_ROLES = (TRAIN_TASK, LAUNCH_TASK)
+RESEARCH_RUN = "20261109T000000Z-ea260ed0"
+RESEARCH_KEYS = tuple(f"research/{RESEARCH_RUN}/{kind}_HAI_1.json" for kind in ("research", "replay", "canary", "notice"))
+RESEARCH_OTHER_KEYS = ("researched/x.json", "research", "other/research/x.json", "promote/x.json", "lakehouse/gold/x.parquet", "unlisted/x.json")
+RESEARCH_REFUSED_ACTIONS = ("DeleteObject", "DeleteObjectVersion", "GetObjectVersion", "PutObjectTagging", "PutObjectAcl", "AbortMultipartUpload")
+NOTICE_REFUSED_ACTIONS = (
+    "sns:Subscribe",
+    "sns:Unsubscribe",
+    "sns:SetTopicAttributes",
+    "sns:DeleteTopic",
+    "sns:CreateTopic",
+    "sns:AddPermission",
+    "sns:RemovePermission",
+    "sns:GetTopicAttributes",
+    "sns:ListSubscriptionsByTopic",
+    "sns:TagResource",
+    "sns:*",
+)
+
+
+def research_case(principal: str, label: str, action: str, resource: str, allowed: bool, sid: str | None = None, extra: dict[str, Any] | None = None) -> Case:
+    return Case(label, request(action, resource, extra=extra, region=None), allowed, sid, principal)
+
+
+def research_cases() -> Iterator[Case]:
+    """The research records of the promote task role and the launch role, and the owner notice of the promote task role.
+
+    The promote task role creates each record once, reads it and lists the prefix, under ``research/`` alone. The launch role reads the records only. The task
+    role publishes to the alerts topic and nothing else of SNS. Every refusal here is a request the grant must not allow: another prefix, another bucket,
+    another topic (the budget topic too), another account, region, project or environment, and any other action.
+    """
+    once = {"s3:if-none-match": "*"}
+    for key in RESEARCH_KEYS:
+        resource = f"{BUCKET}/{key}"
+        yield research_case(TRAIN_TASK, f"research records: GetObject {key}", "s3:GetObject", resource, True, "ReadResearchRecords")
+        yield research_case(TRAIN_TASK, f"research records: create {key} once", "s3:PutObject", resource, True, "CreateResearchRecords", once)
+        yield research_case(TRAIN_TASK, f"research records: overwrite {key} without the header refused", "s3:PutObject", resource, False)
+        yield research_case(
+            TRAIN_TASK,
+            f"research records: PutObject {key} with another if-none-match value refused",
+            "s3:PutObject",
+            resource,
+            False,
+            extra={"s3:if-none-match": "abc"},
+        )
+        yield research_case(
+            TRAIN_TASK, f"research records: {key} in another bucket refused", "s3:GetObject", resource.replace(BUCKET, f"{BUCKET}-other"), False
+        )
+        for action in RESEARCH_REFUSED_ACTIONS:
+            for header in (True, False):
+                yield research_case(
+                    TRAIN_TASK, f"research records: {action} {key} header={header} refused", f"s3:{action}", resource, False, extra=once if header else None
+                )
+        yield research_case(LAUNCH_TASK, f"launch research read: GetObject {key}", "s3:GetObject", resource, True, "ReadResearchRecords")
+        yield research_case(
+            LAUNCH_TASK, f"launch research read: {key} in another bucket refused", "s3:GetObject", resource.replace(BUCKET, f"{BUCKET}-other"), False
+        )
+        for header in (True, False):
+            yield research_case(
+                LAUNCH_TASK, f"launch research read: PutObject {key} header={header} refused", "s3:PutObject", resource, False, extra=once if header else None
+            )
+        for action in RESEARCH_REFUSED_ACTIONS:
+            yield research_case(LAUNCH_TASK, f"launch research read: {action} {key} refused", f"s3:{action}", resource, False)
+    for key in RESEARCH_OTHER_KEYS:
+        resource = f"{BUCKET}/{key}"
+        yield research_case(TRAIN_TASK, f"research records: GetObject outside research/ {key} refused", "s3:GetObject", resource, False)
+        yield research_case(LAUNCH_TASK, f"launch research read: GetObject outside research/ {key} refused", "s3:GetObject", resource, False)
+        for header in (True, False):
+            yield research_case(
+                TRAIN_TASK,
+                f"research records: PutObject outside research/ {key} header={header} refused",
+                "s3:PutObject",
+                resource,
+                False,
+                extra=once if header else None,
+            )
+    for prefix in ("research/", f"research/{RESEARCH_RUN}/"):
+        listing = {"s3:prefix": (prefix,)}
+        yield research_case(TRAIN_TASK, f"research records: list under {prefix}", "s3:ListBucket", BUCKET, True, "ListResearchRecords", listing)
+        yield research_case(LAUNCH_TASK, f"launch research read: list under {prefix} refused", "s3:ListBucket", BUCKET, False, extra=listing)
+    for prefix in ("", "promote/", "researched/", "research", "lakehouse/", "other/research/"):
+        yield research_case(
+            TRAIN_TASK,
+            f"research records: list outside research/ with prefix {prefix!r} refused",
+            "s3:ListBucket",
+            BUCKET,
+            False,
+            extra={"s3:prefix": (prefix,)},
+        )
+    yield research_case(TRAIN_TASK, "research records: list without a prefix refused", "s3:ListBucket", BUCKET, False)
+    yield research_case(
+        TRAIN_TASK, "research records: list in another bucket refused", "s3:ListBucket", f"{BUCKET}-other", False, extra={"s3:prefix": ("research/",)}
+    )
+    yield research_case(LAUNCH_TASK, "launch research read: list without a prefix refused", "s3:ListBucket", BUCKET, False)
+
+    def notice(label: str, action: str, topic: str, allowed: bool, region: str = R) -> Case:
+        return Case(f"owner notice: {label}", request(action, topic, region=region), allowed, "PublishOwnerNotices" if allowed else None, TRAIN_TASK)
+
+    yield notice("Publish to the alerts topic", "sns:Publish", TOPIC, True)
+    yield notice("Publish to the budget topic refused", "sns:Publish", BUDGET_TOPIC, False)
+    yield notice("Publish to a topic that only starts like the alerts topic refused", "sns:Publish", f"{TOPIC}_other", False)
+    yield notice("Publish to a topic that only ends like the alerts topic refused", "sns:Publish", TOPIC.replace(f"{P}_alerts", f"other_{P}_alerts"), False)
+    yield notice("Publish to every topic refused", "sns:Publish", arn("sns", "*"), False)
+    for label, topic, region in widen(TOPIC):
+        yield notice(f"Publish to the alerts topic of another {label} refused", "sns:Publish", topic, False, region or R)
+    for action in NOTICE_REFUSED_ACTIONS:
+        yield notice(f"{action} on the alerts topic refused", action, TOPIC, False)
+    yield Case("owner notice: the launch role does not publish", request("sns:Publish", TOPIC), False, None, LAUNCH_TASK)
+
+
 def logging_bucket_cases() -> Iterator[Case]:
     """The logging bucket may be created and configured, and the project bucket may send its access logs there. Nothing else follows."""
     other = f"{BUCKET}-other"
@@ -2451,6 +2563,7 @@ def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from scope_cases({"s3": bucket_requests()})
     yield from single_copy_cases()
     yield from promote_cases()
+    yield from research_cases()
     yield from logging_bucket_cases()
     yield from tag_cases()
     yield from container_instance_cases()
@@ -2512,8 +2625,10 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
     roles = {name: [document for key, document in documents.items() if key.startswith(f"role/{name}/")] for name in ROLES}
     # A delivery role holds its inline policy and every policy attached to it. None is attached today; ``check_delivery_roles`` fails when one is.
     delivery = {f"delivery_{name}": [document for key, document in documents.items() if key.startswith(f"delivery/{name}/")] for name in DELIVERY_ROLES}
+    unbounded = {name: [document for key, document in documents.items() if key.startswith(f"role/{name}/")] for name in UNBOUNDED_ROLES}
     return {
         **roles,
+        **unbounded,
         "user": user,
         "snapshots": [documents["owner_snapshots"]],
         "execution": [documents["owner_task_execution"]],
@@ -3665,9 +3780,139 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "serving execution: loses the registry token": ("serving execution: registry token", serving_drops("EcrToken")),
     }
 
+    def research_statement(documents: dict[str, dict[str, Any]], key: str, sid: str) -> dict[str, Any]:
+        return next(statement for statement in documents[key]["Statement"] if statement["Sid"] == sid)
+
+    def research_sets(key: str, sid: str, field: str, value: Any) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            research_statement(documents, key, sid)[field] = value
+
+        return mutation
+
+    def research_adds_action(key: str, sid: str, *actions: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            statement = research_statement(documents, key, sid)
+            statement["Action"] = [*as_list(statement["Action"]), *actions]
+
+        return mutation
+
+    def research_drops_condition(key: str, sid: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            del research_statement(documents, key, sid)["Condition"]
+
+        return mutation
+
+    def research_removes(key: str, sid: str) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            documents[key]["Statement"] = [statement for statement in documents[key]["Statement"] if statement["Sid"] != sid]
+
+        return mutation
+
+    def research_appends(key: str, statement: dict[str, Any]) -> Mutation:
+        def mutation(documents: dict[str, dict[str, Any]]) -> None:
+            documents[key]["Statement"].append(statement)
+
+        return mutation
+
+    records = f"role/{TRAIN_TASK}/research_records"
+    notice_key = f"role/{TRAIN_TASK}/owner_notice"
+    launch = f"role/{LAUNCH_TASK}/research_records"
+    research_defects: dict[str, tuple[str, Mutation]] = {
+        "research records: the create loses its header condition": ("research records: overwrite", research_drops_condition(records, "CreateResearchRecords")),
+        "research records: the create reaches every object of the bucket": (
+            "research records: PutObject outside research/",
+            research_sets(records, "CreateResearchRecords", "Resource", "*"),
+        ),
+        "research records: the create reaches a prefix that only starts with research": (
+            "research records: PutObject outside research/",
+            research_sets(records, "CreateResearchRecords", "Resource", f"{BUCKET}/research*"),
+        ),
+        "research records: the records may be deleted": (
+            "research records: DeleteObject",
+            research_adds_action(records, "CreateResearchRecords", "s3:DeleteObject"),
+        ),
+        "research records: the records may be tagged": (
+            "research records: PutObjectTagging",
+            research_adds_action(records, "CreateResearchRecords", "s3:PutObjectTagging"),
+        ),
+        "research records: the read reaches every object of the bucket": (
+            "research records: GetObject outside research/",
+            research_sets(records, "ReadResearchRecords", "Resource", f"{BUCKET}/*"),
+        ),
+        "research records: the read reaches every resource": (
+            "research records: GetObject outside research/",
+            research_sets(records, "ReadResearchRecords", "Resource", "*"),
+        ),
+        "research records: the read reaches other versions": (
+            "research records: GetObjectVersion",
+            research_adds_action(records, "ReadResearchRecords", "s3:GetObjectVersion"),
+        ),
+        "research records: the list loses its prefix condition": (
+            "research records: list without a prefix",
+            research_drops_condition(records, "ListResearchRecords"),
+        ),
+        "research records: the list takes any prefix": (
+            "research records: list outside research/",
+            research_sets(records, "ListResearchRecords", "Condition", {"StringLike": {"s3:prefix": ["*"]}}),
+        ),
+        "research records: the list reaches the whole bucket's objects": (
+            "research records: list in another bucket",
+            research_sets(records, "ListResearchRecords", "Resource", "arn:aws:s3:::*"),
+        ),
+        "research records: the create statement is gone": ("research records: create", research_removes(records, "CreateResearchRecords")),
+        "research records: the read statement is gone": ("research records: GetObject research/", research_removes(records, "ReadResearchRecords")),
+        "research records: the list statement is gone": ("research records: list under", research_removes(records, "ListResearchRecords")),
+        "launch research read: the read reaches every object of the bucket": (
+            "launch research read: GetObject outside research/",
+            research_sets(launch, "ReadResearchRecords", "Resource", f"{BUCKET}/*"),
+        ),
+        "launch research read: the read reaches every resource": (
+            "launch research read: GetObject outside research/",
+            research_sets(launch, "ReadResearchRecords", "Resource", "*"),
+        ),
+        "launch research read: the read may write": ("launch research read: PutObject", research_adds_action(launch, "ReadResearchRecords", "s3:PutObject")),
+        "launch research read: the read may delete": (
+            "launch research read: DeleteObject",
+            research_adds_action(launch, "ReadResearchRecords", "s3:DeleteObject"),
+        ),
+        "launch research read: the read may list": (
+            "launch research read: list under",
+            research_appends(launch, {"Sid": "ListAnything", "Effect": "Allow", "Action": "s3:ListBucket", "Resource": BUCKET}),
+        ),
+        "launch research read: the read statement is gone": ("launch research read: GetObject research/", research_removes(launch, "ReadResearchRecords")),
+        "owner notice: the publish reaches every topic": (
+            "owner notice: Publish to the budget topic",
+            research_sets(notice_key, "PublishOwnerNotices", "Resource", "*"),
+        ),
+        "owner notice: the publish reaches the budget topic too": (
+            "owner notice: Publish to the budget topic",
+            research_sets(notice_key, "PublishOwnerNotices", "Resource", [TOPIC, BUDGET_TOPIC]),
+        ),
+        "owner notice: the publish reaches topics that start like the alerts topic": (
+            "owner notice: Publish to a topic that only starts like",
+            research_sets(notice_key, "PublishOwnerNotices", "Resource", f"{TOPIC}*"),
+        ),
+        "owner notice: the publish reaches the topic of every region": (
+            "owner notice: Publish to the alerts topic of another region",
+            research_sets(notice_key, "PublishOwnerNotices", "Resource", TOPIC.replace(R, "*")),
+        ),
+        "owner notice: the publish reaches the topic of every account": (
+            "owner notice: Publish to the alerts topic of another account",
+            research_sets(notice_key, "PublishOwnerNotices", "Resource", TOPIC.replace(A, "*")),
+        ),
+        "owner notice: the action is every SNS action": ("owner notice: sns:Subscribe", research_sets(notice_key, "PublishOwnerNotices", "Action", "sns:*")),
+        "owner notice: the role may subscribe": ("owner notice: sns:Subscribe", research_adds_action(notice_key, "PublishOwnerNotices", "sns:Subscribe")),
+        "owner notice: the role may change the topic": (
+            "owner notice: sns:SetTopicAttributes",
+            research_adds_action(notice_key, "PublishOwnerNotices", "sns:SetTopicAttributes"),
+        ),
+        "owner notice: the statement is gone": ("owner notice: Publish to the alerts topic", research_removes(notice_key, "PublishOwnerNotices")),
+    }
+
     return {
         **job_defects,
         **serving_execution_defects,
+        **research_defects,
         **delivery_defects,
         **serving_release_defects,
         **plan_delivery_defects,
