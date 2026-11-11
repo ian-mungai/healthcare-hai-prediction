@@ -173,6 +173,7 @@ def alert_email_checks(text: str) -> dict[str, bool]:
 
     order = [
         ("render", index("render_platform_config")),
+        ("policy", index("manage_policies apply", "--policy sns")),
         ("find", index("list-subscriptions-by-topic", "PendingConfirmation")),
         ("import", index(f"terraform -chdir=infra/platform import '{address}[0]' <SUBSCRIPTION_ARN>")),
         ("apply", index("terraform.sh --platform", "apply <PLAN>")),
@@ -189,6 +190,17 @@ def alert_email_checks(text: str) -> dict[str, bool]:
         plan >= 0 and "Stop on any create or destroy of the subscription" in steps[plan]
     )
     checks["the list states that the project user needs the subscribe permission first"] = "sns:Subscribe" in body and "administrator" in body
+    policy = index("manage_policies apply", "--policy sns")
+    plan_policy = index("manage_policies plan", "--policy sns")
+    checks["the policy step plans before it applies, limited to the sns policy, with the plan digest"] = (
+        plan_policy >= 0 and plan_policy == policy and "--digest <PLAN_DIGEST>" in steps[policy] and "CONFIRM_IAM_POLICIES=" in steps[policy]
+    )
+    checks["the policy step names the three actions it adds and the alerts topic only"] = policy >= 0 and all(
+        action in steps[policy] for action in ("sns:Subscribe", "sns:GetSubscriptionAttributes", "sns:Unsubscribe", "alerts topic")
+    )
+    checks["the policy step runs before the import and before the platform plan, which read and create the subscription"] = (
+        policy >= 0 and index("terraform -chdir=infra/platform import") >= 0 and policy < index("terraform -chdir=infra/platform import") and policy < plan
+    )
     return checks
 
 
