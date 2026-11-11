@@ -5,17 +5,23 @@ run on that base whose launch ended with every acceptance check passed. The trai
 training run IDs (``training_contract.trained_run_id``), which the launch store holds a record of.
 
 The chain (``run_types``) reads the research record of each type from the data bucket. A type with no challenger has no chain. A type with a challenger runs
-four steps, each launched once under a run of its own (``training_contract.chain_run_id``), so a retry joins what ran:
+its steps, each launched once under a run of its own (``training_contract.chain_run_id``), so a retry joins what ran:
 
-1. ``canary_check`` judges the canary replay stored for the research run and stores its result. The chain reads that result and goes on only for ``promote``.
-2. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result.
-3. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion.
-4. ``owner_notice`` tells the owner through the alerts topic: promoted after a promotion, held after a hold, a failed canary check or a canary result that does
-   not name this candidate.
+1. ``canary_deploy`` asks the serve family to deploy the challenger beside the Production model. The request is closed: the infection type and the mode canary.
+   The serve preflight derives the version from the type's research record and the share from the job table.
+2. ``canary_check`` judges the canary replay stored for the research run and stores its result. The chain reads that result and goes on only for ``promote``.
+3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result.
+4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion.
+5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
+   active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. After a hold,
+   a failed canary check or a failed canary deploy the same step takes the candidate off the API instead.
+6. ``owner_notice`` tells the owner what happened: ``promoted`` only when the promotion and the rollout both ended, ``promoted_not_rolled_out`` when the
+   promotion stands but the release or the rollout failed, and ``held`` after a hold, a failed canary deploy or check, or a canary result that does not name
+   this candidate.
 
-One type failing never stops another type's chain. A failed canary check or a hold is announced as held. A failed promotion is not announced, because the
-Production alias may have moved: the failure is the signal, and the owner resolves it with the promotion tooling. A failed release leaves the promotion and
-its notice standing and is reported as a failure. ``run_types`` returns every failure; the caller fails the DAG task with them.
+One type failing never stops another type's chain. A failed promotion is not announced, because the Production alias may have moved: the failure is the signal,
+and the owner resolves it with the promotion tooling. A failed release or rollout leaves the promotion standing, is announced as such and is reported as a
+failure. ``run_types`` returns every failure; the caller fails the DAG task with them.
 """
 
 from __future__ import annotations
@@ -147,6 +153,9 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
     def run_of(name: str) -> str:
         return chain_run_id(research_run, hai_type, name)
 
+    def serve(mode: str, name: str) -> Callable[[], None]:
+        return lambda: steps.launch("serve_deploy", run_of(name), {"hai_type": hai_type, "deploy_mode": mode})
+
     outcome = "held"
     decision: list[str] = []
 
@@ -154,12 +163,16 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
         steps.launch("canary_check", run_of("canary"), {"research_run": research_run, "hai_type": hai_type, "mlflow": "aws"})
         decision.append(canary_decision(steps.read, research_run, challenger))
 
-    if step("canary check", canary) and decision == ["promote"]:
+    if step("canary deploy", serve("canary", "canary_deploy")):
+        step("canary check", canary)
+    if decision == ["promote"]:
         promotion = {"hai_type": hai_type, "model_version": challenger.version, "promotion_mode": "promote", "mlflow": "aws"}
         if not step("promotion", lambda: steps.launch("promote", run_of("promote"), promotion)):
             return
-        outcome = "promoted"
-        step("release", lambda: steps.release(challenger.model, challenger.features_run, run_of("release")))
+        released = step("release", lambda: steps.release(challenger.model, challenger.features_run, run_of("release")))
+        outcome = "promoted" if released and step("rollout", serve("stable", "stable_deploy")) else "promoted_not_rolled_out"
+    else:
+        step("canary removal", serve("stable", "stable_deploy"))
     notice = {"research_run": research_run, "hai_type": hai_type, "outcome": outcome, "mlflow": "aws"}
     step("owner notice", lambda: steps.launch("owner_notice", run_of("notice"), notice))
 

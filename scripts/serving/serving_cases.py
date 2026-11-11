@@ -698,6 +698,98 @@ def case_deploy_verifies_the_active_version(c: Checker) -> None:
         )
 
 
+def case_chain_rollout(c: Checker) -> None:
+    """The promotion chain against the real deployment action, manifest store and API refresh: the canary is live before the check, a passed canary ends as
+    the one stable version after the API refreshes, and the notice says only what happened (promoted and rolled out, promoted but not rolled out, held)."""
+    from orchestration import ecs_preflight, promotion_chain
+    from scripts.orchestration import research_chain_cases as chain
+
+    def served(w: World) -> tuple[Any, ...]:
+        w.clock.now += 31
+        ask(w)
+        body = w.api.health().body[HAI]
+        return (body["stable"], body["candidate"])
+
+    def scenario(
+        decision: str = "promote", release_fails: bool = False, fail: tuple[str, str] | None = None
+    ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
+        with world(count=40, deployment=False) as w:
+            recorder = chain.Recorder({HAI: chain.CHALLENGER}, canary=decision)
+            recorder.release_fails = release_fails
+            seen: dict[str, Any] = {}
+
+            def launch(step: str, run: str, params: dict[str, Any]) -> None:
+                recorder.calls.append((step, params["hai_type"], run, params))
+                if step == "serve_deploy":
+                    if fail == (step, params["deploy_mode"]):
+                        raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
+                    values = ecs_preflight.serving_values(params, chain.RESEARCH, 10, recorder.read)
+                    request = json.loads(values["SERVING_REQUEST"])
+                    deploy.run(
+                        registry=w.registry,
+                        manifests=w.store,
+                        hai_type=request["hai_type"],
+                        candidate_version=request["candidate_version"],
+                        percent=request["percent"],
+                        mode=request["deploy_mode"],
+                        deployment_id=run,
+                    )
+                if step == "canary_check":
+                    seen["at_the_check"] = served(w)
+                if step == "promote":
+                    w.registry.aliases["production"] = params["model_version"]
+
+            failures = promotion_chain.run_types(chain.BASE, chain.RESEARCH, [HAI], launch=launch, read=recorder.read, release=recorder.release)
+            seen["after"] = served(w)
+            seen["alias"] = w.registry.aliases["production"]
+            seen["answers"] = {ask(w, key).body["model_version"] for key in hospital_keys(40)}
+            return failures, recorder.calls, seen
+
+    def names(calls: list[tuple[Any, ...]]) -> list[str]:
+        return [f"{call[0]}:{call[3]['deploy_mode']}" if call[0] == "serve_deploy" else str(call[0]) for call in calls]
+
+    failures, calls, seen = scenario()
+    c.check(
+        "a passed canary is deployed first, checked, promoted, released, rolled out stable-only and then announced",
+        failures == [] and names(calls) == ["serve_deploy:canary", "canary_check", "promote", "release", "serve_deploy:stable", "owner_notice"],
+    )
+    c.check("the API serves the canary when the check runs", seen["at_the_check"] == (PRODUCTION, CANDIDATE))
+    c.check(
+        "after the rollout the API refreshes to the promoted version alone and every answer comes from it",
+        seen["after"] == (CANDIDATE, None) and seen["alias"] == CANDIDATE and seen["answers"] == {CANDIDATE},
+    )
+    c.check("the notice says promoted", calls[-1][3]["outcome"] == "promoted")
+    failures, calls, seen = scenario(release_fails=True)
+    c.check(
+        "a failed release is reported, nothing is rolled out and the notice says the promotion did not roll out",
+        len(failures) == 1 and "release" in failures[0] and "serve_deploy:stable" not in names(calls) and calls[-1][3]["outcome"] == "promoted_not_rolled_out",
+    )
+    c.check("the API still serves the earlier deployment", seen["after"] == (PRODUCTION, CANDIDATE) and seen["alias"] == CANDIDATE)
+    failures, calls, seen = scenario(fail=("serve_deploy", "stable"))
+    c.check(
+        "a failed rollout is reported and the notice says the promotion did not roll out",
+        len(failures) == 1 and "rollout" in failures[0] and calls[-1][3]["outcome"] == "promoted_not_rolled_out" and seen["after"] == (PRODUCTION, CANDIDATE),
+    )
+    failures, calls, seen = scenario(decision="hold")
+    c.check(
+        "a held canary is taken off the API with a stable-only deploy and announced as held, and the alias does not move",
+        failures == []
+        and names(calls) == ["serve_deploy:canary", "canary_check", "serve_deploy:stable", "owner_notice"]
+        and calls[-1][3]["outcome"] == "held"
+        and seen["after"] == (PRODUCTION, None)
+        and seen["alias"] == PRODUCTION,
+    )
+    failures, calls, seen = scenario(fail=("serve_deploy", "canary"))
+    c.check(
+        "a failed canary deploy checks and promotes nothing, clears any canary and announces held",
+        len(failures) == 1
+        and "canary deploy" in failures[0]
+        and names(calls) == ["serve_deploy:canary", "serve_deploy:stable", "owner_notice"]
+        and calls[-1][3]["outcome"] == "held"
+        and seen["alias"] == PRODUCTION,
+    )
+
+
 def case_images(c: Checker) -> None:
     """The image list names the model API and page images, builds each from its own Dockerfile with the repository as context, and the platform stack
     gets their repositories behind one flag."""
@@ -1679,6 +1771,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
     "deploy_verifies_the_active_version": (case_deploy_verifies_the_active_version, "deploy"),
+    "chain_rollout": (case_chain_rollout, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "images_and_repositories": (case_images, "deploy aws"),
     "parameter_names_agree": (case_parameter_names, "iam services"),
