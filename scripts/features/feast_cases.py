@@ -2226,6 +2226,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E33_held_release": (online_release_cases.case_e33_held_release, "FS6"),
     "E33_not_held": (online_release_cases.case_e33_not_held, "FS6"),
     "E33_command": (online_release_cases.case_e33_command, "FS6"),
+    "E33_cached_release": (online_release_cases.case_e33_cached_release, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_lease": (case_e13_lease, "LC12"),

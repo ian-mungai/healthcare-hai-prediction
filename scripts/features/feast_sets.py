@@ -427,6 +427,13 @@ def set_materialize(
     return record
 
 
+def record_problems(record: Mapping[str, Any], expected: Mapping[str, Any], text_fields: Sequence[str]) -> list[str]:
+    """The fields of a stored record that do not equal what is expected, and the text fields that are missing or empty, by name."""
+    problems = [name for name, value in expected.items() if record.get(name) != value]
+    problems += [name for name in text_fields if not isinstance(record.get(name), str) or not record[name]]
+    return sorted(set(problems))
+
+
 def release(
     feature_set: str,
     run: str,
@@ -445,6 +452,7 @@ def release(
     run's schema hash the release is refused by name and the hold stays, so no model is served online features of another schema: a new schema waits until
     every consumer of the set has promoted a model trained on it (owner decision "Shared online set release", Nov 10 2026).
 
+    A cached release record is returned only when it is this hold's: its set, run, base run and set schema hash equal the hold's and it names a load.
     A set loader that can recover (``SetLoader``) is asked for a finished load of the request before it loads: a retry after the load finished and the receipt
     write failed records that load and loads nothing again."""
     if feature_sets.checked(feature_set) not in feature_sets.MODEL_SETS or not schema["model_sets"][feature_set]["online"]:
@@ -454,9 +462,11 @@ def release(
         raise ReadError(f"run {run} has no online hold record, so there is nothing to release")
     if hold.get("feature_set") != feature_set:
         raise ReadError(f"the hold of run {run} belongs to set {hold.get('feature_set')}, not to set {feature_set}")
+    if hold.get("run_id") != run:
+        raise ReadError(f"the hold stored for run {run} names run {hold.get('run_id')}")
     released = holds.read(RELEASE_NAME, run)
     if released is not None:
-        return released
+        return bound_release(released, hold, feature_set, run)
     newest = newest_run(feature_set)
     if newest != run:
         raise ReadError(f"run {run} is not the newest committed run of set {feature_set} ({newest}): its held load is superseded")
@@ -487,7 +497,21 @@ def release(
     stored = holds.read(RELEASE_NAME, run)
     if stored is None:
         raise ReadError(f"the release record of run {run} cannot be read back")
-    return stored
+    return bound_release(stored, hold, feature_set, run)
+
+
+def bound_release(released: Mapping[str, Any], hold: Mapping[str, Any], feature_set: str, run: str) -> dict[str, Any]:
+    """The stored release record of a hold, or a refusal when it is not that hold's release: another set, run, base run or schema hash, or no load ID."""
+    expected = {
+        "feature_set": feature_set,
+        "run_id": run,
+        "base_run": hold.get("base_run"),
+        "set_schema_sha256": hold.get("set_schema_sha256"),
+    }
+    problems = record_problems(released, expected, ("load_id", "base_run", "set_schema_sha256"))
+    if problems:
+        raise ReadError(f"the release record of run {run} is not the release of its hold (fields that do not fit: {', '.join(problems)}); nothing was loaded")
+    return dict(released)
 
 
 def newest_set_run(catalog: reads.IcebergCatalog, namespace: str, feature_set: str, schema: Mapping[str, Any]) -> str:

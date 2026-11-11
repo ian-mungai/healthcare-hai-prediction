@@ -162,3 +162,51 @@ def case_e33_command(c: Checker) -> None:
         c.check("a name that is not a model set exits 1", code == 1 and "not a model set" in err)
         code, _, err = run(["--model", "m1", "--features-run", "latest"])
         c.check("a run that is not a run ID exits 1 and loads nothing", code == 1 and "run ID" in err and len(online.loads) == 1)
+
+
+def case_e33_cached_release(c: Checker) -> None:
+    """A release record is returned only when it is the release of this hold: its set, run, base run and schema hash match, and it names a load."""
+    online_release: Any = importlib.import_module("scripts.features.online_release")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    other_run = "20261110T090000Z-0000a002"
+    online = Online()
+    held = {"schema": 1, "feature_set": "m1", "run_id": HELD_RUN, "base_run": BASE_RUN, "set_schema_sha256": mine, "production_set_schema_sha256": [OLD_HASH]}
+    genuine = {
+        "schema": 1,
+        "feature_set": "m1",
+        "run_id": HELD_RUN,
+        "base_run": BASE_RUN,
+        "set_schema_sha256": mine,
+        "feature_schema_sha256": sha,
+        "load_id": "load-first",
+    }
+    with tempfile.TemporaryDirectory(prefix="online_release_cases_") as raw:
+        counter = [0]
+
+        def attempt(release: dict[str, Any] | None, hold: dict[str, Any] | None = None) -> dict[str, Any]:
+            counter[0] += 1
+            holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+            holds.write_new(feast_sets.HOLD_NAME, HELD_RUN, held if hold is None else hold)
+            if release is not None:
+                holds.write_new(feast_sets.RELEASE_NAME, HELD_RUN, release)
+            return online_release.release_promoted(
+                "m1", HELD_RUN, schema=(schema, sha), holds=holds, loader=online.load, newest_run=lambda name: HELD_RUN, production=lambda: {"HAI_1": mine}
+            )
+
+        again = attempt(genuine)
+        c.check(
+            "the genuine release record answers already released with its load", again["outcome"] == "already_released" and again["load_id"] == "load-first"
+        )
+        c.refused("a release record of another set is refused without a load", lambda: attempt({**genuine, "feature_set": "m2"}), "release record")
+        c.refused("a release record of another run is refused", lambda: attempt({**genuine, "run_id": other_run}), "release record")
+        c.refused("a release record of another base run is refused", lambda: attempt({**genuine, "base_run": other_run}), "release record")
+        c.refused("a release record of another schema is refused", lambda: attempt({**genuine, "set_schema_sha256": OLD_HASH}), "release record")
+        c.refused("an empty release record is refused", lambda: attempt({}), "release record")
+        c.refused(
+            "a release record without a load ID is refused", lambda: attempt({key: value for key, value in genuine.items() if key != "load_id"}), "load_id"
+        )
+        c.refused("a release record with an empty load ID is refused", lambda: attempt({**genuine, "load_id": ""}), "load_id")
+        c.refused("a release record with a load ID that is not text is refused", lambda: attempt({**genuine, "load_id": 7}), "load_id")
+        c.refused("a hold of another run is refused", lambda: attempt(genuine, {**held, "run_id": other_run}), "hold")
+        c.check("no refusal loaded anything online", online.loads == [])
