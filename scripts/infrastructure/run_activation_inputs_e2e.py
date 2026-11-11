@@ -48,6 +48,8 @@ SOURCES = (
 DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 ACCOUNT = "111111111111"
 ADMIN = "example_admin"
+# The platform output the alerts root renders its topic from (a synthetic ARN of the stand-in account).
+ALERTS_TOPIC = f"arn:aws:sns:us-west-2:{ACCOUNT}:example_project_alerts_dev"
 STACKS = {"iam": "infra/iam", "platform": "infra/platform", "services": "infra/services", "jobs": "infra/jobs"}
 OUTPUTS = {
     "iam": "infra/iam/preparation.auto.tfvars.json",
@@ -450,7 +452,11 @@ class Workspace:
         # The platform outputs the services renderer reads, and the services output host_capacity_binding the jobs renderer reads for host jobs
         # (TEST FIXTURE ONLY, not measured values).
         binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
-        self.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding}.items()}))
+        self.outputs.write_text(
+            json.dumps(
+                {name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding, "alerts_topic_arn": ALERTS_TOPIC}.items()}
+            )
+        )
         for stack in ("services",):
             (self.root / STACKS[stack] / "images.auto.tfvars.json").parent.mkdir(parents=True, exist_ok=True)
             (self.root / STACKS[stack] / "images.auto.tfvars.json").write_text(json.dumps({"image_digests": {}}))

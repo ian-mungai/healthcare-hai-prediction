@@ -27,8 +27,9 @@ from scripts.process import run_command
 OWNER_LISTS = ROOT / "config/aws/owner_command_lists.json"
 CODE = "Code checkout on the host"
 ALERT = "Alert email at bootstrap"
+TEARDOWN = "Alert email teardown"
 IAM_FLAGS = {"host_code_fetch_prepared": True}
-STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs")
+STACK_OPTIONS = ("--iam", "--platform", "--services", "--jobs", "--alerts")
 
 
 def steps_of(body: str) -> list[str]:
@@ -155,52 +156,101 @@ DOTENV_REST = (f"AWS_ACCOUNT_ID={owner_commands.ACCOUNT}", "PROJECT_NAME=example
 
 
 def alert_email_checks(text: str) -> dict[str, bool]:
-    """The alert email list: the address comes from .env, a hand subscription is imported once confirmed and before the apply, and the owner confirms."""
+    """The alert email lists: the address comes from .env, the alerts root is applied after the policy and the platform, hand subscriptions are imported once
+    confirmed and before the apply, the owner confirms, and the teardown removes the budget subscription with the administrator profile."""
     body = owner_commands.section(text, ALERT)
     steps = steps_of(body)
     numbers = [int(step.split(".", 1)[0]) for step in steps]
-    declared = "".join(path.read_text() for path in (ROOT / "infra/platform").glob("*.tf"))
-    address = "aws_sns_topic_subscription.alerts_email"
+    root = "".join(path.read_text() for path in (ROOT / "infra/alerts").glob("*.tf"))
+    platform = "".join(path.read_text() for path in (ROOT / "infra/platform").glob("*.tf"))
+    address = "aws_sns_topic_subscription.email"
     checks = {
-        "the alert email section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 4,
-        "the platform stack declares the subscription the list imports": 'resource "aws_sns_topic_subscription" "alerts_email"' in declared,
+        "the alert email section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 6,
+        "the alerts root declares the subscription the list imports, for the alerts and budget topics": 'resource "aws_sns_topic_subscription" "email"' in root
+        and "alerts = var.alerts_topic_arn" in root
+        and "budget = local.budget_topic_arn" in root,
+        "the platform stack declares no subscription": "aws_sns_topic_subscription" not in platform,
         "the list names the .env key, and an empty key skips it": "ALERT_EMAIL" in body and "empty" in body,
         "the list says no address is typed into a tracked file": "tracked" in body,
+        "the list says no pull request plan runs the alerts root": "no pull request plan runs it" in body
+        and "GitHub plan role never reads a subscription" in body,
     }
 
     def index(*needles: str) -> int:
         return next((position for position, step in enumerate(steps) if all(needle in step for needle in needles)), -1)
 
     order = [
-        ("render", index("render_platform_config")),
         ("policy", index("manage_policies apply", "--policy sns")),
+        ("platform apply", index("terraform.sh --platform", "apply <PLAN>")),
+        ("budget topic", index("terraform -chdir=infra/iam output -json budget")),
         ("find", index("list-subscriptions-by-topic", "PendingConfirmation")),
-        ("import", index(f"terraform -chdir=infra/platform import '{address}[0]' <SUBSCRIPTION_ARN>")),
-        ("apply", index("terraform.sh --platform", "apply <PLAN>")),
+        ("init", index("terraform -chdir=infra/alerts init -input=false -lockfile=readonly")),
+        ("render", index("render_platform_config --stack alerts")),
+        ("import", index(f"terraform -chdir=infra/alerts import '{address}[\"alerts\"]' <SUBSCRIPTION_ARN>")),
+        ("apply", index("terraform.sh --alerts", "apply <PLAN>")),
         ("confirm", index("The bootstrap is not complete until you do", "list-subscriptions-by-topic")),
     ]
     positions = [position for _, position in order]
     checks[f"the alert email steps come in order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
+    checks["the list reads the budget topic from the IAM stack output and lists both topics"] = (
+        "<BUDGET_TOPIC_ARN>" in steps[index("list-subscriptions-by-topic", "PendingConfirmation")] and "<ALERTS_TOPIC_ARN>" in body
+    )
     find = index("list-subscriptions-by-topic", "PendingConfirmation")
     checks["the list says a pending subscription has no ARN to import, so the owner confirms first"] = (
         find >= 0 and "cannot be imported" in steps[find] and "Confirm subscription" in steps[find]
     )
-    plan = index("terraform.sh --platform", "plan -out <PLAN>")
-    checks["the plan step stops on a create of the subscription after an import"] = (
-        plan >= 0 and "Stop on any create or destroy of the subscription" in steps[plan]
+    imports = index("terraform -chdir=infra/alerts import")
+    checks["the import step imports both topics into the alerts root state and nowhere else"] = (
+        imports >= 0
+        and f'{address}["budget"]\' <BUDGET_SUBSCRIPTION_ARN>' in steps[imports]
+        and "infra/platform import" not in body
+        and "Run each import once" in steps[imports]
     )
-    checks["the list states that the project user needs the subscribe permission first"] = "sns:Subscribe" in body and "administrator" in body
+    plan = index("terraform.sh --alerts", "plan -out <PLAN>")
+    checks["the plan step stops on a destroy or a replace of a subscription and allows only the two subscriptions"] = (
+        plan >= 0 and "Stop on any destroy, on any replace and on any other change" in steps[plan] and f"{address}" in steps[plan]
+    )
+    checks["the alerts root is planned and applied through the wrapper with no other stack option"] = plan >= 0 and "--platform" not in steps[plan]
     policy = index("manage_policies apply", "--policy sns")
     plan_policy = index("manage_policies plan", "--policy sns")
     checks["the policy step plans before it applies, limited to the sns policy, with the plan digest"] = (
         plan_policy >= 0 and plan_policy == policy and "--digest <PLAN_DIGEST>" in steps[policy] and "CONFIRM_IAM_POLICIES=" in steps[policy]
     )
-    checks["the policy step names the three actions it adds and the alerts topic only"] = policy >= 0 and all(
-        action in steps[policy] for action in ("sns:Subscribe", "sns:GetSubscriptionAttributes", "sns:Unsubscribe", "alerts topic")
+    checks["the policy step names the actions it adds: subscribe and read on every alert topic, unsubscribe on the platform topic only"] = policy >= 0 and all(
+        words in steps[policy]
+        for words in (
+            "`sns:Subscribe` and `sns:GetSubscriptionAttributes` on every project alert topic",
+            "`sns:Unsubscribe` on the platform alerts topic only",
+            "can never remove a subscription of the budget alerts topic",
+        )
     )
-    checks["the policy step runs before the import and before the platform plan, which read and create the subscription"] = (
-        policy >= 0 and index("terraform -chdir=infra/platform import") >= 0 and policy < index("terraform -chdir=infra/platform import") and policy < plan
+    checks["the policy step runs before the import and before the alerts plan, which read and create the subscriptions"] = (
+        policy >= 0 and imports >= 0 and plan >= 0 and policy < imports and policy < plan
     )
+    checks["no step touches the CI plan role or the delivery boundary"] = (
+        "plan role" not in body.replace("never reads a subscription", "").replace("the GitHub plan role", "") and "delivery boundary" not in body
+    )
+    teardown = owner_commands.section(text, TEARDOWN)
+    tear = steps_of(teardown)
+    tear_numbers = [int(step.split(".", 1)[0]) for step in tear]
+    checks["the teardown section is one numbered list"] = bool(teardown) and tear_numbers == list(range(1, len(tear_numbers) + 1)) and len(tear_numbers) >= 4
+
+    def tear_index(*needles: str) -> int:
+        return next((position for position, step in enumerate(tear) if all(needle in step for needle in needles)), -1)
+
+    removal = tear_index("aws sns unsubscribe", "--profile <ADMIN_PROFILE>", "<BUDGET_SUBSCRIPTION_ARN>")
+    dropped = tear_index(f"terraform -chdir=infra/alerts state rm '{address}[\"budget\"]'")
+    destroy = tear_index("terraform.sh --alerts plan -destroy -out <PLAN>", "terraform.sh --alerts apply <PLAN>")
+    verified = tear_index("list-subscriptions-by-topic", "<BUDGET_TOPIC_ARN>", "<ALERTS_TOPIC_ARN>")
+    positions = [removal, dropped, destroy, verified]
+    checks[f"the teardown removes the budget subscription with the administrator, drops it from state, destroys the rest and verifies ({positions})"] = all(
+        position >= 0 for position in positions
+    ) and positions == sorted(positions)
+    checks["the teardown says the project user can never remove the budget subscription"] = "can never remove the one of the budget alerts topic" in teardown
+    checks["the teardown destroy plan must delete the platform topic subscription only"] = (
+        destroy >= 0 and "Stop on any other change or on any other resource" in tear[destroy]
+    )
+    checks["the teardown keeps the topics, the platform stack, .env and the other state"] = "keeps everything else" in teardown and "`.env`" in teardown
     return checks
 
 
@@ -339,10 +389,11 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     checks[f"{CODE}: {len(problems)} printed commands were found"] = len(problems) >= 5
     for number, (line, found) in enumerate(problems.items(), 1):
         checks[f"{CODE}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
-    problems = owner_commands.check_section(owner_commands.section(text, ALERT), folder / "alert", wrapper, {"ADMIN_PROFILE": ADMIN})
-    checks[f"{ALERT}: {len(problems)} printed commands were found"] = len(problems) >= 5
-    for number, (line, found) in enumerate(problems.items(), 1):
-        checks[f"{ALERT}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
+    for heading in (ALERT, TEARDOWN):
+        problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
+        checks[f"{heading}: {len(problems)} printed commands were found"] = len(problems) >= 5
+        for number, (line, found) in enumerate(problems.items(), 1):
+            checks[f"{heading}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
     return checks
 
 

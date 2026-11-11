@@ -89,7 +89,7 @@ output "log_group_names" {
 }
 
 output "alerts_topic_arn" {
-  description = "SNS topic for run-failure alerts; it has no subscriber until the owner adds one."
+  description = "SNS topic for run-failure alerts; it has no subscriber until the alerts root (infra/alerts) subscribes the owner's address. That root reads this output."
   value       = aws_sns_topic.alerts.arn
 }
 

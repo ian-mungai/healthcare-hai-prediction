@@ -1,4 +1,4 @@
-"""Render platform or services Terraform inputs and check saved plans before apply."""
+"""Render platform, services or alerts Terraform inputs and check saved plans before apply."""
 
 from __future__ import annotations
 
@@ -82,9 +82,22 @@ def terraform_document(directory: Path, arguments: list[str], storage: dict[str,
     return document
 
 
+def platform_outputs(storage: dict[str, str]) -> dict[str, Any]:
+    """The outputs of the applied platform stack, as ``terraform output -json`` prints them."""
+    return terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], storage, "The platform outputs could not be read. Apply the platform stack first.")
+
+
+def alerts_values(storage: dict[str, str], env_file: Path) -> dict[str, Any]:
+    """The inputs of the alerts root: the project keys, the alerts topic from the platform output and the optional address from .env."""
+    topic = platform_outputs(storage).get("alerts_topic_arn")
+    if not isinstance(topic, dict) or not isinstance(topic.get("value"), str) or not topic["value"]:
+        raise ConfigurationError("Missing platform output: alerts_topic_arn. Apply the platform stack before rendering the alerts inputs.")
+    return {**platform_values(storage), "alerts_topic_arn": topic["value"], **load_alert_email(env_file)}
+
+
 def services_values(storage: dict[str, str]) -> dict[str, Any]:
     """Combine project inputs with the ten required platform outputs, preserving map values; the host address is one of them, never typed by hand."""
-    outputs = terraform_document(PLATFORM_DIRECTORY, ["output", "-json"], storage, "The platform outputs could not be read. Apply the platform stack first.")
+    outputs = platform_outputs(storage)
     values: dict[str, Any] = dict(platform_values(storage))
     for name in SERVICES_PLATFORM_KEYS:
         item = outputs.get(name)
@@ -105,6 +118,8 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
     """Read the nonsecret reviewed inputs of the platform or services stack only when their exact bytes match the reviewed digest."""
     if path is None and sha256 is None:
         return {}
+    if stack not in PREPARATION_SCHEMAS:
+        raise ConfigurationError(f"The {stack} root takes no preparation inputs. No Terraform action was run.")
     if path is None or sha256 is None:
         raise ConfigurationError("Supply both the preparation input path and preparation SHA-256.")
     try:
@@ -151,14 +166,17 @@ def verify_platform_plan(plan: dict, expected: Mapping[str, object], stack: str 
             source = ".env" if stack == "platform" else "its input sources"
             raise ConfigurationError(f"A {stack} variable without a default is not rendered from {source}; create and review a fresh plan.")
         if value != (expected[name] if name in expected else declared[name]["default"]):
-            sources = ".env or the committed defaults" if stack == "platform" else ".env, platform outputs, image digests or the committed defaults"
+            sources = {
+                "platform": ".env or the committed defaults",
+                "alerts": ".env, platform outputs or the committed defaults",
+            }.get(stack, ".env, platform outputs, image digests or the committed defaults")
             raise ConfigurationError(f"Saved plan inputs differ from {sources}; create and review a fresh plan.")
 
 
 def main() -> None:
     """Render or check platform or services inputs without printing private values."""
-    parser = argparse.ArgumentParser(description="Render ignored platform or services Terraform inputs without printing values.")
-    parser.add_argument("--stack", choices=("platform", "services"), default="platform")
+    parser = argparse.ArgumentParser(description="Render ignored platform, services or alerts Terraform inputs without printing values.")
+    parser.add_argument("--stack", choices=("platform", "services", "alerts"), default="platform")
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--check", action="store_true")
     parser.add_argument("--preparation-inputs", type=Path, help="the reviewed nonsecret inputs file of the platform or services stack")
@@ -170,8 +188,13 @@ def main() -> None:
     directory = REPO_ROOT / "infra" / stack
     try:
         storage, _ = load_configuration(arguments.env_file)
-        # The alert address is a platform input only; the services stack does not declare it.
-        values: dict[str, Any] = services_values(storage) if stack == "services" else {**platform_values(storage), **load_alert_email(arguments.env_file)}
+        # The alert address is an input of the alerts root only: no CI plan may hold it, so the platform and services stacks never receive it.
+        if stack == "services":
+            values: dict[str, Any] = services_values(storage)
+        elif stack == "alerts":
+            values = alerts_values(storage, arguments.env_file)
+        else:
+            values = platform_values(storage)
         values.update(stack_preparation(arguments.preparation_inputs, arguments.preparation_sha256, stack))
         if arguments.check_plan:
             if stack == "platform":
@@ -208,7 +231,7 @@ def main() -> None:
         if arguments.check:
             logger.info("Verified .env-derived %s inputs.", stack)
         else:
-            logger.info("Rendered private %s inputs from .env%s.", stack, " and platform outputs" if stack == "services" else "")
+            logger.info("Rendered private %s inputs from .env%s.", stack, " and platform outputs" if stack in ("services", "alerts") else "")
     finally:
         logger.removeHandler(handler)
 

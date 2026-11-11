@@ -95,7 +95,9 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "PLAN": "silver_step.tfplan",
         "TOKEN": "example-host:4242:20261031T120000Z:0123abcd",
         "ALERTS_TOPIC_ARN": f"arn:aws:sns:us-west-2:{ACCOUNT}:example_project_alerts_dev",
+        "BUDGET_TOPIC_ARN": f"arn:aws:sns:us-west-2:{ACCOUNT}:example_project_budget_alerts_dev",
         "SUBSCRIPTION_ARN": f"arn:aws:sns:us-west-2:{ACCOUNT}:example_project_alerts_dev:01234567-89ab-cdef-0123-456789abcdef",
+        "BUDGET_SUBSCRIPTION_ARN": f"arn:aws:sns:us-west-2:{ACCOUNT}:example_project_budget_alerts_dev:01234567-89ab-cdef-0123-456789abcdef",
     }
 
 

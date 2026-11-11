@@ -128,6 +128,13 @@ elif arguments[0] == "-chdir=" + str(root / "infra/services") and arguments[1] i
 else:
     sys.exit("Unsupported services Terraform stand-in call")
 """
+ALERTS_ADDRESS = "owner@example.org"
+ALERTS_TOPIC = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+ALERTS_OUTPUT = "infra/alerts/deployment.auto.tfvars.json"
+# The Terraform stand-in of the alerts root: it records the profile and credentials of each call and answers the platform output and the saved plan.
+ALERTS_TERRAFORM = SERVICES_TERRAFORM.replace("infra/services", "infra/alerts").replace(
+    "Unsupported services Terraform stand-in call", "Unsupported alerts Terraform stand-in call"
+)
 SERVICES_AWS = """
 import json, sys
 from pathlib import Path
@@ -1879,6 +1886,89 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     evidence.check(step, "apply_not_started", not any(call["arguments"][1] == "apply" for call in calls))
 
 
+def run_alerts_cases(evidence: Evidence, sources: dict[str, bytes], bash: str) -> None:
+    """Exercise alerts rendering and the wrapper: the address comes from .env, the topic from the platform output, no other stack gets the address."""
+    workspace = copied_workspace(evidence.temporary, "alerts", sources, {**FIXTURE, "ALERT_EMAIL": ALERTS_ADDRESS}).resolve()
+    tools = workspace / "tools"
+    tools.mkdir()
+    for name, body in {"terraform": ALERTS_TERRAFORM, "aws": SERVICES_AWS}.items():
+        (tools / name).write_text(f"#!{sys.executable}\n" + body, encoding="utf-8")
+        (tools / name).chmod(0o700)
+    (tools / "dirname").symlink_to("/usr/bin/dirname")
+    environment = {"PATH": str(tools), "AWS_ACCESS_KEY_ID": DISCLOSURE_SENTINEL, "AWS_SECRET_ACCESS_KEY": DISCLOSURE_SENTINEL}
+    call_path = workspace / "terraform_calls.jsonl"
+    output_path = workspace / "platform_outputs.json"
+    output_path.write_text(json.dumps({"alerts_topic_arn": {"value": ALERTS_TOPIC}}), encoding="utf-8")
+    expected = {
+        "aws_profile": PROFILE,
+        "aws_region": "eu-west-1",
+        "environment": "dev",
+        "expected_account_id": "111111111111",
+        "project_name": "example_project",
+        "alerts_topic_arn": ALERTS_TOPIC,
+        "alert_email": ALERTS_ADDRESS,
+    }
+    renderer = [sys.executable, "-m", "scripts.infrastructure.render_platform_config", "--stack", "alerts"]
+    wrapper = [bash, "scripts/infrastructure/terraform.sh", "--alerts"]
+    path = workspace / ALERTS_OUTPUT
+    step, result = evidence.run("render_alerts", renderer, workspace, environment)
+    evidence.check(step, "render_succeeded", result.returncode == 0 and "Rendered private alerts inputs" in result.stdout)
+    evidence.check(step, "exact_alerts_inputs_from_env_and_platform", path.is_file() and json.loads(path.read_bytes()) == expected)
+    evidence.check(step, "owner_only_permissions", stat.S_IMODE(path.stat().st_mode) == 0o600)
+    evidence.check(step, "only_alerts_output", not any((workspace / name).exists() for name in (*OUTPUT_NAMES, PLATFORM_OUTPUT, SERVICES_OUTPUT)))
+    evidence.check(step, "address_not_printed", ALERTS_ADDRESS not in result.stdout + result.stderr)
+    step, result = evidence.run("wrapper_alerts_plan", [*wrapper, "plan", "-out=alerts.tfplan"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()]
+    evidence.check(
+        step,
+        "alerts_root_selected",
+        result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/alerts'}", "plan", "-input=false", "-out=alerts.tfplan"],
+    )
+    evidence.check(step, "identity_verified", (workspace / "identity_called").exists())
+    evidence.check(step, "platform_output_uses_project_profile", calls[0]["profile"] == PROFILE and all(not call["static_credentials"] for call in calls))
+    evidence.check(step, "address_not_printed", ALERTS_ADDRESS not in result.stdout + result.stderr)
+    plan_path = workspace / "infra/alerts/reviewed.tfplan"
+    plan_path.write_text(json.dumps(platform_plan(expected, defaults={})), encoding="utf-8")
+    (workspace / "identity_called").unlink()
+    step, result = evidence.run("wrapper_alerts_apply", [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()]
+    evidence.check(
+        step,
+        "saved_alerts_plan_applied",
+        result.returncode == 0 and calls[-1]["arguments"] == [f"-chdir={workspace / 'infra/alerts'}", "apply", "-input=false", "reviewed.tfplan"],
+    )
+    evidence.check(step, "no_launch_hold_around_an_alerts_apply", not (workspace / "services_apply_calls.jsonl").exists())
+    evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
+    original = path.read_bytes()
+    plan_path.write_text(json.dumps(platform_plan({**expected, "alert_email": "other@example.org"}, defaults={})), encoding="utf-8")
+    step, result = evidence.run("reject_alerts_plan_with_another_address", [*wrapper, "apply", "reviewed.tfplan"], workspace, environment)
+    evidence.check(step, "other_address_refused", result.returncode == 2 and "Saved plan inputs differ" in result.stderr)
+    evidence.check(
+        step, "no_value_disclosure", "other@example.org" not in result.stdout + result.stderr and ALERTS_ADDRESS not in result.stdout + result.stderr
+    )
+    evidence.check(step, "inputs_unchanged", sha256(path.read_bytes()) == sha256(original))
+    before_calls = len(call_path.read_text(encoding="utf-8").splitlines())
+    step, result = evidence.run("validate_alerts_without_platform", [*wrapper, "validate"], workspace, environment)
+    calls = [json.loads(line) for line in call_path.read_text(encoding="utf-8").splitlines()][before_calls:]
+    evidence.check(step, "validation_ignores_render_inputs", result.returncode == 0 and [call["arguments"][1] for call in calls] == ["validate"])
+    (workspace / ".env").write_text("\n".join(f"{key}={value}" for key, value in FIXTURE.items()) + "\n", encoding="utf-8")
+    step, result = evidence.run("render_alerts_without_address", renderer, workspace, environment)
+    unset = json.loads(path.read_bytes())
+    evidence.check(step, "unset_address_renders_no_address_input", result.returncode == 0 and set(unset) == set(expected) - {"alert_email"})
+    (workspace / ".env").write_text("\n".join(f"{key}={value}" for key, value in {**FIXTURE, "ALERT_EMAIL": ALERTS_ADDRESS}.items()) + "\n", encoding="utf-8")
+    step, result = evidence.run("render_platform_with_address", [sys.executable, "-m", "scripts.infrastructure.render_platform_config"], workspace, environment)
+    platform_inputs = json.loads((workspace / PLATFORM_OUTPUT).read_bytes())
+    evidence.check(
+        step,
+        "platform_inputs_hold_no_address",
+        result.returncode == 0 and ALERTS_ADDRESS not in json.dumps(platform_inputs) and "alert_email" not in platform_inputs,
+    )
+    output_path.write_text(json.dumps({"alerts_topic_arn": {"value": None}}), encoding="utf-8")
+    step, result = evidence.run("reject_missing_alerts_topic", renderer, workspace, environment)
+    evidence.check(step, "missing_topic_named", result.returncode == 2 and "Missing platform output: alerts_topic_arn" in result.stderr)
+    evidence.check(step, "address_not_printed", ALERTS_ADDRESS not in result.stdout + result.stderr)
+
+
 def run_storage_retention_cases(evidence: Evidence, sources: dict[str, bytes]) -> None:
     """The MLflow retention rule changes the live lifecycle configuration: only the explicit option renders it, and only a plan made with it passes."""
     renderer = [sys.executable, "-m", "scripts.infrastructure.render_project_config", "--stack", "storage"]
@@ -3323,6 +3413,7 @@ def run_suite(evidence: Evidence) -> None:
     run_platform_cases(evidence, sources)
     run_storage_retention_cases(evidence, sources)
     run_services_cases(evidence, sources, bash)
+    run_alerts_cases(evidence, sources, bash)
     run_host_boot_cases(evidence, bash)
     run_job_firewall_syntax_cases(evidence)
 
@@ -3382,12 +3473,12 @@ def run_suite(evidence: Evidence) -> None:
         (["--iam", "plan"], {}, "IAM updates require --admin-profile."),
         (["--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
         (["--platform", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
-        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        (["--iam", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+        (["--platform", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
         (["--services", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
-        (["--services", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-        (["--platform", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-        (["--services", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+        (["--services", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+        (["--platform", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+        (["--services", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
         (["--services", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["--platform", "apply"], {}, "Apply requires one reviewed saved-plan path."),
         (["apply"], {}, "Apply requires one reviewed saved-plan path."),
@@ -3405,15 +3496,27 @@ def run_suite(evidence: Evidence) -> None:
         guards.append((arguments, {name: "-var=project_name=example_unapproved"}, f"Unset {name};"))
     guards.extend(
         [
-            (["--iam", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-            (["--jobs", "--iam", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-            (["--platform", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-            (["--jobs", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-            (["--jobs", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--iam", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--jobs", "--iam", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--platform", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--jobs", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--jobs", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
             (["--jobs", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
             (["--jobs", "apply"], {}, "Apply requires one reviewed saved-plan path."),
-            (["--services", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
-            (["--jobs", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services or --jobs."),
+            (["--services", "--jobs", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--jobs", "--services", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--alerts", "--alerts", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--alerts", "--platform", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--platform", "--alerts", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--alerts", "--iam", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--jobs", "--alerts", "plan"], {}, "Choose one stack: --iam, --platform, --services, --jobs or --alerts."),
+            (["--alerts", "--admin-profile", ADMIN, "plan"], {}, "Administrator profiles are allowed only with --iam."),
+            (["--alerts", "apply"], {}, "Apply requires one reviewed saved-plan path."),
+            (
+                ["--alerts", "--preparation-inputs", "inputs.json", "--preparation-sha256", "0" * 64, "plan"],
+                {},
+                "Preparation inputs are allowed only with --jobs, --services or --platform.",
+            ),
         ]
     )
     for index, (arguments, exports, message) in enumerate(guards, start=1):

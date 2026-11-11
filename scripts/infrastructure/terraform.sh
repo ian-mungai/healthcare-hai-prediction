@@ -18,8 +18,8 @@ jobs_sha256=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --iam | --platform | --services | --jobs)
-      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
+    --iam | --platform | --services | --jobs | --alerts)
+      [[ "$stack" == storage ]] || { printf 'Choose one stack: --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
       stack="${1#--}"
       shift
       ;;
@@ -76,10 +76,10 @@ if [[ "$identity_probe" == true ]]; then
   [[ "$stack" == jobs ]] || { printf 'The identity probe is allowed only with --jobs.\n' >&2; exit 2; }
 fi
 if [[ "$mlflow_retention" == true ]]; then
-  [[ "$stack" == storage ]] || { printf 'The MLflow retention rule belongs to the storage stack: use it without --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
+  [[ "$stack" == storage ]] || { printf 'The MLflow retention rule belongs to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
 if [[ "$athena_retention" == true ]]; then
-  [[ "$stack" == storage ]] || { printf 'The Athena retention rule belongs to the storage stack: use it without --iam, --platform, --services or --jobs.\n' >&2; exit 2; }
+  [[ "$stack" == storage ]] || { printf 'The Athena retention rule belongs to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
   [[ "$stack" == jobs || "$stack" == services || "$stack" == platform ]] || { printf 'Preparation inputs are allowed only with --jobs, --services or --platform.\n' >&2; exit 2; }
@@ -157,8 +157,9 @@ fi
 if [[ "$stack" == storage && "$athena_retention" == true ]]; then
   render_args+=(--athena-retention)
 fi
-if [[ "$stack" == platform || "$stack" == services ]]; then
-  # The shared renderer writes only the inputs the selected stack declares.
+if [[ "$stack" == platform || "$stack" == services || "$stack" == alerts ]]; then
+  # The shared renderer writes only the inputs the selected stack declares. The alerts root holds the alert address: apply it only through this wrapper
+  # with the project profile, and never plan it in CI.
   directory="$directory/$stack"
   renderer=scripts.infrastructure.render_platform_config
   render_args=(--stack "$stack")
@@ -200,8 +201,8 @@ if [[ "$action" != validate ]]; then
   render_args+=(--verify-identity)
 fi
 unset AWS_PROFILE AWS_DEFAULT_PROFILE AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_SECURITY_TOKEN
-# Services validation needs no rendered inputs or applied platform stack.
-if [[ "$stack" != services || "$action" != validate ]]; then
+# Services and alerts validation needs no rendered inputs or applied platform stack.
+if [[ ( "$stack" != services && "$stack" != alerts ) || "$action" != validate ]]; then
   "$python_bin" -m "$renderer" ${render_args[@]+"${render_args[@]}"}
 fi
 if [[ "$action" == validate ]]; then
