@@ -31,7 +31,7 @@ OFFLINE_VALUES = {
     "PROJECT_NAME": "healthcare_hai_prediction",
     "ENVIRONMENT": "dev",
     "DATA_BUCKET_NAME": "example-hai-data-bucket",
-    "AWS_PROFILE": "healthcare_hai_prediction_dev",
+    "AWS_PROFILE": "offline_preflight",
 }
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 ROW_KEYS = {"role", "action", "resource", "context", "scope", "granted_by"}

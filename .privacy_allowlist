@@ -1,11 +1,3 @@
 # Exceptions to the privacy scan (scripts/quality/repo_checks.py privacy-scan).
 # Every entry reads <type> <key> -- <reason> -- <expiry>, with exactly two ' -- ' separators. The expiry is the last field and is exactly one of: permanent (counted in the check output; the owner approves each kind of permanent entry), expires YYYY-MM-DD (valid through that UTC date) or expires-when path-absent:<glob> (expired once no tracked file matches; no spaces in the glob). The reason may not contain the words expires or permanent. The expiry field is the only expiry the check reads; the reason is free text and is not interpreted. A missing, malformed or expired expiry is a finding.
 # One entry per line: <type> <path glob> -- <why this value is intentionally public>. Entries match by type and path only.
-home-path docker-compose.yaml -- the analytics container service user home directory, not a person -- permanent
-home-path services/analytics/Dockerfile -- the analytics container service user home directory, not a person -- permanent
-home-path scripts/lakehouse/run_duckdb_view_e2e.py -- the analytics container service user home directory, not a person -- permanent
-email scripts/acquisition/one_off/privacy_review/run_redaction_e2e.py -- a synthetic role address on a reserved-style example domain in the redaction E2E fixture; not a person -- permanent
-env-value scripts/infrastructure/iam_preflight_policies.py -- the AWS CLI profile name of the offline preflight values: a profile name is a local label, not a credential or an account identifier -- permanent
-email scripts/infrastructure/openmetadata_bootstrap.py -- the default administrator login of OpenMetadata, a public product constant; not a person -- permanent
-email scripts/infrastructure/run_openmetadata_e2e.py -- the same OpenMetadata default administrator login in the stand-in server -- permanent
-email scripts/infrastructure/run_openmetadata_persistent_e2e.py -- the same OpenMetadata default administrator login in the stand-in server -- permanent

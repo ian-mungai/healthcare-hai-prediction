@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import openmetadata_persistent_bootstrap as bootstrap
+from scripts.infrastructure.openmetadata_bootstrap import ADMIN_EMAIL
 
 ROOT = Path(__file__).resolve().parents[2]
 ADMIN_VALUE = "Synthetic-Admin-1!"
@@ -140,7 +141,7 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                 if self.path == "/api/v1/users/login":
                     request = self.body()
                     secret = base64.b64decode(request["password"]).decode()
-                    if request["email"] == "admin@open-metadata.org" and secret == state.admin:
+                    if request["email"] == ADMIN_EMAIL and secret == state.admin:
                         return self.reply(200, {"accessToken": "admin-session"})
                     return self.reply(401)
             self.reply(404)

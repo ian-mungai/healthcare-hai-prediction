@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure.openmetadata_bootstrap import ADMIN_EMAIL
 from scripts.process import run_command
 
 REPO = Path(__file__).resolve().parents[2]
@@ -487,7 +488,7 @@ def om_routes(state: dict[str, Any]) -> Callable[[str, str, dict[str, Any]], tup
         if path == "/api/v1/users/login":
             import base64
 
-            if body.get("email") == "admin@open-metadata.org" and base64.b64decode(body["password"]).decode() == state["password"]:
+            if body.get("email") == ADMIN_EMAIL and base64.b64decode(body["password"]).decode() == state["password"]:
                 return 200, {"accessToken": "login.session.token"}
             return 401, {}
         if path == "/api/v1/users/changePassword":

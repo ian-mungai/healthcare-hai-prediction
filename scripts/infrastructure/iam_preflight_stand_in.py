@@ -19,6 +19,9 @@ from scripts.infrastructure.policy_evaluator import Request, decide
 
 ACCOUNT = OFFLINE_VALUES["AWS_ACCOUNT_ID"]
 PROFILE = f"{OFFLINE_VALUES['PROJECT_NAME']}_{OFFLINE_VALUES['ENVIRONMENT']}"
+# The live check validates the profile as the project name, an underscore and the environment, so the stand-in's user is that name; the offline
+# values hold a made-up profile name.
+LIVE_VALUES = {**OFFLINE_VALUES, "AWS_PROFILE": PROFILE}
 DECISIONS = {"allow": "allowed", "deny": "explicitDeny", "implicit_deny": "implicitDeny"}
 
 
@@ -39,7 +42,7 @@ def simulate(given: dict[str, str]) -> dict[str, Any] | None:
     """The evaluator's answer for one request, or None when the role is not in the table."""
     infra = Path(os.environ["IAM_PREFLIGHT_INFRA"])
     names = infra_names(infra)
-    values = {**names, **OFFLINE_VALUES}
+    values = {**names, **LIVE_VALUES}
     table = load_table()
     kind, name = given["--policy-source-arn"].rsplit(":", 1)[-1].split("/", 1)
     role = next((item for item in table["roles"].values() if item.get("kind", "role") == kind and expand(item["name"], values) == name), None)
@@ -48,7 +51,7 @@ def simulate(given: dict[str, str]) -> dict[str, Any] | None:
     context: dict[str, tuple[str, ...]] = {}
     for entry in json.loads(given["--context-entries"]):
         context[entry["ContextKeyName"]] = tuple(entry["ContextKeyValues"])
-    decision = decide(role_documents(role, infra, OFFLINE_VALUES, names), Request(given["--action-names"], given["--resource-arns"], context))
+    decision = decide(role_documents(role, infra, LIVE_VALUES, names), Request(given["--action-names"], given["--resource-arns"], context))
     result = {
         "EvalActionName": given["--action-names"],
         "EvalResourceName": given["--resource-arns"],
