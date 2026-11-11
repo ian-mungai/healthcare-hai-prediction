@@ -68,13 +68,17 @@ PERSONAL_EMAIL = "jane.doe" + "@" + "gmail.com"
 PHONE = "(206) 555" + "-0100"
 ACCOUNT = "1234" + "56789012"
 AWS_ARN = f"arn:aws:iam::{ACCOUNT}:role/deploy"
+# The one synthetic account ID the privacy scan exempts, and other fake IDs it must still flag. All are built at run time, so this file
+# holds no account ID literal.
+EXEMPT_ACCOUNT = "1" * 12
+OTHER_ACCOUNTS = {"all-zero": "0" * 12, "all-two": "2" * 12, "sequential": ACCOUNT}
 ENV_VALUE = "acme" + "-admin-profile"
 # The AWS CLI profile name of this project, a local label that .privacy_allowlist names for its one tracked file.
 PROFILE_LABEL = "healthcare_hai" + "_prediction_dev"
 PROFILE_FILE = "scripts/infrastructure/iam_preflight_policies.py"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
-PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, ENV_VALUE, PROFILE_LABEL]
+PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, *OTHER_ACCOUNTS.values(), ENV_VALUE, PROFILE_LABEL]
 WRITING_ALLOWLIST = ".writing_allowlist"
 ISO_DATE = "2026" + "-09-30"
 EM_DASH = "\u2014"
@@ -1276,6 +1280,36 @@ def both_hooks(name: str, expect_pass: bool, **extra: Any) -> tuple[Case, Case]:
     return Case(f"{name} (removed names)", "removed-names", expect_pass, **extra), Case(f"{name} (importer types)", IMPORTERS_HOOK, expect_pass, **extra)
 
 
+
+def account_arn(account: str) -> str:
+    """An IAM role ARN in ``account``."""
+    return f"arn:aws:iam::{account}:role/deploy"
+
+
+def account_field(account: str) -> str:
+    """A configuration line that names ``account`` after an account id label."""
+    return f'CONFIG = {{"account_id": "{account}"}}\n'
+
+
+def account_cases() -> list[Case]:
+    """The exemption cases: the one synthetic ID passes in both contexts and every other 12-digit ID is flagged in both."""
+    cases = [
+        Case("synthetic account ARN is exempt", "privacy-scan", True, {"infra/policy.json": f'{{"Resource": "{account_arn(EXEMPT_ACCOUNT)}"}}\n'}),
+        Case("synthetic account ID field is exempt", "privacy-scan", True, {"tests/test_config.py": account_field(EXEMPT_ACCOUNT)}),
+        Case(
+            "synthetic account beside another account",
+            "privacy-scan",
+            False,
+            {"infra/policy.json": f'{{"Resource": ["{account_arn(EXEMPT_ACCOUNT)}", "{account_arn(OTHER_ACCOUNTS["all-two"])}"]}}\n'},
+        ),
+    ]
+    for label, account in OTHER_ACCOUNTS.items():
+        if label != "sequential":  # The sequential ID has the plain cases "AWS account ARN" and "AWS account ID field".
+            cases.append(Case(f"{label} account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{account_arn(account)}"}}\n'}))
+            cases.append(Case(f"{label} account ID field", "privacy-scan", False, {"tests/test_config.py": account_field(account)}))
+    return cases
+
+
 CASES = [
     Case("clean file", "gitleaks", True, {"notes.md": "Nothing secret here.\n"}),
     Case("GitHub token", "gitleaks", False, {"config.py": f'GITHUB = "{FAKE_PAT}"\n'}),
@@ -2102,6 +2136,7 @@ CASES = [
     Case("phone number", "privacy-scan", False, {"notes.md": f"Call {PHONE}\n"}),
     Case("AWS account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{AWS_ARN}"}}\n'}),
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
+    *account_cases(),
     Case("value declared in .env", "privacy-scan", False, {".env": f"AWS_PROFILE={ENV_VALUE}\n", "scripts/deploy.sh": f"aws s3 ls --profile {ENV_VALUE}\n"}),
     Case(
         "allowlisted profile label in its tracked file",
@@ -2413,6 +2448,11 @@ BLOCK_REASONS = {
     "phone number": "notes.md:1: phone number",
     "AWS account ARN": "infra/policy.json:1: AWS account ID",
     "AWS account ID field": "tests/test_config.py:1: AWS account ID",
+    "synthetic account beside another account": "infra/policy.json:1: AWS account ID",
+    "all-zero account ARN": "infra/policy.json:1: AWS account ID",
+    "all-zero account ID field": "tests/test_config.py:1: AWS account ID",
+    "all-two account ARN": "infra/policy.json:1: AWS account ID",
+    "all-two account ID field": "tests/test_config.py:1: AWS account ID",
     "value declared in .env": "scripts/deploy.sh:1: value declared in .env",
     "profile label in another file": "scripts/deploy.sh:1: value declared in .env",
     "bucket named after the project": "scripts/deploy.sh:1: value declared in .env",
@@ -3135,6 +3175,35 @@ def run_privacy_scope_case() -> tuple[bool, str]:
         )
         codes = f"default exit={default.returncode}; --all on ignored exit={ignored.returncode}; --all exit={full.returncode}; --warn exit={warned.returncode}"
         return ok, f"{codes}; value leaked={leaked}\n" + full.stderr
+
+
+def account_probe(repo: Path) -> tuple[set[str], str]:
+    """Run the privacy scan over probe files in ``repo``; return the probe files it flagged and its output."""
+    probes = {"exempt_arn": account_arn(EXEMPT_ACCOUNT), "exempt_field": account_field(EXEMPT_ACCOUNT).strip()}
+    probes |= {f"{label}_{kind}": text(account) for label, account in OTHER_ACCOUNTS.items() for kind, text in (("arn", account_arn), ("field", account_field))}
+    probes["mixed"] = f"{account_arn(EXEMPT_ACCOUNT)} {account_arn(OTHER_ACCOUNTS['all-two'])}"
+    write(repo, {f"probe/{name}.txt": text + "\n" for name, text in probes.items()})
+    result = run_command(str(ROOT / ".venv/bin/python"), ["-m", "scripts.quality.repo_checks", "privacy-scan", "--all"], cwd=repo)
+    output = result.stdout + result.stderr
+    return {name for name in probes if f"probe/{name}.txt:1: AWS account ID" in output}, output
+
+
+def run_account_plant_case() -> tuple[bool, str]:
+    """The scan flags every probe but the exempt ones; a planted regression that exempts any 12 digits is caught by the same probe."""
+    expected = {"all-zero_arn", "all-zero_field", "all-two_arn", "all-two_field", "sequential_arn", "sequential_field", "mixed"}
+    with tempfile.TemporaryDirectory(prefix="hai_account_plant_") as scratch:
+        repo = scratch_repo(Path(scratch), Case("account plant", "privacy-scan", True))
+        real, real_output = account_probe(repo)
+        source = repo / "scripts" / "quality" / "repo_checks.py"
+        text = source.read_text()
+        planted = text.replace("== SYNTHETIC_ACCOUNT_ID", ".isdigit()")
+        if planted == text:
+            return False, "the plant did not apply: the exemption comparison is not where this case expects it\n"
+        source.write_text(planted)
+        caught, _ = account_probe(repo)
+        leaked = any(account in real_output for account in OTHER_ACCOUNTS.values())  # The fix hint names the exempt ID on purpose.
+        ok = real == expected and caught != expected and not leaked
+        return ok, f"flagged by the real scan: {sorted(real)}; flagged with the planted regression: {sorted(caught)}; value leaked={leaked}\n"
 
 
 # Each sample runs the check directly, without --warn: (name, files, articles, expected exit, marker in the output).
@@ -4078,6 +4147,7 @@ def main() -> int:
             ("workflow ranges", run_workflow_range_case),
             ("verbose commit", run_verbose_case),
             ("privacy scope", run_privacy_scope_case),
+            ("account exemption plant", run_account_plant_case),
             ("writing samples", run_writing_case),
             ("writing kinds", run_writing_kinds_case),
             ("allowlist expiry", run_allowlist_expiry_case),
