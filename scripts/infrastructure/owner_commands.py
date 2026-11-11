@@ -72,8 +72,6 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "JOBS_GROUP": "example_project_jobs_dev",
         "DATA_BUCKET": "example-project-data-dev",
         "HOST_INSTANCE_ID": "i-0123456789abcdef0",
-        "HOST_PRIVATE_IP": "10.0.1.20",
-        "APPROVAL_ID": "approval-1",
         "RUN_ID": "20261031T120000Z-abcdef12",
         "SILVER_RUN_ID": "20261031T080000Z-12345678",
         "GOLD_RUN_ID": "20261031T100000Z-23456789",
@@ -82,14 +80,10 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "JOB": "gold",
         "STATEMENT": "aws_tasks list names no job task and ECS shows the gold task STOPPED",
         "CODE_SHA256": "a" * 64,
-        "CODE_SHA256_FIRST_12": "a" * 12,
         "SHA256": "b" * 64,
         "PLAN_DIGEST": "c" * 64,
-        "SIGN_TEXT": "sign-silver-20261031T120000Z-abcdef12-cccccccccccc",
         "TASK_ARN": f"arn:aws:ecs:us-west-2:{ACCOUNT}:task/example_project_cluster_dev/{task}",
         "TASK_ID": task,
-        "SUBNET_ID": "subnet-0123456789abcdef0",
-        "LAKEHOUSE_SECURITY_GROUP": "sg-0123456789abcdef0",
         "TRAINING_SUBNET_ID": "subnet-0123456789abcdef1",
         "TRAINING_SECURITY_GROUP": "sg-0123456789abcdef1",
         "FEATURES_RUN_ID": "20261031T110000Z-3456789a",
@@ -100,8 +94,6 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "CODE_REVISION": "0123456789abcdef0123456789abcdef01234567",
         "PLAN": "silver_step.tfplan",
         "TOKEN": "example-host:4242:20261031T120000Z:0123abcd",
-        "OWNER": "Example Owner",
-        "ANALYTICS_IMAGE": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:{'d' * 64}",
     }
 
 
@@ -339,23 +331,11 @@ def check_shell_section(body: str, folder: Path, wrapper: Wrapper, overrides: di
 
 
 def example_json(body: str) -> dict[str, Any] | None:
-    """The reviewed jobs file of the section: the first ``json`` fence with its placeholders filled."""
+    """The reviewed file of the section: the first ``json`` fence with its placeholders filled."""
     found = re.search(r"```json\n(.*?)```", body, re.S)
     if not found:
         return None
     table = values(Path("record")) | {
-        "REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_spark_dev@sha256:{'e' * 64}",
-        "EXECUTION_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_execution_dev",
-        "SILVER_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_silver_task_dev",
-        "ID_NAME": "/example_project/aws_polaris_silver_client_id",
-        "SECRET_NAME": "/example_project/aws_polaris_silver_client_secret",
-        "FEATURE_STORE_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_feature_store_dev@sha256:{'f' * 64}",
-        "GOLD_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_gold_task_dev",
-        "FEATURES_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_write_features_task_dev",
-        "GOLD_ID_NAME": "/example_project/aws_polaris_gold_client_id",
-        "GOLD_SECRET_NAME": "/example_project/aws_polaris_gold_client_secret",
-        "FEATURES_ID_NAME": "/example_project/aws_polaris_features_client_id",
-        "FEATURES_SECRET_NAME": "/example_project/aws_polaris_features_client_secret",
         "TRAINING_REF": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev@sha256:{'c' * 64}",
         "TRAIN_TASK_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_job_train_task_dev",
         "CODE_FETCH_ROLE_ARN": f"arn:aws:iam::{ACCOUNT}:role/example_project_host_code_fetch_task_dev",

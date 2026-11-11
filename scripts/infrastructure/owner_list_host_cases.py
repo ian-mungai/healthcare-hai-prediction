@@ -2,9 +2,10 @@
 
 ``scripts/infrastructure/run_owner_list_e2e.py`` runs them. The list must start no Fargate task: each job runs on the host through the direct ECS launch
 that its DAG step calls. Silver runs first, because the gold preflight needs the silver launch record. Each run has its code staged under its own run ID
-before its trigger, because the launch reads ``lakehouse/run_stage/<run>/inputs/code.sha256`` of the run. The owner approves each run ID before it starts
-and signs each first publish by hand; the signed publishes are not a code gate (owner, Nov 10 2026), so the list names no closed chain. Every stop
-condition leads to one bounded failure path that reads the run's records and tasks, closes the forward and stops and verifies the host.
+before its trigger, because the launch reads ``lakehouse/run_stage/<run>/inputs/code.sha256`` of the run. The evidence task of each DAG run writes the
+acceptance report, so the list has no approval, no signature and no report command (owner, Nov 11 2026), and the host stays on for both runs. The host stop
+is proven by ``host_session stop`` (``host_off_verified``). Every stop condition leads to one bounded failure path that reads the run's records and
+tasks, closes the forward and stops and verifies the host.
 The forward must join the local port that ``scripts.orchestration.trigger_dag`` calls (``config/orchestration/platform.json``) to the port of the host's
 API server (``infra/services/airflow.tf``). Every printed command runs through its real parser with synthetic values
 (``scripts.infrastructure.owner_commands``), and each planted typo or planted omission must fail its check. Nothing calls AWS or Airflow.
@@ -39,12 +40,12 @@ MUTANTS = (
     ("a trigger without its wait deadline", "--mode real --run-id <SILVER_RUN_ID> --wait-seconds 14400", "--mode real --run-id <SILVER_RUN_ID>"),
     ("an unknown task command", "aws_tasks list", "aws_tasks lists"),
     (
-        "a mistyped describe-tasks option",
-        "describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --cluster",
-        "describe-tasks --profile <PROJECT_PROFILE> --region <REGION> --clusters",
+        "a mistyped describe-task-definition option",
+        "describe-task-definition --profile <PROJECT_PROFILE> --region <REGION> --task-definition",
+        "describe-task-definition --profile <PROJECT_PROFILE> --region <REGION> --task-definitions",
     ),
-    ("an approval without its code digest", "--run <GOLD_RUN_ID> --code-sha256 <CODE_SHA256> --out", "--run <GOLD_RUN_ID> --out"),
-    ("a gold report without its output path", " --out <RECORD_DIR>/qualification_gold.json", ""),
+    ("a mistyped host stop", "scripts.infrastructure.host_session stop", "scripts.infrastructure.host_session stops"),
+    ("a mistyped s3 command", "s3 cp s3://<DATA_BUCKET>/lakehouse/launch_records", "s3 cpp s3://<DATA_BUCKET>/lakehouse/launch_records"),
     ("a mistyped settle option", "--run-id <RUN_ID> --settle --wait-seconds 600 >", "--run-id <RUN_ID> --settled --wait-seconds 600 >"),
 )
 
@@ -137,22 +138,19 @@ def failure_path_checks(step: str) -> dict[str, bool]:
 def structure_checks(body: str) -> dict[str, bool]:
     steps = steps_of(body)
     numbers = [int(step.split(".", 1)[0]) for step in steps]
-    checks = {"the host DAG section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 12}
+    checks = {"the host DAG section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 10}
     index = finder(steps)
     checks["the host DAG list starts no Fargate task and no hand-started task"] = bool(body) and "FARGATE" not in body and "run-task" not in body
     order = [
         ("host and twins", index("host_session status", "describe-instances", "_job_silver_host", "_job_gold_host", "requiresCompatibilities")),
         ("port forward", index("ssm start-session", "AWS-StartPortForwardingSession")),
-        ("silver staging and approval", index("code_archive build", "run_stage/<SILVER_RUN_ID>/inputs/code.sha256", "approve --layer silver")),
-        ("silver trigger", index(*trigger_of("silver"), "before_silver.json")),
-        ("silver evidence", index("lakehouse/launch_records/<SILVER_RUN_ID>/", "describe-tasks", "after_silver.json", "_job_silver_host")),
-        ("silver sign", index("host_session stop", "layer_acceptance report --layer silver", "layer_acceptance sign")),
-        ("host restart", index("host_session start", "ssm start-session")),
-        ("gold staging and approval", index("run_stage/<GOLD_RUN_ID>/inputs/code.sha256", "approve --layer gold")),
-        ("gold trigger", index(*trigger_of("gold"), "--silver-snapshot-run <SILVER_RUN_ID>", "before_gold.json")),
-        ("gold evidence", index("lakehouse/launch_records/<GOLD_RUN_ID>/", "describe-tasks", "after_gold.json", "_job_gold_host")),
-        ("drain", index("aws_tasks list", "host_jobs")),
-        ("gold sign", index("host_session stop", "layer_acceptance report --layer gold", "--input-report", "layer_acceptance sign")),
+        ("silver staging", index("code_archive build", "run_stage/<SILVER_RUN_ID>/inputs/code.sha256")),
+        ("silver trigger", index(*trigger_of("silver"))),
+        ("silver records", index("lakehouse/launch_records/<SILVER_RUN_ID>/", "lakehouse/layer_runs/silver/<SILVER_RUN_ID>/")),
+        ("gold staging", index("run_stage/<GOLD_RUN_ID>/inputs/code.sha256")),
+        ("gold trigger", index(*trigger_of("gold"), "--silver-snapshot-run <SILVER_RUN_ID>")),
+        ("gold records", index("lakehouse/launch_records/<GOLD_RUN_ID>/", "lakehouse/layer_runs/gold/<GOLD_RUN_ID>/")),
+        ("drain and stop", index("aws_tasks list", "host_jobs", "host_session stop", "host_off_verified")),
         ("failure path", index(FAILURE_PATH, "aws_tasks list", "aws_tasks stop", "host_session stop", "host_session status")),
     ]
     positions = [position for _, position in order]
@@ -163,21 +161,25 @@ def structure_checks(body: str) -> dict[str, bool]:
         checks[f"the {layer} run has its code staged under its own run ID before its trigger"] = staged_before_trigger(body, layer)
     planted = re.sub(r"(?m)^.*run_stage/<GOLD_RUN_ID>/inputs/code\.(tar\.gz|sha256).*\n", "", body)
     checks["planted: a list without the gold code staging fails the staging case"] = planted != body and not staged_before_trigger(planted, "gold")
-    checks["the code is staged before the version listing that the report compares"] = all(
-        0 <= index(f"run_stage/<{run}>/inputs/code.sha256") <= index(f"before_{layer}.json") for layer, run in RUNS.items()
+    checks["the list saves no version listing by hand: the preflight task saves it"] = (
+        bool(body) and "list-object-versions" not in body and "preflight task saves the listing" in body
     )
-    checks["the list names no closed chain: the signed publishes are a manual step"] = (
-        bool(body) and "first_publishes_signed" not in body and "chain is closed" not in body
+    checks["the list has no approval, no signature and no report command"] = bool(body) and not any(
+        word in body
+        for word in ("layer_acceptance approve", "layer_acceptance sign", "layer_acceptance report", "CONFIRM_APPROVE", "CONFIRM_SIGN", "--approval")
     )
-    checks["the owner signs each first publish by hand"] = (
-        all(f"layer_acceptance report --layer {layer}" in body for layer in RUNS) and body.count("layer_acceptance sign") >= 2 and "by hand" in body
+    checks["the evidence task writes the acceptance report and the DAG fails on a failed check"] = all(
+        word in body for word in ("evidence task", "acceptance report", "The DAG fails if one check fails")
+    )
+    checks["the host stays on for both runs and the stop is proven by host_off_verified"] = (
+        bool(body) and body.count("host_session stop") >= 2 and body.count("host_session start") == 0 and "`host_off_verified`" in body
     )
     checks["the gold step says it needs the silver launch record of step 5"] = index(*trigger_of("gold")) >= 0 and (
         "lakehouse/launch_records/<SILVER_RUN_ID>/silver/" in steps[index(*trigger_of("gold"))]
     )
     local, remote = ports()
     checks[f"the forward joins local port {local} (trigger_dag) to the API server's port {remote}"] = (
-        remote > 0 and body.count(f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}') >= 2
+        remote > 0 and body.count(f'{{"portNumber":["{remote}"],"localPortNumber":["{local}"]}}') >= 1
     )
     waits = [float(value) for value in re.findall(r"--mode real .*?--wait-seconds ([0-9]+)", body)]
     limit = max_wait_seconds()
