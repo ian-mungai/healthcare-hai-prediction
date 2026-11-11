@@ -291,6 +291,7 @@ run "server_uses_the_host_database_and_basic_sign_in" {
         { name = "ELASTICSEARCH_HOST", value = "127.0.0.1" },
         { name = "ELASTICSEARCH_PORT", value = "9200" },
         { name = "AUTHENTICATION_PROVIDER", value = "basic" },
+        { name = "AUTHORIZER_PRINCIPAL_DOMAIN", value = "example.org" },
         { name = "PIPELINE_SERVICE_CLIENT_ENABLED", value = "false" },
         { name = "OPENMETADATA_HEAP_OPTS", value = "-Xmx1024m -Xms1024m" },
       ] : contains(jsondecode(aws_ecs_task_definition.service["openmetadata"].container_definitions)[2].environment, pair)

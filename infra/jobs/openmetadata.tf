@@ -202,7 +202,7 @@ locals {
     { name = "ELASTICSEARCH_SCHEME", value = "http" },
     { name = "AUTHENTICATION_PROVIDER", value = "basic" },
     { name = "AUTHORIZER_ADMIN_PRINCIPALS", value = "[admin]" },
-    { name = "AUTHORIZER_PRINCIPAL_DOMAIN", value = "open-metadata.org" },
+    { name = "AUTHORIZER_PRINCIPAL_DOMAIN", value = "example.org" },
     { name = "OPENMETADATA_HEAP_OPTS", value = "-Xmx6G -Xms6G" },
     # Without a pipeline service client the server cannot deploy or trigger ingestion pipelines. Nobody can start a profiler, sampling or auto-classification run from the UI.
     { name = "PIPELINE_SERVICE_CLIENT_ENABLED", value = "false" },

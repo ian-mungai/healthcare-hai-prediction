@@ -108,6 +108,13 @@ run "enabled_plan_registers_one_bounded_private_task" {
 
   assert {
     condition = (
+      [for c in jsondecode(output.openmetadata_container_definitions) : [for e in c.environment : e.value if e.name == "AUTHORIZER_PRINCIPAL_DOMAIN"][0] if c.name == "server"][0] == "example.org"
+    )
+    error_message = "The server's principal domain is a reserved domain, so the administrator and bot logins are on a reserved domain."
+  }
+
+  assert {
+    condition = (
       [for c in jsondecode(output.openmetadata_container_definitions) : [for s in lookup(c, "secrets", []) : s.name] if c.name == "bootstrap"][0] == ["OM_ADMIN_PASSWORD"] &&
       alltrue([for c in jsondecode(output.openmetadata_container_definitions) : length(lookup(c, "secrets", [])) == 0 if c.name != "bootstrap"])
     )

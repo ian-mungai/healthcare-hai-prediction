@@ -76,10 +76,10 @@ ENV_VALUE = "acme" + "-admin-profile"
 # The AWS CLI profile name of this project, a local label that .privacy_allowlist names for its one tracked file.
 PROFILE_LABEL = "healthcare_hai" + "_prediction_dev"
 PROFILE_FILE = "scripts/deploy.sh"
-# The analytics container user's home and OpenMetadata's default admin login are the two exact values the scan exempts. Near variants are built
-# beside them, so this file holds no home path or address the scan would flag.
+# The analytics container user's home is the one exact home path the scan exempts. Near variants are built beside it, so this file holds no home
+# path the scan would flag. The old OpenMetadata admin address is built too: it is flagged like any other real-domain address.
 ANALYTICS_HOME = "/ho" + "me/analytics"
-ADMIN_LOGIN = "admin" + "@" + "open-metadata.org"
+OLD_OPENMETADATA_LOGIN = "admin" + "@" + "open-metadata.org"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
 PRIVACY_VALUES = [HOME_PATH, TEMP_PATH, PERSONAL_EMAIL, PHONE, ACCOUNT, *OTHER_ACCOUNTS.values(), ENV_VALUE, PROFILE_LABEL]
@@ -1300,6 +1300,52 @@ def account_conditional(first: str, second: str) -> str:
     return f'account_id = "{first}" if False else "{second}"\n'
 
 
+HOME_REASON = "notes.md:1: home-directory path with a user name"
+
+
+def exact_value_cases() -> list[Case]:
+    """Cases for the one exact home path: only the whole home component passes; every near variant is flagged.
+
+    Unicode characters and encoded dots are written as escapes, so this file holds none of the variants it plants.
+    """
+    home = ANALYTICS_HOME
+    accent, joiner, cyrillic_i = "\u00e9", "\u200d", "\u0456"
+    passing = {
+        "analytics home at the end of a line": f"The home is {home}",
+        "analytics home before a sentence-final period": f"The home is {home}.",
+        "analytics home in parentheses": f"The home ({home}) is private.",
+        "analytics home in a mount": f"./data/ui:{home}/.duckdb/ui:ro",
+        "analytics home in quotes": f"'{home}/extensions.csv'",
+    }
+    home_variants = {
+        "home with a period before a separator": f"{home}./private.txt",
+        "home with a repeated period": f"{home}../private.txt",
+        "home with an accented suffix": f"{home}{accent}/private.txt",
+        "home with a joiner suffix": f"{home}{joiner}/private.txt",
+        "home with a look-alike letter": f"{home.replace('i', cyrillic_i, 1)}/private.txt",
+        "home with a parent traversal": f"{home}/../jdoe/private.txt",
+        "home with a nested parent traversal": f"{home}/data/../../jdoe/private.txt",
+        "home with percent-encoded dots": f"{home}/%2e%2e/jdoe/private.txt",
+        "home with double-encoded dots": f"{home}/%252E%252e/jdoe/private.txt",
+        "home with hex-escaped dots": f"{home}/\\x2e\\x2e/jdoe/private.txt",
+        "home with unicode-escaped dots": f"{home}/\\u002e\\u002e/jdoe/private.txt",
+        "home with a trailing period and a path": f"{home}.. /private.txt",
+        "home with a percent-encoded separator": f"{home}%2fprivate.txt",
+        "home with a backslash": f"{home}\\private.txt",
+        "home in capitals": home.replace("analytics", "ANALYTICS") + "/private.txt",
+        "home with a capital letter": home.replace("analytics", "Analytics") + "/private.txt",
+        "home below another folder": f"/srv{home}/private.txt",
+        "home below a parent folder": f"..{home}/private.txt",
+        "home after a user name folder": f"~{home}/private.txt",
+    }
+    cases = [Case(name, "privacy-scan", True, {"notes.md": text + "\n"}) for name, text in passing.items()]
+    cases += [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in home_variants.items()]
+    return cases
+
+
+EXACT_VALUE_CASES = exact_value_cases()
+
+
 def account_cases() -> list[Case]:
     """The exemption cases: the one synthetic ID passes in both contexts and every other 12-digit ID is flagged in both."""
     cases = [
@@ -2194,15 +2240,7 @@ CASES = [
     Case("analytics-like home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME}2/run.log\n"}),
     Case("another home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME[:-9]}analyst/run.log\n"}),
     Case("analytics name under the user folder", "privacy-scan", False, {"notes.md": f"Log at {HOME_PATH.split('jdoe')[0]}analytics/run.log\n"}),
-    Case(
-        "OpenMetadata admin login is exempt",
-        "privacy-scan",
-        True,
-        {"scripts/stand_in.py": f'LOGIN = "{ADMIN_LOGIN}"\n', "notes.md": f"Sign in as {ADMIN_LOGIN}.\n"},
-    ),
-    Case("another OpenMetadata address", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN.replace('admin', 'root')}\n"}),
-    Case("longer OpenMetadata local part", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN.replace('admin', 'administrator')}\n"}),
-    Case("OpenMetadata admin login on a longer domain", "privacy-scan", False, {"notes.md": f"Ask {ADMIN_LOGIN}.evil.com\n"}),
+    Case("former OpenMetadata admin address", "privacy-scan", False, {"notes.md": f"Ask {OLD_OPENMETADATA_LOGIN}\n"}),
     Case("AWS account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{AWS_ARN}"}}\n'}),
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
     *account_cases(),
@@ -2519,9 +2557,7 @@ BLOCK_REASONS = {
     "analytics-like home name": "notes.md:1: home-directory path with a user name",
     "another home name": "notes.md:1: home-directory path with a user name",
     "analytics name under the user folder": "notes.md:1: home-directory path with a user name",
-    "another OpenMetadata address": "notes.md:1: email address",
-    "longer OpenMetadata local part": "notes.md:1: email address",
-    "OpenMetadata admin login on a longer domain": "notes.md:1: email address",
+    "former OpenMetadata admin address": "notes.md:1: email address",
     "temp path": "notes.md:1: machine temporary path",
     "personal email": "notes.md:1: email address",
     "phone number": "notes.md:1: phone number",
@@ -2565,6 +2601,7 @@ BLOCK_REASONS = {
     "uppercase keyword blocked by sqlfluff": "CP01",
     "leading comma blocked by sqlfluff": "LT04",
 }
+BLOCK_REASONS.update({case.name: case.reason for case in EXACT_VALUE_CASES if case.reason})
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 WARNING_HEADERS = {
     "history, no longer and wrapped line warn through the hook": (

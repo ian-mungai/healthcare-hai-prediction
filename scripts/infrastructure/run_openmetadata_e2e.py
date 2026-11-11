@@ -515,6 +515,7 @@ def run_bootstrap(args: list[str], env: dict[str, str]) -> tuple[int, str, str]:
 
 
 def bootstrap_changes_the_default_password_once_and_hands_over_a_token() -> None:
+    require(ADMIN_EMAIL == "admin@example.org", "the administrator login is on the reserved domain the server is configured with")
     state: dict[str, Any] = {"password": "admin", "healthy_at": time.monotonic() + 1.0}
     with serving(om_routes(state)) as server, tempfile.TemporaryDirectory() as folder:
         root = Path(folder)

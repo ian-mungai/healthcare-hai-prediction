@@ -167,6 +167,7 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     return self.reply(200)
                 if self.path == "/api/v1/users":
                     require(request.get("isBot") is True and request["authenticationMechanism"]["authType"] == "JWT", "a bot user must be a JWT bot")
+                    require(request["email"] == f"{request['name']}@example.org", "a bot email is on the reserved domain the server is configured with")
                     require(request["authenticationMechanism"]["config"]["JWTTokenExpiry"] == "Unlimited", "a bot token must not expire silently")
                     require(request.get("roles") and len(request["roles"]) == 1, "a bot user needs exactly one role")
                     existing = state.users.get(request["name"])

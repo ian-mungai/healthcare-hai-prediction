@@ -77,7 +77,7 @@ def ensure_bot(api: str, session: str, caller: str) -> str:
             raise RuntimeError("the role of the bot was not found")
         body = {
             "name": name,
-            "email": f"{name}@open-metadata.org",
+            "email": f"{name}@example.org",
             "isBot": True,
             "roles": [role["id"]],
             "authenticationMechanism": {"authType": "JWT", "config": {"JWTTokenExpiry": "Unlimited"}},

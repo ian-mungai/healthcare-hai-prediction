@@ -21,7 +21,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-ADMIN_EMAIL = "admin@open-metadata.org"
+ADMIN_EMAIL = "admin@example.org"
 FACTORY_LOGIN_VALUE = "admin"
 REQUEST_SECONDS = 10
 

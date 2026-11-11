@@ -200,10 +200,14 @@ RESERVED_DOMAINS = (".invalid", ".test", ".localhost", ".example", "example.com"
 # The one synthetic account ID that code and tests may use. Any other 12-digit ID in an ARN or after an account id label is flagged, and so is
 # any other 12-digit number on a line that holds an account match (a conditional that ends in a real account).
 SYNTHETIC_ACCOUNT_ID = "111111111111"
-# Two exact public values: the analytics container user's home path and the default administrator login of OpenMetadata, a product constant.
-# Near variants (another home name, another address on that domain) stay flagged.
+# The one home path the scan exempts: the analytics container user's home. The match must be the whole home component, so another user name
+# (any other character after "analytics") and a path that leaves the home stay flagged.
 ANALYTICS_HOME = "/home/analytics"
-OPENMETADATA_ADMIN_EMAIL = "admin@open-metadata.org"
+HOME_BEFORE = " \t\"'(=:,;[{<`"  # What may precede the path: a start of text or a separator, never part of a longer path.
+HOME_AFTER = ")]}\"'`:"  # What may follow it directly, besides the end, a slash and a space.
+HOME_PUNCTUATION = ",;!?"  # Sentence punctuation: only when nothing path-like follows.
+HOME_TOKEN_END = re.compile(r"[\s\"'`)<>]")
+PATH_ESCAPES = ("..", "%2e", "%252e", "\\x2e", "\\u002e", "&#46;", "&#x2e;")  # A parent folder, plain or encoded.
 TWELVE_DIGITS = re.compile(r"(?<![\w.])\d{12}(?!\w)")
 UUID = re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.IGNORECASE)
 ENV_VALUE_KEYS = re.compile(r"PROFILE|BUCKET|ACCOUNT|ARN|ENDPOINT|HOST|EMAIL|USER")
@@ -1641,12 +1645,36 @@ def env_values() -> list[str]:
     return values
 
 
+def analytics_home(match: re.Match[str]) -> bool:
+    """Whether a home-path match is exactly the analytics container home: the whole component, the path below it inside it.
+
+    The pattern reads only ASCII name characters, so the characters around the match decide: anything else after "analytics" (an accent, a joiner,
+    a backslash, a percent sign) names a different home, and so does a period before a separator. A sentence-final period belongs to the prose.
+    """
+    line, name = match.string, match.group(0)
+    if name not in (ANALYTICS_HOME, ANALYTICS_HOME + "."):
+        return False
+    if match.start() and line[match.start() - 1] not in HOME_BEFORE:
+        return False
+    rest = line[match.end() :]
+    if name.endswith("."):
+        return not rest or rest[0].isspace()
+    if not rest or rest[0].isspace() or rest[0] in HOME_AFTER:
+        return True
+    if rest[0] in HOME_PUNCTUATION:
+        return len(rest) == 1 or rest[1].isspace()
+    if rest[0] != "/":
+        return False
+    path = HOME_TOKEN_END.split(rest, 1)[0].lower()
+    return not any(escape in path for escape in PATH_ESCAPES)
+
+
 def exempt_match(kind: str, match: re.Match[str]) -> bool:
-    """Whether a privacy match is a reserved email domain, the OpenMetadata admin login, the analytics home or the one synthetic account ID."""
+    """Whether a privacy match is a reserved email domain, the analytics home or the one synthetic account ID."""
     if kind == "email":
-        return match.group(1).lower().endswith(RESERVED_DOMAINS) or match.group(0).lower() == OPENMETADATA_ADMIN_EMAIL
+        return match.group(1).lower().endswith(RESERVED_DOMAINS)
     if kind == "home-path":
-        return match.group(0).rstrip(".") == ANALYTICS_HOME  # The pattern takes a sentence-final period into the name.
+        return analytics_home(match)
     if kind == "aws-account":
         return (match.group(1) or match.group(2)) == SYNTHETIC_ACCOUNT_ID
     return False
