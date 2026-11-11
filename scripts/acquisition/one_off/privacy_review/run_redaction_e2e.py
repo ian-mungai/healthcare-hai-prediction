@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
+from scripts.acquisition.single_copy import load_policy
 from scripts.process import run_command
 
 HERE = Path(__file__).resolve().parent
@@ -59,7 +60,7 @@ LONG = (
 )
 DICTIONARY = '\ufeff_id,Data Item,Definition\r\n1,CHIEF EXECUTIVE OFFICER,"The Chief Executive Officer (CEO) of the hospital."\r\n'
 PACKAGE = json.dumps(
-    {"contact_email": "data.team@example.gov", "resources": [{"schema": {"fields": [{"name": "CEO", "description": "Chief executive officer"}]}}]}
+    {"contact_email": "data.team@example.org", "resources": [{"schema": {"fields": [{"name": "CEO", "description": "Chief executive officer"}]}}]}
 )
 NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"'
 DEFINITION = (
@@ -87,6 +88,7 @@ class FakeS3:
 
     def __init__(self) -> None:
         self.configuration = {"data_bucket_name": "synthetic-bucket"}
+        self.storage_policy = load_policy()
         self.objects: dict[str, tuple[str, bytes]] = {}
         self.puts = 0
 
