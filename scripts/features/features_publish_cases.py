@@ -84,6 +84,17 @@ def count(spark: Any, template: str, **parts: Any) -> int:
     return int(spark.sql(template.format(**parts)).collect()[0][0])
 
 
+def changed_tables(old: Context, new: Context) -> list[str]:
+    """The tables, in fast-forward order, whose exported rows differ between two runs: the tables a publication of ``new`` over ``old`` moves."""
+    prints: list[dict[str, tuple[int, str]]] = []
+    for ctx in (old, new):
+        manifest, _, export_dir = publish.verified_export(ctx)
+        prints.append(
+            {name: publish.fingerprint(ctx, item["columns"], publish.parquet_view(ctx, export_dir, name, item)) for name, item in manifest["tables"].items()}
+        )
+    return sorted(name for name, found in prints[1].items() if prints[0].get(name) != found)
+
+
 def head_matches(ctx: Context, row: dict[str, Any]) -> list[str]:
     """Per-table head verification of design 3.5: the tables whose ``main`` differs from the row's snapshot."""
     return [name for name, snapshot in sorted(row["snapshot_set"].items()) if publish.main_head(ctx, name) != int(snapshot)]
@@ -197,9 +208,13 @@ def interruption_between_fast_forwards(h: Features) -> Check:
     checks = h.begin()
     probe = h.features_context("a", work="probe")
     before = publish.published_head(probe)
-    first_table = sorted(probe.plan.tables)[0]
-    faults = Faults(frozenset({f"commit:after_ff:{first_table}"}))
-    ctx = h.features_context("v2", faults, work="fault")
+    ctx = h.features_context("v2", work="fault")
+    changed = changed_tables(probe, ctx)
+    checks["the second export changes at least two tables, so a stop after the first fast-forward leaves the others behind"] = len(changed) >= 2
+    if len(changed) < 2:
+        return checks
+    first_table = changed[0]
+    ctx = replace(ctx, faults=Faults(frozenset({f"commit:after_ff:{first_table}"})))
     raised = False
     try:
         run_steps(ctx)
