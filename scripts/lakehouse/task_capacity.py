@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from scripts.lakehouse.ecs_engine import TASK_ENVIRONMENTS
 from scripts.lakehouse.memory_budget import BudgetError, parse_size, spark_heap
 
 GIB = 1024**3
@@ -309,7 +310,7 @@ def apply(
     Outside an ECS task nothing is read or set and the result is None. The derivation is written to standard error, so the task log shows the figures.
     ``metadata`` and ``affinity`` are read from the task and the process when they are None."""
     target = os.environ if environ is None else environ
-    if not target.get("AWS_EXECUTION_ENV", "").startswith("AWS_ECS"):
+    if target.get("AWS_EXECUTION_ENV") not in TASK_ENVIRONMENTS:
         return None
     spill = Path(target["HAI_DUCKDB_TEMP_DIRECTORY"]) if target.get("HAI_DUCKDB_TEMP_DIRECTORY") else None
     capacity = read_capacity(

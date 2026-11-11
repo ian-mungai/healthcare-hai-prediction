@@ -283,6 +283,13 @@ def case_apply_does_nothing_outside_a_task(root: Path) -> None:
     expect(environ == {"DUCKDB_MEMORY_LIMIT": "150MB", "JOB_THREADS": "2"}, environ)
 
 
+def case_apply_does_nothing_for_an_unknown_ecs_environment(root: Path) -> None:
+    for value in ("AWS_ECS_UNKNOWN", "AWS_ECS", "AWS_ECS_FARGATE_X", "aws_ecs_ec2"):
+        environ = {"AWS_EXECUTION_ENV": value, "DUCKDB_MEMORY_LIMIT": "150MB"}
+        expect(task_capacity.apply("default", environ, root, None, None, None) is None, value)
+        expect(environ == {"AWS_EXECUTION_ENV": value, "DUCKDB_MEMORY_LIMIT": "150MB"}, environ)
+
+
 def case_apply_fails_by_name_when_the_task_is_tiny(root: Path) -> None:
     v2(root, str(GIB), "100000 100000", "0")
     expect_error(lambda: task_capacity.apply("default", task_environment(None), root, task(1024, 1, [PHASE]), 1024, None), "floor")
