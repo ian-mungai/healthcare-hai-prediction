@@ -82,6 +82,22 @@ def task(**settings: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     return decorate
 
 
+class TriggerDagRunOperator:
+    """The stand-in of the standard provider's operator: a trigger mapped over the requests that another task returns."""
+
+    @staticmethod
+    def partial(**settings: Any) -> SimpleNamespace:
+        def expand_kwargs(source: Any) -> Node:
+            if Dag.current is None:
+                raise ValueError("a trigger was created outside its declared DAG")
+            node = Node(settings["task_id"], Rule.ALL_SUCCESS)
+            node.upstream_task_ids.add(source.operator.task_id)
+            Dag.current.task_dict[node.task_id] = node
+            return node
+
+        return SimpleNamespace(expand_kwargs=expand_kwargs)
+
+
 def run() -> list[dict[str, Any]]:
     """Exercise actual declarations and task adapters while recording the substituted SDK boundary."""
     cases = Cases([])
@@ -117,7 +133,10 @@ def run() -> list[dict[str, Any]]:
     package = ModuleType("airflow")
     previous = sys.modules.pop("orchestration.dag_runtime", None)
     try:
-        with mock.patch.dict(sys.modules, {"airflow": package, "airflow.sdk": sdk}):
+        trigger = ModuleType("airflow.providers.standard.operators.trigger_dagrun")
+        trigger.__dict__["TriggerDagRunOperator"] = TriggerDagRunOperator
+        providers = {name: ModuleType(name) for name in ("airflow.providers", "airflow.providers.standard", "airflow.providers.standard.operators")}
+        with mock.patch.dict(sys.modules, {"airflow": package, "airflow.sdk": sdk, **providers, trigger.__name__: trigger}):
             runtime = importlib.import_module("orchestration.dag_runtime")
             for dag_id in ("training_dag", "model_promotion_dag"):
                 loaded = runpy.run_path(str(ROOT / "dags" / f"{dag_id}.py"))

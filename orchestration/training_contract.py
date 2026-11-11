@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 DAGS = ("training_dag", "model_promotion_dag")
@@ -223,6 +223,24 @@ def chain_parameters_for(step: str, raw: Mapping[str, Any], lanes: tuple[str, ..
     if raw["mlflow"] != "aws" or "aws" not in lanes:
         raise ValueError("every step of the promotion chain runs on AWS: name mlflow=aws")
     return dict(raw)
+
+
+def research_requests(model: str, training_run: str, base_run: str, population: str, hai_types: Sequence[str], mlflow: str) -> list[dict[str, Any]]:
+    """The one request for ``research_dag`` that a finished training run of ``model`` makes, or none.
+
+    Only m1, m2 and m4 are compared, and only a run that names its base run can say which base to research. The research run derives from the base run, so the
+    triggers of the three models name one run; each trigger has its own DAG run (``training__<training run>``), so the last model's trigger is not dropped as a
+    repeat of the first model's.
+    """
+    if model not in PROMOTION_MODELS or not base_run:
+        return []
+    research = {"base_run": base_run, "population": population, "hai_types": list(hai_types), "mlflow": mlflow}
+    return [
+        {
+            "trigger_run_id": f"training__{training_run}",
+            "conf": {"run_id": research_run_id(base_run), "mode": "real", **parameters_for("research_dag", research, LAUNCH_LANES)},
+        }
+    ]
 
 
 def action_environment(template: str, action: str, mode: str) -> str:

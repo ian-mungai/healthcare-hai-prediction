@@ -25,16 +25,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from orchestration.training_contract import (
-    LAUNCH_LANES,
-    PROMOTION_MODELS,
-    chain_run_id,
-    model_features_run_id,
-    parameters_for,
-    record_key,
-    research_run_id,
-    trained_run_id,
-)
+from orchestration.training_contract import PROMOTION_MODELS, chain_run_id, model_features_run_id, record_key, trained_run_id
 
 TRAIN_JOB = "train"
 Launch = Callable[[str, str, dict[str, Any]], None]
@@ -179,24 +170,6 @@ def run_types(base_run: str, research_run: str, hai_types: Sequence[str], *, lau
         if challenger is not None:
             type_chain(challenger, research_run, steps, failures)
     return failures
-
-
-def research_requests(model: str, training_run: str, base_run: str, population: str, hai_types: Sequence[str], mlflow: str) -> list[dict[str, Any]]:
-    """The one request for ``research_dag`` that a finished training run of ``model`` makes, or none.
-
-    Only m1, m2 and m4 are compared, and only a run that names its base run can say which base to research. The research run derives from the base run, so the
-    triggers of the three models name one run; each trigger has its own DAG run (``training__<training run>``), so the last model's trigger is not dropped as a
-    repeat of the first model's.
-    """
-    if model not in PROMOTION_MODELS or not base_run:
-        return []
-    research = {"base_run": base_run, "population": population, "hai_types": list(hai_types), "mlflow": mlflow}
-    return [
-        {
-            "trigger_run_id": f"training__{training_run}",
-            "conf": {"run_id": research_run_id(base_run), "mode": "real", **parameters_for("research_dag", research, LAUNCH_LANES)},
-        }
-    ]
 
 
 def release_online(found: Any, context: Mapping[str, Any], model: str, features_run: str, run: str) -> None:

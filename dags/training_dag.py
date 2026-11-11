@@ -1,11 +1,18 @@
-"""Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library."""
+"""Fit and evaluate a recorded analysis plan through the training job of the direct ECS launch library.
+
+After its release, a training run of m1, m2 or m4 that names its base run (``base_run``) starts ``research_dag`` for that base; the DAG skips until all three
+models have run on it. Another model, a hand start with no base and a run that did not pass its release start nothing.
+"""
 
 from __future__ import annotations
 
-from airflow.sdk import DAG, Param
+from typing import Any
+
+from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOperator
+from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration.dag_runtime import build_tasks
-from orchestration.training_contract import HAI_TYPES, TRAINING_STEPS
+from orchestration.training_contract import HAI_TYPES, TRAINING_STEPS, research_requests
 
 with DAG(
     dag_id="training_dag",
@@ -23,7 +30,25 @@ with DAG(
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The one model this run fits; no default, so a form trigger must choose it (orchestration.training_contract.MODELS).
         "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
+        # The base run of the model set this run trains on: research compares the models of one base run. Empty for a hand start, which starts no research.
+        "base_run": Param("", type="string", pattern=r"^(|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"),
     },
     default_args={"retries": 0},
 ) as dag:
-    build_tasks(TRAINING_STEPS, "training")
+    released = build_tasks(TRAINING_STEPS, "training")
+
+    @task(task_id="research_request", retries=0)
+    def research_request() -> list[dict[str, Any]]:
+        params = get_current_context()["params"]
+        return research_requests(params["model"], params["run_id"], params["base_run"], params["population"], params["hai_types"], params["mlflow"])
+
+    request = research_request()
+    released >> request.operator
+    TriggerDagRunOperator.partial(
+        task_id="trigger_research",
+        trigger_dag_id="research_dag",
+        wait_for_completion=False,
+        reset_dag_run=False,
+        skip_when_already_exists=True,
+        fail_when_dag_is_paused=True,
+    ).expand_kwargs(request)

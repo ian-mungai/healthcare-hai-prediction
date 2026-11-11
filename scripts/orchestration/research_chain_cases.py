@@ -453,7 +453,7 @@ def each_promotion_model_starts_the_research_on_its_base() -> None:
     of the base. Any other model, and a run that names no base (a hand start), starts nothing."""
     training_run = training_contract.trained_run_id(BASE, "m2")
     for model in training_contract.MODELS:
-        requests = promotion_chain.research_requests(model, training_run, BASE, "primary", ["HAI_1", "HAI_2"], "aws")
+        requests = training_contract.research_requests(model, training_run, BASE, "primary", ["HAI_1", "HAI_2"], "aws")
         if model not in training_contract.PROMOTION_MODELS:
             require(requests == [], f"{model} started the research: {requests}")
             continue
@@ -461,15 +461,15 @@ def each_promotion_model_starts_the_research_on_its_base() -> None:
             requests == [{"trigger_run_id": f"training__{training_run}", "conf": {"run_id": RESEARCH, "mode": "real", **RESEARCH_PARAMS}}],
             f"{model} started another research: {requests}",
         )
-    require(promotion_chain.research_requests("m2", training_run, "", "primary", ["HAI_1"], "aws") == [], "a run with no base started the research")
-    first = promotion_chain.research_requests("m1", training_contract.trained_run_id(BASE, "m1"), BASE, "primary", ["HAI_1"], "aws")
-    second = promotion_chain.research_requests("m4", training_contract.trained_run_id(BASE, "m4"), BASE, "primary", ["HAI_1"], "aws")
+    require(training_contract.research_requests("m2", training_run, "", "primary", ["HAI_1"], "aws") == [], "a run with no base started the research")
+    first = training_contract.research_requests("m1", training_contract.trained_run_id(BASE, "m1"), BASE, "primary", ["HAI_1"], "aws")
+    second = training_contract.research_requests("m4", training_contract.trained_run_id(BASE, "m4"), BASE, "primary", ["HAI_1"], "aws")
     require(
         first[0]["conf"]["run_id"] == second[0]["conf"]["run_id"] and first[0]["trigger_run_id"] != second[0]["trigger_run_id"],
         "the models' triggers share a run",
     )
-    refuses(ValueError, partial(promotion_chain.research_requests, "m2", training_run, BASE, "primary", ["HAI_9"], "aws"))
-    refuses(ValueError, partial(promotion_chain.research_requests, "m2", training_run, BASE, "primary", ["HAI_1"], "local"))
+    refuses(ValueError, partial(training_contract.research_requests, "m2", training_run, BASE, "primary", ["HAI_9"], "aws"))
+    refuses(ValueError, partial(training_contract.research_requests, "m2", training_run, BASE, "primary", ["HAI_1"], "local"))
 
 
 def training_dag_starts_the_research_after_its_release() -> None:
