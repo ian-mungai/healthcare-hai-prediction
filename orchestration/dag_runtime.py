@@ -32,6 +32,9 @@ MODEL_SELECTIONS = {"pin_gold": "base_snapshot_run"}
 # The serving deployment's form names the research run whose record names the candidate of a canary.
 SERVING_DAG = "serving_deploy_dag"
 SERVING_SELECTIONS = {"serve_deploy": "research_run"}
+# The drift check reads one model run's published set: its form names that run, and the check's job needs the features job of that run to have passed.
+DRIFT_DAG = "drift_monitoring_dag"
+DRIFT_SELECTIONS = {"drift_run": "features_run"}
 ASSETS = {"features_commit": "features"}
 # The time limits of the one-job chain's tasks that start no job.
 PREFLIGHT_TIMEOUT = timedelta(minutes=30)
@@ -61,6 +64,8 @@ def selections_of(dag_id: str) -> dict[str, str]:
     """The DAG parameter that names the producer run of each template's job in ``dag_id``."""
     if dag_id == SERVING_DAG:
         return SERVING_SELECTIONS
+    if dag_id == DRIFT_DAG:
+        return DRIFT_SELECTIONS
     return MODEL_SELECTIONS if dag_id in FEATURE_DAGS else SELECTIONS
 
 
@@ -88,6 +93,8 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
             raw["promotion_mode"] = mode
             mode = "real"
         training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
+    elif instance.dag_id == DRIFT_DAG:
+        training = {"model": params["model"]}  # the model whose set the drift job checks; the preflight refuses a model outside the contract
     publisher = {"kind": params["run_kind"], "capture_root": params["capture_root"]} if template == PUBLISHER_TEMPLATE else None
     return SubmissionRequest(
         template,

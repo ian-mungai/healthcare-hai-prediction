@@ -13,6 +13,7 @@ import hashlib
 import importlib
 import importlib.util
 import json
+import logging
 import os
 import re
 import sys
@@ -24,12 +25,14 @@ from types import ModuleType, SimpleNamespace
 from typing import Any, ClassVar
 from unittest import mock
 
+from monitoring import drift_gate
 from monitoring.aws_cases import MemoryS3
-from orchestration.training_contract import LAUNCH_LANES, RUN_ID, parameters_for
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, model_training_run_id, parameters_for
 
 ROOT = Path(__file__).resolve().parents[1]
 DAG_FILE = ROOT / "dags/drift_monitoring_dag.py"
 DRIFT_RUN = "20261030T120000Z-0a1b2c3d"
+FEATURES_RUN = "20261030T110000Z-feed5eed"
 BUCKET = "bucket-for-tests"
 Problems = list[str]
 CONTEXT: dict[str, Any] = {}
@@ -161,8 +164,18 @@ def record(hai_type: str, *, run: str = DRIFT_RUN, status: str = "checked", trig
     }
 
 
-def bucket_with(records: list[dict[str, Any]], *, marker: bool = True, marker_run: str = DRIFT_RUN, raw: dict[str, bytes] | None = None) -> MemoryS3:
-    """An in-memory bucket as the task's publish phase leaves it: the records, then the marker that names them."""
+def bucket_with(
+    records: list[dict[str, Any]],
+    *,
+    marker: bool = True,
+    marker_run: str = DRIFT_RUN,
+    raw: dict[str, bytes] | None = None,
+    unmonitored: dict[str, str] | None = None,
+    model: str = "m2",
+    gated: bool = True,
+) -> MemoryS3:
+    """An in-memory bucket as the task's publish phase leaves it: the records, then the marker that names them and, for a run of one model, the gate's
+    decision of that model (``monitoring.drift_gate``)."""
     s3 = MemoryS3()
     bodies = {f"drift_{item['hai_type']}.json": (json.dumps(item) + "\n").encode() for item in records}
     sums = {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()}
@@ -171,14 +184,22 @@ def bucket_with(records: list[dict[str, Any]], *, marker: bool = True, marker_ru
         s3.put_object(Bucket=BUCKET, Key=f"drift/{DRIFT_RUN}/{name}", Body=body)
         sums.setdefault(name, hashlib.sha256(body).hexdigest())
     if marker:
-        document = {"run_id": marker_run, "monitored": [item["hai_type"] for item in records], "unmonitored": {}, "files": sums}
+        document: dict[str, Any] = {
+            "run_id": marker_run,
+            "monitored": [item["hai_type"] for item in records],
+            "unmonitored": dict(unmonitored or {}),
+            "files": sums,
+        }
+        if gated:
+            baseline = {"monitored": document["monitored"], "unmonitored": document["unmonitored"]}
+            document |= {"model": model, "gate": drift_gate.decide(model, baseline, {item["hai_type"]: item for item in records})}
         s3.put_object(Bucket=BUCKET, Key=f"drift/{DRIFT_RUN}/_complete.json", Body=json.dumps(document).encode())
     return s3
 
 
 def decide(module: Any, s3: MemoryS3, *, mlflow: str = "aws", model: str = "m2") -> list[dict[str, Any]]:
-    """Run the real ``decide`` task body for the DRIFT_RUN of one model against the in-memory bucket."""
-    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow, "model": model}}
+    """Run the real ``decide`` task body for the DRIFT_RUN of one model run's set against the in-memory bucket."""
+    CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": mlflow, "model": model, "features_run": FEATURES_RUN}}
     with mock.patch.dict(os.environ, {"HAI_LAUNCH_BUCKET": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
         os.environ.pop("DATA_BUCKET_NAME", None)
         result: list[dict[str, Any]] = module.dag.task_dict["decide"].function()
@@ -188,7 +209,7 @@ def decide(module: Any, s3: MemoryS3, *, mlflow: str = "aws", model: str = "m2")
 def decide_reads_the_launch_bucket(folder: Path) -> Problems:
     """The services environment names the data bucket in HAI_LAUNCH_BUCKET (infra/services/airflow.tf) and sets no DATA_BUCKET_NAME, so decide reads it."""
     with loaded_dag() as module:
-        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}}
+        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws", "model": "m2", "features_run": FEATURES_RUN}}
         s3 = bucket_with([record("HAI_1")])
         with mock.patch.dict(os.environ, {"DATA_BUCKET_NAME": BUCKET}), mock.patch.object(module, "s3_client", return_value=s3):
             os.environ.pop("HAI_LAUNCH_BUCKET", None)
@@ -223,6 +244,8 @@ def graph_is_declared(folder: Path) -> Problems:
         params = dag.settings["params"]
         if params["run_id"].settings.get("pattern") != f"^{RUN_ID}$" or params["mode"].settings.get("enum") != ["real"]:
             problems.append("the run_id pattern differs from the training DAG's or the mode is not real only")
+        if params["features_run"].default is not None or params["features_run"].settings.get("pattern") != f"^{RUN_ID}$":
+            problems.append("the features_run is not a required run ID: the drift check reads one published set, never the latest")
         return problems
 
 
@@ -232,7 +255,14 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
         if len(requests) != 1:
             return [f"expected one trigger request, got {len(requests)}"]
         request = requests[0]
-        training = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": f"drift:{DRIFT_RUN}", "mlflow": "aws", "model": "m2"}
+        training = {
+            "features_run": FEATURES_RUN,
+            "population": "primary",
+            "hai_types": ["HAI_1"],
+            "trigger": f"drift:{DRIFT_RUN}",
+            "mlflow": "aws",
+            "model": "m2",
+        }
         problems = []
         if request["trigger_run_id"] != f"drift__{DRIFT_RUN}":
             problems.append(f"the trigger run id is {request['trigger_run_id']}")
@@ -240,6 +270,8 @@ def one_drifted_type_starts_one_training_run(folder: Path) -> Problems:
             problems.append(f"the training conf is not the run, the real mode and the training parameters: {request['conf']}")
         if not re.fullmatch(RUN_ID, request["conf"]["run_id"]) or request["conf"]["run_id"] == DRIFT_RUN:
             problems.append("the training run id is malformed or equals the drift run id")
+        if request["conf"]["run_id"] != model_training_run_id(DRIFT_RUN, "m2"):
+            problems.append("the training run id is not the model's own, derived from the drift run and the model (the chain gate binds that run)")
         return problems
 
 
@@ -293,6 +325,58 @@ def a_run_with_nothing_to_monitor_starts_nothing(folder: Path) -> Problems:
         return [] if requests == [] else [f"an empty marker started {requests}"]
 
 
+def a_model_without_a_production_model_trains_every_type(folder: Path) -> Problems:
+    """Q11: a model with no Production model yet trains. Nothing is monitored (the marker names no record) and the gate's decision starts the training."""
+    with loaded_dag() as module:
+        requests = decide(module, bucket_with([], unmonitored=dict.fromkeys(HAI_TYPES, "no_production_model")))
+        types = requests[0]["conf"]["hai_types"] if requests else None
+        return [] if len(requests) == 1 and types == list(HAI_TYPES) else [f"expected one run for every type, got {types} in {len(requests)} requests"]
+
+
+def a_changed_schema_trains_beside_a_drifted_type(folder: Path) -> Problems:
+    """Q11: a type whose feature schema changed trains though its model is not monitored, and shares the run with a drifted type; a quiet type does not."""
+    with loaded_dag() as module:
+        records = [record("HAI_1", triggered=True), record("HAI_3")]
+        requests = decide(module, bucket_with(records, unmonitored={"HAI_2": "feature_schema_changed"}))
+        types = requests[0]["conf"]["hai_types"] if requests else None
+        return [] if len(requests) == 1 and types == ["HAI_1", "HAI_2"] else [f"expected one run for HAI_1 and HAI_2, got {types} in {len(requests)} requests"]
+
+
+def a_skip_names_its_reason(folder: Path) -> Problems:
+    """A model that does not train starts nothing and says why for each type, in the task log."""
+    lines: list[str] = []
+
+    class Capture(logging.Handler):
+        def emit(self, entry: logging.LogRecord) -> None:
+            lines.append(entry.getMessage())
+
+    with loaded_dag() as module:
+        logger = logging.getLogger(module.__name__)
+        handler = Capture(level=logging.INFO)
+        previous = logger.level
+        logger.addHandler(handler)
+        logger.setLevel(logging.INFO)
+        try:
+            requests = decide(module, bucket_with([record("HAI_1"), record("HAI_2", status="skipped")]))
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(previous)
+    text = " ".join(lines)
+    problems = [] if requests == [] else [f"quiet records started {requests}"]
+    return problems + [f"the log does not name the skip reasons not_drifted and no_new_window: {lines}"] * (
+        not ("not_drifted" in text and "no_new_window" in text)
+    )
+
+
+def with_gate(s3: MemoryS3, **changes: Any) -> MemoryS3:
+    """The bucket with the marker's gate decision changed, as a marker that was edited or written by another version would hold."""
+    key = (BUCKET, f"drift/{DRIFT_RUN}/_complete.json")
+    document = json.loads(s3.objects[key])
+    document["gate"] = {**document["gate"], **changes}
+    s3.objects[key] = json.dumps(document).encode()
+    return s3
+
+
 def decision_repeats(folder: Path) -> Problems:
     with loaded_dag() as module:
         s3 = bucket_with([record("HAI_1", triggered=True)])
@@ -320,7 +404,7 @@ def a_changed_record() -> MemoryS3:
 
 
 def launch_step(folder: Path) -> Problems:
-    """The one step reaches the launch library as the template drift_run for this DAG, in real mode and without training parameters."""
+    """The one step reaches the launch library as the template drift_run for this DAG, in real mode, naming the model whose set it checks."""
     sent: list[Any] = []
 
     def launched(request: Any, context: Any, selections: Any) -> str:
@@ -329,11 +413,11 @@ def launch_step(folder: Path) -> Problems:
 
     with loaded_dag() as module:
         instance = SimpleNamespace(try_number=1, dag_id="drift_monitoring_dag", task_id="drift_run", run_id="manual")
-        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}, "ti": instance}
+        CONTEXT["context"] = {"params": {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws", "model": "m2", "features_run": FEATURES_RUN}, "ti": instance}
         with mock.patch.object(module.dag_runtime, "launch_module", return_value=SimpleNamespace(launch_step=launched)):
             module.dag.task_dict["drift_run"].function()
     shape = [(request.template, request.dag_id, request.mode, request.training) for request in sent]
-    return [] if shape == [("drift_run", "drift_monitoring_dag", "real", None)] else [f"the launch library received {shape}"]
+    return [] if shape == [("drift_run", "drift_monitoring_dag", "real", {"model": "m2"})] else [f"the launch library received {shape}"]
 
 
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
@@ -345,6 +429,22 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("dag_quiet_records_start_nothing", quiet_records_start_nothing),
         ("dag_nothing_to_monitor_starts_nothing", a_run_with_nothing_to_monitor_starts_nothing),
         ("dag_decision_repeats", decision_repeats),
+        ("dag_a_model_without_a_production_model_trains_every_type", a_model_without_a_production_model_trains_every_type),
+        ("dag_a_changed_schema_trains_beside_a_drifted_type", a_changed_schema_trains_beside_a_drifted_type),
+        ("dag_a_skip_names_its_reason", a_skip_names_its_reason),
+        ("dag_refuses_a_marker_without_the_gate_decision", refuses("no gate decision", lambda: bucket_with([record("HAI_1", triggered=True)], gated=False))),
+        (
+            "dag_refuses_the_gate_decision_of_another_model",
+            refuses("another model", lambda: bucket_with([record("HAI_1", triggered=True)], model="m4")),
+        ),
+        (
+            "dag_refuses_a_gate_that_skips_a_drifted_type",
+            refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1", triggered=True)]), train_types=[], train=False)),
+        ),
+        (
+            "dag_refuses_a_gate_that_trains_a_quiet_type",
+            refuses("inconsistent", lambda: with_gate(bucket_with([record("HAI_1")]), train_types=["HAI_1"], train=True)),
+        ),
         ("dag_refuses_a_record_of_another_run", refuses("another run", lambda: bucket_with(stale))),
         ("dag_refuses_a_run_without_its_marker", refuses("not complete", lambda: bucket_with([record("HAI_1")], marker=False))),
         ("dag_refuses_a_marker_of_another_run", refuses("another run", lambda: bucket_with([record("HAI_1")], marker_run="20261029T120000Z-ffffffff"))),

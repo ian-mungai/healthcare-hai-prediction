@@ -1,17 +1,20 @@
-"""Compare the Production models' features with their training baselines and start ``training_dag`` when enough of them drift.
+"""Check one model set's features against the model's Production baseline and start ``training_dag`` for that model when its gate says so.
 
-One step launches the drift task on AWS through the direct ECS launch library. The task covers the six HAI types and publishes its records to
+Each ``features_m<n>_dag`` starts this DAG once its set is published, with the model and the run of that set (``features_run``). One step launches the drift
+task on AWS through the direct ECS launch library. The task covers the six HAI types of that model and publishes its records and the gate's decision to
 ``s3://<data bucket>/drift/<run>/``, with the marker ``_complete.json`` last. ``decide`` reads the marker and the records it names, refuses a missing marker,
-a record of another run, a changed or inconsistent record, and builds at most one request for ``training_dag``: the types whose record says ``triggered``, the
-primary population, the latest publication and ``trigger=drift:<this run>``. A run where no type has a Production model has a marker with no records and
-starts nothing. The trigger is mapped over that list, so a quiet run starts nothing. The training run id and the trigger run id come from the drift run id, so
-a retry never starts a second training run. The training DAG keeps its own approval gate for real runs, and promotion of a retrained model stays with the
-owner."""
+a record of another run, a changed or inconsistent record, a marker without the gate's decision, a decision of another model and a decision that does not
+match the records. It builds at most one request for ``training_dag``: the model's own training run for the types the gate trains (the model drifted, its
+feature schema changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
+``trigger=drift:<this run>``. A type the gate skips is logged with its reason. The trigger is mapped over that list, so a model that does not train starts
+nothing. The training run id and the trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of
+a retrained model is automatic through the promotion rule and the canary."""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from typing import Any
 
@@ -19,8 +22,9 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration import dag_runtime
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, parameters_for, training_run_id
+from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, RUN_ID, model_training_run_id, parameters_for
 
+LOG = logging.getLogger(__name__)
 MARKER = "_complete.json"
 
 
@@ -40,8 +44,8 @@ def fetch(s3: Any, bucket: str, key: str) -> bytes | None:
     return body
 
 
-def read_records(s3: Any, bucket: str, drift_run: str) -> list[dict[str, Any]]:
-    """Read the drift records the marker of this run names and refuse a stale, changed, unreadable or inconsistent one, so that it never triggers training."""
+def read_marker(s3: Any, bucket: str, drift_run: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Read this run's marker and the drift records it names. Refuse a stale, changed, unreadable or inconsistent one, so that it never triggers training."""
     prefix = f"drift/{drift_run}/"
     raw = fetch(s3, bucket, prefix + MARKER)
     try:
@@ -70,19 +74,42 @@ def read_records(s3: Any, bucket: str, drift_run: str) -> list[dict[str, Any]]:
         if record["triggered"] and (record.get("status") != "checked" or record.get("population") != "primary"):
             raise RuntimeError(f"the drift record {name} is inconsistent: only a checked record of the primary population may trigger")
         records.append(record)
-    return sorted(records, key=lambda item: HAI_TYPES.index(item["hai_type"]))
+    return marker, sorted(records, key=lambda item: HAI_TYPES.index(item["hai_type"]))
 
 
-def training_requests(drift_run: str, mlflow: str, model: str, records: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Return one request for ``training_dag`` that retrains ``model`` for every drifted type, or none when no record triggered."""
-    drifted = [record["hai_type"] for record in records if record["triggered"]]
-    if not drifted:
+def gate_types(marker: dict[str, Any], model: str, records: list[dict[str, Any]]) -> tuple[list[str], dict[str, str]]:
+    """Return the types the marker's gate decision trains for ``model`` and the reason of each type it skips, after checking that the decision belongs to
+    this model and matches the records: every drifted type and every type without a baseline trains, and no quiet monitored type does."""
+    gate = marker.get("gate")
+    if not isinstance(gate, dict) or gate.get("kind") != "drift_gate":
+        raise RuntimeError(f"the marker holds no gate decision of {model}: the drift task of this run did not gate a model")
+    if marker.get("model") != model or gate.get("model") != model:
+        raise RuntimeError(f"the gate decision belongs to another model, {marker.get('model')}, not {model}")
+    types, decisions, unmonitored = gate.get("train_types"), gate.get("decisions"), marker.get("unmonitored")
+    if not isinstance(types, list) or not isinstance(decisions, dict) or not isinstance(unmonitored, dict):
+        raise RuntimeError("the gate decision is inconsistent: it names no types to train, no decisions or no unmonitored types")
+    monitored = {record["hai_type"]: record["triggered"] for record in records}
+    drifted = {hai_type for hai_type, triggered in monitored.items() if triggered}
+    if (
+        types != sorted(set(types), key=lambda name: HAI_TYPES.index(name) if name in HAI_TYPES else len(HAI_TYPES))
+        or not set(types) <= set(HAI_TYPES)
+        or not drifted | set(unmonitored) <= set(types)
+        or any(monitored.get(hai_type) is False or hai_type not in monitored | unmonitored for hai_type in types)
+    ):
+        raise RuntimeError(f"the gate decision is inconsistent with the drift records: it trains {types}, the records drifted {sorted(drifted)}")
+    skipped = {hai_type: str(item.get("reason")) for hai_type, item in sorted(decisions.items()) if isinstance(item, dict) and not item.get("train")}
+    return types, skipped
+
+
+def training_requests(drift_run: str, mlflow: str, model: str, features_run: str, types: list[str]) -> list[dict[str, Any]]:
+    """Return one request for ``training_dag`` that trains ``model`` on its own set for the given types, or none when the gate trains no type."""
+    if not types:
         return []
-    training = {"features_run": "latest", "population": "primary", "hai_types": drifted, "trigger": f"drift:{drift_run}", "mlflow": mlflow, "model": model}
+    training = {"features_run": features_run, "population": "primary", "hai_types": types, "trigger": f"drift:{drift_run}", "mlflow": mlflow, "model": model}
     return [
         {
             "trigger_run_id": f"drift__{drift_run}",
-            "conf": {"run_id": training_run_id(drift_run), "mode": "real", **parameters_for("training_dag", training, LAUNCH_LANES)},
+            "conf": {"run_id": model_training_run_id(drift_run, model), "mode": "real", **parameters_for("training_dag", training, LAUNCH_LANES)},
         }
     ]
 
@@ -99,6 +126,8 @@ with DAG(
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The model whose drift this run checks and whose training it starts (orchestration.training_contract.MODELS).
         "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
+        # The run of the model's published set: the drift job reads that set (its features job must have passed) and the training run it starts fits on it.
+        "features_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
     },
     default_args={"retries": 0},
 ) as dag:
@@ -113,7 +142,11 @@ with DAG(
         bucket = os.environ.get("HAI_LAUNCH_BUCKET", "")
         if not bucket:
             raise RuntimeError("HAI_LAUNCH_BUCKET (the data bucket of the launched jobs) is not set in the Airflow service environment")
-        return training_requests(params["run_id"], params["mlflow"], params["model"], read_records(s3_client(), bucket, params["run_id"]))
+        marker, records = read_marker(s3_client(), bucket, params["run_id"])
+        types, skipped = gate_types(marker, params["model"], records)
+        for hai_type, reason in skipped.items():
+            LOG.info("no training of %s for %s: %s", params["model"], hai_type, reason)
+        return training_requests(params["run_id"], params["mlflow"], params["model"], params["features_run"], types)
 
     ran = drift_run()
     requests = decide()
