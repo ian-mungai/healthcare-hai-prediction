@@ -241,6 +241,7 @@ class Rig:
                 host_group="stand_in_host",
                 directory=Path("stand_in_reports"),
             ),
+            read_object=steps.object_reader(self.stage, BUCKET),
         )
         self.reports: list[str] = []
         self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"]))
@@ -290,6 +291,10 @@ def json_type_matches(value: Any, declared: str | list[str]) -> bool:
         "null": lambda item: item is None,
     }
     return any(kinds[kind](value) for kind in ([declared] if isinstance(declared, str) else declared))
+
+
+class Skipped(Exception):
+    """The stand-in of Airflow's ``AirflowSkipException``: the task ends skipped, not failed."""
 
 
 class FormRefused(Exception):
@@ -357,14 +362,28 @@ class World:
                 dag_settings.clear()
                 dag_settings.update(settings)
 
-        def trigger(**settings: Any) -> Operator:
-            node = Operator(**settings)
-            built.append(node)
-            return node
+        class Trigger:
+            """The stand-in of ``TriggerDagRunOperator``: called, or partial with the requests mapped over a task's output (``expand_kwargs``)."""
+
+            def __call__(self, **settings: Any) -> Operator:
+                node = Operator(**settings)
+                built.append(node)
+                return node
+
+            def partial(self, **settings: Any) -> SimpleNamespace:
+                def expand_kwargs(source: Any) -> Operator:
+                    node = self(**settings)
+                    source.operator >> node
+                    return node
+
+                return SimpleNamespace(expand_kwargs=expand_kwargs)
+
+        trigger = Trigger()
 
         with (
             mock.patch.object(sys.modules["airflow.sdk"], "task", task),
             mock.patch.object(sys.modules["airflow.sdk"], "DAG", FormDag),
+            mock.patch.object(sys.modules["airflow.sdk"], "get_current_context", lambda: self.context),
             mock.patch.object(self.runtime, "task", task),
             mock.patch.object(sys.modules[TRIGGER_MODULE], "TriggerDagRunOperator", trigger),
         ):
@@ -383,13 +402,17 @@ class World:
                     raise FormRefused(f"{name}={value!r} does not match {pattern}")
         for node in built:
             self.enter(node.task_id)
-            upstream_ok = all(self.states.get(before.task_id) == "success" for before in node.upstream)
-            if not upstream_ok and node.settings.get("trigger_rule") != "all_done":
-                self.states[node.task_id] = "upstream_failed"
+            before_states = [self.states.get(before.task_id) for before in node.upstream]
+            if not all(state == "success" for state in before_states) and node.settings.get("trigger_rule") != "all_done":
+                # A skipped upstream task skips an all_success task and a failed one fails it, as Airflow does.
+                self.states[node.task_id] = "skipped" if all(state in ("success", "skipped") for state in before_states) else "upstream_failed"
                 continue
             try:
                 self.results[node.task_id] = node.function() if node.function else None
                 self.states[node.task_id] = "success"
+            except Skipped as error:
+                self.results[node.task_id] = f"{type(error).__name__}: {error}"
+                self.states[node.task_id] = "skipped"
             except Exception as error:
                 self.results[node.task_id] = f"{type(error).__name__}: {error}"
                 self.states[node.task_id] = "failed"
@@ -414,6 +437,8 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
         name: ModuleType(name) for name in ("airflow", "airflow.providers", "airflow.providers.standard", "airflow.providers.standard.operators")
     }
     modules["airflow.sdk"] = sdk
+    modules["airflow.sdk.exceptions"] = ModuleType("airflow.sdk.exceptions")
+    modules["airflow.sdk.exceptions"].__dict__["AirflowSkipException"] = Skipped
     modules[TRIGGER_MODULE] = SimpleNamespace(TriggerDagRunOperator=lambda **settings: Operator(**settings))
     try:
         with mock.patch.dict(sys.modules, modules):

@@ -23,6 +23,7 @@ from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for
 
 LOG = logging.getLogger(__name__)
+RESEARCH_DAG = "research_dag"
 STEP_TIMEOUT = timedelta(hours=26)
 # The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
 SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
@@ -35,6 +36,7 @@ CHECK_TIMEOUT = timedelta(minutes=15)
 CHAIN_TASKS = ("preflight", "job", "evidence")
 # The step of the Run 3 publisher: its DAG form names the run kind and the capture root, and the launch checks them.
 PUBLISHER_TEMPLATE = "publisher_run"
+RESEARCH_TASKS = ("ready", "research", "chain")
 # The module that launches a step, and the environment setting that names the pool of host jobs.
 LAUNCH_MODULE = "orchestration.airflow_steps"
 POOL_SETTING = "HAI_LAUNCH_POOL"
@@ -65,7 +67,10 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
     selected = params.get(selections[template], "latest") if template in selections else "latest"
     training = None
     mode = str(params["mode"])
-    if instance.dag_id in DAGS:
+    if instance.dag_id == RESEARCH_DAG:
+        raw = {name: params[name] for name in ("base_run", "population", "hai_types", "mlflow")}
+        training = parameters_for(RESEARCH_DAG, raw, LAUNCH_LANES)  # the research step runs on AWS: mlflow=local is refused by name
+    elif instance.dag_id in DAGS:
         names = (
             ("features_run", "population", "hai_types", "trigger", "mlflow", "model")
             if instance.dag_id == "training_dag"
@@ -142,6 +147,57 @@ def build_job_chain(template: str, asset: str | None = None) -> Any:
     return last
 
 
+def research_request() -> SubmissionRequest:
+    """The research DAG's request: its research run, with the form's closed parameters. A form that names the local lane is refused here, by name."""
+    context = get_current_context()
+    return step_request("research", context)
+
+
+def build_research_tasks() -> Any:
+    """Create ready, research, chain and gate for ``research_dag`` and return the gate operator.
+
+    ``ready`` launches nothing: it ends skipped, not failed, until m1, m2 and m4 each have a passed training run on the base run, and every task after it
+    is then skipped too. ``research`` is the one-job step of the promote family (its preflight and launch run in the one task, joined by a retry). ``chain``
+    runs the promotion chain of each infection type that has a challenger (``promotion_chain``). ``gate`` runs after a failure too and fails the DAG run unless
+    the three passed, or every one was skipped.
+    """
+
+    @task(task_id="ready", retries=0, execution_timeout=CHECK_TIMEOUT)
+    def ready() -> str:
+        from airflow.sdk.exceptions import AirflowSkipException
+
+        missing = launch_module().research_missing_models(research_request())
+        if missing:
+            raise AirflowSkipException(f"research waits for a passed training run of {', '.join(missing)} on this base run")
+        return "ready"
+
+    @task(task_id="research", retries=0, execution_timeout=STEP_TIMEOUT, pool=launch_pool())
+    def research() -> str:
+        request = research_request()
+        context = get_current_context()
+        steps = launch_module()
+        steps.job_step(request, context, {})
+        return str(steps.evidence_step(request, context, {})["run_id"])
+
+    @task(task_id="chain", retries=0, execution_timeout=STEP_TIMEOUT, pool=launch_pool())
+    def chain() -> str:
+        return str(launch_module().research_chain_step(research_request(), get_current_context()))
+
+    @task(task_id="gate", trigger_rule=TriggerRule.ALL_DONE, retries=0, execution_timeout=CHECK_TIMEOUT)
+    def gate() -> str:
+        states = task_states(RESEARCH_TASKS)
+        if all(state == "skipped" for state in states.values()):
+            return "skipped"
+        failures = [name for name, state in states.items() if state != "success"]
+        if failures:
+            raise RuntimeError(f"the research gate rejected the run: {', '.join(f'{name} {states[name]}' for name in failures)}")
+        return "accepted"
+
+    first, researched, chained, last = ready().operator, research().operator, chain().operator, gate().operator
+    first >> researched >> chained >> last
+    return last
+
+
 def task_states(task_ids: tuple[str, ...]) -> dict[str, str | None]:
     """Read this DAG run's named task states from Airflow's task-instance API."""
     ti = get_current_context()["ti"]
@@ -150,8 +206,8 @@ def task_states(task_ids: tuple[str, ...]) -> dict[str, str | None]:
     return {name: states.get(name) for name in task_ids}
 
 
-def build_tasks(work_steps: tuple[str, ...], family: str) -> None:
-    """Create an ordered work chain, an always-run catalog release and a failure-preserving sole release leaf."""
+def build_tasks(work_steps: tuple[str, ...], family: str) -> Any:
+    """Create an ordered work chain, an always-run catalog release and a failure-preserving release leaf, and return the release operator."""
 
     def step(name: str, rule: TriggerRule = TriggerRule.ALL_SUCCESS) -> Any:
         outlets = [Asset(ASSETS[name])] if name in ASSETS else []
@@ -195,3 +251,4 @@ def build_tasks(work_steps: tuple[str, ...], family: str) -> None:
     for operation in [*work, catalog_release]:
         operation >> gate
     gate >> release
+    return release

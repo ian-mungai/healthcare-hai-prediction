@@ -22,9 +22,12 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from orchestration import layer_report
+from botocore.exceptions import BotoCoreError, ClientError
+
+from orchestration import layer_report, promotion_chain
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings, client_config
-from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchRefused, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import (
     GATE,
     HOST_JOB_CAP_SETTING,
@@ -78,6 +81,8 @@ class LaunchServices:
     definition: Callable[[str], str]
     clock: Clock
     report: layer_report.ReportAccess | None = None
+    # Reads one object of the data bucket: its bytes, or None when the key is absent. The research DAG reads the records that research and the canary store.
+    read_object: Callable[[str], bytes | None] | None = None
 
 
 def host_fit_probe(inner: EcsFitProbe, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> HeldCapProbe:
@@ -155,8 +160,32 @@ def services() -> LaunchServices:
         host_launch_hold=hold,
     )
     return LaunchServices(
-        preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock, report
+        preflight,
+        launcher,
+        BrokerlessEcsRunTaskOperator,
+        values["HAI_LAUNCH_CLUSTER"],
+        lambda job: adapter.definition(job, HOST),
+        clock,
+        report,
+        object_reader(s3, bucket),
     )
+
+
+def object_reader(s3: Any, bucket: str) -> Callable[[str], bytes | None]:
+    """Read an object of the data bucket: None when the key is absent, a refusal that names the key when the read fails for any other reason."""
+
+    def read(key: str) -> bytes | None:
+        try:
+            return bytes(s3.get_object(Bucket=bucket, Key=key)["Body"].read())
+        except ClientError as error:
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code in ("NoSuchKey", "404", "NotFound"):
+                return None
+            raise promotion_chain.RecordRefused(f"{key} cannot be read: {code or 'ClientError'}") from None
+        except BotoCoreError as error:
+            raise promotion_chain.RecordRefused(f"{key} cannot be read: {type(error).__name__}") from None
+
+    return read
 
 
 def folder_bytes(folder: Path) -> int:
@@ -301,3 +330,44 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
             raise LaunchRefused(str(error)) from None
         result |= {"report": accepted["report"], "passed": True}
     return result
+
+
+def research_missing_models(request: SubmissionRequest) -> list[str]:
+    """The promotion-eligible models that have no passed training run on the research request's base run, read from the launch records. Nothing is launched."""
+    base_run = str((request.training or {})["base_run"])
+    return promotion_chain.missing_models(services().preflight.store, base_run)
+
+
+def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) -> str:
+    """Run the promotion chain of every infection type of the research request that has a challenger, and fail with every failure after the last type.
+
+    Each launching step binds its run to the code of the research run, launches once under its own run (a retry joins it) and fails by name when its job does.
+    """
+    found = services()
+    training = request.training or {}
+
+    def launch_step_of(template: str, run: str, parameters: dict[str, Any]) -> None:
+        found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
+        step = replace(request, template=template, run_id=run, input_run_id=None, training=parameters)
+        try:
+            spec = prepared(found, step)
+            if spec is None:
+                raise LaunchRefused(f"{template} starts no ECS job")
+            launch(found, spec, context)
+        except (JobFailed, LaunchError) as error:
+            raise promotion_chain.StepFailed(f"{type(error).__name__}: {error}") from None
+
+    def read(key: str) -> bytes | None:
+        if found.read_object is None:
+            raise promotion_chain.RecordRefused("these launch services cannot read the data bucket")
+        return found.read_object(key)
+
+    def release(model: str, features_run: str, run: str) -> None:
+        promotion_chain.release_online(found, context, model, features_run, run)
+
+    failures = promotion_chain.run_types(
+        str(training["base_run"]), request.run_id, list(training["hai_types"]), launch=launch_step_of, read=read, release=release
+    )
+    if failures:
+        raise RuntimeError("the promotion chain failed: " + "; ".join(failures))
+    return "chained"

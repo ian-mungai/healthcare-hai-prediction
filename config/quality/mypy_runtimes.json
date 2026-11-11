@@ -12,6 +12,10 @@
       "runtime": "streamlit_page",
       "reason": "Cannot find implementation or library stub for module named \"streamlit.testing.v1\""
     },
+    "dags/research_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
     "dags/serving_deploy_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
