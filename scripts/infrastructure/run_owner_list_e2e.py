@@ -181,11 +181,22 @@ def alert_email_checks(text: str) -> dict[str, bool]:
             "gives `sns:*` on their exact ARNs" in body and "you click the confirmation link in each email" in body
         ),
         "the administrator profile is named for the SNS policy steps only": "`ADMIN_PROFILE`" in body and "ADMIN_PROFILE" not in teardown,
-        "both lists say a block prints status words only, stops on a failed or unexpected read and keeps masked details in a log": all(
+        "both lists say a block prints status words only, stops on a failed or unexpected read and keeps only command identity in a log": all(
             words in text_of
             for text_of in (body, teardown)
-            for words in ("prints status words only", "stops at the first failed or unexpected read", "last_run.log", "Exit code 0 means the step is done")
+            for words in (
+                "prints status words only",
+                "stops at the first failed or unexpected read or argument",
+                "last_run.log",
+                "Exit code 0 means the step is done",
+                "never their output",
+            )
         ),
+        "both lists say a block is a bash heredoc with strict options and a fixed ERR trap": all(
+            words in text_of for text_of in (body, teardown) for words in ("bash heredoc", "ERR trap")
+        )
+        and "`set -euo pipefail`" in body,
+        "the list does not claim that a log is masked": "masked" not in body and "masked" not in teardown,
         "the list stores the plan digest exactly as the plan printed it": "exactly as the plan printed it in `plans/alert_email/policy_digest.txt`" in body,
         "the list does not claim a protection against the project user's own removal": "can never remove" not in body and "cannot be silenced" not in body,
         "the teardown keeps the topics, the platform stack, .env and the other state": "keeps everything else" in teardown or "keeps everything else" in text,

@@ -6,9 +6,10 @@ same project profile. Run it from the repository root: ``.venv/bin/python -m scr
 
 Every read is strict and typed. A command that fails, prints something the parser does not expect or returns a value of the wrong type stops with a status
 word and exit code 1, and no later step runs. The only text a command prints is ``<subject>: <status>`` from two closed vocabularies (``Subject`` and
-``Status``), so no ARN, topic name, account number, address or subscription identifier can reach the terminal. The output of every command it runs goes to
-the ignored file ``plans/alert_email/last_run.log`` with every twelve digit number masked. A plan is read with ``terraform show -json`` and checked before it
-is applied.
+``Status``), so no ARN, topic name, account number, address or subscription identifier can reach the terminal. That holds for a bad argument too: the parser
+reports a fixed status word and never the value. The ignored file ``plans/alert_email/last_run.log`` keeps only the identity of each command it runs (the
+subject, the program name and a fixed category: the exit status, ``could not run`` or ``timed out``), never its output. A plan is read with
+``terraform show -json``, its envelope and its addresses are checked, and it is checked again before it is applied.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ import sys
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, NoReturn
 
 from scripts.infrastructure.render_project_config import ConfigurationError, load_alert_email, load_configuration
 from scripts.process import TimeoutExpired, run_command
@@ -39,7 +40,7 @@ APPLIED_LINE = re.compile(r"^Applied \d+ step\(s\)\.$", re.MULTILINE)
 POLICY_STEP = re.compile(r"^(CREATE|KEEP|UPDATE) POLICY {1,12}healthcare_hai_prediction_sns_policy(?: \(deletes versions? [v0-9, ]+\))?$")
 STEP_WORDS = re.compile(r"^(CREATE|KEEP|UPDATE|RETIRE|ATTACH|DETACH|ADD) [A-Z]+ ")
 SUBSCRIPTION_ID = r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"
-MASK = re.compile(r"\d{12}")
+FORMAT_VERSION = re.compile(r"1\.\d+")
 ALERTS_ADDRESS = 'aws_sns_topic_subscription.email["alerts"]'
 BUDGET_ADDRESS = 'aws_sns_topic_subscription.email["budget"]'
 # The stack folder, the wrapper option and the saved plan of each stack the owner blocks plan and apply.
@@ -101,24 +102,26 @@ def say(subject: Subject, status: Status) -> None:
 
 
 def note(text: str) -> None:
-    """Append text to the masked log: every twelve digit number is hidden, and the file is for the owner only."""
+    """Append one line of command identity to the log: only fixed words, program names and exit statuses are written, and the file is for the owner only."""
     RECORD.mkdir(parents=True, exist_ok=True)
     with LOG.open("a", encoding="utf-8") as handle:
-        handle.write(MASK.sub("************", text).rstrip("\n") + "\n")
+        handle.write(text.rstrip("\n") + "\n")
     LOG.chmod(0o600)
 
 
-def run(subject: Subject, program: str, args: list[str], *, env: dict[str, str] | None = None, keep_output: bool = True) -> str:
-    """Run one command, log its output unless it holds plan values, and return its standard output; a failed command stops the step."""
+def run(subject: Subject, program: str, args: list[str], *, env: dict[str, str] | None = None) -> str:
+    """Run one command and return its standard output; a failed command stops the step. The log gets the identity and the exit status, never the output."""
     environment = {**os.environ, **(env or {})}
+    identity = f"{subject.value}: {Path(program).name}"
     try:
         result = run_command(program, args, env=environment, timeout=TIMEOUT_SECONDS)
-    except (OSError, TimeoutExpired):
-        note(f"$ {program} {' '.join(args[:3])}\ncould not run")
+    except TimeoutExpired:
+        note(f"{identity} timed out")
         raise Stop(subject, Status.FAILED) from None
-    note(f"$ {program} {' '.join(args[:3])}\nexit {result.returncode}")
-    if keep_output:
-        note(result.stdout + result.stderr)
+    except OSError:
+        note(f"{identity} could not run")
+        raise Stop(subject, Status.FAILED) from None
+    note(f"{identity} exit {result.returncode}")
     if result.returncode != 0:
         raise Stop(subject, Status.FAILED)
     return result.stdout
@@ -170,9 +173,11 @@ def read_json(subject: Subject, text: str) -> Any:
 
 def topics(config: Settings) -> None:
     """Terraform reports exactly the two topic ARNs that .env names, as a string and as the ``alerts_topic`` field of the budget output."""
-    alerts = run(Subject.TOPICS, "terraform", ["-chdir=infra/platform", "output", "-raw", "alerts_topic_arn"], keep_output=False)
-    budget = read_json(Subject.TOPICS, run(Subject.TOPICS, "terraform", ["-chdir=infra/iam", "output", "-json", "budget"], keep_output=False))
-    if alerts != config.alerts_topic or not isinstance(budget, dict) or budget.get("alerts_topic") != config.budget_topic:
+    alerts = run(Subject.TOPICS, "terraform", ["-chdir=infra/platform", "output", "-raw", "alerts_topic_arn"])
+    if alerts != config.alerts_topic:
+        raise Stop(Subject.TOPICS, Status.UNEXPECTED)
+    budget = read_json(Subject.TOPICS, run(Subject.TOPICS, "terraform", ["-chdir=infra/iam", "output", "-json", "budget"]))
+    if not isinstance(budget, dict) or budget.get("alerts_topic") != config.budget_topic:
         raise Stop(Subject.TOPICS, Status.UNEXPECTED)
 
 
@@ -184,7 +189,6 @@ def subscription_status(config: Settings, subject: Subject, topic: str) -> Statu
             subject,
             "aws",
             ["sns", "list-subscriptions-by-topic", "--profile", config.profile, "--region", config.region, "--topic-arn", topic, "--output", "json"],
-            keep_output=False,
         ),
     )
     rows = listing.get("Subscriptions") if isinstance(listing, dict) else None
@@ -211,26 +215,43 @@ def state_addresses() -> set[str] | None:
     """The resources of the alerts root state, or ``None`` when there is no state file. A resource other than the two subscriptions stops the step."""
     if not STATE_FILE.is_file():
         return None
-    listed = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"], keep_output=False).splitlines()
+    listed = run(Subject.STATE, "terraform", ["-chdir=infra/alerts", "state", "list"]).splitlines()
     if not set(listed) <= {ALERTS_ADDRESS, BUDGET_ADDRESS} or len(listed) != len(set(listed)):
         raise Stop(Subject.STATE, Status.UNEXPECTED)
     return set(listed)
 
 
-def read_plan(stack: str, plan: Path, subject: Subject) -> dict[str, tuple[str, ...]]:
-    """The changes of a saved plan by resource address and actions, from ``terraform show -json``, every type checked. No-op and read entries are left out."""
-    raw = run(subject, "terraform", [f"-chdir={STACKS[stack]}", "show", "-json", str(plan.resolve())], keep_output=False)
-    document = read_json(subject, raw)
-    entries = document.get("resource_changes", []) if isinstance(document, dict) else None
-    if not isinstance(entries, list):
+def plan_entries(document: Any, subject: Subject) -> list[Any]:
+    """The ``resource_changes`` of a supported plan document. The envelope that ``terraform show -json`` prints for every plan must be there: a format version
+    1.x, the Terraform version, the planned values and the configuration, each with a root module, and no error. A plan without changes has no change list."""
+    if not isinstance(document, dict):
         raise Stop(subject, Status.UNEXPECTED)
+    version, tool = document.get("format_version"), document.get("terraform_version")
+    if not isinstance(version, str) or not FORMAT_VERSION.fullmatch(version) or not isinstance(tool, str) or not tool:
+        raise Stop(subject, Status.UNEXPECTED)
+    for member in ("planned_values", "configuration"):
+        section = document.get(member)
+        if not isinstance(section, dict) or not isinstance(section.get("root_module"), dict):
+            raise Stop(subject, Status.UNEXPECTED)
+    entries = document.get("resource_changes", [])
+    if document.get("errored", False) is not False or not isinstance(entries, list):
+        raise Stop(subject, Status.UNEXPECTED)
+    return entries
+
+
+def read_plan(stack: str, plan: Path, subject: Subject) -> dict[str, tuple[str, ...]]:
+    """The changes of a saved plan by resource address and actions, from ``terraform show -json``, the envelope and every type checked. A resource address that
+    appears twice stops the step. No-op and read entries are left out."""
+    raw = run(subject, "terraform", [f"-chdir={STACKS[stack]}", "show", "-json", str(plan.resolve())])
     changes: dict[str, tuple[str, ...]] = {}
-    for entry in entries:
+    seen: set[str] = set()
+    for entry in plan_entries(read_json(subject, raw), subject):
         change = entry.get("change") if isinstance(entry, dict) else None
         actions = change.get("actions") if isinstance(change, dict) else None
         address = entry.get("address") if isinstance(entry, dict) else None
-        if not isinstance(address, str) or not isinstance(actions, list) or not all(isinstance(action, str) for action in actions):
+        if not isinstance(address, str) or address in seen or not isinstance(actions, list) or not all(isinstance(action, str) for action in actions):
             raise Stop(subject, Status.UNEXPECTED)
+        seen.add(address)
         if actions not in (["no-op"], ["read"]):
             changes[address] = tuple(actions)
     return changes
@@ -383,8 +404,16 @@ def command_state(arguments: argparse.Namespace) -> int:
     return 0
 
 
+class QuietParser(argparse.ArgumentParser):
+    """An argument parser whose error is the fixed status ``step: unexpected``: the message, which holds the value that failed, is never printed. Subparsers
+    use the same class."""
+
+    def error(self, message: str) -> NoReturn:
+        raise Stop(Subject.STEP, Status.UNEXPECTED)
+
+
 def parser() -> argparse.ArgumentParser:
-    main = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
+    main = QuietParser(description=(__doc__ or "").splitlines()[0])
     commands = main.add_subparsers(dest="command", required=True)
     for name, function in (("policy-plan", command_policy_plan), ("policy-apply", command_policy_apply)):
         item = commands.add_parser(name)
@@ -404,8 +433,8 @@ def parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
-    arguments = parser().parse_args(argv)
     try:
+        arguments = parser().parse_args(argv)
         return int(arguments.function(arguments))
     except Stop as stop:
         note(f"STOP {stop.subject.value}: {stop.status.value}")

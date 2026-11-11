@@ -8,7 +8,9 @@ subscription shows ``PendingConfirmation`` in a listing, as SNS does. The projec
 A case can make one read return something else, as AWS or Terraform do: ``fail_list`` (every listing exits 255), ``list_raw`` (the listing prints that text),
 ``fail_state_list`` (``terraform state list`` exits 1), ``state_extra`` (it also lists that resource), ``show_raw`` (``terraform show -json`` prints that text),
 ``plan_extra`` (the saved plan also changes that address), ``alerts_output`` and ``budget_output`` (the platform and IAM topic outputs print that text),
-``policy_steps`` (the SNS policy plan prints those step lines too) and ``digest`` (it replaces the plan digest). The alerts root has a state file
+``policy_steps`` (the SNS policy plan prints those step lines too), ``digest`` (it replaces the plan digest) and ``wrapper_fail`` (the wrapper prints that text
+to standard error and exits 1). The saved plan reads as Terraform prints it: ``plan_document`` builds the envelope of ``terraform show -json``, with the
+metadata and the plan structure of a supported plan and, when it has changes, ``resource_changes``. The alerts root has a state file
 (``infra/alerts/terraform.tfstate``) once an import or an apply created something, and ``state list`` without one exits 1 as Terraform does.
 """
 
@@ -78,6 +80,24 @@ def aws(arguments: list[str], state: dict[str, Any]) -> int:
     return 0
 
 
+def plan_document(changes: list[dict[str, Any]] | None, **replace: Any) -> dict[str, Any]:
+    """The JSON of ``terraform show -json`` for a saved plan. ``None`` is the no-change form, which has no ``resource_changes`` member; a ``replace`` value of
+    ``None`` removes that member."""
+    document: dict[str, Any] = {
+        "format_version": "1.2",
+        "terraform_version": "1.16.4",
+        "planned_values": {"root_module": {}},
+        "configuration": {"root_module": {}},
+        "timestamp": "2026-11-11T00:00:00Z",
+        "complete": True,
+        "errored": False,
+    }
+    if changes is not None:
+        document["resource_changes"] = changes
+    document.update(replace)
+    return {key: value for key, value in document.items() if value is not None}
+
+
 def show(path: str, state: dict[str, Any]) -> int:
     if state.get("show_raw") is not None:
         sys.stdout.write(state["show_raw"] + "\n")
@@ -88,7 +108,7 @@ def show(path: str, state: dict[str, Any]) -> int:
     changes.append({"address": "aws_sns_topic.alerts", "change": {"actions": ["no-op"]}})
     if state.get("plan_extra"):
         changes.append({"address": state["plan_extra"], "change": {"actions": actions}})
-    sys.stdout.write(json.dumps({"format_version": "1.2", "resource_changes": changes}) + "\n")
+    sys.stdout.write(json.dumps(plan_document(changes)) + "\n")
     return 0
 
 
@@ -123,6 +143,8 @@ def terraform(arguments: list[str], state: dict[str, Any]) -> int:
 
 
 def wrapper(arguments: list[str], state: dict[str, Any]) -> int:
+    if state.get("wrapper_fail"):
+        return fail(state["wrapper_fail"], 1)
     stack = arguments[0].removeprefix("--")
     action, rest = arguments[1], arguments[2:]
     destroy = "-destroy" in rest

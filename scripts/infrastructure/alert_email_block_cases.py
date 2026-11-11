@@ -1,6 +1,7 @@
 """Run the delivered alert email owner blocks as written, against stand-in tools, and check what each one does.
 
-Every ``sh`` block of the bootstrap and teardown lists is one call of ``scripts.infrastructure.alert_email``. The cases write the block text to a file in a
+Every ``sh`` block of the bootstrap and teardown lists is a bash heredoc that runs one call of ``scripts.infrastructure.alert_email`` under
+``set -euo pipefail`` and a fixed ERR trap. The cases write the block text to a file in a
 scratch repository root with a valid ``.env``, the stack folders and a stand-in ``aws``, ``terraform``, wrapper and ``.venv/bin/python`` first on the PATH
 (``owner_list_stand_ins``), and run it with ``bash``. Every read that the helper makes can be made to fail or to return the wrong shape, and the case checks
 that the block stops with a status word before any later command. Every run of every block adds its terminal output to one list, and one check holds that
@@ -13,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shutil
 import sys
 import tempfile
 from pathlib import Path
@@ -30,6 +32,14 @@ ADDRESS = "owner@example.org"
 # A valid SHA-256 whose hex digits hold a run of twelve decimal digits, so a mask of account numbers corrupts it.
 NUMERIC_DIGEST = hashlib.sha256(b"synthetic-policy-plan-2").hexdigest()
 PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
+HEREDOC_OPEN = "bash <<'BLOCK'"
+HEREDOC_CLOSE = "BLOCK"
+STRICT_OPTIONS = "set -euo pipefail"
+# The trap holds no value: its body has only the exit status variable and one fixed status line of the helper's vocabulary.
+TRAP_LINE = re.compile(r"trap '(?P<body>[^']*)' ERR")
+TRAP_STATUS = re.compile(r"""code=\$\?; case "\$code" in 1\|3\) ;; \*\) echo "(?P<text>[a-z ]+: [a-z ]+)" ;; esac""")
+# What a retained log must never hold: the address, a topic name or ARN, an account number or a subscription identifier.
+LOG_VALUES = re.compile(r"@|example_project|arn:aws|\d{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}")
 VOCABULARY = re.compile(
     rf"({'|'.join(re.escape(item.value) for item in alert_email.Subject)}): ({'|'.join(re.escape(item.value) for item in alert_email.Status)})"
 )
@@ -156,13 +166,35 @@ class Scratch:
         return path.read_text() if path.is_file() else ""
 
 
-def syntax_check(file: Path) -> CompletedProcess[str]:
-    """``bash -n`` on the file: the shell parses it and runs nothing."""
-    return run_command("bash", ["-c", 'bash -n "$BLOCK_FILE"'], env={"PATH": "/usr/bin:/bin", "BLOCK_FILE": str(file)}, timeout=30)
+def syntax_check(file: Path, shell: str = "bash") -> CompletedProcess[str]:
+    """``<shell> -n`` on the file (``bash`` or ``zsh``): the shell parses it and runs nothing."""
+    return run_command(
+        "bash", ["-c", '"$SYNTAX_SHELL" -n "$BLOCK_FILE"'], env={"PATH": "/usr/bin:/bin", "BLOCK_FILE": str(file), "SYNTAX_SHELL": shell}, timeout=30
+    )
+
+
+def block_problems(block: str) -> list[str]:
+    """What a delivered block lacks: it is a quoted bash heredoc of exactly the strict options, a fixed value-free ERR trap and one helper call."""
+    lines = [line for line in block.splitlines() if line.strip()]
+    if len(lines) != 5:
+        return [f"the block has {len(lines)} lines, not 5"]
+    problems = []
+    if lines[0] != HEREDOC_OPEN or lines[4] != HEREDOC_CLOSE:
+        problems.append("not a quoted bash heredoc")
+    if lines[1] != STRICT_OPTIONS:
+        problems.append("no strict options")
+    trap = TRAP_LINE.fullmatch(lines[2])
+    status = TRAP_STATUS.fullmatch(trap["body"]) if trap else None
+    if not status or not VOCABULARY.fullmatch(status["text"]):
+        problems.append("no fixed value-free ERR trap")
+    if not lines[3].startswith(f"{HELPER_CALL} ") or PLACEHOLDER.search(block):
+        problems.append("not one placeholder-free helper call")
+    return problems
 
 
 def static_checks(sections: dict[str, str]) -> dict[str, bool]:
-    """Every block is one placeholder-free call of the helper with valid syntax, and nothing of the removed path is left in the lists."""
+    """Every block is a bash heredoc with the strict options, a fixed value-free ERR trap and one placeholder-free call of the helper, with valid syntax in
+    bash and in zsh, and nothing of the removed path is left in the lists."""
     checks: dict[str, bool] = {}
     blocks = [(name, block) for name, section in sections.items() for block in fences(section)]
     checks["the alert email lists hold 13 shell blocks"] = len(blocks) == 13
@@ -170,15 +202,28 @@ def static_checks(sections: dict[str, str]) -> dict[str, bool]:
         for number, (name, block) in enumerate(blocks, 1):
             file = Path(folder) / f"block_{number}.sh"
             file.write_text(block)
-            lines = [line for line in block.splitlines() if line.strip()]
-            checks[f"{name} block {number} is one call of the helper that runs as pasted: {lines[0][len(HELPER_CALL) :].strip()[:60]}"] = (
-                len(lines) == 1 and lines[0].startswith(f"{HELPER_CALL} ") and not PLACEHOLDER.search(block) and syntax_check(file).returncode == 0
-            )
+            call = next((line for line in block.splitlines() if line.startswith(HELPER_CALL)), "")
+            problems = block_problems(block)
+            checks[f"{name} block {number} is a strict bash heredoc with a fixed ERR trap ({problems}): {call[len(HELPER_CALL) :].strip()[:60]}"] = not problems
+            checks[f"{name} block {number} has valid syntax in bash: {call[len(HELPER_CALL) :].strip()[:60]}"] = syntax_check(file).returncode == 0
+            if shutil.which("zsh"):
+                checks[f"{name} block {number} has valid syntax in zsh, the owner's terminal: {call[len(HELPER_CALL) :].strip()[:60]}"] = (
+                    syntax_check(file, "zsh").returncode == 0
+                )
     text = "".join(sections.values())
     checks["the lists keep nothing of the administrator confirmation, the hand import or the terminal token"] = not [
         word for word in REMOVED_WORDS if word in text
     ]
     return checks
+
+
+def duplicate_changes(first: list[str], second: list[str]) -> list[dict[str, Any]]:
+    """The changes of a plan that names the alerts subscription twice, with the given actions, and the budget subscription once."""
+    return [
+        {"address": world.ALERTS_ADDRESS, "change": {"actions": first}},
+        {"address": world.ALERTS_ADDRESS, "change": {"actions": second}},
+        {"address": world.BUDGET_ADDRESS, "change": {"actions": ["create"]}},
+    ]
 
 
 def first_call(called: list[str], word: str) -> bool:
@@ -246,12 +291,11 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
         code, output, called = scratch.run(plan_alerts)
         calls += called
         case(
-            "the alerts plan prints a status per subscription and keeps its details in a masked log",
+            "the alerts plan prints a status per subscription and keeps only command identity and exit status in the log",
             code == 0
             and output == "alerts topic: planned\nbudget topic: planned\nalerts: planned\n"
-            and "************" in scratch.log()
-            and not re.search(r"\d{12}", scratch.log())
-            and "topic_arn" in scratch.log(),
+            and "alerts: bash exit 0" in scratch.log()
+            and not LOG_VALUES.search(scratch.log()),
         )
         code, output, called = scratch.run(apply_alerts)
         calls += called
@@ -263,6 +307,10 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
         code, output, called = scratch.run(verify)
         calls += called
         case("the verification passes after the owner clicks both links", code == 0 and output == "alerts topic: confirmed\nbudget topic: confirmed\n")
+        case(
+            "the log of the whole bootstrap holds no address, topic, account number or subscription identifier",
+            bool(scratch.log()) and not LOG_VALUES.search(scratch.log()),
+        )
         scratch.set(budget_output="")
         code, output, called = scratch.run(verify)
         case(
@@ -305,6 +353,7 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
     for label, extra in (
         ("an empty platform topic output", {"alerts_output": ""}),
         ("a platform topic output of another topic", {"alerts_output": world.BUDGET_TOPIC}),
+        ("a platform topic output of true", {"alerts_output": "true"}),
         ("a budget output that holds a boolean", {"budget_output": '{"alerts_topic": true}'}),
         ("a budget output that is not JSON", {"budget_output": "not json"}),
         ("a budget output of the wrong shape", {"budget_output": "[]"}),
@@ -319,6 +368,8 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
                     f"{label} stops {name} with a status word and no AWS call",
                     code == 1 and output == "topics: unexpected\n" and not first_call(called, "aws "),
                 )
+                if "alerts_output" in extra:
+                    case(f"{label} stops {name} before the budget output is read", not first_call(called, "-chdir=infra/iam"))
 
     # A listing of the wrong shape stops the verification: a container that is not a list, a row of the wrong type, two rows, a subscription of another topic.
     topic_row = {"SubscriptionArn": "PendingConfirmation", "Protocol": "email", "Endpoint": ADDRESS}
@@ -355,8 +406,19 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
 
     # A plan the helper cannot read, or that holds more than the two subscriptions, is never applied.
     for label, extra in (
-        ("a plan of the wrong JSON shape", {"show_raw": '{"resource_changes": {}}'}),
+        ("a plan of the wrong JSON shape", {"show_raw": json.dumps(world.plan_document({}))}),
         ("a plan that is not JSON", {"show_raw": "Plan: nothing"}),
+        ("a plan document that is an empty object", {"show_raw": "{}"}),
+        ("a plan document of a format version only", {"show_raw": '{"format_version": "1.2"}'}),
+        ("a plan document of an empty change list only", {"show_raw": '{"resource_changes": []}'}),
+        ("a plan document without a Terraform version", {"show_raw": json.dumps(world.plan_document([], terraform_version=None))}),
+        ("a plan document without planned values", {"show_raw": json.dumps(world.plan_document([], planned_values=None))}),
+        ("a plan document without a configuration", {"show_raw": json.dumps(world.plan_document([], configuration=None))}),
+        ("a plan document of another format version type", {"show_raw": json.dumps(world.plan_document([], format_version=1.2))}),
+        ("a plan document that errored", {"show_raw": json.dumps(world.plan_document([], errored=True))}),
+        ("a plan that names one address twice, deleting it first", {"show_raw": json.dumps(world.plan_document(duplicate_changes(["delete"], ["create"])))}),
+        ("a plan that names one address twice, creating it twice", {"show_raw": json.dumps(world.plan_document(duplicate_changes(["create"], ["create"])))}),
+        ("a plan that names one address twice with no change", {"show_raw": json.dumps(world.plan_document(duplicate_changes(["no-op"], ["no-op"])))}),
         ("a plan that changes an unexpected resource", {"plan_extra": 'aws_sns_topic_subscription.email["reviewer@example.org"]'}),
         ("a plan that changes another resource type", {"plan_extra": "aws_sns_topic.audit"}),
     ):
@@ -375,6 +437,63 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
         code, output, called = scratch.run(plan_platform)
         calls += called
         case("a platform plan that replaces a resource stops with a status word", code == 1 and output == "platform: unexpected\n")
+
+    # A plan with no change has no ``resource_changes`` member and is valid: nothing to do, in both stacks.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = scratch_for(folder, show_raw=json.dumps(world.plan_document(None)))
+        for label, block, subject in (("alerts", plan_alerts, "alerts"), ("platform", plan_platform, "platform")):
+            code, output, called = scratch.run(block)
+            calls += called
+            case(f"a {label} plan with no change and no change list is valid and reports nothing to do", code == 0 and output == f"{subject}: nothing to do\n")
+
+    # A failed command leaves only its identity and exit status in the log, whatever its output holds.
+    secret = f"provider failure for endpoint {ADDRESS} topic {world.ALERTS_TOPIC} subscription {world.ALERTS_TOPIC}:01234567-89ab-cdef-0123-456789abcdef"
+    for label, block in (("the alerts plan", plan_alerts), ("the platform plan", plan_platform)):
+        with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+            scratch = scratch_for(folder, wrapper_fail=secret)
+            code, output, called = scratch.run(block)
+            calls += called
+            held = scratch.log()
+            case(
+                f"{label} with a failed command prints a status word and keeps no address, topic, account number or subscription identifier in the log",
+                code == 1 and not LOG_VALUES.search(held) and "provider failure" not in held and "exit 1" in held,
+            )
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = scratch_for(folder, list_raw=secret, fail_list=False)
+        scratch.run(verify)
+        case("a listing that holds the address and topics leaves none of it in the log", not LOG_VALUES.search(scratch.log()) and "exit 0" in scratch.log())
+
+    # A bad argument prints a fixed status word, never its value; normal help still works.
+    topic_value = f"{world.ALERTS_TOPIC}:01234567-89ab-cdef-0123-456789abcdef"
+    for label, arguments in (
+        ("an address as the command", ADDRESS),
+        ("an address as the stack", f"plan {ADDRESS}"),
+        ("an unknown option holding a topic", f"plan alerts --expect {world.ALERTS_TOPIC}"),
+        ("a topic as the expectation", f"subscriptions --expect {world.ALERTS_TOPIC}"),
+        ("a subscription after topics", f"topics {topic_value}"),
+        ("a missing option value", "policy-plan --admin-profile"),
+        ("no command", ""),
+    ):
+        with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+            scratch = scratch_for(folder)
+            code, output, called = scratch.run(f"{HELPER_CALL} {arguments}\n")
+            case(f"{label} stops with the fixed status word and no command", code == 1 and output == "step: unexpected\n" and not called)
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = scratch_for(folder)
+        for name in ("--help", "plan --help", "subscriptions --help"):
+            code, output, called = scratch.run(f"{HELPER_CALL} {name}\n")
+            sink.pop()
+            case(f"`{name}` still prints the usage and exits 0", code == 0 and output.startswith("usage:") and not called)
+
+    # The fixed ERR trap: any status but the helper's own 1 and 3 ends with one fixed line; the status of the failed command is kept.
+    with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
+        scratch = scratch_for(folder)
+        for status, expected in ((0, ""), (1, ""), (3, ""), (2, "step: stopped\n"), (5, "step: stopped\n"), (127, "step: stopped\n")):
+            code, output, called = scratch.run(topics.replace(f"{HELPER_CALL} topics", f'sh -c "exit {status}"'))
+            case(f"a block whose command ends with {status} exits {status} and prints {expected.strip() or 'nothing'}", code == status and output == expected)
+        code, output, called = scratch.run(topics.replace(f"{HELPER_CALL} topics", 'echo "$UNSET_NAME"; echo reached'))
+        sink.pop()
+        case("a block runs under set -u: an unset variable stops it before the next command", code != 0 and "reached" not in output)
 
     # An empty ALERT_EMAIL has nothing to subscribe.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
@@ -501,6 +620,7 @@ def cases(text: str, helper: str = HELPER_CALL) -> tuple[dict[str, bool], list[s
     return checks | results, calls
 
 
+BUDGET_READ = 'budget = read_json(Subject.TOPICS, run(Subject.TOPICS, "terraform", ["-chdir=infra/iam", "output", "-json", "budget"]))'
 # Planted defects: a change to the helper's source, run through the same delivered blocks. Each must fail at least one case.
 MUTANTS = (
     (
@@ -508,7 +628,26 @@ MUTANTS = (
         "    if result.returncode != 0:\n        raise Stop(subject, Status.FAILED)\n",
         "    if False:\n        raise Stop(subject, Status.FAILED)\n",
     ),
-    ("the topic outputs are not compared with .env", "    if alerts != config.alerts_topic or", "    if False and alerts != config.alerts_topic or"),
+    ("the platform topic output is not compared with .env", "    if alerts != config.alerts_topic:\n", "    if False:\n"),
+    (
+        "the platform topic output is compared only after the budget read",
+        "    if alerts != config.alerts_topic:\n        raise Stop(Subject.TOPICS, Status.UNEXPECTED)\n"
+        + f"    {BUDGET_READ}\n    if not isinstance(budget, dict) or",
+        f"    {BUDGET_READ}\n    if alerts != config.alerts_topic or not isinstance(budget, dict) or",
+    ),
+    (
+        "the plan envelope is not checked",
+        "    if not isinstance(version, str) or not FORMAT_VERSION.fullmatch(version) or not isinstance(tool, str) or not tool:",
+        "    if False:",
+    ),
+    ("the planned values and configuration are not checked", '    for member in ("planned_values", "configuration"):', "    for member in ():"),
+    ("a plan that errored is accepted", '    if document.get("errored", False) is not False or not', "    if not"),
+    ("a duplicate resource address is accepted", "address in seen or ", ""),
+    (
+        "the parser prints its own error",
+        "    def error(self, message: str) -> NoReturn:\n        raise Stop(Subject.STEP, Status.UNEXPECTED)",
+        "    def error(self, message: str) -> NoReturn:\n        super().error(message)",
+    ),
     (
         "the listing container type is not checked",
         "    if not isinstance(rows, list):\n        raise Stop(subject, Status.UNEXPECTED)\n",
@@ -525,11 +664,15 @@ MUTANTS = (
         '    check_plan(stack, destroy, read_plan(stack, plan, subject), subject)\n    wrapper(subject, stack, "apply"',
         '    wrapper(subject, stack, "apply"',
     ),
-    ("the log is not masked", '        handle.write(MASK.sub("************", text).rstrip("\\n") + "\\n")', '        handle.write(text.rstrip("\\n") + "\\n")'),
+    (
+        "the output of a command is kept in the log",
+        '    note(f"{identity} exit {result.returncode}")\n',
+        '    note(f"{identity} exit {result.returncode}")\n    note(result.stdout + result.stderr)\n',
+    ),
     (
         "the command output is printed",
-        "    note(f\"$ {program} {' '.join(args[:3])}\\nexit {result.returncode}\")",
-        "    sys.stdout.write(result.stdout)\n    note(f\"$ {program} {' '.join(args[:3])}\\nexit {result.returncode}\")",
+        '    note(f"{identity} exit {result.returncode}")\n',
+        '    sys.stdout.write(result.stdout)\n    note(f"{identity} exit {result.returncode}")\n',
     ),
     ("a policy step for another policy is accepted", "    if not all(POLICY_STEP.fullmatch(line) for line in steps):", "    if False:"),
 )
