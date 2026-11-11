@@ -218,19 +218,21 @@ def derived_run_id(parent_run: str, layer: str) -> str:
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
 
 
-def serving_values(request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None]) -> dict[str, str]:
+def serving_values(
+    request: Mapping[str, Any], research_run: str | None, canary_percent: int, read: Callable[[str], bytes | None], canary_ttl_hours: int
+) -> dict[str, str]:
     """The values of the serve container for a closed launch request: the infection type and the mode, canary or stable.
 
-    The request names no version and no share. A canary deploys the challenger of the type's research record in the research run the launch publishes from,
-    at the share the job table fixes. A stable deploy names none: the serve job writes the Production version alone, which it reads from the registry. A
-    request with any other key, a canary without a research run and a type with no challenger are refused. The container receives the derived request and reads
-    nothing else.
+    The request names no version, share or lifetime. A canary deploys the challenger of the type's research record in the research run the launch publishes
+    from, at the share and for the lifetime the job table fixes. A stable deploy names none and has no expiry: the serve job writes the Production version
+    alone, which it reads from the registry. A request with any other key, a canary without a research run and a type with no challenger are refused. The
+    container receives the derived request and reads nothing else.
     """
     try:
         closed = serving_parameters_for(request)
     except ValueError as error:
         raise TaskRefused(f"serving_request_refused: {error}") from None
-    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0}
+    derived: dict[str, Any] = {**closed, "candidate_version": None, "percent": 0, "canary_ttl_hours": None}
     if closed["deploy_mode"] == "canary":
         if research_run is None:
             raise TaskRefused("serving_request_refused: a canary deploys the challenger of a research run, and the launch names none")
@@ -240,7 +242,7 @@ def serving_values(request: Mapping[str, Any], research_run: str | None, canary_
             raise TaskRefused(f"serving_candidate_refused: {error}") from None
         if named is None:
             raise TaskRefused(f"serving_candidate_refused: the research record of {closed['hai_type']} has no challenger to deploy")
-        derived |= {"candidate_version": named[1], "percent": canary_percent}
+        derived |= {"candidate_version": named[1], "percent": canary_percent, "canary_ttl_hours": canary_ttl_hours}
     body = json.dumps(derived, sort_keys=True, separators=(",", ":"))
     return {"SERVING_REQUEST": body, "SERVING_REQUEST_SHA256": hashlib.sha256(body.encode()).hexdigest()}
 
@@ -591,7 +593,14 @@ class Preflight:
         if row.get("needs_serving_parameters"):
             if self.read_record is None:
                 raise LaunchRefused("serving_records_not_configured")
-            values |= self.read(serving_values, request.training or {}, request.input_run_id, int(row["canary_percent"]), self.read_record)
+            values |= self.read(
+                serving_values,
+                request.training or {},
+                request.input_run_id,
+                int(row["canary_percent"]),
+                self.read_record,
+                int(row["canary_ttl_hours"]),
+            )
         if DEADLINE_VARIABLE in names:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(row["deadline_seconds"]))
         return values

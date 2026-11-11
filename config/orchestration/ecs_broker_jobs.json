@@ -242,6 +242,7 @@
       "network": "training",
       "needs_serving_parameters": true,
       "canary_percent": 10,
+      "canary_ttl_hours": 24,
       "containers": {
         "fetch": [
           "RUN_ID",

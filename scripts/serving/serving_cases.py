@@ -43,6 +43,9 @@ RUN_1 = "20261030T100000Z-aaaaaaa1"
 RUN_2 = "20261030T110000Z-aaaaaaa2"
 RUN_3 = "20261030T120000Z-aaaaaaa3"
 PRODUCTION, CANDIDATE = "3", "4"
+# The wall clock the serving worlds start at (epoch seconds) and the canary lifetime the deploys of these cases ask for.
+NOW = 1_800_000_000
+TTL_HOURS = 24
 CONTRACT = json.loads((ROOT / "data_contracts/serving/predictions.json").read_text())
 
 
@@ -143,6 +146,7 @@ class World:
     api: service.ModelService
     reads: list[str] = field(default_factory=list)
     logs: io.StringIO = field(default_factory=io.StringIO)
+    wall: Clock = field(default_factory=Clock)
 
 
 def hospital_keys(count: int) -> list[str]:
@@ -157,7 +161,8 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
     online_cases.load(server, online_cases.Hooks(server, "v1", names), online_cases.plan_for(count=len(names)))
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         store = manifests.FileManifestStore(Path(folder))
-        registry, loader, sink, clock = Registry(), Loader(), Sink(), Clock()
+        registry, loader, sink, clock, wall = Registry(), Loader(), Sink(), Clock(), Clock()
+        wall.now = float(NOW)
         if "configure" in options:
             options.pop("configure")(loader)
         if deployment:
@@ -168,6 +173,8 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
                 candidate_version=CANDIDATE,
                 percent=options.pop("percent", 20),
                 mode="canary",
+                canary_ttl_hours=TTL_HOURS,
+                now=NOW,
                 deployment_id=RUN_1,
             )
         read_features = options.pop("wrap", lambda inner: inner)(online_cases.reader(server))
@@ -188,13 +195,14 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
                 sink, columns=CONTRACT["columns"], capacity=options.get("capacity", 1000), batch=50, deadline_seconds=5.0, clock=clock
             ),
             clock=clock,
+            wall=wall,
             new_id=iter(f"req{number:04d}" for number in range(10_000)).__next__,
             hai_types=(HAI,),
             refresh_seconds=30.0,
             failure_limit=3,
         )
         loader.clock = clock
-        world_ = World(server, registry, store, loader, sink, clock, api, counted)
+        world_ = World(server, registry, store, loader, sink, clock, api, counted, wall=wall)
         yield world_
 
 
@@ -326,14 +334,16 @@ def case_missing_feature(c: Checker) -> None:
 def case_split(c: Checker) -> None:
     """The split is a function of the deployment and the hospital-window: pinned values, repeats, two processes and a replayed corpus agree."""
     c.check("the bucket of one key is pinned", canary.bucket("dep1", HAI, "H00001", 2022) == 5291 and canary.bucket("dep1", HAI, "H00002", 2022) == 5788)
-    wide = canary.Deployment(HAI, "dep1", PRODUCTION, CANDIDATE, 20)
-    c.check("the pinned bucket routes by the percent", canary.route(wide, "H00001", 2022) == "stable" and canary.route(wide, "H00002", 2022) == "stable")
+    wide = canary.Deployment(HAI, "dep1", PRODUCTION, CANDIDATE, 20, written_at=NOW, expires_at=NOW + 3600)
+    c.check(
+        "the pinned bucket routes by the percent", canary.route(wide, "H00001", 2022, NOW) == "stable" and canary.route(wide, "H00002", 2022, NOW) == "stable"
+    )
     corpus = [(f"H{number:05d}", 2022) for number in range(1, 10_001)]
-    share = sum(canary.route(wide, ccn, year) == "canary" for ccn, year in corpus)
+    share = sum(canary.route(wide, ccn, year, NOW) == "canary" for ccn, year in corpus)
     c.check("a replayed corpus of 10,000 keys sends 1,998 to the canary at 20 percent", share == 1998)
     c.check(
         "zero candidate means no canary",
-        all(canary.route(canary.Deployment(HAI, "dep1", PRODUCTION, None, 0), ccn, year) == "stable" for ccn, year in corpus[:500]),
+        all(canary.route(canary.Deployment(HAI, "dep1", PRODUCTION, None, 0), ccn, year, NOW) == "stable" for ccn, year in corpus[:500]),
     )
     with world(count=200, percent=20) as w:
         seen = {}
@@ -349,7 +359,7 @@ def case_split(c: Checker) -> None:
             )
         c.check(
             "the answer routes as the router does",
-            all(body["served_by"] == canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key, body in seen.items()),
+            all(body["served_by"] == canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key, body in seen.items()),
         )
 
 
@@ -357,7 +367,7 @@ def case_version_failure(c: Checker) -> None:
     """One version failing never takes the other down: a failing canary falls back and is ejected, a failing stable fails only its own requests."""
     keys_ = hospital_keys(40)
     with world(count=40, percent=50) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         stable_keys = [key for key, kind in routed.items() if kind == "stable"]
         c.check("the corpus holds both kinds", len(canary_keys) >= 5 and len(stable_keys) >= 5)
@@ -380,7 +390,7 @@ def case_version_failure(c: Checker) -> None:
         )
         c.check("no model was loaded again by failing", len(w.loader.loaded) == before)
     with world(count=40, percent=50) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         w.loader.broken.add(PRODUCTION)
         stable_failed = [ask(w, key) for key, kind in routed.items() if kind == "stable"]
         canary_served = [ask(w, key) for key, kind in routed.items() if kind == "canary"]
@@ -392,7 +402,17 @@ def case_version_failure(c: Checker) -> None:
         c.check("a failed answer leaves no prediction row", all(row["model_version"] == CANDIDATE for row in rows_of(w)))
     with world(count=40, percent=50, deployment=False) as w:
         w.loader.unloadable.add(CANDIDATE)
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=50,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         w.api.refresh()
         statuses = {ask(w, key).status for key in keys_}
         c.check(
@@ -405,7 +425,17 @@ def case_recovered_model(c: Checker) -> None:
     keys_ = hospital_keys(40)
     with world(count=40, percent=50, deployment=False) as w:
         w.loader.unloadable.add(CANDIDATE)
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=50,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         w.api.refresh()
         c.check("a canary that cannot load is failed", w.api.health().body[HAI]["candidate"] == "failed")
         w.loader.unloadable.discard(CANDIDATE)
@@ -422,7 +452,17 @@ def case_recovered_model(c: Checker) -> None:
         c.check("a loaded model is not loaded again by a later refresh", len(w.loader.attempts) == attempts)
         w.loader.unloadable.add(CANDIDATE)
         w.loader.unloadable.add("5")
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version="5", percent=30, mode="canary", deployment_id=RUN_2)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version="5",
+            percent=30,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_2,
+        )
         w.clock.now += 31.0
         ask(w, keys_[0])
         c.check("a new candidate that cannot load is failed while the stable model serves", w.api.health().body[HAI]["candidate"] == "failed")
@@ -431,7 +471,17 @@ def case_recovered_model(c: Checker) -> None:
         c.check("a failing load is tried once per refresh interval", w.loader.attempts.count("5") == 2)
     with world(count=40, percent=50, deployment=False) as w:
         w.loader.unloadable.add(PRODUCTION)
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=50,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         w.api.refresh()
         c.check("a stable model that cannot load makes the service unready", w.api.health().status == 503)
         w.loader.unloadable.discard(PRODUCTION)
@@ -440,15 +490,35 @@ def case_recovered_model(c: Checker) -> None:
         c.check("the recovered stable model makes the service ready", w.api.health().status == 200 and w.api.health().body[HAI]["stable"] == PRODUCTION)
     with world(count=40, percent=50, deployment=False) as w:
         w.loader.unloadable.add(CANDIDATE)
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=50, mode="canary", deployment_id=RUN_1)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=50,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         w.api.refresh()
         w.loader.unloadable.discard(CANDIDATE)
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=40, mode="canary", deployment_id=RUN_2)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=40,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_2,
+        )
         w.clock.now += 31.0
         ask(w, keys_[0])
         c.check("a new deployment of the same failed version loads it", w.api.health().body[HAI]["candidate"] == CANDIDATE)
     with world(count=40, percent=50) as w:
-        canary_keys = [key for key in keys_ if canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) == "canary"]
+        canary_keys = [key for key in keys_ if canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) == "canary"]
         w.loader.broken.add(CANDIDATE)
         for key in canary_keys[:4]:
             ask(w, key)
@@ -461,7 +531,17 @@ def case_recovered_model(c: Checker) -> None:
             "an ejected canary is not loaded again by a refresh",
             w.api.health().body[HAI]["candidate"] == "ejected" and w.loader.attempts.count(CANDIDATE) == attempts,
         )
-        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=40, mode="canary", deployment_id=RUN_2)
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=40,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_2,
+        )
         w.clock.now += 31.0
         ask(w, keys_[0])
         c.check("the next deployment gives the ejected canary a fresh load", w.api.health().body[HAI]["candidate"] == CANDIDATE)
@@ -496,16 +576,44 @@ def case_rollback(c: Checker) -> None:
 def case_deploy(c: Checker) -> None:
     """Deploy reads the production alias and never moves it, retries have no second effect and every refusal writes nothing."""
     with world(deployment=False) as w:
-        first = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        first = deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=10,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         c.check("the first deploy writes", first.status == "written" and first.deployment.stable_version == PRODUCTION)
         stored = w.store.read_active(HAI)
-        again = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        again = deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=10,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         c.check("a retry changes nothing", again.status == "unchanged" and w.store.read_active(HAI) == stored and w.store.writes == 2)
         c.check(
             "a retry under the same id with other parameters is refused",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=30, mode="canary", deployment_id=RUN_1
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version=CANDIDATE,
+                    percent=30,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_1,
                 )
             ),
         )
@@ -514,21 +622,49 @@ def case_deploy(c: Checker) -> None:
             "the candidate must differ from production",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=PRODUCTION, percent=10, mode="canary", deployment_id=RUN_2
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version=PRODUCTION,
+                    percent=10,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_2,
                 )
             ),
         )
         c.check(
             "an unknown version is refused",
             refused(
-                lambda: deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version="99", percent=10, mode="canary", deployment_id=RUN_2)
+                lambda: deploy.run(
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version="99",
+                    percent=10,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_2,
+                )
             ),
         )
         w.registry.versions["5"] = {}
         c.check(
             "a version without a completed bundle is refused",
             refused(
-                lambda: deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version="5", percent=10, mode="canary", deployment_id=RUN_2)
+                lambda: deploy.run(
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version="5",
+                    percent=10,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_2,
+                )
             ),
         )
         for percent in (0, 51, -1):
@@ -546,7 +682,15 @@ def case_deploy(c: Checker) -> None:
             "a deploy with no production model is refused",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_3
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version=CANDIDATE,
+                    percent=10,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_3,
                 )
             ),
         )
@@ -556,7 +700,15 @@ def case_deploy(c: Checker) -> None:
             "a deployment id that is not a run id is refused",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id="../x"
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version=CANDIDATE,
+                    percent=10,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id="../x",
                 )
             ),
         )
@@ -631,7 +783,7 @@ def run_deploy_job(client: S3Client, registry: Registry, run: str, environment: 
 
 def case_deploy_job(c: Checker) -> None:
     """The serve job as the task runs it: the checked request arrives in the environment, records go to the one fixed prefix and a refusal writes nothing."""
-    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary"}
+    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary", "canary_ttl_hours": TTL_HOURS}
     environment = {"SERVING_REQUEST": json.dumps(request), "MODEL_API_MANIFEST_URI": "s3://example-bucket/serving/deployments"}
     client, registry = S3Client(), Registry()
     code, out, err = run_deploy_job(client, registry, RUN_1, environment)
@@ -658,7 +810,7 @@ def case_deploy_job(c: Checker) -> None:
         c.check(f"{label} exits 2 with the refusal message and writes nothing", code == 2 and "serve_deploy refused" in err and not fresh.objects and not out)
     code, _, err = run_deploy_job(client, registry, RUN_1, {**environment, "SERVING_REQUEST": json.dumps({**request, "percent": 30})})
     c.check("a retry under the same id with another request is refused", code == 2 and "serve_deploy refused" in err and client.objects == before)
-    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable"}
+    stable = {"hai_type": HAI, "candidate_version": None, "percent": 0, "deploy_mode": "stable", "canary_ttl_hours": None}
     fresh = S3Client()
     code, out, err = run_deploy_job(fresh, registry, RUN_3, environment | {"SERVING_REQUEST": json.dumps(stable)})
     printed = json.loads(out) if out.strip() else {}
@@ -731,17 +883,224 @@ def case_deploy_verifies_the_active_version(c: Checker) -> None:
         )
 
 
+def active_body(store: Any) -> bytes:
+    """The body of the active deployment record of the test type, which the case has written."""
+    stored = store.read_active(HAI)
+    if stored is None:
+        raise AssertionError("no active deployment is written")
+    return bytes(stored.body)
+
+
+def traffic_of(w: World, count: int = 200) -> dict[str, int]:
+    """How many of the first ``count`` hospital-windows each model version answers, after the API refreshed."""
+    w.clock.now += 31
+    counts: dict[str, int] = {}
+    for key in hospital_keys(count):
+        version = str(ask(w, key).body.get("model_version"))
+        counts[version] = counts.get(version, 0) + 1
+    return counts
+
+
+def case_canary_expiry(c: Checker) -> None:
+    """The API serves a canary's share only while the wall clock is inside its recorded lifetime. After it, before it began, or on a record whose lifetime is
+    missing, malformed or beyond the bound, it serves the stable version alone, with no step and no refresh in between. A stable deployment has no expiry."""
+    with world(count=200, percent=10, rate=10**6, burst=10**6, capacity=10**6) as w:
+        written = canary.Deployment.parse(active_body(w.store))
+        c.check(
+            "a canary deployment carries its write time and its expiry, a fixed number of hours later",
+            (written.written_at, written.expires_at) == (NOW, NOW + TTL_HOURS * 3600),
+        )
+        c.check("before its expiry the canary serves its share", set(traffic_of(w)) == {PRODUCTION, CANDIDATE})
+        w.wall.now = NOW + TTL_HOURS * 3600 - 1
+        c.check("one second before its expiry it still does", CANDIDATE in traffic_of(w))
+        w.wall.now = NOW + TTL_HOURS * 3600
+        c.check("at its expiry it serves nothing, with no refresh and no later step", traffic_of(w) == {PRODUCTION: 200})
+        w.wall.now = NOW + 365 * 86_400
+        c.check("and a year later still nothing", traffic_of(w) == {PRODUCTION: 200})
+        w.wall.now = NOW - 1
+        c.check("a clock behind the write time (skew) serves the stable version alone", traffic_of(w) == {PRODUCTION: 200})
+        w.wall.now = NOW + 60
+        c.check("a clock inside the lifetime serves the canary again", CANDIDATE in traffic_of(w))
+    base = {"version": 1, "hai_type": HAI, "deployment_id": RUN_1, "stable_version": PRODUCTION, "candidate_version": CANDIDATE, "percent": 10, "sequence": 1}
+    ttl = TTL_HOURS * 3600
+    variants: dict[str, dict[str, Any]] = {
+        "no written time and no expiry": {},
+        "no expiry": {"written_at": NOW},
+        "no written time": {"expires_at": NOW + ttl},
+        "an expiry that is text": {"written_at": NOW, "expires_at": str(NOW + ttl)},
+        "a written time that is text": {"written_at": str(NOW), "expires_at": NOW + ttl},
+        "a boolean expiry": {"written_at": NOW, "expires_at": True},
+        "a fractional expiry": {"written_at": NOW, "expires_at": NOW + ttl + 0.5},
+        "an expiry that is null": {"written_at": NOW, "expires_at": None},
+        "an expiry before the write": {"written_at": NOW, "expires_at": NOW - 10},
+        "an expiry equal to the write": {"written_at": NOW, "expires_at": NOW},
+        "a negative lifetime": {"written_at": NOW + ttl, "expires_at": NOW},
+        "a lifetime beyond the bound": {"written_at": NOW, "expires_at": NOW + canary.MAX_TTL_HOURS * 3600 + 1},
+        "an expiry far in the future": {"written_at": NOW, "expires_at": NOW + 10 * 365 * 86_400},
+    }
+    for label, fields in variants.items():
+        with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
+            record = json.dumps(base | fields).encode()
+            w.store.replace_active(HAI, record, None)
+            c.check(f"a canary record with {label} serves the stable version alone", traffic_of(w) == {PRODUCTION: 200})
+    with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
+        w.store.replace_active(HAI, json.dumps(base | {"written_at": NOW, "expires_at": NOW + ttl}).encode(), None)
+        c.check("the same record with a good lifetime serves its share", CANDIDATE in traffic_of(w))
+    with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1)
+        document = json.loads(active_body(w.store))
+        w.wall.now = NOW + 365 * 86_400
+        c.check(
+            "a stable deployment carries no expiry and serves for ever",
+            "written_at" not in document and "expires_at" not in document and traffic_of(w) == {PRODUCTION: 200},
+        )
+    c.check(
+        "a stable deployment cannot be given an expiry",
+        rejected(lambda: canary.Deployment(HAI, RUN_1, PRODUCTION, None, 0, written_at=NOW, expires_at=NOW + ttl)),
+    )
+    with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
+        deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=10,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
+        w.registry.aliases["production"] = CANDIDATE
+        deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_2)
+        c.check(
+            "only a promotion turns a canary into stable: the stable deployment replaces the canary and serves the promoted version",
+            traffic_of(w) == {CANDIDATE: 200},
+        )
+
+
+def case_deploy_expiry(c: Checker) -> None:
+    """A canary deploy needs a lifetime within the bound and a write time, writes both, and a retry never extends them. A stable deploy takes none."""
+
+    def run(mode: str = "canary", ttl: Any = TTL_HOURS, now: Any = NOW, run_id: str = RUN_1, folder: Any = None, **more: Any) -> deploy.Outcome:
+        return deploy.run(
+            registry=Registry(),
+            manifests=manifests.FileManifestStore(folder),
+            hai_type=HAI,
+            candidate_version=CANDIDATE if mode == "canary" else None,
+            percent=10 if mode == "canary" else 0,
+            mode=mode,
+            deployment_id=run_id,
+            canary_ttl_hours=ttl,
+            now=now,
+            **more,
+        )
+
+    for label, arguments in (
+        ("no lifetime", {"ttl": None}),
+        ("a lifetime of zero", {"ttl": 0}),
+        ("a negative lifetime", {"ttl": -1}),
+        ("a lifetime beyond the bound", {"ttl": canary.MAX_TTL_HOURS + 1}),
+        ("a boolean lifetime", {"ttl": True}),
+        ("a fractional lifetime", {"ttl": 1.5}),
+        ("no write time", {"now": None}),
+        ("a boolean write time", {"now": True}),
+        ("a zero write time", {"now": 0}),
+    ):
+        with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+            c.check(
+                f"a canary deploy with {label} is refused and writes nothing",
+                rejected(lambda folder=folder, arguments=arguments: run(folder=Path(folder), **arguments)) and not list(Path(folder).rglob("*.json")),
+            )
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        c.check("a stable deploy with a lifetime is refused", rejected(lambda: run("stable", folder=Path(folder))))
+        c.check("a stable deploy with a lifetime and no write time is refused", rejected(lambda: run("stable", now=None, folder=Path(folder))))
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        written = run(ttl=canary.MAX_TTL_HOURS, folder=Path(folder)).deployment
+        c.check("the longest lifetime is allowed", written.expires_at == NOW + canary.MAX_TTL_HOURS * 3600)
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        first = run(folder=Path(folder)).deployment
+        again = run(now=NOW + 5 * 3600, folder=Path(folder))
+        document = json.loads(active_body(manifests.FileManifestStore(Path(folder))))
+        c.check(
+            "a retry of the same deployment later changes nothing and does not extend the expiry",
+            again.status == "unchanged"
+            and (again.deployment.written_at, again.deployment.expires_at) == (first.written_at, first.expires_at)
+            and document["expires_at"] == NOW + TTL_HOURS * 3600,
+        )
+    with tempfile.TemporaryDirectory(prefix="serving_") as folder:
+        run(folder=Path(folder))
+        later = run(now=NOW + 5 * 3600, run_id=RUN_2, folder=Path(folder)).deployment
+        c.check(
+            "a new canary deployment is a new deployment with its own lifetime, not an extension of the old one",
+            later.expires_at == NOW + 5 * 3600 + TTL_HOURS * 3600 and later.sequence == 2,
+        )
+
+
+def case_expiry_is_not_requestable(c: Checker) -> None:
+    """No request field sets, extends or removes an expiry: the closed request has the type and the mode only, the lifetime comes from the job table, the job
+    refuses a lifetime outside the bound, and the job table schema bounds it."""
+    from jsonschema import Draft202012Validator
+
+    from orchestration import training_contract
+
+    ok = {"hai_type": HAI, "deploy_mode": "canary"}
+    for name in ("expires_at", "written_at", "canary_ttl_hours", "ttl", "expiry"):
+        c.check(f"a closed request with {name} is refused", rejected(training_contract.serving_parameters_for, ok | {name: 99}))
+    environment = {"MODEL_API_MANIFEST_URI": "s3://example-bucket/serving/deployments"}
+    request = {"hai_type": HAI, "candidate_version": CANDIDATE, "percent": 10, "deploy_mode": "canary", "canary_ttl_hours": TTL_HOURS}
+    with mock.patch.object(deploy_job.time, "time", return_value=float(NOW)):
+        client, registry = S3Client(), Registry()
+        code, out, err = run_deploy_job(client, registry, RUN_1, environment | {"SERVING_REQUEST": json.dumps(request)})
+        active = json.loads(client.objects[f"serving/deployments/active/{HAI}.json"][1]) if code == 0 else {}
+        c.check(
+            "the job stamps the write time from its clock and the expiry from the derived lifetime",
+            (active.get("written_at"), active.get("expires_at")) == (NOW, NOW + TTL_HOURS * 3600),
+        )
+        for label, changed in (
+            ("no lifetime", {k: v for k, v in request.items() if k != "canary_ttl_hours"}),
+            ("a lifetime beyond the bound", request | {"canary_ttl_hours": canary.MAX_TTL_HOURS + 1}),
+            ("a lifetime of zero", request | {"canary_ttl_hours": 0}),
+            ("a stable request with a lifetime", {**request, "deploy_mode": "stable", "candidate_version": None, "percent": 0}),
+            ("an expiry field", request | {"expires_at": NOW + 10**9}),
+        ):
+            fresh = S3Client()
+            code, out, err = run_deploy_job(fresh, registry, RUN_2, environment | {"SERVING_REQUEST": json.dumps(changed)})
+            c.check(f"the job refuses {label} and writes nothing", code == 2 and "serve_deploy refused" in err and not fresh.objects)
+    table = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
+    schema = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.schema.json").read_text())
+    validator = Draft202012Validator(schema)
+    c.check(
+        "the shipped job table holds the lifetime of the serve job",
+        table["jobs"]["serve"].get("canary_ttl_hours") == TTL_HOURS and not list(validator.iter_errors(table)),
+    )
+    for label, value in (("zero", 0), ("beyond the bound", canary.MAX_TTL_HOURS + 1), ("text", "24"), ("a boolean", True), ("a fraction", 1.5)):
+        changed = json.loads(json.dumps(table))
+        changed["jobs"]["serve"]["canary_ttl_hours"] = value
+        c.check(f"the job table schema refuses a lifetime of {label}", bool(list(validator.iter_errors(changed))))
+    missing = json.loads(json.dumps(table))
+    del missing["jobs"]["serve"]["canary_ttl_hours"]
+    c.check("the job table schema refuses a serve job with no lifetime", bool(list(validator.iter_errors(missing))))
+
+
 def case_chain_rollout(c: Checker) -> None:
     """The promotion chain against the real deployment action, manifest store and API refresh: the canary is live before the check, a passed canary ends as
-    the one stable version after the API refreshes, a held or failed canary ends its own exposure, and the notice says only what happened."""
+    the one stable version after the API refreshes, a held or failed canary stops getting traffic at its expiry with no later step, and the notice says only
+    what happened."""
     from orchestration import ecs_preflight, promotion_chain, training_contract
     from scripts.orchestration import research_chain_cases as chain
 
-    def served(w: World) -> tuple[Any, ...]:
-        w.clock.now += 86_400
+    keys_ = hospital_keys(200)
+
+    def health(w: World) -> tuple[Any, ...]:
+        w.clock.now += 31
         ask(w)
         body = w.api.health().body[HAI]
         return (body["stable"], body["candidate"])
+
+    def traffic(w: World) -> set[Any]:
+        """The model versions that answer 200 hospital-windows, after the API refreshed."""
+        w.clock.now += 31
+        return {ask(w, key).body.get("model_version") for key in keys_}
 
     def recorder_for(research: str, challenger: dict[str, Any], decision: str | None = "promote") -> Any:
         """A recorder whose bucket holds the research record, and the canary result when there is one, of the research run."""
@@ -758,23 +1117,25 @@ def case_chain_rollout(c: Checker) -> None:
         recorder: Any,
         research: str = chain.RESEARCH,
         fail: tuple[str, str] | None = None,
+        after_write: bool = False,
         release_fails: bool = False,
         check_fails: bool = False,
     ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
-        """Run the chain of the research run against the world's registry, manifest store and API."""
+        """Run the chain of the research run against the world's registry, manifest store and API, then read what the API serves at the end of the chain and
+        after the canary's lifetime, with no step in between."""
         recorder.release_fails = release_fails
         seen: dict[str, Any] = {}
 
         def launch(step: str, run: str, params: dict[str, Any]) -> None:
             recorder.calls.append((step, params["hai_type"], run, params))
             if step == "canary_check":
-                seen["at_the_check"] = served(w)
+                seen["at_the_check"] = health(w)
                 if check_fails:
                     raise promotion_chain.StepFailed("the canary check task failed")
             if step == "serve_deploy":
-                if fail == (step, params["deploy_mode"]):
+                if fail == (step, params["deploy_mode"]) and not after_write:
                     raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} failed")
-                values = ecs_preflight.serving_values(params, research, 10, recorder.read)
+                values = ecs_preflight.serving_values(params, research, 10, recorder.read, 24)
                 request = json.loads(values["SERVING_REQUEST"])
                 deploy.run(
                     registry=w.registry,
@@ -784,23 +1145,30 @@ def case_chain_rollout(c: Checker) -> None:
                     percent=request["percent"],
                     mode=request["deploy_mode"],
                     deployment_id=run,
+                    canary_ttl_hours=request["canary_ttl_hours"],
+                    now=int(w.wall.now),
                 )
+                if fail == (step, params["deploy_mode"]):
+                    raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} timed out after its write")
             if step == "promote":
                 w.registry.aliases["production"] = params["model_version"]
 
         failures = promotion_chain.run_types(chain.BASE, research, [HAI], launch=launch, read=recorder.read, release=recorder.release)
-        seen["after"] = served(w)
+        seen["after"] = health(w)
         seen["alias"] = w.registry.aliases["production"]
-        seen["answers"] = {ask(w, key).body.get("model_version") for key in hospital_keys(40)}
+        seen["live"] = traffic(w)
+        w.wall.now += TTL_HOURS * 3600
+        seen["expired"] = traffic(w)
         return failures, recorder.calls, seen
 
     def scenario(decision: str | None = "promote", **options: Any) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
-        with world(count=40, deployment=False) as w:
+        with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
             return run_chain(w, recorder_for(chain.RESEARCH, chain.CHALLENGER, decision), **options)
 
     def names(calls: list[tuple[Any, ...]]) -> list[str]:
         return [f"{call[0]}:{call[3]['deploy_mode']}" if call[0] == "serve_deploy" else str(call[0]) for call in calls]
 
+    both, stable_only, promoted = {PRODUCTION, CANDIDATE}, {PRODUCTION}, {CANDIDATE}
     failures, calls, seen = scenario()
     c.check(
         "a passed canary is deployed first, checked, promoted, released, rolled out stable-only and then announced",
@@ -808,8 +1176,8 @@ def case_chain_rollout(c: Checker) -> None:
     )
     c.check("the API serves the canary when the check runs", seen["at_the_check"] == (PRODUCTION, CANDIDATE))
     c.check(
-        "after the rollout the API refreshes to the promoted version alone and every answer comes from it",
-        seen["after"] == (CANDIDATE, None) and seen["alias"] == CANDIDATE and seen["answers"] == {CANDIDATE},
+        "after the rollout the API serves the promoted version alone, and the stable deployment does not expire",
+        seen["after"] == (CANDIDATE, None) and seen["alias"] == CANDIDATE and seen["live"] == promoted and seen["expired"] == promoted,
     )
     c.check("the notice says promoted", calls[-1][3]["outcome"] == "promoted")
     failures, calls, seen = scenario(release_fails=True)
@@ -817,11 +1185,18 @@ def case_chain_rollout(c: Checker) -> None:
         "a failed release is reported, nothing is rolled out and the notice says the promotion did not roll out",
         len(failures) == 1 and "release" in failures[0] and "serve_deploy:stable" not in names(calls) and calls[-1][3]["outcome"] == "promoted_not_rolled_out",
     )
-    c.check("the API still serves the earlier deployment", seen["after"] == (PRODUCTION, CANDIDATE) and seen["alias"] == CANDIDATE)
+    c.check(
+        "the earlier deployment serves its canary share until it expires and then the stable version alone",
+        seen["after"] == (PRODUCTION, CANDIDATE) and seen["alias"] == CANDIDATE and seen["live"] == both and seen["expired"] == stable_only,
+    )
     failures, calls, seen = scenario(fail=("serve_deploy", "stable"))
     c.check(
-        "a failed rollout is reported and the notice says the promotion did not roll out",
-        len(failures) == 1 and "rollout" in failures[0] and calls[-1][3]["outcome"] == "promoted_not_rolled_out" and seen["after"] == (PRODUCTION, CANDIDATE),
+        "a failed rollout is reported, the notice says the promotion did not roll out and the canary expires",
+        len(failures) == 1
+        and "rollout" in failures[0]
+        and calls[-1][3]["outcome"] == "promoted_not_rolled_out"
+        and seen["live"] == both
+        and seen["expired"] == stable_only,
     )
     ended = ["serve_deploy:canary", "canary_check", "owner_notice"]
     for label, decision, options, expected_failures in (
@@ -831,8 +1206,13 @@ def case_chain_rollout(c: Checker) -> None:
     ):
         failures, calls, seen = scenario(decision, **options)
         c.check(
-            f"{label} promotes and deploys nothing more, leaves the alias and announces held",
-            len(failures) == expected_failures and names(calls) == ended and calls[-1][3]["outcome"] == "held" and seen["alias"] == PRODUCTION,
+            f"{label} deploys nothing more and announces held, and its canary serves its share until its expiry and no traffic after it",
+            len(failures) == expected_failures
+            and names(calls) == ended
+            and calls[-1][3]["outcome"] == "held"
+            and seen["alias"] == PRODUCTION
+            and seen["live"] == both
+            and seen["expired"] == stable_only,
         )
     failures, calls, seen = scenario(fail=("serve_deploy", "canary"))
     c.check(
@@ -844,20 +1224,29 @@ def case_chain_rollout(c: Checker) -> None:
         and seen["alias"] == PRODUCTION
         and seen["after"] == (None, None),
     )
+    failures, calls, seen = scenario(fail=("serve_deploy", "canary"), after_write=True)
+    c.check(
+        "a canary deploy that timed out after it wrote is reported and announced held, and its canary expires with no later step",
+        len(failures) == 1
+        and names(calls) == ["serve_deploy:canary", "owner_notice"]
+        and calls[-1][3]["outcome"] == "held"
+        and seen["live"] == both
+        and seen["expired"] == stable_only,
+    )
     other_research = training_contract.research_run_id("20261108T000000Z-b45e0002")
     newer = {**chain.CHALLENGER, "version": "5"}
-    with world(count=40, deployment=False) as w:
+    with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
         first = run_chain(w, recorder_for(chain.RESEARCH, chain.CHALLENGER), release_fails=True)
         failures, calls, seen = run_chain(w, recorder_for(other_research, newer, "hold"), research=other_research, fail=("serve_deploy", "canary"))
         c.check(
             "after a promotion whose release failed, a failed next canary keeps stable 3 and never deploys the promoted version as stable",
             first[2]["after"] == (PRODUCTION, CANDIDATE)
             and first[2]["alias"] == CANDIDATE
-            and seen["after"] == (PRODUCTION, CANDIDATE)
             and seen["alias"] == CANDIDATE
             and "serve_deploy:stable" not in names(calls)
             and calls[-1][3]["outcome"] == "held"
-            and len(failures) == 1,
+            and len(failures) == 1
+            and seen["expired"] == stable_only,
         )
 
 
@@ -910,7 +1299,17 @@ def case_parameter_names(c: Checker) -> None:
 
 
 def canary_deploy(w: World, percent: int) -> deploy.Outcome:
-    return deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=percent, mode="canary", deployment_id=RUN_2)
+    return deploy.run(
+        registry=w.registry,
+        manifests=w.store,
+        hai_type=HAI,
+        candidate_version=CANDIDATE,
+        percent=percent,
+        mode="canary",
+        canary_ttl_hours=TTL_HOURS,
+        now=NOW,
+        deployment_id=RUN_2,
+    )
 
 
 class CrashingStore(manifests.FileManifestStore):
@@ -933,7 +1332,15 @@ def case_deploy_order(c: Checker) -> None:
 
         def canary_run(run: str, version: str = CANDIDATE, percent: int = 10) -> deploy.Outcome:
             return deploy.run(
-                registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=version, percent=percent, mode="canary", deployment_id=run
+                registry=w.registry,
+                manifests=w.store,
+                hai_type=HAI,
+                candidate_version=version,
+                percent=percent,
+                mode="canary",
+                canary_ttl_hours=TTL_HOURS,
+                now=NOW,
+                deployment_id=run,
             )
 
         def rollback_run(run: str) -> deploy.Outcome:
@@ -961,11 +1368,31 @@ def case_deploy_order(c: Checker) -> None:
         store.crash_next_replace = True
         stopped = False
         try:
-            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+            deploy.run(
+                registry=registry,
+                manifests=store,
+                hai_type=HAI,
+                candidate_version=CANDIDATE,
+                percent=10,
+                mode="canary",
+                canary_ttl_hours=TTL_HOURS,
+                now=NOW,
+                deployment_id=RUN_1,
+            )
         except OSError:
             stopped = True
         c.check("a deploy that stops between its writes leaves no active record", stopped and store.read_active(HAI) is None)
-        finished = deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1)
+        finished = deploy.run(
+            registry=registry,
+            manifests=store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=10,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         active = store.read_active(HAI)
         c.check(
             "its retry finishes the same deployment",
@@ -974,7 +1401,17 @@ def case_deploy_order(c: Checker) -> None:
         registry.aliases["production"] = "5"
         c.check(
             "a retry after the production alias moved keeps the recorded stable version",
-            deploy.run(registry=registry, manifests=store, hai_type=HAI, candidate_version=CANDIDATE, percent=10, mode="canary", deployment_id=RUN_1).status
+            deploy.run(
+                registry=registry,
+                manifests=store,
+                hai_type=HAI,
+                candidate_version=CANDIDATE,
+                percent=10,
+                mode="canary",
+                canary_ttl_hours=TTL_HOURS,
+                now=NOW,
+                deployment_id=RUN_1,
+            ).status
             == "unchanged",
         )
         c.check(
@@ -1024,7 +1461,7 @@ def case_candidate_feature_errors(c: Checker) -> None:
     """A feature error that belongs to the canary model sends its requests to the stable model and ejects the canary. A store error does not."""
     keys_ = hospital_keys(40)
     with world(count=40, percent=50, configure=candidate_trouble) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         stable_keys = [key for key, kind in routed.items() if kind == "stable"]
         first = ask(w, canary_keys[0])
@@ -1039,7 +1476,7 @@ def case_candidate_feature_errors(c: Checker) -> None:
         c.check("the fallback rows name the canary as the routed version", any(row["routed_version"] == CANDIDATE and row["fallback"] for row in rows_of(w)))
     absent = "feature_matrix_extra:x"
     with world(count=40, percent=50, wrap=with_view(absent, None, 0), configure=lambda loader: loader.extra_references.update({CANDIDATE: (absent,)})) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         replies = [ask(w, key) for key in canary_keys[:4]]
         c.check(
@@ -1048,7 +1485,7 @@ def case_candidate_feature_errors(c: Checker) -> None:
         )
         c.check("and is ejected", w.api.health().body[HAI]["candidate"] == "ejected")
     with world(count=40, percent=50) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"state": "loading"})
         outage = [ask(w, key).status for key in canary_keys[:5]]
@@ -1265,7 +1702,7 @@ def case_nonfinite(c: Checker) -> None:
     """A prediction that is not a finite number is a model failure: it triggers fallback and ejection, and it is never returned or recorded."""
     keys_ = hospital_keys(40)
     with world(count=40, percent=50) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         w.loader.nonfinite[CANDIDATE] = math.nan
         first = ask(w, canary_keys[0])
@@ -1280,7 +1717,7 @@ def case_nonfinite(c: Checker) -> None:
         c.check("an infinite answer is handled alike", ask(w, canary_keys[3]).body["model_version"] == PRODUCTION)
         c.check("no recorded prediction is nonfinite", all(math.isfinite(row["prediction"]) for row in rows_of(w)))
     with world(count=40, percent=50) as w:
-        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022) for key in keys_}
+        routed = {key: canary.route(w.api.deployment(HAI), key.split(":")[0], 2022, NOW) for key in keys_}
         stable_keys = [key for key, kind in routed.items() if kind == "stable"]
         canary_keys = [key for key, kind in routed.items() if kind == "canary"]
         w.loader.nonfinite[PRODUCTION] = -math.inf
@@ -1426,7 +1863,15 @@ def case_previous_record_format(c: Checker) -> None:
             "a retry of the previous-format deployment is refused as replaced",
             refused(
                 lambda: deploy.run(
-                    registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=20, mode="canary", deployment_id=RUN_1
+                    registry=w.registry,
+                    manifests=w.store,
+                    hai_type=HAI,
+                    candidate_version=CANDIDATE,
+                    percent=20,
+                    mode="canary",
+                    canary_ttl_hours=TTL_HOURS,
+                    now=NOW,
+                    deployment_id=RUN_1,
                 )
             ),
         )
@@ -1434,7 +1879,17 @@ def case_previous_record_format(c: Checker) -> None:
         c.check("a retry of the new deployment changes nothing", again.status == "unchanged")
     with world(deployment=False) as w:
         w.store.put_history(HAI, RUN_1, old)
-        finished = deploy.run(registry=w.registry, manifests=w.store, hai_type=HAI, candidate_version=CANDIDATE, percent=20, mode="canary", deployment_id=RUN_1)
+        finished = deploy.run(
+            registry=w.registry,
+            manifests=w.store,
+            hai_type=HAI,
+            candidate_version=CANDIDATE,
+            percent=20,
+            mode="canary",
+            canary_ttl_hours=TTL_HOURS,
+            now=NOW,
+            deployment_id=RUN_1,
+        )
         c.check("a previous-format history record with no active record finishes on retry", finished.status == "written" and finished.deployment.sequence == 1)
 
 
@@ -1845,6 +2300,9 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "deploy_idempotent": (case_deploy, "deploy"),
     "deploy_order": (case_deploy_order, "deploy"),
     "deploy_verifies_the_active_version": (case_deploy_verifies_the_active_version, "deploy"),
+    "canary_expiry": (case_canary_expiry, "deploy"),
+    "deploy_expiry": (case_deploy_expiry, "deploy"),
+    "expiry_is_not_requestable": (case_expiry_is_not_requestable, "deploy"),
     "chain_rollout": (case_chain_rollout, "deploy"),
     "deploy_job_entry": (case_deploy_job, "deploy aws"),
     "images_and_repositories": (case_images, "deploy aws"),

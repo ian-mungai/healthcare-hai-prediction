@@ -24,8 +24,9 @@
         "type": "object",
         "additionalProperties": false,
         "dependentRequired": {
-          "needs_serving_parameters": ["canary_percent"],
-          "canary_percent": ["needs_serving_parameters"]
+          "needs_serving_parameters": ["canary_percent", "canary_ttl_hours"],
+          "canary_percent": ["needs_serving_parameters"],
+          "canary_ttl_hours": ["needs_serving_parameters"]
         },
         "required": [
           "deadline_seconds",
@@ -115,6 +116,12 @@
             "minimum": 1,
             "maximum": 50,
             "description": "The share of hospital-windows a canary deployment receives, fixed here and never named by a caller. A job with needs_serving_parameters must set it"
+          },
+          "canary_ttl_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 72,
+            "description": "The hours a canary deployment serves its share, counted from its write: the deployment record carries the expiry, and the model API serves the canary only before it. Fixed here and never named by a caller. A job with needs_serving_parameters must set it"
           }
         }
       }

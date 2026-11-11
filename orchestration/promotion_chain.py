@@ -8,13 +8,14 @@ The chain (``run_types``) reads the research record of each type from the data b
 its steps, each launched once under a run of its own (``training_contract.chain_run_id``), so a retry joins what ran:
 
 1. ``canary_deploy`` asks the serve family to deploy the challenger beside the Production model. The request is closed: the infection type and the mode canary.
-   The serve preflight derives the version from the type's research record and the share from the job table.
+   The serve preflight derives the version from the type's research record and the share and the lifetime from the job table. The deployment record
+   carries the canary's expiry, and the model API serves the canary only before it.
 2. ``canary_check`` judges the canary replay stored for the research run and stores its result. The chain reads that result and goes on only for ``promote``.
 3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result.
 4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion.
 5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
    active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. A hold, a
-   failed check or a failed canary deploy deploys nothing more.
+   failed check or a failed canary deploy deploys nothing more: the canary stops getting traffic at its expiry, with no later step.
 6. ``owner_notice`` tells the owner what happened: ``promoted`` only when the promotion and the rollout both ended, ``promoted_not_rolled_out`` when the
    promotion stands but the release or the rollout failed, and ``held`` after a hold, a failed canary deploy or check, or a canary result that does not name
    this candidate.

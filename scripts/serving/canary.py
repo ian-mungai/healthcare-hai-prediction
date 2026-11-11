@@ -20,6 +20,9 @@ SAFE_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 VERSION = re.compile(r"[1-9][0-9]{0,18}")
 BUCKETS = 10_000
 MAX_PERCENT = 50
+# A canary deployment carries its write time and its expiry (epoch seconds). The longest lifetime the API honors, and the longest one a deploy accepts.
+MAX_TTL_HOURS = 72
+MAX_TTL_SECONDS = MAX_TTL_HOURS * 3600
 Route = Literal["stable", "canary"]
 
 
@@ -35,6 +38,8 @@ class Deployment:
     candidate_version: str | None
     percent: int
     sequence: int = 1
+    written_at: Any = None
+    expires_at: Any = None
 
     def __post_init__(self) -> None:
         if self.hai_type not in HAI_TYPES:
@@ -51,6 +56,19 @@ class Deployment:
             raise DeploymentInvalid("the sequence must be a positive whole number")
         if self.candidate_version == self.stable_version:
             raise DeploymentInvalid("the candidate is the stable version")
+        if self.candidate_version is None and (self.written_at is not None or self.expires_at is not None):
+            raise DeploymentInvalid("a deployment without a candidate has no expiry")
+
+    def live(self, now: float) -> bool:
+        """True while the candidate may receive its share: a write time and an expiry that are whole numbers, a lifetime from one second to the bound, and the
+        clock from the write time up to, but not including, the expiry. A record with no expiry, a malformed one or one beyond the bound is never live, and a
+        clock behind the write time is not either, so every doubt ends the canary's traffic."""
+        if self.candidate_version is None:
+            return False
+        written, expires = self.written_at, self.expires_at
+        if type(written) is not int or type(expires) is not int:
+            return False
+        return 0 < expires - written <= MAX_TTL_SECONDS and written <= now < expires
 
     def dump(self) -> bytes:
         document = {
@@ -61,6 +79,8 @@ class Deployment:
             "candidate_version": self.candidate_version,
             "percent": self.percent,
             "sequence": self.sequence,
+            **({"written_at": self.written_at} if self.written_at is not None else {}),
+            **({"expires_at": self.expires_at} if self.expires_at is not None else {}),
         }
         return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
@@ -71,7 +91,7 @@ class Deployment:
         except ValueError:
             raise DeploymentInvalid("the deployment record is not JSON") from None
         expected = {"version", "hai_type", "deployment_id", "stable_version", "candidate_version", "percent"}
-        if not isinstance(document, dict) or set(document) - {"sequence"} != expected or document["version"] != 1:
+        if not isinstance(document, dict) or set(document) - {"sequence", "written_at", "expires_at"} != expected or document["version"] != 1:
             raise DeploymentInvalid("the deployment record has other fields than the format")
         return cls(
             document["hai_type"],
@@ -80,6 +100,8 @@ class Deployment:
             document["candidate_version"],
             document["percent"],
             document.get("sequence", 1),
+            document.get("written_at"),
+            document.get("expires_at"),
         )
 
 
@@ -89,8 +111,8 @@ def bucket(deployment_id: str, hai_type: str, ccn: str, window_year: int) -> int
     return int.from_bytes(digest[:8], "big") % BUCKETS
 
 
-def route(deployment: Deployment, ccn: str, window_year: int) -> Route:
-    """``canary`` when the hospital-window falls in the candidate's share, else ``stable``."""
-    if deployment.candidate_version is None:
+def route(deployment: Deployment, ccn: str, window_year: int, now: float) -> Route:
+    """``canary`` when the canary is live at ``now`` and the hospital-window falls in the candidate's share, else ``stable``."""
+    if not deployment.live(now):
         return "stable"
     return "canary" if bucket(deployment.deployment_id, deployment.hai_type, ccn, window_year) < deployment.percent * (BUCKETS // 100) else "stable"

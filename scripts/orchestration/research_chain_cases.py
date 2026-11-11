@@ -488,12 +488,12 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     require([item.get("serve", item.get("promote"))["RUN_ID"] for item in environments] == [RESEARCH, *runs], f"runs: {environments}")
     canary_request = json.loads(environments[1]["serve"]["SERVING_REQUEST"])
     require(
-        canary_request == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10},
+        canary_request == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10, "canary_ttl_hours": 24},
         f"the derived canary request: {canary_request}",
     )
     stable_request = json.loads(environments[4]["serve"]["SERVING_REQUEST"])
     require(
-        stable_request == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0},
+        stable_request == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_ttl_hours": None},
         f"the derived stable request: {stable_request}",
     )
     require(json.loads(environments[5]["promote"]["TRAINING_PARAMETERS"])["outcome"] == "promoted", "the owner was not told promoted")

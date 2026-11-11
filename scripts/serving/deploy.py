@@ -1,7 +1,8 @@
 """The serving deploy action: write the active deployment of one HAI type from the production alias and an optional candidate.
 
-It reads the registry and never moves an alias. The promotion chain moves it through the promote job. A canary deploy names a candidate version and a share.
-A stable deploy names none and writes a deployment with the production version only: it ends a promotion's rollout. The deployment id is the run id, and each
+It reads the registry and never moves an alias. The promotion chain moves it through the promote job. A canary deploy names a candidate version, a share and a
+lifetime in hours, and records its write time and its expiry: the API serves the canary only until the expiry, and a retry never extends it. A stable deploy
+names none and has no expiry: it writes a deployment with the production version only and ends a promotion's rollout. The deployment id is the run id, and each
 deployment carries a sequence number one above the one it replaces. A retry with the same parameters is a no-op while that deployment is active and equals the
 recorded one. It finishes the deployment if it stopped before the active write, and it is refused once a later deployment replaced it. A retry with other
 parameters is refused. Every refusal happens before any write. After a write the deploy reads the active deployment back and succeeds only when it is the one
@@ -16,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol, cast
 
-from scripts.serving.canary import HAI_TYPES, RUN_ID, Deployment, DeploymentInvalid
+from scripts.serving.canary import HAI_TYPES, MAX_TTL_HOURS, RUN_ID, Deployment, DeploymentInvalid
 from scripts.serving.manifests import ManifestConflict, ManifestStore, Stored
 from scripts.training import registry as model_registry
 
@@ -48,6 +49,8 @@ def run(
     percent: int,
     mode: str,
     deployment_id: str,
+    canary_ttl_hours: int | None = None,
+    now: int | None = None,
 ) -> Outcome:
     if mode not in ("canary", "stable"):
         raise DeployRefused("the mode must be canary or stable")
@@ -56,10 +59,18 @@ def run(
     contract = json.loads(CONTRACT.read_text())
     name = contract["registered_models"][hai_type]
     production = _production(registry, name)
+    written_at, expires_at = None, None
     if mode == "stable":
         if candidate_version is not None or percent != 0:
             raise DeployRefused("a stable deploy names no candidate and no percent")
+        if canary_ttl_hours is not None:
+            raise DeployRefused("a stable deploy has no expiry")
     else:
+        if type(canary_ttl_hours) is not int or not 1 <= canary_ttl_hours <= MAX_TTL_HOURS:
+            raise DeployRefused(f"a canary has a lifetime of a whole number of hours from 1 to {MAX_TTL_HOURS}")
+        if type(now) is not int or now < 1:
+            raise DeployRefused("a canary is written at a time given as whole seconds since the epoch")
+        written_at, expires_at = now, now + canary_ttl_hours * 3600
         if candidate_version is None or not re.fullmatch(r"[1-9][0-9]{0,18}", candidate_version):
             raise DeployRefused("a canary names a candidate version")
         if candidate_version == production:
@@ -70,7 +81,7 @@ def run(
         if not found[0].tags.get(contract["completion_tag"]):
             raise DeployRefused(f"version {candidate_version} has no completed bundle")
     try:
-        deployment = Deployment(hai_type, deployment_id, production, candidate_version, percent)
+        deployment = Deployment(hai_type, deployment_id, production, candidate_version, percent, written_at=written_at, expires_at=expires_at)
     except DeploymentInvalid as error:
         raise DeployRefused(str(error)) from None
     current = manifests.read_active(hai_type)
@@ -79,7 +90,9 @@ def run(
     try:
         if recorded is not None:
             return _retry(manifests, hai_type, current, active, _parse(recorded), candidate_version, percent)
-        deployment = Deployment(hai_type, deployment_id, production, candidate_version, percent, 1 if active is None else active.sequence + 1)
+        deployment = Deployment(
+            hai_type, deployment_id, production, candidate_version, percent, 1 if active is None else active.sequence + 1, written_at, expires_at
+        )
         body = deployment.dump()
         manifests.put_history(hai_type, deployment_id, body)
         manifests.replace_active(hai_type, body, None if current is None else current.token)

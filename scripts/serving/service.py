@@ -12,6 +12,7 @@ import logging
 import math
 import re
 import threading
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
@@ -97,11 +98,13 @@ class ModelService:
         refresh_seconds: float,
         failure_limit: int,
         metrics: Metrics | None = None,
+        wall: Callable[[], float] = time.time,
     ) -> None:
         self.keys, self.limiter, self.buffer = keys, limiter, buffer
         self.metrics = metrics if metrics is not None else Metrics()
         self._read_marker, self._read_features = read_marker, read_features
         self._manifests, self._loader, self._clock, self._new_id = manifests, loader, clock, new_id
+        self._wall = wall  # the epoch clock a canary's expiry is read against; ``clock`` is monotonic and has no date
         self._hai_types, self._refresh_seconds, self._failure_limit = tuple(hai_types), refresh_seconds, failure_limit
         self._active: dict[str, Active] = {}
         self._lock = threading.Lock()
@@ -251,7 +254,7 @@ class ModelService:
         active = self._active.get(hai_type)
         if active is None:
             return refusal(503, "no_deployment", request_id=rid), None
-        routed = canary.route(active.deployment, ccn, window_year)
+        routed = canary.route(active.deployment, ccn, window_year, self._wall())
         slot, fallback = active.stable, False
         if routed == "canary":
             if active.candidate is not None and active.candidate.state == "loaded":

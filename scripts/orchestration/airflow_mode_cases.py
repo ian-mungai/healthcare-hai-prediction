@@ -733,7 +733,7 @@ def serving_request_is_closed_and_derived() -> None:
         require(current.step("serve_deploy") == "succeeded", "a canary of the research record's challenger did not run")
         derived = json.loads(rig.environment()["serve"]["SERVING_REQUEST"])
         require(
-            derived == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10},
+            derived == {"hai_type": "HAI_1", "deploy_mode": "canary", "candidate_version": "4", "percent": 10, "canary_ttl_hours": 24},
             f"the derived request is {derived}",
         )
     with world(rig, "serving_deploy_dag", {**SERVE_CANARY, "deploy_mode": "promote"}) as current:
@@ -748,7 +748,7 @@ def serving_request_is_closed_and_derived() -> None:
         require(current.step("serve_deploy") == "succeeded", "a stable deploy did not run")
         derived = json.loads(rig.environment(1)["serve"]["SERVING_REQUEST"])
         require(
-            derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0},
+            derived == {"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_ttl_hours": None},
             f"the derived stable request is {derived}",
         )
     before = rig.tasks_started()
