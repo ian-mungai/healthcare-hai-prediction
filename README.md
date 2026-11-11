@@ -34,6 +34,7 @@ Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS C
    | `PROJECT_NAME` | The project name |
    | `ENVIRONMENT` | The environment name (`dev`) |
    | `S3_BUCKET` | The project data bucket |
+   | `ALERT_EMAIL` | Optional. One address for the run-failure alerts; empty creates no subscription |
 
 3. Store no secret in `.env` or in any other file on the host. Project secrets live in AWS Systems Manager Parameter Store and the shared API keys in AWS Secrets Manager.
 

@@ -14,7 +14,14 @@ from typing import Any
 from jsonschema import Draft202012Validator
 
 from scripts.infrastructure.render_ecs_target import TargetError, read_capture_with_digest
-from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration, verify_project_identity, write_or_check
+from scripts.infrastructure.render_project_config import (
+    REPO_ROOT,
+    ConfigurationError,
+    load_alert_email,
+    load_configuration,
+    verify_project_identity,
+    write_or_check,
+)
 from scripts.process import TimeoutExpired, run_command
 
 PLATFORM_DIRECTORY = REPO_ROOT / "infra" / "platform"
@@ -163,7 +170,8 @@ def main() -> None:
     directory = REPO_ROOT / "infra" / stack
     try:
         storage, _ = load_configuration(arguments.env_file)
-        values: dict[str, Any] = services_values(storage) if stack == "services" else platform_values(storage)
+        # The alert address is a platform input only; the services stack does not declare it.
+        values: dict[str, Any] = services_values(storage) if stack == "services" else {**platform_values(storage), **load_alert_email(arguments.env_file)}
         values.update(stack_preparation(arguments.preparation_inputs, arguments.preparation_sha256, stack))
         if arguments.check_plan:
             if stack == "platform":

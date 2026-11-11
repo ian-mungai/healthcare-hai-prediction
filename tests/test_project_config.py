@@ -9,7 +9,7 @@ from typing import Any
 import pytest
 
 from scripts.infrastructure import render_project_config as renderer
-from scripts.infrastructure.render_project_config import ConfigurationError, build_configuration, verify_plan_variables
+from scripts.infrastructure.render_project_config import ConfigurationError, alert_email_input, build_configuration, verify_plan_variables
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
 from tests.support import check
 
@@ -100,6 +100,55 @@ def test_unsupported_configuration_is_rejected(environment: dict[str, Any], valu
     environment["EXAMPLE_UNUSED_SETTING"] = value
     with pytest.raises(ConfigurationError, match="Unsupported .env settings"):
         build_configuration(environment)
+
+
+@pytest.mark.parametrize("value", ["owner@example.org", "first.last+alerts@mail.example.org", ""])
+def test_alert_email_is_an_optional_key_that_stays_out_of_the_storage_and_iam_inputs(environment: dict[str, Any], value: str) -> None:
+    plain_storage, plain_iam = build_configuration(environment)
+    environment["ALERT_EMAIL"] = value
+    storage, iam = build_configuration(environment)
+    check(storage == plain_storage and iam == plain_iam, "the alert address reaches neither the storage nor the IAM inputs")
+    check(alert_email_input(environment) == ({"alert_email": value} if value else {}), "only a set address becomes the platform input")
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_unset_or_empty_alert_email_renders_no_input(environment: dict[str, Any], value: str | None) -> None:
+    environment["ALERT_EMAIL"] = value
+    build_configuration(environment)
+    check(alert_email_input(environment) == {}, "an unset or empty alert address renders no input")
+    check(alert_email_input({}) == {}, "a missing key renders no input")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "owner@example.org,other@example.org",
+        "owner@example.org other@example.org",
+        "owner@example.org;other@example.org",
+        "Owner <owner@example.org>",
+        "mailto:owner@example.org",
+        " owner@example.org",
+        "owner@example.org ",
+        "owner@example",
+        "owner@",
+        "@example.org",
+        "owner",
+        "owner@@example.org",
+        "owner@example..org",
+        "own er@example.org",
+        "owner@example.org\n",
+        "a" * 250 + "@example.org",
+        "your-alert-email",
+    ],
+)
+def test_alert_email_must_be_one_plain_address_and_is_never_echoed(environment: dict[str, Any], value: str) -> None:
+    environment["ALERT_EMAIL"] = value
+    with pytest.raises(ConfigurationError) as error:
+        build_configuration(environment)
+    check(value.strip() not in str(error.value), "the rejected value is not echoed")
+    check("ALERT_EMAIL" in str(error.value), "the error names the key")
+    with pytest.raises(ConfigurationError):
+        alert_email_input(environment)
 
 
 def test_profile_follows_project_and_environment(environment: dict[str, Any]) -> None:

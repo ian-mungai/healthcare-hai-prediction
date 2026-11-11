@@ -2576,6 +2576,18 @@ CASES = [
     *account_cases(),
     Case("value declared in .env", "privacy-scan", False, {".env": f"AWS_PROFILE={ENV_VALUE}\n", "scripts/deploy.sh": f"aws s3 ls --profile {ENV_VALUE}\n"}),
     Case(
+        "alert email declared in .env on a reserved domain",
+        "privacy-scan",
+        False,
+        {".env": "ALERT_EMAIL=owner@example.org\n", "scripts/notify.sh": "mail owner@example.org\n"},
+    ),
+    Case(
+        "empty alert email declared in .env",
+        "privacy-scan",
+        True,
+        {".env": "ALERT_EMAIL=\n", "scripts/notify.sh": "mail --help\n"},
+    ),
+    Case(
         "allowlisted profile label in its tracked file",
         "privacy-scan",
         True,
@@ -2902,6 +2914,7 @@ BLOCK_REASONS = {
     "exempt account ARN beside a bare other account": "infra/policy.json:1: AWS account ID",
     "real account declared in .env": "scripts/deploy.sh:1: value declared in .env",
     "value declared in .env": "scripts/deploy.sh:1: value declared in .env",
+    "alert email declared in .env on a reserved domain": "scripts/notify.sh:1: value declared in .env",
     "profile label in another file": "scripts/deploy.sh:1: value declared in .env",
     "bucket named after the project": "scripts/deploy.sh:1: value declared in .env",
     "allowlist is by type": "notes.md:1: phone number",

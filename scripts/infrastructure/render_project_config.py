@@ -62,6 +62,11 @@ MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
 # The same rule as the airflow_launch_record_prefix validation in infra/iam/airflow_launch.tf.
 LAUNCH_RECORD_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*(/[A-Za-z0-9_][A-Za-z0-9_.-]*)*/")
 COLLECTION_PATTERN = re.compile(r"[a-z0-9_]+/[a-z0-9_]+")
+# One plain address, with no display name, list, scheme or space. The same rule as the alert_email validation in infra/platform/variables.tf.
+ALERT_EMAIL = re.compile(r"[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
+ALERT_EMAIL_LIMIT = 254
+# .env keys that may be left out; only the platform stack reads them.
+OPTIONAL_ENV_KEYS = frozenset({"ALERT_EMAIL"})
 DVC_LOCAL_CONFIG = REPO_ROOT / ".dvc" / "config.local"
 DVC_REMOTE_NAME = "data"
 
@@ -79,8 +84,9 @@ def build_configuration(environment: dict[str, str | None], admin_profile: str |
         "PROJECT_NAME": r"[a-z][a-z0-9_]{2,79}",
         "S3_BUCKET": r"[a-z0-9][a-z0-9-]{1,61}[a-z0-9]",
     }
-    if environment.keys() - (rules.keys() | {"AWS_PROFILE"}):
+    if environment.keys() - (rules.keys() | {"AWS_PROFILE"} | OPTIONAL_ENV_KEYS):
         raise ConfigurationError("Unsupported .env settings; keep only the keys documented in .env.example.")
+    alert_email_input(environment)
     for name, pattern in rules.items():
         value = environment.get(name)
         if not isinstance(value, str) or not re.fullmatch(pattern, value) or value.startswith("your-"):
@@ -103,6 +109,23 @@ def build_configuration(environment: dict[str, str | None], admin_profile: str |
             raise ConfigurationError("IAM permission updates require an explicitly selected administrator profile.")
         iam["admin_profile"] = admin_profile
     return storage, iam
+
+
+def alert_email_input(environment: Mapping[str, str | None]) -> dict[str, str]:
+    """The platform input for the optional ALERT_EMAIL key: empty when the key is unset or empty, else the one validated address, never echoed."""
+    value = environment.get("ALERT_EMAIL")
+    if value is None or value == "":
+        return {}
+    if not isinstance(value, str) or len(value) > ALERT_EMAIL_LIMIT or not ALERT_EMAIL.fullmatch(value):
+        raise ConfigurationError(
+            "Set ALERT_EMAIL in .env to empty or one plain address (a name, an at sign and a domain with a dot), without a display name, list, space or scheme."
+        )
+    return {"alert_email": value}
+
+
+def load_alert_email(path: Path) -> dict[str, str]:
+    """Read the optional alert address from the dotenv file; it is validated again by load_configuration."""
+    return alert_email_input(dict(dotenv_values(path, interpolate=False)))
 
 
 def load_configuration(path: Path, admin_profile: str | None = None) -> tuple[dict[str, str], dict[str, str]]:
