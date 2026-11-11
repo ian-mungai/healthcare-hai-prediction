@@ -52,6 +52,8 @@ OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "mod
 # Lists that may be left out: the job families the broker role and the Airflow launch role may start.
 OPTIONAL_PREPARATION_LISTS = ("broker_job_families", "airflow_launch_families")
 BROKER_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
+# The families the Airflow launch role may start: the host job families and the Run 3 publisher (infra/iam/airflow_launch.tf). The broker has no publisher.
+LAUNCH_FAMILIES = (*BROKER_FAMILIES, "publisher")
 # The exact ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value.
 PUBLISHER_SECRET_NAMES = frozenset({"census_api_key", "bls_api_key", "hud_api_key"})
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS, "publisher_secret_arns"})
@@ -163,7 +165,7 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
     if (
         not isinstance(launch_families, list)
         or len(set(map(str, launch_families))) != len(launch_families)
-        or not all(item in BROKER_FAMILIES for item in launch_families)
+        or not all(item in LAUNCH_FAMILIES for item in launch_families)
         or (document.get("airflow_launch_prepared") is True and not launch_families)
     ):
         raise ConfigurationError(

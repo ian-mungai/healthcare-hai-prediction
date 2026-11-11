@@ -57,6 +57,8 @@ IMAGE = f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_%s_dev@sha25
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/example_project_%s_dev"
 RESOURCES = {"cpu": 1024, "memory": 4096, "ephemeral_storage_gib": 21}
 FAMILIES = ["serve", "train"]
+# The launch role may also start the Run 3 publisher host task (infra/iam/airflow_launch.tf lists publisher among the families).
+LAUNCH_FAMILIES = ["publisher", "serve", "train"]
 # The platform defaults of infra/platform/variables.tf, which a case below compares with the file, and the additions the owner steps make to them.
 PLATFORM_DEFAULT_REPOSITORIES = [
     "airflow",
@@ -140,7 +142,14 @@ ROWS: list[Row] = [
     Row("iam", "model_api_registry_key", "lakehouse/feast/registry.pb", "/rooted/registry.pb"),
     Row("iam", "model_api_manifest_prefix", "serving/deployments", "serving/deployments/"),
     Row("iam", "broker_job_families", FAMILIES, "serve"),
-    Row("iam", "airflow_launch_families", FAMILIES, "serve", None, (["write_gold"], ["train", "train"], ["Train"], [1], ["train", None])),
+    Row(
+        "iam",
+        "airflow_launch_families",
+        LAUNCH_FAMILIES,
+        "serve",
+        None,
+        (["write_gold"], ["train", "train"], ["Train"], [1], ["train", None], ["publish"], ["publisher", "publisher"], ["publisher", "unknown"]),
+    ),
     Row(
         "iam",
         "airflow_launch_record_prefix",
