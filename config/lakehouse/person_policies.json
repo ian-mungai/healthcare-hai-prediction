@@ -1,0 +1,1861 @@
+{
+  "version": 1,
+  "key_version": "v1",
+  "tables": {
+    "cms_hospital_owners": {
+      "reason": "Hospital All Owners files as published name individual owners (plan version 2). Plan version 1 captures hold organisation owner rows only.",
+      "policies": [
+        {
+          "policy_id": "cms_owners_layout_v1",
+          "policy_version": 1,
+          "source_id": "CMS_OWNERS",
+          "normalization_version": "norm_v1",
+          "headers": [
+            "ENROLLMENT ID",
+            "ASSOCIATE ID",
+            "ORGANIZATION NAME",
+            "ASSOCIATE ID - OWNER",
+            "TYPE - OWNER",
+            "ROLE CODE - OWNER",
+            "ROLE TEXT - OWNER",
+            "ASSOCIATION DATE - OWNER",
+            "FIRST NAME - OWNER",
+            "MIDDLE NAME - OWNER",
+            "LAST NAME - OWNER",
+            "TITLE - OWNER",
+            "ORGANIZATION NAME - OWNER",
+            "DOING BUSINESS AS NAME - OWNER",
+            "ADDRESS LINE 1 - OWNER",
+            "ADDRESS LINE 2 - OWNER",
+            "CITY - OWNER",
+            "STATE - OWNER",
+            "ZIP CODE - OWNER",
+            "PERCENTAGE OWNERSHIP",
+            "CREATED FOR ACQUISITION - OWNER",
+            "CORPORATION - OWNER",
+            "LLC - OWNER",
+            "MEDICAL PROVIDER SUPPLIER - OWNER",
+            "MANAGEMENT SERVICES COMPANY - OWNER",
+            "MEDICAL STAFFING COMPANY - OWNER",
+            "HOLDING COMPANY - OWNER",
+            "INVESTMENT FIRM - OWNER",
+            "FINANCIAL INSTITUTION - OWNER",
+            "CONSULTING FIRM - OWNER",
+            "FOR PROFIT - OWNER",
+            "NON PROFIT - OWNER",
+            "OTHER TYPE - OWNER",
+            "OTHER TYPE TEXT - OWNER"
+          ],
+          "treatments": {
+            "ENROLLMENT ID": {
+              "treatment": "keep"
+            },
+            "ASSOCIATE ID": {
+              "treatment": "keep"
+            },
+            "ORGANIZATION NAME": {
+              "treatment": "scrub_names"
+            },
+            "ASSOCIATE ID - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "TYPE - OWNER": {
+              "treatment": "keep"
+            },
+            "ROLE CODE - OWNER": {
+              "treatment": "keep"
+            },
+            "ROLE TEXT - OWNER": {
+              "treatment": "keep"
+            },
+            "ASSOCIATION DATE - OWNER": {
+              "treatment": "keep"
+            },
+            "FIRST NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "MIDDLE NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "LAST NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "TITLE - OWNER": {
+              "treatment": "drop"
+            },
+            "ORGANIZATION NAME - OWNER": {
+              "treatment": "scrub_names"
+            },
+            "DOING BUSINESS AS NAME - OWNER": {
+              "treatment": "scrub_names"
+            },
+            "ADDRESS LINE 1 - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "ADDRESS LINE 2 - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "CITY - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "STATE - OWNER": {
+              "treatment": "keep"
+            },
+            "ZIP CODE - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "PERCENTAGE OWNERSHIP": {
+              "treatment": "keep"
+            },
+            "CREATED FOR ACQUISITION - OWNER": {
+              "treatment": "keep"
+            },
+            "CORPORATION - OWNER": {
+              "treatment": "keep"
+            },
+            "LLC - OWNER": {
+              "treatment": "keep"
+            },
+            "MEDICAL PROVIDER SUPPLIER - OWNER": {
+              "treatment": "keep"
+            },
+            "MANAGEMENT SERVICES COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "MEDICAL STAFFING COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "HOLDING COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "INVESTMENT FIRM - OWNER": {
+              "treatment": "keep"
+            },
+            "FINANCIAL INSTITUTION - OWNER": {
+              "treatment": "keep"
+            },
+            "CONSULTING FIRM - OWNER": {
+              "treatment": "keep"
+            },
+            "FOR PROFIT - OWNER": {
+              "treatment": "keep"
+            },
+            "NON PROFIT - OWNER": {
+              "treatment": "keep"
+            },
+            "OTHER TYPE - OWNER": {
+              "treatment": "keep"
+            },
+            "OTHER TYPE TEXT - OWNER": {
+              "treatment": "scrub_names"
+            }
+          },
+          "pseudonyms": [
+            {
+              "output": "owner_person_pseudonym",
+              "kind": "id",
+              "namespace": "cms_associate_id",
+              "columns": [
+                "ASSOCIATE ID - OWNER"
+              ],
+              "when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            {
+              "output": "owner_name_match_pseudonym",
+              "kind": "name",
+              "namespace": "person_name",
+              "columns": [
+                "FIRST NAME - OWNER",
+                "LAST NAME - OWNER"
+              ],
+              "middle_column": "MIDDLE NAME - OWNER",
+              "when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            }
+          ],
+          "max_bytes": 1073741824,
+          "min_rows": 0
+        },
+        {
+          "policy_id": "cms_owners_layout_v2",
+          "policy_version": 1,
+          "source_id": "CMS_OWNERS",
+          "normalization_version": "norm_v1",
+          "headers": [
+            "ENROLLMENT ID",
+            "ASSOCIATE ID",
+            "ORGANIZATION NAME",
+            "ASSOCIATE ID - OWNER",
+            "TYPE - OWNER",
+            "ROLE CODE - OWNER",
+            "ROLE TEXT - OWNER",
+            "ASSOCIATION DATE - OWNER",
+            "FIRST NAME - OWNER",
+            "MIDDLE NAME - OWNER",
+            "LAST NAME - OWNER",
+            "TITLE - OWNER",
+            "ORGANIZATION NAME - OWNER",
+            "DOING BUSINESS AS NAME - OWNER",
+            "ADDRESS LINE 1 - OWNER",
+            "ADDRESS LINE 2 - OWNER",
+            "CITY - OWNER",
+            "STATE - OWNER",
+            "ZIP CODE - OWNER",
+            "PERCENTAGE OWNERSHIP",
+            "CREATED FOR ACQUISITION - OWNER",
+            "CORPORATION - OWNER",
+            "LLC - OWNER",
+            "MEDICAL PROVIDER SUPPLIER - OWNER",
+            "MANAGEMENT SERVICES COMPANY - OWNER",
+            "MEDICAL STAFFING COMPANY - OWNER",
+            "HOLDING COMPANY - OWNER",
+            "INVESTMENT FIRM - OWNER",
+            "FINANCIAL INSTITUTION - OWNER",
+            "CONSULTING FIRM - OWNER",
+            "FOR PROFIT - OWNER",
+            "NON PROFIT - OWNER",
+            "PRIVATE EQUITY COMPANY - OWNER",
+            "REIT - OWNER",
+            "CHAIN HOME OFFICE - OWNER",
+            "OTHER TYPE - OWNER",
+            "OTHER TYPE TEXT - OWNER",
+            "OWNED BY ANOTHER ORG OR IND - OWNER"
+          ],
+          "treatments": {
+            "ENROLLMENT ID": {
+              "treatment": "keep"
+            },
+            "ASSOCIATE ID": {
+              "treatment": "keep"
+            },
+            "ORGANIZATION NAME": {
+              "treatment": "scrub_names"
+            },
+            "ASSOCIATE ID - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "TYPE - OWNER": {
+              "treatment": "keep"
+            },
+            "ROLE CODE - OWNER": {
+              "treatment": "keep"
+            },
+            "ROLE TEXT - OWNER": {
+              "treatment": "keep"
+            },
+            "ASSOCIATION DATE - OWNER": {
+              "treatment": "keep"
+            },
+            "FIRST NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "MIDDLE NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "LAST NAME - OWNER": {
+              "treatment": "drop"
+            },
+            "TITLE - OWNER": {
+              "treatment": "drop"
+            },
+            "ORGANIZATION NAME - OWNER": {
+              "treatment": "scrub_names"
+            },
+            "DOING BUSINESS AS NAME - OWNER": {
+              "treatment": "scrub_names"
+            },
+            "ADDRESS LINE 1 - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "ADDRESS LINE 2 - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "CITY - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "STATE - OWNER": {
+              "treatment": "keep"
+            },
+            "ZIP CODE - OWNER": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            "PERCENTAGE OWNERSHIP": {
+              "treatment": "keep"
+            },
+            "CREATED FOR ACQUISITION - OWNER": {
+              "treatment": "keep"
+            },
+            "CORPORATION - OWNER": {
+              "treatment": "keep"
+            },
+            "LLC - OWNER": {
+              "treatment": "keep"
+            },
+            "MEDICAL PROVIDER SUPPLIER - OWNER": {
+              "treatment": "keep"
+            },
+            "MANAGEMENT SERVICES COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "MEDICAL STAFFING COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "HOLDING COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "INVESTMENT FIRM - OWNER": {
+              "treatment": "keep"
+            },
+            "FINANCIAL INSTITUTION - OWNER": {
+              "treatment": "keep"
+            },
+            "CONSULTING FIRM - OWNER": {
+              "treatment": "keep"
+            },
+            "FOR PROFIT - OWNER": {
+              "treatment": "keep"
+            },
+            "NON PROFIT - OWNER": {
+              "treatment": "keep"
+            },
+            "PRIVATE EQUITY COMPANY - OWNER": {
+              "treatment": "keep"
+            },
+            "REIT - OWNER": {
+              "treatment": "keep"
+            },
+            "CHAIN HOME OFFICE - OWNER": {
+              "treatment": "keep"
+            },
+            "OTHER TYPE - OWNER": {
+              "treatment": "keep"
+            },
+            "OTHER TYPE TEXT - OWNER": {
+              "treatment": "scrub_names"
+            },
+            "OWNED BY ANOTHER ORG OR IND - OWNER": {
+              "treatment": "keep"
+            }
+          },
+          "pseudonyms": [
+            {
+              "output": "owner_person_pseudonym",
+              "kind": "id",
+              "namespace": "cms_associate_id",
+              "columns": [
+                "ASSOCIATE ID - OWNER"
+              ],
+              "when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            },
+            {
+              "output": "owner_name_match_pseudonym",
+              "kind": "name",
+              "namespace": "person_name",
+              "columns": [
+                "FIRST NAME - OWNER",
+                "LAST NAME - OWNER"
+              ],
+              "middle_column": "MIDDLE NAME - OWNER",
+              "when": {
+                "column": "TYPE - OWNER",
+                "equals": "I",
+                "others": [
+                  "O"
+                ]
+              }
+            }
+          ],
+          "max_bytes": 1073741824,
+          "min_rows": 0
+        }
+      ],
+      "unchanged": [
+        {
+          "headers": [
+            "ENROLLMENT ID",
+            "ASSOCIATE ID",
+            "ORGANIZATION NAME",
+            "ASSOCIATE ID - OWNER",
+            "TYPE - OWNER",
+            "ROLE CODE - OWNER",
+            "ROLE TEXT - OWNER",
+            "ASSOCIATION DATE - OWNER",
+            "ORGANIZATION NAME - OWNER",
+            "DOING BUSINESS AS NAME - OWNER",
+            "STATE - OWNER",
+            "PERCENTAGE OWNERSHIP",
+            "CREATED FOR ACQUISITION - OWNER",
+            "CORPORATION - OWNER",
+            "LLC - OWNER",
+            "MEDICAL PROVIDER SUPPLIER - OWNER",
+            "MANAGEMENT SERVICES COMPANY - OWNER",
+            "MEDICAL STAFFING COMPANY - OWNER",
+            "HOLDING COMPANY - OWNER",
+            "INVESTMENT FIRM - OWNER",
+            "FINANCIAL INSTITUTION - OWNER",
+            "CONSULTING FIRM - OWNER",
+            "FOR PROFIT - OWNER",
+            "NON PROFIT - OWNER",
+            "OTHER TYPE - OWNER",
+            "OTHER TYPE TEXT - OWNER"
+          ],
+          "guard": {
+            "column": "TYPE - OWNER",
+            "equals": "O",
+            "others": []
+          }
+        },
+        {
+          "headers": [
+            "ENROLLMENT ID",
+            "ASSOCIATE ID",
+            "ORGANIZATION NAME",
+            "ASSOCIATE ID - OWNER",
+            "TYPE - OWNER",
+            "ROLE CODE - OWNER",
+            "ROLE TEXT - OWNER",
+            "ASSOCIATION DATE - OWNER",
+            "ORGANIZATION NAME - OWNER",
+            "DOING BUSINESS AS NAME - OWNER",
+            "STATE - OWNER",
+            "PERCENTAGE OWNERSHIP",
+            "CREATED FOR ACQUISITION - OWNER",
+            "CORPORATION - OWNER",
+            "LLC - OWNER",
+            "MEDICAL PROVIDER SUPPLIER - OWNER",
+            "MANAGEMENT SERVICES COMPANY - OWNER",
+            "MEDICAL STAFFING COMPANY - OWNER",
+            "HOLDING COMPANY - OWNER",
+            "INVESTMENT FIRM - OWNER",
+            "FINANCIAL INSTITUTION - OWNER",
+            "CONSULTING FIRM - OWNER",
+            "FOR PROFIT - OWNER",
+            "NON PROFIT - OWNER",
+            "PRIVATE EQUITY COMPANY - OWNER",
+            "REIT - OWNER",
+            "CHAIN HOME OFFICE - OWNER",
+            "OTHER TYPE - OWNER",
+            "OTHER TYPE TEXT - OWNER",
+            "OWNED BY ANOTHER ORG OR IND - OWNER"
+          ],
+          "guard": {
+            "column": "TYPE - OWNER",
+            "equals": "O",
+            "others": []
+          }
+        }
+      ]
+    },
+    "onc_pi_attestations_csv": {
+      "reason": "The meaningful-use file as published (plan version 2) holds clinician rows with NPI and practice ZIP. Plan version 1 captures hold hospital rows only.",
+      "policies": [
+        {
+          "policy_id": "onc_mu_report",
+          "policy_version": 1,
+          "source_id": "ONC_PI",
+          "normalization_version": "norm_v1",
+          "headers": [
+            "NPI",
+            "CCN",
+            "Provider_Type",
+            "Business_State_Territory",
+            "ZIP",
+            "Specialty",
+            "Hospital_Type",
+            "Program_Type",
+            "Program_Year",
+            "Provider_Stage_Number",
+            "Payment_Year",
+            "Attestation_Month",
+            "Attestation_Year",
+            "MU_Definition_Year",
+            "Stage_2_Scheduled_2014",
+            "EHR_Certification_Number",
+            "EHR_Product_CHP_Id",
+            "Vendor_Name",
+            "EHR_Product_Name",
+            "EHR_Product_Version",
+            "Product_Classification",
+            "Product_Setting",
+            "Product_Certification_Edition_Yr"
+          ],
+          "treatments": {
+            "NPI": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "Provider_Type",
+                "equals": "EP",
+                "others": [
+                  "Hospital"
+                ]
+              }
+            },
+            "CCN": {
+              "treatment": "keep"
+            },
+            "Provider_Type": {
+              "treatment": "keep"
+            },
+            "Business_State_Territory": {
+              "treatment": "keep"
+            },
+            "ZIP": {
+              "treatment": "keep",
+              "blank_when": {
+                "column": "Provider_Type",
+                "equals": "EP",
+                "others": [
+                  "Hospital"
+                ]
+              }
+            },
+            "Specialty": {
+              "treatment": "drop"
+            },
+            "Hospital_Type": {
+              "treatment": "keep"
+            },
+            "Program_Type": {
+              "treatment": "keep"
+            },
+            "Program_Year": {
+              "treatment": "keep"
+            },
+            "Provider_Stage_Number": {
+              "treatment": "keep"
+            },
+            "Payment_Year": {
+              "treatment": "keep"
+            },
+            "Attestation_Month": {
+              "treatment": "keep"
+            },
+            "Attestation_Year": {
+              "treatment": "keep"
+            },
+            "MU_Definition_Year": {
+              "treatment": "keep"
+            },
+            "Stage_2_Scheduled_2014": {
+              "treatment": "keep"
+            },
+            "EHR_Certification_Number": {
+              "treatment": "keep"
+            },
+            "EHR_Product_CHP_Id": {
+              "treatment": "keep"
+            },
+            "Vendor_Name": {
+              "treatment": "keep"
+            },
+            "EHR_Product_Name": {
+              "treatment": "keep"
+            },
+            "EHR_Product_Version": {
+              "treatment": "keep"
+            },
+            "Product_Classification": {
+              "treatment": "keep"
+            },
+            "Product_Setting": {
+              "treatment": "keep"
+            },
+            "Product_Certification_Edition_Yr": {
+              "treatment": "keep"
+            }
+          },
+          "pseudonyms": [
+            {
+              "output": "provider_pseudonym",
+              "kind": "id",
+              "namespace": "onc_npi",
+              "columns": [
+                "NPI"
+              ],
+              "when": {
+                "column": "Provider_Type",
+                "equals": "EP",
+                "others": [
+                  "Hospital"
+                ]
+              }
+            }
+          ],
+          "max_bytes": 1073741824,
+          "min_rows": 0
+        }
+      ],
+      "unchanged": [
+        {
+          "headers": [
+            "NPI",
+            "CCN",
+            "Provider_Type",
+            "Business_State_Territory",
+            "ZIP",
+            "Hospital_Type",
+            "Program_Type",
+            "Program_Year",
+            "Provider_Stage_Number",
+            "Payment_Year",
+            "Attestation_Month",
+            "Attestation_Year",
+            "MU_Definition_Year",
+            "Stage_2_Scheduled_2014",
+            "EHR_Certification_Number",
+            "EHR_Product_CHP_Id",
+            "Vendor_Name",
+            "EHR_Product_Name",
+            "EHR_Product_Version",
+            "Product_Classification",
+            "Product_Setting",
+            "Product_Certification_Edition_Yr"
+          ],
+          "guard": {
+            "column": "Provider_Type",
+            "equals": "Hospital",
+            "others": []
+          }
+        }
+      ]
+    },
+    "hcai_util_workbook_sheet_rows": {
+      "reason": "The HCAI utilization workbook (plan version 2) holds administrator and report preparer names, a facility phone number and street addresses as published, and the name, city and ZIP code of an individual investor owner. Only the workbook layouts listed here load: the exact sheet names and the complete data sheet header of each plan year. Its data sheets are Page 1-6 and NonResp 1-6; Tips and Crosswalk hold no person fields by design and are scanned only for contact details and the names found in the data sheets.",
+      "sheet_cells": {
+        "data_sheets": [
+          "Page 1-6",
+          "NonResp 1-6"
+        ],
+        "label_rows": 4,
+        "redact_columns": [
+          "FAC_STR_ADDR",
+          "FAC_PHONE",
+          "FAC_ADMIN_NAME",
+          "FAC_PAR_CORP_BUS_ADDR",
+          "REPT_PREP_NAME",
+          "REV_REPT_PREP_NAME"
+        ],
+        "name_columns": [
+          "FAC_ADMIN_NAME",
+          "REPT_PREP_NAME",
+          "REV_REPT_PREP_NAME"
+        ],
+        "not_personal_columns": [
+          "FAC_NAME",
+          "FAC_PAR_CORP_NAME",
+          "EMSA_TRAUMA_DESIGNATION",
+          "EMSA_TRAUMA_DESIGNATION_PEDIATRIC"
+        ],
+        "personal_pattern": "NAME|PHONE|FAX|MAIL|ADDR|PREP|CONTACT|TITLE|SIGN",
+        "individual_owner": {
+          "column": "LICEE_TOC",
+          "equals": "Investor - Individual",
+          "name_column": "FAC_PAR_CORP_NAME",
+          "redact_columns": [
+            "FAC_PAR_CORP_NAME",
+            "FAC_PAR_CORP_CITY",
+            "FAC_PAR_CORP_ZIP"
+          ]
+        },
+        "replacement": "[REDACTED]",
+        "layouts": [
+          {
+            "layout_id": "hcai_util_2018_2020",
+            "years": [
+              2018,
+              2019,
+              2020
+            ],
+            "sheets": [
+              "Tips",
+              "Page 1-6",
+              "NonResp 1-6",
+              "Crosswalk"
+            ],
+            "header": [
+              "Description",
+              "FAC_NO",
+              "FAC_NAME",
+              "FAC_STR_ADDR",
+              "FAC_CITY",
+              "FAC_ZIP",
+              "FAC_PHONE",
+              "FAC_ADMIN_NAME",
+              "FAC_OPERATED_THIS_YR",
+              "FAC_OP_PER_BEGIN_DT",
+              "FAC_OP_PER_END_DT",
+              "FAC_PAR_CORP_NAME",
+              "FAC_PAR_CORP_BUS_ADDR",
+              "FAC_PAR_CORP_CITY",
+              "FAC_PAR_CORP_STATE",
+              "FAC_PAR_CORP_ZIP",
+              "REPT_PREP_NAME",
+              "SUBMITTED_DT",
+              "REV_REPT_PREP_NAME",
+              "REVISED_DT",
+              "CORRECTED_DT",
+              "LICENSE_NO",
+              "LICENSE_EFF_DATE",
+              "LICENSE_EXP_DATE",
+              "LICENSE_STATUS",
+              "FACILITY_LEVEL",
+              "TRAUMA_CTR",
+              "TEACH_HOSP",
+              "TEACH_RURAL",
+              "LONGITUDE",
+              "LATITUDE",
+              "ASSEMBLY_DIST",
+              "SENATE_DIST",
+              "CONGRESS_DIST",
+              "CENS_TRACT",
+              "MED_SVC_STUDY_AREA",
+              "LA_COUNTY_SVC_PLAN_AREA",
+              "HEALTH_SVC_AREA",
+              "COUNTY",
+              "LIC_CAT",
+              "LICEE_TOC",
+              "PRIN_SERVICE_TYPE",
+              "MED_SURG_LIC_BEDS",
+              "PERINATAL_LIC_BEDS",
+              "PEDIATRIC_LIC_BEDS",
+              "IC_LIC_BEDS",
+              "CORONARY_CARE_LIC_BEDS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BEDS",
+              "BURN_LIC_BEDS",
+              "IC_NEWBORN_LIC_BEDS",
+              "REHAB_CTR_LIC_BEDS",
+              "GAC_SUBTOT_LIC_BEDS",
+              "CHEM_DEPEND_RECOVERY_LIC_BEDS",
+              "ACUTE_PSYCHIATRIC_LIC_BEDS",
+              "SN_LIC_BEDS",
+              "INTERMEDIATE_CARE_LIC_BEDS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BEDS",
+              "TOT_LIC_BEDS",
+              "GAC_CDRS_LIC_BEDS",
+              "ACUTE_PSYCH_LIC_BEDS",
+              "NEWBORN_NURSERY_BASSINETS",
+              "GEN_ACUTE_CARE_SN_SWING_BEDS",
+              "ACUTE_PSYCHIATRIC_PATS_LOCKED_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_OPEN_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_UNIT_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_0_TO_17_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_18_TO_64_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_65_AND_UP_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_AGE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_COUNTY_INDIGENT_PROG",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_TRAD",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_MANAGED_CARE",
+              "ACUTE_PSYCHIATRIC_PATS_SHORT_DOYLE",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_INDIGENT",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_PAYERS",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_PAYOR",
+              "SHORT_DOYLE_SERVICES_OFFERED",
+              "INPATIENT_HOSPICE_PROG_OFFERED",
+              "BED_CLASS_GEN_ACUTE_CARE_SERVICE",
+              "BED_CLASS_SN_HOSPICE_SERVICE",
+              "BED_CLASS_IC_HOSPICE_SERVICE",
+              "INPATIENT_PALLIATIVE_CARE_PROG_OFFERED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_CHAPLAINS",
+              "OUTPATIENT_PALLIATIVE_CARE_SERV_OFFERED",
+              "MED_SURG_LIC_BED_DAYS",
+              "PERINATAL_LIC_BED_DAYS",
+              "PEDIATRIC_LIC_BED_DAYS",
+              "IC_LIC_BED_DAYS",
+              "CORONARY_CARE_LIC_BED_DAYS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BED_DAYS",
+              "BURN_LIC_BED_DAYS",
+              "IC_NEWBORN_LIC_BED_DAYS",
+              "REHAB_CTR_LIC_BED_DAYS",
+              "GAC_SUBTOT_LIC_BED_DAYS",
+              "CHEM_DEPEND_RECOVERY_LIC_BED_DAYS",
+              "ACUTE_PSYCHIATRIC_LIC_BED_DAYS",
+              "SN_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BED_DAYS",
+              "TOT_LIC_BED_DAYS",
+              "MED_SURG_DISCHARGES",
+              "PERINATAL_DISCHARGES",
+              "PEDIATRIC_DISCHARGES",
+              "IC_DISCHARGES",
+              "CORONARY_CARE_DISCHARGES",
+              "ACUTE_RESPIRATORY_CARE_DISCHARGES",
+              "BURN_DISCHARGES",
+              "IC_NEWBORN_DISCHARGES",
+              "REHAB_CTR_DISCHARGES",
+              "GAC_SUBTOT_DISCHARGES",
+              "CHEM_DEPEND_RECOVERY_DISCHARGES",
+              "ACUTE_PSYCHIATRIC_DISCHARGES",
+              "SN_DISCHARGES",
+              "INTERMEDIATE_CARE_DISCHARGES",
+              "INTERMEDIATE_CARE_DEV_DIS_DISCHARGES",
+              "TOT_DISCHARGES",
+              "GAC_CDRS_DISCHARGES",
+              "ACUTE_PSYCH_DISCHARGES",
+              "NEWBORN_NURSERY_INFANTS",
+              "IC_INTRA_TRANSFERS",
+              "CORONARY_CARE_INTRA_TRANSFERS",
+              "ACUTE_RESPIRATORY_CARE_INTRA_TRANSFERS",
+              "BURN_INTRA_TRANSFERS",
+              "IC_NEWBORN_INTRA_TRANSFERS",
+              "SN_INTRA_TRANSFERS",
+              "MED_SURG_CEN_DAYS",
+              "PERINATAL_CEN_DAYS",
+              "PEDIATRIC_CEN_DAYS",
+              "IC_CEN_DAYS",
+              "CORONARY_CARE_CEN_DAYS",
+              "ACUTE_RESPIRATORY_CARE_CEN_DAYS",
+              "BURN_CEN_DAYS",
+              "IC_NEWBORN_CEN_DAYS",
+              "REHAB_CTR_CEN_DAYS",
+              "GAC_SUBTOT_CEN_DAYS",
+              "CHEM_DEPEND_RECOV_CEN_DAYS",
+              "ACUTE_PSYCHIATRIC_CEN_DAYS",
+              "SN_CEN_DAYS",
+              "INTERMEDIATE_CARE_CEN_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_CEN_DAYS",
+              "TOT_CEN_DAYS",
+              "GAC_CDRS_CEN_DAYS",
+              "ACUTE_PSYCH_CEN_DAYS",
+              "NEWBORN_NURSERY_CEN_DAYS",
+              "MED_SURG_ALOS_CY",
+              "PERINATAL_ALOS_CY",
+              "PEDIATRIC_ALOS_CY",
+              "IC_ALOS_CY",
+              "CORONARY_CARE_ALOS_CY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_CY",
+              "BURN_ALOS_CY",
+              "IC_NEWBORN_ALOS_CY",
+              "REHAB_CTR_ALOS_CY",
+              "GAC_SUBTOT_ALOS_CY",
+              "CHEM_DEPEND_RECOV_ALOS_CY",
+              "ACUTE_PSYCHIATRIC_ALOS_CY",
+              "SN_ALOS_CY",
+              "INTERMEDIATE_CARE_ALOS_CY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_CY",
+              "TOT_ALOS_CY",
+              "GAC_CDRS_ALOS_CY",
+              "ACUTE_PSYCH_CDRS_ALOS_CY",
+              "MED_SURG_ALOS_PY",
+              "PERINATAL_ALOS_PY",
+              "PEDIATRIC_ALOS_PY",
+              "IC_ALOS_PY",
+              "CORONARY_CARE_ALOS_PY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_PY",
+              "BURN_ALOS_PY",
+              "IC_NEWBORN_ALOS_PY",
+              "REHAB_CTR_ALOS_PY",
+              "GAC_SUBTOT_ALOS_PY",
+              "CHEM_DEPEND_RECOV_ALOS_PY",
+              "ACUTE_PSYCHIATRIC_ALOS_PY",
+              "SN_ALOS_PY",
+              "INTERMEDIATE_CARE_ALOS_PY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_PY",
+              "TOT_ALOS_PY",
+              "GAC_CDRS_ALOS_PY",
+              "ACUTE_PSYCH_CDRS_ALOS_PY",
+              "EMSA_TRAUMA_DESIGNATION",
+              "LIC_ED_LEV_BEGIN",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_24HR",
+              "AVAIL_SERVICES_LAB_24HR",
+              "AVAIL_SERVICES_OPER_RM_24HR",
+              "AVAIL_SERVICES_PHARMACIST_24HR",
+              "AVAIL_SERVICES_PHYSICIAN_24HR",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_24HR",
+              "AVAIL_SERVICES_RADIOLOGY_24HR",
+              "EMS_VISITS_NON_URGENT_TOT",
+              "EMS_VISITS_URGENT_TOT",
+              "EMS_VISITS_MODERATE_TOT",
+              "EMS_VISITS_SEVERE_TOT",
+              "EMS_VISITS_CRITICAL_TOT",
+              "EMER_DEPT_VISITS_NOT_RESULT_ADMISSIONS_TOT",
+              "EMER_MED_TREAT_STATIONS_ON_1231",
+              "NON_EMER_VISITS_IN_EMER_DEPT",
+              "EMER_REGISTRATIONS_PATS_LEAVE_WO_BEING_SEEN",
+              "EMER_DEPT_AMBULANCE_DIVERSION_HOURS",
+              "EMER_DEPT_HR_DIVERSION_JAN",
+              "EMER_DEPT_HR_DIVERSION_FEB",
+              "EMER_DEPT_HR_DIVERSION_MAR",
+              "EMER_DEPT_HR_DIVERSION_APR",
+              "EMER_DEPT_HR_DIVERSION_MAY",
+              "EMER_DEPT_HR_DIVERSION_JUN",
+              "EMER_DEPT_HR_DIVERSION_JUL",
+              "EMER_DEPT_HR_DIVERSION_AUG",
+              "EMER_DEPT_HR_DIVERSION_SEP",
+              "EMER_DEPT_HR_DIVERSION_OCT",
+              "EMER_DEPT_HR_DIVERSION_NOV",
+              "EMER_DEPT_HR_DIVERSION_DEC",
+              "EMER_DEPT_HR_DIVERSION_TOT",
+              "EMSA_TRAUMA_DESIGNATION_PEDIATRIC",
+              "LIC_ED_LEV_END",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_ON_CALL",
+              "AVAIL_SERVICES_LAB_ON_CALL",
+              "AVAIL_SERVICES_OPER_RM_ON_CALL",
+              "AVAIL_SERVICES_PHARMACIST_ON_CALL",
+              "AVAIL_SERVICES_PHYSICIAN_ON_CALL",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_ON_CALL",
+              "AVAIL_SERVICES_RADIOLOGY_ON_CALL",
+              "EMS_VISITS_NON_URGENT_ADMITTED",
+              "EMS_VISITS_URGENT_ADMITTED",
+              "EMS_VISITS_MODERATE_ADMITTED",
+              "EMS_VISITS_SEVERE_ADMITTED",
+              "EMS_VISITS_CRITICAL_ADMITTED",
+              "ADMITTED_FROM_EMER_DEPT_TOT",
+              "ER_TRAFFIC_TOT",
+              "INPATIENT_SURG_OPER",
+              "OUTPATIENT_SURG_OPER",
+              "INPAT_OPER_RM",
+              "OUTPAT_OPER_RM",
+              "INPAT_OUTPAT_OPER_RM",
+              "OPER_RM_TOT",
+              "OFFER_AMBULATORY_SURG_PROG",
+              "LIVE_BIRTHS_TOT",
+              "LIVE_BIRTHS_LT_2500GM",
+              "LIVE_BIRTHS_LT_1500GM",
+              "OFFER_ALTERNATE_BIRTH_PROG",
+              "ALTERNATE_SETTING_LDR",
+              "ALTERNATE_SETTING_LDRP",
+              "LIVE_BIRTHS_IN_ALTERNATIVE_SETTING",
+              "LIVE_BIRTHS_C_SECTION",
+              "LIC_CARDIOLOGY_CARDIOVASCULAR_SURG_SERVICES",
+              "CARDIOVASCULAR_OPER_RM",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_USED_TOT",
+              "CORONARY_ARTERY_BYPASS_GRAFT_SURG",
+              "CARDIAC_CATHETERIZATION_LAB_RM",
+              "CARD_CATH_PED_IP_DIAG_VST",
+              "CARD_CATH_PED_OP_DIAG_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_DIAGNOSTIC_VISITS_TOT",
+              "DIAGNOSTIC_CARDIAC_CATH_PROC",
+              "MYOCARDIAL_BIOPSY",
+              "PERM_PACEMAKER_IMPLANT",
+              "OTH_PERM_PACEMAKER_PROC",
+              "IMPLANABLE_CARDIO_DEFIB_IMPLANTATION",
+              "OTH_PROCEDURES",
+              "PCI_WITH_STENT",
+              "PCI_WO_STENT",
+              "ATHERECTOMY",
+              "THROMBOLYTIC_AGENTS",
+              "PTBV",
+              "DIAGNOSTIC_ELECTROPHYSIOLOGY_EP",
+              "CATHETER_ABLATION",
+              "PERIPHERAL_VASCULAR_ANGIOGRAPHY",
+              "PERIPHERAL_VASCULAR_INTERVENTIONAL",
+              "CAROTID_STENTING",
+              "INTRA_AORTIC_BALLOON_PUMP_INSERTION",
+              "CATHETER_BASED_VENTRICULAR_ASSIST_DEVICE_INSERTION",
+              "ALL_OTHER_CATHETERIZATION_PROC",
+              "CATHETERIZATION_PROC_TOT",
+              "INPATIENT_SURG_OPER_RM_MINS",
+              "OUTPATIENT_SURG_OPER_RM_MINS",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_NOT_USED_TOT",
+              "CARD_CATH_PED_IP_THER_VST",
+              "CARD_CATH_PED_OP_THER_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_THERAPEUTIC_VISITS_TOT",
+              "INPATIENT_AVG_PER_SURGERY",
+              "OUTPATIENT_AVG_PER_SURGERY",
+              "FAC_ACQUIRE_EQUIP_OVER_500K",
+              "DESC_EQUIP_01",
+              "DESC_EQUIP_02",
+              "DESC_EQUIP_03",
+              "DESC_EQUIP_04",
+              "DESC_EQUIP_05",
+              "DESC_EQUIP_06",
+              "DESC_EQUIP_07",
+              "DESC_EQUIP_08",
+              "DESC_EQUIP_09",
+              "DESC_EQUIP_10",
+              "PROJ_OVER_1M",
+              "DESC_PROJ_01",
+              "DESC_PROJ_02",
+              "DESC_PROJ_03",
+              "DESC_PROJ_04",
+              "DESC_PROJ_05",
+              "EQUIP_VAL_01",
+              "EQUIP_VAL_02",
+              "EQUIP_VAL_03",
+              "EQUIP_VAL_04",
+              "EQUIP_VAL_05",
+              "EQUIP_VAL_06",
+              "EQUIP_VAL_07",
+              "EQUIP_VAL_08",
+              "EQUIP_VAL_09",
+              "EQUIP_VAL_10",
+              "PROJ_EXPENDITURES_01",
+              "PROJ_EXPENDITURES_02",
+              "PROJ_EXPENDITURES_03",
+              "PROJ_EXPENDITURES_04",
+              "PROJ_EXPENDITURES_05",
+              "DT_AQUIRE_EQUIP_01",
+              "DT_AQUIRE_EQUIP_02",
+              "DT_AQUIRE_EQUIP_03",
+              "DT_AQUIRE_EQUIP_04",
+              "DT_AQUIRE_EQUIP_05",
+              "DT_AQUIRE_EQUIP_06",
+              "DT_AQUIRE_EQUIP_07",
+              "DT_AQUIRE_EQUIP_08",
+              "DT_AQUIRE_EQUIP_09",
+              "DT_AQUIRE_EQUIP_10",
+              "OSHPD_PROJ_NO_01",
+              "OSHPD_PROJ_NO_02",
+              "OSHPD_PROJ_NO_03",
+              "OSHPD_PROJ_NO_04",
+              "OSHPD_PROJ_NO_05",
+              "MEANS_FOR_ACQUISITION_01",
+              "MEANS_FOR_ACQUISITION_02",
+              "MEANS_FOR_ACQUISITION_03",
+              "MEANS_FOR_ACQUISITION_04",
+              "MEANS_FOR_ACQUISITION_05",
+              "MEANS_FOR_ACQUISITION_06",
+              "MEANS_FOR_ACQUISITION_07",
+              "MEANS_FOR_ACQUISITION_08",
+              "MEANS_FOR_ACQUISITION_09",
+              "MEANS_FOR_ACQUISITION_10"
+            ]
+          },
+          {
+            "layout_id": "hcai_util_2021_2021",
+            "years": [
+              2021
+            ],
+            "sheets": [
+              "Tips",
+              "Page 1-6",
+              "NonResp 1-6",
+              "Crosswalk"
+            ],
+            "header": [
+              "Description",
+              "FAC_NO",
+              "FAC_NAME",
+              "FAC_STR_ADDR",
+              "FAC_CITY",
+              "FAC_ZIP",
+              "FAC_PHONE",
+              "FAC_ADMIN_NAME",
+              "FAC_OPERATED_THIS_YR",
+              "FAC_OP_PER_BEGIN_DT",
+              "FAC_OP_PER_END_DT",
+              "FAC_PAR_CORP_NAME",
+              "FAC_PAR_CORP_BUS_ADDR",
+              "FAC_PAR_CORP_CITY",
+              "FAC_PAR_CORP_STATE",
+              "FAC_PAR_CORP_ZIP",
+              "REPT_PREP_NAME",
+              "SUBMITTED_DT",
+              "REV_REPT_PREP_NAME",
+              "REVISED_DT",
+              "CORRECTED_DT",
+              "LICENSE_NO",
+              "LICENSE_EFF_DATE",
+              "LICENSE_EXP_DATE",
+              "LICENSE_STATUS",
+              "FACILITY_LEVEL",
+              "TRAUMA_CTR",
+              "TEACH_HOSP",
+              "TEACH_RURAL",
+              "LONGITUDE",
+              "LATITUDE",
+              "ASSEMBLY_DIST",
+              "SENATE_DIST",
+              "CONGRESS_DIST",
+              "CENS_TRACT",
+              "MED_SVC_STUDY_AREA",
+              "LA_COUNTY_SVC_PLAN_AREA",
+              "HEALTH_SVC_AREA",
+              "COUNTY",
+              "LIC_CAT",
+              "LICEE_TOC",
+              "PRIN_SERVICE_TYPE",
+              "MED_SURG_LIC_BEDS",
+              "PERINATAL_LIC_BEDS",
+              "PEDIATRIC_LIC_BEDS",
+              "IC_LIC_BEDS",
+              "CORONARY_CARE_LIC_BEDS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BEDS",
+              "BURN_LIC_BEDS",
+              "IC_NEWBORN_LIC_BEDS",
+              "REHAB_CTR_LIC_BEDS",
+              "GAC_SUBTOT_LIC_BEDS",
+              "CHEM_DEPEND_RECOVERY_LIC_BEDS",
+              "ACUTE_PSYCHIATRIC_LIC_BEDS",
+              "SN_LIC_BEDS",
+              "INTERMEDIATE_CARE_LIC_BEDS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BEDS",
+              "TOT_LIC_BEDS",
+              "GAC_CDRS_LIC_BEDS",
+              "ACUTE_PSYCH_LIC_BEDS",
+              "NEWBORN_NURSERY_BASSINETS",
+              "GEN_ACUTE_CARE_SN_SWING_BEDS",
+              "ACUTE_PSYCHIATRIC_PATS_LOCKED_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_OPEN_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_UNIT_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_0_TO_17_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_18_TO_64_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_65_AND_UP_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_AGE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_COUNTY_INDIGENT_PROG",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_TRAD",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_MANAGED_CARE",
+              "ACUTE_PSYCHIATRIC_PATS_SHORT_DOYLE",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_INDIGENT",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_PAYERS",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_PAYOR",
+              "SHORT_DOYLE_SERVICES_OFFERED",
+              "INPATIENT_HOSPICE_PROG_OFFERED",
+              "BED_CLASS_GEN_ACUTE_CARE_SERVICE",
+              "BED_CLASS_SN_HOSPICE_SERVICE",
+              "BED_CLASS_IC_HOSPICE_SERVICE",
+              "INPATIENT_PALLIATIVE_CARE_PROG_OFFERED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_CHAPLAINS",
+              "OUTPATIENT_PALLIATIVE_CARE_SERV_OFFERED",
+              "MED_SURG_LIC_BED_DAYS",
+              "PERINATAL_LIC_BED_DAYS",
+              "PEDIATRIC_LIC_BED_DAYS",
+              "IC_LIC_BED_DAYS",
+              "CORONARY_CARE_LIC_BED_DAYS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BED_DAYS",
+              "BURN_LIC_BED_DAYS",
+              "IC_NEWBORN_LIC_BED_DAYS",
+              "REHAB_CTR_LIC_BED_DAYS",
+              "GAC_SUBTOT_LIC_BED_DAYS",
+              "CHEM_DEPEND_RECOVERY_LIC_BED_DAYS",
+              "ACUTE_PSYCHIATRIC_LIC_BED_DAYS",
+              "SN_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BED_DAYS",
+              "TOT_LIC_BED_DAYS",
+              "MED_SURG_DISCHARGES",
+              "PERINATAL_DISCHARGES",
+              "PEDIATRIC_DISCHARGES",
+              "IC_DISCHARGES",
+              "CORONARY_CARE_DISCHARGES",
+              "ACUTE_RESPIRATORY_CARE_DISCHARGES",
+              "BURN_DISCHARGES",
+              "IC_NEWBORN_DISCHARGES",
+              "REHAB_CTR_DISCHARGES",
+              "GAC_SUBTOT_DISCHARGES",
+              "CHEM_DEPEND_RECOVERY_DISCHARGES",
+              "ACUTE_PSYCHIATRIC_DISCHARGES",
+              "SN_DISCHARGES",
+              "INTERMEDIATE_CARE_DISCHARGES",
+              "INTERMEDIATE_CARE_DEV_DIS_DISCHARGES",
+              "TOT_DISCHARGES",
+              "GAC_CDRS_DISCHARGES",
+              "ACUTE_PSYCH_DISCHARGES",
+              "NEWBORN_NURSERY_INFANTS",
+              "IC_INTRA_TRANSFERS",
+              "CORONARY_CARE_INTRA_TRANSFERS",
+              "ACUTE_RESPIRATORY_CARE_INTRA_TRANSFERS",
+              "BURN_INTRA_TRANSFERS",
+              "IC_NEWBORN_INTRA_TRANSFERS",
+              "SN_INTRA_TRANSFERS",
+              "MED_SURG_CEN_DAYS",
+              "PERINATAL_CEN_DAYS",
+              "PEDIATRIC_CEN_DAYS",
+              "IC_CEN_DAYS",
+              "CORONARY_CARE_CEN_DAYS",
+              "ACUTE_RESPIRATORY_CARE_CEN_DAYS",
+              "BURN_CEN_DAYS",
+              "IC_NEWBORN_CEN_DAYS",
+              "REHAB_CTR_CEN_DAYS",
+              "GAC_SUBTOT_CEN_DAYS",
+              "CHEM_DEPEND_RECOV_CEN_DAYS",
+              "ACUTE_PSYCHIATRIC_CEN_DAYS",
+              "SN_CEN_DAYS",
+              "INTERMEDIATE_CARE_CEN_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_CEN_DAYS",
+              "TOT_CEN_DAYS",
+              "GAC_CDRS_CEN_DAYS",
+              "ACUTE_PSYCH_CEN_DAYS",
+              "NEWBORN_NURSERY_CEN_DAYS",
+              "MED_SURG_ALOS_CY",
+              "PERINATAL_ALOS_CY",
+              "PEDIATRIC_ALOS_CY",
+              "IC_ALOS_CY",
+              "CORONARY_CARE_ALOS_CY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_CY",
+              "BURN_ALOS_CY",
+              "IC_NEWBORN_ALOS_CY",
+              "REHAB_CTR_ALOS_CY",
+              "GAC_SUBTOT_ALOS_CY",
+              "CHEM_DEPEND_RECOV_ALOS_CY",
+              "ACUTE_PSYCHIATRIC_ALOS_CY",
+              "SN_ALOS_CY",
+              "INTERMEDIATE_CARE_ALOS_CY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_CY",
+              "TOT_ALOS_CY",
+              "GAC_CDRS_ALOS_CY",
+              "ACUTE_PSYCH_CDRS_ALOS_CY",
+              "MED_SURG_ALOS_PY",
+              "PERINATAL_ALOS_PY",
+              "PEDIATRIC_ALOS_PY",
+              "IC_ALOS_PY",
+              "CORONARY_CARE_ALOS_PY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_PY",
+              "BURN_ALOS_PY",
+              "IC_NEWBORN_ALOS_PY",
+              "REHAB_CTR_ALOS_PY",
+              "GAC_SUBTOT_ALOS_PY",
+              "CHEM_DEPEND_RECOV_ALOS_PY",
+              "ACUTE_PSYCHIATRIC_ALOS_PY",
+              "SN_ALOS_PY",
+              "INTERMEDIATE_CARE_ALOS_PY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_PY",
+              "TOT_ALOS_PY",
+              "GAC_CDRS_ALOS_PY",
+              "ACUTE_PSYCH_CDRS_ALOS_PY",
+              "EMSA_TRAUMA_DESIGNATION",
+              "LIC_ED_LEV_BEGIN",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_24HR",
+              "AVAIL_SERVICES_LAB_24HR",
+              "AVAIL_SERVICES_OPER_RM_24HR",
+              "AVAIL_SERVICES_PHARMACIST_24HR",
+              "AVAIL_SERVICES_PHYSICIAN_24HR",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_24HR",
+              "AVAIL_SERVICES_RADIOLOGY_24HR",
+              "EMS_VISITS_NON_URGENT_TOT",
+              "EMS_VISITS_URGENT_TOT",
+              "EMS_VISITS_MODERATE_TOT",
+              "EMS_VISITS_SEVERE_TOT",
+              "EMS_VISITS_CRITICAL_TOT",
+              "EMER_DEPT_VISITS_NOT_RESULT_ADMISSIONS_TOT",
+              "EMER_MED_TREAT_STATIONS_ON_1231",
+              "NON_EMER_VISITS_IN_EMER_DEPT",
+              "EMER_REGISTRATIONS_PATS_LEAVE_WO_BEING_SEEN",
+              "EMER_DEPT_AMBULANCE_DIVERSION_HOURS",
+              "EMER_DEPT_HR_DIVERSION_JAN",
+              "EMER_DEPT_HR_DIVERSION_FEB",
+              "EMER_DEPT_HR_DIVERSION_MAR",
+              "EMER_DEPT_HR_DIVERSION_APR",
+              "EMER_DEPT_HR_DIVERSION_MAY",
+              "EMER_DEPT_HR_DIVERSION_JUN",
+              "EMER_DEPT_HR_DIVERSION_JUL",
+              "EMER_DEPT_HR_DIVERSION_AUG",
+              "EMER_DEPT_HR_DIVERSION_SEP",
+              "EMER_DEPT_HR_DIVERSION_OCT",
+              "EMER_DEPT_HR_DIVERSION_NOV",
+              "EMER_DEPT_HR_DIVERSION_DEC",
+              "EMER_DEPT_HR_DIVERSION_TOT",
+              "EMSA_TRAUMA_DESIGNATION_PEDIATRIC",
+              "LIC_ED_LEV_END",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_ON_CALL",
+              "AVAIL_SERVICES_LAB_ON_CALL",
+              "AVAIL_SERVICES_OPER_RM_ON_CALL",
+              "AVAIL_SERVICES_PHARMACIST_ON_CALL",
+              "AVAIL_SERVICES_PHYSICIAN_ON_CALL",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_ON_CALL",
+              "AVAIL_SERVICES_RADIOLOGY_ON_CALL",
+              "EMS_VISITS_NON_URGENT_ADMITTED",
+              "EMS_VISITS_URGENT_ADMITTED",
+              "EMS_VISITS_MODERATE_ADMITTED",
+              "EMS_VISITS_SEVERE_ADMITTED",
+              "EMS_VISITS_CRITICAL_ADMITTED",
+              "ADMITTED_FROM_EMER_DEPT_TOT",
+              "ER_TRAFFIC_TOT",
+              "INPATIENT_SURG_OPER",
+              "OUTPATIENT_SURG_OPER",
+              "INPAT_OPER_RM",
+              "OUTPAT_OPER_RM",
+              "INPAT_OUTPAT_OPER_RM",
+              "OPER_RM_TOT",
+              "OFFER_AMBULATORY_SURG_PROG",
+              "LIVE_BIRTHS_TOT",
+              "LIVE_BIRTHS_LT_2500GM",
+              "LIVE_BIRTHS_LT_1500GM",
+              "OFFER_ALTERNATE_BIRTH_PROG",
+              "ALTERNATE_SETTING_LDR",
+              "ALTERNATE_SETTING_LDRP",
+              "LIVE_BIRTHS_IN_ALTERNATIVE_SETTING",
+              "LIVE_BIRTHS_C_SECTION",
+              "LIC_CARDIOLOGY_CARDIOVASCULAR_SURG_SERVICES",
+              "CARDIOVASCULAR_OPER_RM",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_USED_TOT",
+              "CORONARY_ARTERY_BYPASS_GRAFT_SURG",
+              "CARDIAC_CATHETERIZATION_LAB_RM",
+              "CARD_CATH_PED_IP_DIAG_VST",
+              "CARD_CATH_PED_OP_DIAG_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_DIAGNOSTIC_VISITS_TOT",
+              "DIAGNOSTIC_CARDIAC_CATH_PROC",
+              "MYOCARDIAL_BIOPSY",
+              "PERM_PACEMAKER_IMPLANT",
+              "OTH_PERM_PACEMAKER_PROC",
+              "IMPLANABLE_CARDIO_DEFIB_IMPLANTATION",
+              "OTH_PROCEDURES",
+              "PCI_WITH_STENT",
+              "PCI_WO_STENT",
+              "ATHERECTOMY",
+              "THROMBOLYTIC_AGENTS",
+              "PTBV",
+              "DIAGNOSTIC_ELECTROPHYSIOLOGY_EP",
+              "CATHETER_ABLATION",
+              "PERIPHERAL_VASCULAR_ANGIOGRAPHY",
+              "PERIPHERAL_VASCULAR_INTERVENTIONAL",
+              "CAROTID_STENTING",
+              "INTRA_AORTIC_BALLOON_PUMP_INSERTION",
+              "CATHETER_BASED_VENTRICULAR_ASSIST_DEVICE_INSERTION",
+              "ALL_OTHER_CATHETERIZATION_PROC",
+              "CATHETERIZATION_PROC_TOT",
+              "INPATIENT_SURG_OPER_RM_MINS",
+              "OUTPATIENT_SURG_OPER_RM_MINS",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_NOT_USED_TOT",
+              "CARD_CATH_PED_IP_THER_VST",
+              "CARD_CATH_PED_OP_THER_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_THERAPEUTIC_VISITS_TOT",
+              "INPATIENT_AVG_PER_SURGERY",
+              "OUTPATIENT_AVG_PER_SURGERY",
+              "FAC_ACQUIRE_EQUIP_OVER_500K",
+              "DESC_EQUIP_01",
+              "DESC_EQUIP_02",
+              "DESC_EQUIP_03",
+              "DESC_EQUIP_04",
+              "DESC_EQUIP_05",
+              "DESC_EQUIP_06",
+              "DESC_EQUIP_07",
+              "DESC_EQUIP_08",
+              "DESC_EQUIP_09",
+              "DESC_EQUIP_10",
+              "PROJ_OVER_1M",
+              "DESC_PROJ_01",
+              "DESC_PROJ_02",
+              "DESC_PROJ_03",
+              "DESC_PROJ_04",
+              "DESC_PROJ_05",
+              "EQUIP_VAL_01",
+              "EQUIP_VAL_02",
+              "EQUIP_VAL_03",
+              "EQUIP_VAL_04",
+              "EQUIP_VAL_05",
+              "EQUIP_VAL_06",
+              "EQUIP_VAL_07",
+              "EQUIP_VAL_08",
+              "EQUIP_VAL_09",
+              "EQUIP_VAL_10",
+              "PROJ_EXPENDITURES_01",
+              "PROJ_EXPENDITURES_02",
+              "PROJ_EXPENDITURES_03",
+              "PROJ_EXPENDITURES_04",
+              "PROJ_EXPENDITURES_05",
+              "DT_AQUIRE_EQUIP_01",
+              "DT_AQUIRE_EQUIP_02",
+              "DT_AQUIRE_EQUIP_03",
+              "DT_AQUIRE_EQUIP_04",
+              "DT_AQUIRE_EQUIP_05",
+              "DT_AQUIRE_EQUIP_06",
+              "DT_AQUIRE_EQUIP_07",
+              "DT_AQUIRE_EQUIP_08",
+              "DT_AQUIRE_EQUIP_09",
+              "DT_AQUIRE_EQUIP_10",
+              "HCAI_PROJ_NO_01",
+              "HCAI_PROJ_NO_02",
+              "HCAI_PROJ_NO_03",
+              "HCAI_PROJ_NO_04",
+              "HCAI_PROJ_NO_05",
+              "MEANS_FOR_ACQUISITION_01",
+              "MEANS_FOR_ACQUISITION_02",
+              "MEANS_FOR_ACQUISITION_03",
+              "MEANS_FOR_ACQUISITION_04",
+              "MEANS_FOR_ACQUISITION_05",
+              "MEANS_FOR_ACQUISITION_06",
+              "MEANS_FOR_ACQUISITION_07",
+              "MEANS_FOR_ACQUISITION_08",
+              "MEANS_FOR_ACQUISITION_09",
+              "MEANS_FOR_ACQUISITION_10"
+            ]
+          },
+          {
+            "layout_id": "hcai_util_2022_2025",
+            "years": [
+              2022,
+              2023,
+              2024,
+              2025
+            ],
+            "sheets": [
+              "Tips",
+              "Page 1-6",
+              "NonResp 1-6"
+            ],
+            "header": [
+              "Description",
+              "FAC_NO",
+              "FAC_NAME",
+              "FAC_STR_ADDR",
+              "FAC_CITY",
+              "FAC_ZIP",
+              "FAC_PHONE",
+              "FAC_ADMIN_NAME",
+              "FAC_OPERATED_THIS_YR",
+              "FAC_OP_PER_BEGIN_DT",
+              "FAC_OP_PER_END_DT",
+              "FAC_PAR_CORP_NAME",
+              "FAC_PAR_CORP_BUS_ADDR",
+              "FAC_PAR_CORP_CITY",
+              "FAC_PAR_CORP_STATE",
+              "FAC_PAR_CORP_ZIP",
+              "REPT_PREP_NAME",
+              "SUBMITTED_DT",
+              "REV_REPT_PREP_NAME",
+              "REVISED_DT",
+              "CORRECTED_DT",
+              "LICENSE_NO",
+              "LICENSE_EFF_DATE",
+              "LICENSE_EXP_DATE",
+              "LICENSE_STATUS",
+              "FACILITY_LEVEL",
+              "TRAUMA_CTR",
+              "TEACH_HOSP",
+              "TEACH_RURAL",
+              "LONGITUDE",
+              "LATITUDE",
+              "ASSEMBLY_DIST",
+              "SENATE_DIST",
+              "CONGRESS_DIST",
+              "CENSUS_KEY",
+              "MED_SVC_STUDY_AREA",
+              "LA_COUNTY_SVC_PLAN_AREA",
+              "HEALTH_SVC_AREA",
+              "COUNTY",
+              "LIC_CAT",
+              "LICEE_TOC",
+              "PRIN_SERVICE_TYPE",
+              "MED_SURG_LIC_BEDS",
+              "PERINATAL_LIC_BEDS",
+              "PEDIATRIC_LIC_BEDS",
+              "IC_LIC_BEDS",
+              "CORONARY_CARE_LIC_BEDS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BEDS",
+              "BURN_LIC_BEDS",
+              "IC_NEWBORN_LIC_BEDS",
+              "REHAB_CTR_LIC_BEDS",
+              "GAC_SUBTOT_LIC_BEDS",
+              "CHEM_DEPEND_RECOVERY_LIC_BEDS",
+              "ACUTE_PSYCHIATRIC_LIC_BEDS",
+              "SN_LIC_BEDS",
+              "INTERMEDIATE_CARE_LIC_BEDS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BEDS",
+              "TOT_LIC_BEDS",
+              "GAC_CDRS_LIC_BEDS",
+              "ACUTE_PSYCH_LIC_BEDS",
+              "NEWBORN_NURSERY_BASSINETS",
+              "GEN_ACUTE_CARE_SN_SWING_BEDS",
+              "ACUTE_PSYCHIATRIC_PATS_LOCKED_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_OPEN_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_UNIT_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_0_TO_17_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_18_TO_64_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_65_AND_UP_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_AGE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_TRAD_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_MED_CAL_MANAGED_CARE_ON_1231",
+              "ACUTE_PSYCHIATRIC_PATS_COUNTY_INDIGENT_PROG",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_TRAD",
+              "ACUTE_PSYCHIATRIC_PATS_3RD_PARTIES_MANAGED_CARE",
+              "ACUTE_PSYCHIATRIC_PATS_SHORT_DOYLE",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_INDIGENT",
+              "ACUTE_PSYCHIATRIC_PATS_OTHER_PAYERS",
+              "ACUTE_PSYCHIATRIC_PATS_TOT_BY_PAYOR",
+              "SHORT_DOYLE_SERVICES_OFFERED",
+              "INPATIENT_HOSPICE_PROG_OFFERED",
+              "BED_CLASS_GEN_ACUTE_CARE_SERVICE",
+              "BED_CLASS_SN_HOSPICE_SERVICE",
+              "BED_CLASS_IC_HOSPICE_SERVICE",
+              "INPATIENT_PALLIATIVE_CARE_PROG_OFFERED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES",
+              "INPATIENT_PALLIATIVE_CARE_PROG_NURSES_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN",
+              "INPATIENT_PALLIATIVE_CARE_PROG_PHYSICIAN_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER",
+              "INPATIENT_PALLIATIVE_CARE_PROG_SOCIAL_WORKER_CERTIFIED",
+              "INPATIENT_PALLIATIVE_CARE_PROG_CHAPLAINS",
+              "OUTPATIENT_PALLIATIVE_CARE_SERV_OFFERED",
+              "MED_SURG_LIC_BED_DAYS",
+              "PERINATAL_LIC_BED_DAYS",
+              "PEDIATRIC_LIC_BED_DAYS",
+              "IC_LIC_BED_DAYS",
+              "CORONARY_CARE_LIC_BED_DAYS",
+              "ACUTE_RESPIRATORY_CARE_LIC_BED_DAYS",
+              "BURN_LIC_BED_DAYS",
+              "IC_NEWBORN_LIC_BED_DAYS",
+              "REHAB_CTR_LIC_BED_DAYS",
+              "GAC_SUBTOT_LIC_BED_DAYS",
+              "CHEM_DEPEND_RECOVERY_LIC_BED_DAYS",
+              "ACUTE_PSYCHIATRIC_LIC_BED_DAYS",
+              "SN_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_LIC_BED_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_LIC_BED_DAYS",
+              "TOT_LIC_BED_DAYS",
+              "MED_SURG_DISCHARGES",
+              "PERINATAL_DISCHARGES",
+              "PEDIATRIC_DISCHARGES",
+              "IC_DISCHARGES",
+              "CORONARY_CARE_DISCHARGES",
+              "ACUTE_RESPIRATORY_CARE_DISCHARGES",
+              "BURN_DISCHARGES",
+              "IC_NEWBORN_DISCHARGES",
+              "REHAB_CTR_DISCHARGES",
+              "GAC_SUBTOT_DISCHARGES",
+              "CHEM_DEPEND_RECOVERY_DISCHARGES",
+              "ACUTE_PSYCHIATRIC_DISCHARGES",
+              "SN_DISCHARGES",
+              "INTERMEDIATE_CARE_DISCHARGES",
+              "INTERMEDIATE_CARE_DEV_DIS_DISCHARGES",
+              "TOT_DISCHARGES",
+              "GAC_CDRS_DISCHARGES",
+              "ACUTE_PSYCH_DISCHARGES",
+              "NEWBORN_NURSERY_INFANTS",
+              "IC_INTRA_TRANSFERS",
+              "CORONARY_CARE_INTRA_TRANSFERS",
+              "ACUTE_RESPIRATORY_CARE_INTRA_TRANSFERS",
+              "BURN_INTRA_TRANSFERS",
+              "IC_NEWBORN_INTRA_TRANSFERS",
+              "SN_INTRA_TRANSFERS",
+              "MED_SURG_CEN_DAYS",
+              "PERINATAL_CEN_DAYS",
+              "PEDIATRIC_CEN_DAYS",
+              "IC_CEN_DAYS",
+              "CORONARY_CARE_CEN_DAYS",
+              "ACUTE_RESPIRATORY_CARE_CEN_DAYS",
+              "BURN_CEN_DAYS",
+              "IC_NEWBORN_CEN_DAYS",
+              "REHAB_CTR_CEN_DAYS",
+              "GAC_SUBTOT_CEN_DAYS",
+              "CHEM_DEPEND_RECOV_CEN_DAYS",
+              "ACUTE_PSYCHIATRIC_CEN_DAYS",
+              "SN_CEN_DAYS",
+              "INTERMEDIATE_CARE_CEN_DAYS",
+              "INTERMEDIATE_CARE_DEV_DIS_CEN_DAYS",
+              "TOT_CEN_DAYS",
+              "GAC_CDRS_CEN_DAYS",
+              "ACUTE_PSYCH_CEN_DAYS",
+              "NEWBORN_NURSERY_CEN_DAYS",
+              "MED_SURG_ALOS_CY",
+              "PERINATAL_ALOS_CY",
+              "PEDIATRIC_ALOS_CY",
+              "IC_ALOS_CY",
+              "CORONARY_CARE_ALOS_CY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_CY",
+              "BURN_ALOS_CY",
+              "IC_NEWBORN_ALOS_CY",
+              "REHAB_CTR_ALOS_CY",
+              "GAC_SUBTOT_ALOS_CY",
+              "CHEM_DEPEND_RECOV_ALOS_CY",
+              "ACUTE_PSYCHIATRIC_ALOS_CY",
+              "SN_ALOS_CY",
+              "INTERMEDIATE_CARE_ALOS_CY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_CY",
+              "TOT_ALOS_CY",
+              "GAC_CDRS_ALOS_CY",
+              "ACUTE_PSYCH_CDRS_ALOS_CY",
+              "MED_SURG_ALOS_PY",
+              "PERINATAL_ALOS_PY",
+              "PEDIATRIC_ALOS_PY",
+              "IC_ALOS_PY",
+              "CORONARY_CARE_ALOS_PY",
+              "ACUTE_RESPIRATORY_CARE_ALOS_PY",
+              "BURN_ALOS_PY",
+              "IC_NEWBORN_ALOS_PY",
+              "REHAB_CTR_ALOS_PY",
+              "GAC_SUBTOT_ALOS_PY",
+              "CHEM_DEPEND_RECOV_ALOS_PY",
+              "ACUTE_PSYCHIATRIC_ALOS_PY",
+              "SN_ALOS_PY",
+              "INTERMEDIATE_CARE_ALOS_PY",
+              "INTERMEDIATE_CARE_DEV_DIS_ALOS_PY",
+              "TOT_ALOS_PY",
+              "GAC_CDRS_ALOS_PY",
+              "ACUTE_PSYCH_CDRS_ALOS_PY",
+              "EMSA_TRAUMA_DESIGNATION",
+              "LIC_ED_LEV_BEGIN",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_24HR",
+              "AVAIL_SERVICES_LAB_24HR",
+              "AVAIL_SERVICES_OPER_RM_24HR",
+              "AVAIL_SERVICES_PHARMACIST_24HR",
+              "AVAIL_SERVICES_PHYSICIAN_24HR",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_24HR",
+              "AVAIL_SERVICES_RADIOLOGY_24HR",
+              "EMS_VISITS_NON_URGENT_TOT",
+              "EMS_VISITS_URGENT_TOT",
+              "EMS_VISITS_MODERATE_TOT",
+              "EMS_VISITS_SEVERE_TOT",
+              "EMS_VISITS_CRITICAL_TOT",
+              "EMER_DEPT_VISITS_NOT_RESULT_ADMISSIONS_TOT",
+              "EMER_MED_TREAT_STATIONS_ON_1231",
+              "NON_EMER_VISITS_IN_EMER_DEPT",
+              "EMER_REGISTRATIONS_PATS_LEAVE_WO_BEING_SEEN",
+              "EMER_DEPT_AMBULANCE_DIVERSION_HOURS",
+              "EMER_DEPT_HR_DIVERSION_JAN",
+              "EMER_DEPT_HR_DIVERSION_FEB",
+              "EMER_DEPT_HR_DIVERSION_MAR",
+              "EMER_DEPT_HR_DIVERSION_APR",
+              "EMER_DEPT_HR_DIVERSION_MAY",
+              "EMER_DEPT_HR_DIVERSION_JUN",
+              "EMER_DEPT_HR_DIVERSION_JUL",
+              "EMER_DEPT_HR_DIVERSION_AUG",
+              "EMER_DEPT_HR_DIVERSION_SEP",
+              "EMER_DEPT_HR_DIVERSION_OCT",
+              "EMER_DEPT_HR_DIVERSION_NOV",
+              "EMER_DEPT_HR_DIVERSION_DEC",
+              "EMER_DEPT_HR_DIVERSION_TOT",
+              "EMSA_TRAUMA_DESIGNATION_PEDIATRIC",
+              "LIC_ED_LEV_END",
+              "AVAIL_SERVICES_ANESTHESIOLOGIST_ON_CALL",
+              "AVAIL_SERVICES_LAB_ON_CALL",
+              "AVAIL_SERVICES_OPER_RM_ON_CALL",
+              "AVAIL_SERVICES_PHARMACIST_ON_CALL",
+              "AVAIL_SERVICES_PHYSICIAN_ON_CALL",
+              "AVAIL_SERVICES_PSYCHIATRIC_ER_ON_CALL",
+              "AVAIL_SERVICES_RADIOLOGY_ON_CALL",
+              "EMS_VISITS_NON_URGENT_ADMITTED",
+              "EMS_VISITS_URGENT_ADMITTED",
+              "EMS_VISITS_MODERATE_ADMITTED",
+              "EMS_VISITS_SEVERE_ADMITTED",
+              "EMS_VISITS_CRITICAL_ADMITTED",
+              "ADMITTED_FROM_EMER_DEPT_TOT",
+              "ER_TRAFFIC_TOT",
+              "INPATIENT_SURG_OPER",
+              "OUTPATIENT_SURG_OPER",
+              "INPAT_OPER_RM",
+              "OUTPAT_OPER_RM",
+              "INPAT_OUTPAT_OPER_RM",
+              "OPER_RM_TOT",
+              "OFFER_AMBULATORY_SURG_PROG",
+              "LIVE_BIRTHS_TOT",
+              "LIVE_BIRTHS_LT_2500GM",
+              "LIVE_BIRTHS_LT_1500GM",
+              "OFFER_ALTERNATE_BIRTH_PROG",
+              "ALTERNATE_SETTING_LDR",
+              "ALTERNATE_SETTING_LDRP",
+              "LIVE_BIRTHS_IN_ALTERNATIVE_SETTING",
+              "LIVE_BIRTHS_C_SECTION",
+              "LIC_CARDIOLOGY_CARDIOVASCULAR_SURG_SERVICES",
+              "CARDIOVASCULAR_OPER_RM",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_USED_TOT",
+              "CORONARY_ARTERY_BYPASS_GRAFT_SURG",
+              "CARDIAC_CATHETERIZATION_LAB_RM",
+              "CARD_CATH_PED_IP_DIAG_VST",
+              "CARD_CATH_PED_OP_DIAG_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_DIAGNOSTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_DIAGNOSTIC_VISITS_TOT",
+              "DIAGNOSTIC_CARDIAC_CATH_PROC",
+              "MYOCARDIAL_BIOPSY",
+              "PERM_PACEMAKER_IMPLANT",
+              "OTH_PERM_PACEMAKER_PROC",
+              "IMPLANABLE_CARDIO_DEFIB_IMPLANTATION",
+              "OTH_PROCEDURES",
+              "PCI_WITH_STENT",
+              "PCI_WO_STENT",
+              "ATHERECTOMY",
+              "THROMBOLYTIC_AGENTS",
+              "PTBV",
+              "DIAGNOSTIC_ELECTROPHYSIOLOGY_EP",
+              "CATHETER_ABLATION",
+              "PERIPHERAL_VASCULAR_ANGIOGRAPHY",
+              "PERIPHERAL_VASCULAR_INTERVENTIONAL",
+              "CAROTID_STENTING",
+              "INTRA_AORTIC_BALLOON_PUMP_INSERTION",
+              "CATHETER_BASED_VENTRICULAR_ASSIST_DEVICE_INSERTION",
+              "ALL_OTHER_CATHETERIZATION_PROC",
+              "CATHETERIZATION_PROC_TOT",
+              "INPATIENT_SURG_OPER_RM_MINS",
+              "OUTPATIENT_SURG_OPER_RM_MINS",
+              "CARDIOVASCULAR_SURG_OPER_PEDIATRIC_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_ADULT_BYPASS_NOT_USED",
+              "CARDIOVASCULAR_SURG_OPER_BYPASS_NOT_USED_TOT",
+              "CARD_CATH_PED_IP_THER_VST",
+              "CARD_CATH_PED_OP_THER_VST",
+              "CARDIAC_CATHETERIZATION_ADULT_INPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_ADULT_OUTPAT_THERAPEUTIC_VISITS",
+              "CARDIAC_CATHETERIZATION_THERAPEUTIC_VISITS_TOT",
+              "INPATIENT_AVG_PER_SURGERY",
+              "OUTPATIENT_AVG_PER_SURGERY",
+              "FAC_ACQUIRE_EQUIP_OVER_500K",
+              "DESC_EQUIP_01",
+              "DESC_EQUIP_02",
+              "DESC_EQUIP_03",
+              "DESC_EQUIP_04",
+              "DESC_EQUIP_05",
+              "DESC_EQUIP_06",
+              "DESC_EQUIP_07",
+              "DESC_EQUIP_08",
+              "DESC_EQUIP_09",
+              "DESC_EQUIP_10",
+              "PROJ_OVER_1M",
+              "DESC_PROJ_01",
+              "DESC_PROJ_02",
+              "DESC_PROJ_03",
+              "DESC_PROJ_04",
+              "DESC_PROJ_05",
+              "EQUIP_VAL_01",
+              "EQUIP_VAL_02",
+              "EQUIP_VAL_03",
+              "EQUIP_VAL_04",
+              "EQUIP_VAL_05",
+              "EQUIP_VAL_06",
+              "EQUIP_VAL_07",
+              "EQUIP_VAL_08",
+              "EQUIP_VAL_09",
+              "EQUIP_VAL_10",
+              "PROJ_EXPENDITURES_01",
+              "PROJ_EXPENDITURES_02",
+              "PROJ_EXPENDITURES_03",
+              "PROJ_EXPENDITURES_04",
+              "PROJ_EXPENDITURES_05",
+              "DT_AQUIRE_EQUIP_01",
+              "DT_AQUIRE_EQUIP_02",
+              "DT_AQUIRE_EQUIP_03",
+              "DT_AQUIRE_EQUIP_04",
+              "DT_AQUIRE_EQUIP_05",
+              "DT_AQUIRE_EQUIP_06",
+              "DT_AQUIRE_EQUIP_07",
+              "DT_AQUIRE_EQUIP_08",
+              "DT_AQUIRE_EQUIP_09",
+              "DT_AQUIRE_EQUIP_10",
+              "HCAI_PROJ_NO_01",
+              "HCAI_PROJ_NO_02",
+              "HCAI_PROJ_NO_03",
+              "HCAI_PROJ_NO_04",
+              "HCAI_PROJ_NO_05",
+              "MEANS_FOR_ACQUISITION_01",
+              "MEANS_FOR_ACQUISITION_02",
+              "MEANS_FOR_ACQUISITION_03",
+              "MEANS_FOR_ACQUISITION_04",
+              "MEANS_FOR_ACQUISITION_05",
+              "MEANS_FOR_ACQUISITION_06",
+              "MEANS_FOR_ACQUISITION_07",
+              "MEANS_FOR_ACQUISITION_08",
+              "MEANS_FOR_ACQUISITION_09",
+              "MEANS_FOR_ACQUISITION_10"
+            ]
+          }
+        ]
+      }
+    }
+  }
+}

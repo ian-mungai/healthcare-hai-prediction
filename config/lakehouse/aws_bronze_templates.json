@@ -33,6 +33,7 @@
   "stage_files": [
     "config/lakehouse/aws_bronze_templates.json",
     "config/lakehouse/bronze_tables.json",
+    "config/lakehouse/person_policies.json",
     "config/lakehouse/removed_tables.json",
     "config/lakehouse/retired_objects.json",
     "scripts/acquisition/raw_root.py",
@@ -44,13 +45,17 @@
     "scripts/lakehouse/aws_bronze.py",
     "scripts/lakehouse/bronze.py",
     "scripts/lakehouse/bronze_metadata.py",
+    "scripts/lakehouse/bronze_pin.py",
     "scripts/lakehouse/bronze_writer.py",
     "scripts/lakehouse/checksums.py",
     "scripts/lakehouse/dictionary.py",
     "scripts/lakehouse/ecs_engine.py",
     "scripts/lakehouse/file_readers.py",
     "scripts/lakehouse/namespace_binding.py",
+    "scripts/lakehouse/person_fields.py",
     "scripts/lakehouse/session.py",
-    "scripts/lakehouse/smoke.py"
+    "scripts/lakehouse/smoke.py",
+    "scripts/pseudonym_core.py",
+    "scripts/sdk_logs.py"
   ]
 }

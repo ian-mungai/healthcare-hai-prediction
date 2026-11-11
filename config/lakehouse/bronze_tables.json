@@ -17,7 +17,7 @@
       },
       "cms/hospital_ownership": {
         "class": "Public",
-        "reason": "The Hospital All Owners files name individual owners and the stored copy is the privacy-filtered derivative. The collection also holds the Change of Ownership and Enrollments files and the dictionaries, which have table overrides. Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "The Hospital All Owners files name individual owners. Releases stored under plan version 2 are the files as published and bronze pseudonymizes the person fields at load; earlier captures are the organisation-owner derivative. The collection also holds the Change of Ownership and Enrollments files and the dictionaries, which have table overrides. Public research data (owner, decision 158)."
       },
       "cms/medicare_inpatient": {
         "class": "Public",
@@ -97,7 +97,7 @@
       },
       "onc/promoting_interoperability": {
         "class": "Public",
-        "reason": "The meaningful-use attestation file lists clinicians beside hospitals and the stored copy keeps hospital rows only. The collection also holds the CHPL linkage file, which has a table override. Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "The meaningful-use attestation file lists clinicians beside hospitals. Under plan version 2 it is stored as published and bronze pseudonymizes the person fields at load; earlier captures keep hospital rows only. The collection also holds the CHPL linkage file, which has a table override. Public research data (owner, decision 158)."
       },
       "hrsa/shortage_areas": {
         "class": "Public",
@@ -117,11 +117,11 @@
       },
       "california_hcai/hospital_finance": {
         "class": "Public",
-        "reason": "HCAI annual financial files name hospital chief executives. The untouched download stays local and only the privacy-filtered derivative is stored. Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "HCAI annual financial files name hospital chief executives. The stored copy is the privacy-filtered derivative and the untouched download stays local, as stored before the public-data decision. Public research data (owner, decision 158)."
       },
       "california_hcai/hospital_utilization": {
         "class": "Public",
-        "reason": "HCAI annual utilization workbooks. Personal columns and individual-owner details are replaced with [REDACTED] in the stored derivative. Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "HCAI annual utilization workbooks name administrators and report preparers. Under plan version 2 each workbook is stored as published and bronze pseudonymizes the person fields at load; earlier captures replace personal columns with [REDACTED]. Public research data (owner, decision 158)."
       },
       "illinois/hospital_report_card": {
         "class": "Public",
@@ -289,7 +289,7 @@
       },
       "classification": {
         "class": "Public",
-        "reason": "Buyer and seller organization records. The dictionary does not rule out an individual buyer or seller (owner decision). Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "Buyer and seller organization records. The dictionary does not rule out an individual buyer or seller (owner decision). Public research data (owner, decision 158)."
       }
     },
     {
@@ -1478,7 +1478,7 @@
       "table": "onc_pi_attestations_csv",
       "group": "federal_context",
       "collection": "onc/promoting_interoperability",
-      "member_pattern": "^hospital_attestations\\.csv$",
+      "member_pattern": "^(hospital_attestations|mu_report)\\.csv$",
       "format": "csv",
       "encodings": [
         "utf-8",
@@ -1497,7 +1497,7 @@
       ],
       "classification": {
         "class": "Public",
-        "reason": "No publisher dictionary is stored for this file, so nothing rules out personal fields (owner decision). Public research data (owner, decision 158); the personal original stays local with owner-only access."
+        "reason": "No publisher dictionary is stored for this file, so nothing rules out personal fields (owner decision). Public research data (owner, decision 158)."
       }
     },
     {
@@ -1660,6 +1660,13 @@
         "cp1252"
       ],
       "unnamed_headers": true
+    },
+    {
+      "table": "hcai_util_workbook_sheet_rows",
+      "group": "state_sources",
+      "collection": "california_hcai/hospital_utilization",
+      "member_pattern": "^hcai_util_\\d{4}\\.xlsx$",
+      "format": "sheet_rows"
     },
     {
       "table": "hcai_util_documents_pdf",

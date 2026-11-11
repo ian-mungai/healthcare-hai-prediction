@@ -733,7 +733,8 @@ models:
   - name: int_onc_attestation_rows
     description: >
       One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart
-      from the CHPL linkage, with no registry control.
+      from the CHPL linkage, with no registry control. Rows whose Provider_Type is not Hospital (the clinician rows of the
+      version 2 whole file) are left out; assert_onc_attestations_are_hospitals checks it.
     meta:
       classification: Public
     columns:

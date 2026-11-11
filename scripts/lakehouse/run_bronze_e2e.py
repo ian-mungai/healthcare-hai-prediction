@@ -15,6 +15,7 @@ The report under data/e2e/bronze/ holds outcomes only.
 
 from __future__ import annotations
 
+import base64
 import csv
 import hashlib
 import io
@@ -32,6 +33,7 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from scripts.acquisition import cms_owners_contract
 from scripts.lakehouse import bronze, bronze_metadata, care_compare_tables, dictionary, file_readers
 from scripts.lakehouse.session import spark_session
 
@@ -411,6 +413,7 @@ def scenarios(spark: Any, root: Path) -> dict[str, bool]:
     results.update(publisher_dictionary_scenarios(spark, root, storage, scratch))
     results.update(county_scenarios(spark, root, storage, scratch))
     results.update(remaining_scenarios(spark, root, storage, scratch))
+    results.update(person_field_scenarios(spark, root, storage, scratch))
     return results
 
 
@@ -1999,6 +2002,71 @@ def bootstrap_repair_scenarios(spark: Any, root: Path) -> dict[str, bool]:
         "native_bootstrap_repair_dictionary_scope": all(set(report["dictionaries"]) == set(names[:2]) for report in reports),
         "native_bootstrap_repair_restores_session_stop": spark.stop == original_stop,
     }
+
+
+PERSON_KEY = base64.urlsafe_b64encode(hashlib.sha256(b"synthetic bronze e2e person key").digest()).decode()
+PERSON_TABLE = "cms_hospital_owners"
+DROPPED_HEADERS = frozenset({"FIRST NAME - OWNER", "MIDDLE NAME - OWNER", "LAST NAME - OWNER", "TITLE - OWNER"})
+PERSON_DROPPED = ("first_name_owner", "middle_name_owner", "last_name_owner", "title_owner")
+PERSON_NAME = re.compile(r"fixturegiven\s+(fixturemiddle\s+)?fixturesurname", re.IGNORECASE)
+
+
+def person_key(_version: str) -> str:
+    """The synthetic pseudonym key reader for the person-field scenario."""
+    return PERSON_KEY
+
+
+def owner_csv_row(header: list[str], kind: str, **cells: str) -> list[str]:
+    """One synthetic version 2 CMS owners row in the published header order."""
+    base = {"ENROLLMENT ID": "E-1", "ASSOCIATE ID": "A-1", "TYPE - OWNER": kind, "PERCENTAGE OWNERSHIP": "25", "STATE - OWNER": "ZZ", **cells}
+    return [base.get(column, "") for column in header]
+
+
+def person_field_scenarios(spark: Any, root: Path, storage: FakeStorage, scratch: Path) -> dict[str, bool]:
+    """A synthetic version 2 CMS owners file with protected person fields reaches Iceberg; a rerun gives the same table and no collected full name remains."""
+    header = cms_owners_contract.HEADERS["v2"]
+    people = {"FIRST NAME - OWNER": "Fixturegiven", "MIDDLE NAME - OWNER": "Fixturemiddle", "LAST NAME - OWNER": "Fixturesurname"}
+    rows = [
+        owner_csv_row(header, "I", **{"ASSOCIATE ID - OWNER": "0123456789", "ADDRESS LINE 1 - OWNER": "11 Nowhere Lane", **people}),
+        owner_csv_row(header, "O", **{"ASSOCIATE ID - OWNER": "B-777", "ORGANIZATION NAME": "Fixturegiven Fixturemiddle Fixturesurname Clinic"}),
+        owner_csv_row(header, "O", **{"ASSOCIATE ID - OWNER": "B-778", "ORGANIZATION NAME": "FIXTUREGIVEN FIXTURESURNAME'S CLINIC"}),
+        owner_csv_row(header, "O", **{"ASSOCIATE ID - OWNER": "B-779", "ORGANIZATION NAME": "Unrelated Clinic"}),
+    ]
+    store(storage, "cms/person_fields", "cms_owners", "snap_p1", [(None, "owners.csv", csv_bytes(header, rows))])
+    owners = {
+        "table": PERSON_TABLE,
+        "group": "persons",
+        "collection": "cms/person_fields",
+        "dataset_ids": ["cms_owners"],
+        "format": "csv",
+        "encodings": ["utf-8", "cp1252"],
+    }
+    inputs, _ = bronze.discover(storage, BUCKET, bronze.load_table_map(table_map(root / "persons.json", [owners])), [PERSON_TABLE])
+    summary = bronze.load_objects(spark, inputs, storage, "bronze", scratch, person_key)
+
+    def table() -> list[Any]:
+        return spark.table(f"bronze.{PERSON_TABLE}").orderBy("_row_number").collect()
+
+    def snapshot() -> list[str]:
+        return sorted(json.dumps(row.asDict(), sort_keys=True, default=str) for row in table())
+
+    first, loaded = snapshot(), table()
+    mapped = spark.table("bronze.column_map").where(f"table_name = '{PERSON_TABLE}'").collect()
+    names = [row["organization_name"] for row in loaded]
+    results = {
+        "person_cms_rows_reach_iceberg": len(loaded) == len(rows) and summary[PERSON_TABLE]["rows"] == len(rows),
+        "person_cms_organization_name_holds_no_collected_full_name": names == ["", "[REDACTED]", "[REDACTED]", "Unrelated Clinic"]
+        and not any(PERSON_NAME.search(json.dumps(row.asDict(), default=str)) for row in loaded),
+        "person_cms_scrubs_exactly_the_two_collected_forms": summary[PERSON_TABLE].get("person_cells_scrubbed") == 2,
+        "person_cms_direct_identifiers_absent_from_the_table": not set(PERSON_DROPPED) & set(spark.table(f"bronze.{PERSON_TABLE}").columns)
+        and not any(fragment in json.dumps(row.asDict(), default=str) for row in loaded for fragment in ("Fixturegiven", "0123456789", "Nowhere")),
+        "person_cms_pseudonyms_only_on_the_individual_row": [bool(row["owner_person_pseudonym"]) for row in loaded] == [True, False, False, False]
+        and all(re.fullmatch("v1:[0-9a-f]{64}", row["owner_person_pseudonym"]) for row in loaded[:1]),
+        "person_cms_column_map_omits_dropped_headers": not DROPPED_HEADERS & {row["original_header"] for row in mapped},
+    }
+    bronze.load_objects(spark, inputs, storage, "bronze", scratch, person_key)
+    results["person_cms_rerun_gives_the_same_table"] = snapshot() == first and len(table()) == len(rows)
+    return results
 
 
 def main() -> int:

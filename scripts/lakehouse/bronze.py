@@ -31,7 +31,7 @@ import re
 import sys
 import tempfile
 from collections import Counter
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
@@ -39,8 +39,10 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from scripts.acquisition.raw_root import read_roots, strip_root
+from scripts.lakehouse import person_fields
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
+from scripts.pseudonym_core import PseudonymizationError
 
 TABLE_MAP = Path("config/lakehouse/bronze_tables.json")
 # Objects the privacy deletion removed from S3 that manifests still list: skipped by exact key, version and SHA-256 [146].
@@ -50,6 +52,7 @@ REMOVED = Path("config/lakehouse/removed_tables.json")
 # A manifest with these fields and no objects list records one document by checksum [153].
 SINGLE_DOCUMENT = frozenset({"role", "sha256", "byte_count", "source_id"})
 DEPLOYMENT = Path("infra/deployment.auto.tfvars.json")
+KeyReader = Callable[[str], str | None]
 SCRATCH = Path(tempfile.gettempdir()) / "bronze_scratch"
 REPORT_ROOT = Path("data/e2e/bronze_load")
 # Format -> file extensions. text_lines, sheet_rows and sas store files losslessly without interpretation [68]-[80].
@@ -729,17 +732,43 @@ def read_sheet_frame(spark: Any, jsonl: Path) -> Any:
     return read_fixed_frame(spark, jsonl, SHEET_SCHEMA, SHEET_COLUMNS)
 
 
-def parse_object(spark: Any, item: dict[str, Any], path: Path, rows_path: Path) -> tuple[Any, int, str, list[str], list[str | None], dict[str, int], list[str]]:
+def read_csv_object(item: dict[str, Any], path: Path, rows_path: Path, keys: KeyReader | None = None) -> dict[str, Any]:
+    """Read one CSV object into JSON Lines rows, apply the table's person-field policy and return what the loader needs, with format counts in ``stats``.
+
+    A policy failure removes the rows file, which still holds the published values, and stops the load with a fixed code.
+    """
+    found = read_csv(path, rows_path, item["encodings"], {key: item[key] for key in CSV_OPTIONS if key in item})
+    stats = {key: found[key] for key in ("end_of_file_markers", "trailing_blank_lines") if found[key]}
+    try:
+        protected = person_fields.protect(item["table"], found["headers"], found["labels"], rows_path, keys)
+    except (person_fields.PersonFieldError, PseudonymizationError) as error:
+        rows_path.unlink(missing_ok=True)
+        raise BronzeError(f"person fields: {error}") from None
+    except BaseException:
+        rows_path.unlink(missing_ok=True)
+        raise
+    if protected is not None:
+        found = {**found, "headers": protected.headers, "labels": [None] * len(protected.headers)}
+        stats.update(protected.stats)
+    return {**found, "stats": stats}
+
+
+def parse_object(
+    spark: Any, item: dict[str, Any], path: Path, rows_path: Path, keys: KeyReader | None = None
+) -> tuple[Any, int, str, list[str], list[str | None], dict[str, int], list[str]]:
     """Validate one downloaded file in its format; return its Spark rows, count, encoding, headers, labels, counts and preamble."""
     from scripts.lakehouse import file_readers
 
     file_format = item.get("format", "csv")
     try:
+        person_fields.refuse_blocked(item["table"])
+    except person_fields.PersonFieldError as error:
+        raise BronzeError(f"person fields: {error}") from None
+    try:
         if file_format == "csv":
-            found = read_csv(path, rows_path, item["encodings"], {key: item[key] for key in CSV_OPTIONS if key in item})
+            found = read_csv_object(item, path, rows_path, keys)
             names = column_names(found["headers"], item.get("unnamed_headers", False))
-            stats = {key: found[key] for key in ("end_of_file_markers", "trailing_blank_lines") if found[key]}
-            return read_rows(spark, rows_path, names), found["rows"], found["encoding"], found["headers"], found["labels"], stats, found["preamble"]
+            return read_rows(spark, rows_path, names), found["rows"], found["encoding"], found["headers"], found["labels"], found["stats"], found["preamble"]
         if file_format == "csv_rows":
             rows, encoding = file_readers.read_csv_rows(
                 path, rows_path, item["encodings"], item.get("delimiter", ","), item.get("byte_order_mark", False), item.get("quoted_fields", False)
@@ -761,15 +790,23 @@ def parse_object(spark: Any, item: dict[str, Any], path: Path, rows_path: Path) 
             rows, stats = file_readers.read_pdf_rows(path, rows_path)
             return read_fixed_frame(spark, rows_path, file_readers.PDF_SCHEMA, file_readers.PDF_COLUMNS), rows, "pdf", [], [], stats, []
         rows, encoding, stats = file_readers.read_sheet_rows(path, rows_path)
+        try:
+            stats.update(person_fields.protect_sheets(item["table"], rows_path))
+        except (person_fields.PersonFieldError, PseudonymizationError) as error:
+            rows_path.unlink(missing_ok=True)
+            raise BronzeError(f"person fields: {error}") from None
+        except BaseException:
+            rows_path.unlink(missing_ok=True)
+            raise
         return read_sheet_frame(spark, rows_path), rows, encoding, [], [], stats, []
     except file_readers.ReaderError as error:
         raise BronzeError(str(error)) from None
 
 
-def load_object(spark: Any, item: dict[str, Any], storage: Storage, namespace: str, scratch: Path) -> tuple[int, dict[str, int]]:
+def load_object(spark: Any, item: dict[str, Any], storage: Storage, namespace: str, scratch: Path, keys: KeyReader | None = None) -> tuple[int, dict[str, int]]:
     """Load one object and return its rows and format counts; any failure names its table, snapshot and file (51)."""
     try:
-        return _load_object(spark, item, storage, namespace, scratch)
+        return _load_object(spark, item, storage, namespace, scratch, keys)
     except BronzeError as error:
         raise BronzeError(f"{item['table']} {item['snapshot_id']} {item['file_name']}: {error}") from None
     except Exception as error:
@@ -777,7 +814,9 @@ def load_object(spark: Any, item: dict[str, Any], storage: Storage, namespace: s
         raise BronzeError(f"{item['table']} {item['snapshot_id']} {item['file_name']}: {type(error).__name__}: {error}") from error
 
 
-def _load_object(spark: Any, item: dict[str, Any], storage: Storage, namespace: str, scratch: Path) -> tuple[int, dict[str, int]]:
+def _load_object(
+    spark: Any, item: dict[str, Any], storage: Storage, namespace: str, scratch: Path, keys: KeyReader | None = None
+) -> tuple[int, dict[str, int]]:
     """Download, check and validate one object, then replace its rows and column map, each in one Iceberg commit."""
     from pyspark.sql.functions import lit
 
@@ -791,7 +830,7 @@ def _load_object(spark: Any, item: dict[str, Any], storage: Storage, namespace: 
             raise BronzeError(f"{item['snapshot_id']} {item['table']}: the bytes read do not match the recorded SHA-256 and size")
         target = f"{namespace}.{item['table']}"
         ensure_table(spark, namespace, item["table"], item.get("format", "csv"))
-        frame, rows, encoding, headers, labels, stats, preamble = parse_object(spark, item, path, rows_path)
+        frame, rows, encoding, headers, labels, stats, preamble = parse_object(spark, item, path, rows_path, keys)
         names = [name for name in frame.columns if name != "_row_number"]
         if frame.count() != rows:
             raise BronzeError(f"{item['snapshot_id']} {item['table']}: Spark read a different row count from the validation pass")
@@ -890,11 +929,13 @@ def write_copies(spark: Any, namespace: str, names: Iterable[str], inputs: list[
     return len(rows)
 
 
-def load_objects(spark: Any, inputs: list[dict[str, Any]], storage: Storage, namespace: str, scratch: Path = SCRATCH) -> dict[str, dict[str, int]]:
+def load_objects(
+    spark: Any, inputs: list[dict[str, Any]], storage: Storage, namespace: str, scratch: Path = SCRATCH, keys: KeyReader | None = None
+) -> dict[str, dict[str, int]]:
     """Load every input object in order and return per-table object and row counts."""
     summary: dict[str, dict[str, int]] = {}
     for item in inputs:
-        rows, stats = load_object(spark, item, storage, namespace, scratch)
+        rows, stats = load_object(spark, item, storage, namespace, scratch, keys)
         counts = summary.setdefault(item["table"], {"objects": 0, "rows": 0})
         counts["objects"] += 1
         counts["rows"] += rows

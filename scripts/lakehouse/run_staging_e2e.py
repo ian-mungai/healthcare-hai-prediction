@@ -2096,6 +2096,7 @@ GROUP_B5B = (
             cc(
                 npi="1234567893",
                 ccn="010001",
+                provider_type="Hospital",
                 program_type="Medicare/Medicaid",
                 program_year="2014",
                 # Leading zeros past four characters: the payment year is 3.
@@ -2104,6 +2105,8 @@ GROUP_B5B = (
                 attestation_year="2014",
                 vendor_name="Fixture Developer A",
             ),
+            # A version 2 clinician row: the silver model leaves it out (assert_onc_attestations_are_hospitals).
+            cc(provider_type="EP", program_type="Medicare/Medicaid", program_year="2014", attestation_year="2014", vendor_name="Fixture Developer C"),
         ),
     ),
 )

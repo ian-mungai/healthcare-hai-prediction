@@ -1,7 +1,8 @@
 -- One row per hospital Medicare and Medicaid EHR incentive attestation, program years 2011 to 2017: a series apart from the
 -- 2023 and 2024 CHPL linkage, with no registry control (failure mode 383). Years and months are typed; the CCN follows the
 -- B5a rule. payment_year is the program's payment-year number (1, 2, 3 and so on), the integer of any digits-only published
--- text in the INTEGER range, kept in payment_year_text (failure mode 795).
+-- text in the INTEGER range, kept in payment_year_text (failure mode 795). Hospital rows only: the version 2 whole ONC file
+-- also holds eligible-professional clinician rows (Provider_Type EP), which are not hospital attestations.
 {{ config(materialized='table') }}
 
 with
@@ -37,6 +38,7 @@ attestations as (
         nullif(trim(product_certification_edition_yr), '') as product_certification_edition_yr,
         nullif(trim(payment_year), '') as payment_year_text
     from {{ ref('stg_onc_pi_attestations_csv') }}
+    where nullif(trim(provider_type), '') = 'Hospital'
 ),
 
 keyed as (
