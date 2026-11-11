@@ -30,7 +30,17 @@ from orchestration import serving_contract
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import FEATURE_DAGS, LAUNCH_LANES, MODELS, model_features_run_id, parameters_for, training_run_id
+from orchestration.training_contract import (
+    FEATURE_DAGS,
+    LAUNCH_LANES,
+    MODELS,
+    PROMOTION_MODELS,
+    chain_parameters_for,
+    model_features_run_id,
+    parameters_for,
+    trained_run_id,
+    training_run_id,
+)
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
@@ -69,6 +79,18 @@ BINDING_FORM = re.compile(
     r"job_memory_mib=(?P<job>[1-9][0-9]*) (?P<inputs>usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+)) "
     r"service_reservations_mib=(?P<services>[0-9]+)"
 )  # the label of a host revision, the services output host_capacity_binding
+# The phase of the promote family's one task definition that each step runs: the PHASE variable of its container, which the task command passes to the runner.
+PHASES = {"promote": "promote", "research": "research", "canary_check": "canary", "owner_notice": "notify"}
+# The steps that the research DAG launches with their own closed parameters, besides its research step.
+CHAIN_TEMPLATES = ("canary_check", "owner_notice", "promote")
+
+
+def phase_of(template: str) -> str:
+    """The phase the promote family's task runs for ``template``; a step that names none is refused, so the task never runs a phase by default."""
+    try:
+        return PHASES[template]
+    except KeyError:
+        raise LaunchRefused(f"the step {template} names no phase of the promote task") from None
 
 
 def feature_set_of(dag_id: str) -> str:
@@ -516,13 +538,19 @@ class Preflight:
             self.require_passed(job, after, request.input_run_id)
         if row.get("needs_training_parameters"):
             try:
-                parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
+                if request.dag_id == "research_dag" and request.template in CHAIN_TEMPLATES:
+                    chain_parameters_for(request.template, request.training or {}, LAUNCH_LANES)
+                else:
+                    parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
         spec = self.spec(request, job)
         revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
+        if request.template == "research" and request.dag_id == "research_dag":
+            # Research compares the models' runs, so it runs the code the first of them trained with.
+            self.code_runs.bind(request.run_id, self.code_runs.resolve(trained_run_id(str((request.training or {})["base_run"]), PROMOTION_MODELS[0])))
         # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
         # probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=max(spec.need.memory_mib, job_memory))
@@ -687,6 +715,7 @@ class Preflight:
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
             "FEATURE_SET": lambda: feature_set_of(request.dag_id),
+            "PHASE": lambda: phase_of(request.template),
             **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},
         }
         containers, log_container = self.containers(job)

@@ -73,6 +73,7 @@
     "drift_monitoring_dag": "drift",
     "training_dag": "train",
     "model_promotion_dag": "promote",
+    "research_dag": "promote",
     "serving_deploy_dag": "serve",
     "metadata_ingest_dag": "metadata",
     "bronze_chain_dag": "chain",

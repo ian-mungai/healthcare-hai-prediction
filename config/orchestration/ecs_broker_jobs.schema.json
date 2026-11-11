@@ -72,7 +72,8 @@
                   "HAI_DEADLINE_UTC",
                   "SERVING_REQUEST",
                   "PUBLISHER_RUN_KIND",
-                  "HAI_CAPTURE_ROOT"
+                  "HAI_CAPTURE_ROOT",
+                  "PHASE"
                 ]
               }
             }

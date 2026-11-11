@@ -31,9 +31,21 @@ variable "promote_resources" {
   }
 }
 
+variable "alerts_topic_arn" {
+  description = "ARN of the platform alerts topic (the alerts_topic_arn output of infra/platform). The notify phase of the promote task publishes the outcome of a challenger to it, and its task role may publish to this one topic only. Null leaves the variable out of the definition, so the notify phase refuses by name."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.alerts_topic_arn == null || can(regex("^arn:aws:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}$", var.alerts_topic_arn))
+    error_message = "Supply the ARN of an SNS topic: arn:aws:sns:<region>:<account>:<name>."
+  }
+}
+
 locals {
-  # Two steps after the volume hand-over: fetch the run's code, then move the alias. The promote step logs in to MLflow as the train step does.
-  promote_phase = "cd /workspace/code && python -m scripts.training.aws_run promote --run \"$RUN_ID\""
+  # Two steps after the volume hand-over: fetch the run's code, then run one phase. The promote task runs the phase its PHASE variable names (promote, research,
+  # canary or notify), which the launch library sets for each step (config/orchestration/ecs_broker_jobs.json). The phase logs in to MLflow as the train step does.
+  promote_phase = "cd /workspace/code && python -m scripts.training.aws_run \"$PHASE\" --run \"$RUN_ID\""
   promote_steps = [
     { name = "init", script = "chown 10001:10001 /workspace /tmp", secrets = [], variables = [] },
     { name = "fetch", script = "python -I /opt/hai/fetch_code.py", secrets = [], variables = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] },
@@ -41,7 +53,7 @@ locals {
       name      = "promote"
       script    = local.promote_phase
       secrets   = [{ name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_admin_password_name}" }]
-      variables = ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "MLFLOW_TRACKING_URI"]
+      variables = ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "MLFLOW_TRACKING_URI", "PHASE"]
     },
   ]
   promote_containers = var.promote_enabled ? [
@@ -70,7 +82,8 @@ locals {
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         ],
         [for name in step.variables : { name = name, value = "" }],
-        step.name == "promote" ? [{ name = "MLFLOW_TRACKING_USERNAME", value = "admin" }] : []
+        step.name == "promote" ? [{ name = "MLFLOW_TRACKING_USERNAME", value = "admin" }] : [],
+        step.name == "promote" && var.alerts_topic_arn != null ? [{ name = "ALERTS_TOPIC_ARN", value = var.alerts_topic_arn }] : []
       )
       secrets = step.secrets
       mountPoints = [

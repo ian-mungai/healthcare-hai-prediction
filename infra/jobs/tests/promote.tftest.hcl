@@ -75,10 +75,10 @@ run "promote_steps_images_and_users" {
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].command[0] == "cd /workspace/code && python -m scripts.training.aws_run promote --run \"$RUN_ID\"" &&
+      jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].command[0] == "cd /workspace/code && python -m scripts.training.aws_run \"$PHASE\" --run \"$RUN_ID\"" &&
       jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[1].command[0] == "python -I /opt/hai/fetch_code.py"
     )
-    error_message = "The last step runs the promote phase of the runner."
+    error_message = "The last step runs the phase of the runner that the PHASE variable names: promote, research, canary or notify."
   }
 }
 
@@ -103,7 +103,7 @@ run "promote_secret_and_variables" {
 
   assert {
     condition = (
-      [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "MLFLOW_TRACKING_URI"] &&
+      [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "MLFLOW_TRACKING_URI", "PHASE"] &&
       [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[1].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] &&
       !anytrue([for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : anytrue([for entry in item.environment : strcontains(entry.name, "POLARIS")])])
     )
@@ -176,4 +176,49 @@ run "promote_containers_follow_the_job_catalog" {
     )
     error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
+}
+
+run "promote_phase_is_the_launch_variable_and_the_topic_is_fixed" {
+  command = plan
+
+  variables {
+    train_enabled    = true
+    promote_enabled  = true
+    alerts_topic_arn = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+  }
+
+  assert {
+    condition = (
+      [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[2].environment : item.value if item.name == "ALERTS_TOPIC_ARN"] == ["arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"] &&
+      length([for container in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : container.name if anytrue([for item in container.environment : item.name == "ALERTS_TOPIC_ARN"])]) == 1 &&
+      length([for container in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : container.name if anytrue([for item in container.environment : item.name == "PHASE"])]) == 1
+    )
+    error_message = "Only the last step holds the alerts topic, and its value is fixed in the definition, not filled at launch. Only the last step is told a phase."
+  }
+}
+
+run "promote_without_a_topic_has_no_topic_variable" {
+  command = plan
+
+  variables {
+    train_enabled   = true
+    promote_enabled = true
+  }
+
+  assert {
+    condition     = !anytrue([for container in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : anytrue([for item in container.environment : item.name == "ALERTS_TOPIC_ARN"])])
+    error_message = "A definition planned without a topic names none, so the notify phase refuses by name instead of publishing to a default."
+  }
+}
+
+run "alerts_topic_must_be_an_sns_topic_arn" {
+  command = plan
+
+  variables {
+    train_enabled    = true
+    promote_enabled  = true
+    alerts_topic_arn = "not an arn"
+  }
+
+  expect_failures = [var.alerts_topic_arn]
 }

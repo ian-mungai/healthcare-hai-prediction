@@ -231,7 +231,8 @@
           "RUN_ID",
           "CODE_SHA256",
           "TRAINING_PARAMETERS",
-          "MLFLOW_TRACKING_URI"
+          "MLFLOW_TRACKING_URI",
+          "PHASE"
         ]
       }
     },
@@ -317,6 +318,7 @@
   "steps": {
     "acquire_run": null,
     "bronze_load": "bronze",
+    "canary_check": "promote",
     "catalog_backup": "gold",
     "catalog_release": null,
     "catalog_up": null,
@@ -355,6 +357,7 @@
     "mediation": "train",
     "metadata_run": "metadata",
     "online_store_up": null,
+    "owner_notice": "promote",
     "pin_bronze": "silver",
     "pin_gold": "features",
     "pin_silver": "gold",
@@ -370,6 +373,7 @@
     "record_silver_snapshot": "silver",
     "release_accepted": null,
     "release_rejected": null,
+    "research": "promote",
     "reserve_gold": null,
     "reserve_silver": null,
     "run_record": null,
