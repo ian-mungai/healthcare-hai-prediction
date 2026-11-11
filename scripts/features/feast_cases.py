@@ -38,7 +38,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from scripts.features import feast_job, fixture_catalog, historical
+from scripts.features import feast_job, fixture_catalog, historical, online_release_cases
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker, fake_module, fake_redis_modules, run_cases, write_report
 from scripts.features.publication_reads import ReadError
@@ -2223,6 +2223,9 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E32_set_hold": (case_e32_set_hold, "FS6"),
     "E32_release": (case_e32_release, "FS6"),
     "E32_release_command": (case_e32_release_command, "FS6"),
+    "E33_held_release": (online_release_cases.case_e33_held_release, "FS6"),
+    "E33_not_held": (online_release_cases.case_e33_not_held, "FS6"),
+    "E33_command": (online_release_cases.case_e33_command, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_lease": (case_e13_lease, "LC12"),
