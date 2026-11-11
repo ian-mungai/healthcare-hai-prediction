@@ -29,6 +29,7 @@ from scripts import resource_peaks
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import stored_mirror
 from scripts.acquisition.collection_layout import RAW_ROOT
+from scripts.infrastructure import startup_check
 
 REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
 # The attempt and byte ledgers travel too, settlements and unsettled charges alike, so a new task cannot spend a limit again.
@@ -220,6 +221,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     missing = [name for name in REQUIRED if not env.get(name)]
     if missing:
         raise PublisherError(f"The publisher job needs {', '.join(missing)}.")
+    startup_check.check_environment("publisher")
     region = env["AWS_REGION"]
     stored_mirror.require_task_identity(factory("sts", region), env["EXPECTED_ACCOUNT_ID"], env["TASK_ROLE_NAME"])
     s3 = factory("s3", region)
@@ -227,6 +229,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     queue = queue_of(inputs)
     require_bound_queue(queue, env)
     install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
+    startup_check.check_files("publisher", startup_check.queue_files(json.loads(queue.read_text(encoding="utf-8"))))
     state_parent = workspace_of(env) / "state"
     state_root = state_parent / "run"
     restored_from = restore_state(s3, state_root, env)

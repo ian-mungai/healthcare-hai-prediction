@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
+from scripts.infrastructure import startup_check
 from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
 from scripts.process import TimeoutExpired, run_command
@@ -908,6 +909,14 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         {"build": build, "validate": validate, "verify": verify, "export": export, "maintain": maintain}[phase](job)
 
 
+def startup(job: Job, phase: str) -> None:
+    """The host job startup check at the first code step (pin) and at the start of the build, whose image holds the DuckDB extensions."""
+    if phase == "pin":
+        startup_check.check_environment(job.layer, polaris=True)
+    elif phase == "build":
+        startup_check.check_build(job.layer, job.mode, job.folder / "snapshot/project/profiles.yml")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("phase", choices=sorted({phase for phases in PHASES.values() for phase in phases}))
@@ -949,6 +958,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
         if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
             raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")
+        startup(job, args.phase)
         task_capacity.apply(capacity_profile(args.layer, args.phase))
         with task_deadline(job):
             if args.phase != "pin":
@@ -960,6 +970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         PublishError,
         provenance.ProvenanceError,
         task_capacity.CapacityError,
+        startup_check.StartupCheckError,
         OSError,
         ValueError,
         KeyError,
