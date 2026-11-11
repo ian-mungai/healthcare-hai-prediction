@@ -20,7 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import owner_commands, owner_list_host_cases, services_code_inputs
+from scripts.infrastructure import alert_email_block_cases, owner_commands, owner_list_host_cases, services_code_inputs
 from scripts.infrastructure.run_activation_inputs_e2e import ADMIN, ROOT, ROWS, STACKS, Workspace, variables_of
 from scripts.process import run_command
 
@@ -155,58 +155,22 @@ DOTENV_VARIANTS = {
 DOTENV_REST = (f"AWS_ACCOUNT_ID={owner_commands.ACCOUNT}", "PROJECT_NAME=example_project", "ENVIRONMENT=dev", "S3_BUCKET=example-project-data-dev")
 
 
-def teardown_runs(teardown: str) -> dict[str, bool]:
-    """Follow the teardown list literally from two starts: both alert subscriptions in the alerts root state, and the budget subscription either confirmed or
-    still pending. Each command acts on a model of the state and of AWS. A pending subscription has no ARN in the listing, so it cannot be unsubscribed. The
-    project user cannot remove the budget subscription, so an apply whose plan deletes it fails. A step the list says to skip for a pending one does not run."""
-    steps = steps_of(teardown)
-    results: dict[str, bool] = {}
-    for scenario in ("confirmed", "pending"):
-        pending = scenario == "pending"
-        state = {"alerts", "budget"}
-        aws = {"alerts": "confirmed", "budget": "pending" if pending else "confirmed"}
-        skipped: set[int] = set()
-        planned: set[str] | None = None
-        denied = False
-        for step in steps:
-            number = int(step.split(".", 1)[0])
-            if pending:
-                for found in re.finditer(r"[Ss]kip steps? (\d+)(?: and (\d+))?", step.split("```", 1)[0]):
-                    skipped |= {int(item) for item in found.groups() if item}
-            if number in skipped:
-                continue
-            for line in owner_commands.commands(step):
-                if "aws sns unsubscribe" in line and "<BUDGET_SUBSCRIPTION_ARN>" in line and aws.get("budget") == "confirmed":
-                    del aws["budget"]
-                elif "state rm" in line and '["budget"]' in line:
-                    state.discard("budget")
-                elif "plan -destroy" in line:
-                    planned = set(state)
-                elif "terraform.sh --alerts apply" in line and planned is not None:
-                    if "budget" in planned:
-                        denied = True
-                        continue
-                    state -= planned
-                    for name in planned:
-                        aws.pop(name, None)
-        results[f"teardown run ({scenario} budget subscription): the destroy plan holds the platform alerts subscription only"] = planned == {"alerts"}
-        results[f"teardown run ({scenario} budget subscription): the apply is not denied and no state entry remains"] = not denied and not state
-        results[f"teardown run ({scenario} budget subscription): no confirmed subscription remains in AWS"] = all(value == "pending" for value in aws.values())
-    return results
-
-
 def alert_email_checks(text: str) -> dict[str, bool]:
     """The alert email lists: the address comes from .env, the alerts root is applied after the policy and the platform, hand subscriptions are imported once
-    confirmed and before the apply, the owner confirms, and the teardown removes the budget subscription with the administrator profile."""
+    confirmed and before the apply, the budget subscription is confirmed by the administrator with authentication, and the teardown removes it with the
+    administrator profile, drops the state entry whether the subscription is confirmed or pending and reports a pending row. The behavior of every block is
+    checked by running it (alert_email_block_cases); the checks here read the prose that the blocks cannot hold."""
     body = owner_commands.section(text, ALERT)
-    steps = steps_of(body)
+    teardown = owner_commands.section(text, TEARDOWN)
+    steps, tear = steps_of(body), steps_of(teardown)
     numbers = [int(step.split(".", 1)[0]) for step in steps]
+    tear_numbers = [int(step.split(".", 1)[0]) for step in tear]
     root = "".join(path.read_text() for path in (ROOT / "infra/alerts").glob("*.tf"))
     platform = "".join(path.read_text() for path in (ROOT / "infra/platform").glob("*.tf"))
-    address = "aws_sns_topic_subscription.email"
     checks = {
-        "the alert email section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) >= 6,
-        "the alerts root declares the subscription the list imports, for the alerts and budget topics": 'resource "aws_sns_topic_subscription" "email"' in root
+        "the alert email section is one numbered list": bool(body) and numbers == list(range(1, len(numbers) + 1)) and len(numbers) == 11,
+        "the teardown section is one numbered list": bool(teardown) and tear_numbers == list(range(1, len(tear_numbers) + 1)) and len(tear_numbers) == 6,
+        "the alerts root declares the subscription for the alerts and budget topics": 'resource "aws_sns_topic_subscription" "email"' in root
         and "alerts = var.alerts_topic_arn" in root
         and "budget = local.budget_topic_arn" in root,
         "the platform stack declares no subscription": "aws_sns_topic_subscription" not in platform,
@@ -214,6 +178,34 @@ def alert_email_checks(text: str) -> dict[str, bool]:
         "the list says no address is typed into a tracked file": "tracked" in body,
         "the list says no pull request plan runs the alerts root": "no pull request plan runs it" in body
         and "GitHub plan role never reads a subscription" in body,
+        "the list asks for ADMIN_PROFILE once and every block checks it": "`ADMIN_PROFILE`" in body and "`ADMIN_PROFILE`" in teardown,
+        "the list never opens the budget email link, because a link confirmation leaves an unsigned unsubscribe route": (
+            "never open the link of the budget email" in body and "without a signed request" in body
+        ),
+        "the list claims no protection beyond the confirmation, and says the refusal is not verified against AWS": (
+            "can never remove" not in body and "cannot be silenced" not in body and "not verified against AWS" in body
+        ),
+        "the policy step names the actions it adds: subscribe and read on every alert topic, unsubscribe on the platform topic only": all(
+            words in body
+            for words in (
+                "`sns:Subscribe` and `sns:GetSubscriptionAttributes` on every project alert topic",
+                "`sns:Unsubscribe` on the platform alerts topic only",
+                "holds no `sns:Unsubscribe` grant on the budget alerts topic",
+            )
+        ),
+        "the teardown says the project user holds no signed removal of the budget subscription and the administrator removes it": (
+            "holds no signed removal of the budget alerts subscription" in teardown and "The administrator removes that subscription" in teardown
+        ),
+        "the teardown never skips the state step, and the destroy plan must hold the platform subscription only": (
+            "skip steps" not in teardown and "Stop on the budget entry, on any other change and on any other resource" in teardown
+        ),
+        "the teardown withholds completion while a subscription is pending": "not complete" in teardown
+        and "PendingConfirmation" in teardown
+        and "run record" in teardown,
+        "the teardown keeps the topics, the platform stack, .env and the other state": "keeps everything else" in teardown and "`.env`" in teardown,
+        "no step touches the CI plan role or the delivery boundary": (
+            "plan role" not in body.replace("never reads a subscription", "").replace("the GitHub plan role", "") and "delivery boundary" not in body
+        ),
     }
 
     def index(*needles: str) -> int:
@@ -221,116 +213,27 @@ def alert_email_checks(text: str) -> dict[str, bool]:
 
     order = [
         ("policy", index("manage_policies apply", "--policy sns")),
-        ("platform apply", index("terraform.sh --platform", "apply <PLAN>")),
-        ("budget topic", index("terraform -chdir=infra/iam output -json budget")),
-        ("find", index("list-subscriptions-by-topic", "PendingConfirmation")),
-        ("init", index("terraform -chdir=infra/alerts init -input=false -lockfile=readonly")),
-        ("render", index("render_platform_config --stack alerts")),
-        ("import", index(f"terraform -chdir=infra/alerts import '{address}[\"alerts\"]' <SUBSCRIPTION_ARN>")),
-        ("apply", index("terraform.sh --alerts", "apply <PLAN>")),
+        ("platform apply", index("terraform.sh --platform apply")),
+        ("budget topic", index("output -json budget", "reports the budget alerts topic")),
+        ("find", index("PendingConfirmation", "ConfirmationWasAuthenticated")),
+        ("init", index("init -input=false -lockfile=readonly")),
+        ("import", index("terraform -chdir=infra/alerts import")),
+        ("apply", index("terraform.sh --alerts apply")),
         ("confirm alerts", index("Click `Confirm subscription` in the alerts topic email")),
-        ("confirm budget", index("aws sns confirm-subscription", "<BUDGET_TOPIC_ARN>")),
-        ("verify", index("The bootstrap is not complete until", "list-subscriptions-by-topic")),
+        ("confirm budget", index("aws sns confirm-subscription", "--authenticate-on-unsubscribe true")),
+        ("verify", index("The bootstrap is not complete until", "Both alert subscriptions are confirmed")),
     ]
     positions = [position for _, position in order]
     checks[f"the alert email steps come in order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
-    checks["the list reads the budget topic from the IAM stack output and lists both topics"] = (
-        "<BUDGET_TOPIC_ARN>" in steps[index("list-subscriptions-by-topic", "PendingConfirmation")] and "<ALERTS_TOPIC_ARN>" in body
-    )
-    find = index("list-subscriptions-by-topic", "PendingConfirmation")
-    checks["the list says a pending subscription has no ARN to import, so the owner confirms first"] = (
-        find >= 0 and "cannot be imported" in steps[find] and "Confirm subscription" in steps[find]
-    )
-    checks["the adoption step reads ConfirmationWasAuthenticated of a hand budget subscription and imports it only when it prints true"] = (
-        find >= 0
-        and "aws sns get-subscription-attributes" in steps[find]
-        and "Attributes.ConfirmationWasAuthenticated" in steps[find]
-        and "only when it prints `true`" in steps[find]
-        and "--profile <ADMIN_PROFILE>" in steps[find]
-    )
-    checks["the adoption step removes a hand budget subscription that was not confirmed with authentication, with the administrator profile"] = (
-        find >= 0 and "aws sns unsubscribe --profile <ADMIN_PROFILE>" in steps[find] and "<BUDGET_SUBSCRIPTION_ARN>" in steps[find]
-    )
-    checks["the list never opens the budget email link, because a link confirmation leaves an unsigned unsubscribe route"] = (
-        "never open the link of the budget email" in body and "without a signed request" in body
-    )
-    confirm = index("aws sns confirm-subscription", "<BUDGET_TOPIC_ARN>")
-    checks["the budget subscription is confirmed by the administrator with the token and AuthenticateOnUnsubscribe true"] = confirm >= 0 and all(
-        word in steps[confirm]
-        for word in ("--profile <ADMIN_PROFILE>", "--token <CONFIRMATION_TOKEN>", "--authenticate-on-unsubscribe true", "(administrator profile)")
-    )
-    checks["the budget confirmation step reads ConfirmationWasAuthenticated and stops unless it prints true"] = (
-        confirm >= 0
-        and "Attributes.ConfirmationWasAuthenticated" in steps[confirm]
-        and "Stop unless it prints `true`" in steps[confirm]
-        and "Do not save the token" in steps[confirm]
-    )
-    checks["the list claims no protection beyond the confirmation, and says the refusal is not verified against AWS"] = (
-        "can never remove" not in body and "cannot be silenced" not in body and "not verified against AWS" in body
-    )
-    imports = index("terraform -chdir=infra/alerts import")
-    checks["the import step imports both topics into the alerts root state and nowhere else"] = (
-        imports >= 0
-        and f'{address}["budget"]\' <BUDGET_SUBSCRIPTION_ARN>' in steps[imports]
-        and "infra/platform import" not in body
-        and "Run each import once" in steps[imports]
-    )
-    plan = index("terraform.sh --alerts", "plan -out <PLAN>")
-    checks["the plan step stops on a destroy or a replace of a subscription and allows only the two subscriptions"] = (
-        plan >= 0 and "Stop on any destroy, on any replace and on any other change" in steps[plan] and f"{address}" in steps[plan]
-    )
-    checks["the alerts root is planned and applied through the wrapper with no other stack option"] = plan >= 0 and "--platform" not in steps[plan]
-    policy = index("manage_policies apply", "--policy sns")
-    plan_policy = index("manage_policies plan", "--policy sns")
-    checks["the policy step plans before it applies, limited to the sns policy, with the plan digest"] = (
-        plan_policy >= 0 and plan_policy == policy and "--digest <PLAN_DIGEST>" in steps[policy] and "CONFIRM_IAM_POLICIES=" in steps[policy]
-    )
-    checks["the policy step names the actions it adds: subscribe and read on every alert topic, unsubscribe on the platform topic only"] = policy >= 0 and all(
-        words in steps[policy]
-        for words in (
-            "`sns:Subscribe` and `sns:GetSubscriptionAttributes` on every project alert topic",
-            "`sns:Unsubscribe` on the platform alerts topic only",
-            "holds no `sns:Unsubscribe` grant on the budget alerts topic",
-        )
-    )
-    checks["the policy step runs before the import and before the alerts plan, which read and create the subscriptions"] = (
-        policy >= 0 and imports >= 0 and plan >= 0 and policy < imports and policy < plan
-    )
-    checks["no step touches the CI plan role or the delivery boundary"] = (
-        "plan role" not in body.replace("never reads a subscription", "").replace("the GitHub plan role", "") and "delivery boundary" not in body
-    )
-    teardown = owner_commands.section(text, TEARDOWN)
-    tear = steps_of(teardown)
-    tear_numbers = [int(step.split(".", 1)[0]) for step in tear]
-    checks["the teardown section is one numbered list"] = bool(teardown) and tear_numbers == list(range(1, len(tear_numbers) + 1)) and len(tear_numbers) >= 4
-
-    def tear_index(*needles: str) -> int:
-        return next((position for position, step in enumerate(tear) if all(needle in step for needle in needles)), -1)
-
-    listed = tear_index("terraform -chdir=infra/alerts state list")
-    removal = tear_index("aws sns unsubscribe", "--profile <ADMIN_PROFILE>", "<BUDGET_SUBSCRIPTION_ARN>")
-    dropped = tear_index(f"terraform -chdir=infra/alerts state rm '{address}[\"budget\"]'")
-    destroy = tear_index("terraform.sh --alerts plan -destroy -out <PLAN>", "terraform.sh --alerts apply <PLAN>")
-    verified = tear_index("list-subscriptions-by-topic", "<BUDGET_TOPIC_ARN>", "<ALERTS_TOPIC_ARN>")
-    positions = [listed, removal, dropped, destroy, verified]
-    checks[
-        f"the teardown reads the state, removes the budget subscription as administrator, drops it from state, destroys the rest, verifies ({positions})"
-    ] = all(position >= 0 for position in positions) and positions == sorted(positions)
-    checks["the teardown says the project user holds no signed removal of the budget subscription and the administrator removes it"] = (
-        "holds no signed removal of the budget alerts subscription" in teardown and "The administrator removes that subscription" in teardown
-    )
-    checks["the teardown drops the budget entry from state whether the subscription is confirmed, pending or gone, so it never skips that step"] = (
-        dropped >= 0 and "whether the AWS subscription is confirmed, pending or already removed" in tear[dropped] and "skip steps" not in teardown
-    )
-    checks["the teardown destroy plan must delete the platform topic subscription only"] = (
-        destroy >= 0 and "Stop on the budget entry, on any other change and on any other resource" in tear[destroy]
-    )
-    checks["the teardown reports a pending subscription before it calls the teardown complete"] = (
-        verified >= 0 and "PendingConfirmation" in tear[verified] and "run record" in tear[verified] and "not complete" in tear[verified]
-    )
-    for name, ok in teardown_runs(teardown).items():
-        checks[name] = ok
-    checks["the teardown keeps the topics, the platform stack, .env and the other state"] = "keeps everything else" in teardown and "`.env`" in teardown
+    tear_order = [
+        ("state", next((n for n, step in enumerate(tear) if "state list" in step), -1)),
+        ("budget removal", next((n for n, step in enumerate(tear) if "aws sns unsubscribe" in step), -1)),
+        ("state drop", next((n for n, step in enumerate(tear) if "state rm" in step), -1)),
+        ("destroy", next((n for n, step in enumerate(tear) if "plan -destroy" in step and "subscriptions are destroyed" in step), -1)),
+        ("verify", next((n for n, step in enumerate(tear) if "PendingConfirmation" in step and "exit code 3" in step), -1)),
+    ]
+    positions = [position for _, position in tear_order]
+    checks[f"the teardown steps come in order ({positions})"] = all(position >= 0 for position in positions) and positions == sorted(positions)
     return checks
 
 
@@ -510,12 +413,29 @@ def mutant_checks(text: str, folder: Path) -> dict[str, bool]:
     return checks
 
 
+def alert_call_checks(calls: list[str], folder: Path) -> dict[str, bool]:
+    """Every distinct command that the alert blocks ran against the stand-ins goes through the real parser of its program, as the printed lines did before."""
+    wrapper = make_wrapper(Workspace(folder / "alert_workspace"), {})
+    (folder / "alert_record").mkdir(parents=True, exist_ok=True)
+    lines = sorted({line for line in calls})
+    checks: dict[str, bool] = {"the alert blocks ran commands against the stand-ins": len(lines) >= 20}
+    for line in lines:
+        tool, _, rest = line.partition(" ")
+        printed = {"wrapper": "bash scripts/infrastructure/terraform.sh", "python": ".venv/bin/python"}.get(tool, tool) + " " + rest
+        problems = owner_commands.check_line(printed, folder, wrapper)
+        label = re.sub(r"/\S+\.tfplan", "<saved plan>", printed)
+        checks[f"the real parser accepts the alert block command: {label[:110]}"] = not problems
+    return checks
+
+
 def run(output: Path) -> dict[str, dict[str, bool]]:
     text = "".join(f"## {heading}\n{body}" for heading, body in json.loads(OWNER_LISTS.read_text()).items())
+    block_checks, block_calls = alert_email_block_cases.cases(text)
     with tempfile.TemporaryDirectory(prefix="owner_list_") as folder:
         results = {
             "structure": structure_checks(text),
             "alert_email": alert_email_checks(text),
+            "alert_blocks": block_checks | alert_call_checks(block_calls, Path(folder)) | alert_email_block_cases.mutant_checks(text),
             "commands": command_checks(text, Path(folder)),
             "mutants": mutant_checks(text, Path(folder)),
             "host": owner_list_host_cases.host_checks(text, Path(folder)),
