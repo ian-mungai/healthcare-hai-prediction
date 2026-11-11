@@ -21,7 +21,7 @@ from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, read_record, safe_name
 from scripts.lakehouse import duckdb_bounds
-from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings, validate_task_credentials
+from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings, in_task, validate_task_credentials
 
 IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parquet(?)'
 
@@ -35,11 +35,7 @@ def layer_selection(layer: str) -> list[str]:
 def build_target(layer: str, mode: str) -> str:
     """Select bounded profiles when configured and native task credentials for real silver."""
     bounded = bool(duckdb_temp_settings())
-    if (
-        os.environ.get("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE"
-        and mode == "publish_fixture"
-        and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"))
-    ):
+    if in_task() and mode == "publish_fixture" and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
         raise PipelineError("fixture_role_session_refused")
     try:
         task = validate_task_credentials(require_catalog=layer == "silver" and mode == "real")

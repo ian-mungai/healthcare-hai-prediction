@@ -45,7 +45,7 @@ SOURCES = (
 )
 
 
-def environment(folder: Path, *, task: bool = True, bounded: bool = True) -> dict[str, str]:
+def environment(folder: Path, *, task: bool = True, bounded: bool = True, execution: str = "AWS_ECS_FARGATE") -> dict[str, str]:
     values = {
         "AWS_REGION": "us-west-2",
         "POLARIS_URI": "http://verified-catalog.example.invalid:8181/api/catalog",
@@ -59,7 +59,7 @@ def environment(folder: Path, *, task: bool = True, bounded: bool = True) -> dic
         "HAI_DEADLINE_UTC": str(time.time() + 30),
     }
     if task:
-        values.update(AWS_EXECUTION_ENV="AWS_ECS_FARGATE", AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="/v2/credentials/synthetic_task")
+        values.update(AWS_EXECUTION_ENV=execution, AWS_CONTAINER_CREDENTIALS_RELATIVE_URI="/v2/credentials/synthetic_task")
         values["HAI_SPARK_LOCAL_DIRECTORY"] = str(folder / "spark_tmp")
     if bounded:
         values.update(HAI_DUCKDB_TEMP_DIRECTORY=str(folder / "spill"), HAI_DUCKDB_MAX_TEMP_BYTES="1048576")
@@ -114,7 +114,7 @@ def spark(values: dict[str, str], warehouse: Path | None = None) -> dict[str, An
             return self
 
         def config(self, name: str, value: Any) -> Builder:
-            if values.get("AWS_EXECUTION_ENV") == "AWS_ECS_FARGATE":
+            if values.get("AWS_EXECUTION_ENV") in ("AWS_ECS_FARGATE", "AWS_ECS_EC2"):
                 require(values["POLARIS_CLIENT_SECRET"] not in str(value), "secret_in_spark_arguments")
             startup.append((name, value))
             captured[name] = value
@@ -312,6 +312,59 @@ def task_profile_endpoint_required(folder: Path) -> None:
     del values["POLARIS_URI"]
     with patch.dict(os.environ, values, clear=True):
         expect_refusal("missing_profile_environment:POLARIS_URI", lambda: rendered_profile(ROOT / "dbt/profiles.yml", "lakehouse_task"))
+
+
+def host_task_environment(folder: Path) -> None:
+    """A job on the EC2 host runs with AWS_ECS_EC2 and is a task as a Fargate job is: the offline profile and the same credential and catalog refusals."""
+    for index, (layer, mode, target) in enumerate(
+        (("silver", "real", "lakehouse_task"), ("gold", "real", "pinned_silver_bounded"), ("silver", "publish_fixture", "fixture_bounded"))
+    ):
+        child = folder / ("build" + str(index))
+        child.mkdir()
+        values = environment(child, execution="AWS_ECS_EC2")
+        if mode == "publish_fixture":
+            values["STAGING_E2E_CASE"] = str(child)
+        captured = build(child, values, layer=layer, mode=mode)
+        require(captured["exit_code"] == 0 and captured["target"] == target, "host_task_target:" + layer + ":" + mode + ":" + str(captured.get("target")))
+        if target == "lakehouse_task":
+            require(captured["profile"]["config_options"]["extension_directory"] == EXTENSION_DIRECTORY, "host_task_extension_directory")
+            require(captured["profile"]["config_options"]["autoinstall_known_extensions"] is False, "host_task_no_extension_download")
+    for index, name in enumerate(("AWS_PROFILE", "AWS_ACCESS_KEY_ID", "AWS_CONTAINER_CREDENTIALS_FULL_URI")):
+        child = folder / ("credential" + str(index))
+        child.mkdir()
+        values = environment(child, execution="AWS_ECS_EC2")
+        values[name] = "synthetic_forbidden_value"
+        expect_refusal("task_credential_source_refused", partial(spark, values))
+        captured = build(child, values)
+        require(captured["exit_code"] == 1 and "task_credential_source_refused" in captured["stderr"], "host_task_credential_refusal:" + name)
+        require(captured["invocations"] == 0, "host_task_engine_started_after_refusal:" + name)
+    child = folder / "provider"
+    child.mkdir()
+    values = environment(child, execution="AWS_ECS_EC2")
+    values["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI"] = ""
+    expect_refusal("task_credential_provider_missing", partial(spark, values))
+    captured = build(child, values)
+    require(captured["exit_code"] == 1 and "task_credential_provider_missing" in captured["stderr"], "host_task_provider_refusal")
+    child = folder / "endpoint"
+    child.mkdir()
+    values = environment(child, execution="AWS_ECS_EC2")
+    values["POLARIS_URI"] = "http://example.invalid/wrong"
+    expect_refusal("task_catalog_endpoint_refused", partial(spark, values))
+    captured = build(child, values)
+    require(captured["exit_code"] == 1 and "task_catalog_endpoint_refused" in captured["stderr"], "host_task_endpoint_refusal")
+    child = folder / "fixture"
+    child.mkdir()
+    values = environment(child, execution="AWS_ECS_EC2")
+    for name in ("AWS_ACCESS_KEY_ID", "AWS_SESSION_TOKEN"):
+        values[name] = "synthetic_fixture_session"
+    values["STAGING_E2E_CASE"] = str(child)
+    captured = build(child, values, mode="publish_fixture")
+    require(captured["exit_code"] == 1 and "fixture_role_session_refused" in captured["stderr"], "host_fixture_build_session_accepted")
+    child = folder / "storage"
+    child.mkdir()
+    values = {**environment(child, execution="AWS_ECS_EC2"), "HAI_DUCKDB_MAX_TEMP_BYTES": ""}
+    captured = build(child, values)
+    require(captured["exit_code"] == 1 and "temporary_storage_settings_incomplete" in captured["stderr"], "host_task_invalid_storage_accepted")
 
 
 def local_paths(folder: Path) -> None:
@@ -781,6 +834,7 @@ def main() -> int:
         "task_dbt": task_dbt,
         "task_extension_directory": task_extension_directory,
         "task_profile_endpoint_required": task_profile_endpoint_required,
+        "host_task_environment": host_task_environment,
         "local_paths": local_paths,
         "credential_refusals": credential_refusals,
         "fixture_refusals": fixture_refusals,

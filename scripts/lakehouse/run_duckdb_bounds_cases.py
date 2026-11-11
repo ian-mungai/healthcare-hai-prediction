@@ -128,13 +128,14 @@ def helper_cases() -> dict[str, bool]:
         with tempfile.TemporaryDirectory(prefix="duckdb_bounds_") as scratch:
             error, peak, clean = helper_spill(Path(scratch), 20 * 2**30, read_only, config)
         checks[f"{label}: a spill below the cap lands in the configured directory and not beside the database"] = error == "" and peak > 50 * MIB and clean
-    with mock.patch.dict(os.environ, {"AWS_EXECUTION_ENV": "AWS_ECS_FARGATE", "HAI_DUCKDB_TEMP_DIRECTORY": "", "HAI_DUCKDB_MAX_TEMP_BYTES": ""}):
-        try:
-            duckdb_bounds.options()
-            refused = False
-        except TemporaryStorageError:
-            refused = True
-    checks["inside a task a missing spill setting is an error"] = refused
+    for execution, where in (("AWS_ECS_FARGATE", "inside a task"), ("AWS_ECS_EC2", "inside a task on the EC2 host")):
+        with mock.patch.dict(os.environ, {"AWS_EXECUTION_ENV": execution, "HAI_DUCKDB_TEMP_DIRECTORY": "", "HAI_DUCKDB_MAX_TEMP_BYTES": ""}):
+            try:
+                duckdb_bounds.options()
+                refused = False
+            except TemporaryStorageError:
+                refused = True
+        checks[f"{where} a missing spill setting is an error"] = refused
     with mock.patch.dict(os.environ, {"HAI_DUCKDB_TEMP_DIRECTORY": "", "HAI_DUCKDB_MAX_TEMP_BYTES": ""}, clear=False):
         os.environ.pop("AWS_EXECUTION_ENV", None)
         connection = duckdb_bounds.connect(duckdb)

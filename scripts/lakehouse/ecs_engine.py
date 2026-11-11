@@ -7,6 +7,14 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
+# ECS sets one of these in a job's containers: Fargate in the cloud and EC2 on the job host. Both read their credentials from the task provider.
+TASK_ENVIRONMENTS = frozenset({"AWS_ECS_FARGATE", "AWS_ECS_EC2"})
+
+
+def in_task() -> bool:
+    """Whether this process runs in an ECS task, on Fargate or on the EC2 host."""
+    return os.environ.get("AWS_EXECUTION_ENV") in TASK_ENVIRONMENTS
+
 
 class TemporaryStorageError(RuntimeError):
     """An incomplete task spill configuration, independent of controller modules."""
@@ -14,7 +22,7 @@ class TemporaryStorageError(RuntimeError):
 
 def validate_task_credentials(*, require_catalog: bool = True) -> bool:
     """Reject profile and static credentials when a native task provider is required."""
-    if os.environ.get("AWS_EXECUTION_ENV") != "AWS_ECS_FARGATE":
+    if not in_task():
         return False
     forbidden = (
         "AWS_ACCESS_KEY_ID",
@@ -53,7 +61,7 @@ def duckdb_temp_settings() -> dict[str, str]:
     """Read an explicit task spill directory and byte cap, preserving unset local defaults."""
     directory = os.environ.get("HAI_DUCKDB_TEMP_DIRECTORY", "")
     maximum = os.environ.get("HAI_DUCKDB_MAX_TEMP_BYTES", "")
-    if not directory and not maximum and os.environ.get("AWS_EXECUTION_ENV") != "AWS_ECS_FARGATE":
+    if not directory and not maximum and not in_task():
         return {}
     if not directory or not maximum.isdecimal() or int(maximum) <= 0 or not Path(directory).is_absolute() or ".." in Path(directory).parts:
         raise TemporaryStorageError("temporary_storage_settings_incomplete")

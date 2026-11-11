@@ -244,8 +244,8 @@ def case_an_override_that_is_not_understood_fails_by_name(root: Path) -> None:
     expect_error(lambda: task_capacity.clip({"HAI_DUCKDB_MAX_TEMP_BYTES": "-1"}, derived), "HAI_DUCKDB_MAX_TEMP_BYTES")
 
 
-def task_environment(spill: Path | None) -> dict[str, str]:
-    found = {"AWS_EXECUTION_ENV": "AWS_ECS_FARGATE"}
+def task_environment(spill: Path | None, execution: str = "AWS_ECS_FARGATE") -> dict[str, str]:
+    found = {"AWS_EXECUTION_ENV": execution}
     if spill is not None:
         found["HAI_DUCKDB_TEMP_DIRECTORY"] = str(spill)
     return found
@@ -265,6 +265,16 @@ def case_apply_sets_the_engine_environment_in_a_task(root: Path) -> None:
     with mock.patch.dict(os.environ, environ, clear=True):
         found = ecs_engine.duckdb_temp_settings()
     expect(found == {"temp_directory": str(spill), "max_temp_directory_size": f"{60 * GIB}B"}, found)
+
+
+def case_apply_derives_the_limits_of_a_task_on_the_ec2_host(root: Path) -> None:
+    v2(root, str(64 * GIB), "1600000 100000", "0-15")
+    environ = task_environment(root / "workspace/duckdb_spill", "AWS_ECS_EC2")
+    limits = task_capacity.apply("features_build", environ, root, task(65536, 16, [GUARD, PHASE]), 1024, lambda path: 100 * GIB)
+    expect(limits is not None and limits.threads == 8, limits)
+    with mock.patch.dict(os.environ, environ, clear=True):
+        found = ecs_engine.duckdb_temp_settings()
+    expect(found.get("max_temp_directory_size") == f"{60 * GIB}B", found)
 
 
 def case_apply_does_nothing_outside_a_task(root: Path) -> None:
