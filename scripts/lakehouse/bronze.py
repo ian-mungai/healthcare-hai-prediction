@@ -157,6 +157,10 @@ class BronzeError(ValueError):
     """An input, validation or count check failed; the message names the object, never its values."""
 
 
+# The fixed message of a workbook the reader could not read. The reader's own error can quote a cell, so it is never passed on or chained.
+WORKBOOK_UNREADABLE = "workbook_unreadable: the workbook cannot be read"
+
+
 class Storage(Protocol):
     """The S3 operations the loader needs: list current keys, get or download one exact version."""
 
@@ -789,7 +793,18 @@ def parse_object(
         if file_format == "pdf_rows":
             rows, stats = file_readers.read_pdf_rows(path, rows_path)
             return read_fixed_frame(spark, rows_path, file_readers.PDF_SCHEMA, file_readers.PDF_COLUMNS), rows, "pdf", [], [], stats, []
-        rows, encoding, stats = file_readers.read_sheet_rows(path, rows_path)
+        try:
+            rows, encoding, stats = file_readers.read_sheet_rows(path, rows_path)
+        except file_readers.ReaderError:
+            rows_path.unlink(missing_ok=True)
+            raise
+        except Exception:
+            # A native reader error can quote the cell it stopped at, and the rows file already holds unprotected cells: keep neither.
+            rows_path.unlink(missing_ok=True)
+            raise BronzeError(WORKBOOK_UNREADABLE) from None
+        except BaseException:
+            rows_path.unlink(missing_ok=True)
+            raise
         try:
             stats.update(person_fields.protect_sheets(item["table"], rows_path))
         except (person_fields.PersonFieldError, PseudonymizationError) as error:

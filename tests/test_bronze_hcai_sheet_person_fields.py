@@ -9,7 +9,14 @@ plan, an independent source: every header has the real 354 columns and every wor
 from __future__ import annotations
 
 import copy
+import hashlib
+import io
 import json
+import re
+import sys
+import traceback
+import types
+import zipfile
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -475,3 +482,70 @@ def test_a_native_xlsx_with_an_unknown_owner_type_is_refused_before_the_spark_re
     with refused, pytest.raises(bronze.BronzeError, match="person fields: .*owner type"):
         bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
     check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "a refused workbook left a rows file or a staging file")
+
+
+SOURCE_MARKER = "SYNTHETIC_CELL_MARKER"
+
+
+def workbook_with_a_text_in_a_numeric_cell(path: Path) -> None:
+    """A real synthetic workbook whose administrator cell is typed numeric but holds the marker text, so the native reader fails on that cell."""
+    write_xlsx(path, sheet_records([data_row("100", INDIVIDUAL, "Pell Dunmore", "Zorba Quill", "Scanner")]))
+    cell = re.compile(rb"<c\b[^>]*>(?:(?!</c>).)*<t>Zorba Quill</t>(?:(?!</c>).)*</c>")
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(path) as original, zipfile.ZipFile(buffer, "w") as changed:
+        for name in original.namelist():
+            raw = original.read(name)
+            match = cell.search(raw) if name == "xl/worksheets/sheet2.xml" else None
+            if match is not None:
+                reference = re.search(rb'\br="([A-Z]+[0-9]+)"', match.group())
+                check(reference is not None, "the synthetic cell has no coordinate")
+                raw = raw[: match.start()] + b'<c r="' + reference[1] + b'" t="n"><v>' + SOURCE_MARKER.encode() + b"</v></c>" + raw[match.end() :]
+            changed.writestr(name, raw)
+    path.write_bytes(buffer.getvalue())
+
+
+def test_a_workbook_the_native_reader_cannot_read_fails_with_a_fixed_code_and_no_cell_text(tmp_path: Path) -> None:
+    workbook, rows_path = tmp_path / "book.xlsx", tmp_path / "rows.jsonl"
+    workbook_with_a_text_in_a_numeric_cell(workbook)
+    with pytest.raises(bronze.BronzeError) as caught:
+        bronze.parse_object(None, {"table": TABLE, "format": "sheet_rows"}, workbook, rows_path)
+    shown = "".join(traceback.format_exception(caught.value))
+    check(SOURCE_MARKER not in str(caught.value) and SOURCE_MARKER not in shown, "the cell text reached the message or the traceback")
+    check(
+        str(caught.value) == bronze.WORKBOOK_UNREADABLE and caught.value.__cause__ is None and caught.value.__suppress_context__,
+        "the failure is not the fixed code",
+    )
+    check(sorted(p.name for p in tmp_path.iterdir()) == ["book.xlsx"], "the unreadable workbook left a partly written rows file")
+
+
+def test_the_loader_reports_an_unreadable_workbook_by_its_fixed_code_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    source = tmp_path / "source.xlsx"
+    workbook_with_a_text_in_a_numeric_cell(source)
+
+    class Store:
+        def download(self, _bucket: str, _key: str, _version: str, target: Path) -> None:
+            target.write_bytes(source.read_bytes())
+
+    item = {
+        "table": TABLE,
+        "format": "sheet_rows",
+        "snapshot_id": "S1",
+        "file_name": "book.xlsx",
+        "object_key": "k1",
+        "bucket": "b",
+        "key": "k",
+        "version_id": "v",
+        "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "byte_count": source.stat().st_size,
+    }
+    monkeypatch.setattr(bronze, "ensure_table", lambda *_args, **_kwargs: None)
+    # The loader imports Spark's column helpers before it reads the file; the host has no Spark, and a read that fails never reaches them.
+    functions = types.SimpleNamespace(lit=str)
+    monkeypatch.setitem(sys.modules, "pyspark", types.ModuleType("pyspark"))
+    monkeypatch.setitem(sys.modules, "pyspark.sql", types.ModuleType("pyspark.sql"))
+    monkeypatch.setitem(sys.modules, "pyspark.sql.functions", functions)
+    with pytest.raises(bronze.BronzeError) as caught:
+        bronze.load_object(None, item, Store(), "ns", tmp_path / "scratch")
+    shown = "".join(traceback.format_exception(caught.value))
+    check(SOURCE_MARKER not in str(caught.value) and SOURCE_MARKER not in shown, "the cell text reached the loader error or its traceback")
+    check(str(caught.value).endswith(bronze.WORKBOOK_UNREADABLE), f"the loader error is {str(caught.value)!r}")
