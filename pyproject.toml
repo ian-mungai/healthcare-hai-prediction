@@ -222,7 +222,7 @@ spark = [
   "botocore==1.43.107; sys_platform == 'linux'",
   "narwhals==2.26.0; sys_platform == 'linux'",
   "numpy==2.5.3; sys_platform == 'linux'",
-  "pillow==12.3.0; sys_platform == 'linux'",
+  "pillow==13.0.0; sys_platform == 'linux'",
   "pycparser==3.0; sys_platform == 'linux'",
   "pypdfium2==5.13.0; sys_platform == 'linux'",
   "s3transfer==0.19.2; sys_platform == 'linux'",
