@@ -230,7 +230,7 @@ spark = [
 
 # MLflow tracking server image with the auth extra (Flask-WTF, which the basic-auth app needs to import), the PostgreSQL driver and boto3 for S3 artifacts.
 mlflow = [
-  "mlflow[auth]==3.17.0; sys_platform == 'linux'",
+  "mlflow[auth]==3.17.2; sys_platform == 'linux'",
   "psycopg2-binary==2.9.13; sys_platform == 'linux'",
   "boto3==1.43.123; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
