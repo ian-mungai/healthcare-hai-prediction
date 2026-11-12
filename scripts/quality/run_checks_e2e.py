@@ -863,12 +863,17 @@ DELETED_MODULE_ROUND_TWO = [
         reason=f"app/read.py:1: {DEAD_PATH} {LEFTOVER}",
     ),
     Case(
-        "deleted module, relative import above a folder with an alias remains",
+        "deleted module, relative import of the parent package with an alias remains",
         "removed-names",
         False,
-        committed={**DEAD_MODULE, "app/__init__.py": "", "dags/pending_dag.py": f"from ..app import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}"},
+        committed={
+            **DEAD_MODULE,
+            "app/__init__.py": "",
+            "app/sub/__init__.py": "",
+            "app/sub/read.py": f"from .. import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}",
+        },
         delete=[DEAD_FILE],
-        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+        reason=f"app/sub/read.py:1: {DEAD_PATH} {LEFTOVER}",
     ),
     Case(
         "deleted module, aliased dotted import and its attribute remain",
@@ -1007,6 +1012,89 @@ DELETED_MODULE_ROUND_TWO = [
         reason=f"README.md:1: {DEAD_STEM}.py {LEFTOVER}",
     ),
 ]
+# Inputs of the second review: a command in one Python string, a relative import above the top package and unreadable import roots.
+COMMAND_FILE = "app/read.py"
+DELETED_MODULE_ROUND_THREE = [
+    Case(
+        f"deleted module, command string {label} remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, COMMAND_FILE: f'COMMAND = "{command}"\n'},
+        delete=[DEAD_FILE],
+        reason=f"{COMMAND_FILE}:1: {module} {LEFTOVER}",
+    )
+    for label, command, module in [
+        ("with python", f"python -m {DEAD_PATH} --check", DEAD_PATH),
+        ("with a path to python and a flag", f".venv/bin/python -u -m {DEAD_PATH} --check", DEAD_PATH),
+        ("with uv run python", f"uv run python -m {DEAD_PATH}", DEAD_PATH),
+        ("with a versioned python at the end of a sentence", f"run /usr/bin/python3.12 -m {DEAD_PATH}.", DEAD_PATH),
+    ]
+]
+DELETED_MODULE_ROUND_THREE += [
+    Case(
+        "deleted module, command string with a shell variable as the program remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, COMMAND_FILE: f'COMMAND = "exec \\"$HAI_PYTHON\\" -m {DEAD_PATH} --check"\n'},
+        delete=[DEAD_FILE],
+        reason=f"{COMMAND_FILE}:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, command in an alert record remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "orchestration/worker_recovery.py": f'ALERT = {{"kind": "unproven", "command": "python -m {DEAD_PATH} workers"}}\n'},
+        delete=[DEAD_FILE],
+        reason=f"orchestration/worker_recovery.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, command in an f-string remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, COMMAND_FILE: f'NAME = "x"\nCOMMAND = f".venv/bin/python -m {DEAD_PATH} --output {{NAME}}"\n'},
+        delete=[DEAD_FILE],
+        reason=f"{COMMAND_FILE}:2: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, command string for a root module remains",
+        "removed-names",
+        False,
+        committed={DEAD_ROOT_FILE: UTIL_FUNCTION, COMMAND_FILE: f'COMMAND = "python3 -m {DEAD_STEM}"\n'},
+        delete=[DEAD_ROOT_FILE],
+        reason=f"{COMMAND_FILE}:1: {DEAD_STEM} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, command strings for other modules and prose with a flag are no reference",
+        "removed-names",
+        True,
+        committed={
+            **DEAD_MODULE,
+            COMMAND_FILE: f'OTHER = "python -m other.{DEAD_STEM} --check"\nLONGER = "python -m {DEAD_PATH}_v2"\n'
+            f'PROSE = "use -m to name a module such as {DEAD_PATH} in a sentence"\nBARE = "see {DEAD_STEM} -m"\n',
+        },
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, relative import above the top package is unresolved",
+        "removed-names",
+        True,
+        committed={**DEAD_MODULE, "other/__init__.py": "", "other/read.py": f"from ..app import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}"},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, unreadable import roots stop the check",
+        "removed-names",
+        False,
+        committed={
+            "pyproject.toml": '[tool.mypy]\nmypy_path = ["src"]\n',
+            "mypy.ini": "[mypy]\n",
+            f"src/{DEAD_FILE}": UTIL_FUNCTION,
+            "dags/pending_dag.py": f"from {DEAD_PATH} import {OLD_FUNCTION}\nVALUE: int = {OLD_FUNCTION}()\n",
+        },
+        delete=[f"src/{DEAD_FILE}"],
+        reason="cannot read the import roots",
+    ),
+]
 DELETED_MODULE_CASES = [
     Case(
         "deleted module, its function name is an unrelated local variable",
@@ -1113,6 +1201,7 @@ DELETED_MODULE_CASES = [
         reason=f"app/paths.py:1: {DEAD_STEM}.py {LEFTOVER}",
     ),
     *DELETED_MODULE_ROUND_TWO,
+    *DELETED_MODULE_ROUND_THREE,
     Case(
         "function removed from a file that stays, an unrelated word elsewhere still counts",
         "removed-names",

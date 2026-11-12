@@ -783,6 +783,8 @@ def bound_names(files: dict[str, list[str]]) -> set[str]:
 
 DOTTED_WORD = re.compile(r"[A-Za-z_]\w*(?:\.\w+)*")
 IMPORT_CALLS = {"__import__", "import_module", "find_spec"}
+# The program of a Python command: python, python3, python3.12 (any folder) or a shell variable named like it.
+PYTHON_PROGRAM = re.compile(r"python[\d.]*|\$\{?\w*PYTHON\w*\}?", re.IGNORECASE)
 
 
 def dead_prefixes(path: str, names: list[str], roots: list[str]) -> set[str]:
@@ -800,13 +802,43 @@ def refers_to(dotted: str, prefixes: set[str]) -> bool:
     return any(dotted == prefix or dotted.startswith(f"{prefix}.") for prefix in prefixes)
 
 
+def command_modules(text: str) -> list[str]:
+    """Return the modules a command written in one string runs with ``-m``: the word after ``-m`` when a Python program, with only flags between, precedes it.
+
+    The program is ``python``, ``python3.12`` or a path to one, either behind a launcher (``uv run python``) or not, or a shell variable named like Python.
+    The string is split like a shell line, or at spaces when its quotes do not pair.
+    """
+    if "-m" not in text:
+        return []
+    try:
+        words = shlex.split(text)
+    except ValueError:
+        words = text.split()
+    words = [word.strip("`'\"()") for word in words]
+    modules = []
+    for index, word in enumerate(words[:-1]):
+        before = index - 1
+        while before >= 0 and words[before].startswith("-"):
+            before -= 1
+        module = words[index + 1].rstrip(".,;:")
+        if word == "-m" and before >= 0 and PYTHON_PROGRAM.fullmatch(Path(words[before]).name) and DOTTED_WORD.fullmatch(module):
+            modules.append(module)
+    return modules
+
+
 def python_module_uses(tree: ast.Module, package: str, dead: dict[str, set[str]]) -> set[tuple[int, str]]:
     """Return the (line, deleted module) pairs a parsed Python file refers to.
 
     An import statement counts by the complete statement (continuations, parentheses, aliases; a relative import is resolved against ``package``). A name
     an import binds stands for the module it names, so an attribute read through it counts. A string that is a dotted module path counts, and so does the
-    first argument of ``__import__``, ``import_module`` and ``find_spec`` or the word after ``-m`` in a command list (a root module has no dot). A name
-    that no import bound stands for nothing.
+    first argument of ``__import__``, ``import_module`` and ``find_spec``, the word after ``-m`` in a command list (a root module has no dot) and the
+    word after ``-m`` in a command written as one string (``command_modules``). A name that no import bound stands for nothing.
+
+    Known limits, each judged not to hide a reader in this repository: a name stays bound for the whole file, so an attribute read through a name that
+    another import rebinds is read as the last import says; a bare ``import util`` beside ``util.py`` (run as a script) names no package, so it is not
+    matched to ``pkg.util``; a deleted ``__init__.py`` takes away only the functions and classes it defines, not the names it imports; ``from pkg import *``
+    binds nothing; a path without ``.py`` (``app/util``) in a configuration file is not read as a module; a runtime alias of a package
+    (config/quality/dependency_runtimes.json) is not mapped back to its folder; a docstring that is only a dotted module path counts as a string.
     """
     hits: set[tuple[int, str]] = set()
     bound: dict[str, str] = {}
@@ -824,7 +856,7 @@ def python_module_uses(tree: ast.Module, package: str, dead: dict[str, set[str]]
                 top = alias.name.partition(".")[0]
                 bound[alias.asname or top] = alias.name if alias.asname else top
                 check(node.lineno, alias.name)
-        elif isinstance(node, ast.ImportFrom) and node.level - 1 <= len(parts):
+        elif isinstance(node, ast.ImportFrom) and node.level <= len(parts):  # A relative import above the top package is no import of a module.
             anchor = parts[: len(parts) - (node.level - 1)] if node.level else []
             base = ".".join([*anchor, *([node.module] if node.module else [])])
             check(node.lineno, base)
@@ -847,6 +879,8 @@ def python_module_uses(tree: ast.Module, package: str, dead: dict[str, set[str]]
             word = node.value.partition(":")[0]
             if "." in word and DOTTED_WORD.fullmatch(word):
                 check(node.lineno, word)
+            for module in command_modules(node.value):
+                check(node.lineno, module)
         elif isinstance(node, ast.List | ast.Tuple):
             for flag, item in zip(node.elts, node.elts[1:], strict=False):
                 if text(flag) == "-m" and text(item) is not None:
@@ -1294,8 +1328,8 @@ def deleted_modules_left(removed: dict[str, list[str]], deleted: list[str], file
         return []
     try:
         roots = typecheck_importers.declared_roots(Path.cwd(), os.environ.get("PRE_COMMIT_FROM_REF", "HEAD"))
-    except ValueError:
-        roots = []  # Unreadable declarations: the paths below the project root still name every module.
+    except ValueError as error:
+        raise SystemExit(f"removed-names: cannot read the import roots, so a deleted module cannot be matched by its module path: {error}") from error
     dead = {typecheck_importers.module_of(path, roots): dead_prefixes(path, PY_TOP_LEVEL.findall("\n".join(removed.get(path, []))), roots) for path in gone}
     return deleted_module_findings({module: prefixes for module, prefixes in dead.items() if prefixes}, files, roots, allowed)
 
@@ -1310,7 +1344,8 @@ def removed_names() -> list[Finding]:
     class body) is a live name, not a leftover. Python functions, classes and modules
     are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
     Only the Python files MyPy does not cover keep a text check for them, until they join MyPy. The names of a deleted
-    module are not part of it: only a reference to the module counts (see ``deleted_module_findings``), in any file.
+    module are not part of it: only a reference to the module counts (see ``deleted_module_findings``), in any file. The known limits of that
+    reading are listed in ``python_module_uses``. Unreadable import-root declarations stop the check when a Python file is deleted.
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
