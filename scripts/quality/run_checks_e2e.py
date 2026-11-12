@@ -1512,6 +1512,7 @@ CASES = [
             ("a match capture inside a function", f"def outer() -> None:\n    match 1:\n        case {WINNOW}:\n            pass\n"),
             ("a type alias inside a function", f"def outer() -> None:\n    type {WINNOW} = int\n"),
             ("a walrus in a lambda default inside a lambda body", f"HANDLER = lambda: (lambda value=({WINNOW} := 1): value)\n"),
+            ("a walrus in a class body annotation", f"class Holder:\n    value: ({WINNOW} := int) = 1\n"),
             ("a loop target in a class body", f"class Holder:\n    for {WINNOW} in []:\n        pass\n"),
             ("a with target in a class body", f"class Holder:\n    with open('x') as {WINNOW}:\n        pass\n"),
             ("a type alias in a class body", f"class Holder:\n    type {WINNOW} = int\n"),
@@ -1553,6 +1554,13 @@ CASES = [
             ("nested if block", f"if True:\n    if True:\n        {WINNOW} = 1\n"),
             ("conditional import", f"if True:\n    from datetime import datetime as {WINNOW}\n"),
             ("conditional def", f"if True:\n    def {WINNOW}() -> int:\n        return 1\n"),
+            ("while body", f"while True:\n    {WINNOW} = 1\n    break\n"),
+            ("while else block", f"while False:\n    pass\nelse:\n    {WINNOW} = 1\n"),
+            ("for else block", f"for item in []:\n    pass\nelse:\n    {WINNOW} = 1\n"),
+            ("try else block", f"try:\n    pass\nexcept ValueError:\n    pass\nelse:\n    {WINNOW} = 1\n"),
+            ("finally block", f"try:\n    pass\nfinally:\n    {WINNOW} = 1\n"),
+            ("except-star block", f"try:\n    pass\nexcept* ValueError:\n    {WINNOW} = 1\n"),
+            ("match body", f"match 1:\n    case _:\n        {WINNOW} = 1\n"),
         )
     ],
     *[
@@ -1617,6 +1625,12 @@ CASES = [
             ("a walrus in a keyword-only lambda default", f"HANDLER = lambda *, value=({WINNOW} := 1): value\n"),
             ("a walrus in a comprehension in a lambda default", f"HANDLER = lambda value=[({WINNOW} := item) for item in range(3)]: value\n"),
             ("a walrus in a nested lambda default", f"HANDLER = lambda value=(lambda inner=({WINNOW} := 1): inner): value\n"),
+            ("a global declaration in a class body that assigns the word", f"class Holder:\n    global {WINNOW}\n    {WINNOW} = 1\n"),
+            ("a walrus in a module-level annotation with a value", f"value: ({WINNOW} := int) = 1\n"),
+            ("a walrus in a module-level annotation without a value", f"value: ({WINNOW} := int)\n"),
+            ("a walrus in a parameter annotation", f"def setup(value: ({WINNOW} := int)) -> None:\n    pass\n"),
+            ("a walrus in a decorator", f"@({WINNOW} := print)\ndef setup() -> None:\n    pass\n"),
+            ("a walrus in a class base", f"class Holder(({WINNOW} := object)):\n    pass\n"),
             ("a global declaration in a function that augments the word", f"def setup() -> None:\n    global {WINNOW}\n    {WINNOW} += 1\n"),
             ("a global declaration in a function with a loop target", f"def setup() -> None:\n    global {WINNOW}\n    for {WINNOW} in [1]:\n        pass\n"),
             (
@@ -2603,12 +2617,15 @@ PLANTED_REGRESSIONS = [
             for case in CASES
             if case.hook == "removed-names"
             and not case.expect_pass
-            and any(label in case.name for label in ("loop target read", "tuple target holding", "subscript target", "nested tuple target"))
+            and any(
+                label in case.name for label in ("subscript index read", "tuple target holding", "subscript target", "attribute target", "nested tuple target")
+            )
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "names |= {name for target in targets for name in target_names(target)}",
-        "names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}",
+        "elif isinstance(node, ast.Assign):\n            names |= {name for target in node.targets for name in target_names(target)}\n",
+        "elif isinstance(node, ast.Assign):\n"
+        "            names |= {name.id for target in node.targets for name in ast.walk(target) if isinstance(name, ast.Name)}\n",
         0,
     ),
     (
@@ -2659,26 +2676,74 @@ PLANTED_REGRESSIONS = [
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "names.add(node.name)\n",
-        "names.add(node.name)\n            names |= module_bindings(node.body)\n",
+        "if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n            names.add(node.name)\n",
+        "if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n"
+        "            names.add(node.name)\n"
+        "            names |= module_bindings(node.body)\n",
         0,
     ),
     (
-        "bindings inside module-level if and loop blocks",
+        "bindings inside module-level if and while blocks",
         [
             case
             for case in CASES
-            if case.hook == "removed-names" and case.expect_pass and any(label in case.name for label in ("if block", "else block", "loop body", "conditional"))
+            if case.hook == "removed-names"
+            and case.expect_pass
+            and any(
+                label in case.name
+                for label in (
+                    "module-level if block",
+                    "module-level else block",
+                    "module-level nested if block",
+                    "module-level while body",
+                    "module-level while else block",
+                    "module-level conditional",
+                )
+            )
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):",
-        "elif False:",
+        "elif isinstance(node, ast.If | ast.While):\n            names |= module_bindings(node.body) | module_bindings(node.orelse)\n",
+        "elif False:\n            names |= module_bindings(node.body) | module_bindings(node.orelse)\n",
+        1,
+    ),
+    (
+        "bindings inside module-level loops",
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names"
+            and case.expect_pass
+            and any(
+                label in case.name
+                for label in ("module-level loop body", "module-level for else block", "module-level loop target", "loop tuple target", "loop starred target")
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "elif isinstance(node, ast.For | ast.AsyncFor):\n"
+        "            names |= target_names(node.target) | module_bindings(node.body) | module_bindings(node.orelse)\n",
+        "elif False:\n            names |= target_names(node.target) | module_bindings(node.body) | module_bindings(node.orelse)\n",
         1,
     ),
     (
         "bindings inside module-level try blocks",
-        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and ("try block" in case.name or "except block" in case.name)],
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names"
+            and case.expect_pass
+            and any(
+                label in case.name
+                for label in (
+                    "module-level try block",
+                    "module-level except block",
+                    "module-level try else block",
+                    "module-level finally block",
+                    "module-level except-star block",
+                )
+            )
+        ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
         "elif isinstance(node, ast.Try | ast.TryStar):",
@@ -2687,11 +2752,29 @@ PLANTED_REGRESSIONS = [
     ),
     (
         "bindings inside module-level with blocks",
-        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "with block" in case.name],
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names"
+            and case.expect_pass
+            and any(
+                label in case.name
+                for label in ("module-level with block", "a with target", "tuple with target", "second with item target", "async with target")
+            )
+        ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
         "elif isinstance(node, ast.With | ast.AsyncWith):",
         "elif False:",
+        1,
+    ),
+    (
+        "bindings inside module-level match bodies",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "module-level match body" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "names |= {name for case in node.cases for name in pattern_names(case.pattern) | module_bindings(case.body)}",
+        "names |= {name for case in node.cases for name in pattern_names(case.pattern)}",
         1,
     ),
     (
