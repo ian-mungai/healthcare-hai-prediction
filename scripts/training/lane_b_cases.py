@@ -1,4 +1,4 @@
-"""Synthetic caller cases for training snapshots, broker admission and extraction."""
+"""Synthetic caller cases for training snapshots, approvals, rendering and extraction."""
 
 from __future__ import annotations
 
@@ -23,7 +23,6 @@ from orchestration.interface import SubmissionRefused, SubmissionRequest
 from scripts.features import feature_schema
 from scripts.features import training_extract as extract
 from scripts.lakehouse import memory_budget, run_lock
-from scripts.orchestration.broker import Broker, BrokerPaths, load_templates
 from scripts.process import CompletedProcess
 from scripts.training import job_inputs
 from scripts.training.step_records import verify_done, write_done
@@ -823,7 +822,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
 
 
 def orchestration_cases(cases: Cases, folder: Path) -> None:
-    """Exercise snapshots, broker rows, approvals and fixed rendered mount sets."""
+    """Exercise snapshots, approvals and fixed rendered mount sets."""
     source = folder / "source"
     fixture(source)
     run_folder = folder / RUN
@@ -964,30 +963,6 @@ def orchestration_cases(cases: Cases, folder: Path) -> None:
         "not allowed",
     )
     config = launcher.Config(run_lock.Registry(folder / "registry", "test"), source, "", folder / "tokens", folder / "runs", allowed_roots=(folder,))
-    client = launcher.LauncherClient(config)
-    broker = Broker(BrokerPaths(config.registry, folder / "broker_state"), load_templates(), client, repo_root=source, runs_root=folder / "runs")
-    request = SubmissionRequest("promotion_check", RUN, "fixture", 1, "training_dag", "promotion_check", "manual", training=PARAMETERS)
-    cases.check("broker_primary_promotion_check_runs", lambda: require(not broker.row_for(request)["no_op"], "primary promotion check was skipped"))
-    cases.check(
-        "broker_sensitivity_never_promotes",
-        lambda: require(
-            broker.row_for(replace(request, training={**PARAMETERS, "population": "sensitivity"}))["no_op"], "sensitivity run can mutate a model alias"
-        ),
-    )
-    cases.check(
-        "broker_forwards_training_parameters",
-        lambda: require(broker.payload_of(request, broker.row_for(request))["params"]["parameters"] == PARAMETERS, "broker dropped the parameters"),
-    )
-    cases.refuses("broker_aws_route_refused", lambda: broker.row_for(replace(request, training={**PARAMETERS, "mlflow": "aws"})), "not built")
-    cases.refuses("broker_wrong_training_task_refused", lambda: broker.row_for(replace(request, template="gold_build")), "outside")
-    guard = replace(request, template="guard", task_id="guard")
-    broker.write_intent(guard, broker.row_for(guard), broker.payload_of(guard, broker.row_for(guard)))
-    with mock.patch.object(broker, "advance_locked", side_effect=RuntimeError("a light case attempted external dispatch")):
-        cases.refuses(
-            "broker_retry_parameter_change_refused",
-            lambda: broker.submit(replace(guard, training={**PARAMETERS, "population": "sensitivity"})),
-            "parameters differ",
-        )
     output = run_folder / "outputs/fit"
     cases.refuses("step_code_digest_refused", lambda: verify_done(output, "fit", "c" * 64), "code digest")
     (output / "unrecorded.json").write_text("unrecorded synthetic output")

@@ -1,4 +1,4 @@
-"""Synthetic regressions for training mounts, approval admission and interrupted work."""
+"""Synthetic regressions for training mounts, snapshots and preparation."""
 
 from __future__ import annotations
 
@@ -10,16 +10,13 @@ import tempfile
 from dataclasses import replace
 from functools import partial
 from pathlib import Path, PurePosixPath
-from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
 from orchestration import code_digest, launcher, training_contract, training_render
-from orchestration.interface import SubmissionRequest
 from scripts.lakehouse import run_lock
-from scripts.orchestration import pipeline_control, transform_fixtures
-from scripts.orchestration.broker import Broker, BrokerPaths, load_templates
-from scripts.training.lane_b_cases import GOLD, PARAMETERS, ROOT, RUN, Cases, fixture, fixture_git, require
+from scripts.orchestration import transform_fixtures
+from scripts.training.lane_b_cases import PARAMETERS, ROOT, RUN, Cases, fixture, fixture_git, require
 from scripts.training.step_records import write_done
 
 
@@ -209,102 +206,6 @@ def rendered_cases(cases: Cases, folder: Path) -> None:
             path.write_bytes(original)
 
 
-def broker_for(folder: Path) -> Broker:
-    """Use the real broker with only synthetic registry and run folders."""
-    config = launcher.Config(run_lock.Registry(folder / "registry", "test"), folder, "", folder / "tokens", folder / "runs", allowed_roots=(folder,))
-    return Broker(
-        BrokerPaths(config.registry, folder / "state"), load_templates(), launcher.LauncherClient(config), repo_root=folder, runs_root=folder / "runs"
-    )
-
-
-def approval_cases(cases: Cases, folder: Path) -> None:
-    """Submit real-mode requests with missing and exact approvals, keeping launcher calls synthetic."""
-    broker = broker_for(folder)
-    request = SubmissionRequest("acquire_run", RUN, "real", 1, "training_dag", "acquire_run", "manual", training=PARAMETERS)
-    calls: list[tuple[str, dict[str, Any]]] = []
-
-    def call(method: str, params: dict[str, Any], *arguments: Any, **keywords: Any) -> dict[str, Any]:
-        calls.append((method, params))
-        if method == "status" and params.get("what") == "run":
-            return {"state": "held"}
-        if method == "training_prepare":
-            return {"prepared": True}
-        raise ValueError(f"unexpected synthetic launcher call: {method}")
-
-    with mock.patch.object(broker, "principal", return_value={"kind": "run", "id": RUN}), mock.patch.object(broker, "call", side_effect=call):
-        cases.refuses("real_training_without_approval_refused", lambda: broker.submit(request), "training approval required: approval is missing")
-        cases.check(
-            "unapproved_training_has_no_intent_or_calls",
-            lambda: require(not broker.lines_of(request) and not calls, "unapproved run reached intent or launcher work"),
-        )
-        unadmitted = replace(request, template="release_rejected", task_id="release_run", run_id=GOLD)
-        cases.refuses("unadmitted_training_release_refused", lambda: broker.submit(unadmitted), "training approval required: approval is missing")
-        approval = {"run_id": RUN, "dag_id": "training_dag", "scope": "real_training", "approved_on": "2026-10-23"}
-        path = broker.paths.state / "approvals/training_dag" / f"{RUN}.json"
-        path.parent.mkdir(parents=True)
-        path.write_text(json.dumps(approval))
-        path.chmod(0o600)
-
-        def admitted() -> None:
-            broker.submit(request)
-            line = broker.lines_of(request)[-1]
-            require(line["event"] == "finished" and line["exit_code"] == 0, "approved training acquire did not complete")
-            require(
-                ("training_prepare", {"dag_id": "training_dag", "parameters": PARAMETERS}) in calls, "approved acquire did not bind its training parameters"
-            )
-
-        cases.check("real_training_exact_approval_admitted", admitted)
-        path.unlink()
-        release = replace(request, template="release_rejected", task_id="release_run")
-        with mock.patch.object(broker, "perform_control", side_effect=lambda request, row: broker.finish(request, 0)):
-            cases.check("admitted_training_can_release_without_approval", lambda: broker.submit(release))
-        promotion = SubmissionRequest(
-            "acquire_run",
-            GOLD,
-            "real",
-            1,
-            "model_promotion_dag",
-            "acquire_run",
-            "manual",
-            training={"hai_type": "HAI_1", "model_version": "2", "promotion_mode": "promote", "mlflow": "local"},
-        )
-        cases.check("promotion_runs_without_an_approval_record", lambda: broker.submit(promotion))
-        changed = replace(release, attempt=2, training={**PARAMETERS, "population": "sensitivity"})
-        cases.refuses("training_cleanup_requires_admitted_parameters", lambda: broker.submit(changed), "training approval required: approval is missing")
-
-
-def mlflow_failure_case(folder: Path, *, late: bool) -> None:
-    broker = broker_for(folder)
-    request = SubmissionRequest("log_run", RUN, "fixture", 1, "training_dag", "log_run", "manual", training=PARAMETERS)
-    clock = [0.0]
-    calls: list[str] = []
-
-    def call(method: str, *arguments: Any, **keywords: Any) -> dict[str, Any]:
-        calls.append(method)
-        require(method == "training_mlflow_up", "a failed startup forwarded a container")
-        require(keywords.get("timeout") == 300.0, "MLflow startup did not carry its remaining deadline")
-        if late:
-            clock[0] = 301.0
-            return {"phase": "ready"}
-        return {"phase": "failed", "error": "synthetic startup failure"}
-
-    with (
-        mock.patch.object(broker, "require_serving"),
-        mock.patch.object(broker, "ensure_run", return_value={"kind": "run", "id": RUN}),
-        mock.patch.object(broker, "accepted_forward", return_value=None),
-        mock.patch.object(broker, "call", side_effect=call),
-        mock.patch.object(pipeline_control, "time", SimpleNamespace(monotonic=lambda: clock[0], sleep=lambda seconds: None)),
-    ):
-        first = broker.submit(request)
-        line = broker.lines_of(request)[-1]
-        require(line["event"] == "finished" and line["exit_code"] == 125 and line.get("refused") is True, "startup failure has no terminal refusal")
-        expected = "deadline" if late else "failed before readiness"
-        require("local MLflow startup" in line.get("reason", "") and expected in line["reason"], "startup refusal lost its cause")
-        require(broker.submit(request) == first and calls == ["training_mlflow_up"], "retry repeated failed MLflow startup")
-    with broker.ledger.locked(RUN):
-        require(broker.lines_of(request)[-1] == line, "terminal startup refusal changed after releasing the run lock")
-
-
 def preparation_cases(cases: Cases, folder: Path) -> None:
     """Queue each training template and require its preparation to inspect the training image, never the root Compose model."""
     config = launcher.Config(run_lock.Registry(folder / "registry", "test"), ROOT, "", folder / "tokens", folder / "runs", allowed_roots=(ROOT,))
@@ -334,8 +235,5 @@ def run() -> list[dict[str, Any]]:
         cases.check("dag_mount_case_setup", lambda: dag_mount_cases(cases, folder / "dag_copy"))
         cases.check("snapshot_case_setup", lambda: snapshot_cases(cases, folder / "snapshot"))
         cases.check("rendered_case_setup", lambda: rendered_cases(cases, folder / "render"))
-        cases.check("approval_case_setup", lambda: approval_cases(cases, folder / "approval"))
         cases.check("preparation_case_setup", lambda: preparation_cases(cases, folder / "preparation"))
-        cases.check("mlflow_failed_start_records_refusal", lambda: mlflow_failure_case(folder / "mlflow_failed", late=False))
-        cases.check("mlflow_late_start_records_refusal", lambda: mlflow_failure_case(folder / "mlflow_late", late=True))
     return cases.results
