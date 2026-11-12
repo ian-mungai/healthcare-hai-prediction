@@ -517,38 +517,42 @@ def input_line_numbers(path: str, text: str) -> set[int]:
 
     An input name is a key of a mapping that is the value of a ``with:`` key, or of the ``inputs:`` of an action (action.yml, action.yaml) or of a
     reusable workflow (``on.workflow_call.inputs``). It is a name of the action or workflow that takes it, never a setting or a program of this
-    project. The file is read as YAML, so flow mappings, quoted keys and anchors count. An anchored mapping that an alias also uses outside an input
-    position (``env: *params``), and a line that holds any other key, never count. A file that is not valid YAML counts nothing.
+    project. The file is read as YAML, so flow mappings, quoted keys and anchors count. A mapping inside an input (its metadata, such as
+    ``{type: string}``) is part of the input and never vetoes it. An anchored mapping that an alias also uses outside an input position
+    (``env: *params``), and a line that holds any other key, never count. A file that is not valid YAML counts nothing.
     """
     action = Path(path).name in ("action.yml", "action.yaml")
     if not action and not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", path):
         return set()
     yaml = importlib.import_module("yaml")
     inputs = ("inputs",) if action else ("on", "workflow_call", "inputs")
-    uses: dict[int, tuple[Any, set[bool]]] = {}
+    uses: dict[int, tuple[Any, set[str]]] = {}
 
-    def visit(node: Any, as_input: bool, trail: tuple[str, ...], active: frozenset[int]) -> None:
+    def visit(node: Any, role: str, trail: tuple[str, ...], active: frozenset[int]) -> None:
+        """Walk one use of ``node``; ``role`` is ``input`` (keys name inputs), ``inside`` (part of an input) or ``other``."""
         if isinstance(node, yaml.SequenceNode):
             for item in node.value:
-                visit(item, False, trail, active)
+                visit(item, "inside" if role == "inside" else "other", trail, active)
         elif isinstance(node, yaml.MappingNode):
-            uses.setdefault(id(node), (node, set()))[1].add(as_input)
+            uses.setdefault(id(node), (node, set()))[1].add(role)
             if id(node) in active:
                 return
             for key, value in node.value:
                 step = (*trail, key.value if isinstance(key, yaml.ScalarNode) else "")
-                visit(value, step[-1] == "with" or step == inputs, step, active | {id(node)})
+                inner = "inside" if role in ("input", "inside") else ("input" if step[-1] == "with" or step == inputs else "other")
+                visit(value, inner, step, active | {id(node)})
 
     try:
         for document in yaml.compose_all(text):
             if document is not None:
-                visit(document, False, (), frozenset())
+                visit(document, "other", (), frozenset())
     except yaml.YAMLError:
         return set()
     names: set[int] = set()
     others: set[int] = set()
-    for node, flags in uses.values():
-        (names if flags == {True} else others).update(key.start_mark.line + 1 for key, _ in node.value)
+    for node, roles in uses.values():
+        if roles != {"inside"}:
+            (names if roles == {"input"} else others).update(key.start_mark.line + 1 for key, _ in node.value)
     return names - others
 
 

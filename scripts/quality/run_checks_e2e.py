@@ -689,6 +689,13 @@ MERGED_HUNK = (
     + SETUP_STEP
     + f'        with:\n{INPUT_LINE}          python-version: "3.12"\n        env:\n          {RETIRED_ENV}: "old"\n          region: west\n'
 )
+INLINE_ACTION = (
+    f"name: setup\ndescription: setup\ninputs:\n  {INPUT_NAME}: {{description: Cache, default: 'false'}}\n  python-version: {{description: Version}}\n"
+)
+INLINE_CALLED = (
+    f"name: called\non:\n  workflow_call:\n    inputs:\n      {INPUT_NAME}: {{type: boolean, default: false}}\n      python-version: {{type: string}}\n"
+)
+SHARED_LINE = STEPS_HEAD + f'      - {{uses: ./.github/actions/setup, with: {{\n          {INPUT_NAME}: "true"}}, env: {{region: west}}}}\n'
 MANUAL_WORKFLOW = CALLED_WORKFLOW.replace("workflow_call", "workflow_dispatch")
 INPUT_CASES = [
     Case(
@@ -749,6 +756,28 @@ INPUT_CASES = [
             ("inline flow step input", FLOW_STEP, f'          {INPUT_NAME}: "true",\n'),
             ("step input under an escaped parent key", ESCAPED_PARENT, INPUT_LINE),
         )
+    ),
+    Case(
+        "action input with inline metadata removed, the same word is still a program in a script",
+        "removed-names",
+        True,
+        committed={".github/actions/setup/action.yml": INLINE_ACTION, **INPUT_WORD_USE},
+        files={".github/actions/setup/action.yml": INLINE_ACTION.replace(f"  {INPUT_NAME}: {{description: Cache, default: 'false'}}\n", "")},
+    ),
+    Case(
+        "reusable workflow input with inline metadata removed, the same word is still a program in a script",
+        "removed-names",
+        True,
+        committed={".github/workflows/called.yml": INLINE_CALLED, **INPUT_WORD_USE},
+        files={".github/workflows/called.yml": INLINE_CALLED.replace(f"      {INPUT_NAME}: {{type: boolean, default: false}}\n", "")},
+    ),
+    Case(
+        "step input shares its line with an ordinary key, the same word is still used",
+        "removed-names",
+        False,
+        committed={".github/workflows/ci.yml": SHARED_LINE, **INPUT_WORD_USE},
+        files={".github/workflows/ci.yml": STEPS_HEAD + "      - {uses: ./.github/actions/setup, with: {}, env: {region: west}}\n"},
+        reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
     ),
     Case(
         "step environment key removed, the same word is still used",
