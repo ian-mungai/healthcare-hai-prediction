@@ -45,6 +45,7 @@ import importlib
 import json
 import os
 import re
+import shlex
 import shutil
 import sys
 import tempfile
@@ -70,12 +71,57 @@ GROUP_FILES = "scripts/ci/groups"
 BODY_FILES = tuple(sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / GROUP_FILES).glob("*.sh")))
 
 
+def config_reads_of(text: str) -> list[str]:
+    """The words of the config_read_by_stacks loop of a group file, read as the shell reads them: continuations removed, quotes resolved."""
+    found = re.search(r"for\s+config_read_by_stacks\s+in\s+([^;]*?)\s*;\s*do\b", text.replace("\\\n", ""))
+    words = shlex.split(found.group(1), posix=True) if found else []
+    if not words:
+        raise ValueError("terraform_checks.sh no longer lists the files its stacks read in a config_read_by_stacks loop")
+    return words
+
+
 def stack_config_reads() -> list[str]:
     """The repository files that the Terraform checks copy into every stack folder, read from the list in the group file."""
-    found = re.search(r"for config_read_by_stacks in ([^;]+); do", (ROOT / GROUP_FILES / "terraform_checks.sh").read_text(encoding="utf-8"))
-    if found is None:
-        raise ValueError("terraform_checks.sh no longer lists the files its stacks read in a config_read_by_stacks loop")
-    return found.group(1).split()
+    return config_reads_of((ROOT / GROUP_FILES / "terraform_checks.sh").read_text(encoding="utf-8"))
+
+
+def stack_config_read_cases() -> list[dict[str, Any]]:
+    """The loop list is read as the shell reads it: bare, single-quoted and double-quoted words, backslash-newline continuations and any whitespace around the
+    terminator; a missing or empty loop is refused."""
+    wanted = ["config/a.json", "scripts/b.py", "dir with space/c.json"]
+    loop = "    for config_read_by_stacks in {words}{end}\n      cp x y\n    done\n"
+    forms = {
+        "bare_words": ("config/a.json scripts/b.py 'dir with space/c.json'", "; do"),
+        "double_quotes": ('"config/a.json" "scripts/b.py" "dir with space/c.json"', "; do"),
+        "single_quotes": ("'config/a.json' 'scripts/b.py' 'dir with space/c.json'", "; do"),
+        "continuations": ("config/a.json \\\n      scripts/b.py \\\n      'dir with space/c.json' \\\n     ", "; do"),
+        "tight_terminator": ("config/a.json scripts/b.py 'dir with space/c.json'", ";do"),
+        "spaced_terminator": ("config/a.json scripts/b.py 'dir with space/c.json'", " ;  do"),
+        "terminator_on_next_line": ("config/a.json scripts/b.py 'dir with space/c.json'", ";\n    do"),
+    }
+    results = []
+    for name, (words, end) in forms.items():
+        try:
+            found = config_reads_of(loop.format(words=words, end=end))
+        except ValueError as error:
+            found = [f"error: {error}"]
+        results.append({"case": f"stack_config_reads_{name}", "passed": found == wanted, "found": found, "wanted": wanted})
+    for name, text in {"missing_loop": "    for other in a b; do\n    done\n", "empty_loop": "    for config_read_by_stacks in ; do\n    done\n"}.items():
+        try:
+            config_reads_of(text)
+            refused = False
+        except ValueError:
+            refused = True
+        results.append({"case": f"stack_config_reads_{name}_is_refused", "passed": refused})
+    real = stack_config_reads()
+    results.append(
+        {
+            "case": "stack_config_reads_real_list_names_existing_files",
+            "passed": bool(real) and all((ROOT / path).is_file() for path in real),
+            "count": len(real),
+        }
+    )
+    return results
 
 
 COPIED = (
@@ -2874,7 +2920,7 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
             }
             results.append({"case": f"parallel_{label}_prevents_a_combined_pass", "passed": all(checks.values()), "checks": checks, "exit": code})
         (scratch / f"parallel_{label}.log").write_text(log)
-    return [*results, *dispatcher_output_cases(base, scratch)]
+    return [*results, *dispatcher_output_cases(base, scratch), *stack_config_read_cases()]
 
 
 def feature_listing(suite: str, *arguments: str) -> tuple[int, list[str], str]:
