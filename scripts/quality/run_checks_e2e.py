@@ -110,6 +110,7 @@ TRIMMED_KEY = "trimmed" + "_columns"
 RETRY_POLICY = "retry" + "_policy"
 CLOCK_ALIAS = "utc" + "_clock"
 INPUT_NAME = "warm" + "-cache"
+RETIRED_ENV = "retired" + "-key"
 PENDING_LIST = "config/quality/mypy_runtimes.json"
 PENDING_FIXTURE = '{"pending": {"dags/pending_dag.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}}}\n'
 LEFTOVER = "was removed but is still referenced"
@@ -217,6 +218,7 @@ class Case:
     reason: str = ""  # A blocked case must print this text, so it fails for its intended cause.
     symlinks: dict[str, str] = field(default_factory=dict)  # Link path to link target, staged with the files.
     untracked: dict[str, str] = field(default_factory=dict)  # Written after staging, so Git does not track them.
+    git_config: dict[str, str] = field(default_factory=dict)  # Repository settings applied before the committed files.
 
 
 def guide_page(*body: str) -> str:
@@ -675,6 +677,18 @@ ACTION_INPUTS = (
     f"name: setup\ndescription: setup\ninputs:\n  {INPUT_NAME}:\n    description: warm\n    default: 'false'\n  python-version:\n    description: version\n"
 )
 CALLED_WORKFLOW = f"name: called\non:\n  workflow_call:\n    inputs:\n      {INPUT_NAME}:\n        type: boolean\n      python-version:\n        type: string\n"
+STEPS_HEAD = "name: ci\non: push\njobs:\n  core:\n    runs-on: ubuntu-latest\n    steps:\n"
+SETUP_STEP = "      - uses: ./.github/actions/setup\n"
+INPUT_LINE = f'          {INPUT_NAME}: "true"\n'
+ANCHORED_INPUTS = STEPS_HEAD + SETUP_STEP + f'        with: &params\n{INPUT_LINE}          python-version: "3.12"\n'
+FLOW_ALIGNED = STEPS_HEAD + SETUP_STEP + f'        with: {{\n        {INPUT_NAME}: "true",\n        python-version: "3.12"\n        }}\n'
+FLOW_STEP = STEPS_HEAD + f'      - {{uses: ./.github/actions/setup, with: {{\n          {INPUT_NAME}: "true",\n          python-version: "3.12"\n        }}}}\n'
+ESCAPED_PARENT = STEPS_HEAD + SETUP_STEP + f'        "wi\\u0074h":\n{INPUT_LINE}          python-version: "3.12"\n'
+MERGED_HUNK = (
+    STEPS_HEAD
+    + SETUP_STEP
+    + f'        with:\n{INPUT_LINE}          python-version: "3.12"\n        env:\n          {RETIRED_ENV}: "old"\n          region: west\n'
+)
 MANUAL_WORKFLOW = CALLED_WORKFLOW.replace("workflow_call", "workflow_dispatch")
 INPUT_CASES = [
     Case(
@@ -697,6 +711,44 @@ INPUT_CASES = [
         True,
         committed={".github/workflows/called.yml": CALLED_WORKFLOW, **INPUT_WORD_USE},
         files={".github/workflows/called.yml": CALLED_WORKFLOW.replace(f"      {INPUT_NAME}:\n        type: boolean\n", "")},
+    ),
+    Case(
+        "anchored step input removed, the mapping only feeds inputs, the same word is still used",
+        "removed-names",
+        True,
+        committed={".github/workflows/ci.yml": ANCHORED_INPUTS + SETUP_STEP + "        with: *params\n", **INPUT_WORD_USE},
+        files={".github/workflows/ci.yml": (ANCHORED_INPUTS + SETUP_STEP + "        with: *params\n").replace(INPUT_LINE, "")},
+    ),
+    Case(
+        "anchored step input removed, an alias also uses the mapping as environment, the same word is still used",
+        "removed-names",
+        False,
+        committed={".github/workflows/ci.yml": ANCHORED_INPUTS + "      - run: echo done\n        env: *params\n", **INPUT_WORD_USE},
+        files={".github/workflows/ci.yml": (ANCHORED_INPUTS + "      - run: echo done\n        env: *params\n").replace(INPUT_LINE, "")},
+        reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
+    ),
+    Case(
+        "input and environment key removed in one merged hunk, the environment word is still used",
+        "removed-names",
+        False,
+        committed={".github/workflows/ci.yml": MERGED_HUNK, "scripts/retired.sh": f"{RETIRED_ENV} --now\n"},
+        files={".github/workflows/ci.yml": MERGED_HUNK.replace(INPUT_LINE, "").replace(f'          {RETIRED_ENV}: "old"\n', "")},
+        reason=f"scripts/retired.sh:1: {RETIRED_ENV} {LEFTOVER}",
+        git_config={"diff.interHunkContext": "5"},
+    ),
+    *(
+        Case(
+            f"{name} removed, the same word is still a program in a script",
+            "removed-names",
+            True,
+            committed={".github/workflows/ci.yml": workflow, **INPUT_WORD_USE},
+            files={".github/workflows/ci.yml": workflow.replace(line, "")},
+        )
+        for name, workflow, line in (
+            ("aligned flow mapping step input", FLOW_ALIGNED, f'        {INPUT_NAME}: "true",\n'),
+            ("inline flow step input", FLOW_STEP, f'          {INPUT_NAME}: "true",\n'),
+            ("step input under an escaped parent key", ESCAPED_PARENT, INPUT_LINE),
+        )
     ),
     Case(
         "step environment key removed, the same word is still used",
@@ -1964,6 +2016,8 @@ def scratch_repo(root: Path, case: Case) -> Path:
     # folder is removed, which failed CI run 37736374173 with "Directory not empty".
     git(repo, "config", "gc.auto", "0")
     git(repo, "config", "maintenance.auto", "false")
+    for key, value in case.git_config.items():
+        git(repo, "config", key, value)
     # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
     # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too, and the Airflow launch library that
     # reads the HAI_LAUNCH_* ones. Other hooks must not see that library: its imports and unused helpers would fail their samples.

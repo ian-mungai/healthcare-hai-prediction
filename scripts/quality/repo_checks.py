@@ -78,7 +78,6 @@ PY_ASSIGNED = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)", re.M
 # Environment variables a shell script, workflow or rendered template still uses: $NAME, ${NAME}, vars.NAME, secrets.NAME, env.NAME.
 ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A-Z0-9_]*)\b")
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
-YAML_KEY = re.compile(r"""^(\s*)(-\s+)?["']?([\w-]+)["']?\s*:(?:\s|$)""")
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 TASK_ID = re.compile(r"""task_id\s*=\s*["']([\w.-]+)["']""")
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
@@ -513,28 +512,44 @@ def env_example() -> list[Finding]:
     return findings
 
 
-def input_line_numbers(path: str, lines: list[str]) -> set[int]:
-    """Return the numbers (from 1) of the lines of a workflow or composite action file that define an input name.
+def input_line_numbers(path: str, text: str) -> set[int]:
+    """Return the numbers (from 1) of the lines of a workflow or composite action file that only name inputs.
 
-    An input name is a key inside a ``with:`` mapping, or directly under the ``inputs:`` of an action (action.yml, action.yaml) or of a reusable
-    workflow (``on.workflow_call.inputs``). It is a name of the action or workflow that takes it, never a setting or a program of this project.
+    An input name is a key of a mapping that is the value of a ``with:`` key, or of the ``inputs:`` of an action (action.yml, action.yaml) or of a
+    reusable workflow (``on.workflow_call.inputs``). It is a name of the action or workflow that takes it, never a setting or a program of this
+    project. The file is read as YAML, so flow mappings, quoted keys and anchors count. An anchored mapping that an alias also uses outside an input
+    position (``env: *params``), and a line that holds any other key, never count. A file that is not valid YAML counts nothing.
     """
     action = Path(path).name in ("action.yml", "action.yaml")
     if not action and not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", path):
         return set()
-    numbers: set[int] = set()
-    parents: list[tuple[int, str]] = []
-    for number, line in enumerate(lines, 1):
-        if not (match := YAML_KEY.match(line)):
-            continue
-        indent, key = len(match.group(1)) + len(match.group(2) or ""), match.group(3)
-        while parents and parents[-1][0] >= indent:
-            parents.pop()
-        names = [name for _, name in parents]
-        if names[-1:] == ["with"] or names == (["inputs"] if action else ["on", "workflow_call", "inputs"]):
-            numbers.add(number)
-        parents.append((indent, key))
-    return numbers
+    yaml = importlib.import_module("yaml")
+    inputs = ("inputs",) if action else ("on", "workflow_call", "inputs")
+    uses: dict[int, tuple[Any, set[bool]]] = {}
+
+    def visit(node: Any, as_input: bool, trail: tuple[str, ...], active: frozenset[int]) -> None:
+        if isinstance(node, yaml.SequenceNode):
+            for item in node.value:
+                visit(item, False, trail, active)
+        elif isinstance(node, yaml.MappingNode):
+            uses.setdefault(id(node), (node, set()))[1].add(as_input)
+            if id(node) in active:
+                return
+            for key, value in node.value:
+                step = (*trail, key.value if isinstance(key, yaml.ScalarNode) else "")
+                visit(value, step[-1] == "with" or step == inputs, step, active | {id(node)})
+
+    try:
+        for document in yaml.compose_all(text):
+            if document is not None:
+                visit(document, False, (), frozenset())
+    except yaml.YAMLError:
+        return set()
+    names: set[int] = set()
+    others: set[int] = set()
+    for node, flags in uses.values():
+        (names if flags == {True} else others).update(key.start_mark.line + 1 for key, _ in node.value)
+    return names - others
 
 
 def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
@@ -548,7 +563,7 @@ def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
     removed: dict[str, list[str]] = {}
     inputs: dict[str, set[int]] = {}
     current, in_header, old_number = "", False, 0
-    for line in git("diff", *refs, "-U0", "--no-color").splitlines():
+    for line in git("diff", *refs, "-U0", "--inter-hunk-context=0", "--no-color").splitlines():
         if line.startswith("diff --git "):
             current, in_header = "", True
         elif in_header and line.startswith("--- "):
@@ -558,7 +573,7 @@ def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
             old_number = int(line.split()[1].lstrip("-").split(",")[0])
         elif not in_header and line.startswith("-") and current:
             if current not in inputs:
-                inputs[current] = input_line_numbers(current, git("show", f"{old_ref}:{current}").splitlines())
+                inputs[current] = input_line_numbers(current, git("show", f"{old_ref}:{current}"))
             if old_number not in inputs[current]:
                 removed.setdefault(current, []).append(line[1:])
             old_number += 1
