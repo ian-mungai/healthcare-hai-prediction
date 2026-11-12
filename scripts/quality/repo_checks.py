@@ -612,22 +612,54 @@ def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
     return names
 
 
-def module_bindings(body: list[ast.stmt]) -> set[str]:
-    """Return the names a module's statements bind in module scope.
+def target_names(target: ast.expr) -> set[str]:
+    """Return the names an assignment target stores.
 
-    A function, class, import alias or assignment binds its name here. An assignment binds only the names it stores, not the names its target reads
-    (``table[key] = 1`` binds neither). The blocks that open no scope (if, loops, try, with and match) are searched for the same bindings, but a loop
-    target is not a binding. The body of a function or class is never entered: its names are local to it.
+    Only name, tuple, list and starred targets bind. An attribute or subscript target reads its receiver and its index (``table[key] = 1`` binds
+    neither), and an expression inside it (a comprehension, a lambda) has a scope of its own.
+    """
+    if isinstance(target, ast.Name):
+        return {target.id}
+    if isinstance(target, ast.Tuple | ast.List):
+        return {name for element in target.elts for name in target_names(element)}
+    if isinstance(target, ast.Starred):
+        return target_names(target.value)
+    return set()
+
+
+def walrus_names(node: ast.AST) -> set[str]:
+    """Return the names the walrus operators in the expressions of one statement bind in the scope that holds the statement.
+
+    A comprehension binds its walrus names in the scope around it, so they count. A lambda body is a scope of its own, so it does not count.
+    The statements nested in this one are not entered: the caller visits them.
+    """
+    names: set[str] = set()
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.stmt | ast.Lambda):
+            continue
+        if isinstance(child, ast.NamedExpr):
+            names |= target_names(child.target)
+        names |= walrus_names(child)
+    return names
+
+
+def module_bindings(body: list[ast.stmt]) -> set[str]:
+    """Return the names a scope's statements bind in that scope.
+
+    A function, class, import alias, assignment or walrus binds its name here. The blocks that open no scope (if, loops, try, with and match) are
+    searched for the same bindings, but a loop target is not a binding. The body of a function or class is never entered: its names are local to
+    it. A comprehension or generator variable, a lambda parameter and a function parameter never bind here.
     """
     names: set[str] = set()
     for node in body:
+        names |= walrus_names(node)
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
         elif isinstance(node, ast.Import | ast.ImportFrom):
             names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
         elif isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)}
+            names |= {name for target in targets for name in target_names(target)}
         elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
             names |= module_bindings(node.body) | module_bindings(node.orelse)
         elif isinstance(node, ast.With | ast.AsyncWith):
@@ -640,16 +672,40 @@ def module_bindings(body: list[ast.stmt]) -> set[str]:
     return names
 
 
+def global_declarations(body: list[ast.stmt]) -> set[str]:
+    """Return the names a scope's own statements declare global, nested blocks included and nested scopes left out."""
+    names: set[str] = set()
+    pending: list[ast.AST] = list(body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, ast.Global):
+            names |= set(node.names)
+        elif not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef | ast.Lambda):
+            pending.extend(ast.iter_child_nodes(node))
+    return names
+
+
+def global_bindings(tree: ast.Module) -> set[str]:
+    """Return the names a function or class body declares global and also binds: running that body binds them in module scope."""
+    names: set[str] = set()
+    for scope in ast.walk(tree):
+        if isinstance(scope, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names |= global_declarations(scope.body) & module_bindings(scope.body)
+    return names
+
+
 def bound_names(files: dict[str, list[str]]) -> set[str]:
-    """Return the names the current Python code binds in module scope (see ``module_bindings``)."""
+    """Return the names the current Python code binds in module scope (see ``module_bindings`` and ``global_bindings``)."""
     names: set[str] = set()
     for path, lines in files.items():
         if not path.endswith(".py"):
             continue
         try:
-            names |= module_bindings(ast.parse("\n".join(lines), filename=path).body)
+            tree = ast.parse("\n".join(lines), filename=path)
         except SyntaxError:
             continue
+        names |= module_bindings(tree.body)
+        names |= global_bindings(tree)
     return names
 
 

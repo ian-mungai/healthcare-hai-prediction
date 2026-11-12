@@ -915,6 +915,21 @@ CASES = [
             ("a loop target read as a subscript in the loop body", f'TABLE: dict[str, int] = {{}}\nfor {WINNOW} in ("other",):\n    TABLE[{WINNOW}] = 1\n'),
             ("a loop target read through an attribute of a subscript", f'for {WINNOW} in ("other",):\n    TABLE[{WINNOW}].value = 1\n'),
             ("a tuple target holding a subscript", f"for {WINNOW} in []:\n    TABLE[{WINNOW}], other = 1, 2\n"),
+            ("a generator variable in a subscript target", f'TABLE[tuple({WINNOW} for {WINNOW} in ("other",))] = 1\n'),
+            ("a list comprehension variable in a subscript target", f'TABLE[[{WINNOW} for {WINNOW} in ("other",)][0]] = 1\n'),
+            ("a generator variable in a nested tuple target", f"(TABLE[tuple({WINNOW} for {WINNOW} in ())], other), more = (1, 2), 3\n"),
+            ("a generator variable", f'RESULT = tuple({WINNOW} for {WINNOW} in ("other",))\n'),
+            ("a list comprehension variable", f'RESULT = [{WINNOW} for {WINNOW} in ("other",)]\n'),
+            ("a set comprehension variable", f'RESULT = {{{WINNOW} for {WINNOW} in ("other",)}}\n'),
+            ("a dict comprehension variable", f'RESULT = {{{WINNOW}: 1 for {WINNOW} in ("other",)}}\n'),
+            ("a lambda parameter", f"HANDLER = lambda {WINNOW}: 1\n"),
+            ("a walrus in a lambda body", f"HANDLER = lambda: ({WINNOW} := 1)\n"),
+            ("a function parameter", f"def outer({WINNOW}: int) -> int:\n    return {WINNOW}\n"),
+            ("a class attribute of the same word", f"class Holder:\n    {WINNOW} = 1\n"),
+            ("an except clause inside a function", f"def outer() -> None:\n    try:\n        pass\n    except ValueError as {WINNOW}:\n        pass\n"),
+            ("a walrus in a comprehension inside a function", f"def outer() -> list[int]:\n    return [({WINNOW} := item) for item in range(3)]\n"),
+            ("a global declaration that only reads the word", f"def outer() -> int:\n    global {WINNOW}\n    return {WINNOW}\n"),
+            ("a local assignment beside a global declaration of another word", f"def outer() -> None:\n    global other\n    other = 1\n    {WINNOW} = 2\n"),
         )
     ],
     *[
@@ -937,6 +952,30 @@ CASES = [
             ("nested if block", f"if True:\n    if True:\n        {WINNOW} = 1\n"),
             ("conditional import", f"if True:\n    from datetime import datetime as {WINNOW}\n"),
             ("conditional def", f"if True:\n    def {WINNOW}() -> int:\n        return 1\n"),
+        )
+    ],
+    *[
+        Case(
+            f"task ID removed, {label} keeps it live",
+            "removed-names",
+            True,
+            committed={"dags/job.py": f'TASK = Operator(task_id="{WINNOW}")\n', "app/live.py": source, "README.md": f"Use `{WINNOW}`.\n"},
+            files={"dags/job.py": "TASKS = []\n"},
+        )
+        for label, source in (
+            ("a walrus in a module-level if test", f"if ({WINNOW} := 1):\n    pass\n"),
+            ("a walrus in a module-level call", f"print({WINNOW} := 1)\n"),
+            ("a walrus in a module-level comprehension", f"RESULT = [({WINNOW} := item) for item in range(3)]\n"),
+            ("a global declaration in a function that assigns the word", f"def setup() -> None:\n    global {WINNOW}\n    {WINNOW} = 1\n"),
+            (
+                "a global declaration in a method that assigns the word",
+                f"class Holder:\n    def setup(self) -> None:\n        global {WINNOW}\n        {WINNOW} = 1\n",
+            ),
+            (
+                "a global declaration in a function that imports the word",
+                f"def setup() -> None:\n    global {WINNOW}\n    from datetime import datetime as {WINNOW}\n",
+            ),
+            ("a global declaration in a nested block of a function", f"def setup() -> None:\n    global {WINNOW}\n    if True:\n        {WINNOW} = 1\n"),
         )
     ],
     Case(
@@ -1877,12 +1916,51 @@ PLANTED_REGRESSIONS = [
         [
             case
             for case in CASES
-            if case.hook == "removed-names" and not case.expect_pass and any(label in case.name for label in ("loop target read", "tuple target holding"))
+            if case.hook == "removed-names"
+            and not case.expect_pass
+            and any(label in case.name for label in ("loop target read", "tuple target holding", "subscript target", "nested tuple target"))
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)",
-        "if isinstance(name, ast.Name)",
+        "names |= {name for target in targets for name in target_names(target)}",
+        "names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}",
+        0,
+    ),
+    (
+        "walrus operators bind in module scope",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "walrus" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "names |= walrus_names(node)",
+        "names |= set()",
+        1,
+    ),
+    (
+        "global declarations bind in module scope",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "global declaration" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "names |= global_bindings(tree)",
+        "names |= set()",
+        1,
+    ),
+    (
+        "names bound only in nested scopes",
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names"
+            and not case.expect_pass
+            and any(
+                label in case.name
+                for label in ("comprehension variable", "generator variable", "lambda", "function parameter", "walrus in a comprehension inside")
+            )
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "names |= global_bindings(tree)",
+        "names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)} "
+        "| {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}",
         0,
     ),
     (
