@@ -53,6 +53,7 @@
     "\"$python_bin\" -m scripts.quality.core_commands",
     "\"$python_bin\" -m scripts.quality.install_dvc",
     "\"$python_bin\" -m scripts.quality.lint_sources sql",
+    "\"$python_bin\" -m scripts.quality.run_case_shards_e2e --output-directory \"$quality_output/case_shards\"",
     "\"$python_bin\" -m scripts.quality.run_ci_groups_e2e --selection-only",
     "\"$python_bin\" -m scripts.quality.run_ci_reuse_e2e",
     "\"$python_bin\" -m scripts.quality.run_container_mounts_e2e --output \"$quality_output/container_mounts\"",

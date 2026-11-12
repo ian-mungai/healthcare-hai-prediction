@@ -1,0 +1,4 @@
+{
+  "note": "Saved cost in seconds of each case of a sharded suite, by suite name and case name, taken from the case timings of the last gate or hosted run. scripts/quality/case_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost, and a suite without costs goes round robin in inventory order. A cost changes only the balance, never which cases run.",
+  "suites": {}
+}
