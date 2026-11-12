@@ -114,7 +114,7 @@ def hold_is_written_and_settles_before_the_apply() -> None:
     start = clock.now
     current.hold("terraform.sh --services apply reviewed.tfplan")
     puts = [entry for entry in store.log if entry[1] == "put"]
-    require(len(puts) == 1 and str(puts[0][2]).startswith("held") and "reviewed.tfplan" in str(puts[0][2]), f"the hold was not written: {store.log}")
+    require(len(puts) == 1 and state_of(puts[0][2]) == "held" and "reviewed.tfplan" in str(puts[0][2]), f"the hold was not written: {store.log}")
     require(any(entry[1] == "get" and entry[2] == puts[0][2] for entry in store.log), f"the hold was not read back: {store.log}")
     require(clock.now - start >= module.HOLD_SETTLE_SECONDS >= 30, f"hold returned before the settle window: {clock.now - start} s")
 
@@ -291,7 +291,7 @@ def hold_on_a_fresh_stack_needs_no_services_outputs() -> None:
     require(operations == [["ssm", "get-parameter"], ["ssm", "put-parameter"], ["ssm", "get-parameter"]], f"hold sent other AWS calls: {operations}")
     put = aws.commands[1]
     require("--overwrite" in put and put[put.index("--type") + 1] == "String", f"the hold is not an overwriting String put: {put}")
-    require(str(aws.value).startswith("held by services_apply") and "reviewed.tfplan" in str(aws.value), f"the hold value is wrong: {aws.value}")
+    require(state_of(aws.value) == "held" and "reviewed.tfplan" in str(aws.value), f"the hold value is wrong: {aws.value}")
     require(
         all("--profile" in command and command[command.index("--profile") + 1] == SETTINGS["aws_profile"] for command in aws.commands),
         "a call left the project profile",
@@ -382,7 +382,7 @@ def settle_keeps_a_hold_that_only_the_jobs_registration_ends() -> None:
     current, _ = steps(store, clock, lambda: next(answers))
     current.settle(OWN_LOCK, keep_hold=True)
     require(clock.now > 1000.0, "settle with keep_hold returned before polling the services")
-    require(str(store.value).startswith(MIGRATION), f"the kept hold does not name the host job cap change: {store.value!r}")
+    require(is_pending(store.value), f"the kept hold does not name the host job cap change: {store.value!r}")
     require(store.lock.value == OWN_LOCK, "settle with keep_hold released the apply lock")
 
 
@@ -422,7 +422,7 @@ def finish_clears_the_hold_only_after_the_jobs_registration() -> None:
                 require("registered at 23552 MiB" in str(error), f"finish {label} does not name the gap: {error}")
         else:
             raise AssertionError(f"finish {label} cleared the hold")
-        require(str(store.value).startswith(MIGRATION) and store.lock.value == OWN_LOCK, f"finish {label} changed the hold or the lock")
+        require(is_pending(store.value) and store.lock.value == OWN_LOCK, f"finish {label} changed the hold or the lock")
     answers.append("family gold_host is registered at 23552 MiB, the services give a job 22528 MiB")  # a failed jobs apply left one family behind
     try:
         current.finish(OWN_LOCK, "jobs applied at the new cap")
@@ -439,7 +439,7 @@ def finish_clears_the_hold_only_after_the_jobs_registration() -> None:
         pass
     else:
         raise AssertionError("finish cleared the hold while the services were unstable")
-    require(str(unstable.value).startswith(MIGRATION), "finish with unstable services changed the hold")
+    require(is_pending(unstable.value), "finish with unstable services changed the hold")
     answers.append("")  # the jobs apply registered every host revision at the current services binding
     current.finish(OWN_LOCK, "jobs applied at the new cap")
     require(store.value == "clear" and store.lock.value is None, f"finish after the registration did not clear both: {store.value!r} {store.lock.value!r}")
@@ -470,7 +470,7 @@ def a_services_apply_can_continue_under_the_pending_lock() -> None:
     store, _, current, _ = pending_migration()
     require(current.lock(continue_token=OWN_LOCK) == OWN_LOCK, "lock did not continue under the pending lock")
     current.hold("terraform.sh --services apply restore.tfplan", migration=True)
-    require(str(store.value).startswith(MIGRATION), f"the continued hold is not the change form: {store.value!r}")
+    require(is_pending(store.value), f"the continued hold is not the change form: {store.value!r}")
     for token in ("other-host:2:20261110T221000Z:87654321", "not a token"):
         try:
             current.lock(continue_token=token)
@@ -542,23 +542,56 @@ def rendered_jobs_inputs(content: dict[str, Any] | None) -> Iterator[Path]:
             yield path
 
 
-FROZEN_MARK = " | frozen "
+def hold_fields(value: Any) -> dict[str, Any] | None:
+    """The fields of a hold value in the structured form (one JSON object), or None for any other value."""
+    if not isinstance(value, str) or not value.startswith("{"):
+        return None
+    try:
+        found = json.loads(value)
+    except ValueError:
+        return None
+    return found if isinstance(found, dict) else None
 
 
-def frozen_suffix(families: list[str], binding: str | None = BINDING, project: str = "example_project", environment: str = "dev") -> str:
-    """The frozen record the hold of a pending change carries after the reason: the selected host families, the digest of the reviewed jobs inputs, the
-    project identity and, once the services applied, the capacity binding."""
-    record: dict[str, Any] = {"jobs_sha256": "0" * 64, "families": sorted(families), "project": project, "environment": environment}
+def state_of(value: Any) -> str:
+    """The state a hold value names: ``held``, the change form, or the value itself (``clear`` or a text hold of earlier code)."""
+    fields = hold_fields(value)
+    if fields is not None:
+        return str(fields.get("state"))
+    text = str(value)
+    return MIGRATION if text.startswith(MIGRATION) else "held" if text.startswith("held") else text
+
+
+def is_pending(value: Any) -> bool:
+    """True while the hold value names a host job cap change, in the structured form or the text form of earlier code."""
+    return state_of(value) == MIGRATION
+
+
+def frozen_dict(
+    families: list[str], binding: str | None = BINDING, project: str = "example_project", environment: str = "dev", digest: str = "0" * 64
+) -> dict[str, Any]:
+    """The frozen record the hold of a pending change carries: the selected host families, the digest of the reviewed jobs inputs, the project identity
+    and, once the services applied, the capacity binding."""
+    record: dict[str, Any] = {"jobs_sha256": digest, "families": sorted(families), "project": project, "environment": environment}
     if binding is not None:
         record["binding"] = binding
-    return FROZEN_MARK + json.dumps(record, sort_keys=True, separators=(",", ":"))
+    return record
+
+
+def pending_value(record: Any = None, reason: str = "jobs apply pending", **extra: Any) -> str:
+    """A hold value of a pending change in the structured form: separate fields for the state, the writer, the time, the reason and the record."""
+    fields: dict[str, Any] = {"state": MIGRATION, "by": "services_apply", "at": "2026-11-11T00:00:00Z", "reason": reason}
+    if record is not None:
+        fields["frozen"] = record
+    return json.dumps({**fields, **extra})
 
 
 def frozen_record(value: Any) -> dict[str, Any]:
-    """The frozen record parsed from a hold value, or an assertion error."""
-    text = str(value)
-    require(FROZEN_MARK in text, f"the hold carries no frozen record: {text!r}")
-    return dict(json.loads(text.rsplit(FROZEN_MARK, 1)[1]))
+    """The frozen record in a hold value, or an assertion error."""
+    fields = hold_fields(value)
+    if fields is None or not isinstance(fields.get("frozen"), dict):
+        raise AssertionError(f"the hold carries no frozen record: {value!r}")
+    return dict(fields["frozen"])
 
 
 def rendered_values(selection: dict[str, Any], binding: str = BINDING, project: str = "example_project", environment: str = "dev") -> dict[str, Any]:
@@ -596,7 +629,7 @@ def jobs_registration_reads_the_project_host_families() -> None:
 
     everything = ["example_dev_job_silver_host", "example_dev_job_silver", "example_dev_job_gold_host", "example_dev_job_train_host"]
     settings = {"project_name": "example", "environment": "dev"}
-    frozen = json.loads(frozen_suffix(["example_dev_job_gold_host", "example_dev_job_silver_host"], project="example")[len(FROZEN_MARK) :])
+    frozen = frozen_dict(["example_dev_job_gold_host", "example_dev_job_silver_host"], project="example")
     with (
         mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, BINDING)),
         rendered_jobs_inputs(rendered_values({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}, project="example")),
@@ -645,7 +678,7 @@ def finish_over_ecs(
     """The real ``finish`` command over the stand-in ECS and the given rendered jobs inputs, with stable services and a pending host job cap change
     whose frozen record holds ``frozen_names`` (family names without the project prefix and the ``_host`` suffix)."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
-    value = PENDING + frozen_suffix([f"{PREFIX}{name}_host" for name in frozen_names])
+    value = pending_value(frozen_dict([f"{PREFIX}{name}_host" for name in frozen_names]))
     aws = EcsStandIn(families, value=value, lock=OWN_LOCK)
     with (
         rendered_jobs_inputs(rendered),
@@ -672,15 +705,13 @@ def finish_needs_every_expected_host_family() -> None:
     ):
         code, err, aws = finish_over_ecs(selected, families, names)
         require(code == 1 and named in err, f"finish with {label}: exit {code} {err}")
-        require(str(aws.value).startswith(PENDING) and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+        require(is_pending(aws.value) and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
     code, err, aws = finish_over_ecs(selected, everything, names)
     require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with every expected family did not clear both: exit {code} {err} {aws.value!r}")
     nine = {f"{PREFIX}{name}_host": host_revision() for name in ALL_FAMILIES}
     default = rendered_values({"host_jobs_enabled": True})
     code, err, aws = finish_over_ecs(default, {**nine, f"{PREFIX}train_host": None}, ALL_FAMILIES)
-    require(
-        code == 1 and "train_host" in err and str(aws.value).startswith(PENDING), f"finish with the default selection and one family missing: exit {code} {err}"
-    )
+    require(code == 1 and "train_host" in err and is_pending(aws.value), f"finish with the default selection and one family missing: exit {code} {err}")
     code, err, aws = finish_over_ecs(default, nine, ALL_FAMILIES)
     require(code == 0 and aws.value == "clear", f"finish with the default selection and all nine registered: exit {code} {err}")
     code, err, aws = finish_over_ecs(
@@ -690,7 +721,7 @@ def finish_needs_every_expected_host_family() -> None:
     )
     require(code == 0 and aws.value == "clear", f"finish refused over a family the frozen selection does not hold: exit {code} {err}")
     code, err, aws = finish_over_ecs(None, {f"{PREFIX}silver_host": host_revision()}, ["silver"])
-    require(code == 1 and str(aws.value).startswith(PENDING) and aws.lock == OWN_LOCK, f"finish with no rendered inputs: exit {code} {err}")
+    require(code == 1 and is_pending(aws.value) and aws.lock == OWN_LOCK, f"finish with no rendered inputs: exit {code} {err}")
 
 
 def run_command_path(arguments: list[str], aws: AwsStandIn, rendered: dict[str, Any] | None = None, binding: str = BINDING) -> tuple[int, str, str]:
@@ -712,9 +743,9 @@ def start_change(aws: AwsStandIn, directory: Path, variables: dict[str, Any]) ->
     code, _, err = run_command_path(
         ["hold", "--reason", "terraform.sh --services apply reviewed.tfplan", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], aws
     )
-    require(code == 0 and str(aws.value).startswith(MIGRATION), f"the change did not start: exit {code} {aws.value!r} {err}")
+    require(code == 0 and is_pending(aws.value), f"the change did not start: exit {code} {aws.value!r} {err}")
     code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
-    require(code == 0 and str(aws.value).startswith(MIGRATION) and aws.lock == OWN_LOCK, f"settle --keep-hold: exit {code} {aws.value!r} {err}")
+    require(code == 0 and is_pending(aws.value) and aws.lock == OWN_LOCK, f"settle --keep-hold: exit {code} {aws.value!r} {err}")
     return inputs, digest
 
 
@@ -728,7 +759,7 @@ def the_migration_start_freezes_the_selection_binding_and_identity() -> None:
         aws = AwsStandIn(lock=OWN_LOCK)
         inputs, digest = reviewed_jobs_inputs(Path(directory), selection)
         code, _, err = run_command_path(["hold", "--reason", "a services apply", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], aws)
-        require(code == 0 and str(aws.value).startswith(MIGRATION) and "a services apply" in str(aws.value), f"the start hold: exit {code} {aws.value!r} {err}")
+        require(code == 0 and is_pending(aws.value) and "a services apply" in str(aws.value), f"the start hold: exit {code} {aws.value!r} {err}")
         families = [f"{PREFIX}gold_host", f"{PREFIX}publisher_host", f"{PREFIX}silver_host"]
         frozen = frozen_record(aws.value)
         require(
@@ -746,7 +777,7 @@ def the_migration_start_freezes_the_selection_binding_and_identity() -> None:
         ):
             code, _, err = run_command_path(arguments, aws)
             require(
-                code == 0 and frozen_record(aws.value) == frozen and str(aws.value).startswith(MIGRATION),
+                code == 0 and frozen_record(aws.value) == frozen and is_pending(aws.value),
                 f"{label} changed the frozen record: {aws.value!r} {err}",
             )
         (Path(directory) / "other").mkdir()
@@ -834,7 +865,7 @@ def finish_refuses_a_change_that_froze_nothing() -> None:
         aws = EcsStandIn(stale_gold, value=value, lock=OWN_LOCK)
         if value is None:
             code, _, err = run_command_path(["hold", "--reason", "no inputs given", "--migration"], aws)
-            require(code == 0 and str(aws.value).startswith(MIGRATION) and FROZEN_MARK not in str(aws.value), f"{label}: the start hold: exit {code} {err}")
+            require(code == 0 and is_pending(aws.value) and "frozen" not in (hold_fields(aws.value) or {}), f"{label}: the start hold: exit {code} {err}")
             code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
             require(code == 0 and aws.lock == OWN_LOCK, f"{label}: settle --keep-hold: exit {code} {err}")
         before = aws.value
@@ -870,6 +901,7 @@ def a_continued_hold_cannot_drop_a_pending_family() -> None:
             code == 1 and "gold_host" in err and aws.value == before,
             f"a narrower replacement was accepted or changed the hold: exit {code} {err} {aws.value!r}",
         )
+        require("separate jobs change" in err, f"the refusal does not name the route to a deselection: {err}")
         code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
         require(code == 0 and frozen_record(aws.value)["families"] == original["families"], f"the original selection did not stay: {aws.value!r} {err}")
         before = aws.value
@@ -886,43 +918,75 @@ def a_continued_hold_cannot_drop_a_pending_family() -> None:
         require(code == 0 and aws.value == "clear" and aws.lock is None, f"the complete registration did not end the change: exit {code} {err}")
 
 
-def a_hold_reason_cannot_carry_the_record_separator() -> None:
-    """The hold reason may not contain the record separator, whatever its form: a plain one, one that a removal would rejoin into another (the
-    overlapping form of the review) and one at the end. The hold is refused before any write, so no record can come from reason text."""
-    record = json.dumps({"jobs_sha256": "", "families": [f"{PREFIX}silver_host"], "project": "example_project", "environment": "dev"}, separators=(",", ":"))
+def a_reason_can_never_become_the_frozen_record() -> None:
+    """The hold value is one JSON object with separate fields, so reason text is only ever the reason. The reasons of the review (a separator with no
+    leading space, with a leading newline or Unicode space, overlapping forms, a reason that is itself record-shaped JSON) are stored as data: the
+    hold carries no record, settle --keep-hold adds none, and finish refuses for the missing frozen selection with the hold and the lock unchanged.
+    Over a hold that holds a genuine record the reason changes nothing else. A hold of earlier code, written as text, is never read as authority."""
+    record = json.dumps(frozen_dict([f"{PREFIX}silver_host"], binding=None, digest="a" * 64), separators=(",", ":"))
     reasons = (
+        f"| frozen {record}",
+        f"\n| frozen {record}",
+        f"\u00a0| frozen {record}",
+        f"\u2003| frozen {record}",
+        f" | frozen {record}",
         f"x | | frozen frozen {record}",
-        f"retry {FROZEN_MARK}{record}",
-        "a | frozen b",
-        f"retry{FROZEN_MARK}",
-        "x" * 150 + FROZEN_MARK + "y" * 80,
+        f"retry | frozen {record}",
+        "| frozen",
+        "retry | frozen ",
+        "x" * 150 + " | frozen " + "y" * 80,
+        json.dumps({"state": MIGRATION, "frozen": frozen_dict([f"{PREFIX}silver_host"])}),
+        '", "frozen": {"families": []}, "x": "',
     )
-    for before in (None, "clear", PENDING, PENDING + frozen_suffix([f"{PREFIX}silver_host"])):
-        for reason in reasons:
-            for extra in ([], ["--migration"]):
-                aws = AwsStandIn(value=before, lock=OWN_LOCK)
-                code, _, err = run_command_path(["hold", "--reason", reason, *extra], aws)
-                writes = [command for command in aws.commands if command[1:3] == ["ssm", "put-parameter"] and HOLD in command]
-                require(
-                    code == 1 and aws.value == before and not writes,
-                    f"the reason {reason[:40]!r} over {str(before)[:30]!r} {extra} was accepted: exit {code} {aws.value!r} {err}",
-                )
-    aws = AwsStandIn(value=PENDING + frozen_suffix([f"{PREFIX}silver_host"]), lock=OWN_LOCK)
-    code, _, err = run_command_path(["hold", "--reason", "retry the services apply"], aws)
-    require(code == 0 and "retry the services apply" in str(aws.value), f"an ordinary reason was refused: exit {code} {err}")
+    stale_gold = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")}
+    narrower = rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]})
+    finish_arguments = ["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"]
+    for reason in reasons:
+        aws = EcsStandIn(stale_gold, lock=OWN_LOCK)
+        code, _, err = run_command_path(["hold", "--reason", reason, "--migration"], aws)
+        fields = hold_fields(aws.value)
+        require(
+            code == 0 and fields is not None and fields["state"] == MIGRATION and "frozen" not in fields,
+            f"the reason {reason[:40]!r}: exit {code} {aws.value!r} {err}",
+        )
+        stored = (fields or {}).get("reason")
+        require(stored == reason.strip()[:200], f"the reason {reason[:40]!r} was not stored as data: {stored!r}")
+        code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
+        fields = hold_fields(aws.value)
+        require(
+            code == 0 and fields is not None and "frozen" not in fields, f"settle --keep-hold read the reason {reason[:40]!r} as a record: {aws.value!r} {err}"
+        )
+        before = aws.value
+        code, _, err = run_command_path(finish_arguments, aws, narrower)
+        require(code == 1 and "frozen" in err and aws.value == before and aws.lock == OWN_LOCK, f"finish trusted the reason {reason[:40]!r}: exit {code} {err}")
+        genuine = EcsStandIn(stale_gold, value=pending_value(frozen_dict([f"{PREFIX}silver_host"], digest="b" * 64)), lock=OWN_LOCK)
+        code, _, err = run_command_path(["hold", "--reason", reason], genuine)
+        kept = hold_fields(genuine.value)
+        require(
+            code == 0 and kept is not None and kept["frozen"]["jobs_sha256"] == "b" * 64 and kept["reason"] == reason.strip()[:200],
+            f"a reason {reason[:40]!r} changed the genuine record: exit {code} {genuine.value!r} {err}",
+        )
+    legacy = PENDING + " | frozen " + record
+    for arguments in (["settle", "--token", OWN_LOCK, "--keep-hold"], finish_arguments):
+        aws = EcsStandIn(stale_gold, value=legacy, lock=OWN_LOCK)
+        code, _, err = run_command_path(arguments, aws, narrower)
+        fields = hold_fields(aws.value)
+        require(
+            "frozen" not in (fields or {}) and (code == 1 or arguments[0] == "settle") and aws.lock == OWN_LOCK,
+            f"a text hold was read as authority by {arguments[0]}: {aws.value!r}",
+        )
+    aws = EcsStandIn(stale_gold, value=legacy, lock=OWN_LOCK)
+    code, _, err = run_command_path(finish_arguments, aws, narrower)
+    require(code == 1 and "frozen" in err and aws.value == legacy, f"finish over a text hold of earlier code: exit {code} {err}")
 
 
 def a_malformed_frozen_record_is_refused_with_the_hold_unchanged() -> None:
-    """A hold value whose frozen record is not exactly the schema (a complete lowercase SHA-256, full family names of the record's own project and
-    environment, a valid project, environment and binding, no other keys) is never read as authority: a plain hold, settle --keep-hold and finish each
-    refuse and leave the hold and the lock. A hold that freezes fresh reviewed inputs repairs it."""
-    good: dict[str, Any] = {
-        "jobs_sha256": "a" * 64,
-        "families": [f"{PREFIX}silver_host"],
-        "project": "example_project",
-        "environment": "dev",
-        "binding": BINDING,
-    }
+    """A hold value that is not exactly the structured form (the state, the writer, the time and the reason, and for a pending change an optional record
+    of a complete lowercase SHA-256, full sorted family names of the record's own project and environment, a valid project, environment and binding, with
+    only strings as family names and no other keys) is never read as authority: a plain hold, settle --keep-hold and finish each refuse and leave the hold
+    and the lock. Fresh reviewed jobs inputs repair every invalid shape."""
+    good = frozen_dict([f"{PREFIX}silver_host"], digest="a" * 64)
+    silver = f"{PREFIX}silver_host"
     bad_records: list[tuple[str, Any]] = [
         ("an empty digest", {**good, "jobs_sha256": ""}),
         ("a short digest", {**good, "jobs_sha256": "a" * 63}),
@@ -930,7 +994,14 @@ def a_malformed_frozen_record_is_refused_with_the_hold_unchanged() -> None:
         ("a short family name", {**good, "families": ["silver"]}),
         ("a family of another project", {**good, "families": ["other_project_dev_job_silver_host"]}),
         ("a family without the host suffix", {**good, "families": [f"{PREFIX}silver"]}),
-        ("families that are not a list", {**good, "families": f"{PREFIX}silver_host"}),
+        ("families that are not a list", {**good, "families": silver}),
+        ("an object as a family", {**good, "families": [{}]}),
+        ("an array as a family", {**good, "families": [[]]}),
+        ("a number among the families", {**good, "families": [silver, 1]}),
+        ("a null family", {**good, "families": [None]}),
+        ("a boolean family", {**good, "families": [True]}),
+        ("duplicate families", {**good, "families": [silver, silver]}),
+        ("unsorted families", {**good, "families": [f"{PREFIX}train_host", silver]}),
         ("an invalid project", {**good, "project": "Example Project"}),
         ("an invalid environment", {**good, "environment": "stage"}),
         ("a malformed binding", {**good, "binding": "job_memory_mib=22528"}),
@@ -938,21 +1009,64 @@ def a_malformed_frozen_record_is_refused_with_the_hold_unchanged() -> None:
         ("a missing key", {key: value for key, value in good.items() if key != "project"}),
         ("a record that is not an object", ["not", "an", "object"]),
     ]
+    values: list[tuple[str, str]] = [(label, pending_value(record)) for label, record in bad_records]
+    values += [
+        ("an unknown key beside the record", pending_value(good, note="x")),
+        ("an unknown state", pending_value(good).replace(MIGRATION, "held for something else", 1)),
+        ("a missing reason", json.dumps({"state": MIGRATION, "by": "services_apply", "at": "2026-11-11T00:00:00Z", "frozen": good})),
+        ("a record under the plain state", pending_value(good).replace(MIGRATION, "held", 1)),
+        ("text that is not JSON", '{"state": "' + MIGRATION),
+        ("a JSON array", "[1, 2]"),
+    ]
     finish_arguments = ["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"]
-    registered = {f"{PREFIX}silver_host": host_revision()}
-    for label, record in bad_records:
-        value = PENDING + FROZEN_MARK + json.dumps(record, separators=(",", ":"))
+    registered = {silver: host_revision()}
+    rendered = rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]})
+    for label, value in values:
         for arguments in (["hold", "--reason", "retry"], ["settle", "--token", OWN_LOCK, "--keep-hold"], finish_arguments):
             aws = EcsStandIn(registered, value=value, lock=OWN_LOCK)
-            code, _, err = run_command_path(arguments, aws, rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]}))
-            require(code == 1 and "frozen" in err, f"{label}: {arguments[0]} did not refuse: exit {code} {err}")
+            code, _, err = run_command_path(arguments, aws, rendered)
+            require(code == 1 and "malformed" in err, f"{label}: {arguments[0]} did not refuse: exit {code} {err}")
             require(aws.value == value and aws.lock == OWN_LOCK, f"{label}: {arguments[0]} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
-    value = PENDING + FROZEN_MARK + json.dumps(bad_records[0][1], separators=(",", ":"))
-    with tempfile.TemporaryDirectory() as directory:
-        repaired = AwsStandIn(value=value, lock=OWN_LOCK)
-        inputs, digest = reviewed_jobs_inputs(Path(directory), {"host_jobs_enabled": True, "host_jobs": ["silver"]})
-        code, _, err = run_command_path(["hold", "--reason", "repair", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], repaired)
-        require(code == 0 and frozen_record(repaired.value)["jobs_sha256"] == digest, f"fresh reviewed inputs did not repair the record: exit {code} {err}")
+        with tempfile.TemporaryDirectory() as directory:
+            repaired = AwsStandIn(value=value, lock=OWN_LOCK)
+            inputs, digest = reviewed_jobs_inputs(Path(directory), {"host_jobs_enabled": True, "host_jobs": ["silver"]})
+            code, _, err = run_command_path(["hold", "--reason", "repair", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], repaired)
+            mended = hold_fields(repaired.value)
+            require(
+                code == 0
+                and mended is not None
+                and mended["state"] == MIGRATION
+                and mended["frozen"]["jobs_sha256"] == digest
+                and mended["frozen"]["families"] == [silver],
+                f"{label}: fresh reviewed inputs did not repair the hold: exit {code} {repaired.value!r} {err}",
+            )
+
+
+def the_launch_preflight_blocks_every_structured_hold() -> None:
+    """The structured hold value is one JSON object, so the launch preflight (orchestration/ecs_preflight.py: exactly ``clear`` means no hold, any other
+    value holds every launch and shows its first 120 characters) needs no parser. The values the commands write are not ``clear``, and the first 120
+    characters name the state, so the refusal stays readable."""
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    values = [pending_value(frozen_dict([f"{PREFIX}silver_host"])), pending_value(reason="clear"), json.dumps({"state": "held", "reason": "clear"}), '"clear"']
+    aws = AwsStandIn(lock=OWN_LOCK)
+    code, _, err = run_command_path(["hold", "--reason", "clear"], aws)
+    require(code == 0, f"a plain hold with the reason clear: exit {code} {err}")
+    values.append(str(aws.value))
+    for value in values:
+        why = preflight.held(value)
+        require(why is not None and "launch hold is set" in why, f"the value {value[:60]!r} does not hold launches: {why}")
+        require(MIGRATION[:20] in why or "held" in why or "clear" in why, f"the refusal does not show the state: {why}")
+    require(preflight.held("clear") is None and preflight.held(None) is not None, "the clear value no longer means no hold, or a missing hold no longer holds")
+
+
+def the_recovery_text_states_the_limit_on_a_continued_hold() -> None:
+    """The procedure in the module docstring says that a continued hold must keep every frozen family and the identity, and names the route to a
+    deselection: apply the original selection, finish it, then deselect in a separate jobs change."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    text = " ".join((module.__doc__ or "").split())
+    recovery = text[text.index("Recovery.") :]
+    for needed in ("every frozen family", "identity", "finish", "separate jobs change"):
+        require(needed in recovery, f"the recovery text does not say {needed!r}")
 
 
 def the_cap_description_names_the_start_inputs_and_finish() -> None:
@@ -972,7 +1086,7 @@ def a_plain_hold_never_downgrades_a_pending_host_job_cap_change() -> None:
     module = importlib.import_module("scripts.infrastructure.services_apply")
     store, _, current, _ = pending_migration()
     current.hold("retry the services apply")
-    require(str(store.value).startswith(MIGRATION), f"a plain hold in process downgraded the pending change: {store.value!r}")
+    require(is_pending(store.value), f"a plain hold in process downgraded the pending change: {store.value!r}")
     for later in (
         ["settle", "--token", OWN_LOCK],
         ["resolve", "--statement", "services stable", "--token", OWN_LOCK],
@@ -980,7 +1094,7 @@ def a_plain_hold_never_downgrades_a_pending_host_job_cap_change() -> None:
     ):
         aws = AwsStandIn(value=PENDING, lock=OWN_LOCK)
         code, _, err = run_real_output(["hold", "--reason", "retry the services apply"], aws)
-        require(code == 0 and str(aws.value).startswith(MIGRATION), f"the plain hold command downgraded the pending change: exit {code} {aws.value!r} {err}")
+        require(code == 0 and is_pending(aws.value), f"the plain hold command downgraded the pending change: exit {code} {aws.value!r} {err}")
         require("retry the services apply" in str(aws.value), f"the rewritten hold lost its reason: {aws.value!r}")
         with (
             mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
@@ -988,14 +1102,14 @@ def a_plain_hold_never_downgrades_a_pending_host_job_cap_change() -> None:
         ):
             code, _, err = run_real_output(later, aws)
         require(
-            code == 1 and FINISH in err and f"--token '{OWN_LOCK}'" in err and str(aws.value).startswith(MIGRATION) and aws.lock == OWN_LOCK,
+            code == 1 and FINISH in err and f"--token '{OWN_LOCK}'" in err and is_pending(aws.value) and aws.lock == OWN_LOCK,
             f"{later[0]} after a plain hold released a pending change: exit {code} {err} {aws.value!r} {aws.lock!r}",
         )
     for before in (None, "clear", "held by services_apply at 2026-11-11T00:00:00Z: an earlier apply"):
         aws = AwsStandIn(value=before)
         code, _, err = run_real_output(["hold", "--reason", "a services apply"], aws)
         require(
-            code == 0 and str(aws.value).startswith("held by services_apply") and "a services apply" in str(aws.value),
+            code == 0 and state_of(aws.value) == "held" and "a services apply" in str(aws.value),
             f"hold over {before!r}: exit {code} {aws.value!r} {err}",
         )
 
@@ -1008,7 +1122,7 @@ def finish_through_the_command() -> None:
     aws = AwsStandIn(value="held by services_apply", lock=mine)
     with mock.patch.object(module.Steps, "wait_stable", lambda self, token: None):
         code, out, err = run_real_output(["settle", "--token", mine, "--keep-hold"], aws)
-    require(code == 0 and str(aws.value).startswith(MIGRATION) and aws.lock == mine, f"settle --keep-hold: exit {code} {aws.value!r} {aws.lock!r} {err}")
+    require(code == 0 and is_pending(aws.value) and aws.lock == mine, f"settle --keep-hold: exit {code} {aws.value!r} {aws.lock!r} {err}")
     require(FINISH in out + err and f"--token '{mine}'" in out + err, f"settle --keep-hold does not print the finish command with the token: {out} {err}")
     held = aws.value
     for arguments in (["settle", "--token", mine], ["resolve", "--statement", "x", "--token", mine], ["resolve", "--statement", "x"]):
@@ -1190,8 +1304,10 @@ CASES: dict[str, Callable[[], None]] = {
     "finish_checks_the_frozen_selection_not_a_later_render": finish_checks_the_frozen_selection_not_a_later_render,
     "finish_refuses_a_change_that_froze_nothing": finish_refuses_a_change_that_froze_nothing,
     "a_continued_hold_cannot_drop_a_pending_family": a_continued_hold_cannot_drop_a_pending_family,
-    "a_hold_reason_cannot_carry_the_record_separator": a_hold_reason_cannot_carry_the_record_separator,
+    "a_reason_can_never_become_the_frozen_record": a_reason_can_never_become_the_frozen_record,
+    "the_launch_preflight_blocks_every_structured_hold": the_launch_preflight_blocks_every_structured_hold,
     "a_malformed_frozen_record_is_refused_with_the_hold_unchanged": a_malformed_frozen_record_is_refused_with_the_hold_unchanged,
+    "the_recovery_text_states_the_limit_on_a_continued_hold": the_recovery_text_states_the_limit_on_a_continued_hold,
     "the_cap_description_names_the_start_inputs_and_finish": the_cap_description_names_the_start_inputs_and_finish,
     "a_plain_hold_never_downgrades_a_pending_host_job_cap_change": a_plain_hold_never_downgrades_a_pending_host_job_cap_change,
     "the_hold_command_can_write_the_change_form": the_hold_command_can_write_the_change_form,

@@ -1143,7 +1143,14 @@ def the_production_launcher_rechecks_at_send() -> None:
 def launch_during_the_hold_is_refused() -> None:
     """Launch hold during services applies (owner A, Nov 10 2026): while the hold is set, or while the hold parameter is missing (fail closed), the
     preflight refuses every host launch by name before any record or ECS call: zero tasks."""
-    for hold, named in (([HELD], "launch hold"), ([client_error("ParameterNotFound", "GetParameter")], "launch hold")):
+    structured = json.dumps({"state": "held", "by": "services_apply", "at": "2026-11-10T20:00:00Z", "reason": "clear"})
+    pending = json.dumps({"state": "held for a host job cap change", "by": "services_apply", "at": "2026-11-10T20:00:00Z", "reason": "jobs apply pending"})
+    for hold, named in (
+        ([HELD], "launch hold"),
+        ([structured], "launch hold"),
+        ([pending], "launch hold"),
+        ([client_error("ParameterNotFound", "GetParameter")], "launch hold"),
+    ):
         rig, ssm = held_rig(hold)
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))

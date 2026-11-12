@@ -12,7 +12,10 @@ holds it AWS refuses the create and the apply does not start. ``settle`` and ``r
 
 The hold is one Parameter Store value, ``host_launch_hold_parameter_name`` of the services stack (default ``/healthcare_hai_prediction/host_launch_hold``).
 It is not managed by Terraform, so no apply can clear it. ``clear`` lets host launches run; any other value, or no parameter, holds them: the launch
-preflight refuses every host launch, and the fit probe rereads the hold before every RunTask.
+preflight refuses every host launch, and the fit probe rereads the hold before every RunTask. This command writes any other value as one JSON object with
+separate fields (``state``, ``by``, ``at``, ``reason`` and, for a host job cap change, ``frozen``), so the preflight needs no parser and reason text is only
+ever the reason. A hold that earlier code wrote as text reads as a pending change without a record when it starts with the change marker, and as a plain hold
+otherwise.
 
 Changing the host job cap, and the move of the cap from Parameter Store to the Airflow environment (Nov 11 2026). The cap is the services input
 ``host_job_cap_mib``. The jobs stack must register host revisions at the new cap after every change, and the launch preflight refuses a revision whose job
@@ -78,7 +81,10 @@ inputs as ``JOBS_INPUTS``. Run every command from the repository root in one she
 
 Recovery. A failed jobs apply leaves the hold: fix the cause and repeat step 5. A failed services apply also leaves it (the wrapper prints the finish
 command): if the services changed in part, correct the inputs, repeat step 2 and apply under the same lock, then continue from step 4. The frozen record
-stays; give ``--jobs-inputs`` and ``--jobs-sha256`` to that command again only to freeze other reviewed jobs inputs.
+stays. A continued hold must keep every frozen family and the identity: ``--jobs-inputs`` and ``--jobs-sha256`` given to it again replace the record only
+with a wider or equal selection, and inputs that drop a family are refused. To deselect a family, apply the original selection, run ``finish``, then
+deselect in a separate jobs change. A hold that a malformed value or earlier code (text, no record) left is repaired by ``hold --migration`` with fresh
+reviewed inputs and digest, then ``settle --keep-hold``.
 
     bash "$TF" "${SERVICES_FLAGS[@]}" --continue-launch-hold "$TOKEN" apply host_job_cap.tfplan
 
@@ -130,12 +136,19 @@ JOB_MEMORY = re.compile(r"job_memory_mib=([1-9][0-9]*) ")
 JOBS_INPUTS_RENDERED = REPO_ROOT / "infra" / "jobs" / "deployment.auto.tfvars.json"
 JOBS_HOST_VARIABLES = REPO_ROOT / "infra" / "jobs" / "host.tf"
 FAMILY_NAME = re.compile(r"[a-z][a-z0-9_]*")
-# The frozen record of a host job cap change follows the reason in the hold value: the host families the reviewed jobs inputs select, their digest, the
-# project identity and the services capacity binding. Only the change's own hold carries it, and every rewrite of that hold keeps it.
-FROZEN_MARK = " | frozen "
+# The hold value written by this command is one JSON object with separate fields, so reason text is only ever the reason: "state" (HELD or
+# MIGRATION_HOLD), "by", "at", "reason" and, for a pending host job cap change, "frozen": the host families the reviewed jobs inputs select, their
+# digest, the project identity and the services capacity binding. Only that field is a record. The launch preflight needs no parser: exactly "clear"
+# means no hold and any other value holds every launch.
+HELD = "held"
 FROZEN_KEYS = {"jobs_sha256", "families", "project", "environment", "binding"}
+HOLD_KEYS = {"state", "by", "at", "reason", "frozen"}
 SHA256_HEX = re.compile(r"[0-9a-f]{64}")
 PROJECT_NAME = re.compile(r"[a-z][a-z0-9_]{2,79}")
+MALFORMED = (
+    "the launch hold value is malformed, so it is not trusted and nothing was changed. Freeze the reviewed jobs inputs again with "
+    "hold --migration --jobs-inputs and --jobs-sha256"
+)
 
 
 def finish_command(token: str) -> str:
@@ -201,40 +214,64 @@ def rendered_jobs_values() -> dict[str, Any]:
     return rendered
 
 
-def frozen_suffix(record: dict[str, Any]) -> str:
-    """The text that follows the reason in the hold value of a host job cap change."""
-    return FROZEN_MARK + json.dumps(record, sort_keys=True, separators=(",", ":"))
-
-
-def read_frozen(value: str | None) -> dict[str, Any] | None:
-    """The frozen record in a hold value, None when the value has no record mark, and a refusal when the record after the mark is not exactly the schema:
-    a complete lowercase SHA-256, a project and environment that the configuration allows, sorted full family names of that project and environment and,
-    when present, a capacity binding in the rendered form. A record that does not match is never read as authority."""
-    if value is None or FROZEN_MARK not in value:
-        return None
+def valid_frozen(record: Any) -> bool:
+    """True when ``record`` is exactly the frozen record: a complete lowercase SHA-256, a project and environment that the configuration allows, a list of
+    only strings that are sorted, unique and full family names of that project and environment and, when present, a capacity binding in the rendered form.
+    Every type is checked before anything is hashed or sorted, so no shape raises."""
     from scripts.infrastructure.render_jobs_config import BINDING_FORM  # one form of the binding for the renderer and the record
 
-    refusal = ServicesApplyError(
-        "the frozen record in the launch hold is malformed, so it is not trusted and nothing was changed. Freeze the reviewed jobs inputs again with "
-        "hold --migration --jobs-inputs and --jobs-sha256"
-    )
-    try:
-        record = json.loads(value.rsplit(FROZEN_MARK, 1)[1])
-    except ValueError:
-        raise refusal from None
     if not isinstance(record, dict) or not {"jobs_sha256", "families", "project", "environment"} <= set(record) <= FROZEN_KEYS:
-        raise refusal
+        return False
     digest, families, project, environment = record["jobs_sha256"], record["families"], record["project"], record["environment"]
     if not (isinstance(digest, str) and SHA256_HEX.fullmatch(digest) and isinstance(project, str) and PROJECT_NAME.fullmatch(project)):
-        raise refusal
-    if environment not in ("dev", "prod") or not isinstance(families, list) or families != sorted(set(families)):
-        raise refusal
+        return False
+    if environment not in ("dev", "prod") or not isinstance(families, list) or not all(isinstance(family, str) for family in families):
+        return False
+    if families != sorted(set(families)):
+        return False
     name = re.compile(f"{re.escape(project)}_{environment}_job_[a-z][a-z0-9_]*_host")
-    if not all(isinstance(family, str) and name.fullmatch(family) for family in families):
-        raise refusal
-    if "binding" in record and not (isinstance(record["binding"], str) and BINDING_FORM.fullmatch(record["binding"])):
-        raise refusal
-    return dict(record)
+    if not all(name.fullmatch(family) for family in families):
+        return False
+    return "binding" not in record or (isinstance(record["binding"], str) and BINDING_FORM.fullmatch(record["binding"]) is not None)
+
+
+def hold_value(state: str, reason: str, stamp: str, record: dict[str, Any] | None = None) -> str:
+    """The hold value: one JSON object with the state, the writer, the time, the reason and, for a pending change, the frozen record as its own field."""
+    fields: dict[str, Any] = {"state": state, "by": "services_apply", "at": stamp, "reason": reason}
+    if record is not None:
+        fields["frozen"] = record
+    return json.dumps(fields)
+
+
+@dataclass(frozen=True)
+class HoldView:
+    """What a hold value says: ``pending`` while it names a host job cap change, its trusted frozen ``record`` (None when it has none), and ``malformed``
+    when the value claims the structured form but is not exactly it. A malformed value counts as pending, so no plain command clears it."""
+
+    pending: bool = False
+    record: dict[str, Any] | None = None
+    malformed: bool = False
+
+
+def read_hold_value(value: str | None) -> HoldView:
+    """Read a hold value. None and a plain hold are not pending. A text value of earlier code that starts with the change marker is pending without a
+    record, whatever follows the marker, so text is never authority; the owner freezes the reviewed jobs inputs again."""
+    if value is None:
+        return HoldView()
+    if not value.lstrip().startswith(("{", "[")):
+        return HoldView(pending=value.startswith(MIGRATION_HOLD))
+    try:
+        fields = json.loads(value)
+    except ValueError:
+        return HoldView(pending=True, malformed=True)
+    if not isinstance(fields, dict) or not {"state", "by", "at", "reason"} <= set(fields) <= HOLD_KEYS:
+        return HoldView(pending=True, malformed=True)
+    if not all(isinstance(fields[key], str) for key in ("state", "by", "at", "reason")) or fields["state"] not in (HELD, MIGRATION_HOLD):
+        return HoldView(pending=True, malformed=True)
+    pending = fields["state"] == MIGRATION_HOLD
+    if "frozen" in fields and not (pending and valid_frozen(fields["frozen"])):
+        return HoldView(pending=True, malformed=True)
+    return HoldView(pending=pending, record=dict(fields["frozen"]) if "frozen" in fields else None)
 
 
 def jobs_registration_problem(cli: Any, settings: dict[str, str], frozen: dict[str, Any] | None) -> str | None:
@@ -245,8 +282,8 @@ def jobs_registration_problem(cli: Any, settings: dict[str, str], frozen: dict[s
 
     if frozen is None:
         raise ServicesApplyError(
-            "the host job cap change has no frozen jobs selection from its start, so finish has nothing to check. Run hold --migration with "
-            "--jobs-inputs and --jobs-sha256, then settle --keep-hold with the lock token, then the jobs apply"
+            "the host job cap change has no frozen jobs selection (a hold that earlier code wrote as text carries none that is trusted), so finish has "
+            "nothing to check. Run hold --migration with --jobs-inputs and --jobs-sha256, then settle --keep-hold with the lock token, then the jobs apply"
         )
     binding = frozen.get("binding")
     if not binding:
@@ -383,15 +420,20 @@ class Steps:
         except Exception as error:  # a refused or failed read leaves the hold unknown
             raise ServicesApplyError(f"the launch hold could not be read ({type(error).__name__}: {str(error)[:200]})") from None
 
+    def hold_view(self) -> HoldView:
+        """The current hold value, read."""
+        return read_hold_value(self.read_hold())
+
     def pending_change(self) -> bool:
         """True while the hold is the host job cap change form, which only ``finish`` ends."""
-        found = self.read_hold()
-        return found is not None and found.startswith(MIGRATION_HOLD)
+        return self.hold_view().pending
 
     def pending_record(self) -> dict[str, Any] | None:
-        """The frozen record of the pending host job cap change, or None when the hold is not that form or carries no valid record."""
-        found = self.read_hold()
-        return read_frozen(found) if found is not None and found.startswith(MIGRATION_HOLD) else None
+        """The frozen record of the pending host job cap change, or None when the hold is not that form or carries none. A malformed hold refuses."""
+        view = self.hold_view()
+        if view.malformed:
+            raise ServicesApplyError(MALFORMED)
+        return view.record
 
     @staticmethod
     def pending_refusal(action: str, token: str | None) -> ServicesApplyError:
@@ -404,36 +446,29 @@ class Steps:
     def hold(self, reason: str, migration: bool = False, frozen: dict[str, Any] | None = None) -> None:
         """Set the hold before the apply changes anything, then wait the settle window so a RunTask that a fit check allowed just before has its reply.
         With ``migration`` the hold names a host job cap change, which only ``finish`` ends; ``frozen`` is then the record of the reviewed jobs inputs that
-        the change starts with, and it replaces any earlier record. A hold over a pending host job cap change keeps its name and its frozen record, so a
-        plain hold never turns it into a hold that settle or resolve can clear."""
+        the change starts with. It replaces an earlier record only when it keeps every frozen family and the identity. A hold over a pending host job cap
+        change keeps its name and its record, so a plain hold never turns it into a hold that settle or resolve can clear. The reason is a field of its
+        own, so no reason text can become a record."""
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        text = reason.strip()[:200]
-        if FROZEN_MARK in reason or FROZEN_MARK in text:
-            raise ServicesApplyError(
-                f"the hold reason may not contain {FROZEN_MARK.strip()!r} with its spaces, which separates the frozen record. Nothing was changed"
-            )
         if frozen is not None and not migration:
             raise ServicesApplyError("a frozen jobs selection belongs only to the hold of a host job cap change (--migration)")
-        found = self.read_hold()
-        pending = found is not None and found.startswith(MIGRATION_HOLD)
-        existing: dict[str, Any] | None = None
-        try:
-            existing = read_frozen(found) if pending else None
-        except ServicesApplyError:
-            if frozen is None:
-                raise  # a malformed record is never carried over; fresh reviewed inputs repair it
+        view = self.hold_view()
+        if view.malformed and frozen is None:
+            raise ServicesApplyError(MALFORMED)  # fresh reviewed inputs repair it; nothing else carries a malformed value over
         record: dict[str, Any] | None
         if frozen is not None:
+            existing = view.record
             dropped = sorted(set(existing["families"]) - set(frozen["families"])) if existing is not None else []
             if existing is not None and (dropped or (existing["project"], existing["environment"]) != (frozen["project"], frozen["environment"])):
                 raise ServicesApplyError(
-                    f"the pending host job cap change froze {', '.join(dropped) or 'another project identity'}, which these jobs inputs do not select. The "
-                    "frozen selection stays until the change is finished; freeze inputs that select every frozen family. Nothing was changed"
+                    f"the pending host job cap change froze {', '.join(dropped) or 'another project identity'}, which these jobs inputs do not keep. A "
+                    "continued hold must keep every frozen family and the identity. To deselect a family, apply the original selection, run finish, "
+                    "then deselect in a separate jobs change. Nothing was changed"
                 )
             named, record = True, frozen
         else:
-            named, record = migration or pending, existing
-        self.write(f"{MIGRATION_HOLD if named else 'held'} by services_apply at {stamp}: {text}{frozen_suffix(record) if named and record else ''}")
+            named, record = migration or view.pending, view.record
+        self.write(hold_value(MIGRATION_HOLD if named else HELD, reason.strip()[:200], stamp, record if named else None))
         self.clock.sleep(HOLD_SETTLE_SECONDS)
         self.report(f"launch hold: set, waited {HOLD_SETTLE_SECONDS} s for any RunTask already allowed")
 
@@ -537,7 +572,7 @@ class Steps:
         if record is not None and self.binding is not None:
             record = {**record, "binding": self.binding()}
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.write(f"{MIGRATION_HOLD} by services_apply at {stamp}: jobs apply pending{frozen_suffix(record) if record else ''}")
+        self.write(hold_value(MIGRATION_HOLD, "jobs apply pending", stamp, record))
         self.report(f"launch hold: kept set for a host job cap change. After the jobs apply, run {finish_command(token)}")
 
     def finish(self, token: str | None, statement: str) -> None:
