@@ -1390,11 +1390,11 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 616,
+      "line": 654,
       "code_sha256": "ee20a27238cf5e8b14a791933c550d1cdcae10ff3635aef6ab74e5f57407c008",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "419e94fe37be1a60389013b1f5bcada09f97452653f70ccf433dad35f7182363",
+      "file_sha256": "8743d0e90247dd629635be54517b3123c8085d122140610c339b233ee0ab4d4a",
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
@@ -1631,7 +1631,7 @@
       "dependencies": {
         "orchestration/ecs_preflight.py": "sha256:c8ff9f54d61d59d055dc6039590eb91a10d402d11cb8beb5736b8aa263396c02",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
-        "scripts/infrastructure/host_session.py": "sha256:419e94fe37be1a60389013b1f5bcada09f97452653f70ccf433dad35f7182363",
+        "scripts/infrastructure/host_session.py": "sha256:8743d0e90247dd629635be54517b3123c8085d122140610c339b233ee0ab4d4a",
         "scripts/infrastructure/render_project_config.py": "sha256:667c2413fa2bf33ac67e331487d4f13f9faa423a1b692fac58d4f206b0d9fcb7"
       },
       "reason": "tolerant_runner (imported from host_session) is handed to AwsCli as its runner; AwsCli builds every command as a list that starts with the literal aws, and tolerant_runner runs run_argv(command, ...) and only replaces an empty successful output with an empty JSON object",

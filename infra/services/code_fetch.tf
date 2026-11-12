@@ -35,8 +35,14 @@ variable "code_bucket_name" {
 locals {
   code_fetch_on = var.code_fetch_task_role_arn != null
 
-  # The code one-shot runs infra/services/scripts/code_fetch.py, which calls the training image's own /opt/hai/fetch_code.py: the same download,
-  # hash check and unpack as the first container of a training task. host_session start passes CODE_RUN_ID and CODE_SHA256 as RunTask overrides.
+  # The code one-shot runs infra/services/scripts/code_fetch.py, which calls the training image's own /opt/hai/fetch_code.py on an empty private folder: the
+  # same download, hash check and unpack as the first container of a training task. host_session start passes CODE_RUN_ID and CODE_SHA256 as RunTask
+  # overrides, with the same script text as the container command, so the reviewed installer runs even while an older revision is the registered one.
+  # CODE_MODE install (the default) renames the private folder to repo_releases/<SHA> only when it holds every member of the archive, then switches repo
+  # to it by one rename and keeps the previous link as repo.previous; a refused, failed or interrupted fetch leaves the previous checkout. CODE_MODE verify
+  # checks that repo shows the release of CODE_SHA256 and that the release holds every file of its archive. CODE_MODE restore shows repo.previous again
+  # when repo shows that release or any release that is not complete, and leaves an empty repo folder when no verified release exists. One lock file in
+  # /host serializes every mode of every code task on the host; a task that cannot take it within 600 seconds fails and changes nothing.
   code_fetch_task = {
     network_mode  = "host"
     task_role_arn = var.code_fetch_task_role_arn

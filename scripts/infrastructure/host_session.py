@@ -52,7 +52,10 @@ CODE_FETCH = "code_fetch"
 CODE_FETCH_SECONDS = 1200
 CODE_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
-CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")
+CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
+# The reviewed installer. Every code task carries its text as the container command, so the registered task definition, which may still hold an older
+# installer, never decides how the code is installed, verified or restored.
+CODE_FETCH_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
 OPENMETADATA_BOOTSTRAP_SECONDS = 1500
 OPENMETADATA_STOP_SECONDS = 300
 FAILED_ROLLOUT = "FAILED"
@@ -72,6 +75,10 @@ RUN_TASK_CODE = re.compile(r"[A-Z][A-Z0-9_]*(:[A-Z0-9_]+)?")
 
 class HostSessionError(Exception):
     """A step failed; the message names the step and the cause, never an ARN or an account ID."""
+
+
+class TaskExitError(HostSessionError):
+    """A one-shot task ran to its end and a container exited with a code other than 0."""
 
 
 class TerminationRequested(Exception):
@@ -124,6 +131,12 @@ def code_environment(overrides: dict[str, Any] | None, container: str) -> dict[s
         for item in entry.get("environment", [])
         if item.get("name") in CODE_ENVIRONMENT
     }
+
+
+def code_command(overrides: dict[str, Any] | None, container: str) -> str | None:
+    """The command text that the container overrides of a RunTask call or a described task set for ``container``, or None."""
+    commands = [entry["command"][0] for entry in (overrides or {}).get("containerOverrides", []) if entry.get("name") == container and entry.get("command")]
+    return commands[0] if commands else None
 
 
 def run_task_code(reason: object) -> str:
@@ -422,7 +435,7 @@ class Session:
         stopped_task = self.wait(f"{key} task stop", stopped, seconds, TASK_POLL_SECONDS)
         exits = {item.get("name"): item.get("exitCode") for item in stopped_task.get("containers", [])}
         if not exits or any(code != 0 for code in exits.values()):
-            raise HostSessionError(f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}")
+            raise TaskExitError(f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}")
         self.step(key, f"exit codes {exits}")
 
     def described(self, key: str, arns: list[str]) -> list[dict[str, Any]]:
@@ -437,9 +450,9 @@ class Session:
         return found
 
     def same_code(self, key: str, arns: list[str], overrides: dict[str, Any] | None) -> bool:
-        """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256) that ``overrides`` ask for."""
-        wanted = code_environment(overrides, key)
-        return all(code_environment(task.get("overrides"), key) == wanted for task in self.described(key, arns))
+        """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256, CODE_MODE) and the command that ``overrides`` ask for."""
+        wanted = (code_environment(overrides, key), code_command(overrides, key))
+        return all((code_environment(task.get("overrides"), key), code_command(task.get("overrides"), key)) == wanted for task in self.described(key, arns))
 
     def all_stopped(self, key: str, arns: list[str]) -> bool:
         """True when every task in ``arns`` is STOPPED."""
@@ -545,16 +558,41 @@ class Session:
         except HostSessionError as error:
             self.step("host_off_failed", f"the host may still be on; run stop ({error})")
 
+    def code_overrides(self, code: tuple[str, str] | None, mode: str = "install") -> dict[str, Any]:
+        """The RunTask overrides of a code task: the run ID and digest of ``code`` when given, the CODE_MODE unless it is the default install and the text of
+        the reviewed installer as the command."""
+        environment = [] if code is None else [{"name": "CODE_RUN_ID", "value": code[0]}, {"name": "CODE_SHA256", "value": code[1]}]
+        environment += [] if mode == "install" else [{"name": "CODE_MODE", "value": mode}]
+        script = CODE_FETCH_SCRIPT.read_text(encoding="utf-8")
+        return {"containerOverrides": [{"name": CODE_FETCH, "environment": environment, "command": [script]}]}
+
     def place_code(self, code: tuple[str, str] | None) -> None:
-        """Run the code one-shot after host_prepare: with ``code`` (run ID, code digest) it shows that archive as /data/repo, without it it keeps the
-        existing checkout and fails on a host that has none. A failed fetch leaves the previous checkout, and start stops before any service."""
+        """Run the code tasks after host_prepare: with ``code`` (run ID, code digest) the install of that archive as /data/repo and then a separate
+        verification that repo shows the release and the release holds every file of its archive; without it a check that the existing checkout is a
+        complete release, which fails on a host that has none. Each task runs the reviewed installer as its command. When a task ran and failed, a restore
+        task makes repo show a verified checkout again, and the error says what repo shows. start stops the host before any service."""
         if CODE_FETCH not in self.names.one_shot:
             return
-        overrides = None
-        if code is not None:
-            environment = [{"name": "CODE_RUN_ID", "value": code[0]}, {"name": "CODE_SHA256", "value": code[1]}]
-            overrides = {"containerOverrides": [{"name": CODE_FETCH, "environment": environment}]}
-        self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, overrides)
+        try:
+            self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(code))
+            if code is not None:
+                self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(code, "verify"))
+                self.step("code_verified", code[0])
+        except TaskExitError as error:
+            raise HostSessionError(f"{error}; {self.restore_code(code)}") from None
+        except HostSessionError as error:
+            raise HostSessionError(f"{error}; the code task did not run to its end, so what repo shows is not known; no service was deployed") from None
+
+    def restore_code(self, code: tuple[str, str] | None) -> str:
+        """Run the restore task after a failed code task and answer what repo shows, from the task's own exit code."""
+        try:
+            self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(code, "restore"))
+        except TaskExitError:
+            return "repo shows no verified checkout, an empty folder; no service was deployed; run start with --code-run and --code-sha256"
+        except HostSessionError as error:
+            return f"the check of repo after the failure did not run ({error}), so what repo shows is not known; no service was deployed"
+        self.step("code_restored", "repo shows a verified checkout")
+        return "repo shows a verified checkout, not the requested code; no service was deployed"
 
     def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
         """Host on, host_prepare, the code checkout, every service redeployed and stable. Any failure, interruption or SIGTERM stops the host unless

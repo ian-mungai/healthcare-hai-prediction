@@ -15,6 +15,7 @@ import shutil
 import stat
 import sys
 import tarfile
+import threading
 import time
 import tomllib
 from collections.abc import Callable, Iterator, Sequence
@@ -24,6 +25,7 @@ from unittest import mock
 
 from orchestration import code_digest
 from scripts.features import publication_reads, training_extract
+from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
 from scripts.orchestration.ecs_broker_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
@@ -428,6 +430,36 @@ def fetch(work: Path, sha: str, objects: FakeObjects, *, run: str = RUN, tools: 
         return int(module.main(objects, work, tools or work / "no_tools")), err.getvalue()
 
 
+def fetch_module(**settings: float) -> Any:
+    """A new copy of the fetch script; ``settings`` replace its module values, such as the lock deadline."""
+    spec = importlib.util.spec_from_file_location("fetch_code", FETCH)
+    if spec is None or spec.loader is None:
+        raise ValueError("the fetch script is missing")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    for name, value in settings.items():
+        setattr(module, name, value)
+    return module
+
+
+def unpacked(work: Path) -> dict[str, bytes]:
+    """The files of the unpacked ``code`` folder of a workspace by name, or an empty result."""
+    root = work / "code"
+    return {item.relative_to(root).as_posix(): item.read_bytes() for item in sorted(root.rglob("*")) if item.is_file()} if root.is_dir() else {}
+
+
+def archived(archive: Path) -> dict[str, bytes]:
+    """The regular files of an archive by name."""
+    with tarfile.open(archive) as tar:
+        found = {member.name: tar.extractfile(member) for member in tar if member.isreg()}
+        return {name: source.read() for name, source in found.items() if source is not None}
+
+
+def extra_entries(work: Path) -> list[str]:
+    """The entries of a workspace other than the archive, the code folder and a hidden bookkeeping file."""
+    return sorted(item.name for item in work.iterdir() if item.name not in {"code", "code.tar.gz"} and not item.name.startswith("."))
+
+
 def fetch_cases(cases: Any, folder: Path) -> None:
     """The fetch step downloads the run's code archive, checks its hash and unpacks it once."""
     key = f"lakehouse/run_stage/{RUN}/inputs/code.tar.gz"
@@ -508,6 +540,111 @@ def fetch_cases(cases: Any, folder: Path) -> None:
         code, error = fetch(work, sha, FakeObjects(key, archive), tools=tools)
         require(code == 0, f"the rerun failed: {error}")
 
+    def interrupted() -> None:
+        archive, sha = source("interrupted")
+        work = folder / "interrupted_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+
+        def interrupt() -> None:
+            raise KeyboardInterrupt
+
+        stopped = Worker("interrupted", lambda: fetch_module().main(objects, work, work / "no_tools"))
+        with environment(CODE_SHA256=sha, CODE_RUN_ID=RUN), after_first_member({"interrupted": interrupt}):
+            stopped.start()
+            joined(stopped)
+        require(isinstance(stopped.error, KeyboardInterrupt), "the first fetch was not interrupted")
+        require(not (work / "code").exists(), "an interrupted unpacking left a code folder that a retry could take for a finished one")
+        code, error = fetch(work, sha, objects)
+        require(code == 0, f"the retry failed: {code} {error}")
+        require(unpacked(work) == archived(archive), "after the retry the code folder lacks a file of the archive")
+        require(extra_entries(work) == [], f"temporary entries are left: {extra_entries(work)}")
+
+    def second_fetch_of_one_workspace(name: str, first_ends_with_interrupt: bool) -> None:
+        archive, sha = source(name)
+        work = folder / f"{name}_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+        paused, second_started, second_done, seen = threading.Event(), threading.Event(), threading.Event(), dict[str, dict[str, bytes]]()
+
+        def pause() -> None:
+            paused.set()
+            (second_started if first_ends_with_interrupt else second_done).wait(GATE_SECONDS)
+            if first_ends_with_interrupt:
+                raise KeyboardInterrupt
+
+        def second() -> int:
+            second_started.set()
+            try:
+                return int(fetch_module().main(FakeObjects(key, archive), work, work / "no_tools"))
+            finally:
+                seen["files"] = unpacked(work)
+                second_done.set()
+
+        first = Worker("first", lambda: fetch_module().main(objects, work, work / "no_tools"))
+        follower = Worker("second", second)
+        with environment(CODE_SHA256=sha, CODE_RUN_ID=RUN), after_first_member({"first": pause}):
+            first.start()
+            reached(paused, "the first fetch unpacking its first member")
+            follower.start()
+            finished = joined(first, follower)
+        require(finished, "a fetch did not finish within the deadline")
+        require(follower.result == 0, f"the second fetch failed: {follower.result} {follower.error}")
+        require(seen["files"] == archived(archive), "the second fetch returned success while the code folder lacked files of the archive")
+        require(
+            isinstance(first.error, KeyboardInterrupt) if first_ends_with_interrupt else first.result == 0,
+            f"the first fetch ended with {first.result} {first.error}",
+        )
+        require(unpacked(work) == archived(archive), "at the end the code folder lacks files of the archive")
+        require(extra_entries(work) == [], f"temporary entries are left: {extra_entries(work)}")
+
+    def concurrent() -> None:
+        second_fetch_of_one_workspace("concurrent", first_ends_with_interrupt=False)
+
+    def interrupted_with_a_waiting_fetch() -> None:
+        second_fetch_of_one_workspace("handover", first_ends_with_interrupt=True)
+
+    def lock_deadline() -> None:
+        archive, sha = source("deadline")
+        work = folder / "deadline_work"
+        work.mkdir()
+        paused, second_done, seen = threading.Event(), threading.Event(), dict[str, dict[str, bytes]]()
+
+        def pause() -> None:
+            paused.set()
+            second_done.wait(GATE_SECONDS * 3)
+
+        def second() -> int:
+            try:
+                return int(fetch_module(LOCK_SECONDS=0.5).main(FakeObjects(key, archive), work, work / "no_tools"))
+            finally:
+                seen["files"] = unpacked(work)
+                second_done.set()
+
+        first = Worker("first", lambda: fetch_module().main(FakeObjects(key, archive), work, work / "no_tools"))
+        follower = Worker("second", second)
+        err = io.StringIO()
+        with environment(CODE_SHA256=sha, CODE_RUN_ID=RUN), after_first_member({"first": pause}), contextlib.redirect_stderr(err):
+            first.start()
+            reached(paused, "the first fetch unpacking its first member")
+            follower.start()
+            finished = joined(first, follower)
+        require(finished, "a fetch did not finish within the deadline")
+        require(follower.result == 1 and "lock" in err.getvalue(), f"the second fetch did not fail on the lock: {follower.result} {err.getvalue()}")
+        require(seen["files"] == {}, "the failed fetch published code")
+        require(first.result == 0 and unpacked(work) == archived(archive), "the first fetch did not finish its unpacking")
+
+    def changed_file() -> None:
+        archive, sha = source("changed_file")
+        work = folder / "changed_file_work"
+        work.mkdir()
+        objects = FakeObjects(key, archive)
+        require(fetch(work, sha, objects)[0] == 0, "the first fetch failed")
+        victim = next(item for item in sorted((work / "code").rglob("*")) if item.is_file())
+        victim.write_text("changed\n")
+        code, error = fetch(work, sha, objects)
+        require(code == 0 and unpacked(work) == archived(archive), f"a changed file was kept: {code} {error}")
+
     cases.check("aws_fetch_links_the_image_dvc_where_the_job_looks", links_dvc)
     cases.check("aws_fetch_downloads_verifies_and_unpacks", fetched)
     cases.check("aws_fetch_rerun_downloads_nothing", rerun)
@@ -515,6 +652,11 @@ def fetch_cases(cases: Any, folder: Path) -> None:
     cases.check("aws_fetch_names_an_absent_object", absent_object)
     cases.check("aws_fetch_refuses_a_run_id_with_a_path", unsafe_run)
     cases.check("aws_fetch_refuses_a_path_leaving_the_workspace", traversal)
+    cases.check("aws_fetch_retries_after_an_interrupted_unpacking", interrupted)
+    cases.check("aws_fetch_serializes_two_fetches_of_one_workspace", concurrent)
+    cases.check("aws_fetch_hands_over_to_the_waiting_fetch_after_an_interruption", interrupted_with_a_waiting_fetch)
+    cases.check("aws_fetch_fails_visibly_when_the_lock_is_not_free_in_time", lock_deadline)
+    cases.check("aws_fetch_unpacks_again_when_a_file_of_the_code_folder_changed", changed_file)
 
 
 def start_cases(cases: Any, folder: Path) -> None:

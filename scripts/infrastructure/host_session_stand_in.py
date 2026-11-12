@@ -39,6 +39,8 @@ SERVICE_START_SECONDS = 45
 LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 111111111111"
 CLIENT_TOKEN_LIMIT = 64
 STOP_TASK_SECONDS = 15
+# What RunTask accepts for all container overrides of one call, formatting characters included.
+OVERRIDES_LIMIT = 8192
 FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown", "--no-paginate"}
 
 
@@ -289,6 +291,8 @@ class StandInHost:
 
     def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
         family = options["--task-definition"][0]
+        if len(options.get("--overrides", [""])[0]) > OVERRIDES_LIMIT:
+            raise StandInError("ClientException")
         token = options.get("--client-token", [""])[0]
         if token and (len(token) > CLIENT_TOKEN_LIMIT or not re.fullmatch(r"[A-Za-z0-9_-]+", token)):
             return {"tasks": [], "failures": [{"reason": "InvalidClientToken"}]}
@@ -312,9 +316,14 @@ class StandInHost:
         return {"tasks": [{"taskArn": arn}], "failures": []}
 
     def code_fetch_exit(self, options: dict[str, list[str]], code: int) -> int:
-        """The exit code of the code one-shot; a successful fetch moves the checkout to the digest of its overrides."""
+        """The exit code of the code one-shot; a successful install moves the checkout to the digest of its overrides. The verify mode succeeds when the host
+        shows that digest (fault ``verify_fails`` makes it fail) and the restore mode always succeeds, as a host with a verified checkout does."""
         containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
         environment = {item["name"]: item["value"] for container in containers for item in container.get("environment", [])}
+        if environment.get("CODE_MODE") == "verify":
+            return 0 if environment.get("CODE_SHA256") == self.checkout and "verify_fails" not in self.faults else 1
+        if environment.get("CODE_MODE") == "restore":
+            return 0
         if code != 0:
             return code
         if "CODE_SHA256" in environment:

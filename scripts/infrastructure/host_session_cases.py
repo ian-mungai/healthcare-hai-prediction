@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
-from scripts.infrastructure import host_session_group_signal
+from scripts.infrastructure import host_session_code_cases, host_session_group_signal
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
 from scripts.infrastructure.host_session_stand_in import (
     CLUSTER,
@@ -34,6 +34,7 @@ from scripts.infrastructure.host_session_stand_in import (
 from scripts.process import TimeoutExpired
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+REVIEWED_SCRIPT = host_session_code_cases.REVIEWED_SCRIPT
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
 CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
 
@@ -614,6 +615,14 @@ def code_environment(options: dict[str, list[str]]) -> dict[str, str] | None:
     return {item["name"]: item["value"] for container in containers if container["name"] == "code_fetch" for item in container["environment"]}
 
 
+def code_command(options: dict[str, list[str]]) -> str | None:
+    """The command that the RunTask overrides give the code container, or None."""
+    if "--overrides" not in options:
+        return None
+    commands = [container["command"][0] for container in json.loads(options["--overrides"][0])["containerOverrides"] if container.get("command")]
+    return commands[0] if commands else None
+
+
 def code_start_passes_the_run_and_digest() -> dict[str, bool]:
     host, session, lines = build(code_fetch=True)
     session.start(code=(CODE_RUN, CODE_SHA))
@@ -624,10 +633,13 @@ def code_start_passes_the_run_and_digest() -> dict[str, bool]:
     ]
     runs = runs_of(host, CODE_FETCH_FAMILY)
     return {
-        "the code one-shot runs once": len(runs) == 1,
-        "its overrides carry exactly the run ID and the code digest": code_environment(runs[0]) == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA},
-        "it runs after host_prepare and before every deployment": order[:2] == [FAMILIES["host_prepare"], CODE_FETCH_FAMILY]
-        and set(order[2:]) == {"update-service"},
+        "the code one-shot runs twice: the install, then the verification": len(runs) == 2,
+        "the install carries exactly the run ID and the code digest": code_environment(runs[0]) == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA},
+        "the verification carries the same two values and its mode": code_environment(runs[1])
+        == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA, "CODE_MODE": "verify"},
+        "both carry the reviewed installer as their command": all(code_command(item) == REVIEWED_SCRIPT.read_text(encoding="utf-8") for item in runs),
+        "they run after host_prepare and before every deployment": order[:3] == [FAMILIES["host_prepare"], CODE_FETCH_FAMILY, CODE_FETCH_FAMILY]
+        and set(order[3:]) == {"update-service"},
         "it uses the Project tag and propagation": runs[0].get("--tags") == [f"key=Project,value={PROJECT}"]
         and runs[0].get("--propagate-tags") == ["TASK_DEFINITION"],
         "the host shows the new code": host.checkout == CODE_SHA,
@@ -642,7 +654,8 @@ def code_start_without_code_keeps_the_checkout() -> dict[str, bool]:
     runs = runs_of(host, CODE_FETCH_FAMILY)
     return {
         "the code one-shot still runs, to check the checkout": len(runs) == 1,
-        "it has no overrides": code_environment(runs[0]) is None,
+        "it carries no run ID and no digest": code_environment(runs[0]) == {},
+        "it carries the reviewed installer as its command": code_command(runs[0]) == REVIEWED_SCRIPT.read_text(encoding="utf-8"),
         "the host keeps its checkout": host.checkout == OLD_SHA,
         "every service runs": all(service["running"] == 1 for service in host.services.values()),
     }
@@ -663,6 +676,8 @@ def code_fetch_failure_keeps_the_old_checkout() -> dict[str, bool]:
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
     return {
         "a refused fetch (hash mismatch or failed download) fails start": message is not None and "code_fetch" in message,
+        "the message states that repo shows a verified checkout": message is not None and "verified checkout" in message,
+        "a check of repo runs after the failure": len(runs_of(host, CODE_FETCH_FAMILY)) == 2,
         "no service is deployed on a half-known checkout": not any(entry["operation"] == "update-service" for entry in host.log),
         "the host keeps the old checkout": host.checkout == OLD_SHA,
         "the host is turned off again": host.desired == 0,
@@ -675,8 +690,8 @@ def code_start_repeated_for_the_same_code() -> dict[str, bool]:
     session.start(code=(CODE_RUN, CODE_SHA))
     runs = runs_of(host, CODE_FETCH_FAMILY)
     return {
-        "both starts succeed and run the one-shot with the same overrides": len(runs) == 2 and code_environment(runs[0]) == code_environment(runs[1]),
-        "each start uses a new client token": runs[0]["--client-token"] != runs[1]["--client-token"],
+        "both starts succeed and run the install with the same overrides": len(runs) == 4 and code_environment(runs[0]) == code_environment(runs[2]),
+        "each launch uses a new client token": len({item["--client-token"][0] for item in runs}) == 4,
         "the host shows the same code": host.checkout == CODE_SHA,
     }
 
@@ -688,7 +703,10 @@ OTHER_SHA = "c" * 64
 def launch_code_fetch(host: StandInHost, session: Session, run: str, sha: str) -> str:
     """Start a code one-shot for ``run`` the way an earlier start did, outside ``place_code``, and answer its task ARN."""
     environment = [{"name": "CODE_RUN_ID", "value": run}, {"name": "CODE_SHA256", "value": sha}]
-    launched = session.run_task("code_fetch", CODE_FETCH_FAMILY, {"containerOverrides": [{"name": "code_fetch", "environment": environment}]})
+    command = [REVIEWED_SCRIPT.read_text(encoding="utf-8")]
+    launched = session.run_task(
+        "code_fetch", CODE_FETCH_FAMILY, {"containerOverrides": [{"name": "code_fetch", "environment": environment, "command": command}]}
+    )
     return str(launched["tasks"][0]["taskArn"])
 
 
@@ -701,9 +719,9 @@ def code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs(
     runs = runs_of(host, CODE_FETCH_FAMILY)
     launches = [entry["at"] for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [CODE_FETCH_FAMILY]]
     return {
-        "the requested code gets its own launch": len(runs) == 2 and code_environment(runs[1]) == {"CODE_RUN_ID": OTHER_RUN, "CODE_SHA256": OTHER_SHA},
+        "the requested code gets its own install launch": len(runs) == 3 and code_environment(runs[1]) == {"CODE_RUN_ID": OTHER_RUN, "CODE_SHA256": OTHER_SHA},
         "the host shows the requested code, not the running one": host.checkout == OTHER_SHA,
-        "the requested task starts only after the running one stopped": len(launches) == 2 and launches[1] >= stops_at,
+        "the requested task starts only after the running one stopped": len(launches) == 3 and launches[1] >= stops_at,
         "the wait names why": any("another run or digest" in line for line in lines),
         "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
     }
@@ -717,7 +735,7 @@ def code_fetch_running_that_differs_in_one_value_is_not_reused() -> dict[str, bo
         launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
         session.place_code(requested)
         checks[f"a running task that differs only in the {name} is followed by the requested task"] = (
-            len(runs_of(host, CODE_FETCH_FAMILY)) == 2 and host.checkout == requested[1]
+            len(runs_of(host, CODE_FETCH_FAMILY)) == 3 and host.checkout == requested[1]
         )
     return checks
 
@@ -728,9 +746,25 @@ def code_fetch_running_for_the_same_code_is_awaited_not_doubled() -> dict[str, b
     launch_code_fetch(host, session, CODE_RUN, CODE_SHA)
     session.place_code((CODE_RUN, CODE_SHA))
     return {
-        "no second task starts": len(runs_of(host, CODE_FETCH_FAMILY)) == 1,
+        "the install is not launched a second time": [(code_environment(item) or {}).get("CODE_MODE") for item in runs_of(host, CODE_FETCH_FAMILY)]
+        == [None, "verify"],
         "the host shows the code": host.checkout == CODE_SHA,
         "the wait is reported": any("already running; waiting for it" in line for line in lines),
+    }
+
+
+def code_fetch_running_without_the_reviewed_command_is_not_reused() -> dict[str, bool]:
+    host, session, lines = build(code_fetch=True)
+    session.host_on()
+    environment = [{"name": "CODE_RUN_ID", "value": CODE_RUN}, {"name": "CODE_SHA256", "value": CODE_SHA}]
+    session.run_task("code_fetch", CODE_FETCH_FAMILY, {"containerOverrides": [{"name": "code_fetch", "environment": environment}]})
+    session.place_code((CODE_RUN, CODE_SHA))
+    runs = runs_of(host, CODE_FETCH_FAMILY)
+    return {
+        "a running task with the same values but the registered command is not taken for the reviewed install": len(runs) == 3
+        and code_command(runs[1]) == REVIEWED_SCRIPT.read_text(encoding="utf-8"),
+        "the wait names why": any("another run or digest" in line for line in lines),
+        "the host shows the code": host.checkout == CODE_SHA,
     }
 
 
@@ -887,9 +921,13 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs": code_fetch_running_for_other_code_is_awaited_before_the_requested_code_runs,
     "code_fetch_running_that_differs_in_one_value_is_not_reused": code_fetch_running_that_differs_in_one_value_is_not_reused,
     "code_fetch_running_for_the_same_code_is_awaited_not_doubled": code_fetch_running_for_the_same_code_is_awaited_not_doubled,
+    "code_fetch_running_without_the_reviewed_command_is_not_reused": code_fetch_running_without_the_reviewed_command_is_not_reused,
     "code_fetch_running_for_other_code_that_never_stops_fails_visibly": code_fetch_running_for_other_code_that_never_stops_fails_visibly,
     "code_fetch_wait_and_launch_share_one_deadline": code_fetch_wait_and_launch_share_one_deadline,
     "code_fetch_launch_retries_stay_inside_the_limit": code_fetch_launch_retries_stay_inside_the_limit,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
 }
+
+
+CASES.update(host_session_code_cases.CASES)
