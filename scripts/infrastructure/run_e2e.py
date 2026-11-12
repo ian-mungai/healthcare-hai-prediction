@@ -167,6 +167,7 @@ BOOT_PATHS = {
     "nftables_config": "nftables.conf",
     "guard_script": "sbin/platform_imds_guard",
     "docker_daemon_file": "docker/daemon.json",
+    "docker_options_file": "sysconfig/docker",
 }
 # The job bridge: Docker's default bridge subnet, which boot pins in the Docker daemon file, and the rule that sends replies to it through the main table.
 BOOT_BRIDGE_ADDRESS = "172.17.0.1/16"
@@ -2499,7 +2500,17 @@ def replace_once(text: str, old: str, new: str) -> str:
 # Success cases that check the bridge rule and the Docker daemon file only, not the whole firewall chain.
 BOOT_BRIDGE_PLAIN_CASES = {"boot_bridge_rule_dropped_when_the_address_comes_up", "boot_docker_daemon_file_keeps_other_settings"}
 # Files that exist on the image before boot, by case: the Docker daemon file with a setting of its own.
-BOOT_SEED_FILES = {"boot_docker_daemon_file_keeps_other_settings": {BOOT_PATHS["docker_daemon_file"]: '{"log-driver": "json-file", "bip": "10.99.0.1/16"}\n'}}
+BOOT_SEED_FILES = {
+    "boot_docker_daemon_file_keeps_other_settings": {BOOT_PATHS["docker_daemon_file"]: '{"log-driver": "json-file", "bip": "10.99.0.1/16"}\n'},
+    # Docker already receives the bridge address on its command line: from the options file of the image, or from a drop-in of the Docker unit.
+    "boot_docker_bridge_set_in_the_options_file": {BOOT_PATHS["docker_options_file"]: 'OPTIONS="--bip=10.99.0.1/16 --log-driver=json-file"\n'},
+    "boot_docker_bridge_set_in_a_unit_drop_in": {
+        "systemd/docker.service.d/10_local.conf": "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd -H fd:// --bip 10.99.0.1/16\n"
+    },
+}
+# Boots that must stop before they touch the Docker daemon file: the same option on the command line and in the file makes Docker refuse to start.
+BOOT_BIP_CONFLICT_CASES = {"boot_docker_bridge_set_in_the_options_file", "boot_docker_bridge_set_in_a_unit_drop_in"}
+BOOT_BIP_CONFLICT_MESSAGE = "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address."
 
 
 def bridge_rules(root: Path) -> list[str]:
@@ -2553,6 +2564,16 @@ def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str,
     guard = str(root / BOOT_PATHS["guard_script"])
     step, result = evidence.run("bridge_rule_added_twice", [guard, "route"], root, environment)
     evidence.check(step, "route_is_idempotent", result.returncode == 0 and bridge_rules(root) == [rule])
+    # A rule with a suffix is not the rule the guard owns: this one skips the bridge's own /16 route, so the reply falls through to the interface table.
+    suppressed = f"{rule} suppress_prefixlength 16"
+    (state / "ip_rules").write_text(suppressed + "\n", encoding="utf-8")
+    step, result = evidence.run("bridge_rule_suppressed_check", [guard, "check"], root, environment)
+    evidence.check(step, "check_refuses_the_suppressing_rule", result.returncode != 0)
+    step, result = evidence.run("bridge_rule_suppressed_timer_check", watch, root, environment)
+    evidence.check(step, "timer_noticed_the_suppressing_rule", result.returncode == 0 and "loading the rule again" in result.stderr)
+    evidence.check(step, "timer_added_the_plain_rule", rule in bridge_rules(root))
+    step, result = evidence.run("bridge_rule_suppressed_then_restored_check", [guard, "check"], root, environment)
+    evidence.check(step, "check_accepts_the_restored_rule", result.returncode == 0)
     failing = {**environment, "BOOT_IP_RULE_FAIL": "1"}
     (state / "ip_rules").unlink()
     (state / "systemctl.log").write_text("", encoding="utf-8")
@@ -2647,6 +2668,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_docker_daemon_file_keeps_other_settings": ({}, {}, None),
         "boot_bridge_rule_cannot_be_set": ({}, {"BOOT_IP_RULE_FAIL": "1"}, "Could not set the routing rule for the job bridge."),
         "boot_bridge_rule_behind_a_table_rule": ({}, {"BOOT_IP_LOW_TABLE_RULE": "1"}, "The job bridge routing rule is not ahead of every table rule."),
+        "boot_docker_bridge_set_in_the_options_file": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
+        "boot_docker_bridge_set_in_a_unit_drop_in": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
         "boot_docker_bridge_has_another_subnet": ({}, {"BOOT_DOCKER0_ADDRESS": "10.99.0.1/16"}, "docker0 does not hold the pinned address"),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
@@ -2662,6 +2685,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_interface_search_fails": "Finding the host network interface",
         "boot_interface_attachment_unreadable": "Reading the host network interface attachment",
         "boot_host_address_never_up": "Waiting for the host address",
+        "boot_docker_bridge_set_in_the_options_file": "Pinning the job bridge subnet",
+        "boot_docker_bridge_set_in_a_unit_drop_in": "Pinning the job bridge subnet",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -2785,6 +2810,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                     evidence.check(step, "failure_names_the_failing_step", names_step)
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
+            if name in BOOT_BIP_CONFLICT_CASES:
+                evidence.check(step, "daemon_file_left_alone", not (root / BOOT_PATHS["docker_daemon_file"]).exists())
     run_interface_plants(evidence, bash, template, gnu_timeout)
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
 

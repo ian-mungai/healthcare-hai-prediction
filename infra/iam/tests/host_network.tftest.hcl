@@ -326,6 +326,7 @@ run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
           "docker_daemon_file=\"/etc/docker/daemon.json\"",
           "docker_bridge_address=\"172.17.0.1/16\"",
           "docker_bridge_subnet=\"172.17.0.0/16\"",
+          "docker_options_file=\"/etc/sysconfig/docker\"",
           "settings[\"bip\"] = address",
           "os.replace(temporary, path)"
         ] : strcontains(local.host_user_data, text)
@@ -333,6 +334,19 @@ run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
       length(split("Pinning the job bridge subnet", local.host_user_data)[0]) < length(split("Starting the metadata firewall", local.host_user_data)[0])
     )
     error_message = "Boot pins Docker's bridge address in the daemon file, keeping the other settings, before the firewall and Docker start."
+  }
+
+  assert {
+    condition = (
+      alltrue([
+        for text in [
+          "docker_bridge_on_command_line() {",
+          "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address."
+        ] : strcontains(local.host_user_data, text)
+      ]) &&
+      length(split("Docker already receives --bip on its command line", local.host_user_data)[0]) < length(split("run_within 30 \"Pinning the job bridge subnet\" python3", local.host_user_data)[0])
+    )
+    error_message = "Boot refuses a Docker command line that already sets --bip before it writes the daemon file, because Docker rejects an option given in both places."
   }
 
   assert {
@@ -348,6 +362,7 @@ run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
     condition = alltrue([
       for text in [
         "bridge_priority=%q",
+        "'NF == 7 && $1 == priority && $2 == \"from\" && $3 == \"all\" && $4 == \"to\" && $5 == subnet && $6 == \"lookup\" && $7 == \"main\"",
         "ip -4 rule add to \"$bridge_subnet\" lookup main priority \"$bridge_priority\"",
         "Could not set the routing rule for the job bridge.",
         "The job bridge routing rule is not ahead of every table rule.",

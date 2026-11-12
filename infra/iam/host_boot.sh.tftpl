@@ -16,6 +16,7 @@ nft_rules_file="/etc/nftables/platform_imds.nft"
 nftables_config="/etc/sysconfig/nftables.conf"
 guard_script="/usr/local/sbin/platform_imds_guard"
 docker_daemon_file="/etc/docker/daemon.json"
+docker_options_file="/etc/sysconfig/docker"
 docker_bridge_address="172.17.0.1/16"
 docker_bridge_subnet="172.17.0.0/16"
 bridge_rule_priority=9000
@@ -153,7 +154,25 @@ fi
 # the rule and checks it with the firewall tables (apply, check and route), so Docker and the ECS agent do not start without it, the timer puts it back
 # within 10 seconds when a network reconfiguration drops it and stops both services when it cannot, and boot sets it again once the host
 # address is up, because the interface's own network setup can drop it. Boot fails at that step when the rule cannot be set.
+# Docker refuses to start when an option is given on its command line and again in the daemon file, even with the same value, so
+# the pin stops here, before the daemon file changes, when the options file or the Docker unit (or a drop-in) already passes --bip.
+# Comment lines do not count.
+docker_bridge_on_command_line() {
+  local file
+  for file in "$docker_options_file" "$systemd_directory/docker.service" "$systemd_directory"/docker.service.d/*.conf; do
+    [ -f "$file" ] || continue
+    if awk '$0 !~ /^[[:space:]]*[#;]/ && $0 ~ /--bip([^[:alnum:]_-]|$)/ { found = 1 } END { exit !found }' "$file"; then
+      echo "Found --bip in $file." >&2
+      return 0
+    fi
+  done
+  return 1
+}
 step "Pinning the job bridge subnet"
+if docker_bridge_on_command_line; then
+  echo "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address. Remove it there or set it in the daemon file." >&2
+  exit 1
+fi
 mkdir -p "$(dirname "$docker_daemon_file")"
 run_within 30 "Pinning the job bridge subnet" python3 - "$docker_daemon_file" "$docker_bridge_address" <<'PYTHON'
 import json
@@ -198,10 +217,11 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
 # again when either is missing and stops the ECS agent and Docker when it cannot. route alone sets the job bridge routing rule.
 # The bridge rule sends a reply to a job container through the main table (docker0), ahead of the numbered tables of amazon-ec2-net-utils.
 # docker0, once it exists, must hold the pinned address, or the rule would name another subnet.
+# The rule counts only in its plain form (seven fields): a rule with a suffix such as suppress_prefixlength cannot select the bridge route.
 bridge_rule_present() {
   local rules
   rules=$(timeout --kill-after=5 10 ip -4 rule show) || return 1
-  awk -v priority="$bridge_priority:" -v subnet="$bridge_subnet" '$1 == priority && $2 == "from" && $3 == "all" && $4 == "to" && $5 == subnet && $6 == "lookup" && $7 == "main" { found = 1 } END { exit !found }' <<<"$rules"
+  awk -v priority="$bridge_priority:" -v subnet="$bridge_subnet" 'NF == 7 && $1 == priority && $2 == "from" && $3 == "all" && $4 == "to" && $5 == subnet && $6 == "lookup" && $7 == "main" { found = 1 } END { exit !found }' <<<"$rules"
 }
 bridge_rule_first() {
   local rules
