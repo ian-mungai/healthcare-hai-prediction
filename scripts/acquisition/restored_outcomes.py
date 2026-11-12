@@ -80,9 +80,9 @@ def repeated_artifacts(stored: list[dict]) -> list[dict]:
 
 
 def require_distinct(document: dict) -> None:
-    """Every artifact of a receipt, whatever its role, has its own file name and identity, so a name-keyed mapping can never drop an entry."""
+    """Every artifact of a receipt, whatever its role, has its own file name and its own identity where it has one, so a name-keyed mapping drops no entry."""
     names = [item["stored_file_name"] for item in document["artifacts"]]
-    identities = [item["artifact_id"] for item in document["artifacts"]]
+    identities = [item["artifact_id"] for item in document["artifacts"] if "artifact_id" in item]
     require(
         len(set(names)) == len(names) and len(set(identities)) == len(identities), "Restored outcome names a capture with a repeated artifact name or identity"
     )

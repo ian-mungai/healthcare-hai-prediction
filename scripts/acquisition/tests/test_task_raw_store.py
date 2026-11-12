@@ -835,3 +835,9 @@ def test_coverage_refuses_a_repeated_name_or_identity_in_either_receipt(role: st
     stored, fresh = (repeat, plain) if side == "stored" else (plain, repeat)
     with pytest.raises(RegistryError, match="repeated"):
         restored_outcomes.require_coverage({"mode": "file", "source_id": "X", "flags": []}, None, stored, fresh, [])
+
+
+def test_a_stored_receipt_with_no_artifact_identities_still_has_distinct_names() -> None:
+    from scripts.acquisition import restored_outcomes
+
+    restored_outcomes.require_distinct({"artifacts": [{"role": "data", "stored_file_name": "a.csv"}, {"role": "layout", "stored_file_name": "b.json"}]})
