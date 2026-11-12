@@ -1214,7 +1214,7 @@ def a_present_or_unreadable_apply_lock_refuses_launch() -> None:
     """Apply lock in the launch authorization (round 4, owner A): a services apply that crashed between taking the lock and setting the hold
     (the hold still reads clear), or between settle's clear and the lock delete, leaves the lock present; an unreadable lock is not known to be
     absent. Each refuses every host launch at the preflight, by name, with zero tasks."""
-    locks: list[tuple[str, list[str | Exception]]] = [
+    for label, lock in (
         ("crash between lock and hold", [APPLY_LOCK_VALUE]),
         ("crash between the hold clear and the lock delete", [APPLY_LOCK_VALUE]),
         ("lock unreadable", [client_error("AccessDeniedException", "GetParameter")]),
