@@ -189,7 +189,8 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
 # The bridge rule sends a reply to a job container through the main table (docker0), ahead of the numbered tables of amazon-ec2-net-utils.
 # docker0 must hold the address the rule names as its only IPv4 address (bridge_address_exact), or the rule would name another subnet. While Docker runs,
 # a missing docker0 fails too. A missing docker0 passes only while Docker is not running, which covers the checks before its first start and its own
-# pre-start check, because Docker creates the bridge itself.
+# pre-start check, because Docker creates the bridge itself. When the read finds no docker0 and Docker then proves active, Docker started in between,
+# so the guard reads once more and accepts only the exact address.
 # The rule counts only in its plain form (seven fields): a rule with a suffix such as suppress_prefixlength cannot select the bridge route.
 bridge_rule_present() {
   local rules
@@ -215,7 +216,11 @@ bridge_address_ok() {
   if [ "$status" -eq 1 ]; then
     docker_running || running=$?
     if [ "$running" -eq 1 ]; then return 0; fi
-    return 1
+    if [ "$running" -ne 0 ]; then return 1; fi
+    # Docker may have started and created the bridge after the read above answered, so read once more. Only the exact address passes.
+    shown=$(timeout --kill-after=5 10 ip -o -4 addr show dev docker0 2>/dev/null) || return 1
+    bridge_address_exact "$shown" "$bridge_address"
+    return
   fi
   if [ "$status" -ne 0 ]; then return 1; fi
   bridge_address_exact "$shown" "$bridge_address"

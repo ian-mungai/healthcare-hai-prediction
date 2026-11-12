@@ -385,7 +385,7 @@ else:
     sys.exit(f"aws stand-in: unsupported arguments {arguments}")
 """,
     "ip": """
-import os, sys, time
+import os, subprocess, sys, time
 from pathlib import Path
 state = Path(os.environ["BOOT_STATE"])
 arguments = sys.argv[1:]
@@ -423,6 +423,14 @@ elif arguments == ["-o", "-4", "addr", "show", "dev", "docker0"]:
         elif reads == int(os.environ["BOOT_DOCKER0_LATE_READ"]):
             time.sleep(float(os.environ["BOOT_DOCKER0_ANSWER_SECONDS"]))
     if not text.strip():
+        # A case can let a correct Docker start finish while this read is on its way: the read still reports the missing bridge.
+        if os.environ.get("BOOT_DOCKER_STARTS_DURING_READ"):
+            counter = state / "docker0_missing_reads"
+            misses = (int(counter.read_text(encoding="utf-8")) if counter.exists() else 0) + 1
+            counter.write_text(str(misses), encoding="utf-8")
+            if misses == int(os.environ["BOOT_DOCKER_STARTS_DURING_READ"]):
+                systemctl = str(Path(__file__).resolve().parent / "systemctl")
+                subprocess.run([systemctl, "start", "docker.service"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         sys.exit('Device "docker0" does not exist.')
     for line in text.splitlines():
         address, _, flag = line.partition(" ")
@@ -2592,6 +2600,9 @@ def replace_once(text: str, old: str, new: str) -> str:
     return text.replace(old, new)
 
 
+# Docker stops after a good boot and starts again while the timer's second read of docker0 is on its way: that read reports no bridge,
+# and Docker is active when the timer asks.
+BOOT_START_RACE_CASE = "boot_bridge_docker_start_completes_during_the_timer_read"
 # Success cases that check the bridge rule and the Docker daemon file only, not the whole firewall chain.
 BOOT_BRIDGE_PLAIN_CASES = {
     "boot_bridge_rule_dropped_when_the_address_comes_up",
@@ -2602,6 +2613,7 @@ BOOT_BRIDGE_PLAIN_CASES = {
     "boot_bridge_extra_address_listed_first",
     "boot_bridge_expected_address_secondary",
     "boot_bridge_other_subnet_after_docker_restart",
+    BOOT_START_RACE_CASE,
 }
 # Files that exist on the image before boot, by case. Another bridge subnet reaches Docker through its environment file (a vendor unit that expands
 # $DOCKER_NETWORK_OPTIONS), a vendor flag or the daemon file; a local drop-in that resets ExecStart= and starts Docker without the flag leaves the default.
@@ -2753,6 +2765,28 @@ def run_bridge_lifecycle_case(evidence: Evidence, name: str, root: Path, environ
         )
 
 
+def run_bridge_start_race_case(evidence: Evidence, name: str, root: Path, environment: dict[str, str]) -> None:
+    """Let a correct Docker start finish between the timer's missing-bridge read and its service check: the timer must succeed and request no stop."""
+    state, systemctl = root / "state", str(root / "tools" / "systemctl")
+    watch = unit_command(root, "platform_imds_watch.service", "ExecStart=")
+    step, result = evidence.run(f"{name}_docker_stopped", [systemctl, "stop", "ecs.service", "docker.service"], root, environment)
+    evidence.check(step, "docker_stopped", result.returncode == 0)
+    # The stopped Docker has no bridge, and the routing rule is gone, so the timer's check fails and its repair reads docker0 a second time.
+    (state / "docker0").unlink()
+    (state / "ip_rules").unlink(missing_ok=True)
+    (state / "docker0_missing_reads").unlink(missing_ok=True)
+    (state / "systemctl.log").write_text("", encoding="utf-8")
+    step, result = evidence.run(f"{name}_timer_check", watch, root, {**environment, "BOOT_DOCKER_STARTS_DURING_READ": "2"})
+    requests = read_lines(state / "systemctl.log")
+    evidence.check(step, "docker_started_during_the_read", "start docker.service" in requests)
+    evidence.check(step, "timer_succeeded", result.returncode == 0 and "could not be restored" not in result.stderr)
+    evidence.check(step, "no_stop_requested", not any(line.startswith("stop ") for line in requests))
+    evidence.check(step, "docker_holds_the_exact_bridge", (state / "docker0").read_text(encoding="utf-8") == BOOT_BRIDGE_ADDRESS)
+    evidence.check(step, "one_bridge_rule", bridge_rules(root) == [f"{BOOT_BRIDGE_RULE_PRIORITY}:\tfrom all to {BOOT_BRIDGE_SUBNET} lookup main"])
+    step, result = evidence.run(f"{name}_docker_still_active", [systemctl, "is-active", "--quiet", "docker.service"], root, environment)
+    evidence.check(step, "docker_active", result.returncode == 0)
+
+
 def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
     """Drop the bridge rule as a network reconfiguration does: the timer check must put it back once, and stop Docker when it cannot."""
     state = root / "state"
@@ -2886,6 +2920,7 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
         "boot_docker_bridge_late_success": ({}, BOOT_LATE_ANSWER, "docker0 did not appear within 6 seconds"),
         "boot_docker_bridge_late_success_uncapped": ({}, BOOT_LATE_ANSWER, "docker0 answered after the 6 second limit"),
         **{name: ({}, {}, None) for name in BOOT_LIFECYCLE_CASES},
+        BOOT_START_RACE_CASE: ({}, {}, None),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -3020,6 +3055,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
                 run_rerun_case(evidence, root, environment, bash)
             if name in BOOT_LIFECYCLE_CASES:
                 run_bridge_lifecycle_case(evidence, name, root, environment)
+            if name == BOOT_START_RACE_CASE:
+                run_bridge_start_race_case(evidence, name, root, environment)
             if planted:
                 run_planted_dependency_defect(evidence, root, environment)
             elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS and name not in BOOT_BRIDGE_PLAIN_CASES:
