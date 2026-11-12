@@ -128,6 +128,10 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.providers.standard.operators.empty\"; Cannot find implementation or library stub for module named \"airflow.sdk\"; Cannot find implementation or library stub for module named \"airflow.sdk.bases.operator\""
     },
+    "scripts/orchestration/real_image_dags.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.dag_processing.dagbag\"; Cannot find implementation or library stub for module named \"airflow.utils\""
+    },
     "scripts/review/catalog_documents.py": {
       "runtime": "review",
       "reason": "Library stubs not installed for \"openpyxl\"; Cannot find implementation or library stub for module named \"pypdf\"; Cannot find implementation or library stub for module named \"pypdf.errors\""
