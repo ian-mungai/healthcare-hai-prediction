@@ -912,6 +912,9 @@ CASES = [
             ("a function-local import alias of the same word", f"def outer() -> None:\n    from datetime import datetime as {WINNOW}\n"),
             ("a method of the same word", f"class Holder:\n    def {WINNOW}(self) -> int:\n        return 1\n"),
             ("a function-local class of the same word", f"def outer() -> None:\n    class {WINNOW}:\n        pass\n"),
+            ("a loop target read as a subscript in the loop body", f'TABLE: dict[str, int] = {{}}\nfor {WINNOW} in ("other",):\n    TABLE[{WINNOW}] = 1\n'),
+            ("a loop target read through an attribute of a subscript", f'for {WINNOW} in ("other",):\n    TABLE[{WINNOW}].value = 1\n'),
+            ("a tuple target holding a subscript", f"for {WINNOW} in []:\n    TABLE[{WINNOW}], other = 1, 2\n"),
         )
     ],
     *[
@@ -929,6 +932,8 @@ CASES = [
             ("except block", f"try:\n    import missing\nexcept ImportError:\n    {WINNOW} = 1\n"),
             ("with block", f"with open('x') as handle:\n    {WINNOW} = 1\n"),
             ("loop body", f"for item in []:\n    {WINNOW} = item\n"),
+            ("tuple target", f"{WINNOW}, other = 1, 2\n"),
+            ("starred target", f"first, *{WINNOW} = [1, 2, 3]\n"),
             ("nested if block", f"if True:\n    if True:\n        {WINNOW} = 1\n"),
             ("conditional import", f"if True:\n    from datetime import datetime as {WINNOW}\n"),
             ("conditional def", f"if True:\n    def {WINNOW}() -> int:\n        return 1\n"),
@@ -1865,6 +1870,19 @@ PLANTED_REGRESSIONS = [
         "scripts/quality/repo_checks.py",
         'if kind != "python" or path in unchecked else None',
         'if kind != "python" else None',
+        0,
+    ),
+    (
+        "only stored names bind in assignments",
+        [
+            case
+            for case in CASES
+            if case.hook == "removed-names" and not case.expect_pass and any(label in case.name for label in ("loop target read", "tuple target holding"))
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)",
+        "if isinstance(name, ast.Name)",
         0,
     ),
     (

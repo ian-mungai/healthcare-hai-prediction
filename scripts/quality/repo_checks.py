@@ -615,8 +615,9 @@ def requirement_names(lines_by_file: dict[str, list[str]]) -> set[str]:
 def module_bindings(body: list[ast.stmt]) -> set[str]:
     """Return the names a module's statements bind in module scope.
 
-    A function, class, import alias or assignment binds its name here. The blocks that open no scope (if, loops, try, with and match) are searched
-    for the same bindings, but a loop target is not a binding. The body of a function or class is never entered: its names are local to it.
+    A function, class, import alias or assignment binds its name here. An assignment binds only the names it stores, not the names its target reads
+    (``table[key] = 1`` binds neither). The blocks that open no scope (if, loops, try, with and match) are searched for the same bindings, but a loop
+    target is not a binding. The body of a function or class is never entered: its names are local to it.
     """
     names: set[str] = set()
     for node in body:
@@ -626,7 +627,7 @@ def module_bindings(body: list[ast.stmt]) -> set[str]:
             names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
         elif isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name)}
+            names |= {name.id for target in targets for name in ast.walk(target) if isinstance(name, ast.Name) and isinstance(name.ctx, ast.Store)}
         elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
             names |= module_bindings(node.body) | module_bindings(node.orelse)
         elif isinstance(node, ast.With | ast.AsyncWith):
