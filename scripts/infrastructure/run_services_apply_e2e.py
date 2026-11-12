@@ -19,8 +19,9 @@ import io
 import json
 import re
 import sys
+import tempfile
 import traceback
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -286,8 +287,8 @@ def hold_on_a_fresh_stack_needs_no_services_outputs() -> None:
     require(code == 0, f"hold failed on a fresh stack (exit {code}; services output reads {output_reads})")
     require(not output_reads, f"hold read the services outputs: {output_reads}")
     operations = [command[1:3] for command in aws.commands]
-    require(operations == [["ssm", "put-parameter"], ["ssm", "get-parameter"]], f"hold sent other AWS calls: {operations}")
-    put = aws.commands[0]
+    require(operations == [["ssm", "get-parameter"], ["ssm", "put-parameter"], ["ssm", "get-parameter"]], f"hold sent other AWS calls: {operations}")
+    put = aws.commands[1]
     require("--overwrite" in put and put[put.index("--type") + 1] == "String", f"the hold is not an overwriting String put: {put}")
     require(str(aws.value).startswith("held by services_apply") and "reviewed.tfplan" in str(aws.value), f"the hold value is wrong: {aws.value}")
     require(
@@ -517,36 +518,168 @@ def registration_problem_reads_every_host_revision() -> None:
         require(problem is not None and named in problem, f"{label} is not named: {problem}")
 
 
-def jobs_registration_reads_the_project_host_families() -> None:
-    """The reader behind finish asks ECS for the active families of the project prefix, keeps the ``_host`` ones and describes each one's latest
-    revision; the services binding comes from the services output."""
+BINDING = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+PENDING = MIGRATION + " by services_apply at 2026-11-11T00:00:00Z: jobs apply pending"
+PREFIX = "example_project_dev_job_"
+ALL_FAMILIES = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
+
+
+def host_revision(binding: str = BINDING, memory: str = "22528", status: str = "ACTIVE") -> dict[str, Any]:
+    """The latest revision of a host family as ECS describes it: status, task memory and the capacity binding on the init container."""
+    return {"status": status, "memory": memory, "containerDefinitions": [{"name": "init", "dockerLabels": {"hai.host_capacity": binding}}]}
+
+
+@contextlib.contextmanager
+def rendered_jobs_inputs(content: dict[str, Any] | None) -> Iterator[Path]:
+    """The rendered jobs inputs file that the last jobs plan and apply wrote, in a temporary folder; ``None`` leaves it absent."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
-    binding = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "deployment.auto.tfvars.json"
+        if content is not None:
+            path.write_text(json.dumps(content))
+        with mock.patch.object(module, "JOBS_INPUTS_RENDERED", path, create=True):
+            yield path
+
+
+def jobs_registration_reads_the_project_host_families() -> None:
+    """The reader behind finish asks ECS for the active families of the project prefix and describes the latest revision of each host family that
+    the rendered jobs inputs select (the publisher too); the services binding comes from the services output. A selected family that ECS does not
+    list is named, and a listed family the inputs do not select is not described."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
     asked: list[tuple[str, list[str]]] = []
-    revision = {"status": "ACTIVE", "memory": "22528", "containerDefinitions": [{"name": "init", "dockerLabels": {"hai.host_capacity": binding}}]}
+    revision = host_revision()
 
     class Cli:
+        def __init__(self, listed: list[str]) -> None:
+            self.listed = listed
+
         def call_bounded(self, service: str, operation: str, arguments: list[str], timeout: float = 0) -> dict[str, Any]:
             asked.append((f"{service} {operation}", arguments))
             if operation == "list-task-definition-families":
-                return {"families": ["example_dev_job_silver_host", "example_dev_job_silver", "example_dev_job_gold_host"]}
+                return {"families": self.listed}
             return {"taskDefinition": revision}
 
-    with mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)):
-        problem = module.jobs_registration_problem(Cli(), {"project_name": "example", "environment": "dev"})
-    require(problem is None, f"matching revisions are refused: {problem}")
-    require(
-        asked[0] == ("ecs list-task-definition-families", ["--family-prefix", "example_dev_job_", "--status", "ACTIVE"]),
-        f"the families were not listed by prefix: {asked}",
+    everything = ["example_dev_job_silver_host", "example_dev_job_silver", "example_dev_job_gold_host", "example_dev_job_train_host"]
+    settings = {"project_name": "example", "environment": "dev"}
+    with (
+        mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, BINDING)),
+        rendered_jobs_inputs({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}),
+    ):
+        problem = module.jobs_registration_problem(Cli(everything), settings)
+        require(problem is None, f"matching revisions are refused: {problem}")
+        require(
+            asked[0] == ("ecs list-task-definition-families", ["--family-prefix", "example_dev_job_", "--status", "ACTIVE"]),
+            f"the families were not listed by prefix: {asked}",
+        )
+        described = [arguments[1] for operation, arguments in asked if operation == "ecs describe-task-definition"]
+        require(
+            described == ["example_dev_job_gold_host", "example_dev_job_silver_host"],
+            f"not every selected host family was described, or an unselected or Fargate one was: {described}",
+        )
+        problem = module.jobs_registration_problem(Cli(["example_dev_job_silver_host", "example_dev_job_silver"]), settings)
+        require(problem is not None and "gold_host" in problem, f"a selected family that ECS does not list is not named: {problem}")
+        revision["memory"] = "23552"
+        problem = module.jobs_registration_problem(Cli(everything), settings)
+        require(problem is not None and "23552" in problem, f"a stale task memory is not named: {problem}")
+
+
+class EcsStandIn(AwsStandIn):
+    """``AwsStandIn`` that also answers the two ECS reads of the registration check. ``families`` maps a family name to the revision
+    ``describe-task-definition`` returns; a family set to ``None`` has no active revision, so ECS does not list it."""
+
+    def __init__(self, families: Mapping[str, dict[str, Any] | None], **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.families = families
+
+    def __call__(self, command: list[str], **extra: Any) -> CompletedProcess[str]:
+        operation = command[1:3]
+        if operation == ["ecs", "list-task-definition-families"]:
+            self.commands.append(list(command))
+            listed = [name for name, found in self.families.items() if found is not None]
+            return CompletedProcess(command, 0, json.dumps({"families": listed}), "")
+        if operation == ["ecs", "describe-task-definition"]:
+            self.commands.append(list(command))
+            return CompletedProcess(command, 0, json.dumps({"taskDefinition": self.families[command[command.index("--task-definition") + 1]]}), "")
+        return super().__call__(command, **extra)
+
+
+def finish_over_ecs(rendered: dict[str, Any] | None, families: Mapping[str, dict[str, Any] | None]) -> tuple[int, str, EcsStandIn]:
+    """The real ``finish`` command over the stand-in ECS and the given rendered jobs inputs, with stable services and a pending host job cap change."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    aws = EcsStandIn(families, value=PENDING, lock=OWN_LOCK)
+    with (
+        rendered_jobs_inputs(rendered),
+        mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, BINDING)),
+        mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
+    ):
+        code, _, err = run_real_output(["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"], aws)
+    return code, err, aws
+
+
+def finish_needs_every_expected_host_family() -> None:
+    """The real finish command binds to the host families the rendered jobs inputs select, the publisher too: one that ECS does not list, one whose
+    revision is inactive, a missing publisher and a stale family each refuse, name the family and leave the hold and the lock. The complete set
+    clears both. The default selection is the nine families; a family the inputs do not select does not matter; no inputs refuse."""
+    selected = {"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True}
+    everything = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(), f"{PREFIX}publisher_host": host_revision()}
+    for label, families, named in (
+        ("only silver registered", {f"{PREFIX}silver_host": host_revision()}, "gold_host"),
+        ("an expected family missing", {**everything, f"{PREFIX}gold_host": None}, "gold_host"),
+        ("an expected family inactive", {**everything, f"{PREFIX}gold_host": host_revision(status="INACTIVE")}, "gold_host"),
+        ("the publisher missing", {**everything, f"{PREFIX}publisher_host": None}, "publisher_host"),
+        ("an expected family stale", {**everything, f"{PREFIX}gold_host": host_revision(memory="23552")}, "gold_host"),
+    ):
+        code, err, aws = finish_over_ecs(selected, families)
+        require(code == 1 and named in err, f"finish with {label}: exit {code} {err}")
+        require(aws.value == PENDING and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+    code, err, aws = finish_over_ecs(selected, everything)
+    require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with every expected family did not clear both: exit {code} {err} {aws.value!r}")
+    nine = {f"{PREFIX}{name}_host": host_revision() for name in ALL_FAMILIES}
+    code, err, aws = finish_over_ecs({"host_jobs_enabled": True}, {**nine, f"{PREFIX}train_host": None})
+    require(code == 1 and "train_host" in err and aws.value == PENDING, f"finish with the default selection and one family missing: exit {code} {err}")
+    code, err, aws = finish_over_ecs({"host_jobs_enabled": True}, nine)
+    require(code == 0 and aws.value == "clear", f"finish with the default selection and all nine registered: exit {code} {err}")
+    code, err, aws = finish_over_ecs(
+        {"host_jobs_enabled": True, "host_jobs": ["silver"]}, {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")}
     )
-    described = [arguments[1] for operation, arguments in asked if operation == "ecs describe-task-definition"]
-    require(
-        described == ["example_dev_job_gold_host", "example_dev_job_silver_host"], f"not every host family was described, or a Fargate one was: {described}"
-    )
-    revision["memory"] = "23552"
-    with mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)):
-        problem = module.jobs_registration_problem(Cli(), {"project_name": "example", "environment": "dev"})
-    require(problem is not None and "23552" in problem, f"a stale task memory is not named: {problem}")
+    require(code == 0 and aws.value == "clear", f"finish refused over a family the inputs do not select: exit {code} {err}")
+    for label, rendered in (("no rendered inputs", None), ("no host family selected", {"host_jobs_enabled": False, "publisher_job_enabled": False})):
+        code, err, aws = finish_over_ecs(rendered, {f"{PREFIX}silver_host": host_revision()})
+        require(code == 1 and aws.value == PENDING and aws.lock == OWN_LOCK, f"finish with {label}: exit {code} {err}")
+
+
+def a_plain_hold_never_downgrades_a_pending_host_job_cap_change() -> None:
+    """The real hold command rewrites the hold of a pending host job cap change in the change form, so the plain settle and both resolve forms
+    still refuse afterwards, print the finish command and leave the hold and the lock. Without a pending change the plain hold stays plain."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    store, _, current, _ = pending_migration()
+    current.hold("retry the services apply")
+    require(str(store.value).startswith(MIGRATION), f"a plain hold in process downgraded the pending change: {store.value!r}")
+    for later in (
+        ["settle", "--token", OWN_LOCK],
+        ["resolve", "--statement", "services stable", "--token", OWN_LOCK],
+        ["resolve", "--statement", "services stable"],
+    ):
+        aws = AwsStandIn(value=PENDING, lock=OWN_LOCK)
+        code, _, err = run_real_output(["hold", "--reason", "retry the services apply"], aws)
+        require(code == 0 and str(aws.value).startswith(MIGRATION), f"the plain hold command downgraded the pending change: exit {code} {aws.value!r} {err}")
+        require("retry the services apply" in str(aws.value), f"the rewritten hold lost its reason: {aws.value!r}")
+        with (
+            mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
+            mock.patch.object(module.Steps, "wait_stable", lambda self, token: None),
+        ):
+            code, _, err = run_real_output(later, aws)
+        require(
+            code == 1 and FINISH in err and f"--token '{OWN_LOCK}'" in err and str(aws.value).startswith(MIGRATION) and aws.lock == OWN_LOCK,
+            f"{later[0]} after a plain hold released a pending change: exit {code} {err} {aws.value!r} {aws.lock!r}",
+        )
+    for before in (None, "clear", "held by services_apply at 2026-11-11T00:00:00Z: an earlier apply"):
+        aws = AwsStandIn(value=before)
+        code, _, err = run_real_output(["hold", "--reason", "a services apply"], aws)
+        require(
+            code == 0 and str(aws.value).startswith("held by services_apply") and "a services apply" in str(aws.value),
+            f"hold over {before!r}: exit {code} {aws.value!r} {err}",
+        )
 
 
 def finish_through_the_command() -> None:
@@ -734,6 +867,8 @@ CASES: dict[str, Callable[[], None]] = {
     "registration_problem_reads_every_host_revision": registration_problem_reads_every_host_revision,
     "jobs_registration_reads_the_project_host_families": jobs_registration_reads_the_project_host_families,
     "finish_through_the_command": finish_through_the_command,
+    "finish_needs_every_expected_host_family": finish_needs_every_expected_host_family,
+    "a_plain_hold_never_downgrades_a_pending_host_job_cap_change": a_plain_hold_never_downgrades_a_pending_host_job_cap_change,
     "the_hold_command_can_write_the_change_form": the_hold_command_can_write_the_change_form,
     "resolve_needs_a_statement_and_steady_state": resolve_needs_a_statement_and_steady_state,
     "a_hold_that_cannot_be_written_raises": a_hold_that_cannot_be_written_raises,
