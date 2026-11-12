@@ -832,6 +832,181 @@ DEAD_PATH = f"app.{DEAD_STEM}"
 DEAD_MODULE = {DEAD_FILE: UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE}
 UNRELATED_PARAMETER = f"def report({OLD_FUNCTION}: int) -> int:\n    return {OLD_FUNCTION} + 1\n"
 UNRELATED_KEYWORD = f"RESULT = run({OLD_CLASS}=True)\n"
+# Inputs of the independent review of the first version: each form below must be read from the whole import statement, with the module identity kept.
+OTHER_PACKAGE = {"other/__init__.py": "", f"other/{DEAD_STEM}.py": UTIL_FUNCTION}
+READ_TOTAL = f"VALUE: int = totals.{OLD_FUNCTION}()\n"
+READ_STEM = f"VALUE: int = {DEAD_STEM}.{OLD_FUNCTION}()\n"
+DEAD_ROOT_FILE = f"{DEAD_STEM}.py"
+DELETED_MODULE_ROUND_TWO = [
+    Case(
+        "deleted module, from-import continued over two lines remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"from app \\\n    .{DEAD_STEM} import {OLD_FUNCTION}\nVALUE: int = {OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, parenthesized package import with an alias remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"from app import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, parenthesized relative import with an alias remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "app/__init__.py": "", "app/read.py": f"from . import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}"},
+        delete=[DEAD_FILE],
+        reason=f"app/read.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, relative import above a folder with an alias remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "app/__init__.py": "", "dags/pending_dag.py": f"from ..app import (\n    {DEAD_STEM} as totals,\n)\n{READ_TOTAL}"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, aliased dotted import and its attribute remain",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"import {DEAD_PATH} as totals\n{READ_TOTAL}"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:2: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, dynamic import with a from-list remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"VALUE: int = __import__('{DEAD_PATH}', fromlist=['{OLD_FUNCTION}']).{OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, re-export over several lines and its reader remain",
+        "removed-names",
+        False,
+        committed={
+            **DEAD_MODULE,
+            "app/__init__.py": f"from .{DEAD_STEM} import (\n    {OLD_FUNCTION},\n)\n",
+            "dags/pending_dag.py": f"from app import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n",
+        },
+        delete=[DEAD_FILE],
+        reason=f"app/__init__.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, a local object of the same name is no module",
+        "removed-names",
+        True,
+        committed={
+            DEAD_FILE: UTIL_FUNCTION,
+            "app/read.py": f"from types import SimpleNamespace\n\n{DEAD_STEM} = SimpleNamespace({OLD_FUNCTION}=lambda: 7)\n{READ_STEM}",
+        },
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, same module name in another package is no reference",
+        "removed-names",
+        True,
+        committed={
+            **OTHER_PACKAGE,
+            DEAD_FILE: UTIL_FUNCTION,
+            "dags/pending_dag.py": f"from other import {DEAD_STEM}\nVALUE: int = {DEAD_STEM}.{OLD_FUNCTION}()\n",
+        },
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, same last package name is no reference",
+        "removed-names",
+        True,
+        committed={
+            f"services/audit/{DEAD_STEM}.py": UTIL_FUNCTION,
+            f"clients/audit/{DEAD_STEM}.py": UTIL_FUNCTION,
+            "dags/pending_dag.py": f"from clients.audit.{DEAD_STEM} import {OLD_FUNCTION}\nVALUE: int = {OLD_FUNCTION}()\n",
+        },
+        delete=[f"services/audit/{DEAD_STEM}.py"],
+    ),
+    Case(
+        "deleted module, relative import inside another package is no reference",
+        "removed-names",
+        True,
+        committed={**OTHER_PACKAGE, DEAD_FILE: UTIL_FUNCTION, "other/read.py": f"from . import {DEAD_STEM}\nVALUE: int = {DEAD_STEM}.{OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, its dotted name in a sentence is no leftover to a Python reader",
+        "removed-names",
+        True,
+        committed={DEAD_FILE: UTIL_FUNCTION, "app/read.py": f'NOTE = "the {DEAD_PATH} term is a label"\n'},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, leading underscores in its name, from-import remains",
+        "removed-names",
+        False,
+        committed={
+            "app/__worker.py": UTIL_FUNCTION,
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": f"from app.__worker import {OLD_FUNCTION}\nVALUE: int = {OLD_FUNCTION}()\n",
+        },
+        delete=["app/__worker.py"],
+        reason="dags/pending_dag.py:1: app.__worker " + LEFTOVER,
+    ),
+    Case(
+        "deleted package init, an exported name is still imported",
+        "removed-names",
+        False,
+        committed={
+            "app/__init__.py": UTIL_FUNCTION,
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": f"from app import {OLD_FUNCTION}\nVALUE: int = {OLD_FUNCTION}()\n",
+        },
+        delete=["app/__init__.py"],
+        reason=f"dags/pending_dag.py:1: app {LEFTOVER}",
+    ),
+    Case(
+        "deleted root module, dynamic import remains",
+        "removed-names",
+        False,
+        committed={DEAD_ROOT_FILE: UTIL_FUNCTION, "dags/pending_dag.py": f"VALUE: int = __import__('{DEAD_STEM}').{OLD_FUNCTION}()\n"},
+        delete=[DEAD_ROOT_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_STEM} {LEFTOVER}",
+    ),
+    Case(
+        "deleted root module, python -m command remains",
+        "removed-names",
+        False,
+        committed={DEAD_ROOT_FILE: UTIL_FUNCTION, "tools/run.sh": f"python -m {DEAD_STEM}\n"},
+        delete=[DEAD_ROOT_FILE],
+        reason=f"tools/run.sh:1: {DEAD_STEM} {LEFTOVER}",
+    ),
+    Case(
+        "deleted root module, the word in prose and a string is no reference",
+        "removed-names",
+        True,
+        committed={DEAD_ROOT_FILE: UTIL_FUNCTION, "README.md": f"The {DEAD_STEM} word is a label.\n", "app/read.py": f'LABEL = "{DEAD_STEM}"\n'},
+        delete=[DEAD_ROOT_FILE],
+    ),
+    Case(
+        "deleted module, file name with a dotted suffix is another file",
+        "removed-names",
+        True,
+        committed={DEAD_FILE: UTIL_FUNCTION, "README.md": f"Run tools/{DEAD_STEM}.py.template now.\n"},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, file name at a sentence end still counts",
+        "removed-names",
+        False,
+        committed={DEAD_FILE: UTIL_FUNCTION, "README.md": f"Run tools.v2/{DEAD_STEM}.py.\n"},
+        delete=[DEAD_FILE],
+        reason=f"README.md:1: {DEAD_STEM}.py {LEFTOVER}",
+    ),
+]
 DELETED_MODULE_CASES = [
     Case(
         "deleted module, its function name is an unrelated local variable",
@@ -937,6 +1112,7 @@ DELETED_MODULE_CASES = [
         delete=[DEAD_FILE],
         reason=f"app/paths.py:1: {DEAD_STEM}.py {LEFTOVER}",
     ),
+    *DELETED_MODULE_ROUND_TWO,
     Case(
         "function removed from a file that stays, an unrelated word elsewhere still counts",
         "removed-names",

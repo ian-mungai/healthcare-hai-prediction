@@ -781,27 +781,122 @@ def bound_names(files: dict[str, list[str]]) -> set[str]:
     return names
 
 
-def module_reference(path: str, names: list[str]) -> re.Pattern[str]:
-    """Return the pattern for a line that refers to the deleted Python module at ``path``, whatever name the line uses from it.
+DOTTED_WORD = re.compile(r"[A-Za-z_]\w*(?:\.\w+)*")
+IMPORT_CALLS = {"__import__", "import_module", "find_spec"}
 
-    A reference is its dotted path (the last package and the module name, so a source root prefix does not matter: ``import``, ``from``, a string, a
-    config value or ``-m``), an import of it by package, by relative path or by its bare name, or an attribute through its name that is one of its
-    top-level ``names``. A plain word the module also defined is not a reference.
+
+def dead_prefixes(path: str, names: list[str], roots: list[str]) -> set[str]:
+    """Return the dotted names a deleted Python file takes away: its module path below each import root and below none, or, for an ``__init__.py``, each
+    top-level name in its package (the package itself stays importable as a namespace)."""
+    from scripts.quality.typecheck_importers import module_of
+
+    modules = {module_of(path, roots), module_of(path, [])} - {"__init__"}
+    if Path(path).name == "__init__.py":
+        return {f"{module}.{name}" for module in modules for name in names if len(name) >= 3 and not (name.startswith("__") and name.endswith("__"))}
+    return modules
+
+
+def refers_to(dotted: str, prefixes: set[str]) -> bool:
+    return any(dotted == prefix or dotted.startswith(f"{prefix}.") for prefix in prefixes)
+
+
+def python_module_uses(tree: ast.Module, package: str, dead: dict[str, set[str]]) -> set[tuple[int, str]]:
+    """Return the (line, deleted module) pairs a parsed Python file refers to.
+
+    An import statement counts by the complete statement (continuations, parentheses, aliases; a relative import is resolved against ``package``). A name
+    an import binds stands for the module it names, so an attribute read through it counts. A string that is a dotted module path counts, and so does the
+    first argument of ``__import__``, ``import_module`` and ``find_spec`` or the word after ``-m`` in a command list (a root module has no dot). A name
+    that no import bound stands for nothing.
     """
-    *parents, stem = (re.escape(part) for part in Path(path).with_suffix("").parts)
-    forms = [rf"^\s*from\s+\.*{stem}\s+import\b", rf"^\s*import\s+(?:\w+\s*,\s*)*{stem}\b", rf"^\s*from\s+\.+\s+import\b[^#\n]*\b{stem}\b"]
-    if parents:
-        forms += [rf"(?<!\w){parents[-1]}\.{stem}(?!\w)", rf"\bfrom\s+(?:[\w.]*\.)?{parents[-1]}\s+import\b[^#\n]*\b{stem}\b"]
-    if names:
-        forms.append(rf"(?<![\w.]){stem}\.(?:{'|'.join(map(re.escape, names))})\b")
-    return re.compile("|".join(forms))
+    hits: set[tuple[int, str]] = set()
+    bound: dict[str, str] = {}
+
+    def check(line: int, dotted: str) -> None:
+        hits.update((line, module) for module, prefixes in dead.items() if refers_to(dotted, prefixes))
+
+    def text(node: ast.expr) -> str | None:
+        return node.value if isinstance(node, ast.Constant) and isinstance(node.value, str) else None
+
+    parts = package.split(".") if package else []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = alias.name.partition(".")[0]
+                bound[alias.asname or top] = alias.name if alias.asname else top
+                check(node.lineno, alias.name)
+        elif isinstance(node, ast.ImportFrom) and node.level - 1 <= len(parts):
+            anchor = parts[: len(parts) - (node.level - 1)] if node.level else []
+            base = ".".join([*anchor, *([node.module] if node.module else [])])
+            check(node.lineno, base)
+            for alias in (alias for alias in node.names if alias.name != "*"):
+                bound[alias.asname or alias.name] = f"{base}.{alias.name}" if base else alias.name
+                check(node.lineno, bound[alias.asname or alias.name])
+        elif isinstance(node, ast.Attribute):
+            chain: list[str] = []
+            receiver: ast.expr = node
+            while isinstance(receiver, ast.Attribute):
+                chain.append(receiver.attr)
+                receiver = receiver.value
+            if isinstance(receiver, ast.Name) and receiver.id in bound:
+                check(node.lineno, ".".join([bound[receiver.id], *reversed(chain)]))
+        elif isinstance(node, ast.Call) and node.args and text(node.args[0]) is not None:
+            called = node.func.id if isinstance(node.func, ast.Name) else node.func.attr if isinstance(node.func, ast.Attribute) else ""
+            if called in IMPORT_CALLS:
+                check(node.lineno, str(text(node.args[0])))
+        elif isinstance(node, ast.Constant) and isinstance(node.value, str):
+            word = node.value.partition(":")[0]
+            if "." in word and DOTTED_WORD.fullmatch(word):
+                check(node.lineno, word)
+        elif isinstance(node, ast.List | ast.Tuple):
+            for flag, item in zip(node.elts, node.elts[1:], strict=False):
+                if text(flag) == "-m" and text(item) is not None:
+                    check(item.lineno, str(text(item)))
+    return hits
+
+
+def module_text(prefixes: set[str]) -> re.Pattern[str]:
+    """Return the pattern for a line of text (not Python) that names a deleted module: its full dotted path, or ``-m`` and a root module's name."""
+    dotted = "|".join(re.escape(prefix) for prefix in sorted(prefixes) if "." in prefix) or "(?!)"
+    command = "|".join(re.escape(prefix) for prefix in sorted(prefixes)) or "(?!)"
+    return re.compile(rf"(?<![\w.])(?:{dotted})(?!\w)|(?<![\w-])-m\s+(?:{command})(?![\w.-])")
+
+
+def deleted_module_findings(dead: dict[str, set[str]], files: dict[str, list[str]], roots: list[str], allowed: list[tuple[str, str]]) -> list[Finding]:
+    """Find the remaining references to the deleted Python modules in ``dead`` (display name to dotted prefixes).
+
+    A Python file is read as a syntax tree (``python_module_uses``) and a text file, or a Python file that does not parse, by line (``module_text``).
+    """
+    from scripts.quality.typecheck_importers import module_of
+
+    patterns = {module: module_text(prefixes) for module, prefixes in dead.items()}
+    stems = {prefix.rpartition(".")[2] for prefixes in dead.values() for prefix in prefixes}
+    findings: list[Finding] = []
+    for path, lines in files.items():
+        if any(kind == "script" and fnmatch.fnmatch(path, glob) for kind, glob in allowed):
+            continue
+        uses: set[tuple[int, str]] | None = None
+        if path.endswith(".py"):
+            source = "\n".join(lines)
+            if not any(stem in source for stem in stems):
+                continue
+            try:
+                module = module_of(path, roots)
+                uses = python_module_uses(ast.parse(source, filename=path), module if path.endswith("__init__.py") else module.rpartition(".")[0], dead)
+            except SyntaxError:
+                uses = None
+        if uses is None:
+            uses = {(number, module) for number, line in enumerate(lines, 1) for module, pattern in patterns.items() if pattern.search(line)}
+        for number, module in sorted(uses):
+            fix = f"remove or update the reference, or add 'script {path} -- <why the reference stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
+            findings.append(Finding(f"{path}:{number}", f"{module} was removed but is still referenced", CLEANUP_RULE, fix))
+    return findings
 
 
 def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]]) -> dict[str, dict[str, re.Pattern[str]]]:
     """Find the names the change removed, by kind, each with the pattern that marks a remaining reference.
 
-    A deleted Python module is one reference of its own, by its dotted path (see ``module_reference``), and its top-level names are not searched as plain
-    words: a word it shared with unrelated code (a local variable, a YAML column) is no leftover. A name removed from a file that stays still is one.
+    The top-level names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local variable, a YAML
+    column) is no leftover. The module is checked by ``deleted_module_findings``. A name removed from a file that stays still is a plain word.
     """
 
     def gone(found: set[str], still: set[str]) -> set[str]:
@@ -813,12 +908,8 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     kinds: dict[str, dict[str, re.Pattern[str]]] = {kind: {} for kind in REMOVED_KINDS}
     for path in deleted:
         if Path(path).suffix in SCRIPT_SUFFIXES:
-            # A whole file name: a longer name that ends the same way (a prefixed one) is no reference.
-            kinds["script"][Path(path).name] = re.compile(rf"(?<![\w.-]){re.escape(Path(path).name)}(?![\w-])")
-        if path.endswith(".py") and not Path(path).stem.startswith("__"):
-            kinds["script"][Path(path).with_suffix("").as_posix().replace("/", ".")] = module_reference(
-                path, PY_TOP_LEVEL.findall("\n".join(removed.get(path, [])))
-            )
+            # A whole file name: a longer name that begins or ends the same way, or carries a dotted suffix, is another file.
+            kinds["script"][Path(path).name] = re.compile(rf"(?<![\w.-]){re.escape(Path(path).name)}(?![\w-]|\.\w)")
         if path.endswith(".sql") and re.search(r"(^|/)(models|snapshots)/", path):
             stem = re.escape(Path(path).stem)
             kinds["dbt"][Path(path).stem] = re.compile(rf"""ref\(\s*["']{stem}["']\s*\)|name:\s*{stem}\b|(?<![\w.]){stem}(?![\w.])""")
@@ -1194,6 +1285,21 @@ def mypy_uncovered_files() -> set[str]:
         raise SystemExit(f"removed-names: cannot read the import graph of the pending files: {error}") from error
 
 
+def deleted_modules_left(removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]], allowed: list[tuple[str, str]]) -> list[Finding]:
+    """Find what still refers to a Python module the change deleted (see ``deleted_module_findings``), below the import roots pyproject.toml declares."""
+    from scripts.quality import typecheck_importers
+
+    gone = [path for path in deleted if path.endswith(".py")]
+    if not gone:
+        return []
+    try:
+        roots = typecheck_importers.declared_roots(Path.cwd(), os.environ.get("PRE_COMMIT_FROM_REF", "HEAD"))
+    except ValueError:
+        roots = []  # Unreadable declarations: the paths below the project root still name every module.
+    dead = {typecheck_importers.module_of(path, roots): dead_prefixes(path, PY_TOP_LEVEL.findall("\n".join(removed.get(path, []))), roots) for path in gone}
+    return deleted_module_findings({module: prefixes for module, prefixes in dead.items() if prefixes}, files, roots, allowed)
+
+
 def removed_names() -> list[Finding]:
     """A name the change removed is no longer referenced in any file that describes current behavior.
 
@@ -1204,13 +1310,14 @@ def removed_names() -> list[Finding]:
     class body) is a live name, not a leftover. Python functions, classes and modules
     are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
     Only the Python files MyPy does not cover keep a text check for them, until they join MyPy. The names of a deleted
-    module are not part of it: only a reference to the module counts (see ``module_reference``), in any file.
+    module are not part of it: only a reference to the module counts (see ``deleted_module_findings``), in any file.
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
     files = reference_files()
     kinds = removed_definitions(removed, deleted, files)
     unchecked = mypy_uncovered_files() if kinds["python"] else set()
+    findings += deleted_modules_left(removed, deleted, files, allowed)
     for kind, names in kinds.items():
         for name, pattern in sorted(names.items()):
             for path, lines in files.items():
