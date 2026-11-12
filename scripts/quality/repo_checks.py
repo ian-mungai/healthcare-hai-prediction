@@ -18,6 +18,7 @@ import importlib
 import io
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
@@ -25,6 +26,7 @@ import tempfile
 import tokenize
 import tomllib
 import unicodedata
+import urllib.parse
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -183,11 +185,34 @@ PRIVACY_FIX = (
     " If it is meant to be public, add a reasoned entry to .privacy_allowlist"
 )
 ALLOWLIST = ".privacy_allowlist"
-# A user name is a run of characters that are not delimiters, so a name in any script (or an emoji) is a name. Whitespace, path separators, quotes,
-# brackets and the placeholder openers < $ { * % are delimiters, so /home/<user>, /home/$USER, /home/{user} and /home/* stay placeholders.
-HOME_NAME_CHAR = r"[^\s/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
+# A user name is a run of characters that are not delimiters, so a name in any script (or an emoji, or a no-break space) is a name. ASCII whitespace, path
+# separators, quotes, brackets and the placeholder openers < $ { * % are delimiters, so /home/<user>, /home/$USER, /home/{user} and /home/* stay placeholders.
+HOME_NAME_CHAR = r"[^ \t\r\n\f\v/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
+HOME_QUOTES = "\"'`"
+# The roots below which a folder is a user's home: the macOS and Linux roots (the macOS Shared folder is no home), and a Windows drive with either separator
+# or escaped backslashes. Windows names are not case sensitive.
+HOME_ROOT = r"(?:/Users/(?!Shared/)|/home/|(?<![\w])[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))"
+HOME_PATH_PATTERN = re.compile(
+    # A name; a name after quotes that close the root or open the name (not a plus sign, which joins a variable); or a quoted name that starts with a space.
+    "(?:"
+    + HOME_ROOT
+    + f"(?:{HOME_NAME_CHAR}+|[{HOME_QUOTES}]+(?!\\+){HOME_NAME_CHAR})"
+    + "|(?<!["
+    + HOME_QUOTES
+    + "])"
+    + HOME_ROOT
+    + f"[{HOME_QUOTES}][ \\t]+{HOME_NAME_CHAR}"
+    # A named tilde. A bare ~/ and a tilde inside an address (a slash before it) name no user.
+    + f"|(?<![\\w~/])~[^\\W\\d]{HOME_NAME_CHAR}*/)"
+)
+SHARED_FOLDER = "/Us" + "ers/Shared"  # Built here, so this file holds no path the scan flags.
+SHARED_PATH = re.compile(r"/Users/Shared/([^\s\"'`<>()\[\]{},;|&*?]*)")
+HOME_FIRST_PART = re.compile(HOME_ROOT + r"([^/\\\s\"'`<>]+)")
+ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
+PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
+ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|(/))")
 PRIVACY_PATTERNS = {
-    "home-path": ("home-directory path with a user name", re.compile(r"/(?:" + "Us" + r"ers/(?!Shared/)|home/)" + HOME_NAME_CHAR + r"+")),
+    "home-path": ("home-directory path with a user name", HOME_PATH_PATTERN),
     "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
     "email": ("email address", re.compile(r"\b[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b")),
     "phone": (
@@ -1663,10 +1688,58 @@ def other_twelve_digits(line: str) -> bool:
     return any(number != SYNTHETIC_ACCOUNT_ID for number in TWELVE_DIGITS.findall(UUID.sub("", line)))
 
 
+def unescape(text: str) -> str:
+    """Decode the backslash forms of a character (hex, Unicode, octal) and a JSON-escaped slash."""
+
+    def one(match: re.Match[str]) -> str:
+        if match.group(5):
+            return "/"
+        code = int(match.group(1) or match.group(2) or match.group(3) or match.group(4), 8 if match.group(4) else 16)
+        return chr(code) if code <= sys.maxunicode else match.group(0)
+
+    return ESCAPE.sub(one, text)
+
+
+def decoded_views(line: str) -> set[str]:
+    """The line and what it reads as after percent and backslash decoding, in every order up to three rounds."""
+    views = {line}
+    pending = [line]
+    for _ in range(3):
+        pending = [view for text in pending for view in (urllib.parse.unquote(text), unescape(text)) if view not in views]
+        views.update(pending)
+    return views
+
+
+def shared_escapes(view: str) -> bool:
+    """Whether a path through the macOS Shared folder climbs out of it, so that it cannot be shown to stay inside."""
+    for match in SHARED_PATH.finditer(view):
+        resolved = posixpath.normpath(SHARED_FOLDER + "/" + match.group(1))
+        if resolved != SHARED_FOLDER and not resolved.startswith(SHARED_FOLDER + "/"):
+            return True
+    return False
+
+
+def encoded_home_part(view: str) -> bool:
+    """Whether the folder below a home root hides its name in an escape, unless the whole folder is a placeholder."""
+    return any(ENCODED_PART.search(match.group(1)) and not PLACEHOLDER_PART.fullmatch(match.group(1)) for match in HOME_FIRST_PART.finditer(view))
+
+
+def home_path_found(line: str) -> bool:
+    """Whether a line holds a home path with a user name, in its text or in any decoded reading of it."""
+    return any(
+        HOME_PATH_PATTERN.search(view) or shared_escapes(view) or encoded_home_part(view)
+        for view in (decoded_views(line) if "%" in line or "\\" in line else {line})
+    )
+
+
 def line_privacy(line: str, values: list[str]) -> list[str]:
     """Return the privacy finding types on one line."""
     kinds = []
     for kind, (_, pattern) in PRIVACY_PATTERNS.items():
+        if kind == "home-path":
+            if home_path_found(line):
+                kinds.append(kind)
+            continue
         matches = list(pattern.finditer(line))
         if any(not exempt_match(kind, match) for match in matches) or (kind == "aws-account" and matches and other_twelve_digits(line)):
             kinds.append(kind)

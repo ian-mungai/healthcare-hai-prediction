@@ -80,6 +80,8 @@ PROFILE_FILE = "scripts/deploy.sh"
 # flag. The old OpenMetadata admin address and the look-alike reserved domains are built too: each is flagged like any other real-domain address.
 LINUX_HOME = "/ho" + "me/"
 OLD_ANALYTICS_HOME = LINUX_HOME + "analytics"
+HOME_WORD = "ho" + "me"
+WINDOWS_USERS = "C:" + "\\Us" + "ers\\"
 OLD_OPENMETADATA_LOGIN = "admin" + "@" + "open-metadata.org"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
@@ -1308,6 +1310,7 @@ EMAIL_REASON = "notes.md:1: email address"
 def home_path_cases() -> list[Case]:
     """Cases for home paths: no home is exempt, so the old analytics home is flagged in every position it once passed in."""
     home = OLD_ANALYTICS_HOME
+    mac_users = HOME_PATH.split("jdoe")[0]
     flagged = {
         "old analytics home at the end of a line": f"The home is {home}",
         "old analytics home before a sentence-final period": f"The home is {home}.",
@@ -1324,10 +1327,55 @@ def home_path_cases() -> list[Case]:
         "Linux home with an accented first letter": f"{LINUX_HOME}\u00e9lise/private.txt",
         "Linux home with a non-Latin first letter": f"{LINUX_HOME}\u7528\u6237/private.txt",
         "Linux home with a symbol first character": f"{LINUX_HOME}\U0001f600/private.txt",
+        "Linux home with a no-break space first character": f"{LINUX_HOME}\u00a0jdoe/private.txt",
+        "shared folder climbing into a home": f"{mac_users}Shared/../jdoe/private.txt",
+        "shared folder climbing out through a subfolder": f"{mac_users}Shared/folder/../../jdoe/private.txt",
+        "shared folder climbing out through an encoded parent": f"{mac_users}Shared/%2e%2e/jdoe/private.txt",
+        "percent-encoded home name": f"{LINUX_HOME}%6adoe/private.txt",
+        "percent-encoded home name under the user folder": f"{mac_users}%6adoe/private.txt",
+        "hex-escaped home name": f'path = "{LINUX_HOME}\\x6adoe/private.txt"',
+        "unicode-escaped home name": f'path = "{LINUX_HOME}\\u006adoe/private.txt"',
+        "percent-encoded home root": f"%2F{HOME_WORD}%2Fjdoe%2Fprivate.txt",
+        "percent-encoded slash after the home folder": f"/{HOME_WORD}%2Fjdoe/private.txt",
+        "hex-escaped home root": f"\\x2f{HOME_WORD}\\x2fjdoe/private.txt",
+        "unicode-escaped home root": f"\\u002f{HOME_WORD}\\u002fjdoe/private.txt",
+        "octal-escaped home root": f"\\057{HOME_WORD}\\057jdoe/private.txt",
+        "JSON-escaped slashes in a home path": f"\\/{HOME_WORD}\\/jdoe\\/private.txt",
+        "Windows user path with backslashes": f"{WINDOWS_USERS}jdoe\\private.txt",
+        "Windows user path with forward slashes": f"{WINDOWS_USERS.replace(chr(92), '/')}jdoe/private.txt",
+        "Windows user path with escaped backslashes": f"{WINDOWS_USERS.replace(chr(92), chr(92) * 2)}jdoe\\\\private.txt",
+        "Windows user path in lower case": f"{WINDOWS_USERS.lower()}jdoe\\private.txt",
+        "named tilde": "~" + "jdoe/private.txt",
+        "named tilde in a command": "cd ~" + "jdoe/private",
+        "unicode-escaped named tilde": "\\u007e" + "jdoe/private.txt",
+        "quoted home name": f'{LINUX_HOME}"jdoe"/private.txt',
+        "quoted user folder name": f"{mac_users}'jdoe'/private.txt",
+        "home root closed before the name": f'"{LINUX_HOME}"jdoe',
+        "user folder closed before a quoted name": f"'{mac_users}'" + '"jdoe"',
+        "quoted home name with a leading space": f'{LINUX_HOME}" jdoe"/private.txt',
     }
     cases = [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
     # The macOS shared folder is no user's home. Only the macOS root has this folder, so the Linux twin above stays flagged.
-    cases.append(Case("macOS shared folder is no home", "privacy-scan", True, {"notes.md": f"Log at {HOME_PATH.split('jdoe')[0]}Shared/run.log\n"}))
+    # Placeholders and the home shortcuts name no user. A path through the shared folder passes only while it stays inside the folder.
+    passing = {
+        "macOS shared folder is no home": f"{mac_users}Shared/run.log",
+        "macOS shared folder with a path that stays inside": f"{mac_users}Shared/a/../b/run.log",
+        "Linux home placeholder in angle brackets": f"{LINUX_HOME}<user>/run.log",
+        "Linux home placeholder variable": f"{LINUX_HOME}$USER/run.log",
+        "Linux home placeholder in braces": f"{LINUX_HOME}{{user}}/run.log",
+        "Linux home placeholder in percent signs": f"{LINUX_HOME}%USER%/run.log",
+        "Linux home placeholder format": f"{LINUX_HOME}%s/run.log",
+        "user folder placeholder": f"{mac_users}<name>/run.log",
+        "Windows user placeholder in angle brackets": f"{WINDOWS_USERS}<user>\\run.log",
+        "Windows user placeholder in percent signs": f"{WINDOWS_USERS}%USERNAME%\\run.log",
+        "bare tilde and home variables": "~/projects, $HOME/app and ${HOME}/app",
+        "tilde placeholder": "~<user>/projects",
+        "quoted home root followed by a variable": f'"{LINUX_HOME}"$USER/run.log',
+        "quoted home root joined by a plus sign": f'"{LINUX_HOME}" + user',
+        "quoted home roots in a list": f'("{LINUX_HOME}", "{mac_users}")',
+        "address with a tilde folder": "https://example.invalid/~" + "jdoe/page",
+    }
+    cases += [Case(name, "privacy-scan", True, {"notes.md": f"Log at {text}\n"}) for name, text in passing.items()]
     return cases
 
 
