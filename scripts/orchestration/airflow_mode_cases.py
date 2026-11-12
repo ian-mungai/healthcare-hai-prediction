@@ -942,6 +942,22 @@ def check_production_cap_setting() -> None:
                 require("host job cap" in str(error) and cap in str(error), f"a revision above the environment cap {cap} was not refused by name: {error}")
                 require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision above the environment cap {cap} launched or wrote a record")
         require(not ssm.requests, f"the host job cap was read through SSM: {ssm.requests}")
+    room = 30720 - 2048  # the usable memory less the system reserve of CAPACITY (30720 and 2048): the most a cap can be before any service reservation
+    for cap, runs in ((str(room), True), (str(room + 1), False), ("999999", False)):
+        with tempfile.TemporaryDirectory() as scratch:
+            built = production_services(RecordingSsm(), launch_environment(scratch, cap))
+        rig = Rig()
+        rig.preflight.host_job_cap = built.preflight.host_job_cap
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            if runs:
+                require(current.step("pin_bronze") == "succeeded", f"a cap at the room {cap} did not run")
+            else:
+                error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+                require(CAP_SETTING in str(error) and str(room) in str(error), f"the cap {cap} above the host room {room} is not refused by name: {error}")
+                require(
+                    not rig.aws_calls() and rig.tasks_started() == 0 and not rig.records.calls,
+                    f"the cap {cap} above the host room reached the cloud: {rig.aws_calls()}",
+                )
     for cap in (None, "", "0", "-1", "23552.5", "many", "0x5c00"):
         with tempfile.TemporaryDirectory() as scratch:
             error = refuses(Exception, partial(production_services, RecordingSsm(), launch_environment(scratch, cap)))
@@ -968,6 +984,48 @@ def a_constant_cap_reader_is_caught() -> None:
         except AssertionError:
             return
     raise AssertionError("a constant 999999 MiB cap reader passed the production cap checks")
+
+
+def migration_states_launch_nothing_and_the_procedure_is_written() -> None:
+    """The move of the cap to the environment and every later cap change pass through mixed states, and none of them starts a task. New code with
+    the old container environment (no cap setting) fails the build of the launch services by the setting's name before any AWS call, held or not. New
+    code with the new environment and a revision above a lowered cap is refused by the revision check, and a revision at or below the cap runs. The
+    owner procedure that keeps the hold until the jobs apply is written where the services apply command is documented, and names only commands that
+    exist."""
+    for hold in ("clear", "held"):
+        ssm = RecordingSsm()
+        with tempfile.TemporaryDirectory() as scratch:
+            environment = launch_environment(scratch, None, HAI_LAUNCH_HOST_HOLD_PARAMETER=f"{HOLD_PARAMETER}_{hold}")
+            error = refuses(Exception, partial(production_services, ssm, environment))
+        require(
+            CAP_SETTING in str(error) and "not set" in str(error), f"new code with the old environment ({hold} hold) is not refused by the setting: {error}"
+        )
+        require(not ssm.requests, f"new code with the old environment ({hold} hold) made an SSM call: {ssm.requests}")
+    old_revision = BINDING.replace(f"job_memory_mib={JOB_MEMORY}", "job_memory_mib=23552")
+    for cap, runs in ((str(JOB_MEMORY), True), (str(JOB_MEMORY - 1024), False)):
+        with tempfile.TemporaryDirectory() as scratch:
+            built = production_services(RecordingSsm(), launch_environment(scratch, cap))
+        rig = Rig()
+        rig.ecs.register("example_dev_job_silver_host", JOB_MEMORY, old_revision)
+        rig.preflight.host_job_cap = built.preflight.host_job_cap
+        with world(rig, "silver_transform_dag", SILVER) as current:
+            if runs:
+                require(current.step("pin_bronze") == "succeeded", f"the old revision did not run under the cap {cap}")
+            else:
+                error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+                require(
+                    "Render and apply the jobs stack" in str(error) and rig.tasks_started() == 0,
+                    f"the old revision was not refused under the lowered cap: {error}",
+                )
+    apply = (ROOT / "scripts/infrastructure/services_apply.py").read_text()
+    wrapper = (ROOT / "scripts/infrastructure/terraform.sh").read_text()
+    steps = re.findall(r"^\d\. .*(?:\n   .*)*", apply[apply.index("Changing the host job cap") : apply.index("Run from the repository root")], re.M)
+    require(len(steps) == 5, f"the owner procedure does not have five numbered steps: {len(steps)}")
+    text = " ".join(steps)
+    require(all(part in text for part in ("--keep-launch-hold", "resolve", "terraform.sh --jobs", "IAM stack")), "a step of the owner procedure is missing")
+    require("--keep-launch-hold" in wrapper and "--keep-hold" in wrapper and "--keep-hold" in apply, "the procedure names a hold option that the commands lack")
+    where = [next(number for number, step in enumerate(steps, 1) if part in step) for part in ("--keep-launch-hold", "IAM stack", "terraform.sh --jobs")]
+    require(where == [2, 3, 4] and steps[4].lstrip("5. ").startswith("Run ``resolve``"), f"the owner procedure is out of order: {where}")
 
 
 def cap_setting_is_rendered_by_the_services_stack() -> None:
@@ -1851,7 +1909,7 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
     family = "example_dev_job_publisher_host"
     require(label == BINDING and memory == JOB_MEMORY, f"the pinned publisher revision is not bound to the rig's capacity: {memory}, {label}")
     rig = Rig()
-    revision, job_memory = rig.preflight.checked_revision("publisher")
+    revision, job_memory = rig.preflight.checked_revision("publisher", JOB_MEMORY)
     require((revision, job_memory) == (rig.bound[family], memory), f"the planned publisher revision did not pass the check: {revision}, {job_memory}")
     for other_memory, other_label, named in (
         (memory, None, "carries no host capacity binding"),
@@ -1859,7 +1917,7 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
     ):
         rig = Rig()
         rig.ecs.register(family, other_memory, other_label)
-        error = refuses(LaunchRefused, partial(rig.preflight.checked_revision, "publisher"))
+        error = refuses(LaunchRefused, partial(rig.preflight.checked_revision, "publisher", JOB_MEMORY))
         require(named in str(error), f"the refusal does not say {named!r}: {error}")
 
 
@@ -1894,6 +1952,7 @@ CASES: dict[str, Callable[[], None]] = {
     "revision_within_the_host_job_cap_runs": revision_within_the_host_job_cap_runs,
     "production_cap_comes_from_the_environment": production_cap_comes_from_the_environment,
     "cap_setting_is_rendered_by_the_services_stack": cap_setting_is_rendered_by_the_services_stack,
+    "migration_states_launch_nothing_and_the_procedure_is_written": migration_states_launch_nothing_and_the_procedure_is_written,
     "a_constant_cap_reader_is_caught": a_constant_cap_reader_is_caught,
     "launch_during_the_hold_is_refused": launch_during_the_hold_is_refused,
     "a_hold_set_after_the_preflight_withholds_runtask": a_hold_set_after_the_preflight_withholds_runtask,

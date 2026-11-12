@@ -412,6 +412,16 @@ run "a_cap_of_zero_is_refused" {
   expect_failures = [var.host_job_cap_mib]
 }
 
+run "a_cap_below_1024_is_refused" {
+  command = plan
+
+  variables {
+    host_job_cap_mib = 1023
+  }
+
+  expect_failures = [var.host_job_cap_mib]
+}
+
 run "a_cap_that_is_not_a_whole_number_is_refused" {
   command = plan
 

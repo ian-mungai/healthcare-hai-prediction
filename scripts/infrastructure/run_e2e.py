@@ -1789,6 +1789,18 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     evidence.check(step, "launch_hold_names_the_plan", "--reason" in holds[1] and "reviewed.tfplan" in " ".join(holds[1]))
     evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
     evidence.check(step, "image_record_unchanged", sha256(images.read_bytes()) == images_before)
+    # Host job cap change: --keep-launch-hold leaves the hold and the lock set after the apply, so the jobs apply can follow before launches resume.
+    before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
+    step, result = evidence.run("wrapper_services_apply_keep_hold", [*wrapper, "--keep-launch-hold", "apply", "reviewed.tfplan"], workspace, environment)
+    holds = [json.loads(line) for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()][before_holds:]
+    evidence.check(step, "lock_hold_then_settle_that_keeps_the_hold", result.returncode == 0 and [item[0] for item in holds] == ["lock", "hold", "settle"])
+    evidence.check(step, "settle_gets_the_token_and_keep_hold", holds[-1][-3:] == ["--token", "standin-host:1:20261110T220000Z:0123abcd", "--keep-hold"])
+    step, result = evidence.run(
+        "wrapper_keep_hold_needs_a_services_apply", ["/bin/bash", "scripts/infrastructure/terraform.sh", "--keep-launch-hold", "plan"], workspace, environment
+    )
+    evidence.check(step, "keep_hold_refused_outside_a_services_apply", result.returncode == 2 and "--keep-launch-hold" in result.stderr)
+    step, result = evidence.run("wrapper_keep_hold_on_a_plan", [*wrapper, "--keep-launch-hold", "plan"], workspace, environment)
+    evidence.check(step, "keep_hold_refused_on_a_services_plan", result.returncode == 2 and "--keep-launch-hold" in result.stderr)
     # Launch hold during services applies (owner A, Nov 10 2026): a failed apply keeps the hold, and a hold that cannot be set stops the apply.
     for marker, label in (
         ("apply_fails", "failed_services_apply_keeps_the_hold"),

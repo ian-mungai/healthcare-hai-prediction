@@ -11,6 +11,7 @@ preparation_sha256=""
 identity_probe=false
 mlflow_retention=false
 athena_retention=false
+keep_launch_hold=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -27,6 +28,11 @@ while [[ $# -gt 0 ]]; do
     --athena-retention)
       [[ "$athena_retention" == false ]] || { printf 'Select the Athena retention rule once.\n' >&2; exit 2; }
       athena_retention=true
+      shift
+      ;;
+    --keep-launch-hold)
+      [[ "$keep_launch_hold" == false ]] || { printf 'Select --keep-launch-hold once.\n' >&2; exit 2; }
+      keep_launch_hold=true
       shift
       ;;
     --identity-probe)
@@ -70,6 +76,10 @@ case "$action" in
   plan|apply|validate) ;;
   *) printf 'Use plan, apply or validate.\n' >&2; exit 2 ;;
 esac
+if [[ "$keep_launch_hold" == true && ( "$stack" != services || "$action" != apply ) ]]; then
+  printf -- '--keep-launch-hold is allowed only with --services apply.\n' >&2
+  exit 2
+fi
 for argument in "$@"; do
   case "$argument" in
     -var*|-chdir*) printf 'Set project inputs only in .env.\n' >&2; exit 2 ;;
@@ -177,6 +187,10 @@ if [[ "$stack" == services && "$action" == apply ]]; then
     printf 'The services apply failed.\n' >&2
     resolve_hint
     exit 1
+  fi
+  if [[ "$keep_launch_hold" == true ]]; then
+    # A host job cap change needs the jobs stack applied next: the hold and the lock stay set until the owner runs resolve with the token.
+    exec "$python_bin" -m scripts.infrastructure.services_apply settle --token "$token" --keep-hold
   fi
   exec "$python_bin" -m scripts.infrastructure.services_apply settle --token "$token"
 fi

@@ -125,6 +125,24 @@ def settle_clears_only_after_steady_state() -> None:
     require(puts[0][0] > 1000.0, "settle cleared the hold before polling the services")
 
 
+def settle_can_keep_the_hold_for_the_jobs_apply() -> None:
+    """A change of the host job cap needs the jobs stack applied after the services. ``settle`` with keep_hold waits for steady state and then leaves
+    the hold and the apply lock set, so no host job launches between the two applies; the hold is cleared by ``resolve`` with the lock's token."""
+    clock = Clock()
+    store = Store(clock, "held by services_apply")
+    answers = iter([False, True, True])
+    current, _ = steps(store, clock, lambda: next(answers))
+    current.settle(OWN_LOCK, keep_hold=True)
+    require(clock.now > 1000.0, "settle with keep_hold returned before polling the services")
+    require(
+        store.value == "held by services_apply" and not [entry for entry in store.log if entry[1] == "put"],
+        f"settle with keep_hold changed the hold: {store.log}",
+    )
+    require(store.lock.value == OWN_LOCK, "settle with keep_hold released the apply lock")
+    current.settle(OWN_LOCK)
+    require(store.value == "clear" and store.lock.value is None, "a later plain settle did not clear the hold and the lock")
+
+
 def settle_that_never_reaches_steady_state_keeps_the_hold() -> None:
     """When the services stay unstable past the deadline, or a rollout fails, settle raises and the hold stays."""
     for stable in (lambda: False, lambda: (_ for _ in ()).throw(RuntimeError("service airflow rollout FAILED"))):
@@ -357,6 +375,23 @@ def settle_deletes_its_own_lock_after_clearing_the_hold() -> None:
     require(order == ["put-parameter", "delete-parameter"], f"the lock was not deleted after the hold was cleared: {order}")
 
 
+def settle_with_keep_hold_through_the_command() -> None:
+    """The command form: ``settle --token T --keep-hold`` waits for steady state, prints the resolve command with the token and leaves the hold and
+    the lock; ``resolve`` with that token then clears both."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    mine = OWN_LOCK
+    aws = AwsStandIn(value="held by services_apply", lock=mine)
+    with mock.patch.object(module.Steps, "wait_stable", lambda self, token: None):
+        code, out, err = run_real_output(["settle", "--token", mine, "--keep-hold"], aws)
+    require(code == 0, f"settle --keep-hold failed: exit {code} {err}")
+    require(aws.value == "held by services_apply" and aws.lock == mine, f"settle --keep-hold changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+    require(f"--token '{mine}'" in out + err and "resolve" in out + err, f"settle --keep-hold does not print the resolve command with the token: {out} {err}")
+    require(not any(command[1:3] in (["ssm", "put-parameter"], ["ssm", "delete-parameter"]) for command in aws.commands), "settle --keep-hold wrote the store")
+    with mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
+        code, _, err = run_real_output(["resolve", "--statement", "jobs applied", "--token", mine], aws)
+    require(code == 0 and aws.value == "clear" and aws.lock is None, f"resolve after settle --keep-hold did not clear both: exit {code} {err}")
+
+
 def resolve_clears_the_hold_and_the_lock_with_its_token() -> None:
     """After a failed apply both stay. resolve without the token, or with another one, changes nothing; with the lock's token and stable
     services it clears the hold and deletes the lock."""
@@ -488,6 +523,8 @@ CASES: dict[str, Callable[[], None]] = {
     "hold_is_written_and_settles_before_the_apply": hold_is_written_and_settles_before_the_apply,
     "settle_clears_only_after_steady_state": settle_clears_only_after_steady_state,
     "settle_that_never_reaches_steady_state_keeps_the_hold": settle_that_never_reaches_steady_state_keeps_the_hold,
+    "settle_can_keep_the_hold_for_the_jobs_apply": settle_can_keep_the_hold_for_the_jobs_apply,
+    "settle_with_keep_hold_through_the_command": settle_with_keep_hold_through_the_command,
     "resolve_needs_a_statement_and_steady_state": resolve_needs_a_statement_and_steady_state,
     "a_hold_that_cannot_be_written_raises": a_hold_that_cannot_be_written_raises,
     "the_hold_name_is_the_terraform_default": the_hold_name_is_the_terraform_default,

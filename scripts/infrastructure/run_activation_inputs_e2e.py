@@ -213,6 +213,7 @@ ROWS: list[Row] = [
     Row("services", "model_api_manifest_uri", "s3://example-project-data-dev/serving/deployments", "/serving/deployments"),
     Row("services", "model_api_registry_uri", "s3://example-project-data-dev/lakehouse/feast/registry.pb", "registry.pb"),
     Row("services", "model_api_mlflow_uri", "http://127.0.0.1:5100", "https://mlflow.example.invalid"),
+    Row("services", "host_job_cap_mib", 22528, "22528", 26816, (0, 1023, 32768, 22528.5, True, None)),
     Row("services", "model_api_rate_per_minute", 120, "120"),
     Row("services", "model_api_burst", 40, "40"),
     Row("services", "prometheus_retention_days", 10, "10"),
@@ -403,6 +404,15 @@ def completeness() -> dict[str, bool]:
     for stack, names in declared.items():
         missing = sorted(name for name, kind in names.items() if kind == "bool" and (stack, name) not in covered and name not in EXEMPT)
         checks[f"every boolean input of {stack} has preparation or committed-default coverage ({missing})"] = not missing
+    checks["the owner-set host job cap host_job_cap_mib has preparation coverage"] = ("services", "host_job_cap_mib") in covered
+    cap = re.search(r'variable "host_job_cap_mib" \{.*?default\s*=\s*(\d+)', (ROOT / "infra/services/variables.tf").read_text(), re.S)
+    cap_contract = json.loads((ROOT / "data_contracts/infrastructure/services_preparation.schema.json").read_text())["properties"]["variables"]["properties"]
+    checks["the services contract admits a whole-number host job cap below the nominal host memory"] = (
+        cap is not None
+        and int(cap.group(1)) == 26816
+        and cap_contract.get("host_job_cap_mib", {}).get("type") == "integer"
+        and cap_contract["host_job_cap_mib"].get("maximum", 32768) < 32768
+    )
     platform = (ROOT / "infra/platform/variables.tf").read_text()
     for variable, expected in (("ecr_repositories", PLATFORM_DEFAULT_REPOSITORIES), ("log_groups", PLATFORM_DEFAULT_LOG_GROUPS)):
         block = re.search(rf'variable "{variable}" \{{.*?default\s*=\s*\[(.*?)\]', platform, re.S)
@@ -783,6 +793,55 @@ def scratch_size_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+def host_job_cap_cases(workspace: Workspace) -> dict[str, bool]:
+    """The reviewed host job cap through the renderer and the wrapper: its bounds, and a saved plan that must carry exactly the reviewed cap."""
+    checks: dict[str, bool] = {}
+    stack, name = "services", "host_job_cap_mib"
+    directory = f"-chdir={workspace.root / STACKS[stack]}"
+    siblings = [row for row in ROWS if row.stack == stack]
+    off = {row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None}
+    for cap in (1024, 22528, 26816, 32767):
+        workspace.clear(stack)
+        result = workspace.run(stack, {name: cap})
+        checks[f"host job cap {cap} MiB: the bounded whole number renders exactly"] = (
+            result.returncode == 0 and (workspace.written(stack) or {}).get(name) == cap
+        )
+    workspace.clear(stack)
+    result = workspace.wrapper(stack, {name: 22528})
+    checks["wrapper services: a reviewed 22528 MiB cap is rendered and plan runs"] = (
+        result.returncode == 0 and (workspace.written(stack) or {}).get(name) == 22528
+    )
+    for refused_cap in (0, 1023, 32768, 22528.5, "22528"):
+        workspace.clear(stack)
+        workspace.calls.unlink(missing_ok=True)
+        result = workspace.wrapper(stack, {name: refused_cap})
+        checks[f"wrapper services: host job cap {refused_cap!r} is refused before terraform"] = (
+            result.returncode == 2 and workspace.written(stack) is None and not any(call[0] == directory for call in workspace.called())
+        )
+    workspace.clear(stack)
+    workspace.run(stack, {name: 22528})
+    rendered = {**(workspace.written(stack) or {}), "image_digests": {}}
+    for planned, accepted in ((22528, True), (26816, False), (21000, False)):
+        workspace.plan.write_text(json.dumps(plan_document({**rendered, name: planned}, off)))
+        result = workspace.run(stack, {name: 22528}, "--check-plan", str(workspace.plan))
+        checks[f"host job cap plan {planned} against reviewed 22528: the renderer {'accepts' if accepted else 'refuses'} it"] = (
+            result.returncode == 0 if accepted else result.returncode == 2 and "Saved plan inputs differ" in result.stderr
+        )
+    workspace.plan.write_text(json.dumps(plan_document({**{key: value for key, value in rendered.items() if key != name}, name: 22528}, off)))
+    result = workspace.run(stack, None, "--check-plan", str(workspace.plan))
+    checks["host job cap plan 22528 with no reviewed file: the renderer refuses it against the committed default"] = (
+        result.returncode == 2 and "Saved plan inputs differ" in result.stderr
+    )
+    workspace.plan.write_text(json.dumps(plan_document({**rendered, name: 26816}, off)))
+    workspace.calls.unlink(missing_ok=True)
+    result = workspace.wrapper(stack, {name: 22528}, "apply", str(workspace.plan))
+    calls = workspace.called()
+    checks["wrapper services: a plan with another cap than the reviewed one stops before the apply"] = (
+        result.returncode == 2 and bool(calls) and calls[-1] == [directory, "show", "-json", str(workspace.plan)] and not any("apply" in call for call in calls)
+    )
+    return checks
+
+
 def scratch_root_cases(workspace: Workspace) -> dict[str, bool]:
     """The jobs scratch root through the renderer and the wrapper: only the scratch mount boot creates, or a folder inside it, is admitted."""
     checks: dict[str, bool] = {}
@@ -829,6 +888,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
         results["scratch_size"] = scratch_size_cases(workspace)
+        results["host_job_cap"] = host_job_cap_cases(workspace)
         results["scratch_root"] = scratch_root_cases(workspace)
         results["committed_defaults"] = {name: ok for row in COMMITTED_DEFAULTS for name, ok in committed_default_cases(workspace, row).items()}
     output.mkdir(parents=True)

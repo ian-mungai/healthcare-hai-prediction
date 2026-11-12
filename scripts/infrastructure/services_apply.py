@@ -14,6 +14,25 @@ The hold is one Parameter Store value, ``host_launch_hold_parameter_name`` of th
 It is not managed by Terraform, so no apply can clear it. ``clear`` lets host launches run; any other value, or no parameter, holds them: the launch
 preflight refuses every host launch, and the fit probe rereads the hold before every RunTask.
 
+Changing the host job cap, and the move of the cap from Parameter Store to the Airflow environment (Nov 11 2026). The cap is the services input
+``host_job_cap_mib``. The jobs stack must register host revisions at the new cap after every change, and the launch preflight refuses a revision whose job
+memory is above the cap. So the services and jobs applies are one change, and launches stay held between them. In this order:
+
+1. Check that no host job or DAG run is active and that ``status`` shows a clear hold and no lock. For the move, stage the release that carries the new launch
+   code first. New code with the old container environment, and old code with the new one, both fail the build of the launch services at once ("is not
+   set in the Airflow service environment"), before any AWS call, so neither mix starts a task. Only code and environment from the same release launch.
+2. ``bash scripts/infrastructure/terraform.sh --services --keep-launch-hold apply <PLAN>``. It takes the lock, sets the hold, applies, waits for steady
+   state and then keeps the hold and the lock set. It prints the ``resolve`` command with the lock token. For the move, this apply deletes the retired
+   Parameter Store parameter, which needs the project user's current grant on it.
+3. For the move only: apply the IAM stack and the project user policies. They drop the grants on the retired parameter, so they come after step 2.
+4. Render and apply the jobs stack (``terraform.sh --jobs``), so every host revision carries the new cap as its job memory.
+5. Run ``resolve`` with the printed token. It clears the hold and the lock once the services are stable. Launches resume with matching code, environment
+   and revisions.
+
+The window is from the hold of step 2 to step 5: the preflight refuses every host launch, so a run started in it fails and nothing is lost. Without
+``--keep-launch-hold`` the hold ends at steady state, and with a lower cap the next launch is refused by the revision check (a failed run, no task) until
+the jobs apply has registered revisions at the new cap.
+
 Run from the repository root, for example: ``.venv/bin/python -m scripts.infrastructure.services_apply resolve --statement '<what you checked>'``. The
 profile and region come from ``.env``. Every AWS call goes through ``AwsCli`` with the project profile, and every wait has a deadline.
 """
@@ -208,11 +227,15 @@ class Steps:
                 )
             self.clock.sleep(POLL_SECONDS)
 
-    def settle(self, token: str | None) -> None:
+    def settle(self, token: str | None, keep_hold: bool = False) -> None:
         """After a successful apply: require this apply's own token on the apply lock, wait for steady state, clear the hold, then delete the lock.
-        No token, a malformed one or a lock held by another token changes nothing."""
+        No token, a malformed one or a lock held by another token changes nothing. With ``keep_hold`` it waits for steady state and then leaves the
+        hold and the lock set, for a change that needs the jobs stack applied next (the host job cap); ``resolve`` with the token ends them."""
         _, token = self.require_lock(token)
         self.wait_stable(token)
+        if keep_hold:
+            self.report(f"launch hold: kept set after the services reached steady state. After the jobs apply, run {RESOLVE_COMMAND} --token '{token}'")
+            return
         self.write(LAUNCH_HOLD_CLEAR)
         self.report("launch hold: cleared after the services reached steady state")
         self.release(token)
@@ -321,6 +344,7 @@ def build_parser() -> argparse.ArgumentParser:
     hold.add_argument("--reason", required=True, help="what is being applied, for example the saved plan")
     settle = commands.add_parser("settle", help="after a successful services apply: wait for steady state, clear the hold, release the lock")
     settle.add_argument("--token", required=True, help="the apply lock token that lock printed")
+    settle.add_argument("--keep-hold", action="store_true", help="wait for steady state but keep the hold and the lock until resolve (the jobs apply follows)")
     resolve = commands.add_parser("resolve", help="after a failed apply or settle: clear the hold and the lock once the services are stable")
     resolve.add_argument("--statement", required=True, help="what you checked")
     resolve.add_argument("--token", help="the apply lock token, required while a lock is held")
@@ -338,7 +362,7 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "hold":
             steps.hold(arguments.reason)
         elif arguments.command == "settle":
-            steps.settle(arguments.token)
+            steps.settle(arguments.token, keep_hold=arguments.keep_hold)
         elif arguments.command == "resolve":
             steps.resolve(arguments.statement, arguments.token)
         else:

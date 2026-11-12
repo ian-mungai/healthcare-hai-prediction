@@ -551,7 +551,8 @@ class Preflight:
             return None
         if request.mode != JOB_MODE:
             raise LaunchRefused(f"{request.template} runs on AWS in real mode only")
-        self.require_capacity(job)  # before every gate that reads the cloud, so an empty capacity is never masked by a read
+        # Both settings come from the environment: they are checked before every gate that reads the cloud, so neither is masked by a read.
+        cap = self.host_cap(job, self.require_capacity(job))
         self.require_no_hold(job)
         row = self.jobs[job]
         if row.get("after"):
@@ -564,7 +565,7 @@ class Preflight:
         if row.get("approval") == "promotion":
             self.require_promotion_approval(request)
         spec = self.spec(request, job)
-        revision, job_memory = self.checked_revision(job)
+        revision, job_memory = self.checked_revision(job, cap)
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
         # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
@@ -646,7 +647,7 @@ class Preflight:
             raise LaunchRefused(f"the host capacity {capacity[:200]!r} is not in the rendered form usable_memory_mib=<MiB> system_reserve_mib=<MiB>")
         return capacity
 
-    def checked_revision(self, job: str) -> tuple[str, int]:
+    def checked_revision(self, job: str, cap: int) -> tuple[str, int]:
         """Host launch capacity binding (owner A, Nov 10 2026): the ARN and the job memory of the latest active revision of the job's host
         definition, described once, after checking that it is bound to the current usable-memory cap. The services stack renders the cap's inputs
         into ``HAI_LAUNCH_HOST_CAPACITY`` (``usable_memory_mib=<n> system_reserve_mib=<n>``). The jobs stack labels the init container
@@ -681,7 +682,7 @@ class Preflight:
                 f"the latest active revision {name} of the {job} host job has {str(found.get('memory', ''))[:20]} MiB of task memory, but its binding "
                 f"gives a job {binding['job']} MiB. {again}"
             )
-        self.require_within_cap(job, name, int(binding["job"]))
+        self.require_within_cap(job, name, int(binding["job"]), cap)
         return str(found.get("taskDefinitionArn", "")), int(binding["job"])
 
     def require_no_hold(self, job: str) -> None:
@@ -696,22 +697,35 @@ class Preflight:
                 "the hold, or resolve a failed apply with python -m scripts.infrastructure.services_apply resolve, then run again"
             )
 
-    def require_within_cap(self, job: str, name: str, job_memory: int) -> None:
+    def host_cap(self, job: str, capacity: str) -> int:
         """Host job cap at launch (Nov 11 2026): the services stack renders the cap into the Airflow environment (``HAI_LAUNCH_HOST_JOB_CAP_MIB``, from
-        its variable ``host_job_cap_mib``). Refuse a host launch while the cap is missing or invalid, and a revision whose binding gives a job more
-        memory. The jobs stack learns the cap at its next render, so a lowered cap refuses the old revision instead of overfilling the host."""
+        its variable ``host_job_cap_mib``). Refuse a host launch, before any cloud call, while the cap is missing or invalid, and while it is above the
+        memory the host leaves: the usable memory less the system reserve, both from the rendered capacity. The service reservations it must also fit
+        are checked by the services stack and by the binding of each revision."""
         raw = self.read(self.host_job_cap)
         if raw is None:
             raise LaunchRefused(
                 f"the host job cap ({HOST_JOB_CAP_SETTING}) is missing, so no {job} host job launches. "
                 "Set host_job_cap_mib in the services stack and apply it, then run again"
             )
-        text = raw.strip()
-        if not (text.isdecimal() and text.isascii()) or int(text) <= 0:
+        cap = cap_value(raw)
+        if cap is None:
             raise LaunchRefused(
                 f"the host job cap {raw[:40]!r} is not a whole number of MiB above 0. Set host_job_cap_mib in the services stack, apply it, then run again"
             )
-        cap = int(text)
+        inputs = CAPACITY_FORM.fullmatch(capacity)
+        usable, reserve = (int(item.split("=")[1]) for item in capacity.split()) if inputs else (0, 0)
+        if cap > usable - reserve:
+            raise LaunchRefused(
+                f"the host job cap {cap} MiB ({HOST_JOB_CAP_SETTING}) is above the {usable - reserve} MiB the host leaves ({usable} MiB usable less the "
+                f"{reserve} MiB system reserve), so no {job} host job launches. Lower host_job_cap_mib in the services stack, apply it, then run again"
+            )
+        return cap
+
+    @staticmethod
+    def require_within_cap(job: str, name: str, job_memory: int, cap: int) -> None:
+        """Refuse a revision whose binding gives a job more memory than the host job cap. The jobs stack learns the cap at its next render, so a lowered
+        cap refuses the old revision instead of overfilling the host."""
         if job_memory > cap:
             raise LaunchRefused(
                 f"the latest active revision {name} of the {job} host job gives a job {job_memory} MiB, above the current host job cap of {cap} MiB. "

@@ -255,6 +255,11 @@
         "host_usable_memory_mib": {
           "type": "integer",
           "minimum": 1
+        },
+        "host_job_cap_mib": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 32767
         }
       }
     }

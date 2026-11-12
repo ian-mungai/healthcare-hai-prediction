@@ -419,14 +419,14 @@ variable "host_usable_memory_mib" {
 }
 
 variable "host_job_cap_mib" {
-  description = "The host job cap in MiB: the memory one host job gets (one host job runs at a time). The stack renders it into every Airflow container as HAI_LAUNCH_HOST_JOB_CAP_MIB, which the launch preflight reads at every host launch (a missing or invalid value refuses the launch), and hands it to the jobs stack as the job memory (output host_job_memory_mib) and in the capacity binding. It must fit the room the services leave: the usable memory less host_system_reserve_mib and the always-on service reservations (output host_job_memory_mib refuses a larger cap). The default is the room the live services leave today: MLflow on a 32768 MiB host reserves 3904 MiB, so 32768 - 2048 - 3904 = 26816 MiB. After a change, apply this stack, render the jobs stack from it (render_jobs_config) and apply that too."
+  description = "The host job cap in MiB: the memory one host job gets (one host job runs at a time). The stack renders it into every Airflow container as HAI_LAUNCH_HOST_JOB_CAP_MIB, which the launch preflight reads at every host launch (a missing or invalid value refuses the launch), and hands it to the jobs stack as the job memory (output host_job_memory_mib) and in the capacity binding. It must fit the room the services leave: the usable memory less host_system_reserve_mib and the always-on service reservations (output host_job_memory_mib refuses a larger cap). The default is the room the live services leave today: MLflow on a 32768 MiB host reserves 3904 MiB, so 32768 - 2048 - 3904 = 26816 MiB. After a change, apply this stack with terraform.sh --services --keep-launch-hold, then render and apply the jobs stack, then run resolve (the order is in scripts/infrastructure/services_apply.py)."
   type        = number
   default     = 26816
   nullable    = false
 
   validation {
-    condition     = var.host_job_cap_mib > 0 && var.host_job_cap_mib < var.host_memory_mib && var.host_job_cap_mib == floor(var.host_job_cap_mib)
-    error_message = "Use a whole number of MiB above 0 and below the nominal host memory host_memory_mib."
+    condition     = var.host_job_cap_mib >= 1024 && var.host_job_cap_mib < var.host_memory_mib && var.host_job_cap_mib == floor(var.host_job_cap_mib)
+    error_message = "Use a whole number of MiB of at least 1024 and below the nominal host memory host_memory_mib."
   }
 }
 

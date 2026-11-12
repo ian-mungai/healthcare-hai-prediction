@@ -386,5 +386,5 @@ moved {
 
 # Retired host job cap parameter (Nov 11 2026): earlier applies of this stack wrote the cap to the Parameter Store parameter
 # /healthcare_hai_prediction/host_job_cap. The first services apply after this change deletes it from AWS and from the state, and that delete needs the
-# project user's ssmcap grant on it. So the owner applies this stack first, with the code of the new preflight staged, and applies the IAM stack and the
-# project user policies, which no longer hold that grant, only after it (never before).
+# project user's ssmcap grant on it. The owner order for this move and for every later cap change (hold kept, services, IAM and user policies, jobs, resolve)
+# is in the module docstring of scripts/infrastructure/services_apply.py.
