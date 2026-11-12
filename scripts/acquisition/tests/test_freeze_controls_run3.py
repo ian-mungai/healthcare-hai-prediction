@@ -22,7 +22,8 @@ QUEUE_FOLDER = "data/redownload_checks/20261111_bls2006"
 
 def freezer() -> ModuleType:
     spec = importlib.util.spec_from_file_location("freeze_controls_run3", SCRIPT)
-    check(spec is not None and spec.loader is not None, "the freeze script exists")
+    if spec is None or spec.loader is None:
+        raise AssertionError("the freeze script exists")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

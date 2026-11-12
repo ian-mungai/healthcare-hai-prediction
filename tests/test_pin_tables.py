@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import re
 import sys
@@ -8,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 
 from scripts.lakehouse import pins
 from tests.support import check
 
+yaml: Any = importlib.import_module("yaml")  # the PyYAML type stubs are not in the lock, so the module is typed Any
 ROOT = Path(__file__).resolve().parents[1]
 SOURCES_FILE = "dbt/models/silver/staging/_bronze__sources.yml"
 TABLE_MAP_FILE = "config/lakehouse/bronze_tables.json"
@@ -48,7 +49,10 @@ class FakeSpark:
         self.read: list[str] = []
 
     def sql(self, statement: str) -> Any:
-        table = re.search(r"bronze\.([a-z0-9_]+)\.refs", statement).group(1)
+        found = re.search(r"bronze\.([a-z0-9_]+)\.refs", statement)
+        if found is None:
+            raise AssertionError(f"not a snapshot read: {statement}")
+        table = found.group(1)
         self.read.append(table)
         if table not in self.snapshots:
             raise AnalysisException(table)
@@ -59,7 +63,7 @@ class FakeSpark:
 def fake_pyspark(monkeypatch: pytest.MonkeyPatch) -> None:
     package = types.ModuleType("pyspark")
     errors = types.ModuleType("pyspark.errors")
-    errors.AnalysisException = AnalysisException
+    vars(errors)["AnalysisException"] = AnalysisException
     monkeypatch.setitem(sys.modules, "pyspark", package)
     monkeypatch.setitem(sys.modules, "pyspark.errors", errors)
 

@@ -20,7 +20,8 @@ EXCLUSIONS = f"{OUTPUT}/exclusions.json"
 
 def load(name: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, FOLDER / f"{name}.py")
-    check(spec is not None and spec.loader is not None, f"the script {name} exists")
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"the script {name} exists")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module

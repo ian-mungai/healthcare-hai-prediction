@@ -37,7 +37,7 @@ class StandInOperatorMeta(type):
     """
 
     def __new__(mcs, name: str, bases: tuple[type, ...], namespace: dict[str, Any], **kwargs: Any) -> type:
-        new_cls = super().__new__(mcs, name, bases, namespace, **kwargs)
+        new_cls: Any = super().__new__(mcs, name, bases, namespace, **kwargs)  # Any: the class's own __init__ is read and replaced
         if new_cls.__init__ is not new_cls.mro()[1].__init__:
             new_cls.__init__ = mcs.apply_defaults(new_cls.__init__)
         return new_cls

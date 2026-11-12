@@ -63,7 +63,7 @@ import re
 import runpy
 import sys
 import tempfile
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
@@ -1054,7 +1054,7 @@ class LaunchSsm:
     """The SSM client of the production launch services for the launch hold and the host job cap: a queue of answers per name (the last repeats),
     every request recorded in order, and an access refusal for any other name."""
 
-    def __init__(self, answers: dict[str, list[str | Exception]]) -> None:
+    def __init__(self, answers: Mapping[str, Sequence[str | Exception]]) -> None:
         self.answers = {name: list(values) for name, values in answers.items()}
         self.requests: list[dict[str, Any]] = []
         self.slow_after: int | None = None  # reads after this many take slow_seconds on slow_clock
@@ -1082,7 +1082,7 @@ def no_lock() -> list[str | Exception]:
     return [client_error("ParameterNotFound", "GetParameter")]
 
 
-def held_rig(hold: list[str | Exception], cap: list[str | Exception], lock: list[str | Exception] | None = None) -> tuple[Rig, LaunchSsm]:
+def held_rig(hold: Sequence[str | Exception], cap: Sequence[str | Exception], lock: Sequence[str | Exception] | None = None) -> tuple[Rig, LaunchSsm]:
     """A rig whose preflight hold and cap readers and whose fit probe wrapper are the production ones from ``airflow_steps.services()``, wired to a
     stand-in SSM client. Before the launch hold exists the production pieces are missing and the case fails on that, not on a type error."""
     steps = importlib.import_module("orchestration.airflow_steps")
@@ -1123,9 +1123,10 @@ def held_rig(hold: list[str | Exception], cap: list[str | Exception], lock: list
     rig = Rig()
     rig.preflight.host_job_cap = built.preflight.host_job_cap
     rig.preflight.host_launch_hold = hold_reader
-    rig.launcher.probe = steps.host_fit_probe(rig.launcher.probe, hold_reader, built.preflight.host_job_cap)
-    rig.launcher.probe.monotonic = rig.time.clock().monotonic  # the rig's virtual clock in place of the process clock
-    rig.launcher.send_check = getattr(rig.launcher.probe, "authorize", None)
+    fitted = steps.host_fit_probe(rig.launcher.probe, hold_reader, built.preflight.host_job_cap)
+    fitted.monotonic = rig.time.clock().monotonic  # the rig's virtual clock in place of the process clock
+    rig.launcher.probe = fitted
+    rig.launcher.send_check = getattr(fitted, "authorize", None)
     rig.built = built
     return rig, ssm
 
@@ -1190,7 +1191,8 @@ def a_slow_authorization_withholds_runtask() -> None:
     adapter = importlib.import_module("orchestration.ecs_adapter")
     apply = importlib.import_module("scripts.infrastructure.services_apply")
     window = getattr(preflight, "SEND_AUTHORIZATION_SECONDS", None)
-    require(window is not None, "the preflight has no SEND_AUTHORIZATION_SECONDS")
+    if window is None:
+        raise AssertionError("the preflight has no SEND_AUTHORIZATION_SECONDS")
     config = adapter.send_config()
     require(
         window + config.connect_timeout + config.read_timeout < apply.HOLD_SETTLE_SECONDS,
@@ -1955,7 +1957,7 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
     ):
         rig = Rig()
         rig.ecs.register(family, other_memory, other_label)
-        error = refuses(LaunchRefused, lambda check=rig.preflight.checked_revision: check("publisher"))
+        error = refuses(LaunchRefused, partial(rig.preflight.checked_revision, "publisher"))
         require(named in str(error), f"the refusal does not say {named!r}: {error}")
 
 

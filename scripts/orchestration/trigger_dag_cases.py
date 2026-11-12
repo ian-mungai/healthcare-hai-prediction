@@ -309,7 +309,7 @@ def broken_table_cases() -> dict[str, bool]:
     not a traceback."""
     settle = ["--dag", SETTLE_DAG, "--mode", "real", "--launch-run", SILVER, "--job", "publisher", "--statement", STATEMENT, "--wait-seconds", "5"]
 
-    def refused_with(damage: Callable[[Path], None]) -> bool:
+    def refused_with(damage: Callable[[Path], object]) -> bool:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
             shutil.copytree(trigger_dag.REPO_ROOT / "config/orchestration", root / "config/orchestration")

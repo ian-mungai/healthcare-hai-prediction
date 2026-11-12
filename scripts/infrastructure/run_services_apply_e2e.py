@@ -254,15 +254,14 @@ def run_real(arguments: list[str], aws: AwsStandIn) -> tuple[int, list[str]]:
         output_reads.append("load_names")
         raise config.ConfigurationError("The Terraform output service_names is missing or has the wrong type.")
 
-    patches = [
+    patches: list[Any] = [
         mock.patch.object(session, "load_names", no_outputs),
         mock.patch.object(session, "load_configuration", lambda *_, **__: (dict(SETTINGS), {})),
         mock.patch.object(session, "run_argv", aws),  # under the real tolerant_runner, as the AWS command line answers
         mock.patch.object(module.Clock, "sleep", staticmethod(lambda _seconds: None)),
     ]
-    for name, value in (("load_configuration", lambda *_, **__: (dict(SETTINGS), {})),):
-        if hasattr(module, name):
-            patches.append(mock.patch.object(module, name, value))
+    if hasattr(module, "load_configuration"):
+        patches.append(mock.patch.object(module, "load_configuration", lambda *_, **__: (dict(SETTINGS), {})))
     for patch in patches:
         patch.start()
     try:
@@ -299,7 +298,7 @@ def settle_on_a_fresh_stack_keeps_the_hold() -> None:
     for arguments in (["settle", "--token", OWN_LOCK], ["resolve", "--statement", "checked", "--token", OWN_LOCK]):
         aws = AwsStandIn("held by services_apply", lock=OWN_LOCK)
         code, output_reads = run_real(arguments, aws)
-        require(code == 2 and output_reads, f"{arguments[0]} did not fail on the missing services outputs: exit {code}, reads {output_reads}")
+        require(code == 2 and bool(output_reads), f"{arguments[0]} did not fail on the missing services outputs: exit {code}, reads {output_reads}")
         require(
             aws.value == "held by services_apply" and not any(command[1:3] == ["ssm", "put-parameter"] for command in aws.commands),
             f"{arguments[0]} changed the hold",
@@ -454,7 +453,7 @@ def resolve_cannot_clear_a_hold_another_machine_just_set() -> None:
         require(aws.value == "held by services_apply on other-host", f"resolve cleared the hold another machine set: {aws.value!r}")
     hold_puts = [command for command in aws.commands if command[1:3] == ["ssm", "put-parameter"] and HOLD in command]
     lock_ops = [i for i, command in enumerate(aws.commands) if LOCK in command]
-    require(not hold_puts or (lock_ops and lock_ops[0] < aws.commands.index(hold_puts[0])), "resolve wrote the hold before touching the lock")
+    require(not hold_puts or (bool(lock_ops) and lock_ops[0] < aws.commands.index(hold_puts[0])), "resolve wrote the hold before touching the lock")
 
 
 def a_settle_failure_names_the_lock_token() -> None:

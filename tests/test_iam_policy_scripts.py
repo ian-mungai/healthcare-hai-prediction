@@ -106,7 +106,7 @@ class FakeIam:
         versions.append({"VersionId": version_id, "IsDefaultVersion": False, "CreateDate": created})
         return version_id
 
-    def get_paginator(self, name: str) -> Paginator:
+    def get_paginator(self, name: str) -> Paginator | MarkerPaginator:
         listing: dict[str, tuple[str, Callable[..., list[Any]]]] = {
             "list_policies": ("Policies", self.local_policies),
             "get_group": ("Users", self.users_of_group),
@@ -563,7 +563,7 @@ def test_the_plan_names_the_version_an_update_deletes(env_file: Path, capsys: py
     check(lines == [f"UPDATE POLICY    {name} (deletes version v1)"], f"the plan must name the version the update deletes: {lines}")
 
 
-def stale_after_replan(monkeypatch: pytest.MonkeyPatch, change: Callable[[], None]) -> None:
+def stale_after_replan(monkeypatch: pytest.MonkeyPatch, change: Callable[[], object]) -> None:
     """Make ``change`` happen after each digest is computed: in an apply, after the new plan and before the first write. Patch after the plan."""
     original = manage_policies.plan_digest
 
