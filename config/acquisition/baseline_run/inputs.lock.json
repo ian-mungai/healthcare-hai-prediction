@@ -1,0 +1,90 @@
+{
+  "bundle_sha256": "0896112864d691d040dc34a1d4c9459c1d662ba90f04b54f86aa6b127e8bb91e",
+  "files": [
+    {
+      "bytes": 112,
+      "path": "hosts_approval.json",
+      "sha256": "86a0b3ece35500ae245fea9b134cfd4d4c230c8615c7646e653c6d928004d262"
+    },
+    {
+      "bytes": 1062646,
+      "path": "plan_inputs/data/datasets/acquisition_batches/090f97e9566a9b787380e73fab651a4f10eaacbf6f9e407360874bdc4eb64598/jobs/ADJ_file_001/captures/ADJ/ADJ__20260924T060621Z__b803253568d54a87b4c70d70b85f1d9b/raw/county_adjacency2026.txt",
+      "sha256": "a8ad0d26f5a17deebcc2907633a70dfaf73c4c953c42a74ead4748f076c22015"
+    },
+    {
+      "bytes": 54045,
+      "path": "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json",
+      "sha256": "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
+    },
+    {
+      "bytes": 38847,
+      "path": "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/references/strings.json",
+      "sha256": "160526e6880218e9d7123abcd240e5c4f29a6bf39fc54dd9a55471ce7dbe5184"
+    },
+    {
+      "bytes": 5350,
+      "path": "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json",
+      "sha256": "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
+    },
+    {
+      "bytes": 2562,
+      "path": "plan_inputs/data/datasets/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/plan.json",
+      "sha256": "dfd7303ddf1363b14cb9d3121119e34eefb7870a032dbc7d01c16de8647de8af"
+    },
+    {
+      "bytes": 1116030,
+      "path": "plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_25b1c98577e9a937/captures/ADJ/ADJ__20260924T173146Z__c35a136ae98c484abee7a2d9323733ba/raw/county_adjacency2024.txt",
+      "sha256": "912ca408163016864fe64aaf667b53ad03a19ce4acbc586d3ac508395bdac980"
+    },
+    {
+      "bytes": 1062648,
+      "path": "plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_26cb58bd7c8974f6/captures/ADJ/ADJ__20260924T173129Z__9b86fe8d59ac44b09503e29465799ae8/raw/county_adjacency2025.txt",
+      "sha256": "8233d2aed342f62eb02bae9f9002ad1d8fc6bd82d739185eba8bad832bf8fc87"
+    },
+    {
+      "bytes": 1116106,
+      "path": "plan_inputs/data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_9a80753794c0fcc3/captures/ADJ/ADJ__20260924T173148Z__0f901467c6994d71ba3e95c9005a899c/raw/county_adjacency2023.txt",
+      "sha256": "df62fedd7d27528af7fd870c7ec92232fb2d6bea3ec6cbc9928946b78e128f64"
+    },
+    {
+      "bytes": 13243,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/datadownload.js",
+      "sha256": "fa2644571edb032d70ad629729ee1cfc566d251ead275519a60390d2a835796e"
+    },
+    {
+      "bytes": 12986,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/legend.js",
+      "sha256": "7d403f3f2411061685718586ead4e45dcb36c36579a3fb4c4695f693b705ad6c"
+    },
+    {
+      "bytes": 109363,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/menus.js",
+      "sha256": "986c7d79ad3b1a74680be24ddceb03e8082e921c98d7430739572f0a346ed537"
+    },
+    {
+      "bytes": 24288,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/tooltip.js",
+      "sha256": "70aa19a04d30b0fda7d1093dca789bc057eb3260d5d9aa47f9d78fd22f234b2a"
+    },
+    {
+      "bytes": 34764,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/report.json",
+      "sha256": "381f0b776b5a65312c6dc9cc47020b7e50756bf6e656eaea565a2a672bbc10fc"
+    },
+    {
+      "bytes": 1093,
+      "path": "publisher_hosts_scope.json",
+      "sha256": "31348205ac151c2acc5c1dd8d9de1d0ea0d262e0f3329add467ac1bf5a849d25"
+    },
+    {
+      "bytes": 1359260,
+      "path": "queue.json",
+      "sha256": "266636d543d29c9676c5580a0d0ae0ee01b463a921c183b38aca5ba351d06fde"
+    },
+    {
+      "bytes": 108,
+      "path": "queue.lock.json",
+      "sha256": "620973edb7beb62fbdd5eb5ddc99c332d2a8e39eb54437f4b2bee0ca9b52139c"
+    }
+  ]
+}

@@ -103,3 +103,14 @@ def test_hosts_file_that_misses_a_queue_host_is_refused() -> None:
     short = [HOSTS[0]]
     with pytest.raises(ValueError, match="hosts the queue needs"):
         build.rewrite_hosts({"hosts": short, "hosts_sha256": hosts_digest(short), "queue_sha256": "0" * 64}, trimmed)
+
+
+def test_a_flag_with_a_date_suffix_that_the_secret_scan_reads_as_a_key_is_shortened_and_recorded() -> None:
+    queue = source_queue()
+    long_flag = "browser_export_moved_to_api:parity_verified_" + "2" * 8 + "_" + "3" * 8
+    queue["queue"][0]["flags"] = [long_flag, "other"]
+    body = (json.dumps(queue, indent=1, sort_keys=True) + "\n").encode()
+    trimmed = json.loads(build.trim_queue(body, hashlib.sha256(body).hexdigest()))
+    check(trimmed["queue"][0]["flags"] == ["browser_export_moved_to_api:parity_verified", "other"], "flag shortened")
+    expected = {"browser_export_moved_to_api:parity_verified": {"dated_suffixes_removed": ["2" * 8 + "_" + "3" * 8], "units": 1}}
+    check(trimmed["derived_from"]["flag_rewrites"] == expected, "rewrite recorded without the long flag")

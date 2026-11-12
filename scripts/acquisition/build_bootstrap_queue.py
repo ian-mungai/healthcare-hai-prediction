@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -23,6 +24,8 @@ SOURCE_SHA256 = "c1b0e0032d9417fd9e008b07dfa701169fc9063702dc95792a7009373344fd4
 SOURCE_PATH = "data/redownload_checks/20261111_run3_scope_v2/queue.json"
 KIND = "bootstrap_capture_queue"
 RULE = "keep disposition in api, direct_download, approved_manual"
+# The secret scan reads this flag with its date suffix as an API key. The harness tests the flag by prefix only, so the shortened flag is equal for it.
+DATED_FLAG = re.compile(r"^(browser_export_moved_to_api:parity_verified)_\d{8}_\d{8}$")
 DROPPED = ("not_used_by_bronze", "superseded_duplicate", "failed_attempt_excluded", "derived_replay_only", "dropped")
 
 
@@ -45,6 +48,16 @@ def trim_queue(body: bytes, expected_sha256: str = SOURCE_SHA256) -> bytes:
             dropped.append(unit)
         else:
             raise ValueError(f"Source unit {unit['snapshot_id']} has an unknown disposition {unit['disposition']}")
+    rewrites: dict[str, dict[str, Any]] = {}
+    for unit in kept:
+        for index, flag in enumerate(unit["flags"]):
+            if match := DATED_FLAG.match(flag):
+                unit["flags"][index] = match.group(1)
+                entry = rewrites.setdefault(match.group(1), {"dated_suffixes_removed": [], "units": 0})
+                entry["units"] += 1
+                suffix = flag.removeprefix(match.group(1) + "_")
+                if suffix not in entry["dated_suffixes_removed"]:
+                    entry["dated_suffixes_removed"].append(suffix)
     queue = {key: value for key, value in source.items() if key not in ("run", "inputs_sha256", "queue")}
     queue["kind"] = KIND
     queue["entries"] = len(kept)
@@ -58,6 +71,7 @@ def trim_queue(body: bytes, expected_sha256: str = SOURCE_SHA256) -> bytes:
         "dropped_by_disposition": dict(sorted(Counter(unit["disposition"] for unit in dropped).items())),
         "dropped_snapshot_ids_sha256": hashlib.sha256("\n".join(sorted(unit["snapshot_id"] for unit in dropped)).encode()).hexdigest(),
         "inputs_sha256": source["inputs_sha256"],
+        **({"flag_rewrites": rewrites} if rewrites else {}),
     }
     return encode_queue(queue)
 

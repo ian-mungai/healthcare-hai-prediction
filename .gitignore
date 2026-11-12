@@ -75,3 +75,6 @@ crash.*.log
 # Receipts that Archify finalize writes beside the diagram HTML; the JSON source and HTML are committed.
 # Project worktrees live in .worktrees/<branch-with-dashes>; each is its own checkout.
 /.worktrees/
+# The tracked ingestion inputs bundle keeps the repository paths of its plan inputs, which include a data folder.
+!config/acquisition/baseline_run/plan_inputs/data/
+!config/acquisition/baseline_run/plan_inputs/data/**

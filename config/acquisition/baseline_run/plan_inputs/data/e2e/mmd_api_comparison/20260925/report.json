@@ -1,0 +1,1102 @@
+{
+  "complete_12_year_coverage": true,
+  "created_at_utc": "2026-09-25T21:51:10.606306+00:00",
+  "further_api_collection_authorized": false,
+  "limits": [
+    "No S3 uploads or fresh S3 verification",
+    "No clinical, definition or modeling clearance",
+    "No other conditions or source APIs tested",
+    "Completeness established relative to saved browser exports, not unpublished CMS records",
+    "No downloaded JavaScript executed"
+  ],
+  "manifest_sha256": "ca4c09b47e4418f8895ae06963df0bac61aa76469f9150bbde6856f4ae7d075c",
+  "model_eligible": false,
+  "python_version": "3.12.14 (main, Aug 12 2026, 13:57:54) [Clang 21.0.0 (clang-2100.1.1.101)]",
+  "reference_observations": {
+    "countynames.tsv": {
+      "duplicate_ids_in_source_order": {
+        "60": [
+          "AMERICAN SAMOA",
+          "AMERICAN SAMOA"
+        ],
+        "60040": [
+          "American Samoa",
+          "Swains Island"
+        ],
+        "66": [
+          "GUAM",
+          "GUAM"
+        ],
+        "66010": [
+          "Guam",
+          "Guam",
+          "Guam"
+        ]
+      },
+      "handling": "CMS d3.map.set uses last row; urban labels are unused, only ID membership matters",
+      "utf8_replacement_characters": 0
+    },
+    "urban.tsv": {
+      "duplicate_ids_in_source_order": {},
+      "handling": "CMS d3.map.set uses last row; urban labels are unused, only ID membership matters",
+      "utf8_replacement_characters": 12
+    }
+  },
+  "reproduce": ".venv/bin/python -m scripts.acquisition.compare_mmd_api --manifest data/e2e/mmd_api_comparison/20260925/manifest.json --report data/e2e/mmd_api_comparison/20260925/replay.json",
+  "scope": "C258.01 API comparison only",
+  "script_sha256": "3cc6dd1aed0f43ddb8c3279c1ff4a1ea92ba8e8e7d0241f1aba85d142b6f5947",
+  "status": "passed",
+  "verification_boundary": "Live API capture and independent reconstruction versus twelve saved browser exports; offline replay uses exact retained responses.",
+  "years": [
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 548453,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:53:43.155624+00:00",
+        "sha256": "7fa4ba4d9201d11789a6a2fb1794ee027422f5fe62e5cf2ab0793d273c297f82",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_2_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=2&_size=500000"
+      },
+      "api_rows": 3228,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_2_sexcat_all_dual_all",
+        "prev_final_long_fltr12_year_20_racecat_all_sexcat_all",
+        "prev_final_long_fltr12_racecat_all_sexcat_all_21_f",
+        "prev_final_long_fltr12_racecat_all_sexcat_all_22_f",
+        "prev_final_long_fltr12_racecat_all_sexcat_all_23_p"
+      ],
+      "csv_rows": 3228,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "2"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/e3244f7918f5fa47aca9bfbeda7c94456b28117287154ff04920cfdd47ec7dda/captures/MMD/MMD__20260925T144832Z__ea628304d545425c955bc48b5c3967b3/raw/mmd_ffs_county_ami_prevalence_2012.csv",
+      "original_sha256": "e3244f7918f5fa47aca9bfbeda7c94456b28117287154ff04920cfdd47ec7dda",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 206,
+        "2": 259,
+        "3": 1433,
+        "4": 575,
+        "5": 755
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2012.csv",
+      "reconstructed_sha256": "e3244f7918f5fa47aca9bfbeda7c94456b28117287154ff04920cfdd47ec7dda",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "2"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2012
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 548623,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:53:47.247896+00:00",
+        "sha256": "906a2bdc81753eda842498f33b8014121d47157cf0309d9c8784e27888287eea",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_3_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=3&_size=500000"
+      },
+      "api_rows": 3229,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_3_sexcat_all_dual_all",
+        "prev_final_long_fltr12_racecat_all_sexcat_all_23_p"
+      ],
+      "csv_rows": 3229,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "3"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/da2f829935b77a27fdcef85f7d31a57ff529f61c58f23b73bcd340cf22967cc0/captures/MMD/MMD__20260925T144827Z__356b904668ba45928769e770c005d9d0/raw/mmd_ffs_county_ami_prevalence_2013.csv",
+      "original_sha256": "da2f829935b77a27fdcef85f7d31a57ff529f61c58f23b73bcd340cf22967cc0",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 215,
+        "2": 264,
+        "3": 1425,
+        "4": 575,
+        "5": 750
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2013.csv",
+      "reconstructed_sha256": "da2f829935b77a27fdcef85f7d31a57ff529f61c58f23b73bcd340cf22967cc0",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "3"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2013
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 548793,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:53:51.378618+00:00",
+        "sha256": "16a833aca2e6f2b09a6baf16bdf4fe4c4450be2667e42cca09cb08730309de5b",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_4_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=4&_size=500000"
+      },
+      "api_rows": 3230,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_4_sexcat_all_dual_all"
+      ],
+      "csv_rows": 3230,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "4"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/53e50263fa71e8a18ee37bc536d0a059295bbb1b772bc60fdbb9a2fb35d14553/captures/MMD/MMD__20260925T144632Z__8b7835f09bd54ddbb32ad233b9945bec/raw/mmd_ffs_county_ami_prevalence_2014.csv",
+      "original_sha256": "53e50263fa71e8a18ee37bc536d0a059295bbb1b772bc60fdbb9a2fb35d14553",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 219,
+        "2": 267,
+        "3": 1425,
+        "4": 569,
+        "5": 750
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2014.csv",
+      "reconstructed_sha256": "53e50263fa71e8a18ee37bc536d0a059295bbb1b772bc60fdbb9a2fb35d14553",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "4"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2014
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 547943,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:13.520208+00:00",
+        "sha256": "0da0323fe8a720fe0dad58efa103303a4c5e1f791031210c93b871f4fd8e15d8",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_5_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=5&_size=500000"
+      },
+      "api_rows": 3225,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_5_sexcat_all_dual_all"
+      ],
+      "csv_rows": 3225,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "5"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/9292107f32d07fc6fd21ff4eb9ccd21a58728564db84d4d835ecc7b772b35999/captures/MMD/MMD__20260925T073951Z__5c1921bd63b2459c9cca4f8bfbc0591c/raw/mmd_ffs_county_ami_prevalence_2015.csv",
+      "original_sha256": "9292107f32d07fc6fd21ff4eb9ccd21a58728564db84d4d835ecc7b772b35999",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 216,
+        "2": 273,
+        "3": 1417,
+        "4": 573,
+        "5": 746
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2015.csv",
+      "reconstructed_sha256": "9292107f32d07fc6fd21ff4eb9ccd21a58728564db84d4d835ecc7b772b35999",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "5"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2015
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 548453,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:18.068883+00:00",
+        "sha256": "6df6b3b722c7a7da866b1259682d5fb04d62769e5003d11184f39c4a6bae7b48",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_6_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=6&_size=500000"
+      },
+      "api_rows": 3228,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_6_sexcat_all_dual_all"
+      ],
+      "csv_rows": 3228,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "6"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/b58c5b4d6b9eb903436d7521fb51299a80c3ec8c28f0329b5be2569168844cc2/captures/MMD/MMD__20260925T073538Z__11a6e25aeac64318805daebe425ae46a/raw/mmd_ffs_county_ami_prevalence_2016.csv",
+      "original_sha256": "b58c5b4d6b9eb903436d7521fb51299a80c3ec8c28f0329b5be2569168844cc2",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 226,
+        "2": 273,
+        "3": 1417,
+        "4": 565,
+        "5": 747
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2016.csv",
+      "reconstructed_sha256": "b58c5b4d6b9eb903436d7521fb51299a80c3ec8c28f0329b5be2569168844cc2",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "6"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2016
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 547773,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:22.530144+00:00",
+        "sha256": "e2efd8ba2134930af6d0efe1a52a718e64c2659c26927f76510aa42097a6bc43",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_blankelig_year_7_sexcat_all_dual_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=7&_size=500000"
+      },
+      "api_rows": 3224,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_blankelig_year_7_sexcat_all_dual_all"
+      ],
+      "csv_rows": 3224,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "7"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/8ab74d3dbd39e0ce8234c1753707e7ff1b3a4ea67063cd69582e54777dc506a3/captures/MMD/MMD__20260925T073528Z__f49edaf5a7a84b4a8fe7e43b8bbcd7e7/raw/mmd_ffs_county_ami_prevalence_2017.csv",
+      "original_sha256": "8ab74d3dbd39e0ce8234c1753707e7ff1b3a4ea67063cd69582e54777dc506a3",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 224,
+        "2": 276,
+        "3": 1419,
+        "4": 563,
+        "5": 742
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2017.csv",
+      "reconstructed_sha256": "8ab74d3dbd39e0ce8234c1753707e7ff1b3a4ea67063cd69582e54777dc506a3",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "7"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2017
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 547604,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:28.477833+00:00",
+        "sha256": "c2664752d0cc116b1ed3648f1bfdfbfd4802c56e0fa3b045ca827505a9887a31",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_year_8_racecat_all_sexcat_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=8&_size=500000"
+      },
+      "api_rows": 3223,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_year_8_racecat_all_sexcat_all"
+      ],
+      "csv_rows": 3223,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "8"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/cd2c83d45687dbc0595985397935d71926c4c3bb12974e6d473627434c7cea45/captures/MMD/MMD__20260925T072503Z__21eb9bc0b7d94598b87607dd83918536/raw/mmd_ffs_county_ami_prevalence_2018.csv",
+      "original_sha256": "cd2c83d45687dbc0595985397935d71926c4c3bb12974e6d473627434c7cea45",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 228,
+        "2": 270,
+        "3": 1433,
+        "4": 557,
+        "5": 735
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2018.csv",
+      "reconstructed_sha256": "cd2c83d45687dbc0595985397935d71926c4c3bb12974e6d473627434c7cea45",
+      "returned_dimension_values": {
+        "agecat": [
+          ""
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          ""
+        ],
+        "eligcat": [
+          ""
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          ""
+        ],
+        "sexcat": [
+          ""
+        ],
+        "year": [
+          "8"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2018
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 563501,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:33.696869+00:00",
+        "sha256": "883020bf895baa54aeebcb1f2fefd6f0693a2fee13f44c71e88eeb2e94f927ad",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_year_9_racecat_all_sexcat_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=9&_size=500000"
+      },
+      "api_rows": 3220,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_year_9_racecat_all_sexcat_all"
+      ],
+      "csv_rows": 3220,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "9"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/c29d0f0df5106561190adcdda772e17bc2d9b0a1441a82dbc33a6b2183d0918a/captures/MMD/MMD__20260925T072503Z__6b7c539779c54880b826d4a18918824f/raw/mmd_ffs_county_ami_prevalence_2019.csv",
+      "original_sha256": "c29d0f0df5106561190adcdda772e17bc2d9b0a1441a82dbc33a6b2183d0918a",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 224,
+        "2": 271,
+        "3": 1443,
+        "4": 562,
+        "5": 720
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2019.csv",
+      "reconstructed_sha256": "c29d0f0df5106561190adcdda772e17bc2d9b0a1441a82dbc33a6b2183d0918a",
+      "returned_dimension_values": {
+        "agecat": [
+          "."
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          "."
+        ],
+        "eligcat": [
+          "."
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          "."
+        ],
+        "sexcat": [
+          "."
+        ],
+        "year": [
+          "9"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2019
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 566545,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:55:38.694203+00:00",
+        "sha256": "a4e7c83637131ebb05fcad28554f2f68537d4b78698d894560b41f52dc5bf21d",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_year_20_racecat_all_sexcat_all&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=20&_size=500000"
+      },
+      "api_rows": 3219,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_year_20_racecat_all_sexcat_all"
+      ],
+      "csv_rows": 3219,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "20"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/3ecc09d364efc8ec80716241905afcf704f7902c34a9a434f1cf877e3fffcf46/captures/MMD/MMD__20260925T071712Z__6cf13c27d13742569d7a88bd95930b8e/raw/mmd_ffs_county_ami_prevalence_2020.csv",
+      "original_sha256": "3ecc09d364efc8ec80716241905afcf704f7902c34a9a434f1cf877e3fffcf46",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 228,
+        "2": 272,
+        "3": 1463,
+        "4": 550,
+        "5": 706
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2020.csv",
+      "reconstructed_sha256": "3ecc09d364efc8ec80716241905afcf704f7902c34a9a434f1cf877e3fffcf46",
+      "returned_dimension_values": {
+        "agecat": [
+          "."
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          "."
+        ],
+        "eligcat": [
+          "."
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          "."
+        ],
+        "sexcat": [
+          "."
+        ],
+        "year": [
+          "20"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2020
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 566545,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:58:19.462301+00:00",
+        "sha256": "eb3957b76fa6160e07a373aabbe154fea2f1644323c519deeaa2429db7769c65",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_racecat_all_sexcat_all_21_f&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=21&_size=500000"
+      },
+      "api_rows": 3219,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_racecat_all_sexcat_all_21_f"
+      ],
+      "csv_rows": 3219,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "21"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/captures/MMD/MMD__20260925T064103Z__d5f9f9a323684944ab6248d15d11f05e/raw/mmd_ffs_county_ami_prevalence_2021.csv",
+      "original_sha256": "6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 247,
+        "2": 297,
+        "3": 1479,
+        "4": 519,
+        "5": 677
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2021.csv",
+      "reconstructed_sha256": "6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e",
+      "returned_dimension_values": {
+        "agecat": [
+          "."
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          "."
+        ],
+        "eligcat": [
+          "."
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          "."
+        ],
+        "sexcat": [
+          "."
+        ],
+        "year": [
+          "21"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2021
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 566370,
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:58:26.735386+00:00",
+        "sha256": "9795ceb15d48e155f779c90b2f540a6394fcf153f939a2d55fb21e8ba2ae5e7b",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_racecat_all_sexcat_all_22_f&agecat=.%7CIS%20NULL&condition=2&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&fltr=1&geography=c&measure=v&population=f&racecat=.%7CIS%20NULL&sexcat=.%7CIS%20NULL&year=22&_size=500000"
+      },
+      "api_rows": 3218,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_racecat_all_sexcat_all_22_f"
+      ],
+      "csv_rows": 3218,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "22"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b/captures/MMD/MMD__20260925T063516Z__a4cb35210e7847a48e2a051a8734eed6/raw/mmd_ffs_county_ami_prevalence_2022.csv",
+      "original_sha256": "506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 259,
+        "2": 321,
+        "3": 1492,
+        "4": 501,
+        "5": 645
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2022.csv",
+      "reconstructed_sha256": "506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b",
+      "returned_dimension_values": {
+        "agecat": [
+          "."
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          "."
+        ],
+        "eligcat": [
+          "."
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          "."
+        ],
+        "sexcat": [
+          "."
+        ],
+        "year": [
+          "22"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2022
+    },
+    {
+      "all_13_selections_match": true,
+      "api_receipt": {
+        "bytes": 570417,
+        "capture_method": "curl pilot; HTTP status/content type/bytes reported by curl; timestamp from completed file mtime",
+        "content_type": "application/json",
+        "retrieved_at_utc": "2026-09-25T21:47:39.019639+00:00",
+        "sha256": "e3a65e4cab4cf2d659c234efa32ac37c97e1c53eedb1486007b55196da7f048e",
+        "status": 200,
+        "url": "https://data.cms.gov/data-api/v1/mmd-tool/?_source=prev_final_long_fltr12_racecat_all_sexcat_all_23_p&population=f&year=23&geography=c&measure=v&condition=2&sexcat=.%7CIS%20NULL&agecat=.%7CIS%20NULL&dual=.%7CIS%20NULL&eligcat=.%7CIS%20NULL&racecat=.%7CIS%20NULL&fltr=1&_size=500000"
+      },
+      "api_rows": 3241,
+      "byte_identical": true,
+      "crosswalk_candidates_in_order": [
+        "prev_final_long_fltr12_racecat_all_sexcat_all_23_p"
+      ],
+      "csv_rows": 3241,
+      "excluded_native_ids": [],
+      "extra_native_fips": [],
+      "filters": {
+        "agecat": ".",
+        "condition": "2",
+        "dual": ".",
+        "eligcat": ".",
+        "fltr": "1",
+        "geography": "c",
+        "measure": "v",
+        "population": "f",
+        "racecat": ".",
+        "sexcat": ".",
+        "year": "23"
+      },
+      "mismatch_examples": [],
+      "mismatched_cells": 0,
+      "missing_api_dimensions": [
+        "population"
+      ],
+      "missing_native_fips": [],
+      "original_path": "data/historical_acquisition/mmd_browser_history/a1a45135dc9417f4a0e22c26a73988ecfae66c295fea375e9299bef0093ad168/captures/MMD/MMD__20260924T194708Z__4e8d841538264038beb2c357d5539c2a/raw/mmd_data.csv",
+      "original_sha256": "a1a45135dc9417f4a0e22c26a73988ecfae66c295fea375e9299bef0093ad168",
+      "original_unchanged": true,
+      "raw_denominator_categories": {
+        "1": 299,
+        "2": 351,
+        "3": 1509,
+        "4": 466,
+        "5": 616
+      },
+      "reconstructed_path": "data/e2e/mmd_api_comparison/20260925/reconstructed/mmd_ffs_county_ami_prevalence_2023.csv",
+      "reconstructed_sha256": "a1a45135dc9417f4a0e22c26a73988ecfae66c295fea375e9299bef0093ad168",
+      "returned_dimension_values": {
+        "agecat": [
+          "."
+        ],
+        "condition": [
+          "2"
+        ],
+        "dual": [
+          "."
+        ],
+        "eligcat": [
+          "."
+        ],
+        "fltr": [
+          "1"
+        ],
+        "geography": [
+          "c"
+        ],
+        "measure": [
+          "v"
+        ],
+        "population": [],
+        "racecat": [
+          "."
+        ],
+        "sexcat": [
+          "."
+        ],
+        "year": [
+          "23"
+        ]
+      },
+      "same_row_order": true,
+      "status": "passed",
+      "suppressed_or_non_numeric_rates": 0,
+      "year": 2023
+    }
+  ]
+}

@@ -24,6 +24,7 @@ timed "acquisition: mypy" "$python_bin" -m scripts.quality.typecheck --runtime a
 timed "acquisition: source registry" "$python_bin" -m scripts.acquisition.source_registry
 timed "acquisition: source verification log" "$python_bin" -m scripts.acquisition.source_verification_log --check
 timed "acquisition: receipt index" "$python_bin" -m scripts.acquisition.source_receipt_index --check
+timed "acquisition: baseline run inputs" "$python_bin" -m scripts.acquisition.check_baseline_run
 timed "acquisition: shards E2E" "$python_bin" -m scripts.acquisition.run_shards_e2e
 timed "acquisition: pytest with coverage gate" "$python_bin" -m pytest scripts/acquisition/tests tests/test_source_registry.py --cov=scripts.acquisition \
   --cov-config=config/acquisition/coverage.ini --cov-report=term-missing --cov-fail-under=90 -q

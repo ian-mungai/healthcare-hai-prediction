@@ -1,0 +1,59 @@
+{
+  "expected_format": "csv",
+  "expected_sha256": "6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e",
+  "export_selections": {
+    "adjustment": "Unsmoothed actual",
+    "analysis": "Base measure",
+    "condition": "Acute Myocardial Infarction",
+    "domain": "Primary chronic conditions",
+    "geography": "County",
+    "measure": "Prevalence",
+    "population": "Medicare Fee For Service",
+    "primary_age": "All",
+    "primary_dual": "Dual & non-dual",
+    "primary_eligibility": "All",
+    "primary_race": "All",
+    "primary_sex": "All",
+    "year": "2021"
+  },
+  "file_name": "mmd_ffs_county_ami_prevalence_2021.csv",
+  "governance": {
+    "access_class": "public",
+    "contains_phi": false,
+    "contains_pii": false,
+    "credential_reference": null,
+    "credentials_required": false,
+    "license_or_terms_url": null,
+    "use_restrictions": [
+      "Public aggregate download/documentation inspected. No credentials used. Preserve attribution and source-specific terms; no microdata access claimed.",
+      "Public aggregate institutional/geographic data or documentation only; no patient records intended.",
+      "This is a scope assessment, not a completed privacy-field audit. Stop on unexpected personal records.",
+      "Preserve all source/measure holds, suppression and redistribution restrictions; no model approval."
+    ]
+  },
+  "measurement_periods": [
+    {
+      "end_date": null,
+      "label": "Preserved prior evidence, not a common interval: null",
+      "period_type": "unknown",
+      "source_basis": "unknown",
+      "start_date": null,
+      "target_alignment": "unknown"
+    }
+  ],
+  "mode": "file",
+  "publisher": "data.cms.gov",
+  "release": {
+    "advertised_history": "\"Crosswalk and menu dates do not establish public numeric history, correct algorithm version, or unique geographic join. 2022/2023-only menus and state-only sickle-cell rule inspected.\"",
+    "dataset_version": null,
+    "observed_history": "\"79 cached 2023 branch samples rehashed and parsed, generally two rows each. They are API JSON, not publisher bulk CSV. C258.78 is state-only and per 100000; do not label all branches county percentages.\"",
+    "publisher_release_label": null,
+    "publisher_updated_at": null,
+    "release_date": null,
+    "revision_status": "unknown"
+  },
+  "role": "data",
+  "route_id": "MMD:file:001",
+  "scope": "User-saved publisher browser CSV: 2021 FFS county AMI prevalence, exact recorded selections. County-universe completeness and model eligibility remain unverified.",
+  "source_id": "MMD"
+}
