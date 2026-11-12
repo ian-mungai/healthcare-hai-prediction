@@ -190,8 +190,10 @@ ALLOWLIST = ".privacy_allowlist"
 HOME_NAME_CHAR = r"[^ \t\r\n\f\v/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
 HOME_QUOTES = "\"'`"
 # The roots below which a folder is a user's home: the macOS and Linux roots (the macOS Shared folder is no home), and a Windows drive with either separator
-# or escaped backslashes. Windows names are not case sensitive.
-HOME_ROOT = r"(?:/Users/(?!Shared/)|/home/|(?<![\w])[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))"
+# or escaped backslashes. The macOS and Windows file systems ignore case, so those roots and the Shared folder match in any case. The Linux root is exact.
+# Another case of the macOS root must start a path, so a route such as /v1/users/login is no home.
+MAC_USERS = r"(?:/Users|(?<![\w/.})\]-])/(?i:users))"
+HOME_ROOT = r"(?:" + MAC_USERS + r"/(?!(?i:Shared)/)|/home/|(?<![\w])[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))"
 HOME_PATH_PATTERN = re.compile(
     # A name; a name after quotes that close the root or open the name (not a plus sign, which joins a variable); or a quoted name that starts with a space.
     "(?:"
@@ -206,11 +208,12 @@ HOME_PATH_PATTERN = re.compile(
     + f"|(?<![\\w~/])~[^\\W\\d]{HOME_NAME_CHAR}*/)"
 )
 SHARED_FOLDER = "/Us" + "ers/Shared"  # Built here, so this file holds no path the scan flags.
-SHARED_PATH = re.compile(r"/Users/Shared/([^\s\"'`<>()\[\]{},;|&*?]*)")
+QUOTES_OUT = str.maketrans("", "", HOME_QUOTES)  # The shell drops the quotes around a component.
+SHARED_PATH = re.compile(MAC_USERS + r"/(?i:Shared)/([^\s<>()\[\]{},;|&*?]*)")
 HOME_FIRST_PART = re.compile(HOME_ROOT + r"([^/\\\s\"'`<>]+)")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
-ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|(/))")
+ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|([/\"'\\]))")
 PRIVACY_PATTERNS = {
     "home-path": ("home-directory path with a user name", HOME_PATH_PATTERN),
     "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
@@ -1689,11 +1692,11 @@ def other_twelve_digits(line: str) -> bool:
 
 
 def unescape(text: str) -> str:
-    """Decode the backslash forms of a character (hex, Unicode, octal) and a JSON-escaped slash."""
+    """Decode the backslash forms of a character (hex, Unicode, octal), an escaped slash or quote, and a pair of backslashes."""
 
     def one(match: re.Match[str]) -> str:
         if match.group(5):
-            return "/"
+            return match.group(5)
         code = int(match.group(1) or match.group(2) or match.group(3) or match.group(4), 8 if match.group(4) else 16)
         return chr(code) if code <= sys.maxunicode else match.group(0)
 
@@ -1713,8 +1716,8 @@ def decoded_views(line: str) -> set[str]:
 def shared_escapes(view: str) -> bool:
     """Whether a path through the macOS Shared folder climbs out of it, so that it cannot be shown to stay inside."""
     for match in SHARED_PATH.finditer(view):
-        resolved = posixpath.normpath(SHARED_FOLDER + "/" + match.group(1))
-        if resolved != SHARED_FOLDER and not resolved.startswith(SHARED_FOLDER + "/"):
+        resolved = posixpath.normpath(SHARED_FOLDER + "/" + match.group(1).translate(QUOTES_OUT)).lower()
+        if resolved != SHARED_FOLDER.lower() and not resolved.startswith(SHARED_FOLDER.lower() + "/"):
             return True
     return False
 
