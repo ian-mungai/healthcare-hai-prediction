@@ -494,12 +494,6 @@ for group in ${run_groups[@]+"${run_groups[@]}"}; do
     done
     continue
   fi
-  if [[ "$group" == "orchestration_checks" ]]; then
-    item="orchestration_checks_sdk_runtime"
-    printf -v "item_group_$item" '%s' "$group"
-    printf -v "item_entry_$item" '%s' "$item"
-    exclusive+=("$item")
-  fi
   if [[ "$group" != "lakehouse_gold" ]]; then
     printf -v "item_group_$group" '%s' "$group"
     shared+=("$group")

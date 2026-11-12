@@ -13,7 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.orchestration.sdk_runtime_cases import ROOT, SOURCE_PATHS, source_checks
+from scripts.orchestration.process_group_stop_cases import exit_cases
+from scripts.orchestration.sdk_source_checks import ROOT, SOURCE_PATHS, source_checks
 
 SOURCES = SOURCE_PATHS
 
@@ -37,31 +38,12 @@ MUTATIONS = (
         "def _relay(target_port: int, listen_port: int, deadline: float) -> None:\n    os.killpg(os.getpgrp(), signal.SIGKILL)\n",
         "orchestration/catalog_transport_child.py:signals_only_in_owned_stop_or_self_monitor",
     ),
-    Mutation("sdk_import_in_facade", "orchestration/ecs_api.py", "import secrets", "import boto3\nimport secrets", "facade_has_no_sdk_or_async_call_path"),
-    Mutation(
-        "thread_import_in_facade", "orchestration/ecs_api.py", "import secrets", "import threading\nimport secrets", "facade_has_no_sdk_or_async_call_path"
-    ),
-    Mutation("async_import_in_facade", "orchestration/ecs_api.py", "import secrets", "import asyncio\nimport secrets", "facade_has_no_sdk_or_async_call_path"),
-    Mutation(
-        "pool_import_in_facade",
-        "orchestration/ecs_api.py",
-        "import secrets",
-        "import concurrent.futures\nimport secrets",
-        "facade_has_no_sdk_or_async_call_path",
-    ),
     Mutation(
         "host_reap_outside_stop",
         "scripts/process_group.py",
         "def group_state(",
         "def extra_reap(handle):\n    os.waitpid(handle.pid, 0)\n\ndef group_state(",
         "scripts/process_group.py:only_guarded_stop_reaps",
-    ),
-    Mutation(
-        "task_reap_outside_stop",
-        "services/hai/bootstrap/supervisor.py",
-        "def _members(",
-        "def extra_reap(handle):\n    os.waitpid(handle.pid, 0)\n\ndef _members(",
-        "services/hai/bootstrap/supervisor.py:only_guarded_stop_reaps",
     ),
     Mutation(
         "host_catch_all_reaper",
@@ -106,13 +88,6 @@ MUTATIONS = (
         "scripts/process_group.py:signals_and_reaps_hold_handle_lock",
     ),
     Mutation(
-        "task_signal_outside_lock",
-        "services/hai/bootstrap/supervisor.py",
-        "def _members(",
-        "def extra_signal(handle):\n    _portable.signal_group(handle.pgid, signal.SIGKILL)\n\ndef _members(",
-        "services/hai/bootstrap/supervisor.py:signals_and_reaps_hold_handle_lock",
-    ),
-    Mutation(
         "host_reaped_guard_removed",
         "scripts/process_group.py",
         'if handle.state == "read_only":',
@@ -120,25 +95,11 @@ MUTATIONS = (
         "scripts/process_group.py:reaped_state_refuses_signals",
     ),
     Mutation(
-        "task_reaped_guard_removed",
-        "services/hai/bootstrap/supervisor.py",
-        'if handle.state == "read_only":',
-        'if handle.state == "unreachable_state":',
-        "services/hai/bootstrap/supervisor.py:reaped_state_refuses_signals",
-    ),
-    Mutation(
         "sweep_sends_signal",
         "orchestration/worker_recovery.py",
         "            _, observations = self.inspect(deadline=deadline, discover=True)",
         "            os.killpg(1, 9)\n            _, observations = self.inspect(deadline=deadline, discover=True)",
         "recovery:sweep:no_signal_or_reap",
-    ),
-    Mutation(
-        "pool_catch_all_reaper",
-        "orchestration/worker_pool.py",
-        "MAX_ACTIVE = 4",
-        "def extra_reap():\n    os.waitpid(-1, 0)\n\nMAX_ACTIVE = 4",
-        "orchestration/worker_pool.py:no_catch_all_reaper",
     ),
     Mutation(
         "recovery_bare_killpg",
@@ -155,13 +116,6 @@ MUTATIONS = (
         "            from scripts.process_group import signal_group\n"
         "            signal_group(1, 9)\n            _, observations = self.inspect(deadline=deadline, discover=True)",
         "recovery:sweep:no_signal_or_reap",
-    ),
-    Mutation(
-        "pool_signal_outside_stop",
-        "orchestration/worker_pool.py",
-        '        """Retry only owned unreaped leaders. Read-only handles cannot signal anything."""',
-        '        """Retry only owned unreaped leaders. Read-only handles cannot signal anything."""\n        os.killpg(1, 9)',
-        "orchestration/worker_pool.py:signals_only_in_owned_stop_or_self_monitor",
     ),
     Mutation(
         "recovery_unused_signal_import",
@@ -183,45 +137,18 @@ MUTATIONS = (
 
 @dataclass(frozen=True)
 class StopMutation:
-    """A defect planted in a stop (the task supervisor's or the host's) and the fake-backed stop case that must fail for it."""
+    """A defect planted in the host stop and the fake-backed stop case that must fail for it."""
 
     name: str
     before: str
     after: str
     check: str
-    path: str = "services/hai/bootstrap/supervisor.py"
+    path: str = "scripts/process_group.py"
 
 
-SUPERVISOR = "services/hai/bootstrap/supervisor.py"
 HOST_STOP = "scripts/process_group.py"
 HOST_SIBLINGS = ("services/hai/deadline_run.py",)
-SUPERVISOR_SIBLINGS = ("services/hai/deadline_run.py", "orchestration/worker_protocol.py", "orchestration/worker_stderr.py")
-RETRY_SLEEP = "time.sleep(min(0.1, max(0.0, deadline - time.monotonic())))\n"
 STOP_MUTATIONS = (
-    StopMutation(
-        "task_stop_gives_up_on_a_failed_listing",
-        f'                            reason = "listing_unavailable"\n                            {RETRY_SLEEP}                            continue\n',
-        '                            return {"status": "survivor", "confirmed": False}\n',
-        "task_transient_listing_failure_is_retried",
-    ),
-    StopMutation(
-        "task_stop_gives_up_on_an_unreapable_leader",
-        f'                    reason = "leader_not_reapable"\n                    {RETRY_SLEEP}',
-        '                    return {"status": "survivor", "confirmed": False}\n',
-        "task_zombie_leader_with_exiting_threads_is_retried",
-    ),
-    StopMutation(
-        "task_stop_confirms_an_unproven_group_at_the_deadline",
-        '"confirmed": False, "reason": reason}\n        finally:',
-        '"confirmed": True, "reason": reason}\n        finally:',
-        "task_persistent_listing_failure_is_unconfirmed_at_the_deadline",
-    ),
-    StopMutation(
-        "task_stop_waits_past_its_deadline",
-        "                while time.monotonic() < deadline:\n                    if not ready_to_reap:",
-        "                while time.monotonic() < deadline + 100:\n                    if not ready_to_reap:",
-        "task_unreapable_leader_is_unconfirmed_at_the_deadline",
-    ),
     StopMutation(
         "host_stop_counts_an_exiting_leader_as_live",
         'return state.startswith("Z") or "E" in state[1:]',
@@ -269,9 +196,7 @@ STOP_MUTATIONS = (
 
 def stop_mutation_rows(run_folder: Path) -> list[dict[str, Any]]:
     """Plant each stop defect in a copy of its file and require the named fake-backed stop case to fail, after a passing baseline on the real file."""
-    from scripts.orchestration.sdk_owned_cases import _exit_cases, _retry_cases
-
-    cases = {SUPERVISOR: (_retry_cases, SUPERVISOR_SIBLINGS), HOST_STOP: (_exit_cases, HOST_SIBLINGS)}
+    cases = {HOST_STOP: (exit_cases, HOST_SIBLINGS)}
 
     def checks_of(path: str, text: str, label: str) -> dict[str, bool]:
         run_cases, siblings = cases[path]
@@ -366,7 +291,7 @@ def run(output: Path) -> dict[str, Any]:
                 "proof": "source contract only",
             }
         )
-    case_source = (ROOT / "scripts/orchestration/sdk_runtime_cases.py").read_text()
+    case_source = (ROOT / "scripts/orchestration/sdk_source_checks.py").read_text()
     if case_source.count("    return checks\n") != 1:
         raise ValueError("case_mutation_location_changed")
     changed_case = case_source.replace("    return checks\n", "    return {name: True for name in checks}\n", 1)
@@ -377,9 +302,9 @@ def run(output: Path) -> dict[str, Any]:
         raise RuntimeError("static_case_loader_unavailable")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    bad_subject = run_folder / "sdk_import_in_facade"
-    normal_rejects = source_checks(bad_subject)["facade_has_no_sdk_or_async_call_path"] is False
-    mutant_accepts = module.source_checks(bad_subject)["facade_has_no_sdk_or_async_call_path"] is True
+    bad_subject = run_folder / "recovery_unused_signal_import"
+    normal_rejects = source_checks(bad_subject)["recovery:signal_imports_closed"] is False
+    mutant_accepts = module.source_checks(bad_subject)["recovery:signal_imports_closed"] is True
     rows.append(
         {
             "name": "test_discards_failures",

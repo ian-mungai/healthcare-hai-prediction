@@ -2304,8 +2304,6 @@ def feature_weight_cases() -> list[dict[str, Any]]:
 
 
 WORKER_KINDS = (
-    # The SDK runtime commands of the offline orchestration group run alone before the other items (pull request 72 splits them from the group's own item).
-    "orchestration_checks_sdk_runtime",
     "lakehouse_gold_checks",
     "lakehouse_gold_writer_setup",
     "lakehouse_gold_model_metadata_e2e",
@@ -3128,11 +3126,6 @@ if __name__ == "__main__":
     label = sys.argv[1]
     raise SystemExit(observe(label, sys.argv[2:], lambda: 3 if label == os.environ.get("SCHEDULING_FAIL") else 0))
 """
-SDK_LABELS = (
-    "orchestration_checks: SDK worker fixtures",
-    "orchestration_checks: SDK lifecycle cases",
-    "orchestration_checks: SDK runtime cases",
-)
 ORCHESTRATION_COMMANDS = (
     (
         "scripts.orchestration.sdk_worker_cases",
@@ -3145,23 +3138,13 @@ ORCHESTRATION_COMMANDS = (
         "--output",
         "@quality@/sdk_worker_cases/report.json",
     ),
-    ("scripts.orchestration.sdk_lifecycle_cases", "-B", "--fixtures", "@fixtures@", "--output", "@quality@/sdk_lifecycle_cases/report.json"),
-    ("scripts.orchestration.sdk_runtime_cases", "-B", "--mode", "native", "--cases", "all", "--output", "@quality@/sdk_runtime_cases/report.json"),
     ("scripts.orchestration.sdk_static_mutations", "-B", "--output", "@quality@/sdk_static_mutations/report.json"),
     ("scripts.orchestration.catalog_transport_cases", "-B", "--mutations", "--output", "@quality@/catalog_transport_cases/report.json"),
-    (
-        "scripts.orchestration.sdk_supervisor_cases",
-        "-B",
-        "--mode",
-        "native" if sys.platform.startswith("linux") else "static",
-        "--source-smoke",
-        "--output",
-        "@quality@/sdk_supervisor_cases/report.json",
-    ),
     ("scripts.orchestration.run_lineage_e2e",),
     ("scripts.orchestration.run_ecs_target_e2e", "--proof", "S"),
     ("scripts.orchestration.run_ecs_target_e2e", "--proof", "D"),
     ("scripts.orchestration.task_guard_cases",),
+    ("scripts.orchestration.trigger_dag_cases", "-B", "--output", "@quality@/trigger_dag_cases/report.json"),
     ("scripts.orchestration.run_ecs_launch_e2e",),
     ("scripts.orchestration.run_airflow_mode_e2e",),
     ("scripts.lakehouse.run_layer_run_e2e",),
@@ -3196,11 +3179,11 @@ def intervals_overlap(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return left["start"] < right["end"] and right["start"] < left["end"]
 
 
-def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = False, fail_sdk: bool = False) -> dict[str, Any]:
+def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = False, fail_samples: bool = False) -> dict[str, Any]:
     """Run the dispatcher with native event stand-ins, unchanged orchestration commands and two shared workers that must rendezvous."""
-    name = f"dispatcher_scheduling_{part}_{'no_sdk' if no_sdk else 'sdk_failure' if fail_sdk else 'success'}"
+    name = f"dispatcher_scheduling_{part}_{'staged' if staged else 'samples_failure' if fail_samples else 'success'}"
     events = out / f"{name}_events"
-    exclusive = ([] if no_sdk else [SDK_LABELS[0]]) + (["repository hooks: samples"] if part == "all" else [])
+    exclusive = ["repository hooks: samples"] if part == "all" else []
     peers = ["probe: python_lint", "probe: configuration_checks"]
     probe = scheduling_probe(work, events, exclusive, peers)
     quality = out / f"{name}_quality"
@@ -3217,7 +3200,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
         acquisition.write_text(
             acquisition.read_text() + '\n"$PYTHON_BIN" "$SCHEDULING_PROBE" "probe: acquisition ${ACQUISITION_PART:-} ${ACQUISITION_SHARD:-}"\n'
         )
-        if no_sdk:
+        if staged:
             path = tree / "monitoring/scheduling_probe.py"
             path.parent.mkdir(exist_ok=True)
             path.write_text("synthetic = True\n")
@@ -3229,11 +3212,11 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
             out,
             name,
             {
-                "CI_SCOPE": "staged" if no_sdk else "full",
+                "CI_SCOPE": "staged" if staged else "full",
                 "CI_PART": part,
                 "SCHEDULING_EVENTS": str(events),
                 "SCHEDULING_PROBE": str(probe),
-                "SCHEDULING_FAIL": SDK_LABELS[2] if fail_sdk else "",
+                "SCHEDULING_FAIL": "repository hooks: samples" if fail_samples else "",
                 "QUALITY_ARTIFACT_DIR": str(quality),
             },
             prepare=prepare,
@@ -3242,17 +3225,15 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
     finally:
         probe.unlink(missing_ok=True)
     rows = scheduling_rows(events)
-    sdk = [row for row in rows if row["label"] in SDK_LABELS]
-    ordinary = [row for row in rows if not row["label"].startswith("gates:") and row not in sdk]
+    ordinary = [row for row in rows if not row["label"].startswith("gates:")]
     shared = [
         row
         for row in ordinary
         if not row["label"].startswith("launcher E2E") and row["label"] not in {"probe: lakehouse_gold_writer_setup", "repository hooks: samples"}
     ]
     samples = [row for row in rows if row["label"] == "repository hooks: samples"]
-    sdk_span = {"start": min(row["start"] for row in sdk), "end": max(row["end"] for row in sdk)} if sdk else None
     wanted: list[list[str]] = []
-    for module, *arguments in ORCHESTRATION_COMMANDS[:3] if fail_sdk else ORCHESTRATION_COMMANDS:
+    for module, *arguments in ORCHESTRATION_COMMANDS:
         flags = [arguments.pop(0)] if arguments[:1] == ["-B"] else []
         expanded = [
             argument.replace("@quality@", str(quality))
@@ -3265,7 +3246,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
     labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]
     expected = [
         f"probe: {entry}"
-        for entry in (CORE[:1] + CORE[2:] if not no_sdk else ["python_lint", "repository_code_checks", "ci_tooling_checks", "configuration_checks"])
+        for entry in (CORE[:1] + CORE[2:] if not staged else ["python_lint", "repository_code_checks", "ci_tooling_checks", "configuration_checks"])
     ]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
@@ -3279,17 +3260,19 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, no_sdk: bool = 
     writer = [row for row in rows if row["label"] == "probe: lakehouse_gold_writer_setup"]
     summary = (out / f"{name}_summary.md").read_text()
     checks = {
-        "intended_exit": code != 0 if fail_sdk else code == 0,
-        "sdk_commands_exactly_once_with_unchanged_argv": actual == ([] if no_sdk else wanted),
-        "selected_commands_exactly_once": True if fail_sdk else sorted(labels) == sorted(expected),
-        "sdk_has_no_peer_overlap": sdk_span is None or all(not intervals_overlap(sdk_span, row) for row in ordinary),
+        "intended_exit": code != 0 if fail_samples else code == 0,
+        "orchestration_commands_exactly_once_with_unchanged_argv": actual == ([] if staged or fail_samples else wanted),
+        "selected_commands_exactly_once": True if fail_samples else sorted(labels) == sorted(expected),
         "samples_has_no_peer_overlap": all(not intervals_overlap(sample, row) for sample in samples for row in rows if row is not sample),
-        "exclusive_items_run_in_order": not samples or sdk_span is not None and sdk_span["end"] <= samples[0]["start"],
-        "gold_writer_precedes_sdk": not writer or sdk_span is not None and writer[0]["end"] <= sdk_span["start"],
-        "shared_work_follows_exclusive_items": not samples or all(samples[0]["end"] <= row["start"] for row in shared),
-        "remaining_shared_workers_overlap": fail_sdk or len(peer_rows) == 2 and all(row["barrier_met"] for row in peer_rows) and intervals_overlap(*peer_rows),
-        "sdk_failure_is_preserved": not fail_sdk
-        or re.search(r"^\| orchestration_checks: SDK runtime cases \| .* \| 3 \|$", summary, re.MULTILINE) is not None
+        "gold_writer_precedes_samples": not writer or not samples or writer[0]["end"] <= samples[0]["start"],
+        "shared_work_follows_samples": not samples or fail_samples or all(samples[0]["end"] <= row["start"] for row in shared),
+        "failed_samples_stop_the_shared_work": not fail_samples or not shared,
+        "remaining_shared_workers_overlap": fail_samples
+        or len(peer_rows) == 2
+        and all(row["barrier_met"] for row in peer_rows)
+        and intervals_overlap(*peer_rows),
+        "samples_failure_is_preserved": not fail_samples
+        or re.search(r"^\| repository hooks: samples \| .* \| 3 \|$", summary, re.MULTILINE) is not None
         and PASS_LINES["all"] not in log,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code, "events": rows, "output": log[-500:]}
@@ -3299,8 +3282,8 @@ def dispatcher_scheduling_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     return [
         dispatcher_scheduling_case(work, out, "core"),
         dispatcher_scheduling_case(work, out, "all"),
-        dispatcher_scheduling_case(work, out, "core", no_sdk=True),
-        dispatcher_scheduling_case(work, out, "core", fail_sdk=True),
+        dispatcher_scheduling_case(work, out, "core", staged=True),
+        dispatcher_scheduling_case(work, out, "all", fail_samples=True),
     ]
 
 
@@ -3831,9 +3814,7 @@ def local_plan_of(log: str) -> dict[str, Any]:
     groups: set[str] = {"launcher"} if "TIMED launcher E2E" in log else set()
     units: set[str] = set()
     for item in items:
-        if item == "orchestration_checks_sdk_runtime":
-            groups.add("orchestration_checks")
-        elif item.startswith("lakehouse_gold_"):
+        if item.startswith("lakehouse_gold_"):
             groups.add("lakehouse_gold")
             units.add(item.removeprefix("lakehouse_gold_"))
         elif item.startswith("lakehouse_features_"):
@@ -4080,7 +4061,6 @@ STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
     "lakehouse_features": FEATURE_ENTRIES,
-    "orchestration_checks": ["orchestration_checks_sdk_runtime", "orchestration_checks"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
 STAND_IN_BODY = """#!/usr/bin/env bash

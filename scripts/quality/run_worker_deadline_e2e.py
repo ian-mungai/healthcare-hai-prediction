@@ -62,13 +62,18 @@ RUN_TIMEOUT_SECONDS = 20
 # number of fresh-sandbox attempts the case may use to get a setup that holds.
 TIMING_PRECONDITIONS = ("launch_in_the_middle_of_a_second", "start_late_in_a_wall_clock_second")
 TIMING_ATTEMPTS = 3
+# The wall-clock fraction at which the stand-in plan is held in the first attempt, and the fraction of a second at which a launch is wanted (the middle of the
+# window launch_in_the_middle_of_a_second accepts). A later attempt shifts the plan by the miss that the attempt before it measured, because the time from the
+# plan to the launch depends on the machine.
+PLAN_FRACTION = 0.55
+TARGET_LAUNCH_FRACTION = 0.4
 # The stand-in Python launcher: the plan lists the groups of STUB_GROUPS, every other module succeeds, and -c code (the dispatcher's JSON reads) runs for real.
 STUB_PYTHON = f"""#!/bin/bash
-# The first worker besides the exclusive SDK runtime item starts late in a wall-clock second (STUB_ALIGN_FRACTION), whatever that item took. It waits only
+# The first worker starts late in a wall-clock second (STUB_ALIGN_FRACTION). It waits only
 # inside the second in which it was launched and records the fraction of that second. A wait into the next second would start it a whole second after the
 # dispatcher noted its start, and the dispatcher counts a worker's age in whole seconds from that note.
 if [ -n "${{STUB_ALIGN_FRACTION:-}}" ] && [ "$1" = -I ] && [ "$2" = -c ] && [[ "$3" == *os.setsid* ]]; then
-  if [[ "$*" != *orchestration_checks_sdk_runtime* ]] && [ ! -e "$STUB_DIR/aligned" ]; then
+  if [ ! -e "$STUB_DIR/aligned" ]; then
     touch "$STUB_DIR/aligned"
     {PYTHON} -c "import sys, time
 now = time.time()
@@ -200,8 +205,6 @@ GROUP_BODIES = {
     "python_lint": 'python_lint() { timed "stub: python_lint" bash "$STUB_DIR/$STUB_PYTHON_LINT.sh" python_lint; }\n',
     "orchestration_checks": (
         'orchestration_checks() { timed "stub: orchestration_checks" bash "$STUB_DIR/${STUB_ORCHESTRATION:-quick}.sh" orchestration_checks; }\n'
-        # The dispatcher runs the SDK runtime commands of this group as their own exclusive item before the other workers.
-        'orchestration_checks_sdk_runtime() { timed "stub: SDK runtime" true; }\n'
     ),
 }
 
@@ -763,13 +766,13 @@ def unconfirmed_deadline_stop(base: Path) -> dict[str, Any]:
     return case("deadline_stop_that_cannot_be_confirmed_is_named", base, body)
 
 
-def not_before_the_limit_attempt(base: Path, attempt: int) -> dict[str, Any]:
+def not_before_the_limit_attempt(base: Path, attempt: int, plan_fraction: float = PLAN_FRACTION) -> dict[str, Any]:
     def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
         run = sandbox.run(
             STUB_PYTHON_LINT="alive_time",
             STUB_ORCHESTRATION="near",
             STUB_ALIGN_FRACTION="0.75",
-            STUB_PLAN_FRACTION="0.55",
+            STUB_PLAN_FRACTION=f"{plan_fraction:.3f}",
             CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS),
         )
         alive_file = sandbox.stub / "alive.json"
@@ -814,8 +817,12 @@ def not_before_the_limit(base: Path) -> dict[str, Any]:
     check fails the case at once, whether or not its setup held. Otherwise the first attempt whose setup held decides the case: it passes only when every
     other check of that attempt is true. When no attempt held the setup, the case fails with timing_preconditions_held_in_an_attempt false."""
     attempts: list[dict[str, Any]] = []
+    plan_fraction = PLAN_FRACTION
     for number in range(1, TIMING_ATTEMPTS + 1):
-        attempts.append(not_before_the_limit_attempt(base, number))
+        attempts.append(not_before_the_limit_attempt(base, number, plan_fraction))
+        measured = attempts[-1]["checks"].get("launch_wall_fraction")
+        if isinstance(measured, float) and measured >= 0.0:
+            plan_fraction = (plan_fraction + TARGET_LAUNCH_FRACTION - measured) % 1.0
         # Only a pure timing miss runs again: a failed behaviour check decides the case even when the setup also missed, so a defect that shows only on a
         # missed setup cannot be discarded by a later attempt.
         if "raised" in attempts[-1]["checks"] or setup_held(attempts[-1]["checks"]) or not behaviour_held(attempts[-1]["checks"]):
