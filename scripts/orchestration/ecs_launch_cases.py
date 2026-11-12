@@ -1541,6 +1541,48 @@ def saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity()
         require("end" not in rig.events(1) and rig.ecs.count("stop_task") >= 1, f"the launch was closed without a confirmed stop: {rig.events(1)}")
 
 
+def temporary_record_failure_at_the_gate(kind: str) -> None:
+    """A record-store failure while the gate settles an unfinished launch whose task already stopped is temporary: the refusal keeps the old launch's identity,
+    says it may be temporary and names no cancel or stop state that did not happen, the new run is neither claimed nor does the old launch end, and the
+    same call succeeds once the store answers."""
+    rig = Rig()
+    rig.ecs.hold = True
+    arn = die_while_running(rig, spec())
+    rig.ecs.finish(arn)
+    suffix = "end.json" if kind == "end_write_timeout" else "cancel.json"
+    fault: Exception = client_error("SlowDown", "PutObject") if kind == "cancel_write_throttle" else ReadTimeoutError(endpoint_url="https://s3.invalid")
+    rig.bucket.put_faults[suffix] = [fault]
+    try:
+        rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    except FamilyBusy as busy:
+        raise AssertionError(f"{kind}: a temporary record failure was reported as a family refusal: {busy}") from None
+    except LaunchUnavailable as error:
+        text = str(error)
+    else:
+        raise AssertionError(f"{kind}: the injected record failure did not reach the caller")
+    missing = [part for part in (RUN, "gold", "attempt 1", arn, rig.adapter.identity(f"{RUN}:gold:1"), "temporary") if part not in text]
+    require(not missing, f"{kind}: the refusal does not name {missing}: {text}")
+    require("could not be confirmed" not in text, f"{kind}: the refusal blames the stop, which is shown STOPPED: {text}")
+    cancelled = f"{PREFIX}/{RUN}/gold/cancel.json" in rig.bucket.objects
+    require(cancelled or "cancel is recorded" not in text, f"{kind}: the refusal claims a cancel that was never recorded: {text}")
+    require("end" not in rig.events(1) and not claim_of(rig, OTHER_RUN), f"{kind}: a failed recovery ended the launch or claimed the new run")
+    rig.ecs.hold = False
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok and rig.record(1, "end")["outcome"] == "cancelled", f"{kind}: the same call did not settle the old launch and launch the run: {fresh}")
+
+
+def cancel_write_timeout_is_temporary_at_the_gate() -> None:
+    temporary_record_failure_at_the_gate("cancel_write_timeout")
+
+
+def cancel_write_throttle_is_temporary_at_the_gate() -> None:
+    temporary_record_failure_at_the_gate("cancel_write_throttle")
+
+
+def end_write_timeout_is_temporary_at_the_gate() -> None:
+    temporary_record_failure_at_the_gate("end_write_timeout")
+
+
 def late_send_never_admits_a_new_run() -> None:
     """A sender passes its guard at 599 s and its RunTask request is in flight when the window ends at 600 s. At 601 s a new run's gate is refused and the old
     launch is not closed. The request then creates its task and the sender crashes before the started record: the gate names that task and waits until ECS shows
@@ -1720,6 +1762,9 @@ CASES: dict[str, Callable[[], None]] = {
     "settle_is_idempotent_when_the_task_is_found": settle_is_idempotent_when_the_task_is_found,
     "hidden_task_never_admits_a_new_run": hidden_task_never_admits_a_new_run,
     "late_send_never_admits_a_new_run": late_send_never_admits_a_new_run,
+    "cancel_write_timeout_is_temporary_at_the_gate": cancel_write_timeout_is_temporary_at_the_gate,
+    "cancel_write_throttle_is_temporary_at_the_gate": cancel_write_throttle_is_temporary_at_the_gate,
+    "end_write_timeout_is_temporary_at_the_gate": end_write_timeout_is_temporary_at_the_gate,
     "saved_task_that_ecs_forgot_blocks_the_gate_with_its_identity": saved_task_that_ecs_forgot_blocks_the_gate_with_its_identity,
     "saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity": saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity,
     "two_new_launches_settle_at_most_once": two_new_launches_settle_at_most_once,

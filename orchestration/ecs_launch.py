@@ -122,6 +122,10 @@ class LaunchUnavailable(LaunchError):
     """A later identical call can succeed. Nothing was launched beside a task that may be live."""
 
 
+class RecordStoreUnavailable(LaunchUnavailable):
+    """A launch record could not be read or written now, or a write is not confirmed. The failure is temporary: the same call can succeed."""
+
+
 class StopFailed(LaunchError):
     """A stop was not confirmed. Nothing was recorded, so the stop can be repeated."""
 
@@ -358,7 +362,7 @@ class S3LaunchStore:
                 ) from None
             raise self.refusal(code) from None
         except BotoCoreError as error:
-            raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
+            raise RecordStoreUnavailable(f"launch record store: {type(error).__name__}") from None
         raise LaunchError("a record that cannot exist was read")
 
     def get_with_etag(self, key: str, parse: Callable[[bytes, str], dict[str, Any]] = parse_record) -> tuple[dict[str, Any], str] | None:
@@ -374,7 +378,7 @@ class S3LaunchStore:
                 raise LaunchRefused(f"launch history cannot be read ({key} answered AccessDenied): a launch never starts on history it cannot read") from None
             raise self.refusal(code) from None
         except BotoCoreError as error:
-            raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
+            raise RecordStoreUnavailable(f"launch record store: {type(error).__name__}") from None
         return parse(body, key), str(reply.get("ETag", ""))
 
     def get(self, key: str) -> dict[str, Any] | None:
@@ -384,7 +388,7 @@ class S3LaunchStore:
     @staticmethod
     def refusal(code: str) -> LaunchError:
         if code in RETRYABLE_CODES:
-            return LaunchUnavailable(f"launch record store: {code}")
+            return RecordStoreUnavailable(f"launch record store: {code}")
         return LaunchRefused(f"launch record store refused the call: {code or 'ClientError'}")
 
     def put_once(self, record: Mapping[str, Any]) -> dict[str, Any]:
@@ -400,15 +404,15 @@ class S3LaunchStore:
                 raise self.refusal(code) from None
             stored = self.get(key)
             if stored is None:
-                raise LaunchUnavailable("a launch record exists but is not readable yet: call again") from None
+                raise RecordStoreUnavailable("a launch record exists but is not readable yet: call again") from None
             return stored
         except BotoCoreError:
             stored = self.get(key)
             if stored is None:
-                raise LaunchUnavailable("launch record store: the write is not confirmed") from None
+                raise RecordStoreUnavailable("launch record store: the write is not confirmed") from None
             return stored
         if self.get(key) is None:
-            raise LaunchUnavailable("a launch record was written but is not readable yet: call again")
+            raise RecordStoreUnavailable("a launch record was written but is not readable yet: call again")
         return dict(record)
 
     def run_record(self, run_id: str, job: str, event: str) -> dict[str, Any] | None:
@@ -450,7 +454,7 @@ class S3LaunchStore:
                 raise self.refusal(code) from None
         except BotoCoreError:
             if self.get_with_etag(key, parse_family_record) is None:
-                raise LaunchUnavailable("launch record store: the family index write is not confirmed") from None
+                raise RecordStoreUnavailable("launch record store: the family index write is not confirmed") from None
 
     def family_runs(self, job: str) -> list[str]:
         prefix = self.family_prefix(job)
@@ -473,7 +477,7 @@ class S3LaunchStore:
                 raise LaunchRefused(f"the family index of {job} cannot be listed ({code}): a launch never starts beside launches it cannot see") from None
             raise self.refusal(code) from None
         except BotoCoreError as error:
-            raise LaunchUnavailable(f"launch record store: {type(error).__name__}") from None
+            raise RecordStoreUnavailable(f"launch record store: {type(error).__name__}") from None
 
 
 class EcsFitProbe:
@@ -1058,28 +1062,51 @@ class Launcher:
         unresolved and this raises ``FamilyBusy`` with the launch's run, job, attempt and task identity: when a saved task's stop cannot be confirmed (ECS does
         not describe it, or the stop is not confirmed in time) the message also holds the saved ARN, and when a RunTask call may have been sent and no task is
         found the end of the send window and an empty family listing prove nothing, because ECS lists a new task late and a request that passed its guard may
-        still be in flight. A repeat, or a second caller at the same moment, reads the one end record, because every record is write-once."""
+        still be in flight. A launch record that cannot be read or written now is a temporary failure, not a refusal: it raises ``RecordStoreUnavailable`` (a
+        ``LaunchUnavailable``) with the launch's identity, claims no cancel and ends nothing, and the same call repeats the settle. A repeat, or a second
+        caller at the same moment, reads the one end record, because every record is write-once."""
         claim = self.store.run_record(run_id, job, "claim")
         if claim is None:
             raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
         attempt = int(claim["attempt"])
-        key = f"{run_id}:{job}:{attempt}"
-        who = f"the {job} launch of run {run_id} (attempt {attempt}) has no end record and was not settled"
         try:
             return self.cancel(run_id, job, attempt, reason="automatic settle")
+        except RecordStoreUnavailable as error:
+            try:
+                saved = self.events(run_id, job, attempt).get("started")
+            except RecordStoreUnavailable:
+                saved = None
+            who = self.blocking_launch(run_id, job, attempt, saved)
+            raise RecordStoreUnavailable(
+                f"{who} has no end record and was not settled: a launch record could not be read or written ({error}). Nothing was ended by this call. "
+                "This may be temporary: call the launch again and the family gate repeats the settle"
+            ) from None
         except (LaunchUnavailable, StopFailed) as error:
             started = self.events(run_id, job, attempt).get("started")
+            who = self.blocking_launch(run_id, job, attempt, started)
             if started is not None:
                 raise FamilyBusy(
-                    f"{who}: its task {started['task_arn']} (identity {self.adapter.identity(key)}) is saved in the launch records and its stop could not be "
-                    f"confirmed ({error}). The cancel is recorded. The run launches once ECS describes that task STOPPED, which the next launch of the family "
-                    "then records"
+                    f"{who} has no end record and was not settled: its task is saved in the launch records and its stop could not be confirmed ({error}). "
+                    f"{self.cancel_note(run_id, job)}The run launches once ECS describes that task STOPPED, which the next launch of the family then records"
                 ) from None
         raise FamilyBusy(
-            f"{who}: a RunTask call may have been sent and no task of it is found, and neither the end of its send window nor an empty listing proves that "
-            f"none exists. The cancel is recorded, so no sender sends again after its next check. The run launches once ECS lists that task, which the next "
-            f"launch of the family then stops and records. The task carries the tag {self.adapter.identity(key)}"
+            f"{who} has no end record and was not settled: a RunTask call may have been sent and no task of it is found, and neither the end of its send "
+            f"window nor an empty listing proves that none exists. {self.cancel_note(run_id, job)}The run launches once ECS lists that task, which the next "
+            "launch of the family then stops and records"
         )
+
+    def blocking_launch(self, run_id: str, job: str, attempt: int, started: Mapping[str, Any] | None = None) -> str:
+        """The old launch as a refusal names it: its run, job and attempt, its task identity and, when its started record is saved, its task ARN."""
+        task = f"task {started['task_arn']}, " if started is not None else ""
+        return f"the {job} launch of run {run_id} (attempt {attempt}; {task}identity {self.adapter.identity(f'{run_id}:{job}:{attempt}')})"
+
+    def cancel_note(self, run_id: str, job: str) -> str:
+        """The sentence that says the cancel is recorded, only when the record is read back."""
+        try:
+            recorded = self.store.run_record(run_id, job, "cancel") is not None
+        except RecordStoreUnavailable:
+            return ""
+        return "The cancel is recorded, so no sender sends again after its next check. " if recorded else ""
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:
         """Cancel the run and job's launch. A durable cancel request comes first, so a sender that holds the send token sees it before every RunTask call and
