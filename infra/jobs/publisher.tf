@@ -25,16 +25,16 @@ variable "publisher_keys_enabled" {
 locals {
   publisher_selected = var.publisher_job_enabled ? toset(["publisher"]) : toset([])
   publisher_role     = "publisher_task"
-  # The containers' run variables, which the launch request sets (orchestration/publisher_launch.py); each exists empty in its container.
+  # The containers' run variables, which the launch request sets (orchestration/publisher_launch.py); each exists empty in its container. The capture root is the one
+  # exception: it defaults to raw/, and the request may override it with raw/ or one ingestion_test/<run ID>/ folder (owner decision D4).
   publisher_run_variables = {
     fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-    run   = ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
+    run   = ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
   }
   # The host firewall lets a job reach DNS and TCP 443 only, and has no rule per host. The approved hosts file is the control on where the task
   # connects; the downloader enforces it.
   publisher_settings = concat(
     [
-      { name = "HAI_CAPTURE_ROOT", value = "raw/" },
       { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" },
       { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" },
       { name = "HAI_STORED_MIRROR", value = "/workspace/inputs/mirror" },
@@ -76,7 +76,7 @@ locals {
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         ],
         step.name == "run" ? local.publisher_settings : [],
-        [for name in lookup(local.publisher_run_variables, step.name, []) : { name = name, value = "" }]
+        [for name in lookup(local.publisher_run_variables, step.name, []) : { name = name, value = name == "HAI_CAPTURE_ROOT" ? "raw/" : "" }]
       )
       secrets = []
       mountPoints = [

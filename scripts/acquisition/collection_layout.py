@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from pathlib import Path
 
 from scripts.acquisition.dataset_layout import dataset_id
-from scripts.acquisition.raw_root import RAW_ROOT
+from scripts.acquisition.raw_root import RAW_ROOT, is_test_root
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_json
 from scripts.acquisition.transport import CaptureError
 
@@ -38,10 +39,18 @@ def load_routes(registry: dict, path: Path = LAYOUT_PATH) -> dict[str, dict]:
 
 
 def capture_root() -> str:
-    """Return the root new captures write under: empty for the original layout or ``raw/`` on the AWS route."""
+    """Return the root new captures write under: empty for the original layout, ``raw/`` on the AWS route or ``ingestion_test/<run ID>/`` for a test capture."""
     root = os.environ.get(CAPTURE_ROOT_VARIABLE, "")
-    if root not in {"", RAW_ROOT}:
-        raise CaptureError(f"{CAPTURE_ROOT_VARIABLE} must be empty or {RAW_ROOT}.")
+    if root not in {"", RAW_ROOT} and not is_test_root(root):
+        raise CaptureError(f"{CAPTURE_ROOT_VARIABLE} must be empty, {RAW_ROOT} or ingestion_test/<run ID>/.")
+    return root
+
+
+def run_state_root(environment: Mapping[str, str]) -> str:
+    """Return the root of a publisher run's state: ``raw/`` unless the launch selected a test folder. The BLS ledger ignores it and stays under ``raw/``."""
+    root = environment.get(CAPTURE_ROOT_VARIABLE, RAW_ROOT)
+    if root != RAW_ROOT and not is_test_root(root):
+        raise CaptureError(f"{CAPTURE_ROOT_VARIABLE} must be {RAW_ROOT} or ingestion_test/<run ID>/ for a run.")
     return root
 
 

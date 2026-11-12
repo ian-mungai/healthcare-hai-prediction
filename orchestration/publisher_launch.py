@@ -27,6 +27,8 @@ FETCH_CONTAINER = "fetch"
 RUN_CONTAINER = "run"
 REQUEST_BYTES = 4096
 REQUEST_KEYS = frozenset({"inputs_sha256", "queue_sha256", "resume_sources", "prior_state"})
+# The request may also name the capture root: raw/ (the default) or one test folder of one run ID (owner decision D4). The task validates it again.
+CAPTURE_ROOT = re.compile(r"raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/")
 PRIOR_KEYS = frozenset({"key", "version_id", "sha256"})
 DIGEST = re.compile(r"[a-f0-9]{64}")
 SOURCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}")
@@ -49,6 +51,7 @@ def read_request(s3: S3Reader, bucket: str, run_id: str) -> dict[str, str]:
 
     The file holds exactly ``inputs_sha256`` (the digest of the staged inputs archive), ``queue_sha256`` (the queue whose state the task restores),
     ``resume_sources`` (the paused sources the owner resumes) and ``prior_state`` (the key, version and digest of the state the owner approved, or null).
+    It may also hold ``capture_root``, ``raw/`` or ``ingestion_test/<run ID>/``; without it the root is ``raw/``. The prior state sits under the root.
     """
     try:
         body = s3.get_object(Bucket=bucket, Key=request_key(run_id))["Body"].read(REQUEST_BYTES + 1)
@@ -64,15 +67,18 @@ def read_request(s3: S3Reader, bucket: str, run_id: str) -> dict[str, str]:
         document = json.loads(body)
     except ValueError:
         raise LaunchRefused("publisher_request_malformed") from None
-    if not isinstance(document, dict) or set(document) != REQUEST_KEYS:
+    if not isinstance(document, dict) or set(document) - {"capture_root"} != REQUEST_KEYS:
         raise LaunchRefused("publisher_request_needs_exactly_inputs_queue_resume_sources_and_prior_state")
+    root = document.get("capture_root", "raw/")
+    if not isinstance(root, str) or not CAPTURE_ROOT.fullmatch(root):
+        raise LaunchRefused("publisher_request_has_wrong_capture_root")
     inputs, queue, sources, prior = document["inputs_sha256"], document["queue_sha256"], document["resume_sources"], document["prior_state"]
     if prior is not None and (
         not isinstance(prior, dict)
         or set(prior) != PRIOR_KEYS
         or not all(isinstance(value, str) and value for value in prior.values())
         or not DIGEST.fullmatch(prior["sha256"])
-        or not prior["key"].startswith("raw/run3_state/")
+        or not prior["key"].startswith(f"{root}run3_state/")
     ):
         raise LaunchRefused("publisher_request_has_wrong_prior_state")
     if (
@@ -90,6 +96,7 @@ def read_request(s3: S3Reader, bucket: str, run_id: str) -> dict[str, str]:
         "PUBLISHER_RESUME_SOURCES": ",".join(sources),
         "PUBLISHER_PRIOR_STATE": "" if prior is None else json.dumps(prior, sort_keys=True, separators=(",", ":")),
         "PUBLISHER_REQUEST_SHA256": hashlib.sha256(body).hexdigest(),
+        "HAI_CAPTURE_ROOT": root,
     }
 
 

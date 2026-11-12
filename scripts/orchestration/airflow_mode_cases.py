@@ -2144,6 +2144,7 @@ def ingestion_dag_runs_the_publisher_on_the_host() -> None:
         run["PUBLISHER_INPUTS_SHA256"] == "a" * 64
         and run["PUBLISHER_RESUME_SOURCES"] == "bls_api"
         and run["PUBLISHER_PRIOR_STATE"] == ""
+        and run["HAI_CAPTURE_ROOT"] == "raw/"
         and run["PUBLISHER_REQUEST_SHA256"] == hashlib.sha256(body).hexdigest(),
         f"the run container did not get the checked request: {run}",
     )
@@ -2177,6 +2178,10 @@ def publisher_request_is_checked_and_bound() -> None:
         ):
             rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", bad)
             refuses(LaunchRefused, lambda: current.step("publisher_run"))
+        for root in ("", "ingestion_test/", "ingestion_test/x/", "raw", "lakehouse/"):
+            rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body({**PUBLISHER_REQUEST, "capture_root": root}))
+            error = refuses(LaunchRefused, lambda: current.step("publisher_run"))
+            require("wrong_capture_root" in str(error), f"capture root {root!r} was not refused by name: {error}")
         require(not rig.ecs.calls, "a bad publisher request reached the cloud")
         rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body({**PUBLISHER_REQUEST, "prior_state": prior}))
         require(current.step("publisher_run") == "succeeded", "a good publisher request did not run")

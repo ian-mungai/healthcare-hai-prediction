@@ -175,6 +175,39 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # Test captures live under ingestion_test/<test_id>/ (owner decision D4, Nov 12 2026), and no role holds a delete action, so the bucket removes them: current objects
+  # expire 7 days after they are written and replaced versions 1 day after. S3 lets a rule carry either days or the delete-marker cleanup, so a second rule clears the
+  # markers of expired test objects. The prefix is exact (the tftest checks it), so no other key matches it: raw/ and lakehouse/ current versions never expire.
+  rule {
+    id     = "expire_ingestion_test_objects"
+    status = "Enabled"
+
+    filter {
+      prefix = "ingestion_test/"
+    }
+
+    expiration {
+      days = 7
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
+  rule {
+    id     = "clear_ingestion_test_delete_markers"
+    status = "Enabled"
+
+    filter {
+      prefix = "ingestion_test/"
+    }
+
+    expiration {
+      expired_object_delete_marker = true
+    }
+  }
+
   # DVC stores each training matrix once, as an object named by its content hash under dvc/, and a push never replaces an
   # object with different content. Only replaced or deleted versions are old, so they expire after 30 days. Current DVC objects never expire.
   rule {

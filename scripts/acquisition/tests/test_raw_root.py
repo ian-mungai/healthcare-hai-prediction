@@ -7,14 +7,30 @@ from typing import Any, cast
 import pytest
 
 from scripts.acquisition import collection_layout as layout
-from scripts.acquisition import s3_store
+from scripts.acquisition import publisher_run, s3_store, task_role, transport
 from scripts.acquisition.s3_store import AwsCli
 from scripts.acquisition.single_copy import reference_scope
+from scripts.acquisition.tests.test_task_owners import TaskS3, storage
 from scripts.acquisition.transport import CaptureError
 from tests.support import check
 
 ROUTE = {"publisher": "example", "collection": "collection"}
 BUCKET = "bucket"
+TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
+BAD_ROOTS = (
+    "ingestion_test/",
+    "ingestion_test/x/",
+    "ingestion_test/20261112T220000Z-abcd1234",
+    "ingestion_test/20261112T220000Z-abcd1234/raw/",
+    "ingestion_test/20261112T220000Z-ABCD1234/",
+    "ingestion_test/20261112T220000Z-abcd1234/\n",
+    "Ingestion_test/20261112T220000Z-abcd1234/",
+    "ingestion_tests/20261112T220000Z-abcd1234/",
+    "raw/ingestion_test/20261112T220000Z-abcd1234/",
+    "../raw/",
+    "raw",
+    "raw//",
+)
 ROLES = (("data", False), ("capture_receipt", False), ("dictionary", False), ("transport_audit", True))
 
 
@@ -67,3 +83,74 @@ def test_a_single_copy_reference_under_raw_has_the_same_scope_as_one_at_the_root
     check(reference_scope(f"raw/{tail}", digest) == reference_scope(tail, digest) == "objects", "raw and root payload keys share a scope")
     audit = f"example/collection/audit/run/{digest}/file.json"
     check(reference_scope(f"raw/{audit}", digest) == reference_scope(audit, digest) == "evidence_objects", "raw and root evidence keys share a scope")
+
+
+def test_a_test_folder_root_puts_every_new_prefix_under_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, TEST_ROOT)
+    for role, evidence in ROLES:
+        prefix = layout.object_prefix(ROUTE, "table", role, "2026", "run", evidence)
+        check(prefix.startswith(f"{TEST_ROOT}example/collection/"), f"{role} prefix starts with the test folder")
+    check(layout.capture_root() == TEST_ROOT, "the selected root is the test folder")
+
+
+@pytest.mark.parametrize("root", BAD_ROOTS)
+def test_only_raw_and_one_run_id_test_folder_are_valid_roots(monkeypatch: pytest.MonkeyPatch, root: str) -> None:
+    monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, root)
+    with pytest.raises(CaptureError):
+        layout.capture_root()
+
+
+def test_a_test_folder_capture_never_writes_outside_its_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, TEST_ROOT)
+    path = tmp_path / "file.csv"
+    path.write_bytes(b"a,b\n1,2\n")
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    tail = f"example/collection/datasets/table/release_date=2026/{digest}/file.csv"
+    for outside in (tail, f"raw/{tail}", f"ingestion_test/20261112T220000Z-ffffffff/{tail}"):
+        with pytest.raises(CaptureError, match="outside"):
+            s3_store.store_file(cast(AwsCli, Client()), path, outside)
+    with pytest.raises(Stop):
+        s3_store.store_file(cast(AwsCli, Client()), path, f"{TEST_ROOT}{tail}")
+
+
+def test_a_test_folder_route_still_requires_the_approved_hosts_file(monkeypatch: pytest.MonkeyPatch) -> None:
+    for root, on_route in (("", False), ("raw/", True), (TEST_ROOT, True)):
+        monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, root)
+        check(transport.on_raw_route() is on_route, f"the AWS route flag for {root!r} is {on_route}")
+
+
+def test_task_storage_reaches_only_the_selected_test_folder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, TEST_ROOT)
+    client = storage(TaskS3())
+    path = tmp_path / "plain.csv"
+    path.write_text("a")
+    for key in ("raw/a", "other/a", "ingestion_test/20261112T220000Z-ffffffff/a", f"{task_role.BLS_LEDGER_PREFIX}0000000001.json"):
+        with pytest.raises(task_role.StorageError, match="outside_raw_root"):
+            client.call("s3api", "head-object", ["--key", key])
+    with pytest.raises(task_role.StorageError, match="create_once_required"):
+        client.call("s3api", "put-object", ["--key", f"{TEST_ROOT}a", "--body", str(path), "--if-none-match", "etag"])
+
+
+def test_task_storage_on_raw_is_unchanged_by_the_test_folder_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(layout.CAPTURE_ROOT_VARIABLE, "raw/")
+    client = storage(TaskS3())
+    with pytest.raises(task_role.StorageError, match="outside_raw_root"):
+        client.call("s3api", "head-object", ["--key", f"{TEST_ROOT}a"])
+
+
+@pytest.mark.parametrize("root", ["raw/", TEST_ROOT])
+def test_the_run_state_follows_the_selected_root_and_the_bls_ledger_never_moves(root: str) -> None:
+    environment = {"PUBLISHER_QUEUE_SHA256": "a" * 64, "RUN_ID": "20261112T220000Z-abcd1234", "HAI_CAPTURE_ROOT": root}
+    check(publisher_run.state_prefix(environment) == f"{root}run3_state/{'a' * 64}/", "the state prefix follows the root")
+    check(
+        publisher_run.run_record_key(environment) == f"{root}run3_runs/{'a' * 64}/publisher/20261112T220000Z-abcd1234.json", "the run record follows the root"
+    )
+    check(task_role.BLS_LEDGER_PREFIX == "raw/run3_ledger/bls/", "the BLS ledger stays at its one place for every root")
+
+
+def test_the_run_state_defaults_to_raw_and_refuses_another_root() -> None:
+    environment = {"PUBLISHER_QUEUE_SHA256": "a" * 64, "RUN_ID": "r"}
+    check(publisher_run.state_prefix(environment).startswith("raw/run3_state/"), "no root selects raw/")
+    for root in ("", "elsewhere/", "ingestion_test/"):
+        with pytest.raises(publisher_run.PublisherError):
+            publisher_run.state_prefix(environment | {"HAI_CAPTURE_ROOT": root})

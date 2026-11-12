@@ -28,7 +28,8 @@ from botocore.exceptions import ClientError
 from scripts import resource_peaks
 from scripts.acquisition import redownload as harness
 from scripts.acquisition import stored_mirror
-from scripts.acquisition.collection_layout import RAW_ROOT
+from scripts.acquisition.collection_layout import run_state_root
+from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure import startup_check
 
 REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
@@ -100,8 +101,15 @@ def install_plan_inputs(mirror: Path, code_root: Path) -> None:
         target.write_bytes((mirror / name).read_bytes())
 
 
+def state_root(environment: Mapping[str, str]) -> str:
+    try:
+        return run_state_root(environment)
+    except CaptureError:
+        raise PublisherError("The capture root is neither raw/ nor one test folder.") from None
+
+
 def state_prefix(environment: Mapping[str, str]) -> str:
-    return f"{RAW_ROOT}run3_state/{environment['PUBLISHER_QUEUE_SHA256']}/"
+    return f"{state_root(environment)}run3_state/{environment['PUBLISHER_QUEUE_SHA256']}/"
 
 
 def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> dict[str, str]:
@@ -128,7 +136,7 @@ def save_state(s3: Any, state_root: Path, environment: Mapping[str, str]) -> dic
 
 
 def run_record_key(environment: Mapping[str, str]) -> str:
-    return f"{RAW_ROOT}run3_runs/{environment['PUBLISHER_QUEUE_SHA256']}/publisher/{environment['RUN_ID']}.json"
+    return f"{state_root(environment)}run3_runs/{environment['PUBLISHER_QUEUE_SHA256']}/publisher/{environment['RUN_ID']}.json"
 
 
 def save_run_record(s3: Any, state: Mapping[str, str], environment: Mapping[str, str]) -> str:

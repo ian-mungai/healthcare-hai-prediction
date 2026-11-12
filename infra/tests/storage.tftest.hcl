@@ -106,11 +106,11 @@ run "lifecycle_cleanup_rules" {
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers"])
     )
-    error_message = "A default plan must hold exactly three enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions and replaced DVC versions. The Athena results rule and the MLflow rule stay out until their flags are set."
+    error_message = "A default plan must hold exactly five enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions, replaced DVC versions and the two ingestion_test/ rules. The Athena results rule and the MLflow rule stay out until their flags are set."
   }
 
   assert {
@@ -185,6 +185,79 @@ run "lifecycle_cleanup_rules" {
   }
 }
 
+# D4 (owner, Nov 12 2026): test captures live under ingestion_test/<test_id>/ and expire. Only this prefix expires current objects, besides the plans and
+# Athena results rules. The prefix is exact, so a typing mistake cannot reach raw/ or lakehouse/.
+run "ingestion_test_folder_expires_and_nothing_else_does" {
+  command = plan
+
+  assert {
+    condition = (
+      length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_ingestion_test_objects"]) == 1 &&
+      alltrue([
+        for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+        rule.status == "Enabled" &&
+        one(rule.filter).prefix == "ingestion_test/" &&
+        one(rule.expiration).days == 7 &&
+        one(rule.noncurrent_version_expiration).noncurrent_days == 1 &&
+        length(rule.abort_incomplete_multipart_upload) == 0
+        if rule.id == "expire_ingestion_test_objects"
+      ])
+    )
+    error_message = "Test objects expire 7 days after they are written and their replaced versions 1 day after, under the exact prefix ingestion_test/."
+  }
+
+  assert {
+    condition = (
+      length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "clear_ingestion_test_delete_markers"]) == 1 &&
+      alltrue([
+        for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+        rule.status == "Enabled" &&
+        one(rule.filter).prefix == "ingestion_test/" &&
+        one(rule.expiration).expired_object_delete_marker == true &&
+        length(rule.noncurrent_version_expiration) == 0 &&
+        length(rule.abort_incomplete_multipart_upload) == 0
+        if rule.id == "clear_ingestion_test_delete_markers"
+      ])
+    )
+    error_message = "Delete markers of expired test objects are cleared in a second rule, because S3 does not allow that with days in one rule."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      !strcontains(rule.id, "ingestion_test") || one(rule.filter).prefix == "ingestion_test/"
+    ])
+    error_message = "Every ingestion test rule filters on exactly ingestion_test/."
+  }
+
+  assert {
+    condition = alltrue([
+      for key, expected in {
+        "ingestion_test/20261112T220000Z-abcd1234/raw/a.csv" = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
+        "ingestion_test/"                                    = "expire_ingestion_test_objects,clear_ingestion_test_delete_markers"
+        "ingestion_test"                                     = ""
+        "ingestion_tests/a.csv"                              = ""
+        "raw/ingestion_test/a.csv"                           = ""
+        "raw/example/collection/datasets/t/a.csv"            = ""
+        "lakehouse/gold/dim_state/data/a.parquet"            = "expire_replaced_lakehouse_versions"
+        } : join(",", [
+          for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id
+          if rule.id != "abort_incomplete_uploads" && startswith(key, one(rule.filter).prefix)
+      ]) == expected
+    ])
+    error_message = "The test rules reach keys under ingestion_test/ only, and no rule reaches raw/ beyond what it did."
+  }
+
+  assert {
+    condition = alltrue([
+      for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
+      length(rule.expiration) == 0 || one(rule.expiration).expired_object_delete_marker == true
+      if rule.id != "abort_incomplete_uploads" && one(rule.filter).prefix != "ingestion_test/" && contains(["raw/", "lakehouse/"], one(rule.filter).prefix)
+    ])
+    error_message = "No rule expires a current object of raw/ or lakehouse/: only ingestion_test/ does."
+  }
+}
+
 # The MLflow artifact rule is a live change to the bucket's lifecycle configuration, so it exists only when the owner turns the flag on.
 run "mlflow_retention_rule_only_with_its_flag" {
   command = plan
@@ -195,11 +268,11 @@ run "mlflow_retention_rule_only_with_its_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_mlflow_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_replaced_mlflow_versions"])
     )
-    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the three default rules."
+    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the five default rules."
   }
 
   assert {
@@ -225,11 +298,11 @@ run "athena_results_rule_only_with_its_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 4 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_athena_results"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_athena_results"])
     )
-    error_message = "With athena_retention_enabled the plan must add exactly the Athena results rule to the three default rules."
+    error_message = "With athena_retention_enabled the plan must add exactly the Athena results rule to the five default rules."
   }
 
   assert {
@@ -273,8 +346,8 @@ run "both_retention_flags_add_both_rules" {
   }
 
   assert {
-    condition     = length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5
-    error_message = "Both flags add their rule beside the three default rules and nothing else."
+    condition     = length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7
+    error_message = "Both flags add their rule beside the five default rules and nothing else."
   }
 }
 
@@ -382,7 +455,7 @@ run "state_prefix_is_off_by_default" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 3 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
       length(jsondecode(aws_s3_bucket_policy.tls.policy).Statement) == 1
     )
     error_message = "With the flag off the lifecycle rules and the bucket policy must stay as they are."
@@ -399,7 +472,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
       alltrue([
         for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
         one(rule.filter).prefix == "terraform_state/" &&
@@ -417,7 +490,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
       (length(rule.expiration) == 0 || one(rule.expiration).expired_object_delete_marker == true) &&
       (length(rule.noncurrent_version_expiration) == 0 || one(rule.filter).prefix != "")
-      if !contains(["expire_replaced_state_versions", "expire_saved_plans"], rule.id)
+      if !contains(["expire_replaced_state_versions", "expire_saved_plans", "expire_ingestion_test_objects"], rule.id)
     ])
     error_message = "No other rule may expire a current object, and no other rule may expire versions of the whole bucket."
   }
@@ -804,7 +877,7 @@ run "saved_plans_expire_after_seven_days_and_replaced_versions_after_one" {
   assert {
     condition = (
       toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset([
-        "abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_replaced_state_versions", "expire_saved_plans"
+        "abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_replaced_state_versions", "expire_saved_plans"
       ])
     )
     error_message = "The saved plans rule is added to the existing rules and replaces none."

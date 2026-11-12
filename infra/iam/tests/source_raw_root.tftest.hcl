@@ -148,13 +148,13 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
       !strcontains(aws_iam_role_policy.job_publisher[0].policy, "Delete") &&
       strcontains(aws_iam_role_policy.job_publisher[0].policy, "s3:if-none-match") &&
       alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
-        contains(["ReadStoredPayloadVersions", "ReadStagedRunInputs"], statement.Sid) ? true : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))
+        contains(["ReadStoredPayloadVersions", "ReadStagedRunInputs", "CreateTestObjectsOnce", "ReadTestObjects"], statement.Sid) ? true : !can(regex("example-data-bucket/[^r]", jsonencode(statement.Resource)))
       )]) &&
       alltrue([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
         statement.Sid == "ReadStagedRunInputs" ? true : !strcontains(jsonencode(statement), "lakehouse")
       )])
     )
-    error_message = "Outside the stored payload read and the staged input read the publisher role must reach only raw, create objects once and hold no delete action."
+    error_message = "Outside the stored payload read, the staged input read and the test folder statements the publisher role must reach only raw, create objects once and hold no delete action."
   }
 
   assert {
@@ -169,6 +169,41 @@ run "publisher_job_class_writes_raw_once_and_never_deletes" {
       !can([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadStagedRunInputs"][0].Condition)
     )
     error_message = "The publisher task must read exactly its two staged inputs, the code archive its fetch container downloads and the publisher inputs archive its run container reads, by plain GetObject and nothing else under lakehouse."
+  }
+
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "CreateTestObjectsOnce"][0].Effect == "Allow" &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "CreateTestObjectsOnce"][0].Action == ["s3:PutObject"] &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "CreateTestObjectsOnce"][0].Resource == "arn:aws:s3:::example-data-bucket/ingestion_test/*" &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "CreateTestObjectsOnce"][0].Condition == { Null = { "s3:if-none-match" = "false" } }
+    )
+    error_message = "A write under ingestion_test/ is allowed only create-once, with the same condition as raw/."
+  }
+
+  assert {
+    condition = (
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadTestObjects"][0].Effect == "Allow" &&
+      toset([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadTestObjects"][0].Action) == toset(["s3:GetObject", "s3:GetObjectVersion"]) &&
+      [for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ReadTestObjects"][0].Resource == "arn:aws:s3:::example-data-bucket/ingestion_test/*"
+    )
+    error_message = "The test folder is read with GetObject and GetObjectVersion on ingestion_test/ only."
+  }
+
+  assert {
+    condition = (
+      toset([for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : statement if statement.Sid == "ListRawVersions"][0].Condition.StringLike["s3:prefix"]) == toset(["raw/*", "ingestion_test/*"])
+    )
+    error_message = "The version listing reaches raw/ and ingestion_test/ and nothing else."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_iam_role_policy.job_publisher[0].policy).Statement : (
+        !contains(flatten([statement.Action]), "s3:PutObject") ? true : contains(["arn:aws:s3:::example-data-bucket/raw/*", "arn:aws:s3:::example-data-bucket/ingestion_test/*"], statement.Resource)
+      )
+    ])
+    error_message = "A write outside raw/ and ingestion_test/ is refused: every PutObject grant is on one of those two roots."
   }
 
   assert {

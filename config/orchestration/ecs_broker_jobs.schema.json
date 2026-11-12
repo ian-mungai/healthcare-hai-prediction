@@ -75,7 +75,8 @@
                   "PUBLISHER_QUEUE_SHA256",
                   "PUBLISHER_RESUME_SOURCES",
                   "PUBLISHER_PRIOR_STATE",
-                  "PUBLISHER_REQUEST_SHA256"
+                  "PUBLISHER_REQUEST_SHA256",
+                  "HAI_CAPTURE_ROOT"
                 ]
               }
             }

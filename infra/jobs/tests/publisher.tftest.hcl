@@ -225,7 +225,7 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
       propagate_tags    = "TASK_DEFINITION"
       container_environment = {
         fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-        run   = ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
+        run   = ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
       }
       scratch = { workspace = "/data/job_scratch/publisher/work", tmp = "/data/job_scratch/publisher/tmp" }
     }
@@ -234,10 +234,10 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
   assert {
     condition = alltrue([
       for container in jsondecode(output.publisher_host_container_definitions) : alltrue([
-        for name in lookup(output.publisher_host_run_task.container_environment, container.name, []) : contains(container.environment, { name = name, value = "" })
+        for name in lookup(output.publisher_host_run_task.container_environment, container.name, []) : contains(container.environment, { name = name, value = name == "HAI_CAPTURE_ROOT" ? "raw/" : "" })
       ])
     ])
-    error_message = "Each run variable exists empty in its container, so the launch only overrides it."
+    error_message = "Each run variable exists in its container, empty except the capture root, which defaults to raw/, so the launch only overrides it."
   }
 }
 
@@ -250,4 +250,26 @@ run "no_fargate_publisher_definition_remains" {
     aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   }
   expect_failures = [var.enabled_definitions]
+}
+
+run "the_capture_root_is_declared_once_and_defaults_to_raw" {
+  command = plan
+  variables {
+    publisher_job_enabled = true
+  }
+  assert {
+    condition = alltrue([
+      for container in jsondecode(output.publisher_host_container_definitions) :
+      length([for variable in container.environment : variable.name]) == length(toset([for variable in container.environment : variable.name]))
+    ])
+    error_message = "No container declares an environment name twice."
+  }
+  assert {
+    condition = (
+      length([for variable in jsondecode(output.publisher_host_container_definitions)[2].environment : variable if variable.name == "HAI_CAPTURE_ROOT"]) == 1 &&
+      !contains([for variable in jsondecode(output.publisher_host_container_definitions)[1].environment : variable.name], "HAI_CAPTURE_ROOT") &&
+      output.publisher_host_run_task.capture_root == "raw/"
+    )
+    error_message = "Only the run container holds the capture root, once, and its default stays raw/."
+  }
 }

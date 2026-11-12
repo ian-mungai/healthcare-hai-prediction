@@ -22,7 +22,7 @@ from email.message import Message
 from pathlib import Path
 from typing import Any
 
-from scripts.acquisition.raw_root import RAW_ROOT
+from scripts.acquisition.raw_root import RAW_ROOT, is_test_root
 from scripts.acquisition.source_registry import reject_constant, unique_object
 
 # Exact publisher resource reviewed on 2026-09-24; no bucket-wide redirect permission.
@@ -138,8 +138,9 @@ def approved_hosts() -> frozenset[str] | None:
 
 
 def on_raw_route() -> bool:
-    """True when this process captures under the raw root, which is the AWS route."""
-    return os.environ.get(CAPTURE_ROOT_VARIABLE) == RAW_ROOT
+    """True when this process captures under the raw root or a test folder, which are the AWS route."""
+    root = os.environ.get(CAPTURE_ROOT_VARIABLE, "")
+    return root == RAW_ROOT or is_test_root(root)
 
 
 def require_approved(url: str) -> None:

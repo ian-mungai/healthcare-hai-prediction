@@ -9,10 +9,23 @@
       "Condition": {"Null": {"s3:if-none-match": "false"}}
     },
     {
+      "Sid": "CreateTestObjectsOnce",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject"],
+      "Resource": "${BUCKET_ARN}/ingestion_test/*",
+      "Condition": {"Null": {"s3:if-none-match": "false"}}
+    },
+    {
       "Sid": "ReadRawObjects",
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:GetObjectVersion"],
       "Resource": "${BUCKET_ARN}/raw/*"
+    },
+    {
+      "Sid": "ReadTestObjects",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion"],
+      "Resource": "${BUCKET_ARN}/ingestion_test/*"
     },
     {
       "Sid": "ReadStoredPayloadVersions",
@@ -39,7 +52,7 @@
       "Effect": "Allow",
       "Action": ["s3:ListBucket", "s3:ListBucketVersions"],
       "Resource": "${BUCKET_ARN}",
-      "Condition": {"StringLike": {"s3:prefix": ["raw/*"]}}
+      "Condition": {"StringLike": {"s3:prefix": ["raw/*", "ingestion_test/*"]}}
     }
   ]
 }

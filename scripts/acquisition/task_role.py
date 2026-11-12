@@ -17,7 +17,8 @@ from typing import Any
 
 from scripts.acquisition.api_keys import ApiKeyError, number_shaped
 from scripts.acquisition.bls_api_transport import QuotaPause
-from scripts.acquisition.collection_layout import RAW_ROOT
+from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
+from scripts.acquisition.raw_root import is_test_root
 from scripts.acquisition.s3_store import StorageError, encoded_json
 from scripts.acquisition.stored_mirror import require_task_identity
 from scripts.sdk_logs import quiet_sdk_logs
@@ -188,8 +189,10 @@ class TaskStorage:
             raise StorageError(operation, "outside_task_storage")
         given = arguments or []
         key = _argument(given, "--key")
-        # A stored capture elsewhere is read only by its exact version, for a comparison. Everything else stays under the raw root.
-        if not key.startswith(RAW_ROOT) and not (operation == "get-object" and "--version-id" in given):
+        # A stored capture elsewhere is read only by its exact version, for a comparison. Everything else stays under the raw root, or under the one test folder
+        # the launch selected (the BLS ledger is a separate client and never moves).
+        root = capture_root()
+        if not key.startswith(root if is_test_root(root) else RAW_ROOT) and not (operation == "get-object" and "--version-id" in given):
             raise StorageError(operation, "outside_raw_root")
         named = {"Bucket": self.configuration["data_bucket_name"], "ExpectedBucketOwner": self.configuration["expected_account_id"], "Key": key}
         try:

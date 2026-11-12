@@ -39,6 +39,7 @@ SETTINGS = EcsSettings(
 REVISION = f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_publisher_host:1"
 NEED = Resources(cpu_units=2048, memory_mib=8192, scratch_bytes=20 * 2**30)
 REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api", "hud_api"], "prior_state": None}
+TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
 PRIOR = {"key": "raw/run3_state/" + "b" * 64 + "/state.json", "version_id": "v1", "sha256": "d" * 64}
 
 
@@ -124,6 +125,7 @@ def publisher_runs_on_the_host_bound_to_its_request() -> None:
         and run["PUBLISHER_RESUME_SOURCES"] == "bls_api,hud_api"
         and run["PUBLISHER_PRIOR_STATE"] == ""
         and run["PUBLISHER_REQUEST_SHA256"] == digest
+        and run["HAI_CAPTURE_ROOT"] == "raw/"
         and run["RUN_ID"] == RUN,
         f"the run container gets the checked request values: {run}",
     )
@@ -148,6 +150,49 @@ def publisher_prior_state_reaches_the_task() -> None:
     rig.stage.stage(encoded(REQUEST | {"prior_state": PRIOR}))
     run = rig.spec().environment["run"]
     require(json.loads(run["PUBLISHER_PRIOR_STATE"]) == PRIOR, f"the approved prior state is passed as one JSON value: {run['PUBLISHER_PRIOR_STATE']}")
+
+
+def publisher_capture_root_is_validated_and_reaches_the_task() -> None:
+    """The request may name the capture root. No root means raw/; only raw/ or one run-ID test folder is accepted; a prior state sits under that root."""
+    prior = {**PRIOR, "key": f"{TEST_ROOT}run3_state/{'b' * 64}/state.json"}
+    for given, expected in ((None, "raw/"), ("raw/", "raw/"), (TEST_ROOT, TEST_ROOT)):
+        rig = Rig()
+        digest = rig.stage.stage(encoded(REQUEST if given is None else REQUEST | {"capture_root": given}))
+        run = rig.spec().environment["run"]
+        require(
+            run["HAI_CAPTURE_ROOT"] == expected and run["PUBLISHER_REQUEST_SHA256"] == digest,
+            f"root {given!r} reaches the run container as {expected!r}: {run}",
+        )
+    rig = Rig()
+    rig.stage.stage(encoded(REQUEST | {"capture_root": TEST_ROOT, "prior_state": prior}))
+    require(json.loads(rig.spec().environment["run"]["PUBLISHER_PRIOR_STATE"]) == prior, "a prior state under the test folder is accepted")
+    bad_roots = (
+        "",
+        "ingestion_test/",
+        "ingestion_test/x/",
+        TEST_ROOT.rstrip("/"),
+        TEST_ROOT + "raw/",
+        TEST_ROOT.upper(),
+        "raw",
+        "../raw/",
+        "lakehouse/",
+        None,
+        3,
+    )
+    for root in bad_roots:
+        rig = Rig()
+        rig.stage.stage(encoded(REQUEST | {"capture_root": root}))
+        error = refuses(LaunchRefused, rig.spec)
+        require(str(error) == "publisher_request_has_wrong_capture_root", f"root {root!r} is refused: {error}")
+        require(rig.ecs.count("run_task") == 0 and not rig.records.objects, f"root {root!r}: nothing is recorded or launched")
+    for label, body in (
+        ("a raw prior state under a test folder", REQUEST | {"capture_root": TEST_ROOT, "prior_state": PRIOR}),
+        ("a test folder prior state under raw/", REQUEST | {"prior_state": prior}),
+    ):
+        rig = Rig()
+        rig.stage.stage(encoded(body))
+        error = refuses(LaunchRefused, rig.spec)
+        require(str(error) == "publisher_request_has_wrong_prior_state", f"{label} is refused: {error}")
 
 
 def publisher_request_not_staged_is_retryable() -> None:
@@ -211,6 +256,7 @@ def publisher_request_changed_after_launch_is_refused() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "publisher_runs_on_the_host_bound_to_its_request": publisher_runs_on_the_host_bound_to_its_request,
     "publisher_prior_state_reaches_the_task": publisher_prior_state_reaches_the_task,
+    "publisher_capture_root_is_validated_and_reaches_the_task": publisher_capture_root_is_validated_and_reaches_the_task,
     "publisher_request_not_staged_is_retryable": publisher_request_not_staged_is_retryable,
     "publisher_request_refusals": publisher_request_refusals,
     "publisher_request_changed_after_launch_is_refused": publisher_request_changed_after_launch_is_refused,

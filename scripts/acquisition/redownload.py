@@ -576,7 +576,7 @@ def save_person_records(run: Run) -> list[str]:
     client = run.task_storage
     require(client is not None, "The person lane needs its storage client, because no browser unit counts until its file and record are stored")
     queue_sha256 = hashlib.sha256(run.queue_path.read_bytes()).hexdigest()
-    saved = {name: create_once(client, f"{RAW_ROOT}{PERSON_RECORDS}/{queue_sha256}/{name}", run.state_root / name) for name in names}
+    saved = {name: create_once(client, f"{capture_root() or RAW_ROOT}{PERSON_RECORDS}/{queue_sha256}/{name}", run.state_root / name) for name in names}
     # A browser unit counts only when its file is stored (its outcome names the stored receipt) and its record is saved.
     outcomes = {}
     for name, found in saved.items():
@@ -589,7 +589,7 @@ def save_person_records(run: Run) -> list[str]:
         with tempfile.TemporaryDirectory(prefix="person_run_") as folder:
             path = Path(folder) / "person.json"
             path.write_bytes(json.dumps(document, sort_keys=True, separators=(",", ":")).encode())
-            create_once(client, f"{RAW_ROOT}run3_runs/{queue_sha256}/person.json", path)
+            create_once(client, f"{capture_root() or RAW_ROOT}run3_runs/{queue_sha256}/person.json", path)
     return [found["key"] for found in saved.values()]
 
 
