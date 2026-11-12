@@ -166,8 +166,6 @@ BOOT_PATHS = {
     "nft_rules_file": "nftables/platform_imds.nft",
     "nftables_config": "nftables.conf",
     "guard_script": "sbin/platform_imds_guard",
-    "docker_daemon_file": "docker/daemon.json",
-    "docker_options_file": "sysconfig/docker",
 }
 # The folders that systemctl reads units from besides the local one (BOOT_PATHS["systemd_directory"]): the runtime and vendor folders, under the temporary root.
 BOOT_RUNTIME_UNITS = "run_systemd"
@@ -188,7 +186,13 @@ BOOT_VALUES = {
     "project_tag": "example_project",
 }
 # The runner shortens the boot script's waits, so a stalled interface ends a case in seconds. The script's own values are 5, 600 and 120.
-BOOT_TIMING = {"interface_poll_seconds": "1", "interface_attach_seconds": "6", "interface_wait_seconds": "6"}
+BOOT_TIMING = {
+    "interface_poll_seconds": "1",
+    "interface_attach_seconds": "6",
+    "interface_wait_seconds": "6",
+    "docker_bridge_poll_seconds": "1",
+    "docker_bridge_wait_seconds": "6",
+}
 # The host's job firewall is a tracked file that Terraform writes into the boot script as it is.
 JOB_FIREWALL_FILE = "infra/iam/host_job_firewall.nft"
 # The host finds its data volume and Elastic IP by their Name and Project tags; the aws stand-in answers the two describe calls with these IDs.
@@ -406,7 +410,9 @@ if arguments[:5] == ["-o", "-4", "addr", "show", "to"] and len(arguments) == 6:
     if attached and not os.environ.get("BOOT_ADDRESS_NEVER_UP"):
         print(f"3: ens6    inet {arguments[5]}/24 brd 10.40.0.255 scope global ens6")
 elif arguments == ["-o", "-4", "addr", "show", "dev", "docker0"]:
-    address = os.environ.get("BOOT_DOCKER0_ADDRESS")
+    # docker0 holds the address the Docker stand-in gave it when it started, else the address a case planted before the boot.
+    started = state / "docker0"
+    address = started.read_text(encoding="utf-8") if started.exists() else os.environ.get("BOOT_DOCKER0_ADDRESS")
     if not address:
         sys.exit('Device "docker0" does not exist.')
     print(f"5: docker0    inet {address} brd 172.17.255.255 scope global docker0")
@@ -421,10 +427,6 @@ elif arguments[:3] == ["-4", "rule", "add"] and len(arguments) == 9 and argument
     rules.write_text("".join(entry + "\\n" for entry in [*added(), line]), encoding="utf-8")
 else:
     sys.exit(f"ip stand-in: unsupported arguments {arguments}")
-""",
-    "python3": """
-import os, sys
-os.execv(sys.executable, [sys.executable, "-I", *sys.argv[1:]])
 """,
     "nft": """
 import json, os, sys
@@ -540,49 +542,94 @@ else:
 # systemctl runs the dependency model in systemd_model.py: the model's source is copied into the stand-in, which adds the units the
 # image ships (the firewall service, Docker and the ECS agent) and the stall hook.
 SYSTEMCTL_STUB_BODY = """
-import os, subprocess, sys
+import json, os, re, subprocess, sys
 config = os.environ["BOOT_NFTABLES_CONFIG"]
 BUILTIN = {
     "nftables.service": (
         "[Unit]\\nDescription=Netfilter Tables\\n\\n[Service]\\nType=oneshot\\nRemainAfterExit=yes\\n"
         f"ExecStart=nft -f {config}\\nExecReload=nft -f {config}\\nExecStop=nft flush ruleset\\n"
     ),
-    "docker.service": "[Unit]\\nDescription=Docker Application Container Engine\\n\\n[Service]\\nType=notify\\nExecStart=true\\n",
+    "docker.service": "[Unit]\\nDescription=Docker Application Container Engine\\n\\n[Service]\\nType=notify\\nExecStart=/usr/bin/dockerd\\n",
     "ecs.service": (
         "[Unit]\\nDescription=Amazon ECS container agent\\nRequires=docker.service\\nAfter=docker.service\\n\\n"
         "[Service]\\nType=simple\\nExecStart=true\\n"
     ),
 }
 def execute(command):
+    if Path(command[0]).name == "dockerd":
+        return dockerd()
     return subprocess.run(command, check=False).returncode
-def cat(unit):
-    # What systemctl cat shows: the unit file that wins (local, then runtime, then vendor), then every drop-in of the three folders,
-    # sorted by file name, where a local or runtime drop-in replaces a vendor drop-in of the same name.
-    if os.environ.get("BOOT_SYSTEMCTL_CAT_FAIL"):
-        sys.stderr.write(f"No files found for {unit}.\\n")
+def host_path(text):
+    return Path(os.environ["BOOT_HOST_ROOT"]) / text.lstrip("/")
+def dockerd():
+    # What the Docker daemon does at a start: it takes the command line that systemd builds from the effective unit (the last ExecStart= after every
+    # reset, with $VARIABLE words filled from Environment= and EnvironmentFile=), refuses a bridge address given both as a flag and in the daemon
+    # file, and creates docker0 with the flag's address, the daemon file's address or Docker's default.
+    command, variables = [], {}
+    for _, text in shown_units("docker.service"):
+        section = None
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line or line[0] in "#;":
+                continue
+            if line.startswith("["):
+                section = line[1:-1]
+                continue
+            key, _, value = line.partition("=")
+            if section != "Service":
+                continue
+            if key == "ExecStart":
+                command = value.split()
+            elif key == "Environment":
+                variables.update(pair.partition("=")[::2] for pair in value.split())
+            elif key == "EnvironmentFile":
+                path = host_path(value.removeprefix("-"))
+                for entry in path.read_text(encoding="utf-8").splitlines() if path.is_file() else []:
+                    name, _, setting = entry.strip().partition("=")
+                    if name and not name.startswith("#"):
+                        variables[name] = setting[1:-1] if len(setting) > 1 and setting[0] == setting[-1] and setting[0] in "'\\"" else setting
+    arguments = []
+    for word in command[1:]:
+        braced, plain = re.fullmatch(r"\\$\\{(\\w+)\\}", word), re.fullmatch(r"\\$(\\w+)", word)
+        arguments.extend([variables.get(braced.group(1), "")] if braced else variables.get(plain.group(1), "").split() if plain else [word])
+    flag = None
+    for index, argument in enumerate(arguments):
+        if argument.startswith("--bip="):
+            flag = argument.partition("=")[2]
+        elif argument == "--bip" and index + 1 < len(arguments):
+            flag = arguments[index + 1]
+    daemon_file = host_path("/etc/docker/daemon.json")
+    configured = json.loads(daemon_file.read_text(encoding="utf-8")).get("bip") if daemon_file.is_file() else None
+    if flag and configured:
+        sys.stderr.write("dockerd: the following directives are specified both as a flag and in the configuration file: bip\\n")
         return 1
-    folders = [("/etc/systemd/system", "BOOT_SYSTEMD"), ("/run/systemd/system", "BOOT_SYSTEMD_RUNTIME"), ("/usr/lib/systemd/system", "BOOT_SYSTEMD_VENDOR")]
+    if os.environ.get("BOOT_DOCKERD_FAIL"):
+        sys.stderr.write("dockerd: failed to start the daemon\\n")
+        return 1
+    if not os.environ.get("BOOT_DOCKERD_NO_BRIDGE"):
+        (Path(os.environ["BOOT_STATE"]) / "docker0").write_text(flag or configured or "172.17.0.1/16", encoding="utf-8")
+    return 0
+FOLDERS = [("/etc/systemd/system", "BOOT_SYSTEMD"), ("/run/systemd/system", "BOOT_SYSTEMD_RUNTIME"), ("/usr/lib/systemd/system", "BOOT_SYSTEMD_VENDOR")]
+def shown_units(unit):
+    # The unit text that systemd loads: the unit file that wins (local, then runtime, then vendor), then every drop-in of the three folders,
+    # sorted by file name, where a local or runtime drop-in replaces a vendor drop-in of the same name.
     shown, dropins = [], {}
-    for label, variable in folders:
+    for label, variable in FOLDERS:
         directory = Path(os.environ[variable])
         if not shown and (directory / unit).is_file():
             shown.append((f"{label}/{unit}", (directory / unit).read_text(encoding="utf-8")))
     if not shown and unit in BUILTIN:
         shown.append((f"/usr/lib/systemd/system/{unit}", BUILTIN[unit]))
-    for label, variable in reversed(folders):
+    for label, variable in reversed(FOLDERS):
         for path in (Path(os.environ[variable]) / f"{unit}.d").glob("*.conf"):
             dropins[path.name] = (f"{label}/{unit}.d/{path.name}", path.read_text(encoding="utf-8"))
     shown.extend(dropins[name] for name in sorted(dropins))
-    for label, text in shown:
-        sys.stdout.write(f"# {label}\\n{text}\\n")
-    return 0 if shown else 1
+    return shown
 arguments = sys.argv[1:]
 with (Path(os.environ["BOOT_STATE"]) / "systemctl.log").open("a", encoding="utf-8") as log:
     log.write(" ".join(arguments) + "\\n")
 if os.environ.get("BOOT_SYSTEMCTL_STALL", "\\0") in " ".join(arguments):
     os.execv("/bin/sleep", ["sleep", "45"])
-if arguments[:1] == ["cat"]:
-    sys.exit(cat(arguments[1]))
 main(arguments, BUILTIN, execute)
 """
 # The ECS-optimized image ships a systemd-coredump pipe handler and set-user-ID dumps on.
@@ -2182,6 +2229,7 @@ def boot_host(
         "BOOT_SYSTEMD": str(root / "systemd"),
         "BOOT_SYSTEMD_RUNTIME": str(root / BOOT_RUNTIME_UNITS),
         "BOOT_SYSTEMD_VENDOR": str(root / BOOT_VENDOR_UNITS),
+        "BOOT_HOST_ROOT": str(root),
         "BOOT_IDS": json.dumps(BOOT_IDS),
         "BOOT_TOKEN": BOOT_METADATA_SENTINEL,
         "BOOT_DATA_VOLUME_NAME": BOOT_VALUES["data_volume_name"],
@@ -2526,36 +2574,42 @@ def replace_once(text: str, old: str, new: str) -> str:
 
 
 # Success cases that check the bridge rule and the Docker daemon file only, not the whole firewall chain.
-BOOT_BRIDGE_PLAIN_CASES = {"boot_bridge_rule_dropped_when_the_address_comes_up", "boot_docker_daemon_file_keeps_other_settings"}
-# Files that exist on the image before boot, by case: the Docker daemon file with a setting of its own.
+BOOT_BRIDGE_PLAIN_CASES = {
+    "boot_bridge_rule_dropped_when_the_address_comes_up",
+    "boot_docker_exec_start_reset_removes_the_flag",
+    "boot_rerun_changes_nothing",
+}
+# Files that exist on the image before boot, by case. Another bridge subnet reaches Docker through its environment file (a vendor unit that expands
+# $DOCKER_NETWORK_OPTIONS), a vendor flag or the daemon file; a local drop-in that resets ExecStart= and starts Docker without the flag leaves the default.
+BOOT_DOCKER_DAEMON_FILE = "etc/docker/daemon.json"
+BOOT_DOCKER_ENVIRONMENT_FILE = "etc/sysconfig/docker-network"
+BOOT_DOCKER_LOG_ONLY = '{"log-driver": "json-file"}\n'
+BOOT_VENDOR_FLAG_UNIT = "[Service]\nExecStart=/usr/bin/dockerd --bip=10.99.0.1/16 -H fd://\n"
 BOOT_SEED_FILES = {
-    "boot_docker_daemon_file_keeps_other_settings": {BOOT_PATHS["docker_daemon_file"]: '{"log-driver": "json-file", "bip": "10.99.0.1/16"}\n'},
-    # Docker already receives the bridge address on its command line: from the options file of the image, or from a drop-in of the Docker unit.
-    "boot_docker_bridge_set_in_the_options_file": {BOOT_PATHS["docker_options_file"]: 'OPTIONS="--bip=10.99.0.1/16 --log-driver=json-file"\n'},
-    "boot_docker_bridge_set_in_a_unit_drop_in": {
-        "systemd/docker.service.d/10_local.conf": "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd -H fd:// --bip 10.99.0.1/16\n"
+    "boot_docker_subnet_from_an_environment_file": {
+        f"{BOOT_VENDOR_UNITS}/docker.service": "[Service]\nEnvironmentFile=/etc/sysconfig/docker-network\n"
+        "ExecStart=/usr/bin/dockerd -H fd:// $DOCKER_NETWORK_OPTIONS\n",
+        BOOT_DOCKER_ENVIRONMENT_FILE: 'DOCKER_NETWORK_OPTIONS="--bip=10.99.0.1/16"\n',
+        BOOT_DOCKER_DAEMON_FILE: BOOT_DOCKER_LOG_ONLY,
     },
-    # The vendor unit (with a daemon file that holds only log settings) and the runtime unit pass it too: only systemctl shows the effective unit.
-    "boot_docker_bridge_set_in_the_vendor_unit": {
-        f"{BOOT_VENDOR_UNITS}/docker.service": "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd --bip=10.99.0.1/16 -H fd://\n",
-        BOOT_PATHS["docker_daemon_file"]: '{"log-driver": "json-file"}\n',
-    },
-    "boot_docker_bridge_set_in_the_runtime_unit": {
-        f"{BOOT_RUNTIME_UNITS}/docker.service": "[Service]\nExecStart=/usr/bin/dockerd --bip 10.99.0.1/16 -H fd://\n"
+    "boot_docker_subnet_from_a_vendor_flag": {f"{BOOT_VENDOR_UNITS}/docker.service": BOOT_VENDOR_FLAG_UNIT, BOOT_DOCKER_DAEMON_FILE: BOOT_DOCKER_LOG_ONLY},
+    "boot_docker_subnet_from_the_daemon_file": {BOOT_DOCKER_DAEMON_FILE: '{"log-driver": "json-file", "bip": "10.99.0.1/16"}\n'},
+    "boot_docker_exec_start_reset_removes_the_flag": {
+        f"{BOOT_VENDOR_UNITS}/docker.service": BOOT_VENDOR_FLAG_UNIT,
+        "systemd/docker.service.d/10_local.conf": "[Service]\nExecStart=\nExecStart=/usr/bin/dockerd -H fd://\n",
+        BOOT_DOCKER_DAEMON_FILE: BOOT_DOCKER_LOG_ONLY,
     },
 }
-# Boots that must stop before they touch the Docker daemon file: the same option on the command line and in the file makes Docker refuse to start,
-# and a Docker unit that cannot be read cannot be checked.
-BOOT_DAEMON_FILE_UNTOUCHED_CASES = {
-    "boot_docker_bridge_set_in_the_options_file",
-    "boot_docker_bridge_set_in_a_unit_drop_in",
-    "boot_docker_bridge_set_in_the_vendor_unit",
-    "boot_docker_bridge_set_in_the_runtime_unit",
-    "boot_docker_unit_unreadable",
-    "boot_docker_unit_read_stalls",
+# Boots that must end before ECS joins because the real docker0 is wrong, never appears or its Docker does not start: nothing reaches the ECS configuration.
+BOOT_BRIDGE_REFUSED_CASES = {
+    "boot_docker_subnet_from_an_environment_file",
+    "boot_docker_subnet_from_a_vendor_flag",
+    "boot_docker_subnet_from_the_daemon_file",
+    "boot_docker_never_starts",
+    "boot_docker_bridge_never_appears",
 }
-BOOT_BIP_CONFLICT_MESSAGE = "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address."
-BOOT_DOCKER_UNIT_UNREADABLE_MESSAGE = "Could not read the Docker unit, so the daemon file cannot be checked for --bip."
+BOOT_RERUN_CASES = {"boot_rerun_changes_nothing"}
+BOOT_BRIDGE_REFUSED_MESSAGE = "docker0 holds 10.99.0.1/16 instead of the required 172.17.0.1/16"
 
 
 def bridge_rules(root: Path) -> list[str]:
@@ -2571,18 +2625,21 @@ def bridge_rule_problems(root: Path, log: str, name: str) -> list[str]:
         problems.append(f"the rules are {bridge_rules(root)} instead of {expected}")
     if BOOT_BRIDGE_RULE_PRIORITY >= BOOT_NET_UTILS_PRIORITY:
         problems.append("the rule does not come before the rules of amazon-ec2-net-utils")
-    daemon = root / BOOT_PATHS["docker_daemon_file"]
-    try:
-        settings = json.loads(daemon.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        settings = {}
-    if settings.get("bip") != BOOT_BRIDGE_ADDRESS:
-        problems.append("the Docker daemon file does not pin the bridge address")
-    if name in BOOT_SEED_FILES and settings.get("log-driver") != "json-file":
-        problems.append("the Docker daemon file lost a setting that was there")
+    daemon = root / BOOT_DOCKER_DAEMON_FILE
+    if (daemon.read_text(encoding="utf-8") if daemon.exists() else None) != BOOT_SEED_FILES.get(name, {}).get(BOOT_DOCKER_DAEMON_FILE):
+        problems.append("boot changed the Docker daemon file")
+    docker0 = root / "state" / "docker0"
+    if not docker0.exists() or docker0.read_text(encoding="utf-8") != BOOT_BRIDGE_ADDRESS:
+        problems.append("docker0 does not hold the required address after the boot")
     marks = [log.find(text) for text in ("is up on", "Setting the routing rule for the job bridge", "Attaching the data volume")]
     if min(marks) < 0 or not marks[0] < marks[1] < marks[2]:
         problems.append("the rule was not set after the host address came up and before the volumes")
+    later = [
+        log.find(text)
+        for text in ("Attaching the scratch volume", "starting: Starting Docker", "Checking the job bridge subnet", "Writing the ECS agent configuration")
+    ]
+    if min(later) < 0 or later != sorted(later):
+        problems.append("Docker was not started and its bridge checked after the scratch mount and before the ECS configuration")
     return problems
 
 
@@ -2591,6 +2648,23 @@ def check_bridge_rule(evidence: Evidence, step: dict[str, Any], root: Path, log:
     problems = bridge_rule_problems(root, log, name)
     step["bridge_rule_problems"] = problems
     evidence.check(step, "job_bridge_pinned_and_routed_before_the_volumes", not problems)
+
+
+def run_rerun_case(evidence: Evidence, root: Path, environment: dict[str, str], bash: str) -> None:
+    """Run the whole boot script a second time on the same host: it must succeed and leave the files, the rule and docker0 as they were."""
+    state = root / "state"
+    watched = {"fstab": root / "fstab", "rules": state / "ip_rules", "docker0": state / "docker0"}
+    before = {name: path.read_bytes() for name, path in watched.items()}
+    starts = read_lines(state / "events.log").count("start docker.service")
+    step, result = evidence.run("boot_rerun_second_run", [bash, str(root / "host_boot.sh")], root, environment)
+    log = (root / "boot.log").read_text(encoding="utf-8")
+    config = read_lines(root / "ecs.config")
+    evidence.check(step, "second_boot_succeeded", result.returncode == 0 and log.count("finished: every step succeeded") == 2)
+    evidence.check(step, "files_rule_and_docker0_unchanged", {name: path.read_bytes() for name, path in watched.items()} == before)
+    evidence.check(step, "one_bridge_rule", bridge_rules(root) == [f"{BOOT_BRIDGE_RULE_PRIORITY}:\tfrom all to {BOOT_BRIDGE_SUBNET} lookup main"])
+    evidence.check(step, "docker_started_once", starts == 1 and read_lines(state / "events.log").count("start docker.service") == 1)
+    evidence.check(step, "cluster_joined_last_again", config[-1] == f"ECS_CLUSTER={BOOT_VALUES['cluster_name']}")
+    evidence.check(step, "daemon_file_not_created", not (root / BOOT_DOCKER_DAEMON_FILE).exists())
 
 
 def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
@@ -2629,8 +2703,11 @@ def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str,
     evidence.check(step, "start_refused", result.returncode != 0 and "Could not set the routing rule for the job bridge." in result.stderr)
 
 
-def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
-    """Run the host boot script against stand-in system commands; a stalled or failed step must stop the boot in time."""
+def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | None = None) -> None:
+    """Run the host boot script against stand-in system commands; a stalled or failed step must stop the boot in time.
+
+    ``only`` names the cases to run alone; the plants and the console copy cases that follow the table run only without it.
+    """
     template = (REPO_ROOT / BOOT_TEMPLATE).read_text(encoding="utf-8")
     evidence.report["source_hashes"][BOOT_TEMPLATE] = {"original_sha256": sha256(template.encode())}
     gnu_timeout = shutil.which("gtimeout") or shutil.which("timeout") or ""
@@ -2710,16 +2787,16 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_host_address_never_up": ({}, {"BOOT_ADDRESS_NEVER_UP": "1"}, "The host address did not come up within 6 seconds."),
         "boot_primary_interface_unreadable": ({}, {"BOOT_PRIMARY_INTERFACE_FAIL": "1"}, "The primary network interface ID could not be read."),
         "boot_bridge_rule_dropped_when_the_address_comes_up": ({}, {"BOOT_IP_FLUSH_ON_ATTACH": "1"}, None),
-        "boot_docker_daemon_file_keeps_other_settings": ({}, {}, None),
         "boot_bridge_rule_cannot_be_set": ({}, {"BOOT_IP_RULE_FAIL": "1"}, "Could not set the routing rule for the job bridge."),
         "boot_bridge_rule_behind_a_table_rule": ({}, {"BOOT_IP_LOW_TABLE_RULE": "1"}, "The job bridge routing rule is not ahead of every table rule."),
-        "boot_docker_bridge_set_in_the_options_file": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
-        "boot_docker_bridge_set_in_a_unit_drop_in": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
-        "boot_docker_bridge_set_in_the_vendor_unit": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
-        "boot_docker_bridge_set_in_the_runtime_unit": ({}, {}, BOOT_BIP_CONFLICT_MESSAGE),
-        "boot_docker_unit_unreadable": ({}, {"BOOT_SYSTEMCTL_CAT_FAIL": "1"}, BOOT_DOCKER_UNIT_UNREADABLE_MESSAGE),
-        "boot_docker_unit_read_stalls": ({}, {"BOOT_SYSTEMCTL_STALL": "cat docker"}, "Reading the Docker unit did not finish within 30 seconds."),
-        "boot_docker_bridge_has_another_subnet": ({}, {"BOOT_DOCKER0_ADDRESS": "10.99.0.1/16"}, "docker0 does not hold the pinned address"),
+        "boot_docker_bridge_has_another_subnet": ({}, {"BOOT_DOCKER0_ADDRESS": "10.99.0.1/16"}, "docker0 does not hold the required address"),
+        "boot_docker_subnet_from_an_environment_file": ({}, {}, BOOT_BRIDGE_REFUSED_MESSAGE),
+        "boot_docker_subnet_from_a_vendor_flag": ({}, {}, BOOT_BRIDGE_REFUSED_MESSAGE),
+        "boot_docker_subnet_from_the_daemon_file": ({}, {}, BOOT_BRIDGE_REFUSED_MESSAGE),
+        "boot_docker_exec_start_reset_removes_the_flag": ({}, {}, None),
+        "boot_docker_never_starts": ({}, {"BOOT_DOCKERD_FAIL": "1"}, "Docker did not start"),
+        "boot_docker_bridge_never_appears": ({}, {"BOOT_DOCKERD_NO_BRIDGE": "1"}, "docker0 did not appear within 6 seconds"),
+        "boot_rerun_changes_nothing": ({}, {}, None),
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2734,12 +2811,11 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_interface_search_fails": "Finding the host network interface",
         "boot_interface_attachment_unreadable": "Reading the host network interface attachment",
         "boot_host_address_never_up": "Waiting for the host address",
-        "boot_docker_bridge_set_in_the_options_file": "Pinning the job bridge subnet",
-        "boot_docker_bridge_set_in_a_unit_drop_in": "Pinning the job bridge subnet",
-        "boot_docker_bridge_set_in_the_vendor_unit": "Pinning the job bridge subnet",
-        "boot_docker_bridge_set_in_the_runtime_unit": "Pinning the job bridge subnet",
-        "boot_docker_unit_unreadable": "Reading the Docker unit",
-        "boot_docker_unit_read_stalls": "Reading the Docker unit",
+        "boot_docker_subnet_from_an_environment_file": "Checking the job bridge subnet",
+        "boot_docker_subnet_from_a_vendor_flag": "Checking the job bridge subnet",
+        "boot_docker_subnet_from_the_daemon_file": "Checking the job bridge subnet",
+        "boot_docker_never_starts": "Starting Docker",
+        "boot_docker_bridge_never_appears": "Waiting for docker0",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -2747,6 +2823,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
         "boot_with_the_privilege_setting_overridden": "overridden",
     }
     for name, (stub_overrides, case_environment, message) in cases.items():
+        if only is not None and name not in only:
+            continue
         planted = name == "boot_with_misplaced_dependency"
         case_template = (
             misplace_dependency(template)
@@ -2845,6 +2923,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
             evidence.check(step, "timer_started", "enable --now platform_imds_watch.timer" in read_lines(root / "state" / "systemctl.log"))
             check_interface_attachment(evidence, step, name, calls, deadlines, log)
             check_bridge_rule(evidence, step, root, log, name)
+            if name in BOOT_RERUN_CASES:
+                run_rerun_case(evidence, root, environment, bash)
             if planted:
                 run_planted_dependency_defect(evidence, root, environment)
             elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS and name not in BOOT_BRIDGE_PLAIN_CASES:
@@ -2863,10 +2943,14 @@ def run_host_boot_cases(evidence: Evidence, bash: str) -> None:
                     evidence.check(step, "failure_names_the_failing_step", names_step)
             evidence.check(step, "stopped_within_deadline", step["duration_seconds"] < 15)
             evidence.check(step, "cluster_not_joined", "ECS_CLUSTER=" not in config)
-            if name in BOOT_DAEMON_FILE_UNTOUCHED_CASES:
-                daemon = root / BOOT_PATHS["docker_daemon_file"]
-                seeded = BOOT_SEED_FILES.get(name, {}).get(BOOT_PATHS["docker_daemon_file"])
+            if name in BOOT_BRIDGE_REFUSED_CASES:
+                evidence.check(step, "ecs_configuration_not_written", not config)
+            if name in BOOT_BRIDGE_REFUSED_CASES or name == "boot_docker_bridge_has_another_subnet":
+                daemon = root / BOOT_DOCKER_DAEMON_FILE
+                seeded = BOOT_SEED_FILES.get(name, {}).get(BOOT_DOCKER_DAEMON_FILE)
                 evidence.check(step, "daemon_file_left_alone", (daemon.read_text(encoding="utf-8") if daemon.exists() else None) == seeded)
+    if only is not None:
+        return
     run_interface_plants(evidence, bash, template, gnu_timeout)
     run_console_copy_cases(evidence, bash, template, gnu_timeout)
 

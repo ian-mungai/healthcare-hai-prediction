@@ -15,8 +15,6 @@ sysctl_file="/etc/sysctl.d/90-platform-core-dumps.conf"
 nft_rules_file="/etc/nftables/platform_imds.nft"
 nftables_config="/etc/sysconfig/nftables.conf"
 guard_script="/usr/local/sbin/platform_imds_guard"
-docker_daemon_file="/etc/docker/daemon.json"
-docker_options_file="/etc/sysconfig/docker"
 docker_bridge_address="172.17.0.1/16"
 docker_bridge_subnet="172.17.0.0/16"
 bridge_rule_priority=9000
@@ -35,6 +33,8 @@ interface_name="${interface_name}"
 interface_poll_seconds=5
 interface_attach_seconds=600
 interface_wait_seconds=120
+docker_bridge_poll_seconds=2
+docker_bridge_wait_seconds=60
 project_tag="${project_tag}"
 
 # log and step write to the error stream, which command substitutions leave alone and which goes to the log.
@@ -149,50 +149,13 @@ fi
 # lookup 10001" (priority 10001), whose table sends everything out of the second interface, so the reply to a container left through the VPC
 # gateway instead of docker0 and the connection timed out, although the host itself and a container using the primary address connected.
 # The fix is a policy rule "to <bridge subnet> lookup main" at a priority below every rule that amazon-ec2-net-utils creates (they start at
-# 10000), so a reply to the bridge always follows the main table's docker0 route. The subnet is pinned: boot writes Docker's default
-# bridge address (bip) into the Docker daemon file, which nothing on the host sets otherwise, so the rule and docker0 agree. The guard adds
-# the rule and checks it with the firewall tables (apply, check and route), so Docker and the ECS agent do not start without it, the timer puts it back
-# within 10 seconds when a network reconfiguration drops it and stops both services when it cannot, and boot sets it again once the host
-# address is up, because the interface's own network setup can drop it. Boot fails at that step when the rule cannot be set.
-# Docker refuses to start when an option is given on its command line and again in the daemon file, even with the same value, so
-# the pin stops here, before the daemon file changes, when the options file or the effective Docker unit already passes --bip.
-# systemctl cat shows the unit systemd loads (the local, runtime or vendor unit file) and every loaded drop-in, so the check does not
-# depend on which folder sets the option. Comment lines do not count. A unit that cannot be read stops the boot, because the daemon
-# file cannot be checked against it.
-docker_bridge_on_command_line() {
-  local unit=$1
-  { if [ -f "$docker_options_file" ]; then cat "$docker_options_file"; fi; printf '%s\n' "$unit"; } |
-    awk '$0 !~ /^[[:space:]]*[#;]/ && $0 ~ /--bip([^[:alnum:]_-]|$)/ { print "Found --bip in: " $0 > "/dev/stderr"; found = 1 } END { exit !found }'
-}
-step "Reading the Docker unit"
-docker_unit=$(run_within 30 "$current_step" systemctl cat docker.service) || {
-  echo "Could not read the Docker unit, so the daemon file cannot be checked for --bip." >&2
-  exit 1
-}
-step "Pinning the job bridge subnet"
-if docker_bridge_on_command_line "$docker_unit"; then
-  echo "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address. Remove it there or set it in the daemon file." >&2
-  exit 1
-fi
-mkdir -p "$(dirname "$docker_daemon_file")"
-run_within 30 "Pinning the job bridge subnet" python3 - "$docker_daemon_file" "$docker_bridge_address" <<'PYTHON'
-import json
-import os
-import sys
-
-path, address = sys.argv[1:3]
-try:
-    with open(path, encoding="utf-8") as handle:
-        settings = json.load(handle)
-except FileNotFoundError:
-    settings = {}
-settings["bip"] = address
-temporary = path + ".platform_tmp"
-with open(temporary, "w", encoding="utf-8") as handle:
-    json.dump(settings, handle, indent=2)
-    handle.write("\n")
-os.replace(temporary, path)
-PYTHON
+# 10000), so a reply to the bridge always follows the main table's docker0 route. The rule names Docker's default bridge subnet, so boot
+# checks the subnet that Docker really uses: after Docker starts (see "Starting Docker" below) it reads the address on docker0 and stops unless
+# that address is exactly the one the rule names. Boot never predicts the address from Docker's unit files, drop-ins, options or environment
+# files, because those do not tell which command line Docker gets. The guard adds the rule and checks it with the firewall tables (apply, check
+# and route), so Docker and the ECS agent do not start without it, the timer puts it back within 10 seconds when a network reconfiguration drops
+# it and stops both services when it cannot, and boot sets it again once the host address is up, because the interface's own network setup can
+# drop it. Boot fails at that step when the rule cannot be set.
 step "Writing the metadata firewall files"
 command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
@@ -217,7 +180,7 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
 # both exist and that user 65534 cannot connect to the metadata service (curl status 7 or 28). enforce loads both tables
 # again when either is missing and stops the ECS agent and Docker when it cannot. route alone sets the job bridge routing rule.
 # The bridge rule sends a reply to a job container through the main table (docker0), ahead of the numbered tables of amazon-ec2-net-utils.
-# docker0, once it exists, must hold the pinned address, or the rule would name another subnet.
+# docker0, once it exists, must hold the address the rule names, or the rule would name another subnet.
 # The rule counts only in its plain form (seven fields): a rule with a suffix such as suppress_prefixlength cannot select the bridge route.
 bridge_rule_present() {
   local rules
@@ -237,7 +200,7 @@ bridge_address_ok() {
   awk -v address="$bridge_address" '{ for (i = 1; i < NF; i++) if ($i == "inet" && $(i + 1) == address) found = 1 } END { exit !found }' <<<"$shown"
 }
 ensure_bridge_rule() {
-  bridge_address_ok || { echo "docker0 does not hold the pinned address $bridge_address; restart Docker." >&2; return 1; }
+  bridge_address_ok || { echo "docker0 does not hold the required address $bridge_address." >&2; return 1; }
   if ! bridge_rule_present; then
     timeout --kill-after=5 10 ip -4 rule add to "$bridge_subnet" lookup main priority "$bridge_priority" || { echo "Could not set the routing rule for the job bridge." >&2; return 1; }
     bridge_rule_present || { echo "The job bridge routing rule is missing after it was added." >&2; return 1; }
@@ -500,6 +463,34 @@ run_within 30 "Checking the scratch mount" mountpoint -q "$scratch_path" || {
 }
 # systemd reads the new fstab lines, so the mount units that RequiresMountsFor names exist before Docker or the ECS agent starts.
 run_within 60 "Reloading systemd units for the new mounts" systemctl daemon-reload
+# Docker starts here, with the guard, the scratch mount and the routing rule in place (a start does nothing when Docker already runs). Whatever
+# command line Docker got, the address on docker0 is the subnet it uses: it must be exactly the address the routing rule names, and docker0
+# must appear within the limit. Either failure ends the boot before ECS_CLUSTER is written.
+step "Starting Docker"
+run_within 120 "Starting Docker" systemctl start docker.service || {
+  echo "Docker did not start, so the job bridge subnet cannot be checked and the host does not join the cluster."
+  exit 1
+}
+step "Waiting for docker0"
+deadline=$((SECONDS + docker_bridge_wait_seconds))
+while :; do
+  current_step="Waiting for docker0"
+  status=0
+  shown=$(run_within 30 "Reading the address of docker0" ip -o -4 addr show dev docker0) || status=$?
+  if [ "$status" -eq 0 ] && [ -n "$shown" ]; then break; fi
+  if ((SECONDS >= deadline)); then
+    echo "docker0 did not appear within $docker_bridge_wait_seconds seconds, so the job bridge subnet cannot be checked and the host does not join the cluster."
+    exit 1
+  fi
+  sleep "$docker_bridge_poll_seconds"
+done
+step "Checking the job bridge subnet"
+bridge_addresses=$(awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { printf "%s%s", separator, $(i + 1); separator = " " } }' <<<"$shown")
+if [ "$bridge_addresses" != "$docker_bridge_address" ]; then
+  echo "docker0 holds $bridge_addresses instead of the required $docker_bridge_address ($docker_bridge_subnet), so the host does not join the cluster. Docker received another bridge address: remove the option that sets it, in the daemon file or on the command line."
+  exit 1
+fi
+log "docker0 holds $bridge_addresses, the subnet of the routing rule."
 step "Writing the ECS agent configuration"
 cat >>"$ecs_config_file" <<CONFIG
 ECS_ENABLE_TASK_IAM_ROLE=true

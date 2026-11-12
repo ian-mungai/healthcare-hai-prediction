@@ -117,7 +117,7 @@ variables {
 # - a reply from a host service to a job container leaves through the second interface, because amazon-ec2-net-utils routes everything from the
 #   host address out of that interface (policy rule "from <host address> lookup 10001"), so a job cannot reach Polaris, the catalog, Redis or MLflow
 #   at the host address (found in the first live run); the fix needs a rule for the bridge subnet ahead of every rule of amazon-ec2-net-utils;
-# - the bridge subnet is not pinned, so the rule and docker0 can name different subnets;
+# - the subnet that Docker really uses is never read, so the rule and docker0 can name different subnets, or boot guesses it from unit files and environment files and guesses wrong;
 # - the rule is set once, lost when the interface's network setup or a reconfiguration drops it, and never restored, or a host that cannot set it joins the cluster.
 
 run "job_firewall_is_a_second_table_beside_the_unchanged_metadata_rule" {
@@ -314,42 +314,52 @@ run "docker_and_the_agent_require_the_scratch_mount_and_the_watchdog_checks_both
   }
 }
 
-# The tests above pin the firewall text; this one pins the job bridge routing rule: the subnet is pinned in the Docker daemon file, the guard sets and checks the
+# The tests above pin the firewall text; this one pins the job bridge routing rule: boot reads the subnet from docker0 after Docker starts, the guard sets and checks the
 # rule at a priority below every rule of amazon-ec2-net-utils (10000 and above), and boot sets it again after the host address is up and before the volumes and ECS.
-run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
+run "the_job_bridge_subnet_is_read_from_docker0_and_routed_ahead_of_the_interface_rules" {
   command = plan
 
   assert {
     condition = (
       alltrue([
         for text in [
-          "docker_daemon_file=\"/etc/docker/daemon.json\"",
           "docker_bridge_address=\"172.17.0.1/16\"",
           "docker_bridge_subnet=\"172.17.0.0/16\"",
-          "docker_options_file=\"/etc/sysconfig/docker\"",
-          "settings[\"bip\"] = address",
-          "os.replace(temporary, path)"
+          "docker_bridge_poll_seconds=2",
+          "docker_bridge_wait_seconds=60"
         ] : strcontains(local.host_user_data, text)
       ]) &&
-      length(split("Pinning the job bridge subnet", local.host_user_data)[0]) < length(split("Starting the metadata firewall", local.host_user_data)[0])
+      !anytrue([
+        for text in [
+          "daemon.json",
+          "systemctl cat",
+          "docker_options_file",
+          "settings[\"bip\"]",
+          "--bip"
+        ] : strcontains(local.host_user_data, text)
+      ])
     )
-    error_message = "Boot pins Docker's bridge address in the daemon file, keeping the other settings, before the firewall and Docker start."
+    error_message = "Boot names the one bridge address and its wait, and no longer guesses Docker's bridge address from its daemon file, unit text, options or environment files, or writes the daemon file."
   }
 
   assert {
     condition = (
       alltrue([
         for text in [
-          "docker_bridge_on_command_line() {",
-          "systemctl cat docker.service",
-          "Could not read the Docker unit, so the daemon file cannot be checked for --bip.",
-          "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address."
+          "run_within 120 \"Starting Docker\" systemctl start docker.service",
+          "Docker did not start, so the job bridge subnet cannot be checked and the host does not join the cluster.",
+          "ip -o -4 addr show dev docker0",
+          "docker0 did not appear within $docker_bridge_wait_seconds seconds",
+          "if [ \"$bridge_addresses\" != \"$docker_bridge_address\" ]; then",
+          "docker0 holds $bridge_addresses instead of the required $docker_bridge_address ($docker_bridge_subnet)"
         ] : strcontains(local.host_user_data, text)
       ]) &&
-      length(split("systemctl cat docker.service", local.host_user_data)[0]) < length(split("Docker already receives --bip on its command line", local.host_user_data)[0]) &&
-      length(split("Docker already receives --bip on its command line", local.host_user_data)[0]) < length(split("run_within 30 \"Pinning the job bridge subnet\" python3", local.host_user_data)[0])
+      length(split("Reloading systemd units for the new mounts", local.host_user_data)[0]) < length(split("step \"Starting Docker\"", local.host_user_data)[0]) &&
+      length(split("step \"Starting Docker\"", local.host_user_data)[0]) < length(split("step \"Waiting for docker0\"", local.host_user_data)[0]) &&
+      length(split("step \"Waiting for docker0\"", local.host_user_data)[0]) < length(split("step \"Checking the job bridge subnet\"", local.host_user_data)[0]) &&
+      length(split("step \"Checking the job bridge subnet\"", local.host_user_data)[0]) < length(split("step \"Writing the ECS agent configuration\"", local.host_user_data)[0])
     )
-    error_message = "Boot reads the effective Docker unit with its drop-ins (systemctl cat, under a deadline) and refuses a Docker command line that already sets --bip, or one it cannot read, before it writes the daemon file, because Docker rejects an option given in both places."
+    error_message = "After the scratch mount, boot starts Docker, waits for docker0 under a deadline, refuses any address but the one the routing rule names, and does all of it before the ECS configuration is written."
   }
 
   assert {
@@ -369,7 +379,7 @@ run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
         "ip -4 rule add to \"$bridge_subnet\" lookup main priority \"$bridge_priority\"",
         "Could not set the routing rule for the job bridge.",
         "The job bridge routing rule is not ahead of every table rule.",
-        "docker0 does not hold the pinned address",
+        "docker0 does not hold the required address",
         "  route) ensure_bridge_rule ;;",
         "&& bridge_rule_present \\\n    && bridge_rule_first\n}",
         "  ensure_bridge_rule || return 1\n"
