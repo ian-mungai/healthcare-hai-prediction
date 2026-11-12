@@ -117,8 +117,18 @@ def require_coverage(unit: dict, run: Any, stored: dict, receipt: dict, entries:
 
     fresh = data_artifacts(receipt, stored)
     require(bool(fresh), "Restored outcome names a capture with no data")
+    reference_only = compared_roles(stored["artifacts"]) == REFERENCE_ROLES
+    require(
+        not reference_only or not any(item["role"] in DATA_ROLES for item in receipt["artifacts"]),
+        "Restored outcome names a capture with data its unit does not hold",
+    )
     if unit["mode"] not in PLANNED and not is_mmd(unit):
-        require(set(fresh) == set(data_artifacts(stored, stored)), "Restored outcome names a capture with other data files than its unit")
+        old = data_artifacts(stored, stored)
+        require(set(fresh) == set(old), "Restored outcome names a capture with other data files than its unit")
+        require(
+            not reference_only or {name: item["role"] for name, item in fresh.items()} == {name: item["role"] for name, item in old.items()},
+            "Restored outcome names a capture with other reference roles than its unit",
+        )
     members = members_of(entries)
     for artifact in fresh.values():
         direct = direct_entry(artifact, entries)

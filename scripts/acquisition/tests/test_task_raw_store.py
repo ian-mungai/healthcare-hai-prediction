@@ -697,3 +697,67 @@ def test_coverage_refuses_a_capture_without_what_its_stored_capture_holds(stored
     unit = {"mode": "file", "source_id": "X"}
     with pytest.raises(RegistryError, match=message):
         restored_outcomes.require_coverage(unit, None, artifact_set(*stored), artifact_set(*fresh), [])
+
+
+def mixed_data(receipt: dict, role: str) -> None:
+    """Add a data or API page artifact that no object or manifest entry backs."""
+    extra = copy.deepcopy(receipt["artifacts"][0])
+    extra |= {"role": role, "artifact_id": "missing_data", "stored_file_name": "missing.csv", "storage_path": "raw/missing.csv", "sha256": "0" * 64}
+    receipt["artifacts"].append(extra)
+
+
+def swapped_role(receipt: dict, role: str) -> None:
+    receipt["artifacts"][0]["role"] = role
+
+
+REFERENCE_FORGERIES = {
+    "extra data without an object": partial(mixed_data, role="data"),
+    "extra api page without an object": partial(mixed_data, role="api_page"),
+    "dictionary relabelled layout": partial(swapped_role, role="layout"),
+    "dictionary relabelled methodology": partial(swapped_role, role="methodology"),
+}
+
+
+def forge_reference_receipt(bucket: TaskS3, run: harness.Run, unit: dict, change: Any) -> None:
+    """Change the fresh receipt of a reference-only outcome as a writer could, keeping its digest and its manifest entry consistent."""
+    evidence = (harness.outcome(run, unit["snapshot_id"]) or {})["stored"]
+    receipt = json.loads(bucket.objects[evidence["receipt"]["key"]][1])
+    change(receipt)
+    new_receipt = forge(bucket, evidence["receipt"], encoded_json(receipt))
+    manifests = []
+    for item in evidence["manifests"]:
+        manifest = json.loads(bucket.objects[item["key"]][1])
+        for entry in manifest["objects"]:
+            if entry["storage_path"] == "receipt.json":
+                entry["object"] = new_receipt
+        manifests.append(forge(bucket, item, encoded_json(manifest)))
+    rewrite_outcome(run, unit, stored={"receipt": new_receipt, "manifests": manifests})
+
+
+@pytest.mark.parametrize("change", REFERENCE_FORGERIES.values(), ids=list(REFERENCE_FORGERIES))
+def test_a_reference_receipt_with_data_or_another_reference_role_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: Any) -> None:
+    bucket = TaskS3()
+    run, unit = reference_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    forge_reference_receipt(bucket, run, unit, change)
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+@pytest.mark.parametrize(
+    ("stored", "fresh", "message"),
+    [
+        (("dictionary",), ("dictionary", "data"), "data its unit does not hold"),
+        (("dictionary",), ("dictionary", "api_page"), "data its unit does not hold"),
+        (("dictionary",), ("methodology",), "other reference roles"),
+    ],
+    ids=["extra data", "extra api page", "other role"],
+)
+def test_coverage_refuses_a_reference_capture_that_differs_in_data_or_role(stored: tuple, fresh: tuple, message: str) -> None:
+    from scripts.acquisition import restored_outcomes
+    from scripts.acquisition.source_registry import RegistryError
+
+    old = artifact_set(*stored)
+    new = {"artifacts": [item | {"stored_file_name": "dictionary.csv"} for item in artifact_set(*fresh)["artifacts"]]}
+    with pytest.raises(RegistryError, match=message):
+        restored_outcomes.require_coverage({"mode": "file", "source_id": "X", "flags": []}, None, old, new, [])
