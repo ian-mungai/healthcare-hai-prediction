@@ -63,7 +63,7 @@ locals {
     gold     = "write_gold_task"
     features = "write_features_task"
   }
-  # The container names and their empty variables equal config/orchestration/job_catalog.json; a Terraform test compares them with the file.
+  # The container names and their empty variables equal config/orchestration/ecs_broker_jobs.json; a Terraform test compares them with the file.
   layer_run_variables = {
     silver = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
@@ -186,11 +186,11 @@ locals {
 # A phase that exits with an error does not stop the task: the phases after it wait for its success and never start, and the one essential container (the last
 # phase) never runs, so the task stays PENDING until somebody stops it. The guard is a second essential container with no dependency. It reads the task metadata
 # endpoint and exits with an error as soon as a phase has failed, which stops the whole task (scripts/orchestration/task_guard.py). It also ends the task 900 seconds
-# after the job deadline of the job catalog (config/orchestration/job_catalog.json), so a hand-started task has a limit too. The deadline counts from the init
+# after the job deadline of the job catalog (config/orchestration/ecs_broker_jobs.json), so a hand-started task has a limit too. The deadline counts from the init
 # container and covers the fetch phase and every other phase, so the order is: the driver stops a phase at the deadline, the guard stops the task 900 seconds later
 # and the owner's last resort in the guide is 900 seconds after that. The driver also derives the time of the features build from the deadline that is left.
 locals {
-  layer_guard_seconds = { for layer in local.layer_jobs : layer => jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs[layer].deadline_seconds + 900 }
+  layer_guard_seconds = { for layer in local.layer_jobs : layer => jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].deadline_seconds + 900 }
   layer_guards = {
     for layer in local.layer_jobs : layer => {
       name                   = "guard"

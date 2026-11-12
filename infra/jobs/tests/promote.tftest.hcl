@@ -168,11 +168,11 @@ run "promote_containers_follow_the_job_catalog" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.promote_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.containers)) &&
+      toset([for container in jsondecode(output.promote_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers)) &&
       alltrue([for container in jsondecode(output.promote_container_definitions) : (
-        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.containers[container.name])
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.promote_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.log_container)
+      contains([for container in jsondecode(output.promote_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.log_container)
     )
     error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }

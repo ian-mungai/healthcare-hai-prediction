@@ -206,12 +206,12 @@ run "containers_follow_the_job_catalog" {
   assert {
     condition = (
       toset([for container in jsondecode(output.openmetadata_container_definitions) : container.name if length([for variable in container.environment : variable.name if variable.value == ""]) > 0]) ==
-      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers)) &&
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers)) &&
       alltrue([for container in jsondecode(output.openmetadata_container_definitions) : (
         length([for variable in container.environment : variable.name if variable.value == ""]) == 0 ||
-        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers[container.name])
+        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.log_container)
+      contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.log_container)
     )
     error_message = "Every container with an empty variable is named in the job catalog with exactly those variables, so no container of the catalog task starts with an empty run ID."
   }
@@ -237,7 +237,7 @@ run "marquez_step_needs_its_own_table_entry" {
 
   assert {
     condition = (
-      !contains(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers), "ingest_marquez") &&
+      !contains(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers), "ingest_marquez") &&
       [for variable in one([for container in jsondecode(output.openmetadata_container_definitions) : container if container.name == "ingest_marquez"]).environment : variable.name if variable.value == ""] == ["RUN_ID"]
     )
     error_message = "With a Marquez address the Marquez step needs RUN_ID, and the job catalog does not name it yet. Add it to the metadata job in the same change that turns the address on."
@@ -394,7 +394,7 @@ run "persistent_server_makes_an_ingestion_only_task" {
   assert {
     condition = (
       toset([for c in jsondecode(output.openmetadata_container_definitions) : c.name if length([for variable in c.environment : variable.name if variable.value == ""]) > 0]) ==
-      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers))
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers))
     )
     error_message = "The persistent mode keeps the containers and the empty variables that the job catalog names."
   }

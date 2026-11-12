@@ -1,6 +1,6 @@
 """Check which task definition revisions the project services really run, before a step that depends on them.
 
-    .venv/bin/python -m scripts.infrastructure.deployed_revisions --volume code_jobs_table=/config/orchestration/job_catalog.json \
+    .venv/bin/python -m scripts.infrastructure.deployed_revisions --volume code_jobs_table=/config/orchestration/ecs_broker_jobs.json \
         --in airflow_scheduler --forbid-secret BROKER_TOKEN
 
 The latest registered revision of a family says nothing about what runs: a failed or rolled-back deployment leaves the service on an older revision, and a

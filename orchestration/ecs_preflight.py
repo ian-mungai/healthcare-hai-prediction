@@ -32,8 +32,8 @@ from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, La
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import FEATURE_DAGS, LAUNCH_LANES, MODELS, model_features_run_id, parameters_for, training_run_id
 
-JOBS_FILE = Path("config/orchestration/job_catalog.json")
-JOBS_SCHEMA = Path("config/orchestration/job_catalog.schema.json")
+JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
+JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
 HOST_FILE = Path("config/orchestration/host_jobs.json")
 # Jobs only the direct launch runs, in the same schema: the Run 3 publisher is one of them.
 DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")

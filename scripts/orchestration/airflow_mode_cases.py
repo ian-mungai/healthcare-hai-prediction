@@ -1898,8 +1898,8 @@ def launch_modules_are_in_the_mount_list() -> None:
     unmounted = sorted(path for path in wanted if f"/opt/hai/{path}" not in text and path not in text)
     require(not unmounted, f"the scripts {unmounted} that the launch modules import are not in the Airflow mount list")
     for path in (
-        "config/orchestration/job_catalog.json",
-        "config/orchestration/job_catalog.schema.json",
+        "config/orchestration/ecs_broker_jobs.json",
+        "config/orchestration/ecs_broker_jobs.schema.json",
         "config/orchestration/host_jobs.json",
         "config/orchestration/direct_jobs.json",
         "config/orchestration/ecs_launch.json",
@@ -2066,7 +2066,7 @@ def metadata_uses_the_host_containers() -> None:
     request = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", None)
     spec = rig.preflight.prepare(request)
     require(spec is not None and spec.log_container == "ingest", f"the metadata log is not read from the host container: {spec}")
-    table = json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())["jobs"]["metadata"]
+    table = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]["metadata"]
     require(
         set(table["containers"]) == {"ingest_polaris", "ingest_dbt"} and table["log_container"] == "ingest_polaris",
         "the job table's metadata containers changed",

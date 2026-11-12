@@ -40,7 +40,7 @@ variable "bronze_resources" {
 locals {
   bronze_job_enabled = var.bronze_job_enabled ? toset(["bronze"]) : toset([])
   bronze_role        = "write_bronze_task"
-  # The container names and their empty variables equal config/orchestration/job_catalog.json; a Terraform test compares them with the file.
+  # The container names and their empty variables equal config/orchestration/ecs_broker_jobs.json; a Terraform test compares them with the file.
   bronze_run_variables = {
     fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
     pin   = ["RUN_ID", "POLARIS_URI", "CODE_SHA256", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256", "HAI_DEADLINE_UTC"]

@@ -123,7 +123,7 @@ locals {
     serve    = var.serve_enabled
     metadata = contains(keys(var.openmetadata_images), "ingestion") && contains(keys(var.openmetadata_roles), "execution") && contains(keys(var.openmetadata_roles), "openmetadata_task") && var.log_group_name != null
   }
-  # Roles and network class of each host definition (the class of config/orchestration/job_catalog.json, which a Terraform test compares).
+  # Roles and network class of each host definition (the class of config/orchestration/ecs_broker_jobs.json, which a Terraform test compares).
   host_specs = {
     silver   = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.silver, task = lookup(var.job_role_arns, local.layer_roles.silver, ""), network = "lakehouse" }
     gold     = { execution = lookup(var.job_role_arns, "execution", ""), task_key = local.layer_roles.gold, task = lookup(var.job_role_arns, local.layer_roles.gold, ""), network = "lakehouse" }

@@ -66,14 +66,14 @@ run "containers_follow_the_job_catalog_in_order" {
   assert {
     condition = (
       [for container in jsondecode(output.bronze_container_definitions) : container.name] == ["init", "fetch", "pin", "load", "check"] &&
-      toset([for container in jsondecode(output.bronze_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers))
+      toset([for container in jsondecode(output.bronze_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers))
     )
     error_message = "The containers run in phase order after the volume ownership step and are the ones the job catalog names."
   }
 
   assert {
     condition = alltrue([for container in jsondecode(output.bronze_container_definitions) : (
-      container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers[container.name])
+      container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers[container.name])
     )])
     error_message = "The empty variables of every container equal the job catalog, so no table list, target or dry run flag is fixed in the definition."
   }
@@ -216,7 +216,7 @@ run "the_run_task_output_names_the_dispatch_variables" {
       output.bronze_run_task.task_definition == "example_project_dev_job_bronze" && output.bronze_run_task.task_role_key == "write_bronze_task" &&
       output.bronze_run_task.assign_public_ip == "DISABLED" && output.bronze_run_task.propagate_tags == "TASK_DEFINITION" &&
       output.bronze_run_task.dry_run_variable == "BRONZE_DRY_RUN" && output.bronze_run_task.dry_run_value == "1" &&
-      output.bronze_run_task.container_environment.load == jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers.load
+      output.bronze_run_task.container_environment.load == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers.load
     )
     error_message = "The run task output lists what the launch passes to each container and the one override that makes a dry run."
   }

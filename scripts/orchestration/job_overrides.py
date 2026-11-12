@@ -3,7 +3,7 @@
     .venv/bin/python -m scripts.orchestration.job_overrides --job silver --run <RUN_ID> --code-run <RUN_ID> \\
         --code-sha256 <SHA256> --polaris-uri <URI> [--dry-run]
 
-``config/orchestration/job_catalog.json`` names the containers of each job and the empty variables that each one needs. This tool fills every one of them
+``config/orchestration/ecs_broker_jobs.json`` names the containers of each job and the empty variables that each one needs. This tool fills every one of them
 from an argument and refuses by name when a needed value is missing, so a task never starts with a variable empty. The preflight reads the same catalog.
 Terraform tests compare the table with the registered task definitions, so the output also equals what the task definition leaves empty.
 """
@@ -19,7 +19,7 @@ from typing import Any
 from scripts.features import feature_sets
 
 ROOT = Path(__file__).resolve().parents[2]
-TABLE = ROOT / "config/orchestration/job_catalog.json"
+TABLE = ROOT / "config/orchestration/ecs_broker_jobs.json"
 DRY_RUN_VARIABLE = "LAYER_DRY_RUN"
 LAYERS = ("silver", "gold", "features")
 

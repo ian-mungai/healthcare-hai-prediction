@@ -20,15 +20,15 @@ from scripts.process import CompletedProcess
 
 AIRFLOW = ("airflow_apiserver", "airflow_dag_processor", "airflow_scheduler", "airflow_triggerer")
 SERVICES = {key: f"stand-in-{key.replace('_', '-')}" for key in (*AIRFLOW, "postgres")}
-NEW_SOURCE = "/data/repo/config/orchestration/job_catalog.json"
-NEW_SCHEMA = "/data/repo/config/orchestration/job_catalog.schema.json"
-OLD_SOURCE = "/data/repo/config/orchestration/ecs_broker_jobs.json"
-OLD_SCHEMA = "/data/repo/config/orchestration/ecs_broker_jobs.schema.json"
+NEW_SOURCE = "/data/repo/config/orchestration/ecs_broker_jobs.json"
+NEW_SCHEMA = "/data/repo/config/orchestration/ecs_broker_jobs.schema.json"
+OLD_SOURCE = "/data/repo/config/orchestration/retired_jobs.json"
+OLD_SCHEMA = "/data/repo/config/orchestration/retired_jobs.schema.json"
 RULES = {
-    "volumes": {"code_jobs_table": "/config/orchestration/job_catalog.json", "code_jobs_schema": "/config/orchestration/job_catalog.schema.json"},
+    "volumes": {"code_jobs_table": "/config/orchestration/ecs_broker_jobs.json", "code_jobs_schema": "/config/orchestration/ecs_broker_jobs.schema.json"},
     "required_in": list(AIRFLOW),
     "forbid_secrets": ["BROKER_TOKEN"],
-    "forbid_suffixes": ["/config/orchestration/ecs_broker_jobs.json", "/config/orchestration/ecs_broker_jobs.schema.json"],
+    "forbid_suffixes": ["/config/orchestration/retired_jobs.json", "/config/orchestration/retired_jobs.schema.json"],
 }
 
 
@@ -249,7 +249,7 @@ def the_command_maps_problems_to_the_exit_code() -> dict[str, bool]:
         original = module.open_session
         module.open_session = lambda session=session: session
         try:
-            results[label] = module.main(["--volume", "code_jobs_table=/config/orchestration/job_catalog.json", "--in", "airflow_scheduler"])
+            results[label] = module.main(["--volume", "code_jobs_table=/config/orchestration/ecs_broker_jobs.json", "--in", "airflow_scheduler"])
         finally:
             module.open_session = original
     return {"a clean stack exits 0": results["clean"] == 0, "a problem exits 1": results["old"] == 1}

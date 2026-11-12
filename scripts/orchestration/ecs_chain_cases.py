@@ -349,7 +349,7 @@ def metadata_start_records_a_failed_trigger_in_the_log_and_the_result() -> None:
 
 
 def job_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
-    document = json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())
+    document = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
     job = document["jobs"].get("metadata")
     if job is None:
         raise AssertionError("the job table has no metadata job")

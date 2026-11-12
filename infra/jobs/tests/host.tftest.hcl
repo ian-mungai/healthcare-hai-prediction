@@ -478,14 +478,14 @@ run "run_task_and_dispatch_contract" {
   assert {
     condition = alltrue([for family, task in output.host_run_tasks : (
       task.task_definition == "example_project_dev_job_${family}_host" && task.capacity_provider == "example_project_host_dev" && task.network_mode == "bridge" &&
-      task.propagate_tags == "TASK_DEFINITION" && task.network == jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs[family].network
+      task.propagate_tags == "TASK_DEFINITION" && task.network == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[family].network
     )])
     error_message = "Every host run-task entry names its _host definition, the host capacity provider, bridge mode and the network class of the job table."
   }
 
   assert {
     condition = (
-      toset(keys(output.host_run_tasks)) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs)) &&
+      toset(keys(output.host_run_tasks)) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)) &&
       output.host_run_tasks["silver"].container_environment == output.layer_run_tasks["silver"].container_environment &&
       output.host_run_tasks["features"].container_environment == output.layer_run_tasks["features"].container_environment &&
       output.host_run_tasks["bronze"].container_environment == output.bronze_run_task.container_environment &&

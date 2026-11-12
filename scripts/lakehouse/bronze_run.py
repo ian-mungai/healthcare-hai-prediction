@@ -2,7 +2,7 @@
 
     python -m scripts.lakehouse.bronze_run <phase> --run <run ID> [--tables a,b] [--target real|qualify] [--work /workspace] [--dry-run]
 
-Each ECS container of the job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/job_catalog.json``):
+Each ECS container of the job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
 ``pin``, ``load`` and ``check``. The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``.
 
 Two values change from run to run and arrive at dispatch: the tables (``BRONZE_TABLES``) and the target (``BRONZE_TARGET``). The preflight checks them before it

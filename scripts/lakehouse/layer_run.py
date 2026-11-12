@@ -2,7 +2,7 @@
 
     python -m scripts.lakehouse.layer_run <phase> --layer silver|gold|features --run <run ID> [--input-run <run ID>] [--work /workspace] [--dry-run]
 
-Each ECS container of a job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/job_catalog.json``):
+Each ECS container of a job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
 
 - silver: ``pin``, ``build``, ``validate``, ``verify``, ``export``, ``publish``, ``upload``
 - gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``maintain``
@@ -80,7 +80,7 @@ STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
 UPLOAD_PREFIX = "lakehouse/layer_runs"
-JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/job_catalog.json"  # the deadline of each job
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job
 STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
 PHASE_DEADLINE = "HAI_PHASE_DEADLINE_EPOCH"  # read by scripts.features.features_build: the time by which the phase must end
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")  # what the publisher emits: the decimal string of a sum cast to DECIMAL(38, 0)

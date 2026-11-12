@@ -37,7 +37,7 @@ VALUES = {
 
 
 def job_table() -> dict:
-    return json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())["jobs"]
+    return json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]
 
 
 def the_generator_fills_every_variable_of_every_job() -> None:

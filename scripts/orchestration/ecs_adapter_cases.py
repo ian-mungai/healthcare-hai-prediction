@@ -20,7 +20,7 @@ from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
 from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
 
-JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/job_catalog.json"
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"
 SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",

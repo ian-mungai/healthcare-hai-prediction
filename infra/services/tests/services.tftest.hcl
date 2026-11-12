@@ -2526,7 +2526,7 @@ run "launch_mounts_are_always_present" {
           "/opt/hai/orchestration/ecs_launch.py",
           "/opt/hai/orchestration/ecs_launch_provider.py",
           "/opt/hai/config/orchestration/host_jobs.json",
-          "/opt/hai/config/orchestration/job_catalog.json",
+          "/opt/hai/config/orchestration/ecs_broker_jobs.json",
           "/opt/hai/config/orchestration/direct_jobs.json",
           "/opt/hai/scripts/lakehouse/bronze_dispatch.py",
           "/opt/hai/orchestration/layer_report.py",
