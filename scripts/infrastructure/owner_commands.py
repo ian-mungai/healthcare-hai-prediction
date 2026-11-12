@@ -29,7 +29,7 @@ from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
 ACCOUNT = "111111111111"
-SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp", "cp", "grep", "git")
+SHELL_TOOLS = ("printf", "date", "openssl", "cat", "basename", "shasum", "mkdir", "cmp", "cp", "grep", "git", "sed", "cut", "tee", "read")
 PARSE_FAILURES = re.compile(
     "|".join(
         (
@@ -102,6 +102,18 @@ def values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[st
         "TOKEN": "example-host:4242:20261031T120000Z:0123abcd",
         "OWNER": "Example Owner",
         "ANALYTICS_IMAGE": f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_analytics_dev@sha256:{'d' * 64}",
+    }
+
+
+def shell_values(record_dir: Path, overrides: dict[str, str] | None = None) -> dict[str, str]:
+    """The synthetic value of every shell variable a section that sets its own variables may read: the placeholder values plus the variables of its blocks."""
+    return {
+        **values(record_dir, overrides),
+        "IAM_PLAN": "/work/iam.tfplan",
+        "SERVICES_PLAN": "/work/services.tfplan",
+        "SERVICES_INPUTS_SHA256": "b" * 64,
+        "CODE_DIR": str(record_dir / "code_20261031T120000Z-abcdef12"),
+        "PWD": "/work",
     }
 
 
@@ -276,6 +288,49 @@ def check_section(body: str, folder: Path, wrapper: Wrapper, overrides: dict[str
     for line in commands(body):
         try:
             problems[line] = check_line(filled(line, table), folder, wrapper)
+        except (KeyError, ValueError) as error:
+            problems[line] = [str(error)]
+    return problems
+
+
+SUBSTITUTION = re.compile(r"\$\(((?:[^()]|\([^()]*\))*)\)")
+REFERENCE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\}?")
+
+
+def expand(line: str, table: dict[str, str]) -> str:
+    """The line with every shell variable reference ($NAME, ${NAME}, quoted or not) replaced by its synthetic value. A name without a value raises."""
+    unknown = sorted(set(REFERENCE.findall(line)) - table.keys())
+    if unknown:
+        raise KeyError(f"no synthetic value for the shell variable {unknown}")
+    return REFERENCE.sub(lambda match: table[match.group(1)], line)
+
+
+def check_shell_line(line: str, folder: Path, wrapper: Wrapper) -> list[str]:
+    """What is wrong with one expanded command line of a section that sets its own variables.
+
+    A command substitution is checked as its own command and stands for a word in the outer line. A pipeline is checked segment by segment. A line that only
+    assigns variables has no program of its own.
+    """
+    problems: list[str] = []
+    for inner in SUBSTITUTION.findall(line):
+        for segment in inner.split(" | "):
+            problems += check_line(segment, folder, wrapper)
+    outer = SUBSTITUTION.sub("x", line)
+    if all(re.fullmatch(r"[A-Z][A-Z0-9_]*=.*", word, re.S) for word in shlex.split(outer)):
+        return problems
+    for segment in outer.split(" | "):
+        problems += check_line(segment, folder, wrapper)
+    return problems
+
+
+def check_shell_section(body: str, folder: Path, wrapper: Wrapper, overrides: dict[str, str] | None = None) -> dict[str, list[str]]:
+    """``check_section`` for a section whose commands read shell variables that earlier commands set: the line as printed, mapped to its problems."""
+    table = shell_values(folder / "record", overrides)
+    (folder / "record").mkdir(parents=True, exist_ok=True)
+    problems: dict[str, list[str]] = {}
+    for line in commands(body):
+        try:
+            problems[line] = check_shell_line(expand(line, table), folder, wrapper)
         except (KeyError, ValueError) as error:
             problems[line] = [str(error)]
     return problems

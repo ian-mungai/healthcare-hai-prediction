@@ -229,6 +229,51 @@ def services_code_sample() -> dict[str, Any]:
     return document
 
 
+ZSH = Path("/bin/zsh")
+
+
+def pasteable_checks(body: str, folder: Path) -> dict[str, bool]:
+    """The shell blocks of a section as delivered, before any synthetic substitution: no <NAME> token, a valid syntax for the owner's shells, and every
+    variable a command reads is set by an earlier command of the section."""
+    fences = re.findall(r"```sh\n(.*?)```", body, re.S)
+    placeholders = sorted(set(re.findall(r"<[A-Z][A-Z0-9_]*>", "\n".join(fences))))
+    checks = {
+        "the code list has shell blocks": bool(fences),
+        "the code list's shell blocks contain no <NAME> token" + (f": {', '.join(placeholders)}" if placeholders else ""): not placeholders,
+    }
+    # A block goes to a script file and each shell only parses it (-n). The docker-calls guard accepts a shell started on a literal script name.
+    script = folder / "block.sh"
+    broken: dict[str, list[int]] = {"bash": [], "/bin/zsh": []}
+    for number, fence in enumerate(fences, 1):
+        script.write_text(fence, encoding="utf-8")
+        if run_command("bash", ["-n", "block.sh"], cwd=folder, timeout=30).returncode != 0:
+            broken["bash"].append(number)
+        if ZSH.exists() and run_command("/bin/zsh", ["-n", "block.sh"], cwd=folder, timeout=30).returncode != 0:
+            broken["/bin/zsh"].append(number)
+    if not ZSH.exists():
+        del broken["/bin/zsh"]
+        checks["/bin/zsh is not installed on this machine, so bash -n covered the blocks"] = True
+    for label, blocks in broken.items():
+        checks[f"every shell block of the code list passes {label} -n as delivered" + (f": blocks {blocks}" if blocks else "")] = not blocks
+    assigned: set[str] = {"PWD"}
+    unset: list[str] = []
+    for line in owner_commands.commands(body):
+        stripped = owner_commands.SUBSTITUTION.sub("", line)
+        for name in owner_commands.REFERENCE.findall(line):
+            if name not in assigned:
+                unset.append(name)
+        found = re.match(r"([A-Z][A-Z0-9_]*)=", stripped)
+        if found:
+            assigned.add(found.group(1))
+        read = re.match(r"read -r ([A-Z][A-Z0-9_]*)$", stripped)
+        if read:
+            assigned.add(read.group(1))
+    checks[
+        "every shell variable of the code list is set by an earlier command of the list" + (f": {', '.join(sorted(set(unset)))}" if unset else "")
+    ] = not unset
+    return checks
+
+
 def command_checks(text: str, folder: Path) -> dict[str, bool]:
     workspace = Workspace(folder / "workspace")
     code_body = owner_commands.section(text, CODE)
@@ -246,25 +291,40 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     wrapper = make_wrapper(workspace, samples)
     code_lines = [line.strip() for line in owner_commands.commands(code_body)]
     tool_lines = [line for line in code_lines if "scripts.infrastructure.services_code_inputs" in line]
-    shasums = [index for index, line in enumerate(code_lines) if line.startswith("shasum -a 256 <RECORD_DIR>/services_code.json")]
-    plans = [index for index, line in enumerate(code_lines) if "terraform.sh --services" in line and " plan " in line and "--preparation-sha256" in line]
+    shasums = [
+        index
+        for index, line in enumerate(code_lines)
+        if line.startswith("SERVICES_INPUTS_SHA256=") and 'shasum -a 256 "$RECORD_DIR/services_code.json"' in line
+    ]
+    plans = [
+        index
+        for index, line in enumerate(code_lines)
+        if "terraform.sh --services" in line and " plan " in line and '--preparation-sha256 "$SERVICES_INPUTS_SHA256"' in line
+    ]
+    applies = [
+        index
+        for index, line in enumerate(code_lines)
+        if "terraform.sh --services" in line and " apply " in line and '--preparation-sha256 "$SERVICES_INPUTS_SHA256"' in line
+    ]
     checks: dict[str, bool] = {
         "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample,
         "the code list writes the services file with services_code_inputs from the existing rendered settings, not as hand-written JSON": len(tool_lines) == 1
         and "--existing infra/services/deployment.auto.tfvars.json" in tool_lines[0]
-        and "--role-file <RECORD_DIR>/host_code_fetch_role.json" in tool_lines[0]
-        and "--bucket-file <RECORD_DIR>/data_bucket.txt" in tool_lines[0]
-        and "--output <RECORD_DIR>/services_code.json" in tool_lines[0]
+        and '--role-file "$RECORD_DIR/host_code_fetch_role.json"' in tool_lines[0]
+        and '--bucket-file "$RECORD_DIR/data_bucket.txt"' in tool_lines[0]
+        and '--output "$RECORD_DIR/services_code.json"' in tool_lines[0]
         and owner_commands.example_json(code_body) is None,
         "the code list saves the code one-shot role for the tool": any(
-            line.startswith("terraform -chdir=infra/iam output -json host_code_fetch_role") and line.endswith("> <RECORD_DIR>/host_code_fetch_role.json")
+            line.startswith("terraform -chdir=infra/iam output -json host_code_fetch_role") and line.endswith('> "$RECORD_DIR/host_code_fetch_role.json"')
             for line in code_lines
         ),
         "the code list saves the bucket name for the tool": any(
-            line.endswith("> <RECORD_DIR>/data_bucket.txt") and "<DATA_BUCKET>" in line for line in code_lines
+            line.endswith('> "$RECORD_DIR/data_bucket.txt"') and '"$DATA_BUCKET"' in line for line in code_lines
         ),
-        "the code list writes the services file, binds its complete bytes by digest and only then plans": bool(tool_lines and shasums and plans)
-        and code_lines.index(tool_lines[0]) < min(shasums) < min(plans),
+        "the code list writes the services file, binds its complete bytes by digest in a variable and uses that variable in the plan and the apply": bool(
+            tool_lines and shasums and plans and applies
+        )
+        and code_lines.index(tool_lines[0]) < min(shasums) < min(plans) < min(applies),
         "the code list keeps the check that the plan changes at most the code one-shot task definition": "must change at most the code one-shot task definition"
         in code_body
         and "a setting was lost" in code_body,
@@ -275,7 +335,7 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
         and sorted(code_sample.get("variables", {}))
         == sorted(["code_bucket_name", "code_fetch_task_role_arn", "mlflow_artifact_bucket", "mlflow_enabled", "mlflow_task_role_arn"]),
     }
-    policy_apply, services_plan = code_body.find("manage_policies apply --admin-profile <ADMIN_PROFILE>"), code_body.find("terraform.sh --services")
+    policy_apply, services_plan = code_body.find("manage_policies apply --admin-profile"), code_body.find("terraform.sh --services")
     checks["the code list applies the project user's policy with the policy manager under the administrator profile before the services apply"] = (
         0 <= policy_apply < services_plan
         and "CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies" in code_body
@@ -290,8 +350,10 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     checks["the code list starts the host before every services apply"] = bool(services_applies and host_starts) and min(host_starts) < min(services_applies)
     checks["the code list stages the code before it starts the host"] = bool(stagings and host_starts) and max(stagings) < min(host_starts)
     checks["the code list resolves a failed services apply with the apply lock token"] = "services_apply resolve" in code_body and "--token" in code_body
+    checks.update(pasteable_checks(code_body, folder))
     for heading in (SILVER, GOLD, FEATURES, CODE):
-        problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
+        check = owner_commands.check_shell_section if heading == CODE else owner_commands.check_section
+        problems = check(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
         count = len(problems)
         checks[f"{heading}: {count} printed commands were found"] = count >= 5
         for number, (line, found) in enumerate(problems.items(), 1):
