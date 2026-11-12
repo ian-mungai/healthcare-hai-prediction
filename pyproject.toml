@@ -6,7 +6,7 @@ requires-python = "==3.12.*"
 dependencies = []
 
 [dependency-groups]
-# The host environment (.venv): the pre-commit hooks, the quality tools and the host scripts. No pin here is a transitive one; the lock fixes those.
+# The host environment (.venv): the pre-commit hooks, the quality tools and the host scripts. No pin here is a transitive one except the Linux filelock; the lock fixes the rest.
 host = [
   "boto3==1.35.49",
   "boto3-stubs==1.35.49",
@@ -16,6 +16,8 @@ host = [
   "defusedxml==0.7.1",
   "deptry==0.25.1",
   "duckdb==1.5.6",
+  # Held on Linux at the lowest release that fixes the filelock advisories: the resolver otherwise keeps filelock 3.32.6 and the older virtualenv that needs it.
+  "filelock==4.2.1; sys_platform == 'linux'",
   "jinja2==3.1.6",
   "jsonschema[format]==4.26.0",
   "markdown-it-py==4.2.0",
