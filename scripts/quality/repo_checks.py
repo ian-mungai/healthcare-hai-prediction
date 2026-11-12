@@ -28,6 +28,7 @@ import tokenize
 import tomllib
 import unicodedata
 import urllib.parse
+from collections import deque
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -194,6 +195,8 @@ HOME_NAME_CHAR = "[^" + re.escape(HOME_DELIMITERS) + "]"
 HOME_QUOTES = "\"'`"
 HOME_SPACES = " \t\r\n\f\v"
 SHELL_BREAKS = HOME_SPACES + "()|&;"  # Outside quotes these end a shell word.
+SLASH_SEPARATOR = re.compile("/")
+ANY_SEPARATOR = re.compile(r"[/\\]")
 # The roots of a home. The macOS and Windows file systems ignore case, so their roots match in any case. Another case of the macOS root must start a path (or be
 # the path of a local file address), so a route such as /v1/users/login is no home. The Linux root is exact.
 HOME_ROOT = re.compile(r"(?P<linux>/home/)|(?P<mac>(?:/Users|(?<![\w/.})\]-])/(?i:users))/)|(?P<windows>(?<!\w)[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))")
@@ -1704,16 +1707,17 @@ def decoded_views(line: str) -> set[str]:
     return views
 
 
-def lex_words(text: str) -> list[tuple[str, list[int]]]:
-    """Split text into shell words: the value of each, with quotes and escapes resolved, and the lexical segment of each character.
+def lex_words(text: str) -> list[tuple[str, list[int], str]]:
+    """Split text into shell words: the value of each, with quotes and escapes resolved, the lexical segment of each character and the character before it.
 
     A quote (double, single or backtick) holds any character. A backslash escapes a quote, a space or a backslash outside quotes, and a quote or a backslash
     inside double quotes. Any other backslash stays, so a Windows path keeps its separators. A character that a quote or an escape puts right below a
-    home root has another segment than the root.
+    home root has another segment than the root. The character before a word stays with it, since a route such as (api)/users/login starts no path.
     """
     words = []
     chars: list[str] = []
     segments: list[int] = []
+    lead = ""
     segment = 0
     quote = ""
     started = False
@@ -1729,11 +1733,12 @@ def lex_words(text: str) -> list[tuple[str, list[int]]]:
                 if char == "\\" and quote == '"' and following and following in '"\\`$':
                     index += 1
                     char = following
+                lead = text[index - 1 : index] if not chars else lead
                 chars.append(char)
                 segments.append(segment)
         elif char in SHELL_BREAKS:
             if started:
-                words.append(("".join(chars), segments))
+                words.append(("".join(chars), segments, lead))
                 chars, segments, started = [], [], False
             segment += 1
         else:
@@ -1744,15 +1749,17 @@ def lex_words(text: str) -> list[tuple[str, list[int]]]:
             elif char == "\\" and following and following in "\"'` \\":
                 index += 1
                 segment += 1
+                lead = text[index - 1 : index] if not chars else lead
                 chars.append(following)
                 segments.append(segment)
                 segment += 1
             else:
+                lead = text[index - 1 : index] if not chars else lead
                 chars.append(char)
                 segments.append(segment)
         index += 1
     if started:
-        words.append(("".join(chars), segments))
+        words.append(("".join(chars), segments, lead))
     return words
 
 
@@ -1779,52 +1786,116 @@ def name_found(rest: str, root_segment: int, segments: list[int] | None, base: i
     return first not in HOME_DELIMITERS
 
 
-def home_root_found(kind: str, root: str, rest: str, segments: list[int] | None, base: int) -> bool:
-    """Apply the one rule to the path ``rest`` below a home root.
+def home_root_found(kind: str, root: str, rest: str, segments: list[int] | None, base: int, tail: Callable[[int], str], climbs: bool) -> bool:
+    """Apply the one rule to the path below a home root.
 
-    The path is a finding when its first folder is a concrete name, as written or after the path is normalized. The macOS Shared folder is no home, but
-    only while the normalized path stays inside it.
+    ``rest`` starts the path below the root, and its first folder is what counts. ``tail(offset)`` is the path from that offset in the whole token, with the
+    folders that cancel each other removed, and ``climbs`` says whether the token climbs out of a folder at all. The path is a finding when its first
+    folder is a concrete name, as written or after the path is normalized. The macOS Shared folder is no home, but only while the normalized path stays in it.
     """
     folder = rest.split("/", 1)[0]
     if kind == "mac" and folder.casefold() == "shared":
-        resolved = posixpath.normpath("/Users/Shared/" + rest[len(folder) + 1 :]).casefold()
+        resolved = posixpath.normpath("/Users/Shared/" + tail(len(folder) + 1)).casefold()
         return resolved != "/users/shared" and not resolved.startswith("/users/shared/")
     if name_found(rest, segments[base - 1] if segments else 0, segments, base):
         return True
-    if ".." not in rest:
+    if not climbs:
         return False
     prefix = {"linux": "/home/", "mac": "/Users/", "windows": root[0] + ":\\Users\\"}[kind]
-    normal = (ntpath if kind == "windows" else posixpath).normpath(prefix + rest)
+    normal = (ntpath if kind == "windows" else posixpath).normpath(prefix + tail(0))
     return normal.casefold().startswith(prefix.casefold()) and name_found(normal[len(prefix) :], 0, None, 0)
 
 
-def file_url_found(value: str) -> bool:
-    """Whether a local file address, with any host (localhost, an IP address or another name), has a home path with a user name."""
-    for url in FILE_URL.finditer(value):
+def folded_tails(text: str, starts: set[int], separators: re.Pattern[str], joiner: str) -> dict[int, str]:
+    """For each start, a short path that normalizes like ``text[start:]``: the folders that climb out of the start and the first two folders that stay.
+
+    Each start is the position after a separator. One pass from the right keeps the work linear however many home roots the text holds.
+    """
+    tails: dict[int, str] = {}
+    if not starts:
+        return tails
+    first = min(starts)
+    climbs = 0
+    names: deque[str] = deque(maxlen=2)
+    stop = len(text)
+    begins = [match.end() for match in separators.finditer(text, first)]
+    for begin in [*reversed(begins), first]:
+        part = text[begin:stop]
+        if part == "..":
+            climbs += 1
+        elif part not in ("", "."):
+            if climbs:
+                climbs -= 1
+            else:
+                names.appendleft(part)
+        if begin in starts:
+            tails[begin] = joiner.join([".."] * min(climbs, 3) + list(names))
+        stop = begin - 1
+    return tails
+
+
+def path_from(path: str, offset: int) -> str:
+    """The path from an offset."""
+    return path[offset:]
+
+
+def folded_from(tails: dict[int, str], begin: int, offset: int) -> str:
+    """The folded path from an offset after ``begin``."""
+    return tails.get(begin + offset, "")
+
+
+def file_url_found(text: str, position: int = 0) -> bool:
+    """Whether a local file address from ``position``, with any host (localhost, an IP address or another name), has a home path with a user name."""
+    for url in FILE_URL.finditer(text, position):
         try:
             path = urllib.parse.urlsplit(url.group()).path
         except ValueError:
             continue
         root = FILE_URL_ROOT.match(path)
-        if root and home_root_found("mac", root.group(), path[root.end() :], None, 0):
-            return True
+        if root:
+            rest = path[root.end() :]
+            if home_root_found("mac", root.group(), rest, None, 0, functools.partial(path_from, rest), ".." in rest):
+                return True
     return False
 
 
-def word_has_home(value: str, segments: list[int]) -> bool:
-    """Whether one shell word holds a home path with a user name."""
-    roots = list(HOME_ROOT.finditer(value))
-    for position, root in enumerate(roots):
-        stop = roots[position + 1].start() if position + 1 < len(roots) else len(value)
-        if home_root_found(str(root.lastgroup), root.group(), value[root.end() : stop], segments, root.end()):
+def word_has_home(value: str, segments: list[int], lead: str = "") -> bool:
+    """Whether one shell word holds a home path with a user name. ``lead`` is the character before the word, which a path start must not follow."""
+    probe = lead + value
+    shift = len(lead)
+    found = []
+    posix_starts: set[int] = set()
+    windows_starts: set[int] = set()
+    for match in HOME_ROOT.finditer(probe, shift):
+        kind = str(match.lastgroup)
+        begin = match.end() - shift
+        if kind == "windows":
+            cut = ANY_SEPARATOR.search(value, begin)
+            windows_starts.add(begin)
+        else:
+            cut = SLASH_SEPARATOR.search(value, begin)
+            posix_starts.add(begin)
+        stop = cut.start() if cut else len(value)
+        if kind == "mac" and value[begin:stop].casefold() == "shared":
+            posix_starts.add(stop + 1)
+        found.append((kind, match.group(), begin, stop))
+    if found and ".." in value:
+        posix_tails = folded_tails(value, posix_starts, SLASH_SEPARATOR, "/")
+        windows_tails = folded_tails(value, windows_starts, ANY_SEPARATOR, "\\")
+    else:
+        posix_tails = windows_tails = {}
+    climbed = value.rfind("..")
+    for kind, root, begin, stop in found:
+        tails = windows_tails if kind == "windows" else posix_tails
+        if home_root_found(kind, root, value[begin:stop], segments, begin, functools.partial(folded_from, tails, begin), climbed >= begin):
             return True
-    return TILDE_NAME.search(value) is not None or file_url_found(value)
+    return TILDE_NAME.search(probe, shift) is not None or file_url_found(probe, shift)
 
 
 def home_path_found(line: str) -> bool:
     """Whether a line holds a home path with a user name, in its text or in any decoded reading of it."""
     views = decoded_views(line) if "%" in line or "\\" in line else {line}
-    return any(word_has_home(value, segments) for view in views if HOME_HINT.search(view) for value, segments in lex_words(view))
+    return any(word_has_home(value, segments, lead) for view in views if HOME_HINT.search(view) for value, segments, lead in lex_words(view))
 
 
 def line_privacy(line: str, values: list[str]) -> list[str]:

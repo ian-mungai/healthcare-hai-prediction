@@ -1404,6 +1404,10 @@ def home_path_cases() -> list[Case]:
         "shared folder with an escaped space": f"cat {mac_users}Shared/one\\ two/../../jdoe/private.txt",
         "home placeholder climbing to a name": f"{LINUX_HOME}<user>/../jdoe/private.txt",
         "Windows placeholder climbing to a name": f"{WINDOWS_USERS}<user>\\..\\jdoe\\private.txt",
+        "shared folder holding a home root with a variable climbing out": f"cat '{mac_users}Shared/{HOME_WORD}/$USER/../../../jdoe/private.txt'",
+        "shared folder holding a home root with a brace placeholder climbing out": f"cat '{mac_users}Shared/{HOME_WORD}/{{user}}/../../../jdoe/private.txt'",
+        "shared folder holding a home root with a percent placeholder climbing out": f"cat '{mac_users}Shared/{HOME_WORD}/%USER%/../../../jdoe/private.txt'",
+        "home folder holding a home root with a variable climbing out": f"cat {LINUX_HOME}$USER/a/{HOME_WORD}/$USER/../../../../jdoe/private.txt",
     }
     cases = [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
     # The macOS shared folder is no user's home. Only the macOS root has this folder, so the Linux twin above stays flagged.
@@ -1451,6 +1455,10 @@ def home_path_cases() -> list[Case]:
         "quoted home root joined by a plus sign": f'"{LINUX_HOME}" + user',
         "quoted home roots in a list": f'("{LINUX_HOME}", "{mac_users}")',
         "address with a tilde folder": "https://example.invalid/~" + "jdoe/page",
+        "shared folder holding a home root with a variable that stays inside": f"cat '{mac_users}Shared/{HOME_WORD}/$USER/a/../run.log'",
+        "shared folder holding a home root with a brace placeholder": f"cat '{mac_users}Shared/{HOME_WORD}/{{user}}/run.log'",
+        "nested web route below a parenthesized folder": "https://example.invalid/api(foo)/users/login",
+        "parenthesized route folder before a user folder route": "(api)/users/login",
     }
     cases += [Case(name, "privacy-scan", True, {"notes.md": f"Log at {text}\n"}) for name, text in passing.items()]
     return cases
