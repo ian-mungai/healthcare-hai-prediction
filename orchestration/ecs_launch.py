@@ -732,7 +732,7 @@ class Launcher:
             claim = self.store.run_record(run, spec.job, "claim")
             if claim is not None and "end" not in self.events(run, spec.job, int(claim["attempt"])):
                 try:
-                    self.auto_settle(run, spec.job)
+                    self.auto_settle(run, spec.job, claim)
                 except FamilyBusy as error:
                     raise FamilyBusy(f"{error}; run {spec.run_id} was not claimed") from None
 
@@ -1055,45 +1055,58 @@ class Launcher:
         self.wait(launch)
         return self.conclude(launch)
 
-    def auto_settle(self, run_id: str, job: str) -> Outcome:
+    def auto_settle(self, run_id: str, job: str, claim: Mapping[str, Any] | None = None) -> Outcome:
         """Settle a launch that has no end record, with no statement of the owner (automatic launch recovery). It cancels: the cancel request is recorded, so no
-        sender of the launch sends after its next check, and the launch ends only with proof about its task: the task is found by identity and its stop is
+        sender of the launch sends again after its next check, and the launch ends only with proof about its task: the task is found by identity and its stop is
         confirmed (``cancelled``), or no RunTask call was ever sent and the close token is won (``cancelled`` without a task). Otherwise the launch stays
         unresolved and this raises ``FamilyBusy`` with the launch's run, job, attempt and task identity: when a saved task's stop cannot be confirmed (ECS does
         not describe it, or the stop is not confirmed in time) the message also holds the saved ARN, and when a RunTask call may have been sent and no task is
         found the end of the send window and an empty family listing prove nothing, because ECS lists a new task late and a request that passed its guard may
-        still be in flight. A launch record that cannot be read or written now is a temporary failure, not a refusal: it raises ``RecordStoreUnavailable`` (a
-        ``LaunchUnavailable``) with the launch's identity, claims no cancel and ends nothing, and the same call repeats the settle. A repeat, or a second
+        still be in flight. A launch record that cannot be read or written now, at any step of the settle, is a temporary failure, not a refusal: it raises
+        ``RecordStoreUnavailable`` (a ``LaunchUnavailable``) with the launch's identity as far as it is known, claims no cancel and no end, and the same call
+        repeats the settle. The caller may pass the claim it read (a claim is write-once), which the settle then does not read again. A repeat, or a second
         caller at the same moment, reads the one end record, because every record is write-once."""
-        claim = self.store.run_record(run_id, job, "claim")
-        if claim is None:
-            raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
-        attempt = int(claim["attempt"])
         try:
-            return self.cancel(run_id, job, attempt, reason="automatic settle")
-        except RecordStoreUnavailable as error:
+            if claim is None:
+                claim = self.store.run_record(run_id, job, "claim")
+            if claim is None:
+                raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
+            attempt = int(claim["attempt"])
             try:
-                saved = self.events(run_id, job, attempt).get("started")
+                return self.cancel(run_id, job, attempt, reason="automatic settle")
             except RecordStoreUnavailable:
-                saved = None
-            who = self.blocking_launch(run_id, job, attempt, saved)
+                raise
+            except (LaunchUnavailable, StopFailed) as error:
+                started = self.events(run_id, job, attempt).get("started")
+                who = self.blocking_launch(run_id, job, attempt, started)
+                if started is not None:
+                    raise FamilyBusy(
+                        f"{who} has no end record and was not settled: its task is saved in the launch records and its stop could not be confirmed "
+                        f"({error}). {self.cancel_note(run_id, job)}The run launches once ECS describes that task STOPPED, which the next launch of the "
+                        "family then records"
+                    ) from None
+            raise FamilyBusy(
+                f"{who} has no end record and was not settled: a RunTask call may have been sent and no task of it is found, and neither the end of its send "
+                f"window nor an empty listing proves that none exists. {self.cancel_note(run_id, job)}The run launches once ECS lists that task, which the "
+                "next launch of the family then stops and records"
+            )
+        except RecordStoreUnavailable as error:
+            attempt_known = int(claim["attempt"]) if claim is not None else None
+            saved = self.saved_task(run_id, job, attempt_known)
+            who = self.blocking_launch(run_id, job, attempt_known, saved) if attempt_known is not None else f"the {job} launch of run {run_id}"
             raise RecordStoreUnavailable(
-                f"{who} has no end record and was not settled: a launch record could not be read or written ({error}). Nothing was ended by this call. "
-                "This may be temporary: call the launch again and the family gate repeats the settle"
+                f"{who} was not confirmed settled: a launch record could not be read or written ({error}). This may be temporary: call the launch again "
+                "and the family gate settles it or reads its end record"
             ) from None
-        except (LaunchUnavailable, StopFailed) as error:
-            started = self.events(run_id, job, attempt).get("started")
-            who = self.blocking_launch(run_id, job, attempt, started)
-            if started is not None:
-                raise FamilyBusy(
-                    f"{who} has no end record and was not settled: its task is saved in the launch records and its stop could not be confirmed ({error}). "
-                    f"{self.cancel_note(run_id, job)}The run launches once ECS describes that task STOPPED, which the next launch of the family then records"
-                ) from None
-        raise FamilyBusy(
-            f"{who} has no end record and was not settled: a RunTask call may have been sent and no task of it is found, and neither the end of its send "
-            f"window nor an empty listing proves that none exists. {self.cancel_note(run_id, job)}The run launches once ECS lists that task, which the next "
-            "launch of the family then stops and records"
-        )
+
+    def saved_task(self, run_id: str, job: str, attempt: int | None) -> Mapping[str, Any] | None:
+        """The started record of the attempt when it can be read now, for a diagnostic: a read that fails says nothing."""
+        if attempt is None:
+            return None
+        try:
+            return self.events(run_id, job, attempt).get("started")
+        except RecordStoreUnavailable:
+            return None
 
     def blocking_launch(self, run_id: str, job: str, attempt: int, started: Mapping[str, Any] | None = None) -> str:
         """The old launch as a refusal names it: its run, job and attempt, its task identity and, when its started record is saved, its task ARN."""

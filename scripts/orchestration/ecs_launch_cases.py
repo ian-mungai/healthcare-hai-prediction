@@ -1583,6 +1583,114 @@ def end_write_timeout_is_temporary_at_the_gate() -> None:
     temporary_record_failure_at_the_gate("end_write_timeout")
 
 
+def one_read_timeout(rig: Rig, matches: Callable[[str], bool]) -> None:
+    """Make the first read of a record key that ``matches`` time out, once."""
+
+    def timeout(key: str) -> None:
+        if matches(key):
+            rig.bucket.read_hook = None
+            raise ReadTimeoutError(endpoint_url="https://s3.invalid")
+
+    rig.bucket.read_hook = timeout
+
+
+def stopped_saved_launch(rig: Rig) -> str:
+    """A launch with a saved started record whose sender died and whose task stopped."""
+    rig.ecs.hold = True
+    arn = die_while_running(rig, spec())
+    rig.ecs.finish(arn)
+    return arn
+
+
+def claim_read_timeout_inside_the_settle_keeps_the_identity() -> None:
+    """The gate has read the old launch's claim and a later read of it, inside the settle, times out once: the refusal still names the old launch with its saved
+    task, says it may be temporary, ends nothing, and the same call then settles the launch and launches the run."""
+    rig = Rig()
+    arn = stopped_saved_launch(rig)
+    reads: list[str] = []
+
+    def second_claim_read(key: str) -> None:
+        if key == rig.claim_key():
+            reads.append(key)
+            if len(reads) == 2:
+                rig.bucket.read_hook = None
+                raise ReadTimeoutError(endpoint_url="https://s3.invalid")
+
+    rig.bucket.read_hook = second_claim_read
+    try:
+        rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    except FamilyBusy as busy:
+        raise AssertionError(f"a temporary record read was reported as a family refusal: {busy}") from None
+    except LaunchUnavailable as error:
+        text = str(error)
+    else:
+        raise AssertionError("the injected read failure did not reach the caller")
+    missing = [part for part in (RUN, "gold", "attempt 1", arn, rig.adapter.identity(f"{RUN}:gold:1"), "temporary") if part not in text]
+    require(not missing, f"the refusal does not name {missing}: {text}")
+    require("end" not in rig.events(1) and not claim_of(rig, OTHER_RUN), "a failed read ended the launch or claimed the new run")
+    rig.ecs.hold = False
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok and rig.record(1, "end")["outcome"] == "cancelled", f"the same call did not settle the old launch and launch the run: {fresh}")
+
+
+def claim_read_timeout_of_a_direct_settle_names_the_launch() -> None:
+    """A direct settle whose first read fails has no attempt to name, but it names the run and job and says the failure may be temporary."""
+    rig = Rig()
+    stopped_saved_launch(rig)
+    one_read_timeout(rig, lambda key: key == rig.claim_key())
+    error = refuses(LaunchUnavailable, lambda: rig.launcher().auto_settle(RUN, "gold"))
+    text = str(error)
+    require(RUN in text and "gold" in text and "temporary" in text, f"the refusal does not name the launch and the retry: {text}")
+    require("end" not in rig.events(1), "a failed read ended the launch")
+
+
+def event_read_timeout_inside_the_handler_keeps_the_identity() -> None:
+    """ECS forgot the saved task, so the stop cannot be confirmed, and the diagnostic read of the old launch's records then times out once: the refusal still
+    names the old launch and says it may be temporary."""
+    rig = Rig()
+    stopped_saved_launch(rig)
+    rig.ecs.purge_after = 3600.0
+    rig.time.now += 3601
+
+    def arm_after_the_stop(operation: str) -> None:
+        if operation == "stop_task":
+            rig.ecs.call_hook = None
+            one_read_timeout(rig, lambda key: key == rig.key(1, "intent"))
+
+    rig.ecs.call_hook = arm_after_the_stop
+    try:
+        rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    except FamilyBusy as busy:
+        raise AssertionError(f"a temporary record read was reported as a family refusal: {busy}") from None
+    except LaunchUnavailable as error:
+        text = str(error)
+    else:
+        raise AssertionError("the injected read failure did not reach the caller")
+    missing = [part for part in (RUN, "gold", "attempt 1", rig.adapter.identity(f"{RUN}:gold:1"), "temporary") if part not in text]
+    require(not missing, f"the refusal does not name {missing}: {text}")
+    require("end" not in rig.events(1) and not claim_of(rig, OTHER_RUN), "a failed read ended the launch or claimed the new run")
+
+
+def end_readback_timeout_does_not_deny_a_written_end() -> None:
+    """The end record is written after the stop is confirmed and its read back times out once. The message must not say that the launch has no end record or
+    that nothing was ended, and the same call then reads the end and launches the run."""
+    rig = Rig()
+    stopped_saved_launch(rig)
+    end_key = rig.key(1, "end")
+    one_read_timeout(rig, lambda key: key == end_key and key in rig.bucket.objects)
+    try:
+        rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    except LaunchUnavailable as error:
+        text = str(error)
+    else:
+        raise AssertionError("the injected read failure did not reach the caller")
+    require("end" in rig.events(1), "the end record was not written before the readback failed")
+    require("has no end record" not in text and "Nothing was ended" not in text, f"the message denies the end record that exists: {text}")
+    rig.ecs.hold = False
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok and rig.record(1, "end")["outcome"] == "cancelled", f"the same call did not read the end and launch the run: {fresh}")
+
+
 def late_send_never_admits_a_new_run() -> None:
     """A sender passes its guard at 599 s and its RunTask request is in flight when the window ends at 600 s. At 601 s a new run's gate is refused and the old
     launch is not closed. The request then creates its task and the sender crashes before the started record: the gate names that task and waits until ECS shows
@@ -1762,6 +1870,10 @@ CASES: dict[str, Callable[[], None]] = {
     "settle_is_idempotent_when_the_task_is_found": settle_is_idempotent_when_the_task_is_found,
     "hidden_task_never_admits_a_new_run": hidden_task_never_admits_a_new_run,
     "late_send_never_admits_a_new_run": late_send_never_admits_a_new_run,
+    "claim_read_timeout_inside_the_settle_keeps_the_identity": claim_read_timeout_inside_the_settle_keeps_the_identity,
+    "claim_read_timeout_of_a_direct_settle_names_the_launch": claim_read_timeout_of_a_direct_settle_names_the_launch,
+    "event_read_timeout_inside_the_handler_keeps_the_identity": event_read_timeout_inside_the_handler_keeps_the_identity,
+    "end_readback_timeout_does_not_deny_a_written_end": end_readback_timeout_does_not_deny_a_written_end,
     "cancel_write_timeout_is_temporary_at_the_gate": cancel_write_timeout_is_temporary_at_the_gate,
     "cancel_write_throttle_is_temporary_at_the_gate": cancel_write_throttle_is_temporary_at_the_gate,
     "end_write_timeout_is_temporary_at_the_gate": end_write_timeout_is_temporary_at_the_gate,
