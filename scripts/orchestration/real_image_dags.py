@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal, TypedDict
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +74,7 @@ def planted(plant: Plant | None) -> Iterator[None]:
         return
     from botocore.client import BaseClient
 
-    original = BaseClient._make_api_call
+    original = vars(BaseClient)["_make_api_call"]
 
     def make_api_call(self: Any, operation_name: str, api_params: dict[str, Any]) -> Any:
         if operation_name == plant.operation and plant.when(api_params):
@@ -107,6 +107,13 @@ class Step:
     prepare: Callable[[Any], None] | None = None
     plant: Plant | None = None
     check: Callable[[Any, dict[str, Any]], None] | None = None
+
+
+class RefusedRun(TypedDict):
+    """The end states of a run the DAG refuses: the run state and the state of each task."""
+
+    run_state: str
+    states: dict[str, str]
 
 
 @dataclass(frozen=True)
@@ -393,7 +400,7 @@ def form_check(_rig: Any) -> None:
         "bronze_chain_dag": {"run_id": run},
         "launch_settle_dag": {"run_id": other, "launch_run": run, "job": "silver", "statement": c.SETTLE_STATEMENT},
     }
-    wrong = ({}, {"run_id": "latest"}, {"run_id": "x" + run}, {"run_id": 20261104}, {"run_id": run, "mode": "mock"})
+    wrong: tuple[dict[str, Any], ...] = ({}, {"run_id": "latest"}, {"run_id": "x" + run}, {"run_id": 20261104}, {"run_id": run, "mode": "mock"})
 
     def validated(dag_id: str, conf: Mapping[str, Any]) -> dict[str, Any]:
         dag = BAG["bag"].get_dag(dag_id)
@@ -456,7 +463,7 @@ def bridge_conformance(rig: Any) -> None:
     group, bucket, other = LOG_GROUP, c.BUCKET, "nonexistent-review-bucket"
     with make_bridge(rig) as bridge:
 
-        def client(service: str, region: str = fake.REGION) -> Any:
+        def client(service: Literal["ecs", "ssm", "logs", "s3"], region: str = fake.REGION) -> Any:
             return boto3.session.Session(region_name=region, aws_access_key_id=FAKE_CREDENTIAL, aws_secret_access_key=FAKE_CREDENTIAL).client(
                 service, endpoint_url=bridge.endpoint, config=Config(retries={"max_attempts": 1, "mode": "standard"}, connect_timeout=5, read_timeout=10)
             )
@@ -647,7 +654,7 @@ def cases_catalog() -> dict[str, Scenario]:
         end = rig.end(c.SILVER_RUN, "silver")
         require(end is not None and end["outcome"] in ("cancelled", "failed_closed"), f"the unfinished launch has no end record after the settle: {end}")
 
-    refused = {"run_state": "failed", "states": {"preflight": "failed", "job": "upstream_failed", "evidence": "upstream_failed", "gate": "failed"}}
+    refused: RefusedRun = {"run_state": "failed", "states": {"preflight": "failed", "job": "upstream_failed", "evidence": "upstream_failed", "gate": "failed"}}
 
     def other_capacity() -> Any:
         return make_rig(capacity="usable_memory_mib=65536 system_reserve_mib=2048")
