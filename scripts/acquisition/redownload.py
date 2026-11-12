@@ -348,17 +348,24 @@ def write_replacing(path: Path, body: bytes) -> None:
         raise
 
 
+def require_passing_review(run: Run, frozen: Mapping[str, Any]) -> str:
+    """A passing review bound to the complete frozen controls, continuation field included. Read only; returns the digest the review binds."""
+    review_path = run_records(run)[1]
+    sha = digest(encoded_json(frozen))
+    review = read_json(review_path) if review_path.is_file() else {}
+    require(review.get("status") == "passed" and review.get("reviewed_controls_sha256") == sha, "Passing independent review missing or stale")
+    return sha
+
+
 def review_gate(run: Run) -> str:
     """A separate passing review binds every runtime module, dependency, queue and operational input."""
-    path, review_path = run_records(run)
+    path = run_records(run)[0]
     require(path.is_file(), "Execution controls need an independent review")
     actual = runtime_controls(run)
     frozen = read_json(path)
     predecessors = continued_controls(frozen)
     require({name: value for name, value in frozen.items() if name != CONTINUES} == actual, "Execution controls changed; independent review required")
-    sha = digest(encoded_json(frozen))
-    review = read_json(review_path)
-    require(review.get("status") == "passed" and review.get("reviewed_controls_sha256") == sha, "Passing independent review missing or stale")
+    sha = require_passing_review(run, frozen)
     require(run.byte_cap <= BYTE_CAP, "Byte cap exceeds approved limit")
     run.cache["controls"] = actual
     run.cache["continues"] = predecessors
@@ -458,6 +465,36 @@ def validate_root(run: Run) -> None:
         require((root / "run.json").is_file() or not list(root.iterdir()), "Nonempty state root has no harness ownership record")
 
 
+def saved_time(value: Any) -> datetime:
+    """A time the ownership record saved, or a refusal before anything is written."""
+    try:
+        require(isinstance(value, str), "Malformed saved ownership record")
+        return datetime.fromisoformat(value)
+    except ValueError:
+        raise RegistryError("Malformed saved ownership record") from None
+
+
+def saved_history(record: Mapping[str, Any]) -> list[dict]:
+    """The binding records the ownership record holds, oldest first: the first binding when it has no history yet.
+
+    A history is a non-empty list of records with exactly a controls digest and a time. It ends with the controls that now own the root.
+    """
+    if "controls_history" not in record:
+        return [{"controls_sha256": record["controls_sha256"], "bound_at_utc": record["started_at_utc"]}]
+    history = record["controls_history"]
+    require(
+        isinstance(history, list)
+        and bool(history)
+        and all(isinstance(item, dict) and set(item) == {"controls_sha256", "bound_at_utc"} for item in history)
+        and all(isinstance(item["controls_sha256"], str) and DIGEST_TEXT.fullmatch(item["controls_sha256"]) for item in history)
+        and history[-1]["controls_sha256"] == record["controls_sha256"],
+        "Malformed saved ownership record",
+    )
+    for item in history:
+        saved_time(item["bound_at_utc"])
+    return history
+
+
 def started_at(run: Run) -> datetime:
     """Bind the state root to one queue and return when the run began; manual files must be newer."""
     run.state_root.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -475,11 +512,12 @@ def started_at(run: Run) -> datetime:
     current = run.cache["controls_sha256"]
     if record.get("controls_sha256") != current:
         require(may_continue(run, record.get("controls_sha256"), run.cache.get("continues", [])), "State root belongs to another reviewed implementation")
-        history = record.get("controls_history") or [{"controls_sha256": record["controls_sha256"], "bound_at_utc": record["started_at_utc"]}]
+        saved_time(record.get("started_at_utc"))
+        history = saved_history(record)
         entry = {"controls_sha256": current, "bound_at_utc": datetime.now(UTC).isoformat()}
         record = record | {"controls_sha256": current, "controls_history": [*history, entry]}
         write_replacing(path, encoded_json(record))
-    return datetime.fromisoformat(record["started_at_utc"])
+    return saved_time(record["started_at_utc"])
 
 
 PERSON_RECORDS = "run3_person"
@@ -1771,7 +1809,9 @@ def require_run_binding(run: Run) -> None:
     frozen = read_json(frozen_path)
     record = read_json(run.state_root / "run.json")
     saved = record.get("controls_sha256")
-    require(saved == digest(encoded_json(frozen)) or may_continue(run, saved, continued_controls(frozen)), "State root belongs to another run's controls")
+    if saved != digest(encoded_json(frozen)):
+        require(may_continue(run, saved, continued_controls(frozen)), "State root belongs to another run's controls")
+        require_passing_review(run, frozen)
     require(frozen.get("state_root") == root_label(run), "The chosen queue's controls bind a different state root")
     load_queue(run)
     require(record.get("queue_sha256") == accepted(run).queue_sha256, "State root belongs to another queue")

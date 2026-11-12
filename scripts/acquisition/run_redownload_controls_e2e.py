@@ -13,11 +13,32 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
-from scripts.acquisition import api_keys, bls_api_transport
+from scripts.acquisition import api_keys, bls_api_transport, publisher_run
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import RegistryError, read_json, require
 from scripts.acquisition.tests.test_s3_store import FakeS3, key_reader
+
+
+class StateCloud:
+    """The two S3 calls the task's save and restore make, over a dict. Real AWS is never reached."""
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+
+    def put_object(self, **arguments: Any) -> dict:
+        require(arguments["Key"] not in self.objects, "A state is created once")
+        self.objects[arguments["Key"]] = arguments["Body"]
+        return {"VersionId": "v1"}
+
+    def list_objects_v2(self, **arguments: Any) -> dict:
+        return {"Contents": [{"Key": key} for key in sorted(self.objects) if key.startswith(arguments["Prefix"])], "IsTruncated": False}
+
+    def get_object(self, **arguments: Any) -> dict:
+        return {"Body": io.BytesIO(self.objects[arguments["Key"]])}
+
+
+TASK_SETTINGS = {"DATA_BUCKET_NAME": "example-project-data-dev", "EXPECTED_ACCOUNT_ID": "2" * 12, "PUBLISHER_QUEUE_SHA256": "a" * 64}
 
 
 def approve_fixture(run: Any) -> None:
@@ -639,11 +660,22 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         )
         return sha
 
-    def restored(run: Any, named: bool = True) -> Any:
+    def restored(run: Any, named: bool = True, key: str = "raw/run3_state/synthetic/state.tar.gz") -> Any:
         """The task's next run over the same state root, with the state it restored from the prior state the request named."""
         again = harness.Run(run.queue_path, run.state_root, base=run.base, opener=run.opener, sleep=lambda _n: None)
-        again.restored_from = "raw/run3_state/synthetic/state.tar.gz" if named else None
+        again.restored_from = key if named else None
         return again
+
+    def through_the_task(run: Any, malform: Any = None) -> str:
+        """Save the finished root as the task does, with the ownership record altered first, then restore it into the empty root the next task starts with."""
+        if malform is not None:
+            (run.state_root / "run.json").write_bytes(encoded_json(malform(read_json(run.state_root / "run.json"))))
+        cloud, settings = StateCloud(), TASK_SETTINGS
+        saved = publisher_run.save_state(cloud, run.state_root, settings)
+        run.state_root.rename(run.state_root.with_name("run_saved"))
+        key = publisher_run.restore_state(cloud, run.state_root, settings | {"PUBLISHER_PRIOR_STATE": json.dumps(saved)})
+        require(key == saved["key"], "The task did not restore the named prior state")
+        return key
 
     def history_digests(run: Any) -> list[str]:
         return [item["controls_sha256"] for item in read_json(run.state_root / "run.json").get("controls_history", [])]
@@ -761,6 +793,80 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         require(read_json(run.state_root / "run.json")["controls_sha256"] == second, "An older predecessor took over the root")
 
     scenario("a_predecessor_older_than_the_current_controls_is_refused", older_predecessor)
+
+    def reader_predecessor_not_reviewed() -> None:
+        run, first = continuation("reader_unreviewed")
+        freeze_next(run, ["d" * 64])
+        controls_path = run.queue_path.with_name("controls.json")
+        controls_path.write_bytes(encoded_json(read_json(controls_path) | {"continues_controls_sha256": [first]}))
+        saved = tree(run.state_root)
+        refuses(restored(run), "Passing independent review missing or stale", preview=True)
+        try:
+            harness.report(restored(run))
+        except ValueError as failure:
+            require("Passing independent review missing or stale" in str(failure), f"A report was refused for another reason: {failure}")
+        else:
+            raise ValueError("A report accepted a predecessor list that no review covers")
+        require(tree(run.state_root) == saved, "A refused reader wrote to the state root")
+
+    scenario("readers_refuse_a_predecessor_list_changed_after_the_review", reader_predecessor_not_reviewed)
+
+    def reader_without_a_review() -> None:
+        run, first = continuation("reader_no_review")
+        freeze_next(run, [first])
+        run.queue_path.with_name("independent_review.json").write_bytes(encoded_json({"status": "failed"}))
+        refuses(restored(run), "Passing independent review missing or stale", preview=True)
+
+    scenario("readers_refuse_a_continuation_whose_review_did_not_pass", reader_without_a_review)
+
+    def malformed_saved_metadata() -> None:
+        history = {"controls_sha256": "a" * 64, "bound_at_utc": "2026-11-11T23:25:17+00:00"}
+        for label, malform in (
+            ("start_text", lambda record: record | {"started_at_utc": "not-a-time"}),
+            ("start_number", lambda record: record | {"started_at_utc": 7}),
+            ("start_missing", lambda record: {name: value for name, value in record.items() if name != "started_at_utc"}),
+            ("history_text", lambda record: record | {"controls_history": "broken"}),
+            ("history_empty", lambda record: record | {"controls_history": []}),
+            ("history_text_items", lambda record: record | {"controls_history": ["a", "b"]}),
+            ("history_extra_key", lambda record: record | {"controls_history": [history | {"extra": 1} | {"controls_sha256": record["controls_sha256"]}]}),
+            ("history_bad_digest", lambda record: record | {"controls_history": [history | {"controls_sha256": "A" * 64}]}),
+            (
+                "history_bad_time",
+                lambda record: record | {"controls_history": [history | {"controls_sha256": record["controls_sha256"], "bound_at_utc": "later"}]},
+            ),
+            ("history_not_current", lambda record: record | {"controls_history": [history]}),
+        ):
+            run, first = continuation(f"metadata_{label}")
+            freeze_next(run, [first])
+            key = through_the_task(run, malform)
+            before = (run.state_root / "run.json").read_bytes()
+            refuses(restored(run, key=key), "Malformed saved ownership record")
+            require((run.state_root / "run.json").read_bytes() == before, f"{label}: a refusal replaced the ownership record")
+
+    scenario("malformed_saved_metadata_is_refused_without_replacing_the_ownership_record", malformed_saved_metadata)
+
+    def restored_continuation() -> None:
+        run, first = continuation("through_restore")
+        second = freeze_next(run, [first])
+        key = through_the_task(run)
+        harness.execute(restored(run, key=key))
+        after = read_json(run.state_root / "run.json")
+        require(
+            after["controls_sha256"] == second and history_digests(run) == [first, second], f"A restored continuation did not bind the new controls: {after}"
+        )
+
+    scenario("a_state_restored_by_the_task_continues_under_the_listed_predecessor", restored_continuation)
+
+    def valid_history_extends() -> None:
+        run, first = continuation("valid_history")
+        second = freeze_next(run, [first])
+        harness.execute(restored(run))
+        third = freeze_next(run, [second])
+        key = through_the_task(run)
+        harness.execute(restored(run, key=key))
+        require(history_digests(run) == [first, second, third], f"A saved history was not extended: {history_digests(run)}")
+
+    scenario("a_saved_history_is_extended_after_a_restore", valid_history_extends)
 
     def readers_follow_the_binding() -> None:
         run, first = continuation("readers")
