@@ -381,7 +381,46 @@ def case_features_build_names_the_derivation_when_a_step_runs_long(root: Path) -
     expect(not any(name in source for name in ("COPY_SECONDS", "SEED_SECONDS", "BUILD_SECONDS", "WORKER_SECONDS")), "a fixed limit is left")
 
 
-CASES = [value for name, value in sorted(globals().items()) if name.startswith("case_")]
+CASES = [
+    case_a_large_override_is_clipped_to_capacity,
+    case_a_small_override_stays_exact,
+    case_a_v1_sentinel_alone_is_no_memory_figure,
+    case_an_override_that_is_not_understood_fails_by_name,
+    case_apply_derives_the_limits_of_a_task_on_the_ec2_host,
+    case_apply_does_nothing_for_an_unknown_ecs_environment,
+    case_apply_does_nothing_outside_a_task,
+    case_apply_fails_by_name_when_the_task_is_tiny,
+    case_apply_leaves_the_spill_cap_unset_without_a_spill_folder,
+    case_apply_sets_the_engine_environment_in_a_task,
+    case_below_the_floor_fails_by_name,
+    case_cgroup_v1_limits,
+    case_cgroup_v2_limits,
+    case_entry_points_derive_their_limits_before_an_engine_starts,
+    case_features_build_keeps_a_reserve_for_the_later_phases,
+    case_features_build_limits_come_from_the_remaining_deadline,
+    case_features_build_names_the_derivation_when_a_step_runs_long,
+    case_features_build_reads_the_deadline_from_the_environment,
+    case_features_build_refuses_a_deadline_that_is_too_short,
+    case_garbled_cgroup_file_fails_by_name,
+    case_more_siblings_leave_less_memory,
+    case_no_override_changes_nothing,
+    case_nothing_readable_fails_by_name,
+    case_siblings_come_from_the_task_metadata,
+    case_spill_cap_is_a_share_of_the_free_space,
+    case_spill_space_comes_from_the_filesystem,
+    case_the_16_gib_task,
+    case_the_64_gib_task,
+    case_the_layer_passes_the_phase_deadline_to_the_build,
+    case_the_layers_choose_the_profile_by_phase,
+    case_the_smallest_cpu_source_wins,
+    case_unreadable_metadata_reserves_for_one_sibling,
+    case_v1_unlimited_sentinel_is_not_a_limit,
+    case_v2_unlimited_uses_the_smaller_of_meminfo_and_the_task_metadata,
+]
+
+
+if len(CASES) != sum(name.startswith("case_") for name in globals()):
+    raise SystemExit("run_task_capacity_cases: a case_ function is missing from CASES")
 
 
 def main() -> int:
