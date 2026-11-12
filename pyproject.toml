@@ -1031,7 +1031,7 @@ streamlit = [
 
 # Training image: the model libraries of scripts/training and the MLflow client of the server version. The first four model libraries equal the model API group's.
 training = [
-  "mlflow==3.17.0; sys_platform == 'linux'",
+  "mlflow==3.17.2; sys_platform == 'linux'",
   "boto3==1.43.123; sys_platform == 'linux'",
   "jsonschema==4.26.0; sys_platform == 'linux'",
   "numpy==2.5.3; sys_platform == 'linux'",
