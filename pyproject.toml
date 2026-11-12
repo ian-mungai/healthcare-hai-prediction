@@ -92,7 +92,7 @@ sqlfluff = [
   "dbt-duckdb==1.11.0",
   "duckdb==1.5.6",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
-  "certifi==2026.10.19",
+  "certifi==2026.10.18",
   "chardet==7.6.0",
   "dbt-protos==1.0.565",
   "diff-cover==10.6.0",
@@ -129,7 +129,7 @@ analytics = [
   "duckdb==1.5.6",
   "duckdb-cli==1.5.6",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
-  "certifi==2026.10.19",
+  "certifi==2026.10.18",
   "dbt-protos==1.0.565",
   "msgpack==1.2.3",
   "opentelemetry-api==1.45.1",
@@ -1003,7 +1003,7 @@ quality = [
   "duckdb-engine==0.17.0; sys_platform == 'linux'",
   "duckdb==1.5.6; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
-  "certifi==2026.10.19; sys_platform == 'linux'",
+  "certifi==2026.10.18; sys_platform == 'linux'",
   "mistune==3.3.4; sys_platform == 'linux'",
   "narwhals==2.26.0; sys_platform == 'linux'",
   "numpy==2.5.3; sys_platform == 'linux'",
