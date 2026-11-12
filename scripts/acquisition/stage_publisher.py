@@ -2,7 +2,7 @@
 
 Run it on the owner's Mac after ``stored_mirror`` and the approvals. It writes ``publisher_inputs.tar.gz`` and ``publisher_request.json``. The owner copies both
 beside the run's code archive. The archive holds the stored mirror, its index, the route files and a manifest that names the queue. It refuses an original, a
-settings file or anything that is not a plain file, because everything in it reaches the task.
+settings file, a config file or anything that is not a plain file, because everything in it reaches the task. The task reads its config from the code root.
 
     .venv/bin/python -m scripts.acquisition.stage_publisher --mirror-output <folder> --queue <path inside the mirror> --removal-plan <file> \\
         --removal-confirmation <file> --hosts <file> --hosts-approval <file> --output <new folder> [--resume-source <source>] \\
@@ -70,6 +70,8 @@ def build(
     entries: dict[str, bytes] = {}
     for path in sorted(mirror_output.rglob("*")):
         name = path.relative_to(mirror_output).as_posix()
+        if PurePosixPath(name).parts[:2] == ("mirror", "config"):
+            raise StageError("The mirror output holds config, which the publisher reads from the code root, so the stage is refused.")
         if path.is_symlink() or (not path.is_file() and not path.is_dir()):
             raise StageError("The mirror output holds a file that is not plain, so the stage is refused.")
         if path.is_file():

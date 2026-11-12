@@ -300,6 +300,26 @@ def test_the_stage_refuses_an_original_or_a_settings_file(tmp_path: Path, plante
     check(not (tmp_path / "stage").exists(), "nothing is staged")
 
 
+@pytest.mark.parametrize("planted", ["mirror/config/acquisition/storage_policy.json", "mirror/config/other.json"])
+def test_the_stage_refuses_config_because_the_publisher_reads_it_from_the_code_root(tmp_path: Path, planted: str) -> None:
+    files = stage_files(tmp_path)
+    (files["mirror_output"] / planted).parent.mkdir(parents=True, exist_ok=True)
+    (files["mirror_output"] / planted).write_text("{}")
+    with pytest.raises(stage_publisher.StageError, match="code root"):
+        stage(tmp_path)
+    check(not (tmp_path / "stage").exists(), "nothing is staged")
+
+
+def test_the_stage_still_carries_the_plan_data_files(tmp_path: Path) -> None:
+    files = stage_files(tmp_path)
+    (files["mirror_output"] / "mirror/data/refs").mkdir(parents=True)
+    (files["mirror_output"] / "mirror/data/refs/county.csv").write_bytes(b"county\n")
+    (files["mirror_output"] / "mirror" / stored_mirror.PLAN_INPUTS_NAME).write_text("{}")
+    with tarfile.open(fileobj=io.BytesIO((stage(tmp_path) / "publisher_inputs.tar.gz").read_bytes()), mode="r:gz") as saved:
+        names = set(saved.getnames())
+    check({"mirror/data/refs/county.csv", f"mirror/{stored_mirror.PLAN_INPUTS_NAME}"} <= names, str(names))
+
+
 def test_the_stage_refuses_a_queue_outside_the_mirror(tmp_path: Path) -> None:
     files = stage_files(tmp_path)
     with pytest.raises(stage_publisher.StageError, match="queue"):

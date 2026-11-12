@@ -390,6 +390,15 @@ def verify_input(path: Path, run: Run) -> None:
         require(digest(path.read_bytes()) == expected, "Operational input changed")
 
 
+def verify_config_inputs(run: Run) -> None:
+    """Check each bound config file at the code root. Config belongs to the code, so a copy in the stored mirror is never read."""
+    for relative in run.cache.get("controls", {}).get("operational_sha256", {}):
+        if relative.startswith("config/acquisition/"):
+            path = run.base / relative
+            require(path.is_file(), "Operational config missing from the code root")
+            verify_input(path, run)
+
+
 def validate_root(run: Run) -> None:
     """Enforce a fresh owned subtree and reject symlink traversal or overlap with historical captures."""
     root = run.state_root.absolute()
@@ -1176,9 +1185,7 @@ def planned(unit: dict, run: Run) -> tuple[dict, dict]:
     """Return the locked plan and the single planned item that produced a stored capture."""
     module_name, loader, group, key = PLANNED[unit["mode"]]
     verify_path_map(run)
-    for relative in run.cache.get("controls", {}).get("operational_sha256", {}):
-        if relative.startswith("config/acquisition/"):
-            verify_input(run.data_root / relative, run)
+    verify_config_inputs(run)
     if f"plans:{module_name}" not in run.cache:
         # Loading a plan re-validates the registry, so each locked plan is loaded once per invocation.
         run.cache[f"plans:{module_name}"] = load_plans_of(unit["mode"])
