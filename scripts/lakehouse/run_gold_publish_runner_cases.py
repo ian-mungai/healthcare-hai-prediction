@@ -733,6 +733,8 @@ GOLD_DEFAULT = (
     "maintenance_protection",
     "reader_discovery",
     "contract_plan",
+    "schema_evolution",
+    "base_pin_and_extract",
 )
 FEATURE_DEFAULT = ("happy_and_types", "retry_and_new_publication", "version_two", "interruption_between_fast_forwards", "tamper")
 
