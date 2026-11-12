@@ -253,7 +253,7 @@ class Socket:
 
 
 class Context:
-    def wrap_socket(self, sock: Any, server_hostname: str) -> Any:
+    def wrap_socket(self, sock: Any, **_: Any) -> Any:
         time.sleep(0.01)
         return sock
 

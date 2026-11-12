@@ -179,6 +179,7 @@ def provider_shaped_subclass_needs_its_own_init() -> None:
     error = refuses(AttributeError, lambda: WithoutInit(**arguments))
     require("__wrapped__" in str(error), f"a subclass without its own __init__ fails as Airflow 3.3.2 does: {error}")
     built = WithInit(**arguments)
+    require(getattr(built, "_instantiated", False) is True, "the outermost wrapped __init__ marks the end of construction, as in Airflow 3.3.2")
     require(
         built.reattach is True and built.deferrable is False and built.wait_for_completion is True, "the subclass with its own __init__ keeps the guarantees"
     )

@@ -98,9 +98,6 @@ def synthetic_run(folder: Path, number: int, context: str) -> tuple[harness.Run,
     return run, unit
 
 
-CONTEXTS = [(2, "local"), (3, "task"), (3, "person")]
-
-
 def quiet_environment(monkeypatch: pytest.MonkeyPatch, number: int) -> None:
     monkeypatch.setenv("HAI_CAPTURE_ROOT", "raw/" if number == 3 else "")
     for name in harness.TASK_ENVIRONMENT:

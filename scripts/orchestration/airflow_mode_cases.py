@@ -1366,9 +1366,6 @@ def five_dags_run_end_to_end() -> None:
     require(rig.tasks_started() == again, "a second run of the same DAG run launched again")
 
 
-MODE_REFUSAL = "runs on AWS in real mode only"
-
-
 def form_mode_defaults() -> dict[str, Any]:
     """The default of the ``mode`` parameter in each shipped DAG file's trigger form, read from the file's ``Param`` call."""
     found: dict[str, Any] = {}

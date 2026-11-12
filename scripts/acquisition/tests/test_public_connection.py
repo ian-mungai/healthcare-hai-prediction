@@ -20,7 +20,6 @@ def answers(*addresses: str) -> list[tuple[Any, ...]]:
 class Recorder:
     def __init__(self, monkeypatch: pytest.MonkeyPatch, *addresses: str) -> None:
         self.connected: list[tuple[str, int]] = []
-        self.server_names: list[str] = []
         monkeypatch.setattr(socket, "getaddrinfo", lambda *args, **kwargs: answers(*addresses))
         monkeypatch.setattr(socket, "create_connection", self.create)
 

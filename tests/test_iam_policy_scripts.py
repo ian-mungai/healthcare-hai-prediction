@@ -116,8 +116,12 @@ class FakeIam:
             "list_attached_user_policies": ("AttachedPolicies", lambda UserName: [self.attachment(n) for n in sorted(self.user_policies[UserName])]),
             "list_user_policies": ("PolicyNames", lambda UserName: sorted(self.user_inline[UserName])),
         }
-        if name in ("list_policy_versions", "list_entities_for_policy"):
-            return MarkerPaginator(getattr(self, name))
+        marked: dict[str, Callable[..., dict[str, Any]]] = {
+            "list_policy_versions": self.list_policy_versions,
+            "list_entities_for_policy": self.list_entities_for_policy,
+        }
+        if name in marked:
+            return MarkerPaginator(marked[name])
         key, fetch = listing[name]
         return Paginator(fetch, key)
 

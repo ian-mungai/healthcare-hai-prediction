@@ -56,7 +56,6 @@ PEOPLE = ["Pat Q Example", "Lee Sample", "Jordan Owner"]
 YEARS = [2018, 2025]
 # Phone-like samples are assembled so this file does not trip the privacy scan.
 PHONE_ONE = "(555) 010" + "-0001"
-PHONE_TWO = "555-010" + "-0002"
 LIMITS = Limits(attempts=1, timeout_seconds=5, max_seconds=30)
 
 

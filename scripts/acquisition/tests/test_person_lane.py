@@ -299,9 +299,8 @@ def bucket_bodies(bucket: Any) -> dict[str, bytes]:
     return {key: data for key, (_, data, _) in bucket.objects.items()}
 
 
-def test_a_browser_file_that_passes_is_stored_under_raw_with_a_task_shaped_receipt_and_its_record(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None
-) -> None:
+@pytest.mark.usefixtures("raw_route")
+def test_a_browser_file_that_passes_is_stored_under_raw_with_a_task_shaped_receipt_and_its_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from scripts.acquisition.tests.test_task_owners import TaskS3
     from scripts.acquisition.tests.test_task_raw_store import STORED
 
@@ -332,7 +331,8 @@ def test_a_browser_file_that_passes_is_stored_under_raw_with_a_task_shaped_recei
     check(harness.report(run)["s3_writes"] == 1, "the report counts the stored capture")
 
 
-def test_a_browser_file_whose_store_fails_counts_for_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None) -> None:
+@pytest.mark.usefixtures("raw_route")
+def test_a_browser_file_whose_store_fails_counts_for_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from scripts.acquisition.tests.test_task_owners import TaskS3
     from scripts.acquisition.tests.test_task_raw_store import STORED
 
@@ -383,9 +383,8 @@ def stored_receipt_body(bucket: Any, record: dict) -> dict:
     return json.loads(bucket_bodies(bucket)[record["stored"]["receipt"]["key"]])
 
 
-def test_a_reference_page_is_stored_with_its_reference_role_and_a_fresh_download_proof(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None
-) -> None:
+@pytest.mark.usefixtures("raw_route")
+def test_a_reference_page_is_stored_with_its_reference_role_and_a_fresh_download_proof(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from scripts.acquisition.tests.test_task_owners import TaskS3
     from scripts.acquisition.tests.test_task_raw_store import STORED
 
@@ -405,8 +404,9 @@ def test_a_reference_page_is_stored_with_its_reference_role_and_a_fresh_download
     check(proof["created_at_utc"] == stored["acquisition"]["retrieved_at_utc"], "the proof and the receipt name the same save time")
 
 
+@pytest.mark.usefixtures("raw_route")
 def test_a_fresh_wonder_export_is_stored_as_a_fresh_capture_with_its_derived_csv_and_the_plan_comparison_recorded(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     from scripts.acquisition import wonder_export_contract
     from scripts.acquisition.tests.test_task_owners import TaskS3
@@ -474,8 +474,9 @@ def capture_keys(bucket: Any) -> set[str]:
 
 
 @pytest.mark.parametrize("kind", ["browser file", "reference save"])
+@pytest.mark.usefixtures("raw_route")
 def test_a_resumed_lane_reuses_the_capture_an_interrupted_attempt_stored_and_records_the_outcome(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None, kind: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, kind: str
 ) -> None:
     from scripts.acquisition.tests.test_task_raw_store import STORED
 
@@ -497,7 +498,8 @@ def test_a_resumed_lane_reuses_the_capture_an_interrupted_attempt_stored_and_rec
     check(harness.report(run)["s3_writes"] == 1, "the report does not count the stored capture")
 
 
-def test_a_resumed_lane_refuses_a_capture_folder_whose_file_is_not_the_saved_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None) -> None:
+@pytest.mark.usefixtures("raw_route")
+def test_a_resumed_lane_refuses_a_capture_folder_whose_file_is_not_the_saved_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from scripts.acquisition.tests.test_task_raw_store import STORED
 
     bucket = create_once_bucket()
@@ -514,9 +516,8 @@ def test_a_resumed_lane_refuses_a_capture_folder_whose_file_is_not_the_saved_one
     check(capture_keys(bucket) == stored, "a changed file was stored")
 
 
-def test_a_fresh_wonder_export_is_reused_when_the_adapter_runs_again_after_an_interruption(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, raw_route: None
-) -> None:
+@pytest.mark.usefixtures("raw_route")
+def test_a_fresh_wonder_export_is_reused_when_the_adapter_runs_again_after_an_interruption(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from scripts.acquisition import wonder_export_contract
     from scripts.acquisition.tests.test_task_raw_store import STORED
 

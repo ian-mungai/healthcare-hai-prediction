@@ -185,7 +185,7 @@ class FakeContext:
     def __init__(self, on_wrap: Any = None) -> None:
         self.on_wrap = on_wrap
 
-    def wrap_socket(self, sock: Any, server_hostname: str) -> Any:
+    def wrap_socket(self, sock: Any, **_: Any) -> Any:
         if self.on_wrap is not None:
             self.on_wrap()
         return sock
