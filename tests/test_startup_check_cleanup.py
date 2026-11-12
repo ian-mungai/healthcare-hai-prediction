@@ -7,12 +7,14 @@ removal share one budget, as they do in production with the long one.
 from __future__ import annotations
 
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 
 from scripts.infrastructure import startup_check
+from scripts.process import SESSION_VARIABLE
 from tests.startup_check_support import host_environment
 from tests.support import check
 
@@ -76,3 +78,24 @@ def test_the_child_and_the_read_stop_before_the_overall_deadline_so_that_removal
     with pytest.raises(startup_check.StartupCheckError):
         startup_check.check_queue_files("publisher", Path(f"{MARKER}.json"), controls=None, keys=False)
     check(given and given[0] < 2.0 - 0.1, f"the child's bound leaves time for the removal: {given}")
+
+
+def stop_a_child_that_ignores_term(monkeypatch: pytest.MonkeyPatch, private_root: Path, seconds: float) -> float:
+    """Run the check against a nested-launch child that ignores TERM and sleeps. Return the time to the fixed error, with the folder checked gone."""
+    use_fault(monkeypatch, "ignore_term")
+    monkeypatch.setenv(SESSION_VARIABLE, "1")
+    monkeypatch.setattr(startup_check, "CHILD_SECONDS", seconds)
+    started = time.monotonic()
+    with pytest.raises(startup_check.StartupCheckError, match="startup_check_internal_error"):
+        startup_check.check_queue_files("publisher", Path(f"{MARKER}.json"), controls=None, keys=False)
+    elapsed = time.monotonic() - started
+    check(not left_behind(private_root), f"the private folder is gone although the child ignored TERM: {left_behind(private_root)}")
+    return elapsed
+
+
+def test_a_nested_child_that_ignores_term_is_stopped_and_its_folder_removed_within_a_short_deadline(
+    monkeypatch: pytest.MonkeyPatch, private_root: Path
+) -> None:
+    """The same budget split as production, scaled: the stop grace, the confirmation and the deletion all fit inside the one deadline."""
+    elapsed = stop_a_child_that_ignores_term(monkeypatch, private_root, 6.0)
+    check(elapsed < 6.0, f"the fixed error comes within the deadline: {elapsed:.2f} s")

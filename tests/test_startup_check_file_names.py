@@ -117,3 +117,56 @@ def test_a_path_with_a_privacy_scan_finding_other_than_a_home_path_prints_its_ki
     shown = shown_for(monkeypatch, capsys, tmp_path, startup_check.Need("hcai_util_workbook", "code", path, kind="plan"))
     check(f"code root: plan {startup_check.file_digest(path)}" in shown, f"{finding}: the kind and the digest are named: {shown}")
     check(path.rsplit("/", 1)[-1] not in shown, f"{finding}: the path is not shown: {shown}")
+
+
+# Forms of a credential that the file-name syntax must keep out of the output, each joined from pieces. A query token, a password query, a percent-encoded
+# address, an escaped query key, a backslash address and a look-alike of the address punctuation (full width colon, slash and at sign).
+FULL_WIDTH = {":": chr(0xFF1A), "/": chr(0xFF0F), "@": chr(0xFF20)}
+FORBIDDEN_FORMS = {
+    "a query token": "config/plan.json" + "?" + "token=SYNTHETIC_TOKEN",
+    "a password query": "config/plan.json" + "?" + "password=SYNTHETIC_PASSWORD",
+    "a percent-encoded address": "https%3A%2F%2FSYNTHETIC_USER%3ASYNTHETIC_PASSWORD%40SYNTHETIC_HOST%2Fplan%3Ftoken%3DSYNTHETIC_TOKEN",
+    "an escaped query key": "config/plan.json" + "?" + "%74oken=SYNTHETIC_TOKEN",
+    "a backslash address": "https:" + chr(92) * 2 + "SYNTHETIC_HOST" + chr(92) + "plan" + "?" + "token=SYNTHETIC_TOKEN",
+    "look-alike address punctuation": "https"
+    + FULL_WIDTH[":"]
+    + FULL_WIDTH["/"] * 2
+    + "SYNTHETIC_USER"
+    + FULL_WIDTH[":"]
+    + "SYNTHETIC_PASSWORD"
+    + FULL_WIDTH["@"]
+    + "SYNTHETIC_HOST/plan",
+    "a percent-encoded account ID": "config/" + "account" + "_id%3D" + "123456789012" + ".json",
+    "a space": "config/synthetic plan.json",
+    "an empty segment": "config//plan.json",
+    "a dot segment": "config/./plan.json",
+    "a parent segment": "config/../config/plan.json",
+    "a trailing slash": "config/plan/",
+    "a non-ASCII letter": "config/pl" + chr(0xE4) + "n.json",
+}
+
+
+@pytest.mark.parametrize("form", list(FORBIDDEN_FORMS))
+def test_a_code_root_path_outside_the_repository_filename_syntax_prints_its_kind_and_digest(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, form: str
+) -> None:
+    path = FORBIDDEN_FORMS[form]
+    host_environment(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(startup_check.StartupCheckError) as caught:
+        startup_check.check_files("publisher", [startup_check.Need("hcai_util_workbook", "code", path, kind="plan")], {"code": tmp_path})
+    shown = capsys.readouterr().err + str(caught.value)
+    check(f"code root: plan {startup_check.file_digest(path)}" in shown, f"{form}: the kind and the digest are named: {shown}")
+    leaked = [secret for secret in (*SECRETS, "plan.json", "token", "password") if secret in shown]
+    check(not leaked, f"{form}: the output carries {leaked}: {shown}")
+
+
+ORDINARY_PATHS = ("config/acquisition/x.json", "data/reference/county_adjacency_2020.txt", "dbt/models/silver/stg-a_b.sql", "README.md", "a/b/c.d.e/f-g_h.json")
+
+
+@pytest.mark.parametrize("path", ORDINARY_PATHS)
+def test_an_ordinary_repository_path_under_the_code_root_still_prints(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, path: str
+) -> None:
+    shown = shown_for(monkeypatch, capsys, tmp_path, startup_check.Need("hcai_util_workbook", "code", path, kind="plan"))
+    check(f"code root: plan {path}" in shown, f"the ordinary path is named: {shown}")

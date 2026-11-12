@@ -61,8 +61,11 @@ from scripts.process import run_command
 CONNECT_SECONDS = 3.0
 # The bound of the child process: its imports, its connects and its file reads.
 CHILD_SECONDS = 60.0
-# The part of that bound that is kept for removing the private folder: the child and the read of its result stop before it. A short bound keeps a quarter.
+# The part of that bound that is kept after the child and the read of its result stop: the stop of the child, its confirmation and then the deletion of the
+# private folder. A short bound keeps a quarter. The child is disposable, so its TERM grace is short (0.5 s of the 5 s); about 1.5 s follow for the
+# confirmation that it is gone, and the other 3 s are the deletion budget, which stays nonzero.
 CLEANUP_SECONDS = 5.0
+CHILD_STOP_GRACE_SECONDS = 0.5
 # Run the checks in a child process. The tests of the checks themselves run them in this process, with socket stand-ins.
 ISOLATED = True
 CHILD_MODULE = "scripts.infrastructure.startup_check_child"
@@ -278,8 +281,8 @@ CODES = frozenset(
     }
 )
 ERROR_NAMES = frozenset(errno.errorcode.values())
-# A scheme before a slash, as in an address, or an at sign, as in a user and secret before a host. A path with either is never shown.
-ADDRESS_FORM = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:/|@")
+# Repository filename syntax: ASCII letters, digits, dots, underscores, hyphens and slashes only.
+FILENAME_SYNTAX = re.compile(r"[A-Za-z0-9._/-]+", re.ASCII)
 # What a finding's code says of its outcome. ``credentials`` has both: its reason is the child's label.
 PASSING = frozenset({*SERVICES, "task_environment", "dbt_target", "input_file", "plan_inputs", "input_files"})
 EITHER = frozenset({"credentials"})
@@ -555,16 +558,15 @@ def need_codes(need: Need) -> frozenset[str]:
 def relative_path(need: Need, code: Path) -> str | None:
     """The path of a code root need below the code root, as text that may be shown, or ``None``.
 
-    It shows only a path under the code root that is printable, that has no address form (a scheme or a user and secret before a host) and that the privacy
-    scan's line check passes with no finding of any kind, on the exact text that would print. The check is the scan's own function."""
+    It shows only a path that is under the code root and written in repository filename syntax: ASCII letters, digits, dots, underscores, hyphens and slashes,
+    with no empty, ``.`` or ``..`` segment. Anything else (a query, an escape, a backslash, a look-alike character, a space) is never shown, because such a
+    form can carry a credential that no list of forms will cover. The privacy scan's line check, which is the scan's own function, must also report nothing
+    of any kind on the exact text that would print."""
     if need.root != "code":
         return None
-    root = os.path.normpath(code)
-    full = os.path.normpath(os.path.join(root, need.path))
-    if not full.startswith(root.rstrip(os.sep) + os.sep):
-        return None
-    text = Path(full).relative_to(root).as_posix()
-    if not text.isprintable() or ADDRESS_FORM.search(need.path) or ADDRESS_FORM.search(text):
+    root = os.path.normpath(code).rstrip(os.sep) + os.sep
+    text = need.path[len(root) :] if os.path.isabs(need.path) and need.path.startswith(root) else need.path
+    if not FILENAME_SYNTAX.fullmatch(text) or any(segment in ("", ".", "..") for segment in text.split("/")):
         return None
     try:
         findings = importlib.import_module("scripts.quality.repo_checks").line_privacy(f"{need.kind if need.kind in FILE_KINDS else 'input'} {text}", [])
@@ -751,11 +753,14 @@ def remove_contents(directory: int, deadline: float) -> None:
 def run_child(request: dict[str, Any]) -> list[str]:
     """Run the request in the isolated child and return the lines it wrote to its result file. The child's streams are captured and dropped.
 
-    One deadline covers the child, the read of its result and the removal of its folder. The child and the read stop at a cutoff that leaves
-    ``CLEANUP_SECONDS`` (a quarter of a short bound) before the deadline, so the removal always has its time. The folder is used through one descriptor, so
+    One deadline covers the child, its stop, the read of its result and the removal of its folder, and nothing resets it. The child and the read stop at a
+    cutoff that leaves the reserve (``CLEANUP_SECONDS``, a quarter of a short bound) before the deadline. The reserve holds three budgets in order: the TERM
+    grace of the child (short, because it is disposable), the time to confirm that it is gone, and the deletion. The folder is used through one descriptor, so
     renaming it or replacing a file in it changes nothing that this function opens."""
     deadline = time.monotonic() + CHILD_SECONDS
-    cutoff = deadline - min(CLEANUP_SECONDS, CHILD_SECONDS / 4)
+    reserve = min(CLEANUP_SECONDS, CHILD_SECONDS / 4)
+    cutoff = deadline - reserve
+    grace = CHILD_STOP_GRACE_SECONDS * reserve / CLEANUP_SECONDS
     name = tempfile.mkdtemp(prefix="startup_check_")
     try:
         directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -767,6 +772,7 @@ def run_child(request: dict[str, Any]) -> list[str]:
                 cwd=Path(name),
                 env=child_environment(name, request),
                 timeout=remaining(cutoff),
+                grace_seconds=grace,
                 errors="replace",
             )
             if done.returncode != 0:

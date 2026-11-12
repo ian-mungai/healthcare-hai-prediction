@@ -7,6 +7,7 @@ import faulthandler
 import json
 import logging
 import os
+import signal
 import sys
 import threading
 import time
@@ -90,6 +91,9 @@ def install(fault: str, folder: Path) -> None:
     elif fault == "crash":
         os._exit(3)
     elif fault == "hang":
+        time.sleep(300)
+    elif fault == "ignore_term":
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         time.sleep(300)
     elif fault in ("garbage_line", "free_text", "unknown_code", "no_end", *FORGED_TRANSCRIPTS):
         lines = {
