@@ -8,8 +8,10 @@ the acceptance report (``accept``) with every check of ``scripts.lakehouse.layer
 
 Every file lives in a folder of the Airflow container that only its user reads (``<directory>/<layer>/<run>/``, mode 0700, files 0600), never on the job scratch
 volume. A file is created once. A missing, damaged, readable-by-others or foreign listing or closing record fails the evidence task with its cause, also when a
-report exists already: nothing falls back to a weaker check. The publish contract is read from the run's staged ``code.tar.gz`` after the archive matched
-``code.sha256``. The archive is bounded, is never unpacked to disk and a file is read only when it is a regular member of the expected name.
+report exists already: nothing falls back to a weaker check. A retry with a report on disk reads every input again, the saved records and the AWS records alike,
+through the same functions, and returns the report only when each input has the digest that the report records. The publish contract is read from the run's
+staged ``code.tar.gz`` after the archive matched ``code.sha256``. The archive is bounded, is never unpacked to disk and a file is read only when it is a regular
+member of the expected name.
 The report of silver is the input of the gold report (a passed report). Every wait has a deadline."""
 
 from __future__ import annotations
@@ -397,18 +399,23 @@ def silver_input(access: ReportAccess, pin: Mapping[str, Any], target: Path) -> 
     return target / "input", report
 
 
-def stored_result(path: Path, layer: str, run: str, before_sha256: str = "") -> dict[str, Any]:
-    """The report that exists for the run: returned when it passed, raised as a failed report when it did not. A report that records another before listing
-    than the one on disk (``before_sha256``) is no report of this listing."""
+def stored_result(path: Path, layer: str, run: str, current: Mapping[str, Any]) -> dict[str, Any]:
+    """The report that exists for the run: returned when it passed, raised as a failed report when it did not.
+
+    ``current`` is the report that the inputs give now, built by the functions of the first run. The stored report must record the same digest for every input,
+    the same checks and the same verdict. A stored report of other inputs is refused, never returned and never written again."""
     try:
         document = json.loads(private_bytes(path, "stored report", acceptance.LIMIT))
     except ValueError:
         raise ReportError("the stored report is damaged (not JSON)") from None
     if not isinstance(document, dict) or (document.get("layer"), document.get("run_id")) != (layer, run):
         raise ReportError("the stored report belongs to another run or layer")
-    recorded = document.get("file_sha256")
-    if before_sha256 and (recorded.get("before") if isinstance(recorded, dict) else None) != before_sha256:
-        raise ReportError("the stored report was made from another before listing than the one saved for the run")
+    recorded, now = document.get("file_sha256"), current.get("file_sha256")
+    recorded = recorded if isinstance(recorded, dict) else {}
+    now = now if isinstance(now, dict) else {}
+    changed = sorted(name for name in {*recorded, *now} if recorded.get(name) != now.get(name))
+    if changed or document.get("checks") != current.get("checks") or document.get("passed") != current.get("passed"):
+        raise ReportError(f"the stored report does not match its inputs (changed: {', '.join(changed) or 'the checks'})")
     stored = document.get("checks")
     checks: dict[str, Any] = stored if isinstance(stored, dict) else {}
     failed = sorted(name for name, ok in checks.items() if ok is not True)
@@ -417,18 +424,16 @@ def stored_result(path: Path, layer: str, run: str, before_sha256: str = "") -> 
     return {"passed": True, "report": str(path), "checks": len(checks)}
 
 
-def accept(access: ReportAccess, layer: str, run: str, archive_limit: int = ARCHIVE_LIMIT) -> dict[str, Any]:
-    """Write the acceptance report of a finished run and return its path, or raise with the cause. The report is created once; a second call returns it."""
-    folder = folder_of(access, layer, run)
-    report_path = folder / "report.json"
+def collected_report(access: ReportAccess, layer: str, run: str, folder: Path, archive_limit: int) -> dict[str, Any]:
+    """The report that the run's inputs give: the saved before listing and closing evidence of the private folder, and the records that AWS holds for the run.
+
+    The first run and every retry call this, so each input is read and validated the same way every time."""
     try:
-        before = checked_listing(folder / "before.json", layer, run)
+        checked_listing(folder / "before.json", layer, run)
     except ReportError as error:
         raise ReportError(
             f"{error}: the job task saves the listing right before the launch, so a scheduler restart or a cleared task loses it and the run needs a new run ID"
         ) from None
-    if report_path.exists() or report_path.is_symlink():
-        return stored_result(report_path, layer, run, hashlib.sha256(before).hexdigest())
     try:
         closing = checked_closing(folder / "closing.json", layer, run)
     except ReportError as error:
@@ -467,11 +472,23 @@ def accept(access: ReportAccess, layer: str, run: str, archive_limit: int = ARCH
             frozen=contract.read,
         )
         try:
-            document = acceptance.report(arguments)
+            return acceptance.report(arguments)
         except acceptance.AcceptanceError as error:
             raise ReportError(str(error)) from None
         except (AttributeError, KeyError, TypeError, ValueError):
             raise ReportError("an input of the report has an unexpected shape") from None
+
+
+def accept(access: ReportAccess, layer: str, run: str, archive_limit: int = ARCHIVE_LIMIT) -> dict[str, Any]:
+    """Write the acceptance report of a finished run and return its path, or raise with the cause. The report is created once.
+
+    A second call collects every input again through ``collected_report`` and returns the stored report only when the inputs give the same digests, checks and
+    verdict. A saved record that is missing, damaged, foreign, open to others or changed fails the call, whether a report exists or not."""
+    folder = folder_of(access, layer, run)
+    report_path = folder / "report.json"
+    document = collected_report(access, layer, run, folder, archive_limit)
+    if report_path.exists() or report_path.is_symlink():
+        return stored_result(report_path, layer, run, document)
     write_private(report_path, (json.dumps(document, indent=2, sort_keys=True) + "\n").encode())
     LOG.info("layer acceptance report %s", json.dumps(document, sort_keys=True))
-    return stored_result(report_path, layer, run)
+    return stored_result(report_path, layer, run, document)

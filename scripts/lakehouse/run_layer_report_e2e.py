@@ -401,49 +401,147 @@ def listing_cases(work: Path) -> dict[str, bool]:
 
 
 def cached_cases(work: Path) -> dict[str, bool]:
-    """A retry of the evidence task with a passed report on disk checks the before listing like the first run: the cached pass is not a bypass."""
+    """A retry of the evidence task with a report on disk reads every input the report binds again, through the functions of the first run: the stored
+    report is returned only when each input is valid and has the digest that the report records. A cached pass is not a bypass."""
     checks: dict[str, bool] = {}
 
-    def retry(number: int, change: Callable[[Path, fixtures.Env], None]) -> tuple[str, Any]:
+    def folder_of(box: Box, env: fixtures.Env) -> Path:
+        return box.access.directory / env.spec.layer / env.spec.run
+
+    def retry(number: int, change: Callable[[Box, fixtures.Env, fixtures.Env | None], None], layer: str = "silver") -> tuple[str, Any]:
         box = sandbox(work, f"cached_{number}")
-        env = make(work, f"cached_{number}_run", "silver")
+        producer = None
+        if layer == "gold":
+            producer = make(work, f"cached_{number}_producer", "silver")
+            flow(box, producer)
+        env = make(work, f"cached_{number}_run", layer, producer)
         first = flow(box, env)
-        before = box.access.directory / "silver" / env.spec.run / "before.json"
         if first[0] != "ok":
             return "first run failed", first[1]
-        change(before, env)
+        change(box, env, producer)
         return accept(box, env)
 
-    def delete(path: Path, env: fixtures.Env) -> None:
-        path.unlink()
+    def file(name: str) -> Callable[[Callable[[Path], None]], Callable[[Box, fixtures.Env, fixtures.Env | None], None]]:
+        def wrap(action: Callable[[Path], None]) -> Callable[[Box, fixtures.Env, fixtures.Env | None], None]:
+            return lambda box, env, producer: action(folder_of(box, env) / name)
 
-    def damage(path: Path, env: fixtures.Env) -> None:
+        return wrap
+
+    def damage(path: Path) -> None:
         path.unlink()
         path.write_text("{not json")
         os.chmod(path, 0o600)
 
-    def foreign(path: Path, env: fixtures.Env) -> None:
-        fixtures.edit(path, lambda d: d.update(run_id=fixtures.OTHER_SILVER_RUN))
+    def edit_path(change: Callable[[Any], object]) -> Callable[[Path], None]:
+        return lambda path: fixtures.edit(path, change)
 
-    def readable(path: Path, env: fixtures.Env) -> None:
-        os.chmod(path, 0o644)
+    def listed(d: dict[str, Any]) -> object:
+        return d["versions"].append({"key": "lakehouse/silver/extra.parquet", "version": "v9", "etag": '"e"', "bytes": 1})
 
-    def other_content(path: Path, env: fixtures.Env) -> None:
-        fixtures.edit(path, lambda d: d["versions"].append({"key": "lakehouse/silver/extra.parquet", "version": "v9", "etag": '"e"', "bytes": 1}))
+    def object_edit(key: Callable[[fixtures.Env], str], change: Callable[[dict[str, Any]], object]) -> Callable[[Box, fixtures.Env, fixtures.Env | None], None]:
+        def apply(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+            name = key(env)
+            document = json.loads(box.s3.objects[name])
+            change(document)
+            box.s3.objects[name] = json.dumps(document).encode()
 
-    for number, (label, change, word) in enumerate(
+        return apply
+
+    def swap_archive(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+        other = build_archive("1" * 40)
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.tar.gz"] = other
+
+    def swap_archive_and_digest(box: Box, env: fixtures.Env, producer: fixtures.Env | None, commit: str = "1" * 40) -> None:
+        other = build_archive(commit)
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.tar.gz"] = other
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.sha256"] = (hashlib.sha256(other).hexdigest() + "\n").encode()
+
+    def same_commit_archive(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+        def extra(tar: tarfile.TarFile) -> None:
+            info = tarfile.TarInfo("unrelated/note.txt")
+            info.size = 4
+            tar.addfile(info, io.BytesIO(b"note"))
+
+        other = build_archive(extra=extra)
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.tar.gz"] = other
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.sha256"] = (hashlib.sha256(other).hexdigest() + "\n").encode()
+
+    def swap_digest(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+        box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.sha256"] = ("e" * 64 + "\n").encode()
+
+    def run_key(name: str) -> Callable[[fixtures.Env], str]:
+        return lambda env: f"lakehouse/layer_runs/{env.spec.layer}/{env.spec.run}/{name}"
+
+    def launch_key(name: str) -> Callable[[fixtures.Env], str]:
+        return lambda env: f"lakehouse/launch_records/{env.spec.run}/{env.spec.layer}/{name}"
+
+    def describe_edit(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+        fixtures.edit(env.root / "describe.json", lambda d: d["tasks"][0].update(lastStatus="DEPROVISIONING"))
+
+    def silver_report(change: Callable[[Path], None]) -> Callable[[Box, fixtures.Env, fixtures.Env | None], None]:
+        def apply(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+            change(box.access.directory / "silver" / env.source.spec.run / "report.json")
+
+        return apply
+
+    def touch_report(path: Path) -> None:
+        document = json.loads(path.read_text())
+        document["created_at"] = "2026-01-01T00:00:00Z"
+        path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
+
+    mismatch = "does not match its inputs"
+    table: list[tuple[str, str, Callable[[Box, fixtures.Env, fixtures.Env | None], None], str]] = [
+        ("silver", "a before listing that is missing", file("before.json")(Path.unlink), "missing"),
+        ("silver", "a before listing that is damaged", file("before.json")(damage), "damaged"),
+        ("silver", "a before listing of another run", file("before.json")(edit_path(lambda d: d.update(run_id=fixtures.OTHER_SILVER_RUN))), "another run"),
+        ("silver", "a before listing that others can read", file("before.json")(lambda path: os.chmod(path, 0o644)), "permissions"),
+        ("silver", "a before listing with other content", file("before.json")(edit_path(listed)), mismatch),
+        ("silver", "closing evidence that is missing", file("closing.json")(Path.unlink), "closing evidence is missing"),
+        ("silver", "closing evidence that is damaged", file("closing.json")(damage), "closing evidence is damaged"),
+        ("silver", "closing evidence of another run", file("closing.json")(edit_path(lambda d: d.update(run_id=fixtures.OTHER_SILVER_RUN))), "another run"),
+        ("silver", "closing evidence that others can read", file("closing.json")(lambda path: os.chmod(path, 0o644)), "permissions"),
         (
-            ("missing", delete, "missing"),
-            ("damaged", damage, "damaged"),
-            ("of another run", foreign, "another run"),
-            ("readable by others", readable, "permissions"),
-            ("changed", other_content, "before listing"),
-        )
-    ):
-        result = retry(number, change)
-        checks[f"a retry with a passed report and a before listing that is {label} fails visibly"] = result[0] == "error" and word in str(result[1])
-    result = retry(9, lambda path, env: None)
-    checks["a retry with a passed report and the same before listing returns the passed report"] = result[0] == "ok" and result[1]["passed"] is True
+            "silver",
+            "closing evidence with a second instance in the host facts",
+            file("closing.json")(edit_path(lambda d: d["host"]["container_instances"].append(OTHER_INSTANCE))),
+            mismatch,
+        ),
+        ("silver", "closing evidence with another after listing", file("closing.json")(edit_path(lambda d: listed(d["after"]))), mismatch),
+        (
+            "silver",
+            "closing evidence with another running task list",
+            file("closing.json")(edit_path(lambda d: d["running"]["taskArns"].append("arn:x"))),
+            mismatch,
+        ),
+        ("silver", "a staged code.sha256 that names another digest", swap_digest, "does not match its code.sha256"),
+        ("silver", "a staged archive that does not match code.sha256", swap_archive, "does not match its code.sha256"),
+        ("silver", "a staged archive of another commit and its digest", swap_archive_and_digest, "revision of the run"),
+        ("silver", "a staged archive of the same commit with other bytes and its digest", same_commit_archive, mismatch),
+        ("silver", "a launch claim record with other content", object_edit(launch_key("claim.json"), lambda d: d.update(at="2026-10-31T10:00:01Z")), mismatch),
+        (
+            "silver",
+            "a started record with other content",
+            object_edit(launch_key("01/started.json"), lambda d: d.update(job_started_at="2026-10-31T10:01:01Z")),
+            mismatch,
+        ),
+        ("silver", "an end record with other content", object_edit(launch_key("01/end.json"), lambda d: d.update(at="2026-10-31T10:09:00Z")), mismatch),
+        ("silver", "a task description with another status", describe_edit, mismatch),
+        ("silver", "a run record with other content", object_edit(run_key("layer_run.json"), lambda d: d.update(source_sha256="f" * 64)), mismatch),
+        (
+            "gold",
+            "a silver snapshot record with other content",
+            object_edit(lambda env: "lakehouse/layer_runs/silver/" + env.source.spec.run + "/silver_snapshot.json", lambda d: d.update(note="x")),
+            mismatch,
+        ),
+        ("gold", "a silver report with other content", silver_report(touch_report), mismatch),
+        ("gold", "a silver report that is missing", silver_report(Path.unlink), "silver report"),
+    ]
+    for number, (layer, label, change, word) in enumerate(table):
+        result = retry(number, change, layer)
+        checks[f"{layer}: a retry with a passed report and {label} fails visibly"] = result[0] == "error" and word in str(result[1])
+    for layer in ("silver", "gold"):
+        result = retry(90 if layer == "silver" else 91, lambda box, env, producer: None, layer)
+        checks[f"{layer}: a retry with a passed report and every input unchanged returns the passed report"] = result[0] == "ok" and result[1]["passed"] is True
     return checks
 
 
