@@ -15,7 +15,9 @@
         "prepare": [
           "RUN_ID",
           "CODE_SHA256",
-          "TRAINING_PARAMETERS"
+          "TRAINING_PARAMETERS",
+          "POLARIS_URI",
+          "MLFLOW_TRACKING_URI"
         ],
         "extract": [
           "RUN_ID",
@@ -191,7 +193,8 @@
         ],
         "baseline": [
           "RUN_ID",
-          "MLFLOW_TRACKING_URI"
+          "MLFLOW_TRACKING_URI",
+          "POLARIS_URI"
         ],
         "current": [
           "RUN_ID",
@@ -273,6 +276,7 @@
         ],
         "pin": [
           "RUN_ID",
+          "POLARIS_URI",
           "CODE_SHA256",
           "BRONZE_TABLES",
           "BRONZE_TARGET",

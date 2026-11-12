@@ -81,7 +81,7 @@ variable "drift_resources" {
 locals {
   drift_run_variables = {
     fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI"]
+    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI"]
     current  = ["RUN_ID", "POLARIS_URI"]
     check    = ["RUN_ID"]
     publish  = ["RUN_ID"]

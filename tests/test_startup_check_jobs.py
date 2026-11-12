@@ -45,9 +45,15 @@ def reach(module: object, name: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, name, seam)
 
 
-def run_bronze(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
-    reach(bronze_run.task_capacity, "apply", monkeypatch)
-    return bronze_run.main(["load", "--run", RUN, "--work", str(work), "--bucket", "example-bucket", "--tables", "x", "--target", "qualify"])
+def run_bronze_phase(phase: str) -> Callable[[pytest.MonkeyPatch, Path], int]:
+    def call(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
+        reach(bronze_run.task_capacity, "apply", monkeypatch)
+        return bronze_run.main([phase, "--run", RUN, "--work", str(work), "--bucket", "example-bucket", "--tables", "x", "--target", "qualify"])
+
+    return call
+
+
+run_bronze = run_bronze_phase("load")
 
 
 def run_training(phase: str) -> Callable[[pytest.MonkeyPatch, Path], int]:
@@ -80,13 +86,19 @@ def run_metadata(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
     return openmetadata_host_ingest.main(["glue", "--config-dir", str(work), "--work-dir", str(work)], env=environment)
 
 
-def run_feast(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
-    reach(layer_run.task_capacity, "apply", monkeypatch)
-    monkeypatch.setattr(layer_run, "task_deadline", lambda _job: contextlib.nullcontext())
-    monkeypatch.setattr(layer_run, "check_code_run", lambda _job: None)
-    monkeypatch.setenv("DATA_BUCKET_NAME", "example-bucket")
-    arguments = ["feast", "--layer", "features", "--run", RUN, "--code-run-id", RUN, "--work", str(work), "--input-run", RUN]
-    return layer_run.main(arguments)
+def run_features_phase(phase: str) -> Callable[[pytest.MonkeyPatch, Path], int]:
+    def call(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
+        reach(layer_run.task_capacity, "apply", monkeypatch)
+        monkeypatch.setattr(layer_run, "task_deadline", lambda _job: contextlib.nullcontext())
+        monkeypatch.setattr(layer_run, "check_code_run", lambda _job: None)
+        monkeypatch.setenv("DATA_BUCKET_NAME", "example-bucket")
+        arguments = [phase, "--layer", "features", "--run", RUN, "--code-run-id", RUN, "--work", str(work), "--input-run", RUN]
+        return layer_run.main(arguments)
+
+    return call
+
+
+run_feast = run_features_phase("feast")
 
 
 # Each job: its runner, the environment it needs and the connect that fails, as (host, port) with the cause named in the log.
@@ -150,12 +162,13 @@ def test_a_run_outside_a_task_checks_nothing(monkeypatch: pytest.MonkeyPatch, tm
     check(network.seen == [], "no connect outside a task")
 
 
-def test_the_first_phase_of_a_training_job_checks_the_environment_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    host_environment(monkeypatch)
+def test_the_first_phase_of_a_training_job_checks_every_service_the_job_uses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    host_environment(monkeypatch, mlflow=MLFLOW_URI)
     network = install_network(monkeypatch, Network())
     with pytest.raises(Reached):
         run_training("prepare")(monkeypatch, tmp_path)
-    check({host for host, _ in network.seen} == set(SERVICE_HOSTS), f"prepare needs no host service: {network.seen}")
+    check({(POLARIS_HOST, 8181), (MLFLOW_HOST, 5000)} <= set(network.seen), f"prepare probes Polaris and MLflow: {network.seen}")
+    check({host for host, _ in network.seen} == {POLARIS_HOST, *SERVICE_HOSTS}, f"and nothing else: {network.seen}")
 
 
 def test_a_failed_training_check_leaves_one_json_line_with_the_cause(
@@ -173,3 +186,47 @@ def test_a_failed_training_check_leaves_one_json_line_with_the_cause(
 def test_every_host_job_has_a_row_in_the_check_table() -> None:
     jobs = set(json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["jobs"])
     check(jobs <= set(startup_check.JOB_PHASES), f"jobs without a startup check row: {sorted(jobs - set(startup_check.JOB_PHASES))}")
+
+
+# The first code step of a job, the service it must already reach there although a later phase uses it, and the connect that fails.
+FIRST_STEPS = {
+    "bronze_pin_polaris": (run_bronze_phase("pin"), (POLARIS_HOST, 8181), "polaris_unreachable"),
+    "train_prepare_polaris": (run_training("prepare"), (POLARIS_HOST, 8181), "polaris_unreachable"),
+    "train_prepare_mlflow": (run_training("prepare"), (MLFLOW_HOST, 5000), "mlflow_unreachable"),
+    "drift_baseline_polaris": (run_drift("baseline"), (POLARIS_HOST, 8181), "polaris_unreachable"),
+    "features_pin_redis": (run_features_phase("pin"), (POLARIS_HOST, 6379), "redis_unreachable"),
+}
+
+
+@pytest.mark.parametrize("step", FIRST_STEPS)
+def test_the_first_code_step_stops_on_a_service_that_only_a_later_phase_uses(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], step: str
+) -> None:
+    runner, address, cause = FIRST_STEPS[step]
+    host_environment(monkeypatch, mlflow=MLFLOW_URI)
+    install_network(monkeypatch, Network(refuse={address: TimeoutError("timed out")}))
+    code = runner(monkeypatch, tmp_path)
+    lines = capsys.readouterr().err.splitlines()
+    check(code != 0, f"{step} stops with a failure code")
+    check(f"{cause} {address[0]}:{address[1]}" in "\n".join(lines[:4]), f"the first lines name the address: {lines[:4]}")
+
+
+def test_the_first_phase_of_every_job_checks_every_service_the_job_uses() -> None:
+    for job, phases in startup_check.JOB_PHASES.items():
+        first, *later = phases.values()
+        used = set(first)
+        check(set().union(*later) <= used, f"{job}: the first phase checks {sorted(used)} but a later phase needs {sorted(set().union(*later))}")
+
+
+def test_the_first_container_of_each_job_receives_every_service_address_it_checks() -> None:
+    """The broker fills the empty variables of a container by name, so a container whose check needs an address must list the variable."""
+    jobs = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]
+    variables = {"polaris": "POLARIS_URI", "redis": "POLARIS_URI", "mlflow": "MLFLOW_TRACKING_URI"}
+    missing = []
+    for job, phases in startup_check.JOB_PHASES.items():
+        for phase, services in phases.items():
+            containers = jobs.get(job, {}).get("containers", {})
+            missing += [
+                f"{job} {phase} lacks {variables[service]}" for service in services if phase in containers and variables.get(service) not in containers[phase]
+            ]
+    check(not missing, f"containers whose startup check needs an address they are not given: {missing}")

@@ -43,7 +43,7 @@ locals {
   # The container names and their empty variables equal config/orchestration/ecs_broker_jobs.json; a Terraform test compares them with the file.
   bronze_run_variables = {
     fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-    pin   = ["RUN_ID", "CODE_SHA256", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256", "HAI_DEADLINE_UTC"]
+    pin   = ["RUN_ID", "POLARIS_URI", "CODE_SHA256", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256", "HAI_DEADLINE_UTC"]
     load  = ["RUN_ID", "POLARIS_URI", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
     check = ["RUN_ID", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "HAI_DEADLINE_UTC"]
   }

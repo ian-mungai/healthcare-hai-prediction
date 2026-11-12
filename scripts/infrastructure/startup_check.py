@@ -42,15 +42,16 @@ DEFAULT_PORTS = {"http": 80, "https": 443}
 EXECUTION_VALUE = re.compile(r"AWS_ECS_[A-Z0-9_]{1,24}")
 REGION_NAME = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]")
 # The host jobs of config/orchestration/host_jobs.json, the phase at which each checks and the host services that phase needs. A phase that is not listed
-# checks nothing. The first code step of a job is its first listed phase; the layer jobs check their build separately (``check_build``).
+# checks nothing. The first code step of a job is its first listed phase and checks every service that any later phase uses, so a job with an unreachable
+# service stops before it prepares or pins anything. The layer jobs check their build separately (``check_build``).
 JOB_PHASES: dict[str, dict[str, tuple[str, ...]]] = {
     "silver": {"pin": ("polaris",)},
     "gold": {"pin": ("polaris",)},
-    "features": {"pin": ("polaris",), "feast": ("polaris", "redis")},
-    "bronze": {"pin": (), "load": ("polaris",)},
-    "train": {"prepare": (), "extract": ("polaris",), "train": ("mlflow",)},
+    "features": {"pin": ("polaris", "redis"), "feast": ("polaris", "redis")},
+    "bronze": {"pin": ("polaris",), "load": ("polaris",)},
+    "train": {"prepare": ("polaris", "mlflow"), "extract": ("polaris",), "train": ("mlflow",)},
     "promote": {"promote": ("mlflow",)},
-    "drift": {"baseline": ("mlflow",), "current": ("polaris",)},
+    "drift": {"baseline": ("mlflow", "polaris"), "current": ("polaris",)},
     "serve": {"serve": ("mlflow",)},
     "metadata": {"ingest": ("openmetadata",)},
     "publisher": {"run": ()},
