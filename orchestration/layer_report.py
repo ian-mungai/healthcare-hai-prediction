@@ -413,9 +413,11 @@ def stored_result(path: Path, layer: str, run: str, current: Mapping[str, Any]) 
     recorded, now = document.get("file_sha256"), current.get("file_sha256")
     recorded = recorded if isinstance(recorded, dict) else {}
     now = now if isinstance(now, dict) else {}
-    changed = sorted(name for name in {*recorded, *now} if recorded.get(name) != now.get(name))
-    if changed or document.get("checks") != current.get("checks") or document.get("passed") != current.get("passed"):
-        raise ReportError(f"the stored report does not match its inputs (changed: {', '.join(changed) or 'the checks'})")
+    changed = sorted(name for name in now if recorded.get(name) != now[name])
+    others = sum(1 for name in recorded if name not in now)
+    if changed or others or document.get("checks") != current.get("checks") or document.get("passed") != current.get("passed"):
+        named = [*changed, *([f"{others} other field(s)"] if others else [])]
+        raise ReportError(f"the stored report does not match its inputs (changed: {', '.join(named) or 'the checks'})")
     stored = document.get("checks")
     checks: dict[str, Any] = stored if isinstance(stored, dict) else {}
     failed = sorted(name for name, ok in checks.items() if ok is not True)

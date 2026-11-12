@@ -539,6 +539,15 @@ def cached_cases(work: Path) -> dict[str, bool]:
     for number, (layer, label, change, word) in enumerate(table):
         result = retry(number, change, layer)
         checks[f"{layer}: a retry with a passed report and {label} fails visibly"] = result[0] == "error" and word in str(result[1])
+    unknown = "SYNTHETIC_STORED_FIELD_DO_NOT_ECHO"
+
+    def stored_unknown(box: Box, env: fixtures.Env, producer: fixtures.Env | None) -> None:
+        fixtures.edit(box.access.directory / "silver" / env.spec.run / "report.json", lambda d: d["file_sha256"].update({unknown: "0" * 64}))
+
+    result = retry(92, stored_unknown)
+    checks["silver: a retry with a stored report that has an unknown digest field fails visibly and echoes no stored field name"] = (
+        result[0] == "error" and mismatch in str(result[1]) and "1 other field" in str(result[1]) and unknown not in str(result[1])
+    )
     for layer in ("silver", "gold"):
         result = retry(90 if layer == "silver" else 91, lambda box, env, producer: None, layer)
         checks[f"{layer}: a retry with a passed report and every input unchanged returns the passed report"] = result[0] == "ok" and result[1]["passed"] is True
