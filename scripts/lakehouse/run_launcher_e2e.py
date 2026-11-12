@@ -6978,6 +6978,7 @@ def render_templates(env: Env) -> dict[str, bool]:
         == {
             (str(ROOT / "scripts"), "/workspace/scripts", True),
             (str(ROOT / "config"), "/workspace/config", True),
+            (str(ROOT / "dbt/models/silver/staging/_bronze__sources.yml"), "/workspace/dbt/models/silver/staging/_bronze__sources.yml", True),
             aws,
             (str(run_folder), f"/workspace/data/analytics/dbt/runs/{PINS_RUN}", False),
         }
