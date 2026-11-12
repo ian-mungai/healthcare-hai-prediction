@@ -931,7 +931,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
         ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
         ("a definition with a suffix after host", definition("_host_x"), NAMES["task"]),
         ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),
-        ("the launch records of another run", written("lakehouse/launch_records/{other}/{layer}/claim.json"), NAMES["scope"]),
+        ("the launch records of another run without its claim", written("lakehouse/launch_records/{other}/{layer}/01/end.json"), NAMES["scope"]),
         ("a file at the top of the launch records", written("lakehouse/launch_records/claim.json"), NAMES["scope"]),
         ("the family index key of another run", written("lakehouse/launch_records/families/{layer}/{other}.json"), NAMES["scope"]),
         ("the family index key of another job", written("lakehouse/launch_records/families/ingestion/{run}.json"), NAMES["scope"]),
@@ -950,6 +950,116 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
             change(env, other)
             code, failed, _ = accept(env)
             checks[f"{layer}: planted {label} is refused by its check"] = code == 1 and name in failed
+    return checks
+
+
+OTHER_RUN_JOB = "ingestion"
+OTHER_RUN_ID = "20261112T001500Z-c0ffee01"
+OTHER_RUN_ATTRIBUTED = 10  # the Nov 11 shape: 4 staged inputs, 5 launch records with the claim and 1 family index key
+
+
+def other_run_keys(run: str = OTHER_RUN_ID, job: str = OTHER_RUN_JOB, claim: bool = True) -> list[str]:
+    """The keys that a queued run of another family wrote while a layer task ran: its staged inputs, its launch records and its family index key."""
+    stage = [f"lakehouse/run_stage/{run}/inputs/{name}" for name in ("code.tar.gz", "code.sha256", "bronze_request.json", "approval.json")]
+    records = [f"lakehouse/launch_records/{run}/{job}/{name}" for name in ("claim.json", "01/started.json", "01/end.json", "02/started.json", "02/end.json")]
+    keys = [*stage, *records, f"lakehouse/launch_records/families/{job}/{run}.json"]
+    return keys if claim else [key for key in keys if not key.endswith("/claim.json")]
+
+
+def add_versions(env: Env, keys: list[str], names: tuple[str, ...] = ("after.json",)) -> None:
+    edit_each(env.root, names, lambda d: d["versions"].extend({"key": key, "version": "or", "etag": '"o"', "bytes": 1} for key in keys))
+
+
+def other_run_cases(work: Path) -> dict[str, bool]:
+    """Another run's own writes in the window are listed apart and do not fail the write scope, only when that run's claim record is in the listings. Every
+    other key outside the layer's scope still fails, and a run ID that is not the project's grammar never counts."""
+    checks: dict[str, bool] = {}
+
+    def run(layer: str, label: str, keys: list[str], before: list[str] | None = None) -> tuple[int, list[str], dict[str, Any]]:
+        env, _ = scenario(work, layer, f"other run {label}")
+        if before:
+            add_versions(env, before, ("before.json", "after.json"))
+        add_versions(env, keys)
+        code, failed, _ = accept(env)
+        written = env.root / "qualification.json"
+        return code, failed, json.loads(written.read_text()) if written.is_file() else {}
+
+    def listed(document: dict[str, Any], name: str) -> tuple[int, list[str]]:
+        found = document.get(name) or {}
+        return found.get("count", -1), found.get("keys", [])
+
+    for layer in ("silver", "gold"):
+        keys = other_run_keys()
+        code, failed, document = run(layer, "with its claim", keys)
+        checks[f"{layer}: the keys of a queued run with its claim pass and are listed as its writes"] = (
+            code == 0
+            and not failed
+            and listed(document, "other_runs_writes") == (OTHER_RUN_ATTRIBUTED, sorted(keys))
+            and listed(document, "out_of_scope") == (0, [])
+        )
+        code, failed, document = run(layer, "claim before", [key for key in keys if "/run_stage/" in key], before=[keys[4]])
+        checks[f"{layer}: a claim that the before listing holds attributes the run's staged inputs"] = (
+            code == 0 and not failed and listed(document, "other_runs_writes")[0] == 4 and listed(document, "out_of_scope") == (0, [])
+        )
+        code, failed, document = run(layer, "no claim", other_run_keys(claim=False))
+        checks[f"{layer}: the same keys without the run's claim fail and stay out of scope"] = (
+            code == 1
+            and failed == [NAMES["scope"]]
+            and listed(document, "out_of_scope")[0] == OTHER_RUN_ATTRIBUTED - 1
+            and listed(document, "other_runs_writes") == (0, [])
+        )
+        sibling = f"lakehouse/layer_runs/{layer}/{OTHER_RUN_ID}/layer_run.json"
+        code, failed, document = run(layer, "outside the run prefixes", [*keys, sibling])
+        checks[f"{layer}: a key under another run's name outside run_stage and launch_records fails and is the only out-of-scope key"] = (
+            code == 1
+            and failed == [NAMES["scope"]]
+            and listed(document, "out_of_scope") == (1, [sibling])
+            and listed(document, "other_runs_writes")[0] == OTHER_RUN_ATTRIBUTED
+        )
+        for label, bad in (
+            ("an uppercase hex suffix", "20261112T001500Z-C0FFEE01"),
+            ("a short suffix", "20261112T001500Z-c0ffee0"),
+            ("no suffix", "20261112T001500Z"),
+            ("a path name", "x"),
+        ):
+            code, failed, document = run(layer, f"malformed {label}", other_run_keys(bad))
+            checks[f"{layer}: a run ID with {label} fails even with its claim"] = (
+                code == 1
+                and failed == [NAMES["scope"]]
+                and listed(document, "out_of_scope")[0] == OTHER_RUN_ATTRIBUTED
+                and listed(document, "other_runs_writes") == (0, [])
+            )
+        own = "lakehouse/other/x"
+        code, failed, document = run(layer, "with an own out-of-scope write", [*keys, own])
+        checks[f"{layer}: the layer's own out-of-scope write still fails beside an attributed run"] = (
+            code == 1
+            and failed == [NAMES["scope"]]
+            and listed(document, "out_of_scope") == (1, [own])
+            and listed(document, "other_runs_writes")[0] == OTHER_RUN_ATTRIBUTED
+        )
+        other_claim = other_run_keys("20261112T002500Z-c0ffee02", "ingestion", claim=False)
+        code, failed, document = run(layer, "claim of another run", [*keys, *other_claim])
+        checks[f"{layer}: a claim attributes only its own run's keys"] = (
+            code == 1
+            and failed == [NAMES["scope"]]
+            and listed(document, "out_of_scope") == (len(other_claim), sorted(other_claim))
+            and listed(document, "other_runs_writes")[0] == OTHER_RUN_ATTRIBUTED
+        )
+        family = f"lakehouse/launch_records/families/{layer}/{OTHER_RUN_ID}.json"
+        code, failed, document = run(layer, "family of another job", [*keys, family])
+        checks[f"{layer}: a family index key of a job that the run's claim does not name fails"] = (
+            code == 1 and failed == [NAMES["scope"]] and listed(document, "out_of_scope") == (1, [family])
+        )
+        many = [f"lakehouse/run_stage/{OTHER_RUN_ID}/inputs/part_{index:03d}" for index in range(150)] + [keys[4]]
+        code, failed, document = run(layer, "many keys", many)
+        count, named = listed(document, "other_runs_writes")
+        checks[f"{layer}: the list of another run's writes is bounded and its count is whole"] = (
+            code == 0 and count == 151 and len(named) == acceptance.OUT_OF_SCOPE_KEYS == 100 and named == sorted(many)[:100]
+        )
+        scattered = [f"lakehouse/other/part_{index:03d}" for index in range(150)]
+        code, failed, document = run(layer, "many own keys", [*keys, *scattered])
+        count, named = listed(document, "out_of_scope")
+        checks[f"{layer}: the list of out-of-scope keys stays bounded beside an attributed run"] = code == 1 and count == 150 and len(named) == 100
     return checks
 
 
@@ -1215,6 +1325,7 @@ def main() -> int:
             results["inputs"] = group("inputs", input_cases, work)
             results["guard"] = group("guard", guard_cases, work)
             results["host twin"] = group("host twin", host_twin_cases, work)
+            results["other runs"] = group("other runs", other_run_cases, work)
             results["archive"] = group("archive", archive_cases, work)
             results["commands"] = command_cases(work)
     finally:

@@ -18,10 +18,11 @@ set and namespace equals the contract. The task is this run's real task: its def
 same digest and the input run, the started record names the described task and the end record is ``succeeded``. The export is this run's: the run ID, the
 sealed identity and the consumer result, manifest and candidate hashes agree. The rows and content fingerprints, the commit record that follows the backup and
 the reconcile and names every snapshot ID, the pinned table set (H3) and the input listing before and after (H2) are checked. The listing digest is computed
-again in the way the driver computes it and compared with the pin. Every object version the task added lies under a prefix the layer writer role may write. A
-gold report also needs the passed silver report and its records, and a features report the passed gold report and its records: a producer is accepted when its
-report passed and covers the records read here. The features pin must be complete and equal the commit of the gold run (H3). The input check of features
-cannot read the gold ``publish_runs`` row, because this command reads saved files, so it reads the commit record that the gold report covers. A features
+again in the way the driver computes it and compared with the pin. Every object version the task added lies under a prefix the layer writer role may write, or
+under the run-owned prefixes of another run that holds a claim record (listed as ``other_runs_writes``, not as ``out_of_scope``). A gold report also needs the
+passed silver report and its records, and a features report the passed gold report and its records: a producer is accepted when its report passed and covers
+the records read here. The features pin must be complete and equal the commit of the gold run (H3). The input check of features cannot read the gold
+``publish_runs`` row, because this command reads saved files, so it reads the commit record that the gold report covers. A features
 report also requires the two Feast records to name this run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
 
 The report runs on the host, so the host check holds what is true while the host runs: the group desired capacity is at most 1, no task of the job family is
@@ -74,6 +75,7 @@ WRITE_PREFIXES = {
 PIN_FILE = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}
 FEATURES_RECORD, FEAST_APPLY, FEAST_LOAD = "features_snapshot.json", "feast_apply.json", "feast_materialize.json"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+JOB_NAME = re.compile(r"[a-z][a-z0-9_]{1,40}")  # the job grammar of orchestration/ecs_launch.py
 SHA256 = re.compile(r"[a-f0-9]{64}")
 REVISION = re.compile(r"[0-9a-f]{40}|[0-9a-f]{64}")
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")
@@ -221,9 +223,40 @@ def read_listing(records: Records, path: Path, name: str) -> tuple[list[tuple[st
     return versions, deleted
 
 
-def listing_checks(layer: str, run: str, records: Records, arguments: argparse.Namespace, recorded: Any) -> tuple[dict[str, bool], dict[str, Any]]:
-    """H2 and the write scope from two listings of ``lakehouse/`` (and ``metadata/dbt/`` for gold): one before the task and one after. Returns the checks and
-    the keys added outside the run's scope (``OUT_OF_SCOPE_KEYS`` at most, with their count): another run's writes in the window are named, not hidden."""
+def other_runs_claims(listings: Sequence[Sequence[tuple[str, str, str, int]]]) -> dict[str, set[str]]:
+    """The runs whose claim record (``lakehouse/launch_records/<run>/<job>/claim.json``) one of the listings holds, with the jobs of those claims. The run ID
+    and the job must match their grammars: any other key names no run."""
+    claimed: dict[str, set[str]] = {}
+    for versions in listings:
+        for key, _, _, _ in versions:
+            parts = key.split("/")
+            named = len(parts) == 5 and parts[:2] == ["lakehouse", "launch_records"] and parts[4] == "claim.json"
+            if named and RUN_ID.fullmatch(parts[2]) and JOB_NAME.fullmatch(parts[3]):
+                claimed.setdefault(parts[2], set()).add(parts[3])
+    return claimed
+
+
+def other_runs_key(key: str, claimed: Mapping[str, set[str]]) -> bool:
+    """The key lies in the run-owned part of a run that holds a claim record: ``lakehouse/run_stage/<run>/<file>``, ``lakehouse/launch_records/<run>/<file>`` or
+    its family index key ``lakehouse/launch_records/families/<job>/<run>.json`` of a job that the claim names. No other key is one run's own write."""
+    parts = key.split("/")
+    if len(parts) < 4 or parts[0] != "lakehouse" or not all(parts[1:]):
+        return False
+    if parts[1] in ("run_stage", "launch_records") and parts[2] != "families":
+        return parts[2] in claimed
+    if len(parts) == 5 and parts[1:3] == ["launch_records", "families"] and parts[4].endswith(".json"):
+        return parts[4].removesuffix(".json") in claimed and parts[3] in claimed[parts[4].removesuffix(".json")]
+    return False
+
+
+def listing_checks(
+    layer: str, run: str, records: Records, arguments: argparse.Namespace, recorded: Any
+) -> tuple[dict[str, bool], dict[str, Any], dict[str, Any]]:
+    """H2 and the write scope from two listings of ``lakehouse/`` (and ``metadata/dbt/`` for gold): one before the task and one after. Returns the checks, the
+    keys added outside the run's scope and the keys that another run wrote to its own prefixes (each ``OUT_OF_SCOPE_KEYS`` at most, with their count).
+
+    Another run's write is a key under the run's own ``lakehouse/run_stage/<run>/`` or ``lakehouse/launch_records/<run>/`` prefix or its family index key, and
+    only while one of the two listings holds that run's claim record. It is named and does not fail the check. Every other key outside the scope fails it."""
     before, before_deleted = read_listing(records, arguments.before, "before")
     after, after_deleted = read_listing(records, arguments.after, "after")
     prefix = INPUT_PREFIX[layer]
@@ -238,14 +271,18 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     seen_before = {(key, version) for key, version, _, _ in before} | set(before_deleted)
     seen_after = {(key, version) for key, version, _, _ in after} | set(after_deleted)
     added = [key for key, _ in seen_after - seen_before]
-    outside = sorted({key for key in added if not (key.startswith(allowed) or key == family)})
+    claimed = other_runs_claims((before, after))
+    claimed.pop(run, None)
+    unscoped = sorted({key for key in added if not (key.startswith(allowed) or key == family)})
+    others = [key for key in unscoped if other_runs_key(key, claimed)]
+    outside = [key for key in unscoped if not other_runs_key(key, claimed)]
     checks = {
         "H2: the input object versions are the same before and after the task": same,
         "H2: the pin recorded the digest and count of the listing taken before the task": recorded == version_listing.canonical_digest(prefix, entries),
         "the task added versions only under the layer's prefixes and its own run prefix": bool(added) and not outside,
         "the task removed no version": not seen_before - seen_after,
     }
-    return checks, {"count": len(outside), "keys": outside[:OUT_OF_SCOPE_KEYS]}
+    return checks, {"count": len(outside), "keys": outside[:OUT_OF_SCOPE_KEYS]}, {"count": len(others), "keys": others[:OUT_OF_SCOPE_KEYS]}
 
 
 Reader = Callable[[str, str], str]  # (code revision, repository path) -> the file's text at that revision
@@ -644,7 +681,7 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
         "every container of the task exited 0 and the task stopped": not task_problems(layer, described),
     }
     checks |= evidence
-    listed, out_of_scope = listing_checks(layer, run, records, arguments, found["identity"].get("input_listing"))
+    listed, out_of_scope, other_runs = listing_checks(layer, run, records, arguments, found["identity"].get("input_listing"))
     checks |= listed
     running = records.load(arguments.running_tasks, "running_tasks")
     checks["no task of the job is left running"] = running.get("taskArns") == []
@@ -660,6 +697,7 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
         "checks": checks,
         "tables": summary,
         "out_of_scope": out_of_scope,
+        "other_runs_writes": other_runs,
         "file_sha256": dict(sorted(records.sha256.items())),
         "limits": "Staged records and read-only AWS results only. The report does not prove the catalog state it did not read.",
     }

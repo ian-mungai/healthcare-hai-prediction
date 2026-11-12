@@ -224,8 +224,9 @@ def flow(box: Box, env: fixtures.Env, **window: Any) -> tuple[str, Any]:
     return accept(box, env)
 
 
-def other_run_records(layer: str) -> tuple[dict[str, Any], ...]:
-    """The keys that another run (the queued ingestion job) writes under its own prefixes: its launch records and its staged inputs."""
+def other_run_records(layer: str, claim: bool = True) -> tuple[dict[str, Any], ...]:
+    """The keys that another run (the queued ingestion job) writes under its own prefixes: its launch records and its staged inputs. Without its claim
+    record, its keys name no claimed run."""
     other = "20261111T210000Z-0badc0de"
     names = (
         f"launch_records/{other}/ingestion/claim.json",
@@ -234,7 +235,8 @@ def other_run_records(layer: str) -> tuple[dict[str, Any], ...]:
         f"run_stage/{other}/inputs/code.sha256",
         f"run_stage/{other}/inputs/code.tar.gz",
     )
-    return tuple({"Key": f"lakehouse/{name}", "VersionId": f"o{index}", "ETag": '"o"', "Size": 9} for index, name in enumerate(names))
+    kept = names if claim else tuple(name for name in names if not name.endswith("/claim.json"))
+    return tuple({"Key": f"lakehouse/{name}", "VersionId": f"o{index}", "ETag": '"o"', "Size": 9} for index, name in enumerate(kept))
 
 
 def failed_names(result: tuple[str, Any]) -> list[str]:
@@ -286,21 +288,33 @@ def window_cases(work: Path) -> dict[str, bool]:
         checks[f"{layer}: another run's launch records written while this run waits do not count as this run's writes"] = (
             kind == "ok" and found["passed"] is True
         )
-        other = make(work, f"window_{layer}_late", layer, producer, run="20261112T090000Z-0a0a0a0a" if layer == "silver" else "20261112T100000Z-0b0b0b0b")
-        box2 = sandbox(work, f"window_late_{layer}")
-        if producer is not None:
-            flow(box2, producer)
-        result = flow(box2, other, running=other_run_records(layer))
-        checks[f"{layer}: another run's launch records written after the listing stay a failed write scope check"] = result[0] == "failed" and NAMES[
-            "scope"
-        ] in failed_names(result)
-        saved = box2.access.directory / layer / other.spec.run / "report.json"
-        document = json.loads(saved.read_text()) if saved.is_file() else {}
-        wanted = sorted(entry["Key"] for entry in other_run_records(layer))
-        checks[f"{layer}: the failed report lists every key outside the run's scope, with their count"] = document.get("out_of_scope") == {
-            "count": len(wanted),
-            "keys": wanted,
-        }
+        late = "20261112T090000Z-0a0a0a0a" if layer == "silver" else "20261112T100000Z-0b0b0b0b"
+        for label, claim in (("with its claim record", True), ("without its claim record", False)):
+            other = make(work, f"window_{layer}_late_{int(claim)}", layer, producer, run=late)
+            box2 = sandbox(work, f"window_late_{int(claim)}_{layer}")
+            if producer is not None:
+                flow(box2, producer)
+            records = other_run_records(layer, claim)
+            result = flow(box2, other, running=records)
+            saved = box2.access.directory / layer / other.spec.run / "report.json"
+            document = json.loads(saved.read_text()) if saved.is_file() else {}
+            wanted = sorted(entry["Key"] for entry in records)
+            listed = {"count": len(wanted), "keys": wanted}
+            nothing = {"count": 0, "keys": []}
+            if claim:
+                checks[f"{layer}: another run's records written after the listing pass the write scope when its claim record is listed"] = (
+                    result[0] == "ok" and result[1]["passed"] is True
+                )
+                checks[f"{layer}: the passed report lists them as another run's writes, with their count, and none as out of scope"] = (
+                    document.get("other_runs_writes") == listed and document.get("out_of_scope") == nothing
+                )
+            else:
+                checks[f"{layer}: another run's records written after the listing stay a failed write scope check {label}"] = result[0] == "failed" and NAMES[
+                    "scope"
+                ] in failed_names(result)
+                checks[f"{layer}: the failed report lists every key outside the run's scope, with their count, and no other run's write"] = (
+                    document.get("out_of_scope") == listed and document.get("other_runs_writes") == nothing
+                )
         checks[f"{layer}: a passed report lists no key outside the run's scope"] = box.access.directory.joinpath(
             layer, env.spec.run, "report.json"
         ).is_file() and (
