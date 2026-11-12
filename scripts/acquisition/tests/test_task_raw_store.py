@@ -758,6 +758,80 @@ def test_coverage_refuses_a_reference_capture_that_differs_in_data_or_role(store
     from scripts.acquisition.source_registry import RegistryError
 
     old = artifact_set(*stored)
-    new = {"artifacts": [item | {"stored_file_name": "dictionary.csv"} for item in artifact_set(*fresh)["artifacts"]]}
+    new = artifact_set(*fresh)
+    new["artifacts"][0]["stored_file_name"] = "dictionary.csv"
     with pytest.raises(RegistryError, match=message):
         restored_outcomes.require_coverage({"mode": "file", "source_id": "X", "flags": []}, None, old, new, [])
+
+
+def repeated_name(receipt: dict, *, role: str, first: bool) -> None:
+    """Add an artifact that repeats the genuine one's file name with its own identity, path and checksum, and no object or manifest entry."""
+    source = receipt["artifacts"][0]
+    extra = copy.deepcopy(source) | {
+        "role": role,
+        "artifact_id": "repeated_name",
+        "storage_path": f"raw/other/{source['stored_file_name']}",
+        "sha256": "1" * 64,
+    }
+    receipt["artifacts"] = [extra, *receipt["artifacts"]] if first else [*receipt["artifacts"], extra]
+
+
+def repeated_identity(receipt: dict) -> None:
+    extra = copy.deepcopy(receipt["artifacts"][0]) | {"stored_file_name": "other.csv", "storage_path": "raw/other.csv", "sha256": "1" * 64}
+    receipt["artifacts"].append(extra)
+
+
+def repeats(*roles: str) -> dict[str, Any]:
+    forgeries = {
+        f"{role} name repeated as {as_role}, {where}": partial(repeated_name, role=as_role, first=where == "first")
+        for role in roles
+        for as_role in {role, "layout", "data"}
+        for where in ("first", "last")
+    }
+    return forgeries | {f"{role} identity repeated": repeated_identity for role in roles}
+
+
+REFERENCE_REPEATS = {name: change for name, change in repeats("dictionary").items() if "repeated as data" not in name}
+DATA_REPEATS = {name: change for name, change in repeats("data").items() if "repeated as layout" not in name} | {
+    f"data name repeated as api_page, {where}": partial(repeated_name, role="api_page", first=where == "first") for where in ("first", "last")
+}
+
+
+@pytest.mark.parametrize("change", REFERENCE_REPEATS.values(), ids=list(REFERENCE_REPEATS))
+def test_a_reference_receipt_that_repeats_a_name_or_identity_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: Any) -> None:
+    bucket = TaskS3()
+    run, unit = reference_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    forge_reference_receipt(bucket, run, unit, change)
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+@pytest.mark.parametrize("change", DATA_REPEATS.values(), ids=list(DATA_REPEATS))
+def test_a_data_receipt_that_repeats_a_name_or_identity_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, change: Any) -> None:
+    bucket = TaskS3()
+    run, unit = file_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    forge_reference_receipt(bucket, run, unit, change)
+    with pytest.raises(ValueError, match="outcome"):
+        harness.execute(restart(run))
+
+
+def listed(*items: tuple[str, str, str]) -> dict:
+    return {"artifacts": [{"role": role, "stored_file_name": name, "artifact_id": identity, "sha256": "0" * 64} for role, name, identity in items]}
+
+
+@pytest.mark.parametrize("role", ["data", "api_page", "dictionary", "methodology", "layout"])
+@pytest.mark.parametrize("side", ["stored", "fresh"])
+@pytest.mark.parametrize("kind", ["name", "identity"])
+def test_coverage_refuses_a_repeated_name_or_identity_in_either_receipt(role: str, side: str, kind: str) -> None:
+    from scripts.acquisition import restored_outcomes
+    from scripts.acquisition.source_registry import RegistryError
+
+    plain = listed((role, "one.csv", "a1"), ("export_receipt", "proof.json", "a2"))
+    repeat = listed(
+        (role, "one.csv", "a1"), ("export_receipt", "proof.json", "a2"), (role, "one.csv" if kind == "name" else "two.csv", "a3" if kind == "name" else "a1")
+    )
+    stored, fresh = (repeat, plain) if side == "stored" else (plain, repeat)
+    with pytest.raises(RegistryError, match="repeated"):
+        restored_outcomes.require_coverage({"mode": "file", "source_id": "X", "flags": []}, None, stored, fresh, [])

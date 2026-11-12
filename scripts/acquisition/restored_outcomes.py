@@ -79,8 +79,19 @@ def repeated_artifacts(stored: list[dict]) -> list[dict]:
     return [item for item in stored if item["role"] in roles]
 
 
+def require_distinct(document: dict) -> None:
+    """Every artifact of a receipt, whatever its role, has its own file name and identity, so a name-keyed mapping can never drop an entry."""
+    names = [item["stored_file_name"] for item in document["artifacts"]]
+    identities = [item["artifact_id"] for item in document["artifacts"]]
+    require(
+        len(set(names)) == len(names) and len(set(identities)) == len(identities), "Restored outcome names a capture with a repeated artifact name or identity"
+    )
+
+
 def data_artifacts(document: dict, stored: dict) -> dict[str, dict]:
     """The artifacts of ``document`` in the roles the stored capture's own artifacts choose."""
+    require_distinct(document)
+    require_distinct(stored)
     roles = compared_roles(stored["artifacts"])
     return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in roles}
 
@@ -115,6 +126,8 @@ def require_coverage(unit: dict, run: Any, stored: dict, receipt: dict, entries:
     """Whatever its label says, a capture must hold its data: every data artifact of the receipt has its object, or its archive has the reviewed members."""
     from scripts.acquisition.redownload import PLANNED
 
+    require_distinct(stored)
+    require_distinct(receipt)
     fresh = data_artifacts(receipt, stored)
     require(bool(fresh), "Restored outcome names a capture with no data")
     reference_only = compared_roles(stored["artifacts"]) == REFERENCE_ROLES
