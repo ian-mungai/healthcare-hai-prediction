@@ -341,12 +341,15 @@ run "the_job_bridge_subnet_is_pinned_and_routed_ahead_of_the_interface_rules" {
       alltrue([
         for text in [
           "docker_bridge_on_command_line() {",
+          "systemctl cat docker.service",
+          "Could not read the Docker unit, so the daemon file cannot be checked for --bip.",
           "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address."
         ] : strcontains(local.host_user_data, text)
       ]) &&
+      length(split("systemctl cat docker.service", local.host_user_data)[0]) < length(split("Docker already receives --bip on its command line", local.host_user_data)[0]) &&
       length(split("Docker already receives --bip on its command line", local.host_user_data)[0]) < length(split("run_within 30 \"Pinning the job bridge subnet\" python3", local.host_user_data)[0])
     )
-    error_message = "Boot refuses a Docker command line that already sets --bip before it writes the daemon file, because Docker rejects an option given in both places."
+    error_message = "Boot reads the effective Docker unit with its drop-ins (systemctl cat, under a deadline) and refuses a Docker command line that already sets --bip, or one it cannot read, before it writes the daemon file, because Docker rejects an option given in both places."
   }
 
   assert {

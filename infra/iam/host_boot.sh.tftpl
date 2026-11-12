@@ -155,21 +155,22 @@ fi
 # within 10 seconds when a network reconfiguration drops it and stops both services when it cannot, and boot sets it again once the host
 # address is up, because the interface's own network setup can drop it. Boot fails at that step when the rule cannot be set.
 # Docker refuses to start when an option is given on its command line and again in the daemon file, even with the same value, so
-# the pin stops here, before the daemon file changes, when the options file or the Docker unit (or a drop-in) already passes --bip.
-# Comment lines do not count.
+# the pin stops here, before the daemon file changes, when the options file or the effective Docker unit already passes --bip.
+# systemctl cat shows the unit systemd loads (the local, runtime or vendor unit file) and every loaded drop-in, so the check does not
+# depend on which folder sets the option. Comment lines do not count. A unit that cannot be read stops the boot, because the daemon
+# file cannot be checked against it.
 docker_bridge_on_command_line() {
-  local file
-  for file in "$docker_options_file" "$systemd_directory/docker.service" "$systemd_directory"/docker.service.d/*.conf; do
-    [ -f "$file" ] || continue
-    if awk '$0 !~ /^[[:space:]]*[#;]/ && $0 ~ /--bip([^[:alnum:]_-]|$)/ { found = 1 } END { exit !found }' "$file"; then
-      echo "Found --bip in $file." >&2
-      return 0
-    fi
-  done
-  return 1
+  local unit=$1
+  { if [ -f "$docker_options_file" ]; then cat "$docker_options_file"; fi; printf '%s\n' "$unit"; } |
+    awk '$0 !~ /^[[:space:]]*[#;]/ && $0 ~ /--bip([^[:alnum:]_-]|$)/ { print "Found --bip in: " $0 > "/dev/stderr"; found = 1 } END { exit !found }'
+}
+step "Reading the Docker unit"
+docker_unit=$(run_within 30 "$current_step" systemctl cat docker.service) || {
+  echo "Could not read the Docker unit, so the daemon file cannot be checked for --bip." >&2
+  exit 1
 }
 step "Pinning the job bridge subnet"
-if docker_bridge_on_command_line; then
+if docker_bridge_on_command_line "$docker_unit"; then
   echo "Docker already receives --bip on its command line, so the daemon file cannot pin the bridge address. Remove it there or set it in the daemon file." >&2
   exit 1
 fi
