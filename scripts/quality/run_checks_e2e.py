@@ -109,6 +109,7 @@ SIGN_OFF = "--sign" + "-off"
 TRIMMED_KEY = "trimmed" + "_columns"
 RETRY_POLICY = "retry" + "_policy"
 CLOCK_ALIAS = "utc" + "_clock"
+INPUT_NAME = "warm" + "-cache"
 PENDING_LIST = "config/quality/mypy_runtimes.json"
 PENDING_FIXTURE = '{"pending": {"dags/pending_dag.py": {"runtime": "fixture", "reason": "synthetic missing dependency"}}}\n'
 LEFTOVER = "was removed but is still referenced"
@@ -663,6 +664,70 @@ LINK_CASES = [
 ]
 
 
+def step_workflow(*step_lines: str) -> str:
+    """A workflow with one step that runs a local action; ``step_lines`` follow ``uses`` inside the step."""
+    head = "name: ci\non: push\njobs:\n  core:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: ./.github/actions/setup\n"
+    return head + "".join(f"        {line}\n" for line in step_lines)
+
+
+INPUT_WORD_USE = {"scripts/warm.sh": f"{INPUT_NAME} --now\n"}  # The same word, as a program, still used in a script.
+ACTION_INPUTS = (
+    f"name: setup\ndescription: setup\ninputs:\n  {INPUT_NAME}:\n    description: warm\n    default: 'false'\n  python-version:\n    description: version\n"
+)
+CALLED_WORKFLOW = f"name: called\non:\n  workflow_call:\n    inputs:\n      {INPUT_NAME}:\n        type: boolean\n      python-version:\n        type: string\n"
+MANUAL_WORKFLOW = CALLED_WORKFLOW.replace("workflow_call", "workflow_dispatch")
+INPUT_CASES = [
+    Case(
+        "step input removed, the same word is still a program in a script",
+        "removed-names",
+        True,
+        committed={".github/workflows/ci.yml": step_workflow("with:", f'  {INPUT_NAME}: "true"', '  python-version: "3.12"'), **INPUT_WORD_USE},
+        files={".github/workflows/ci.yml": step_workflow("with:", '  python-version: "3.12"')},
+    ),
+    Case(
+        "action input removed, the same word is still a program in a script",
+        "removed-names",
+        True,
+        committed={".github/actions/setup/action.yml": ACTION_INPUTS, **INPUT_WORD_USE},
+        files={".github/actions/setup/action.yml": ACTION_INPUTS.replace(f"  {INPUT_NAME}:\n    description: warm\n    default: 'false'\n", "")},
+    ),
+    Case(
+        "reusable workflow input removed, the same word is still a program in a script",
+        "removed-names",
+        True,
+        committed={".github/workflows/called.yml": CALLED_WORKFLOW, **INPUT_WORD_USE},
+        files={".github/workflows/called.yml": CALLED_WORKFLOW.replace(f"      {INPUT_NAME}:\n        type: boolean\n", "")},
+    ),
+    Case(
+        "step environment key removed, the same word is still used",
+        "removed-names",
+        False,
+        committed={".github/workflows/ci.yml": step_workflow("env:", f'  {INPUT_NAME}: "true"', "  region: west"), **INPUT_WORD_USE},
+        files={".github/workflows/ci.yml": step_workflow("env:", "  region: west")},
+        reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
+    ),
+    Case(
+        "with key removed from an ordinary config file, the same word is still used",
+        "removed-names",
+        False,
+        committed={"config/plan.yaml": f"with:\n  {INPUT_NAME}: 1\n  region: west\n", **INPUT_WORD_USE},
+        files={"config/plan.yaml": "with:\n  region: west\n"},
+        reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
+    ),
+    Case(
+        "manual dispatch input removed, the same word is still used",
+        "removed-names",
+        False,
+        committed={
+            ".github/workflows/manual.yml": MANUAL_WORKFLOW,
+            **INPUT_WORD_USE,
+        },
+        files={".github/workflows/manual.yml": MANUAL_WORKFLOW.replace(f"      {INPUT_NAME}:\n        type: boolean\n", "")},
+        reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
+    ),
+]
+
+
 POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
 UTIL_FUNCTION = f"def {OLD_FUNCTION}() -> int:\n    return 1\n"
@@ -1145,6 +1210,7 @@ CASES = [
         committed={"app/util.py": f"def {RETRY_POLICY}() -> int:\n    return 1\n", "config/policy.yaml": f"{RETRY_POLICY}: strict\n"},
         files={"app/util.py": "X = 1\n"},
     ),
+    *INPUT_CASES,
     Case(
         "function removed with its callers",
         IMPORTERS_HOOK,

@@ -78,6 +78,7 @@ PY_ASSIGNED = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)", re.M
 # Environment variables a shell script, workflow or rendered template still uses: $NAME, ${NAME}, vars.NAME, secrets.NAME, env.NAME.
 ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A-Z0-9_]*)\b")
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
+YAML_KEY = re.compile(r"""^(\s*)(-\s+)?["']?([\w-]+)["']?\s*:(?:\s|$)""")
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 TASK_ID = re.compile(r"""task_id\s*=\s*["']([\w.-]+)["']""")
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
@@ -512,12 +513,41 @@ def env_example() -> list[Finding]:
     return findings
 
 
+def input_line_numbers(path: str, lines: list[str]) -> set[int]:
+    """Return the numbers (from 1) of the lines of a workflow or composite action file that define an input name.
+
+    An input name is a key inside a ``with:`` mapping, or directly under the ``inputs:`` of an action (action.yml, action.yaml) or of a reusable
+    workflow (``on.workflow_call.inputs``). It is a name of the action or workflow that takes it, never a setting or a program of this project.
+    """
+    action = Path(path).name in ("action.yml", "action.yaml")
+    if not action and not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", path):
+        return set()
+    numbers: set[int] = set()
+    parents: list[tuple[int, str]] = []
+    for number, line in enumerate(lines, 1):
+        if not (match := YAML_KEY.match(line)):
+            continue
+        indent, key = len(match.group(1)) + len(match.group(2) or ""), match.group(3)
+        while parents and parents[-1][0] >= indent:
+            parents.pop()
+        names = [name for _, name in parents]
+        if names[-1:] == ["with"] or names == (["inputs"] if action else ["on", "workflow_call", "inputs"]):
+            numbers.add(number)
+        parents.append((indent, key))
+    return numbers
+
+
 def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
-    """Return removed lines by file and deleted paths, from the staged diff or, in CI, the pushed range."""
+    """Return removed lines by file and deleted paths, from the staged diff or, in CI, the pushed range.
+
+    A removed line that only named an input of a workflow or action (see ``input_line_numbers``) is left out: the input is gone, the name stays free.
+    """
     refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
+    old_ref = refs[0] if len(refs) == 2 else "HEAD"
     deleted = git("diff", *refs, "--name-only", "--diff-filter=D").splitlines()
     removed: dict[str, list[str]] = {}
-    current, in_header = "", False
+    inputs: dict[str, set[int]] = {}
+    current, in_header, old_number = "", False, 0
     for line in git("diff", *refs, "-U0", "--no-color").splitlines():
         if line.startswith("diff --git "):
             current, in_header = "", True
@@ -525,8 +555,13 @@ def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
             current = line[6:] if line.startswith("--- a/") else ""
         elif line.startswith("@@"):
             in_header = False
+            old_number = int(line.split()[1].lstrip("-").split(",")[0])
         elif not in_header and line.startswith("-") and current:
-            removed.setdefault(current, []).append(line[1:])
+            if current not in inputs:
+                inputs[current] = input_line_numbers(current, git("show", f"{old_ref}:{current}").splitlines())
+            if old_number not in inputs[current]:
+                removed.setdefault(current, []).append(line[1:])
+            old_number += 1
     return removed, deleted
 
 
