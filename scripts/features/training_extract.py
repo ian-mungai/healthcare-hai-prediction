@@ -366,19 +366,19 @@ def extract(
         raise ExtractError(f"base run {base_run} lacks a required training support snapshot")
     offline = [reference for reference in references if reference in feature_schema.offline_group_references()]
     try:
-        expected = feature_schema.service_references(reader.schema, model, [reference for reference in references if reference not in offline])
+        served_references = feature_schema.service_references(reader.schema, model, [reference for reference in references if reference not in offline])
     except feature_schema.SchemaError as error:
         raise ExtractError(str(error)) from None
     if sorted(offline) != sorted(feature_schema.offline_group_references()):
         raise ExtractError(f"the {model} extract lacks a group attribute that the offline read must return")
     served = reader.service_references(service)
-    if set(served) != set(expected) or len(served) != len(expected):
-        gap = sorted(set(served) ^ set(expected))
+    if set(served) != set(served_references) or len(served) != len(served_references):
+        gap = sorted(set(served) ^ set(served_references))
         raise ExtractError(
             f"the Feast feature service {service} differs from the reviewed lists of {model} and the labels: {len(gap)} references, first {gap[0]}"
         )
     check()
-    requested = (*expected, *offline)
+    requested = (*served_references, *offline)
     history = reader.historical(requested, publication.run_id)
     if history.publication != publication or history.base != base or history.feature_schema_sha256 != reader.schema_sha256:
         raise ExtractError("historical features came from another publication, base publication or schema")
