@@ -1320,8 +1320,15 @@ def home_path_cases() -> list[Case]:
         "analytics-like home name": f"{home}2/run.log",
         "another home name": f"{LINUX_HOME}analyst/run.log",
         "analytics name under the user folder": f"{HOME_PATH.split('jdoe')[0]}analytics/run.log",
+        "Linux user named Shared": f"{LINUX_HOME}Shared/private.txt",
+        "Linux home with an accented first letter": f"{LINUX_HOME}\u00e9lise/private.txt",
+        "Linux home with a non-Latin first letter": f"{LINUX_HOME}\u7528\u6237/private.txt",
+        "Linux home with a symbol first character": f"{LINUX_HOME}\U0001f600/private.txt",
     }
-    return [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
+    cases = [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
+    # The macOS shared folder is no user's home. Only the macOS root has this folder, so the Linux twin above stays flagged.
+    cases.append(Case("macOS shared folder is no home", "privacy-scan", True, {"notes.md": f"Log at {HOME_PATH.split('jdoe')[0]}Shared/run.log\n"}))
+    return cases
 
 
 def email_domain_cases() -> list[Case]:

@@ -183,8 +183,11 @@ PRIVACY_FIX = (
     " If it is meant to be public, add a reasoned entry to .privacy_allowlist"
 )
 ALLOWLIST = ".privacy_allowlist"
+# A user name is a run of characters that are not delimiters, so a name in any script (or an emoji) is a name. Whitespace, path separators, quotes,
+# brackets and the placeholder openers < $ { * % are delimiters, so /home/<user>, /home/$USER, /home/{user} and /home/* stay placeholders.
+HOME_NAME_CHAR = r"[^\s/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
 PRIVACY_PATTERNS = {
-    "home-path": ("home-directory path with a user name", re.compile(r"/(?:" + "Us" + r"ers|home)/(?![<$])(?!Shared/)[A-Za-z0-9._-]+")),
+    "home-path": ("home-directory path with a user name", re.compile(r"/(?:" + "Us" + r"ers/(?!Shared/)|home/)" + HOME_NAME_CHAR + r"+")),
     "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
     "email": ("email address", re.compile(r"\b[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b")),
     "phone": (
