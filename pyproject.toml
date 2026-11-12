@@ -129,10 +129,10 @@ analytics = [
   "duckdb==1.5.6",
   "duckdb-cli==1.5.6",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
-  "certifi==2026.7.22",
+  "certifi==2026.10.19",
   "dbt-protos==1.0.565",
   "msgpack==1.2.3",
-  "opentelemetry-api==1.45.0",
+  "opentelemetry-api==1.45.1",
   "pydantic==2.13.5",
   "pydantic-core==2.46.5",
   "python-slugify==9.1.2",

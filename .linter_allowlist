@@ -4,7 +4,6 @@
 tflint infra/services/tests/flow/main.tf:terraform_required_version -- test-only stand-in network that the jobs stack tests load as a module; it never plans or applies on its own, so it needs no Terraform version constraint -- permanent
 osv-scanner uv.lock:pillow==12.3.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
 osv-scanner uv.lock:certifi==2026.7.22 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
-osv-scanner uv.lock:opentelemetry-api==1.45.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
 osv-scanner uv.lock:aiohttp==3.14.3 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
 osv-scanner uv.lock:apache-airflow-providers-google==22.5.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
 osv-scanner uv.lock:apache-airflow-providers-snowflake==6.17.0 -- pin upgrade changes a built image or tool environment and needs its own E2E and the owner's decision, so a lint pass does not change it -- expires 2026-11-15
