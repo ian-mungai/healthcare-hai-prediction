@@ -258,7 +258,7 @@ model_api = [
   "fastapi; sys_platform == 'linux'",
   "uvicorn==0.54.0; sys_platform == 'linux'",
   "pydantic==2.14.2; sys_platform == 'linux'",
-  "mlflow-skinny==3.17.0; sys_platform == 'linux'",
+  "mlflow-skinny==3.17.2; sys_platform == 'linux'",
   "feast[aws,duckdb,iceberg,redis]==0.67.0; sys_platform == 'linux'",
   "pyiceberg[pyarrow]==0.12.0; sys_platform == 'linux'",
   "redis==7.4.1; sys_platform == 'linux'",
