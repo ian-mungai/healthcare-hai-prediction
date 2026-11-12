@@ -2,19 +2,22 @@
 
 The job task of a silver or gold DAG waits in the one-slot launch pool. When it holds the slot, it saves the listing of every object version under
 ``lakehouse/`` (``save_before_listing``) right before the launch, so the writes of another run during the wait are in the listing and not in the run's writes.
-The evidence task then reads the run's records from AWS and writes the acceptance report (``accept``) with every check of
-``scripts.lakehouse.layer_acceptance``.
+It saves the closing evidence (``save_closing_evidence``: the listing after the launch, the tasks of the job still running and the host facts) right after the
+launch and before it releases the slot, so a job that takes the slot next cannot change it. The evidence task then reads the run's records from AWS and writes
+the acceptance report (``accept``) with every check of ``scripts.lakehouse.layer_acceptance``.
 
 Every file lives in a folder of the Airflow container that only its user reads (``<directory>/<layer>/<run>/``, mode 0700, files 0600), never on the job scratch
-volume. A file is created once. A missing, damaged, readable-by-others or foreign listing fails the evidence task with its cause: nothing falls back to a weaker
-check. The publish contract is read from the run's staged ``code.tar.gz`` after the archive matched ``code.sha256``. The archive is bounded, is never unpacked
-to disk and a file is read only when it is a regular member of the expected name. The report of silver is the input of the gold report (a passed report).
-Every wait has a deadline."""
+volume. A file is created once. A missing, damaged, readable-by-others or foreign listing or closing record fails the evidence task with its cause, also when a
+report exists already: nothing falls back to a weaker check. The publish contract is read from the run's staged ``code.tar.gz`` after the archive matched
+``code.sha256``. The archive is bounded, is never unpacked to disk and a file is read only when it is a regular member of the expected name.
+The report of silver is the input of the gold report (a passed report). Every wait has a deadline."""
 
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import logging
 import os
@@ -161,16 +164,18 @@ def private_bytes(path: Path, what: str, limit: int) -> bytes:
     return data
 
 
-def checked_listing(path: Path, layer: str, run: str) -> None:
-    """The saved listing exists, is private and belongs to this layer and run."""
+def checked_listing(path: Path, layer: str, run: str) -> bytes:
+    """The bytes of the saved listing, which exists, is private and belongs to this layer and run."""
+    data = private_bytes(path, "before listing", LISTING_LIMIT)
     try:
-        document = json.loads(private_bytes(path, "before listing", LISTING_LIMIT))
+        document = json.loads(data)
     except ValueError:
         raise ReportError("the before listing is damaged (not JSON)") from None
     if not isinstance(document, dict) or (document.get("run_id"), document.get("layer")) != (run, layer):
         raise ReportError("the before listing belongs to another run or layer")
     if not isinstance(document.get("versions"), list) or not isinstance(document.get("deleted"), list):
         raise ReportError("the before listing is damaged (no version lists)")
+    return data
 
 
 def save_before_listing(access: ReportAccess, layer: str, run: str, limit: int = LISTING_LIMIT) -> Path:
@@ -246,17 +251,51 @@ def fetch_archive(access: ReportAccess, run: str, digest: str, target: Path, lim
         raise ReportError("the staged code archive does not match its code.sha256")
 
 
+class BoundedStream(io.RawIOBase):
+    """The decompressed bytes of an archive, read and skipped only up to ``limit``: a read or a seek past it raises before it decompresses anything more."""
+
+    def __init__(self, stream: Any, limit: int) -> None:
+        self.stream = stream
+        self.limit = limit
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return int(self.stream.tell())
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        target = offset + (self.tell() if whence == os.SEEK_CUR else 0)
+        if whence == os.SEEK_END or target > self.limit:
+            raise ReportError("the staged code archive is too large to read or took too long")
+        return int(self.stream.seek(target))
+
+    def readinto(self, buffer: Any) -> int:
+        room = self.limit - self.tell()
+        if room < 0:
+            raise ReportError("the staged code archive is too large to read or took too long")
+        view = memoryview(buffer)[: room + 1]
+        count = int(self.stream.readinto(view))
+        if self.tell() > self.limit:
+            raise ReportError("the staged code archive is too large to read or took too long")
+        return count
+
+
 def contract_from_archive(archive: Path, deadline: float) -> StagedContract:
-    """The contract files of a verified archive. A wanted member must be a regular file within the member limit and appear once."""
+    """The contract files of a verified archive. A wanted member must be a regular file within the member limit and appear once. No member, read or skip
+    reaches past ``UNPACKED_LIMIT`` of decompressed bytes, the last member and the end of the archive included."""
     wanted = set(CONTRACT_FILES)
     files: dict[str, str] = {}
     try:
-        with tarfile.open(archive, "r:gz") as tar:
+        with gzip.open(archive, "rb") as stream, tarfile.open(fileobj=BoundedStream(stream, UNPACKED_LIMIT), mode="r:") as tar:
             commit = str(tar.pax_headers.get("comment", ""))
             if not acceptance.REVISION.fullmatch(commit):
                 raise ReportError("the staged code archive carries no commit ID")
             for member in tar:
-                if member.offset_data > UNPACKED_LIMIT or time.monotonic() > deadline:
+                if member.offset_data + member.size > UNPACKED_LIMIT or time.monotonic() > deadline:
                     raise ReportError("the staged code archive is too large to read or took too long")
                 name = member.name.removeprefix("./")
                 if name not in wanted:
@@ -311,7 +350,8 @@ def describe_file(access: ReportAccess, task_arn: str, target: Path) -> None:
     (target / "describe.json").write_text(json.dumps({"failures": [], "tasks": [kept]}, sort_keys=True))
 
 
-def running_file(access: ReportAccess, layer: str, target: Path, deadline: float) -> None:
+def running_facts(access: ReportAccess, layer: str, deadline: float) -> dict[str, Any]:
+    """The ECS tasks of the layer's host family that run now."""
     arns: list[str] = []
     token: dict[str, str] = {}
     while True:
@@ -325,10 +365,23 @@ def running_file(access: ReportAccess, layer: str, target: Path, deadline: float
         if time.monotonic() > deadline:
             raise ReportError("the ECS task list did not finish before its deadline")
         token = {"nextToken": str(reply["nextToken"])}
-    (target / "running.json").write_text(json.dumps({"taskArns": arns}))
+    return {"taskArns": arns}
 
 
-def host_file(access: ReportAccess, target: Path) -> None:
+def container_instance_ids(access: ReportAccess, arns: list[str]) -> list[str]:
+    """The EC2 instance IDs of the listed container instances. The description must resolve every listed ARN: a failure or a missing ARN is no evidence."""
+    ids: list[str] = []
+    for start in range(0, len(arns), 100):
+        batch = arns[start : start + 100]
+        described = access.ecs.describe_container_instances(cluster=access.cluster, containerInstances=batch)
+        items = described.get("containerInstances") or []
+        if described.get("failures") or sorted(str(item.get("containerInstanceArn")) for item in items) != sorted(batch):
+            raise ReportError("the description of the active container instances does not resolve every listed container instance")
+        ids += [str(item["ec2InstanceId"]) for item in items]
+    return ids
+
+
+def host_facts(access: ReportAccess) -> dict[str, Any]:
     """The facts the host check reads: the group's desired capacity and instances and the EC2 instances of the active container instances."""
     if not access.host_group:
         raise ReportError("HAI_LAUNCH_HOST_GROUP is not set in the Airflow service environment")
@@ -340,22 +393,58 @@ def host_file(access: ReportAccess, target: Path) -> None:
         token: dict[str, str] = {}
         while True:
             reply = access.ecs.list_container_instances(cluster=access.cluster, status="ACTIVE", **token)
-            arns = [str(arn) for arn in reply.get("containerInstanceArns") or []]
-            for start in range(0, len(arns), 100):
-                described = access.ecs.describe_container_instances(cluster=access.cluster, containerInstances=arns[start : start + 100])
-                containers += [str(item["ec2InstanceId"]) for item in described.get("containerInstances") or []]
+            containers += container_instance_ids(access, [str(arn) for arn in reply.get("containerInstanceArns") or []])
             if not reply.get("nextToken"):
                 break
             token = {"nextToken": str(reply["nextToken"])}
     except (ClientError, BotoCoreError) as error:
         raise aws_error("the host description", error) from None
+    except KeyError:
+        raise ReportError("the description of a container instance lacks its EC2 instance ID") from None
     group = groups[0]
-    facts = {
+    return {
         "desired_capacity": group.get("DesiredCapacity"),
         "group_instances": [str(item["InstanceId"]) for item in group.get("Instances") or []],
         "container_instances": containers,
     }
-    (target / "host.json").write_text(json.dumps(facts, sort_keys=True))
+
+
+def save_closing_evidence(access: ReportAccess, layer: str, run: str, limit: int = LISTING_LIMIT) -> Path:
+    """Save the evidence that closes the job's window once for the run: the listing of ``lakehouse/`` after the launch, the host family's running tasks and the
+    host facts. The job task calls it right after the launch, while it still holds the pool slot. A record that exists is kept (and checked)."""
+    folder = folder_of(access, layer, run)
+    path = folder / "closing.json"
+    if path.exists() or path.is_symlink():
+        checked_closing(path, layer, run)
+        return path
+    deadline = time.monotonic() + DEADLINE_SECONDS
+    document = {
+        "schema": 1,
+        "run_id": run,
+        "layer": layer,
+        "after": listing_document(layer, run, list_versions(access.s3, access.bucket, limit, deadline)),
+        "running": running_facts(access, layer, deadline),
+        "host": host_facts(access),
+    }
+    data = json.dumps(document).encode()
+    if len(data) > 2 * limit:
+        raise ReportError("the closing evidence is larger than the report limit")
+    write_private(path, data)
+    return path
+
+
+def checked_closing(path: Path, layer: str, run: str) -> dict[str, Any]:
+    """The closing evidence of the job task: it exists, is private, belongs to this layer and run and has its three parts."""
+    try:
+        document = json.loads(private_bytes(path, "closing evidence", 2 * LISTING_LIMIT))
+    except ValueError:
+        raise ReportError("the closing evidence is damaged (not JSON)") from None
+    if not isinstance(document, dict) or (document.get("run_id"), document.get("layer")) != (run, layer):
+        raise ReportError("the closing evidence belongs to another run or layer")
+    after, running, host = (document.get(name) for name in ("after", "running", "host"))
+    if not (isinstance(after, dict) and isinstance(running, dict) and isinstance(host, dict)):
+        raise ReportError("the closing evidence is damaged (a part is missing)")
+    return document
 
 
 def evidence_files(access: ReportAccess, layer: str, run: str, target: Path) -> dict[str, Any]:
@@ -386,14 +475,18 @@ def silver_input(access: ReportAccess, pin: Mapping[str, Any], target: Path) -> 
     return target / "input", report
 
 
-def stored_result(path: Path, layer: str, run: str) -> dict[str, Any]:
-    """The report that exists for the run: returned when it passed, raised as a failed report when it did not."""
+def stored_result(path: Path, layer: str, run: str, before_sha256: str = "") -> dict[str, Any]:
+    """The report that exists for the run: returned when it passed, raised as a failed report when it did not. A report that records another before listing
+    than the one on disk (``before_sha256``) is no report of this listing."""
     try:
         document = json.loads(private_bytes(path, "stored report", acceptance.LIMIT))
     except ValueError:
         raise ReportError("the stored report is damaged (not JSON)") from None
     if not isinstance(document, dict) or (document.get("layer"), document.get("run_id")) != (layer, run):
         raise ReportError("the stored report belongs to another run or layer")
+    recorded = document.get("file_sha256")
+    if before_sha256 and (recorded.get("before") if isinstance(recorded, dict) else None) != before_sha256:
+        raise ReportError("the stored report was made from another before listing than the one saved for the run")
     stored = document.get("checks")
     checks: dict[str, Any] = stored if isinstance(stored, dict) else {}
     failed = sorted(name for name, ok in checks.items() if ok is not True)
@@ -406,16 +499,18 @@ def accept(access: ReportAccess, layer: str, run: str, archive_limit: int = ARCH
     """Write the acceptance report of a finished run and return its path, or raise with the cause. The report is created once; a second call returns it."""
     folder = folder_of(access, layer, run)
     report_path = folder / "report.json"
-    if report_path.exists() or report_path.is_symlink():
-        return stored_result(report_path, layer, run)
     try:
-        checked_listing(folder / "before.json", layer, run)
+        before = checked_listing(folder / "before.json", layer, run)
     except ReportError as error:
         raise ReportError(
             f"{error}: the job task saves the listing right before the launch, so a scheduler restart or a cleared task loses it and the run needs a new run ID"
         ) from None
-    if not access.host_group:
-        raise ReportError("HAI_LAUNCH_HOST_GROUP is not set in the Airflow service environment")
+    if report_path.exists() or report_path.is_symlink():
+        return stored_result(report_path, layer, run, hashlib.sha256(before).hexdigest())
+    try:
+        closing = checked_closing(folder / "closing.json", layer, run)
+    except ReportError as error:
+        raise ReportError(f"{error}: the job task saves it right after the launch, before it releases the pool slot, so the run needs a new run ID") from None
     deadline = time.monotonic() + DEADLINE_SECONDS
     with tempfile.TemporaryDirectory(dir=folder, prefix="inputs_") as name:
         work = Path(name)
@@ -429,10 +524,8 @@ def accept(access: ReportAccess, layer: str, run: str, archive_limit: int = ARCH
         task_arn = launch_files(access, layer, run, work)
         describe_file(access, task_arn, work)
         pin = evidence_files(access, layer, run, work)
-        after = listing_document(layer, run, list_versions(access.s3, access.bucket, LISTING_LIMIT, deadline))
-        (work / "after.json").write_text(json.dumps(after))
-        running_file(access, layer, work, deadline)
-        host_file(access, work)
+        for name, part in (("after", "after"), ("running", "running"), ("host", "host")):
+            (work / f"{name}.json").write_text(json.dumps(closing[part], sort_keys=True))
         input_evidence = input_report = None
         if layer == "gold":
             input_evidence, input_report = silver_input(access, pin, work)

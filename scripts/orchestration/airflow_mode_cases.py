@@ -426,6 +426,7 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
                 mock.patch.object(runtime, "get_current_context", lambda: current.context),
                 mock.patch.object(steps, "services", lambda: rig.services),
                 mock.patch.object(steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
+                mock.patch.object(steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
                 mock.patch.object(
                     steps.layer_report,
                     "accept",

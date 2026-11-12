@@ -263,15 +263,23 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
 
     A silver or gold job saves the listing of every object version under ``lakehouse/`` here, after the gates and right before the launch. This task holds the
     slot of the one-slot launch pool, so no other run's job writes meanwhile, and the writes of another run during the wait are in the listing. A listing that
-    exists is kept. A listing that fails stops the step before the launch."""
+    exists is kept. A listing that fails stops the step before the launch. Right after the launch, still holding the slot, the task saves the closing evidence
+    (the listing after the launch, the running tasks of the host family and the host facts), so the job that takes the slot next cannot change it. A closing
+    record that fails fails this task, and the evidence task refuses the run."""
     found = services()
     spec = job_spec(found, request, context, selections)
-    if spec.job in layer_report.LAYERS:
+    report = spec.job in layer_report.LAYERS
+    if report:
         try:
             layer_report.save_before_listing(report_access(found), spec.job, request.run_id)
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
     launch(found, spec, context)
+    if report:
+        try:
+            layer_report.save_closing_evidence(report_access(found), spec.job, request.run_id)
+        except layer_report.ReportError as error:
+            raise LaunchRefused(str(error)) from None
     return "succeeded"
 
 

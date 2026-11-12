@@ -39,6 +39,7 @@ CLUSTER = "example_project_cluster_dev"
 PREFIX = "example_project_dev_job_"
 GROUP = "example_project_host_dev"
 OTHER_INSTANCE = "i-0fedcba9876543210"
+UNRESOLVED_INSTANCE = "i-0aaaabbbbccccdddd"
 NAMES = fixtures.NAMES
 ARCHIVE_PATHS = (
     *acceptance.CONTRACT.values(),
@@ -99,14 +100,23 @@ class FakeEcs:
     def list_tasks(self, **arguments: Any) -> dict[str, Any]:
         expect(arguments["cluster"] == CLUSTER and arguments["desiredStatus"] == "RUNNING")
         expect(arguments["family"] == f"{PREFIX}{self.box.current.spec.layer}_host")
-        return {"taskArns": json.loads((self.box.current.root / "running.json").read_text())["taskArns"]}
+        return {"taskArns": [*json.loads((self.box.current.root / "running.json").read_text())["taskArns"], *self.box.later_tasks]}
 
     def list_container_instances(self, **arguments: Any) -> dict[str, Any]:
         expect(arguments["cluster"] == CLUSTER and arguments["status"] == "ACTIVE")
-        return {"containerInstanceArns": [f"arn:ci/{name}" for name in self.box.host()["container_instances"]]}
+        names = [*self.box.host()["container_instances"], *([UNRESOLVED_INSTANCE] if self.box.unresolved else [])]
+        return {"containerInstanceArns": [f"arn:ci/{name}" for name in names]}
 
     def describe_container_instances(self, cluster: str, containerInstances: list[str]) -> dict[str, Any]:
-        return {"containerInstances": [{"containerInstanceArn": arn, "ec2InstanceId": arn.removeprefix("arn:ci/")} for arn in containerInstances]}
+        """The service answers what it can: an instance it cannot describe is a failures entry (``unresolved == "failure"``) or is silently left out."""
+        found = [arn for arn in containerInstances if not (self.box.unresolved and arn == f"arn:ci/{UNRESOLVED_INSTANCE}")]
+        failures = (
+            [{"arn": f"arn:ci/{UNRESOLVED_INSTANCE}", "reason": "MISSING"}] if self.box.unresolved == "failure" and len(found) < len(containerInstances) else []
+        )
+        return {
+            "containerInstances": [{"containerInstanceArn": arn, "ec2InstanceId": arn.removeprefix("arn:ci/")} for arn in found],
+            "failures": failures,
+        }
 
 
 class FakeAutoscaling:
@@ -131,6 +141,8 @@ class Box:
     def __init__(self, work: Path, name: str) -> None:
         self.s3 = FakeS3()
         self.current: Any = None
+        self.unresolved = ""
+        self.later_tasks: list[str] = []
         self.access = layer_report.ReportAccess(
             s3=self.s3,
             bucket=BUCKET,
@@ -146,8 +158,8 @@ class Box:
         return dict(json.loads((self.current.root / "host.json").read_text()))
 
 
-def spec(layer: str, run: str, tag: str) -> fixtures.Spec:
-    return replace(fixtures.spec(layer, run, tag), code=ARCHIVE_SHA256)
+def spec(layer: str, run: str, tag: str, code: str = ARCHIVE_SHA256) -> fixtures.Spec:
+    return replace(fixtures.spec(layer, run, tag), code=code)
 
 
 def entries_of(document: dict[str, Any]) -> list[dict[str, Any]]:
@@ -171,21 +183,25 @@ def sandbox(work: Path, name: str) -> Box:
     return Box(work, name)
 
 
-def make(work: Path, name: str, layer: str, producer: fixtures.Env | None = None, run: str | None = None, tag: str | None = None) -> fixtures.Env:
+def make(
+    work: Path, name: str, layer: str, producer: fixtures.Env | None = None, run: str | None = None, tag: str | None = None, code: str = ARCHIVE_SHA256
+) -> fixtures.Env:
     runs = {"silver": (fixtures.SILVER_RUN, "a"), "gold": (fixtures.GOLD_RUN, "c")}
-    env = fixtures.Env(work / name, spec(layer, run or runs[layer][0], tag or runs[layer][1]), producer)
+    env = fixtures.Env(work / name, spec(layer, run or runs[layer][0], tag or runs[layer][1], code), producer)
     fixtures.build_records(env)
     return env
 
 
 def job_window(box: Box, env: fixtures.Env, waiting: tuple[dict[str, Any], ...] = (), running: tuple[dict[str, Any], ...] = ()) -> None:
-    """The job task: other runs write while this run waits for the pool slot, the task saves the listing right before the launch and then the job writes."""
+    """The job task: other runs write while this run waits for the pool slot, the task saves the listing right before the launch, the job writes and the
+    task saves the closing evidence right after the launch, while it still holds the slot."""
     box.current = env
     before = entries_of(json.loads((env.root / "before.json").read_text()))
     box.s3.entries = sorted([*before, *waiting], key=lambda entry: entry["Key"])
     layer_report.save_before_listing(box.access, env.spec.layer, env.spec.run)
     after = entries_of(json.loads((env.root / "after.json").read_text()))
     box.s3.entries = sorted([*after, *waiting, *running], key=lambda entry: entry["Key"])
+    layer_report.save_closing_evidence(box.access, env.spec.layer, env.spec.run)
 
 
 def attempt(function: Callable[[], Any]) -> tuple[str, Any]:
@@ -209,12 +225,16 @@ def flow(box: Box, env: fixtures.Env, **window: Any) -> tuple[str, Any]:
 
 
 def other_run_records(layer: str) -> tuple[dict[str, Any], ...]:
-    """The launch records that another run (the ingestion job that holds the pool slot) writes under its own prefix."""
+    """The keys that another run (the queued ingestion job) writes under its own prefixes: its launch records and its staged inputs."""
     other = "20261111T210000Z-0badc0de"
-    return tuple(
-        {"Key": f"lakehouse/launch_records/{other}/ingestion/{name}", "VersionId": f"o{index}", "ETag": '"o"', "Size": 9}
-        for index, name in enumerate(("claim.json", "01/intent.json", "01/started.json"))
+    names = (
+        f"launch_records/{other}/ingestion/claim.json",
+        f"launch_records/{other}/ingestion/01/intent.json",
+        f"launch_records/{other}/ingestion/01/started.json",
+        f"run_stage/{other}/inputs/code.sha256",
+        f"run_stage/{other}/inputs/code.tar.gz",
     )
+    return tuple({"Key": f"lakehouse/{name}", "VersionId": f"o{index}", "ETag": '"o"', "Size": 9} for index, name in enumerate(names))
 
 
 def failed_names(result: tuple[str, Any]) -> list[str]:
@@ -274,6 +294,39 @@ def window_cases(work: Path) -> dict[str, bool]:
         checks[f"{layer}: another run's launch records written after the listing stay a failed write scope check"] = result[0] == "failed" and NAMES[
             "scope"
         ] in failed_names(result)
+        saved = box2.access.directory / layer / other.spec.run / "report.json"
+        document = json.loads(saved.read_text()) if saved.is_file() else {}
+        wanted = sorted(entry["Key"] for entry in other_run_records(layer))
+        checks[f"{layer}: the failed report lists every key outside the run's scope, with their count"] = document.get("out_of_scope") == {
+            "count": len(wanted),
+            "keys": wanted,
+        }
+        checks[f"{layer}: a passed report lists no key outside the run's scope"] = box.access.directory.joinpath(
+            layer, env.spec.run, "report.json"
+        ).is_file() and (
+            json.loads(box.access.directory.joinpath(layer, env.spec.run, "report.json").read_text()).get("out_of_scope") == {"count": 0, "keys": []}
+        )
+    return checks
+
+
+def later_job_cases(work: Path) -> dict[str, bool]:
+    """The next queued job takes the released pool slot before the evidence task runs: its writes and its task are not this run's evidence."""
+    checks: dict[str, bool] = {}
+    for layer in ("silver", "gold"):
+        box = sandbox(work, f"later_{layer}")
+        producer = None
+        if layer == "gold":
+            producer = make(work, "later_gold_producer", "silver")
+            flow(box, producer)
+        env = make(work, f"later_{layer}_run", layer, producer)
+        stage(box, env)
+        job_window(box, env)
+        box.s3.entries = sorted([*box.s3.entries, *other_run_records(layer)], key=lambda entry: entry["Key"])
+        box.later_tasks.append(f"arn:aws:ecs:us-west-2:{fixtures.ACCOUNT}:task/x/9999")
+        result = accept(box, env)
+        checks[f"{layer}: a queued job that writes and runs after this job released the slot does not fail this run's evidence"] = (
+            result[0] == "ok" and result[1]["passed"] is True
+        )
     return checks
 
 
@@ -347,12 +400,59 @@ def listing_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def cached_cases(work: Path) -> dict[str, bool]:
+    """A retry of the evidence task with a passed report on disk checks the before listing like the first run: the cached pass is not a bypass."""
+    checks: dict[str, bool] = {}
+
+    def retry(number: int, change: Callable[[Path, fixtures.Env], None]) -> tuple[str, Any]:
+        box = sandbox(work, f"cached_{number}")
+        env = make(work, f"cached_{number}_run", "silver")
+        first = flow(box, env)
+        before = box.access.directory / "silver" / env.spec.run / "before.json"
+        if first[0] != "ok":
+            return "first run failed", first[1]
+        change(before, env)
+        return accept(box, env)
+
+    def delete(path: Path, env: fixtures.Env) -> None:
+        path.unlink()
+
+    def damage(path: Path, env: fixtures.Env) -> None:
+        path.unlink()
+        path.write_text("{not json")
+        os.chmod(path, 0o600)
+
+    def foreign(path: Path, env: fixtures.Env) -> None:
+        fixtures.edit(path, lambda d: d.update(run_id=fixtures.OTHER_SILVER_RUN))
+
+    def readable(path: Path, env: fixtures.Env) -> None:
+        os.chmod(path, 0o644)
+
+    def other_content(path: Path, env: fixtures.Env) -> None:
+        fixtures.edit(path, lambda d: d["versions"].append({"key": "lakehouse/silver/extra.parquet", "version": "v9", "etag": '"e"', "bytes": 1}))
+
+    for number, (label, change, word) in enumerate(
+        (
+            ("missing", delete, "missing"),
+            ("damaged", damage, "damaged"),
+            ("of another run", foreign, "another run"),
+            ("readable by others", readable, "permissions"),
+            ("changed", other_content, "before listing"),
+        )
+    ):
+        result = retry(number, change)
+        checks[f"a retry with a passed report and a before listing that is {label} fails visibly"] = result[0] == "error" and word in str(result[1])
+    result = retry(9, lambda path, env: None)
+    checks["a retry with a passed report and the same before listing returns the passed report"] = result[0] == "ok" and result[1]["passed"] is True
+    return checks
+
+
 def archive_cases(work: Path) -> dict[str, bool]:
     checks: dict[str, bool] = {}
 
-    def run_with(archive: bytes, label: str, digest: str | None = None, limit: int | None = None) -> tuple[str, Any]:
+    def run_with(archive: bytes, label: str, digest: str | None = None, limit: int | None = None, bound: bool = False) -> tuple[str, Any]:
         box = sandbox(work, f"archive_{label}")
-        env = make(work, f"archive_{label}_run", "silver")
+        env = make(work, f"archive_{label}_run", "silver", code=hashlib.sha256(archive).hexdigest() if bound else ARCHIVE_SHA256)
         stage(box, env, archive)
         if digest is not None:
             box.s3.objects[f"lakehouse/run_stage/{env.spec.run}/inputs/code.sha256"] = (digest + "\n").encode()
@@ -420,6 +520,25 @@ def archive_cases(work: Path) -> dict[str, bool]:
     checks["a contract file above the member limit is refused"] = (lambda r: r[0] in ("error", "failed"))(
         run_with(big, "member", digest=hashlib.sha256(big).hexdigest())
     )
+
+    def with_tail(size: int) -> bytes:
+        def tail(tar: tarfile.TarFile) -> None:
+            info = tarfile.TarInfo("unrelated/tail.bin")
+            info.size = size
+            tar.addfile(info, io.BytesIO(b"\0" * size))
+
+        return build_archive(extra=tail)
+
+    tail_archive = with_tail(600_000)
+    with tarfile.open(fileobj=io.BytesIO(tail_archive), mode="r:gz") as tar:
+        starts = [member.offset_data for member in tar if member.name == "unrelated/tail.bin"]
+    bound = starts[0] + 1000  # the last member starts below the bound and ends far above it
+    with mock.patch.object(layer_report, "UNPACKED_LIMIT", bound):
+        crossing = run_with(tail_archive, "tail", bound=True)
+    checks["an archive whose last member ends above the unpacked limit is refused"] = crossing[0] == "error" and "too large" in str(crossing[1])
+    with mock.patch.object(layer_report, "UNPACKED_LIMIT", starts[0] + 600_000 + 2048):
+        inside = run_with(tail_archive, "tail_inside", bound=True)
+    checks["an archive whose last member ends inside the unpacked limit is read"] = inside[0] == "ok"
     box = sandbox(work, "archive_nothing_written")
     env = make(work, "archive_nothing_written_run", "silver")
     stage(box, env, ARCHIVE)
@@ -447,6 +566,20 @@ def host_cases(work: Path) -> dict[str, bool]:
         fixtures.edit(env.root / "host.json", change)
         result = flow(box, env)
         checks[f"{label}: the report fails the host check and the evidence task fails"] = result[0] == "failed" and name in failed_names(result)
+
+    def partial(mode: str) -> tuple[tuple[str, Any], tuple[str, Any]]:
+        box = sandbox(work, f"host_partial_{mode}")
+        env = make(work, f"host_partial_{mode}_run", "silver")
+        box.unresolved = mode
+        stage(box, env)
+        return attempt(lambda: job_window(box, env)), accept(box, env)
+
+    for label, mode in (("a failures entry", "failure"), ("a silently missing instance", "silent")):
+        job, result = partial(mode)
+        refusal = next((found for kind, found in (job, result) if kind == "error"), None)
+        checks[f"a container instance that the description does not resolve ({label}) stops the host evidence and no report passes"] = (
+            refusal is not None and "container instance" in str(refusal) and result[0] != "ok"
+        )
     box = sandbox(work, "host_task")
     env = make(work, "host_task_run", "silver")
     fixtures.write(env.root / "running.json", {"taskArns": [f"arn:aws:ecs:us-west-2:{fixtures.ACCOUNT}:task/x/0123"]})
@@ -525,6 +658,10 @@ def wiring_cases(work: Path) -> dict[str, bool]:
         done = airflow_steps.evidence_step(request, {}, {})
     checks["preflight_step takes no listing (it runs before the pool slot)"] = pre
     checks["job_step: the order is the gates, the listing and then the launch"] = order == ["gates", "launch"] and outcome == "succeeded"
+    closing = box.access.directory / "silver" / env.spec.run / "closing.json"
+    checks["job_step: the closing evidence is saved right after the launch, private, before the task ends"] = (
+        closing.is_file() and stat.S_IMODE(closing.stat().st_mode) == 0o600
+    )
     checks["evidence_step: the launch records and the report pass and the step returns the report"] = (
         done.get("job") == "silver" and done.get("passed") is True and Path(done["report"]).is_file()
     )
@@ -584,7 +721,9 @@ def main() -> int:
         for name, function in (
             ("good", good_cases),
             ("window", window_cases),
+            ("later", later_job_cases),
             ("listing", listing_cases),
+            ("cached", cached_cases),
             ("archive", archive_cases),
             ("host", host_cases),
             ("dependency", dependency_cases),

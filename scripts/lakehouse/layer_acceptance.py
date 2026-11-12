@@ -56,6 +56,7 @@ CONTRACT = {
     "features": "data_contracts/lakehouse/features_publish.json",
 }
 BRONZE_MAP = "config/lakehouse/bronze_tables.json"
+OUT_OF_SCOPE_KEYS = 100
 INPUT_PREFIX = {"silver": "lakehouse/bronze/", "gold": "lakehouse/silver/", "features": "lakehouse/gold/"}
 PRODUCER = {"gold": "silver", "features": "gold"}  # the layer whose signed run this layer reads
 # The prefixes of the layer writer role (infra/iam/job_writer.tf) beside the run's own upload prefix.
@@ -214,8 +215,9 @@ def read_listing(records: Records, path: Path, name: str) -> tuple[list[tuple[st
     return versions, deleted
 
 
-def listing_checks(layer: str, run: str, records: Records, arguments: argparse.Namespace, recorded: Any) -> dict[str, bool]:
-    """H2 and the write scope from two listings of ``lakehouse/`` (and ``metadata/dbt/`` for gold): one before the task and one after."""
+def listing_checks(layer: str, run: str, records: Records, arguments: argparse.Namespace, recorded: Any) -> tuple[dict[str, bool], dict[str, Any]]:
+    """H2 and the write scope from two listings of ``lakehouse/`` (and ``metadata/dbt/`` for gold): one before the task and one after. Returns the checks and
+    the keys added outside the run's scope (``OUT_OF_SCOPE_KEYS`` at most, with their count): another run's writes in the window are named, not hidden."""
     before, before_deleted = read_listing(records, arguments.before, "before")
     after, after_deleted = read_listing(records, arguments.after, "after")
     prefix = INPUT_PREFIX[layer]
@@ -229,12 +231,14 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     seen_before = {(key, version) for key, version, _, _ in before} | set(before_deleted)
     seen_after = {(key, version) for key, version, _, _ in after} | set(after_deleted)
     added = [key for key, _ in seen_after - seen_before]
-    return {
+    outside = sorted({key for key in added if not key.startswith(allowed)})
+    checks = {
         "H2: the input object versions are the same before and after the task": same,
         "H2: the pin recorded the digest and count of the listing taken before the task": recorded == version_listing.canonical_digest(prefix, entries),
-        "the task added versions only under the layer's prefixes and its own run prefix": bool(added) and all(key.startswith(allowed) for key in added),
+        "the task added versions only under the layer's prefixes and its own run prefix": bool(added) and not outside,
         "the task removed no version": not seen_before - seen_after,
     }
+    return checks, {"count": len(outside), "keys": outside[:OUT_OF_SCOPE_KEYS]}
 
 
 Reader = Callable[[str, str], str]  # (code revision, repository path) -> the file's text at that revision
@@ -529,7 +533,8 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
         "every container of the task exited 0 and the task stopped": not task_problems(layer, described),
     }
     checks |= evidence
-    checks |= listing_checks(layer, run, records, arguments, found["identity"].get("input_listing"))
+    listed, out_of_scope = listing_checks(layer, run, records, arguments, found["identity"].get("input_listing"))
+    checks |= listed
     running = records.load(arguments.running_tasks, "running_tasks")
     checks["no task of the job is left running"] = running.get("taskArns") == []
     checks["the host runs alone: its group desired capacity is at most 1 and its one instance is the only active container instance"] = not host_problems(
@@ -543,6 +548,7 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
         "passed": all(checks.values()),
         "checks": checks,
         "tables": summary,
+        "out_of_scope": out_of_scope,
         "file_sha256": dict(sorted(records.sha256.items())),
         "limits": "Staged records and read-only AWS results only. The report does not prove the catalog state it did not read.",
     }
