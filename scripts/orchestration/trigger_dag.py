@@ -35,8 +35,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from orchestration.ecs_launch import OWNER_STATEMENT_MIN, LaunchRefused
-from orchestration.ecs_preflight import DIRECT_JOBS_FILE, load_tables
 from orchestration.training_contract import DAGS as TRAINING_DAGS
 from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, parameters_for
 from scripts.infrastructure import secret_store
@@ -44,12 +42,9 @@ from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, A
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
-SETTLE_DAG = "launch_settle_dag"
 # The producer-run parameter each workflow's form requires, by workflow.
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_transform_dag": "gold_snapshot_run", "feature_store_dag": "gold_snapshot_run"}
-DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS, SETTLE_DAG)
-JOBS_FILE = REPO_ROOT / "config/orchestration/ecs_broker_jobs.json"
-STATEMENT_MAX = 500
+DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_transform_dag", "feature_store_dag", *TRAINING_DAGS)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
@@ -69,25 +64,6 @@ class TriggerError(RuntimeError):
 def new_run_id() -> str:
     """A run ID in the format the workflows accept: the UTC time and eight random hex digits."""
     return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
-
-
-def settle_conf(mode: str, run_id: str, launch_run: str | None, job: str | None, statement: str | None) -> dict[str, Any]:
-    """The validated configuration of a ``launch_settle_dag`` run: the launch's run and job from the direct launch's job table and the owner's one-line
-    statement of what was checked, at least as long as the launch library requires. The DAG run has its own run ID. The table is the one the launch
-    reads (the broker's jobs and the direct launch's own, such as the Run 3 publisher), so every launch the DAGs start can be settled."""
-    try:
-        jobs = load_tables(REPO_ROOT)[0]["jobs"]
-    except (LaunchRefused, OSError, ValueError) as error:  # a missing or unreadable file, text that is not JSON, or a table its schema refuses
-        raise TriggerError(f"refused: the job tables do not load: {type(error).__name__}: {error}") from None
-    if mode != "real" or not RUN_ID.fullmatch(run_id):
-        raise TriggerError(f"refused: the settle DAG runs in real mode with a run ID of its own ({mode!r}, {run_id!r})")
-    if launch_run is None or not RUN_ID.fullmatch(launch_run):
-        raise TriggerError(f"refused: --launch-run must name the run of the launch to settle, not {launch_run!r}")
-    if job not in jobs:
-        raise TriggerError(f"refused: --job must name a job of {JOBS_FILE.name} or {DIRECT_JOBS_FILE.name}, not {job!r}")
-    if statement is None or not OWNER_STATEMENT_MIN <= len(statement.strip()) <= STATEMENT_MAX or "\n" in statement or "\r" in statement:
-        raise TriggerError(f"refused: --statement must be one line of {OWNER_STATEMENT_MIN} to {STATEMENT_MAX} characters naming what was checked")
-    return {"run_id": run_id, "mode": mode, "launch_run": launch_run, "job": job, "statement": statement.strip()}
 
 
 def run_conf(
@@ -245,9 +221,6 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
-    cli.add_argument("--launch-run", help=f"{SETTLE_DAG} only: the run of the launch to settle")
-    cli.add_argument("--job", help=f"{SETTLE_DAG} only: the job of the launch to settle")
-    cli.add_argument("--statement", help=f"{SETTLE_DAG} only: one line naming what the owner checked (aws_tasks list, the ECS console, CloudTrail)")
     cli.add_argument("--wait-seconds", type=float, required=True, help=f"the deadline of the whole wait, at most {MAX_WAIT_SECONDS} s")
     action = cli.add_mutually_exclusive_group()
     action.add_argument("--status", action="store_true", help="read the state of the run --run-id and change nothing")
@@ -275,17 +248,7 @@ def main(argv: list[str] | None = None) -> int:
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow")}
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
-        settle_fields = (args.launch_run, args.job, args.statement)
-        if args.dag == SETTLE_DAG:
-            if args.silver_snapshot_run is not None or args.gold_snapshot_run is not None:
-                raise TriggerError(f"refused: {SETTLE_DAG} reads no silver or gold snapshot run")
-            conf = settle_conf(args.mode, new_run_id() if args.run_id is None else args.run_id, *settle_fields)
-        elif any(field is not None for field in settle_fields):
-            raise TriggerError(f"refused: --launch-run, --job and --statement belong only to {SETTLE_DAG}")
-        else:
-            conf = run_conf(
-                args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training, args.gold_snapshot_run
-            )
+        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training, args.gold_snapshot_run)
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:

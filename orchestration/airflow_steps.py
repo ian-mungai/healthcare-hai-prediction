@@ -6,19 +6,16 @@ launch. A failed job fails each step, and trying again needs a new run. A contro
 gate launch nothing: the gate binds the code runs of the chain. Signing the first publishes is the owner's manual step, not a gate here. A staged input
 that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
-the library's own evidence or its manual owner path resolves the launch.
+the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``).
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
 (the launch's end record says the job passed).
-The owner ends an unresolved launch with ``python -m orchestration.airflow_steps settle`` in the scheduler container (``Launcher.owner_settle``).
 """
 
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import shutil
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
@@ -260,26 +257,3 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
         found = end.get("outcome") if end is not None else "no end record"
         raise LaunchRefused(f"no successful launch of {job} is recorded for run {request.run_id}: {found}")
     return {"job": job, "run_id": request.run_id, "attempt": claim["attempt"] if claim else None, "task_arn": end.get("task_arn", "")}
-
-
-def settle_launch(run_id: str, job: str, statement: str) -> str:
-    """The owner's settle of an unresolved launch (``Launcher.owner_settle``), with the scheduler's own launch services and role."""
-    outcome = services().launcher.owner_settle(run_id, job, None, statement)
-    return f"{job} of run {run_id}: {outcome.outcome} ({outcome.reason})"
-
-
-def main(argv: list[str] | None = None) -> int:
-    """``python -m orchestration.airflow_steps settle --run <run> --job <job> --statement <what was checked>``, in the Airflow scheduler container."""
-    parser = argparse.ArgumentParser(description="Owner commands of the direct ECS launch path.")
-    commands = parser.add_subparsers(dest="command", required=True)
-    settle = commands.add_parser("settle", help="end an unresolved launch after its window, with the family stopped and a statement of what was checked")
-    settle.add_argument("--run", required=True)
-    settle.add_argument("--job", required=True)
-    settle.add_argument("--statement", required=True, help="what was checked: the ECS console and CloudTrail for the launch's identity")
-    arguments = parser.parse_args(argv)
-    sys.stdout.write(settle_launch(arguments.run, arguments.job, arguments.statement) + "\n")
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

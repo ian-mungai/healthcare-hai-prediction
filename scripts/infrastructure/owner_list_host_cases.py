@@ -113,8 +113,6 @@ def failure_path_checks(step: str) -> dict[str, bool]:
         at("scripts.infrastructure.aws_tasks stop"),
         step.find("scripts.infrastructure.aws_tasks list", at("scripts.infrastructure.aws_tasks stop")),
         at("launch_records_failed/<JOB>/claim.json"),
-        at("trigger_dag --dag launch_settle_dag"),
-        at("launch_records_settled/"),
         at("scripts.infrastructure.host_session stop"),
     ]
     return {
@@ -125,9 +123,10 @@ def failure_path_checks(step: str) -> dict[str, bool]:
         "the settle is bounded and its success is a terminal or absent run": all(
             word in step for word in ("--settle --wait-seconds 600", "--status --wait-seconds 60", "`failed`", "`absent`")
         ),
-        "the launch settle runs only with the family stopped and the window over, and its end record is checked": all(
-            word in step for word in ("--launch-run <RUN_ID> --job <JOB>", "--statement", "10 minutes", "`at`", "end record", "FamilyBusy", "names no job task")
-        ),
+        "an unfinished launch is left to the next run's launch gate, with the window and the family stopped named": all(
+            word in step for word in ("launch gate", "10 minutes", "`at`", "end record", "FamilyBusy", "names no job task")
+        )
+        and "--statement" not in step,
         "the restart hold binds the run to a code run with nothing staged and is recorded": all(
             word in step for word in ("restart hold", "<HOLD_RUN_ID>", "restart_hold.txt", "code_digest_not_staged")
         ),
@@ -195,11 +194,13 @@ def structure_checks(body: str) -> dict[str, bool]:
     checks |= failure_path_checks(steps[failure] if failure >= 0 else "")
     planted = re.sub(r"(?m)^.*trigger_dag .*--settle.*\n", "", steps[failure]) if failure >= 0 else ""
     checks["planted: a failure path without the settle fails the settle order case"] = bool(planted) and not all(failure_path_checks(planted).values())
-    planted = re.sub(r"(?m)^.*--dag launch_settle_dag.*\n", "", steps[failure]) if failure >= 0 else ""
-    checks["planted: a failure path without the launch settle fails its cases"] = bool(planted) and not all(failure_path_checks(planted).values())
+    planted = steps[failure].replace("launch gate", "launch step") if failure >= 0 else ""
+    checks["planted: a failure path that does not leave the launch to the gate fails its cases"] = bool(planted) and not all(
+        failure_path_checks(planted).values()
+    )
     forward_step = index("ssm start-session", "AWS-StartPortForwardingSession")
     checks["a restart hold of an earlier session is settled right after the forward and before any staging"] = forward_step >= 0 and all(
-        word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle", "--dag launch_settle_dag")
+        word in steps[forward_step] for word in ("restart hold", "restart_hold.txt", "--settle", "launch gate")
     )
     trigger = index(*trigger_of("silver"))
     checks["the silver trigger step names the token secret that a local start rotates"] = trigger >= 0 and all(

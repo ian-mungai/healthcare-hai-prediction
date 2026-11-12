@@ -15,10 +15,10 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
 4. One decision record, created with a conditional write, is the authority over sending a RunTask call and closing without a task, and the two exclude
    each other durably. A caller sends only while it holds the send token and closes only by winning the close token (or by handing back its own send token when
    every call it sent was answered, with a version-checked replacement). Once a RunTask call may have been sent, the claim stays unresolved until positive
-   evidence: the task found by identity and settled. No timer and no empty listing proves that nothing started. The call raises LaunchUnavailable and names the
-   manual owner path. RunTask is sent only inside the 10 minute window and never after a cancel request, both checked immediately before every call. The
-   adapter's RunTask client has no SDK retry, so every request that may reach ECS passes that check, and once one request had no answer the uncertainty
-   stays for the life of the launch: a later refusal, capacity answer or end of the window does not clear it.
+   evidence: the task found by identity and settled. No timer and no empty listing proves that nothing started. The call raises LaunchUnavailable and names
+   the automatic settle of the next launch of the family (item 11). RunTask is sent only inside the 10 minute window and never after a cancel request, both
+   checked immediately before every call. The adapter's RunTask client has no SDK retry, so every request that may reach ECS passes that check, and once one
+   request had no answer the uncertainty stays for the life of the launch: a later refusal, capacity answer or end of the window does not clear it.
 5. Reattach: a new attempt joins the live task of the launch and keeps its start time and deadline, only when the bound inputs (code digest, request hash and
    input run) equal those of the launch. Different bound inputs are refused.
 6. The deadline counts from the recorded start of the task and is the recorded one, so it holds across restarts. A recovered task starts when ECS created it,
@@ -38,8 +38,10 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
 11. Family gate (owner, Nov 7 2026): the host keeps one scratch folder per family, which the first container of the task empties. Before a new run claims
    a launch, it is refused (``FamilyBusy``, nothing claimed, so the run can launch later) while ECS lists a task of the family's host definition that it
    does not show STOPPED (running, pending or stopping) or while a run in the write-once family index has a claimed attempt without an end record. A
-   listing that fails refuses too. An unresolved launch is ended by the owner's settle (``owner_settle``), which needs the window over, the family
-   stopped and the owner's statement of what was checked.
+   listing that fails refuses too. An unfinished launch is settled by the gate itself (``auto_settle``, automatic launch recovery, owner Nov 11 2026): it
+   cancels first, which ends the launch whenever its task is found; without a task it needs the send window over with the cancel recorded and every task of
+   the family's host definition STOPPED, and it records that machine evidence in the ``failed_closed`` end record. Any failed check refuses the new run
+   with the reason. No statement of the owner and no wait beyond the bounded ones.
 12. Checked revision (owner A, Nov 10 2026): a request names the ARN of the revision of the job's host definition that the preflight checked against the
    current host capacity (``JobSpec.task_definition``). A request without one is refused before any record, and RunTask names that revision, never the
    family, so ECS cannot substitute a later latest revision.
@@ -97,7 +99,6 @@ DENIED_CODES = frozenset({"AccessDenied", "Forbidden", "403"})
 CONFIG_FILE = Path(__file__).resolve().parents[1] / "config" / "orchestration" / "ecs_launch.json"
 PREFIX_PATTERN = re.compile(r"[a-z0-9_]+(/[a-z0-9_]+)*")
 REPORT_LIMIT = 300
-OWNER_STATEMENT_MIN = 20
 RETRYABLE_CODES = frozenset({"SlowDown", "ServiceUnavailable", "InternalError", "RequestTimeout", "ConditionalRequestConflict", "ThrottlingException"})
 LIVE = ("pending", "running")
 ENDED = ("succeeded", "failed")  # the states of a task shown STOPPED
@@ -708,9 +709,10 @@ class Launcher:
         """Refuse a new launch, before its claim, while another launch of the family may use the family's host scratch folder (owner, Nov 7 2026): while
         ECS lists a task of the family's host definition that it does not show STOPPED (running, pending or stopping), or while a run in the family index
         has a claimed attempt with no end record (an index entry
-        with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. Two runs that pass this gate at the same moment
-        are kept apart by the one-slot Airflow pool of host jobs, which runs one launching step at a time. The run is not claimed, so it launches once the
-        earlier launch is settled (its own step run again, or the owner path)."""
+        with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. A claimed launch with no end record is settled
+        here (``auto_settle``) and the gate goes on when that ends it; a refused settle refuses the run with its reason. Two runs that pass this gate at the
+        same moment are kept apart by the one-slot Airflow pool of host jobs and, when they both settle the same launch, by the write-once end record. The
+        run is not claimed, so it launches once the earlier launch is settled."""
         definition = self.adapter.definition(spec.job, HOST)
         busy = self.unstopped_tasks(definition, "nothing was claimed")
         if busy:
@@ -723,10 +725,10 @@ class Launcher:
                 continue
             claim = self.store.run_record(run, spec.job, "claim")
             if claim is not None and "end" not in self.events(run, spec.job, int(claim["attempt"])):
-                raise FamilyBusy(
-                    f"the {spec.job} launch of run {run} (attempt {claim['attempt']}) has no end record, so its task may still use the family's scratch "
-                    f"folder. Settle that launch first (run its step again so it reattaches, or the owner path); run {spec.run_id} was not claimed"
-                )
+                try:
+                    self.auto_settle(run, spec.job)
+                except FamilyBusy as error:
+                    raise FamilyBusy(f"{error}; run {spec.run_id} was not claimed") from None
 
     def admit(self, launch: Launch) -> bool:
         """Claim the one launch of the run and job with a conditional create, the single step that lets a caller start a task. Returns False when another
@@ -877,15 +879,13 @@ class Launcher:
             self.send_check(need)
 
     def unresolved(self, claim: Mapping[str, Any], prefix: str = "") -> LaunchUnavailable:
-        """The launch may have a task that has not been found. Nothing closes it and nothing else starts. The owner resolves it by hand."""
+        """The launch may have a task that has not been found. Nothing closes it and nothing else starts until the next launch of the family settles it."""
         key = f"{claim['run_id']}:{claim['job']}:{claim['attempt']}"
         return LaunchUnavailable(
             f"{prefix}A RunTask call may have been sent for attempt {claim['attempt']} of {claim['job']} in run {claim['run_id']} and no task has been "
-            f"found, so the launch stays unresolved and nothing else will start. Manual owner path: stop every sender of this launch, inspect ECS for "
-            f"the tasks started by {self.adapter.identity(key)} (the client token is the SHA-256 of {key}) and CloudTrail for its RunTask calls, check "
-            "the job's evidence in the bucket, then settle the launch after its send window: in the Airflow scheduler container, "
-            f"python -m orchestration.airflow_steps settle --run {claim['run_id']} --job {claim['job']} --statement '<what you checked>'. The settle "
-            "records a cancel and a failed_closed end, so the family admits a new run."
+            f"found, so the launch stays unresolved and nothing else will start. The next launch of the family settles it by itself once its send window "
+            f"is over and every task of the family shows STOPPED, and records a cancel and a failed_closed end. The task, if one exists, carries the tag "
+            f"{self.adapter.identity(key)} (the client token is the SHA-256 of {key})."
         )
 
     def win_send(self, launch: Launch, claim: Mapping[str, Any]) -> bool:
@@ -1049,36 +1049,40 @@ class Launcher:
         self.wait(launch)
         return self.conclude(launch)
 
-    def owner_settle(self, run_id: str, job: str, attempt: int | None, statement: str) -> Outcome:
-        """The owner's path for a launch that stays unresolved (round 2 review, M7). It first cancels, which settles the launch whenever its task is found.
-        When none is found, it ends the launch durably only with three pieces of evidence: the send window is over and the cancel is recorded, so no
-        sender of the launch may send again (the guard checks both immediately before every RunTask call); ECS shows every task of the family's host
-        definition STOPPED; and the owner states what was checked (the ECS console and CloudTrail for the launch's identity). The claim then gets a
-        ``failed_closed`` end record, so every later caller reports it and the family admits a new run."""
-        if len(statement.strip()) < OWNER_STATEMENT_MIN:
-            raise LaunchRefused(f"name what was checked (at least {OWNER_STATEMENT_MIN} characters): the settle ends a launch on the owner's evidence")
+    def auto_settle(self, run_id: str, job: str) -> Outcome:
+        """Settle a launch that has no end record, with no statement of the owner (automatic launch recovery). It first cancels,
+        which settles the launch whenever its task is found. When none is found, it ends the launch durably only with three pieces of machine evidence: the
+        send window is over and the cancel is recorded, so no sender of the launch may send again (the guard checks both immediately before every RunTask
+        call); and ECS lists no task of the family's host definition that is not STOPPED. The claim then gets a ``failed_closed`` end record that holds
+        that evidence, so every later caller reports it and the family admits a new run. A repeat, or a second caller at the same moment, reads the one
+        end record, because every record is write-once. A failed check raises ``FamilyBusy`` with its reason and records nothing but the cancel."""
         claim = self.store.run_record(run_id, job, "claim")
         if claim is None:
             raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
-        attempt = int(claim["attempt"]) if attempt is None else attempt
+        attempt = int(claim["attempt"])
+        who = f"the {job} launch of run {run_id} (attempt {attempt}) has no end record and was not settled"
         try:
-            return self.cancel(run_id, job, attempt, reason=f"owner settle: {statement}")
+            return self.cancel(run_id, job, attempt, reason="automatic settle")
         except LaunchUnavailable:
-            if "started" in self.events(run_id, job, int(claim["attempt"])):
-                raise  # the launch's task is known: only its confirmed stop ends the launch, never a statement
+            if "started" in self.events(run_id, job, attempt):
+                raise  # the launch's task is known: only its confirmed stop ends the launch, never a window
 
         window_end = stamp(claim["at"]) + FIT_WAIT_SECONDS
         if self.clock.wall() < window_end:
-            raise LaunchUnavailable(
-                f"the send window of {job} in run {run_id} is open until {iso(window_end)}: a sender may still send. The cancel is recorded, so none will "
-                "after its next check; settle again after the window"
+            raise FamilyBusy(
+                f"{who}: its send window is open until {iso(window_end)} and a sender may still send. The cancel is recorded, so none will after its next "
+                "check; the run launches once the window is over"
             )
         definition = self.adapter.definition(job, HOST)
         busy = self.unstopped_tasks(definition, "nothing was settled")
         if busy:
-            raise FamilyBusy(f"a task of {definition} has not stopped ({busy[0]}): stop it and wait until ECS shows it STOPPED, then settle again")
-        end = self.finalize(claim, claim["attempt"], attempt, "failed_closed", CLOSED_EXIT, f"owner_settled: {statement}"[:REPORT_LIMIT], "")
-        return outcome_of(end, adopted=attempt != claim["attempt"])
+            raise FamilyBusy(f"{who}: a task of {definition} has not stopped ({busy[0]}); the run launches once ECS shows it STOPPED")
+        cancelled = self.store.run_record(run_id, job, "cancel")
+        if cancelled is None:
+            raise LaunchError(f"the cancel record of {job} in run {run_id} is missing after the cancel")
+        proof = f"auto_settled: send window ended {iso(window_end)}; cancel recorded {cancelled['at']}; {definition} lists no task that is not STOPPED"
+        end = self.finalize(claim, attempt, attempt, "failed_closed", CLOSED_EXIT, proof[:REPORT_LIMIT], "")
+        return outcome_of(end)
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:
         """Cancel the run and job's launch. A durable cancel request comes first, so a sender that holds the send token sees it before every RunTask call and

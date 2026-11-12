@@ -22,6 +22,7 @@ from botocore.exceptions import ReadTimeoutError
 
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
 from orchestration.ecs_launch import (
+    FIT_WAIT_SECONDS,
     CleanupFailed,
     EcsFitProbe,
     FamilyBusy,
@@ -36,6 +37,7 @@ from orchestration.ecs_launch import (
     StopFailed,
     iso,
     launch_record_prefix,
+    stamp,
 )
 from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeLogs, SdkStub, client_error
 from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
@@ -225,8 +227,8 @@ def aged_recovery_never_replays_runtask() -> None:
     runs = rig.ecs.count("run_task")
     error = refuses(LaunchUnavailable, partial(rig.launcher().run, spec(2)))
     require(
-        "Manual owner path" in str(error) and "orchestration.airflow_steps settle" in str(error) and "admits a new run" in str(error),
-        f"the message names the manual owner path and its settle command: {error}",
+        "next launch of the family settles it" in str(error) and "owner" not in str(error),
+        f"the message names the automatic settle: {error}",
     )
     require(rig.ecs.count("run_task") == runs and len(gold_tasks(rig)) == 1, "no RunTask is repeated after the window, the token life and what ECS remembers")
     require("end" not in rig.events(1), "the unresolved launch is not closed, however old it is")
@@ -1326,25 +1328,140 @@ def family_busy_while_a_task_of_the_family_runs() -> None:
     require(done.ok and claim_of(rig, OTHER_RUN), f"the refused run did not launch once the family was free: {done}")
 
 
-def family_busy_while_an_earlier_launch_has_no_end() -> None:
-    """A claimed launch of the family that has no end record may still have a task the cloud does not show (a lost reply, a failed read): the family stays
-    closed until that launch is settled, even when ECS lists no running task."""
+def stopped_task_found_and_ended() -> None:
+    """A claimed launch of the family that has no end record may have a task the records do not show (a lost reply on the started record). When a new run
+    of the family meets it, the gate settles it first: the cancel finds the stopped task by identity, ends the launch, and the new run launches. No wait."""
     rig = Rig()
-    rig.ecs.forget_stopped_tokens = True
     rig.ecs.hold = True
     rig.bucket.put_faults["started.json"] = [ReadTimeoutError(endpoint_url="https://s3.invalid")]
     refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
-    require(family_key(RUN) in rig.bucket.objects, "the claimed launch is not in the family index")
+    require(family_key(RUN) in rig.bucket.objects and "end" not in rig.events(1), "the claimed launch is not unfinished")
     for arn in gold_tasks(rig):
         rig.ecs.finish(arn)
     rig.ecs.hold = False
-    rig.ecs.faults["list_tasks"] = []
-    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=OTHER_RUN)))
-    require(RUN in str(error) and "no end record" in str(error), f"the refusal names the unsettled launch: {error}")
-    require(not claim_of(rig, OTHER_RUN), "the refused run was claimed")
-    rig.time.now += 300
-    settled = rig.launcher().run(spec(2))
-    require(settled.outcome is not None and rig.launcher().run(spec(1, run_id=OTHER_RUN)).ok, "after the earlier launch is settled the next run launches")
+    done = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(done.ok and claim_of(rig, OTHER_RUN), f"the new run was not admitted after the stopped task of the unfinished launch was found: {done}")
+    ended = rig.record(1, "end")
+    require(ended["outcome"] == "cancelled" and ended["task_arn"] in rig.ecs.tasks, f"the unfinished launch did not end with its task: {ended}")
+
+
+def open_window_gold(rig: Rig) -> None:
+    """A launch whose sender holds the send token with no task and is interrupted inside its send window, as a restarted scheduler leaves it."""
+    rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")]
+    launcher = rig.launcher()
+    launch = launcher.attach(spec())
+    rig.time.on_sleep = lambda now: (_ for _ in ()).throw(Interrupted())
+    with contextlib.suppress(Interrupted):
+        launcher.start(launch)
+    rig.time.on_sleep = None
+    require(
+        not gold_tasks(rig) and rig.decision_key() in rig.bucket.objects and "end" not in rig.events(1),
+        "the stand-in sender did not hold the send token without a task",
+    )
+
+
+def refused_gate(rig: Rig, run: str = OTHER_RUN) -> BaseException:
+    """The new run's launch, refused at the gate with nothing claimed or started."""
+    sent = rig.ecs.count("run_task")
+    error = refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=run)))
+    require(not claim_of(rig, run) and family_key(run) not in rig.bucket.objects, "the refused run was claimed or indexed, so it is burned")
+    require(rig.ecs.count("run_task") == sent, "a task started beside the unfinished launch")
+    return error
+
+
+def settle_refused_while_the_send_window_is_open() -> None:
+    """No task is found and the send window of the unfinished launch is open: a sender may still send, so the new run is refused with the reason. The cancel
+    is recorded, so no sender sends after its next check, and the launch has no end record yet."""
+    rig = Rig()
+    open_window_gold(rig)
+    error = refused_gate(rig)
+    require(RUN in str(error) and "send window" in str(error) and "was not claimed" in str(error), f"the refusal does not name the open window: {error}")
+    require(rig.claim_key() in rig.bucket.objects and f"{PREFIX}/{RUN}/gold/cancel.json" in rig.bucket.objects, "the cancel request was not recorded")
+    require("end" not in rig.events(1), "the launch ended inside its send window")
+
+
+def settle_refused_while_a_family_task_is_not_stopped() -> None:
+    """The send window is over, but a task of the family's host definition does not show STOPPED: the new run is refused, and the settle itself refuses to end
+    a launch beside such a task when it lists the family again."""
+    rig = Rig()
+    unresolved_gold(rig)
+    rig.time.now += 700
+    rig.ecs.hold = True
+    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
+    error = refused_gate(rig)
+    require(other in str(error) and "end" not in rig.events(1), f"the launch ended beside an unstopped task: {error}")
+    error = refuses(FamilyBusy, lambda: rig.launcher().auto_settle(RUN, "gold"))
+    require(other in str(error) and "end" not in rig.events(1), f"the settle ended a launch beside an unstopped task: {error}")
+
+
+def settle_ends_the_launch_after_the_window_and_the_new_run_proceeds() -> None:
+    """No task is found, the window is over, the cancel is recorded and every task of the family shows STOPPED: the gate ends the unfinished launch with a
+    failed_closed record that holds the machine evidence, every later caller of that run reports it, and the new run launches."""
+    rig = Rig()
+    open_window_gold(rig)
+    refused_gate(rig)
+    rig.time.now += 700
+    sent = rig.ecs.count("run_task")
+    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(fresh.ok and claim_of(rig, OTHER_RUN) and rig.ecs.count("run_task") == sent + 1, f"the new run was not admitted after the settle: {fresh}")
+    ended = rig.record(1, "end")
+    require(ended["outcome"] == "failed_closed" and ended["reason"].startswith("auto_settled:"), f"the launch has no automatic end record: {ended}")
+    evidence = json.loads(rig.bucket.objects[f"{PREFIX}/{RUN}/gold/cancel.json"])["at"]
+    window_end = iso(stamp(json.loads(rig.bucket.objects[rig.claim_key()])["at"]) + FIT_WAIT_SECONDS)
+    require(
+        all(word in ended["reason"] for word in (window_end, evidence, "example_dev_job_gold_host")) and "owner" not in ended["reason"],
+        f"the end record does not hold the window end, the cancel record and the family listing: {ended['reason']}",
+    )
+    again = rig.launcher().run(spec(3))
+    require(
+        again.outcome == "failed_closed" and again.adopted and rig.ecs.count("run_task") == sent + 1,
+        f"a later caller of the settled run launched: {again}",
+    )
+
+
+def repeated_settle_is_idempotent() -> None:
+    """A second settle of an ended launch returns the recorded outcome and writes nothing."""
+    rig = Rig()
+    unresolved_gold(rig)
+    rig.time.now += 700
+    first = rig.launcher().auto_settle(RUN, "gold")
+    require(first.outcome == "failed_closed", f"the settle did not end the launch: {first}")
+    stored = dict(rig.bucket.objects)
+    second = rig.launcher().auto_settle(RUN, "gold")
+    require(second == first and dict(rig.bucket.objects) == stored, f"a repeated settle changed the records or the outcome: {second}")
+    require(
+        rig.launcher().run(spec(1, run_id=OTHER_RUN)).ok
+        and dict(rig.bucket.objects)[f"{PREFIX}/{RUN}/gold/01/end.json"] == stored[f"{PREFIX}/{RUN}/gold/01/end.json"],
+        "a new launch changed the settled records",
+    )
+
+
+def two_new_launches_settle_at_most_once() -> None:
+    """Two new runs of the family meet the same unfinished launch. The second starts its gate while the first writes the end record: the end record is
+    write-once, so one end stands, the other caller reads it, and both gates pass."""
+    rig = Rig()
+    unresolved_gold(rig)
+    rig.time.now += 700
+    end_key = f"{PREFIX}/{RUN}/gold/01/end.json"
+    seen: dict[str, Any] = {}
+
+    def second_gate_runs_first(key: str) -> None:
+        if key == end_key and "second" not in seen:
+            rig.bucket.write_hook = None
+            rig.launcher().require_family_free(spec(1, run_id=THIRD_RUN))
+            seen["second"] = True
+            seen["written"] = dict(json.loads(rig.bucket.objects[end_key]))
+
+    rig.bucket.write_hook = second_gate_runs_first
+    first = rig.launcher().run(spec(1, run_id=OTHER_RUN))
+    require(first.ok and "second" in seen, f"the first new run was not admitted, or the second gate never ran: {first}")
+    ends = [key for key in rig.bucket.objects if key.startswith(f"{PREFIX}/{RUN}/gold/") and key.endswith("/end.json")]
+    require(ends == [end_key] and json.loads(rig.bucket.objects[end_key]) == seen["written"], f"the launch was settled more than once: {ends}")
+    require(
+        sum(1 for key in rig.bucket.objects if key.startswith(f"{PREFIX}/{RUN}/gold/") and key.endswith("/cancel.json")) == 1, "more than one cancel record"
+    )
+    third = rig.launcher().run(spec(1, run_id=THIRD_RUN))
+    require(third.ok, f"the second new run was not admitted after the first finished: {third}")
 
 
 def family_gate_reads_or_refuses() -> None:
@@ -1430,52 +1547,11 @@ def unresolved_gold(rig: Rig) -> None:
     unresolved after its window."""
     rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")] * 200
     error = refuses(LaunchUnavailable, lambda: rig.launcher().run(spec()))
-    require("Manual owner path" in str(error) and "settle" in str(error), f"the unresolved launch does not name the owner's settle path: {error}")
+    require(
+        "next launch of the family settles it" in str(error) and "owner" not in str(error), f"the unresolved launch does not name the automatic settle: {error}"
+    )
     rig.ecs.faults["run_task"] = []
     require(not gold_tasks(rig) and "end" not in rig.events(1), "the stand-in launch is not unresolved")
-
-
-def owner_settles_an_unresolved_launch_and_admits_a_new_run() -> None:
-    """The owner path ends an unresolved launch durably (review M7): after the send window, with no task of the family that has not stopped, and with the
-    owner's statement of what was checked, the claim gets a failed_closed end record, every later caller reports it, and a new run of the family launches."""
-    rig = Rig()
-    unresolved_gold(rig)
-    refuses(FamilyBusy, lambda: rig.launcher().run(spec(1, run_id=OTHER_RUN)))
-    refuses(LaunchRefused, lambda: rig.launcher().owner_settle(RUN, "gold", 2, "checked"))
-    require("end" not in rig.events(1), "a settle without a statement of what was checked ended the launch")
-    statement = "ECS console and CloudTrail show no RunTask of this identity created a task"
-    settled = rig.launcher().owner_settle(RUN, "gold", 2, statement)
-    require(settled.outcome == "failed_closed" and settled.reason.startswith("owner_settled:"), f"the settle did not end the launch: {settled}")
-    require(rig.record(1, "end")["outcome"] == "failed_closed" and f"{PREFIX}/{RUN}/gold/cancel.json" in rig.bucket.objects, "no durable end or cancel")
-    sent = rig.ecs.count("run_task")
-    again = rig.launcher().run(spec(3))
-    require(
-        again.outcome == "failed_closed" and rig.ecs.count("run_task") == sent and not gold_tasks(rig), f"a later caller of the settled run launched: {again}"
-    )
-    fresh = rig.launcher().run(spec(1, run_id=OTHER_RUN))
-    require(fresh.ok, f"a new run of the family was not admitted after the settle: {fresh}")
-
-
-def owner_settle_needs_the_family_stopped_and_the_window_over() -> None:
-    """The settle never ends a launch while a task of the family has not stopped, or while a sender of the launch may still send."""
-    rig = Rig()
-    unresolved_gold(rig)
-    rig.ecs.hold = True
-    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
-    statement = "ECS console and CloudTrail show no RunTask of this identity created a task"
-    error = refuses(FamilyBusy, lambda: rig.launcher().owner_settle(RUN, "gold", 2, statement))
-    require(other in str(error) and "end" not in rig.events(1), f"the settle ended a launch beside an unstopped task of the family: {error}")
-    rig = Rig()
-    rig.ecs.faults["run_task"] = [ReadTimeoutError(endpoint_url="https://ecs.invalid")]
-    launcher = rig.launcher()
-    launch = launcher.attach(spec())
-    rig.time.on_sleep = lambda now: (_ for _ in ()).throw(Interrupted())
-    with contextlib.suppress(Interrupted):
-        launcher.start(launch)
-    rig.time.on_sleep = None
-    require(not gold_tasks(rig) and rig.decision_key() in rig.bucket.objects, "the stand-in sender did not hold the send token without a task")
-    error = refuses(LaunchUnavailable, lambda: rig.launcher().owner_settle(RUN, "gold", 2, statement))
-    require("window" in str(error) and "end" not in rig.events(1), f"the settle ended a launch whose sender may still send: {error}")
 
 
 GIB = 2**30
@@ -1513,10 +1589,13 @@ CASES: dict[str, Callable[[], None]] = {
     "fit_without_a_usage_reader_counts_free_space_only": fit_without_a_usage_reader_counts_free_space_only,
     "family_busy_while_a_task_of_the_family_is_stopping": family_busy_while_a_task_of_the_family_is_stopping,
     "family_index_write_with_a_lost_reply": family_index_write_with_a_lost_reply,
-    "owner_settles_an_unresolved_launch_and_admits_a_new_run": owner_settles_an_unresolved_launch_and_admits_a_new_run,
-    "owner_settle_needs_the_family_stopped_and_the_window_over": owner_settle_needs_the_family_stopped_and_the_window_over,
+    "stopped_task_found_and_ended": stopped_task_found_and_ended,
+    "settle_refused_while_the_send_window_is_open": settle_refused_while_the_send_window_is_open,
+    "settle_refused_while_a_family_task_is_not_stopped": settle_refused_while_a_family_task_is_not_stopped,
+    "settle_ends_the_launch_after_the_window_and_the_new_run_proceeds": settle_ends_the_launch_after_the_window_and_the_new_run_proceeds,
+    "repeated_settle_is_idempotent": repeated_settle_is_idempotent,
+    "two_new_launches_settle_at_most_once": two_new_launches_settle_at_most_once,
     "family_busy_while_a_task_of_the_family_runs": family_busy_while_a_task_of_the_family_runs,
-    "family_busy_while_an_earlier_launch_has_no_end": family_busy_while_an_earlier_launch_has_no_end,
     "family_gate_reads_or_refuses": family_gate_reads_or_refuses,
     "family_gate_spares_other_families_and_its_own_run": family_gate_spares_other_families_and_its_own_run,
     "no_terminal_outcome_while_a_launch_may_be_live": no_terminal_outcome_while_a_launch_may_be_live,
