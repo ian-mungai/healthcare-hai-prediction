@@ -40,7 +40,8 @@ operator can use them as hooks (``attach``, ``start``, ``wait``, ``conclude``) a
    does not show STOPPED (running, pending or stopping) or while a run in the write-once family index has a claimed attempt without an end record. A
    listing that fails refuses too. An unfinished launch is settled by the gate itself (``auto_settle``, automatic launch recovery, owner Nov 11 2026): it
    cancels, which ends the launch only with proof: its task is found by identity and its stop is confirmed, or no RunTask call was ever sent. A launch whose
-   call may have been sent and whose task is not found stays unresolved, and the new run is refused with the reason: no timer, no send window and no empty
+   call may have been sent and whose task is not found, and a launch whose saved task ECS no longer describes, stay unresolved, and the new run is refused with
+   the old run, job, attempt, task identity and saved ARN: no timer, no send window and no empty
    listing ends it, because ECS lists a new task late and a request that passed its guard may still be in flight. No statement of the owner ends it either.
 12. Checked revision (owner A, Nov 10 2026): a request names the ARN of the revision of the job's host definition that the preflight checked against the
    current host capacity (``JobSpec.task_definition``). A request without one is refused before any record, and RunTask names that revision, never the
@@ -1053,25 +1054,31 @@ class Launcher:
     def auto_settle(self, run_id: str, job: str) -> Outcome:
         """Settle a launch that has no end record, with no statement of the owner (automatic launch recovery). It cancels: the cancel request is recorded, so no
         sender of the launch sends after its next check, and the launch ends only with proof about its task: the task is found by identity and its stop is
-        confirmed (``cancelled``), or no RunTask call was ever sent and the close token is won (``cancelled`` without a task). A launch whose RunTask call may
-        have been sent and whose task is not found stays unresolved and raises ``FamilyBusy``: the end of the send window and an empty family listing prove
-        nothing, because ECS lists a new task late and a request that passed its guard may still be in flight. A repeat, or a second caller at the same
-        moment, reads the one end record, because every record is write-once."""
+        confirmed (``cancelled``), or no RunTask call was ever sent and the close token is won (``cancelled`` without a task). Otherwise the launch stays
+        unresolved and this raises ``FamilyBusy`` with the launch's run, job, attempt and task identity: when a saved task's stop cannot be confirmed (ECS does
+        not describe it, or the stop is not confirmed in time) the message also holds the saved ARN, and when a RunTask call may have been sent and no task is
+        found the end of the send window and an empty family listing prove nothing, because ECS lists a new task late and a request that passed its guard may
+        still be in flight. A repeat, or a second caller at the same moment, reads the one end record, because every record is write-once."""
         claim = self.store.run_record(run_id, job, "claim")
         if claim is None:
             raise LaunchRefused(f"no launch of {job} in run {run_id}: nothing to settle")
         attempt = int(claim["attempt"])
+        key = f"{run_id}:{job}:{attempt}"
+        who = f"the {job} launch of run {run_id} (attempt {attempt}) has no end record and was not settled"
         try:
             return self.cancel(run_id, job, attempt, reason="automatic settle")
-        except LaunchUnavailable:
-            if "started" in self.events(run_id, job, attempt):
-                raise  # the launch's task is known: only its confirmed stop ends the launch
-        key = f"{run_id}:{job}:{attempt}"
+        except (LaunchUnavailable, StopFailed) as error:
+            started = self.events(run_id, job, attempt).get("started")
+            if started is not None:
+                raise FamilyBusy(
+                    f"{who}: its task {started['task_arn']} (identity {self.adapter.identity(key)}) is saved in the launch records and its stop could not be "
+                    f"confirmed ({error}). The cancel is recorded. The run launches once ECS describes that task STOPPED, which the next launch of the family "
+                    "then records"
+                ) from None
         raise FamilyBusy(
-            f"the {job} launch of run {run_id} (attempt {attempt}) has no end record and was not settled: a RunTask call may have been sent and no task of it "
-            f"is found, and neither the end of its send window nor an empty listing proves that none exists. The cancel is recorded, so no sender sends again "
-            f"after its next check. The run launches once ECS lists that task, which the next launch of the family then stops and records. The task carries "
-            f"the tag {self.adapter.identity(key)}"
+            f"{who}: a RunTask call may have been sent and no task of it is found, and neither the end of its send window nor an empty listing proves that "
+            f"none exists. The cancel is recorded, so no sender sends again after its next check. The run launches once ECS lists that task, which the next "
+            f"launch of the family then stops and records. The task carries the tag {self.adapter.identity(key)}"
         )
 
     def cancel(self, run_id: str, job: str, attempt: int, reason: str = "cancel") -> Outcome:

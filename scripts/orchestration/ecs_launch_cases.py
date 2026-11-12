@@ -1377,7 +1377,7 @@ def refused_gate(rig: Rig, run: str = OTHER_RUN) -> BaseException:
     except FamilyBusy as busy:
         error: BaseException = busy
     except Exception as other:
-        raise AssertionError(f"the gate admitted the new run beside the unfinished launch ({other!r})") from None
+        raise AssertionError(f"the gate did not refuse the new run with FamilyBusy, it raised {other!r}") from None
     else:
         raise AssertionError("the gate admitted the new run beside the unfinished launch, and it finished")
     require(not claim_of(rig, run) and family_key(run) not in rig.bucket.objects, "the refused run was claimed or indexed, so it is burned")
@@ -1502,6 +1502,43 @@ def hidden_task_never_admits_a_new_run() -> None:
     require(
         fresh.ok and ended["outcome"] == "cancelled" and ended["task_arn"] == old, f"the stopped task was not found and recorded before the new run: {ended}"
     )
+
+
+def names_the_blocking_launch(rig: Rig, error: BaseException, arn: str) -> None:
+    """The refusal carries what an operator needs to find the old launch: its run, job and attempt, the saved task ARN and the task identity."""
+    tag = rig.adapter.identity(f"{RUN}:gold:1")
+    missing = [part for part in (RUN, "gold", "attempt 1", arn, tag) if part not in str(error)]
+    require(not missing, f"the refusal does not name {missing}: {error}")
+
+
+def saved_task_that_ecs_forgot_blocks_the_gate_with_its_identity() -> None:
+    """A launch saved its started record and its sender died. The task stopped and ECS no longer describes it (3,601 s after STOPPED, a boundary the service
+    permits). The stop cannot be confirmed, so no end record is written, and the gate refuses every new run, at any age, with the launch's identity."""
+    rig = Rig()
+    rig.ecs.hold = True
+    arn = die_while_running(rig, spec())
+    rig.ecs.finish(arn)
+    rig.ecs.purge_after = 3600.0
+    rig.time.now += 3601
+    for elapsed in (0, 24 * 3600):
+        rig.time.now += elapsed
+        error = refused_gate(rig)
+        names_the_blocking_launch(rig, error, arn)
+        require("end" not in rig.events(1) and rig.events(1) == ["intent", "started"], f"a launch with a task ECS forgot was closed: {rig.events(1)}")
+
+
+def saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity() -> None:
+    """A launch saved its started record and its sender died. ECS never describes the task, so its stop is never confirmed: the gate refuses every new run,
+    at any age, with the launch's identity, and writes no end record."""
+    rig = Rig()
+    rig.ecs.hold = True
+    rig.ecs.visible_delay = float("inf")
+    arn = die_while_running(rig, spec())
+    for elapsed in (700, 24 * 3600):
+        rig.time.now += elapsed
+        error = refused_gate(rig)
+        names_the_blocking_launch(rig, error, arn)
+        require("end" not in rig.events(1) and rig.ecs.count("stop_task") >= 1, f"the launch was closed without a confirmed stop: {rig.events(1)}")
 
 
 def late_send_never_admits_a_new_run() -> None:
@@ -1683,6 +1720,8 @@ CASES: dict[str, Callable[[], None]] = {
     "settle_is_idempotent_when_the_task_is_found": settle_is_idempotent_when_the_task_is_found,
     "hidden_task_never_admits_a_new_run": hidden_task_never_admits_a_new_run,
     "late_send_never_admits_a_new_run": late_send_never_admits_a_new_run,
+    "saved_task_that_ecs_forgot_blocks_the_gate_with_its_identity": saved_task_that_ecs_forgot_blocks_the_gate_with_its_identity,
+    "saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity": saved_task_with_an_endless_listing_delay_blocks_the_gate_with_its_identity,
     "two_new_launches_settle_at_most_once": two_new_launches_settle_at_most_once,
     "family_busy_while_a_task_of_the_family_runs": family_busy_while_a_task_of_the_family_runs,
     "family_gate_reads_or_refuses": family_gate_reads_or_refuses,

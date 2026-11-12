@@ -124,7 +124,8 @@ def failure_path_checks(step: str) -> dict[str, bool]:
             word in step for word in ("--settle --wait-seconds 600", "--status --wait-seconds 60", "`failed`", "`absent`")
         ),
         "an unfinished launch is left to the next run's launch gate, which ends it only when its task is found, and an unfound task goes to the owner": all(
-            word in step for word in ("launch gate", "10 minutes", "`at`", "end record", "FamilyBusy", "names no job task", "ask the owner")
+            word in step
+            for word in ("launch gate", "10 minutes", "`at`", "end record", "FamilyBusy", "names no job task", "ask the owner", "`started.json`", "task ARN")
         )
         and "--statement" not in step,
         "the restart hold binds the run to a code run with nothing staged and is recorded": all(
