@@ -38,6 +38,12 @@ def refused(relative: str) -> bool:
     return "private_original" in parts or name == ".env" or name.startswith(".env.") or name.endswith(".tfvars.json") or name.startswith("terraform.tfstate")
 
 
+def holds_config(relative: str) -> bool:
+    """A path with a mirror folder directly above a config folder, at any depth and in any letter case."""
+    parts = [part.casefold() for part in PurePosixPath(relative).parts]
+    return ("mirror", "config") in zip(parts, parts[1:], strict=False)
+
+
 def archive_bytes(entries: dict[str, bytes]) -> bytes:
     """Fixed order, owners, modes and times, and a gzip header with no time, so the same inputs give the same bytes."""
     buffer = io.BytesIO()
@@ -70,7 +76,7 @@ def build(
     entries: dict[str, bytes] = {}
     for path in sorted(mirror_output.rglob("*")):
         name = path.relative_to(mirror_output).as_posix()
-        if PurePosixPath(name).parts[:2] == ("mirror", "config"):
+        if holds_config(name):
             raise StageError("The mirror output holds config, which the publisher reads from the code root, so the stage is refused.")
         if path.is_symlink() or (not path.is_file() and not path.is_dir()):
             raise StageError("The mirror output holds a file that is not plain, so the stage is refused.")
