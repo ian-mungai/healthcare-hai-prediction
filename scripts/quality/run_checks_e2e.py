@@ -76,9 +76,10 @@ ENV_VALUE = "acme" + "-admin-profile"
 # The AWS CLI profile name of this project, a local label that .privacy_allowlist names for its one tracked file.
 PROFILE_LABEL = "healthcare_hai" + "_prediction_dev"
 PROFILE_FILE = "scripts/deploy.sh"
-# The analytics container user's home is the one exact home path the scan exempts. Near variants are built beside it, so this file holds no home
-# path the scan would flag. The old OpenMetadata admin address is built too: it is flagged like any other real-domain address.
-ANALYTICS_HOME = "/ho" + "me/analytics"
+# The scan exempts no home path, not even the one the analytics image user once had. The paths are built here, so this file holds none the scan would
+# flag. The old OpenMetadata admin address and the look-alike reserved domains are built too: each is flagged like any other real-domain address.
+LINUX_HOME = "/ho" + "me/"
+OLD_ANALYTICS_HOME = LINUX_HOME + "analytics"
 OLD_OPENMETADATA_LOGIN = "admin" + "@" + "open-metadata.org"
 PROJECT_NAME = "acme" + "-analytics"
 # No privacy finding may print the value it found.
@@ -1301,49 +1302,56 @@ def account_conditional(first: str, second: str) -> str:
 
 
 HOME_REASON = "notes.md:1: home-directory path with a user name"
+EMAIL_REASON = "notes.md:1: email address"
 
 
-def exact_value_cases() -> list[Case]:
-    """Cases for the one exact home path: only the whole home component passes; every near variant is flagged.
-
-    Unicode characters and encoded dots are written as escapes, so this file holds none of the variants it plants.
-    """
-    home = ANALYTICS_HOME
-    accent, joiner, cyrillic_i = "\u00e9", "\u200d", "\u0456"
-    passing = {
-        "analytics home at the end of a line": f"The home is {home}",
-        "analytics home before a sentence-final period": f"The home is {home}.",
-        "analytics home in parentheses": f"The home ({home}) is private.",
-        "analytics home in a mount": f"./data/ui:{home}/.duckdb/ui:ro",
-        "analytics home in quotes": f"'{home}/extensions.csv'",
+def home_path_cases() -> list[Case]:
+    """Cases for home paths: no home is exempt, so the old analytics home is flagged in every position it once passed in."""
+    home = OLD_ANALYTICS_HOME
+    flagged = {
+        "old analytics home at the end of a line": f"The home is {home}",
+        "old analytics home before a sentence-final period": f"The home is {home}.",
+        "old analytics home in parentheses": f"The home ({home}) is private.",
+        "old analytics home in a mount": f"./data/ui:{home}/.duckdb/ui:ro",
+        "old analytics home in quotes": f"'{home}/extensions.csv'",
+        "old analytics home in capitals": home.replace("analytics", "ANALYTICS") + "/private.txt",
+        "old analytics home below another folder": f"/srv{home}/private.txt",
+        "old analytics home in a Dockerfile command": f"RUN cat {home}/extensions.csv",
+        "analytics-like home name": f"{home}2/run.log",
+        "another home name": f"{LINUX_HOME}analyst/run.log",
+        "analytics name under the user folder": f"{HOME_PATH.split('jdoe')[0]}analytics/run.log",
     }
-    home_variants = {
-        "home with a period before a separator": f"{home}./private.txt",
-        "home with a repeated period": f"{home}../private.txt",
-        "home with an accented suffix": f"{home}{accent}/private.txt",
-        "home with a joiner suffix": f"{home}{joiner}/private.txt",
-        "home with a look-alike letter": f"{home.replace('i', cyrillic_i, 1)}/private.txt",
-        "home with a parent traversal": f"{home}/../jdoe/private.txt",
-        "home with a nested parent traversal": f"{home}/data/../../jdoe/private.txt",
-        "home with percent-encoded dots": f"{home}/%2e%2e/jdoe/private.txt",
-        "home with double-encoded dots": f"{home}/%252E%252e/jdoe/private.txt",
-        "home with hex-escaped dots": f"{home}/\\x2e\\x2e/jdoe/private.txt",
-        "home with unicode-escaped dots": f"{home}/\\u002e\\u002e/jdoe/private.txt",
-        "home with a trailing period and a path": f"{home}.. /private.txt",
-        "home with a percent-encoded separator": f"{home}%2fprivate.txt",
-        "home with a backslash": f"{home}\\private.txt",
-        "home in capitals": home.replace("analytics", "ANALYTICS") + "/private.txt",
-        "home with a capital letter": home.replace("analytics", "Analytics") + "/private.txt",
-        "home below another folder": f"/srv{home}/private.txt",
-        "home below a parent folder": f"..{home}/private.txt",
-        "home after a user name folder": f"~{home}/private.txt",
-    }
-    cases = [Case(name, "privacy-scan", True, {"notes.md": text + "\n"}) for name, text in passing.items()]
-    cases += [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in home_variants.items()]
+    return [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
+
+
+def email_domain_cases() -> list[Case]:
+    """Cases for reserved email domains: a reserved domain passes by equality or as a dot-delimited subdomain, never as a longer name that ends in it."""
+    passing = [
+        "someone" + "@" + "example.org",
+        "someone" + "@" + "example.com",
+        "someone" + "@" + "example.net",
+        "someone" + "@" + "mail.example.org",
+        "someone" + "@" + "a.b.example.net",
+        "someone" + "@" + "host.invalid",
+        "someone" + "@" + "notexample.invalid",
+        "someone" + "@" + "host.test",
+    ]
+    flagged = [
+        "someone" + "@" + "notexample.org",
+        "someone" + "@" + "notexample.com",
+        "someone" + "@" + "notexample.net",
+        "someone" + "@" + "my-example.org",
+        "someone" + "@" + "example.org.evil.io",
+    ]
+    cases = [Case(f"reserved domain address passes: {address.split('@')[1]}", "privacy-scan", True, {"notes.md": f"Ask {address}\n"}) for address in passing]
+    cases += [
+        Case(f"look-alike domain address is flagged: {address.split('@')[1]}", "privacy-scan", False, {"notes.md": f"Ask {address}\n"}, reason=EMAIL_REASON)
+        for address in flagged
+    ]
     return cases
 
 
-EXACT_VALUE_CASES = exact_value_cases()
+HOME_AND_EMAIL_CASES = [*home_path_cases(), *email_domain_cases()]
 
 
 def account_cases() -> list[Case]:
@@ -2231,15 +2239,7 @@ CASES = [
     Case("temp path", "privacy-scan", False, {"notes.md": f"Scratch at {TEMP_PATH}\n"}),
     Case("personal email", "privacy-scan", False, {"notes.md": f"Ask {PERSONAL_EMAIL}\n"}),
     Case("phone number", "privacy-scan", False, {"notes.md": f"Call {PHONE}\n"}),
-    Case(
-        "analytics container home is exempt",
-        "privacy-scan",
-        True,
-        {"services/analytics/Dockerfile": f"RUN cat {ANALYTICS_HOME}/extensions.csv\n", "notes.md": f"The user home is {ANALYTICS_HOME}.\n"},
-    ),
-    Case("analytics-like home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME}2/run.log\n"}),
-    Case("another home name", "privacy-scan", False, {"notes.md": f"Log at {ANALYTICS_HOME[:-9]}analyst/run.log\n"}),
-    Case("analytics name under the user folder", "privacy-scan", False, {"notes.md": f"Log at {HOME_PATH.split('jdoe')[0]}analytics/run.log\n"}),
+    *HOME_AND_EMAIL_CASES,
     Case("former OpenMetadata admin address", "privacy-scan", False, {"notes.md": f"Ask {OLD_OPENMETADATA_LOGIN}\n"}),
     Case("AWS account ARN", "privacy-scan", False, {"infra/policy.json": f'{{"Resource": "{AWS_ARN}"}}\n'}),
     Case("AWS account ID field", "privacy-scan", False, {"tests/test_config.py": f'CONFIG = {{"account_id": "{ACCOUNT}"}}\n'}),
@@ -2601,7 +2601,7 @@ BLOCK_REASONS = {
     "uppercase keyword blocked by sqlfluff": "CP01",
     "leading comma blocked by sqlfluff": "LT04",
 }
-BLOCK_REASONS.update({case.name: case.reason for case in EXACT_VALUE_CASES if case.reason})
+BLOCK_REASONS.update({case.name: case.reason for case in HOME_AND_EMAIL_CASES if case.reason})
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 WARNING_HEADERS = {
     "history, no longer and wrapped line warn through the hook": (
