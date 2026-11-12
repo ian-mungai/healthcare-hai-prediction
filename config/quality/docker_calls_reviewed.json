@@ -346,9 +346,9 @@
         "scripts/lakehouse/host_ingress_cases.py": "sha256:5e7a48707a1be434f85f58a73afe223a774409f83ef9b8270c0c57a259ed7dfd",
         "scripts/lakehouse/mac_route_probe.py": "sha256:f8e3e7f6b63d8fa6ea4ffe039b71e1e2ba64794ae90e31f5dd704a7db7e4731f",
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
-        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:e2638d0e9b634a1828f62d7ccbae152f7abd756fd1ba1d20af68c9a3141dabf2",
+        "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:22e688d8f7eff46bb3276edc569c85ed378834d3bfa39c07a7ccc1fc46e3fea7",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:3e36677b66998be7e8ea6aab81bd6e36a2f9ea0cdea4a9d868a92a4811d53258",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:237e3a872a9a313ba731d3b839231e7be045916ccc3e89c3cd6e29ac8920ff8a",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -422,7 +422,7 @@
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "3e36677b66998be7e8ea6aab81bd6e36a2f9ea0cdea4a9d868a92a4811d53258",
+      "file_sha256": "237e3a872a9a313ba731d3b839231e7be045916ccc3e89c3cd6e29ac8920ff8a",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
         "orchestration/launcher.py": "sha256:aa28883eea183d0103bee1b39c58ae8046aaa0ab4fd70d0f7ca6b94f6b27a06f",
@@ -465,7 +465,7 @@
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
         "orchestration/launcher.py": "sha256:aa28883eea183d0103bee1b39c58ae8046aaa0ab4fd70d0f7ca6b94f6b27a06f",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:3e36677b66998be7e8ea6aab81bd6e36a2f9ea0cdea4a9d868a92a4811d53258",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:237e3a872a9a313ba731d3b839231e7be045916ccc3e89c3cd6e29ac8920ff8a",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
@@ -1342,11 +1342,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2674,
+      "line": 2675,
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "40068697acb26b67e9f509d397da33dd391c28d44d16aed0fdb245c8849afa4e",
+      "file_sha256": "520ecba76d3086b467f1dcf8e0b94a356700d95d13b4e7c7758b14a7124f73c7",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:d1511aeaa0f939016bd765d2d9b79165ac9936892287c5a7f56b084ea683241c",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
@@ -1366,11 +1366,11 @@
     },
     {
       "path": "scripts/quality/run_ci_groups_e2e.py",
-      "line": 2726,
+      "line": 2727,
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "40068697acb26b67e9f509d397da33dd391c28d44d16aed0fdb245c8849afa4e",
+      "file_sha256": "520ecba76d3086b467f1dcf8e0b94a356700d95d13b4e7c7758b14a7124f73c7",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:d1511aeaa0f939016bd765d2d9b79165ac9936892287c5a7f56b084ea683241c",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",

@@ -219,6 +219,7 @@ ORCHESTRATION_SHARED = {
     "scripts/lakehouse/pins.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/provenance.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/memory_budget.py": LAKEHOUSE_SCRIPT,
+    "scripts/lakehouse/memory_budget_cli.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/dbt_package_archive.py": LAKEHOUSE_SCRIPT,
     "scripts/lakehouse/__init__.py": LAKEHOUSE_SCRIPT,
     "docker-compose.yaml": [*LAYERS, "orchestration_checks", "repository_code_checks"],

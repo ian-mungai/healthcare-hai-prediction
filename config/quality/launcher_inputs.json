@@ -1262,6 +1262,7 @@
     "scripts/lakehouse/mac_route_probe.py",
     "scripts/lakehouse/measure_domains.py",
     "scripts/lakehouse/memory_budget.py",
+    "scripts/lakehouse/memory_budget_cli.py",
     "scripts/lakehouse/migrate_aws_catalog.py",
     "scripts/lakehouse/mmd_conditions.py",
     "scripts/lakehouse/namespace_binding.py",

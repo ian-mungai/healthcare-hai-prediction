@@ -8101,7 +8101,9 @@ def client_exit_codes(env: Env) -> dict[str, bool]:
     )
     env.daemon.restart(8.0)
     env.wait(lambda: env.ping().get("status") == "degraded", 10, "degraded")
-    degraded = run_command(sys.executable, ["-m", "scripts.lakehouse.memory_budget", "--launch", "--test-registry", str(env.registry)], cwd=ROOT, timeout=120)
+    degraded = run_command(
+        sys.executable, ["-m", "scripts.lakehouse.memory_budget_cli", "--launch", "--test-registry", str(env.registry)], cwd=ROOT, timeout=120
+    )
     env.wait(lambda: env.ping().get("status") == "serving", 30, "serving")
     down = run_command(
         sys.executable,

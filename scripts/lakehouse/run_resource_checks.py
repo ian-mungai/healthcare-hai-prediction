@@ -45,7 +45,7 @@ def scenario(
     binary = env.work / "bin"
     host_tools(binary, mac_gib=mac_gib, vm_gib=vm_gib, host_cpus=host_cpus)
     command_env = {**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]}
-    command = ["-m", "scripts.lakehouse.memory_budget", "--launch-json", "--test-registry", str(env.registry)]
+    command = ["-m", "scripts.lakehouse.memory_budget_cli", "--launch-json", "--test-registry", str(env.registry)]
     runs = [run_command(sys.executable, command, cwd=ROOT, env=command_env, timeout=120) for _ in range(2)]
     (env.work / "process.log").write_text("\n".join(f"exit={run.returncode}\n{run.stdout}{run.stderr}" for run in runs))
     payload = json.loads(runs[0].stdout) if runs[0].returncode == 0 else None
@@ -117,7 +117,13 @@ def main() -> int:
         "input_hash": hashlib.sha256(json.dumps({"cases": cases, "failures": failures}, sort_keys=True).encode()).hexdigest(),
         "source_hashes": {
             path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
-            for path in ("scripts/lakehouse/memory_budget.py", "orchestration/launcher.py", "docker-compose.yaml", "dbt/profiles.yml")
+            for path in (
+                "scripts/lakehouse/memory_budget.py",
+                "scripts/lakehouse/memory_budget_cli.py",
+                "orchestration/launcher.py",
+                "docker-compose.yaml",
+                "dbt/profiles.yml",
+            )
         },
         "results": results,
         "passed": sum(results.values()),

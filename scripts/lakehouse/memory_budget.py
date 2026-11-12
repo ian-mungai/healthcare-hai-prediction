@@ -1,13 +1,8 @@
 """Compute container memory, engine budgets and job parallelism from launch-time capacity.
 
-The figures are computed inside the launcher (orchestration/launcher.py), the only process that reads Docker; the command line
-asks the launcher for the plan:
-
-    .venv/bin/python -m scripts.lakehouse.memory_budget            # print DuckDB's limit, for example 26GB
-    .venv/bin/python -m scripts.lakehouse.memory_budget --spark    # print Spark's heap, for example 24g
-    .venv/bin/python -m scripts.lakehouse.memory_budget --explain  # also print the figures it comes from
-    .venv/bin/python -m scripts.lakehouse.memory_budget --launch   # container bytes, DuckDB, Spark, CPU count
-    .venv/bin/python -m scripts.lakehouse.memory_budget --launch-json  # the same plan with its evidence
+The figures are computed inside the launcher (orchestration/launcher.py), the only process that reads Docker. This module holds the arithmetic
+and does not import the launcher, so the Spark driver can import it; the command line that asks the launcher
+for the plan is ``scripts/lakehouse/memory_budget_cli.py``.
 
 Memory is shared across every project's containers, so no limit is hardcoded. The limit is
 the smaller of Docker's total memory minus what every running container uses at that moment minus a fixed headroom, and
@@ -29,10 +24,7 @@ a growth reserve (``launch_plan``). Failure modes 759, 886 and 887 are in plans/
 
 from __future__ import annotations
 
-import argparse
-import json
 import re
-import sys
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any
@@ -287,34 +279,3 @@ def current(reader: DockerReader) -> Budget:
     held = vm_resident()
     mac = None if held >= total else mac_available()
     return compute(total, usages, mac, held)
-
-
-def main() -> int:
-    """Print DuckDB's limit or Spark's heap, and the figures behind it when asked; the launcher reads Docker."""
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--spark", action="store_true", help="print Spark's job heap instead of DuckDB's limit")
-    parser.add_argument("--explain", action="store_true", help="also print the figures the limit comes from")
-    output = parser.add_mutually_exclusive_group()
-    output.add_argument("--launch", action="store_true", help="print container bytes, DuckDB memory, Spark heap and CPU count")
-    output.add_argument("--launch-json", action="store_true", help="print the complete launch plan as JSON")
-    parser.add_argument("--test-registry", help="a test registry folder")
-    args = parser.parse_args()
-    from orchestration import launcher
-
-    try:
-        plan = launcher.load_client(args.test_registry).call("plan")
-    except launcher.ClientError as error:
-        sys.stderr.write(f"memory budget: {error}\n")
-        return 1
-    environment = plan["environment"]
-    if args.launch or args.launch_json:
-        sys.stdout.write((json.dumps(plan) if args.launch_json else " ".join(environment.values())) + "\n")
-        return 0
-    if args.explain:
-        sys.stderr.write(json.dumps(plan["budget"]) + "\n")
-    sys.stdout.write(environment["SPARK_JOB_MEMORY" if args.spark else "DUCKDB_MEMORY_LIMIT"] + "\n")
-    return 0
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())
