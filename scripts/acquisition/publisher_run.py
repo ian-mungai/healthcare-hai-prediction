@@ -230,10 +230,9 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     require_bound_queue(queue, env)
     install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
     mirror = Path(env.get("HAI_STORED_MIRROR") or inputs / "mirror")
-    needs = startup_check.queue_files(
-        json.loads(queue.read_text(encoding="utf-8")), controls=queue.with_name("controls.json"), keys=bool(env.get("HAI_TASK_KEYS"))
+    startup_check.check_queue_files(
+        "publisher", queue, controls=queue.with_name("controls.json"), keys=bool(env.get("HAI_TASK_KEYS")), roots={"code": Path.cwd(), "mirror": mirror}
     )
-    startup_check.check_files("publisher", needs, {"code": Path.cwd(), "mirror": mirror})
     state_parent = workspace_of(env) / "state"
     state_root = state_parent / "run"
     restored_from = restore_state(s3, state_root, env)

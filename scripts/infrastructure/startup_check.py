@@ -9,7 +9,7 @@ fixed bound, and logs one line per check on stderr. Failures come first. A run o
 - ``check_build``: the dbt target that the build selects (``pipeline_build.build_target``) and, for a profile that lists DuckDB extensions, that its extension
   directory exists and holds each of them, so dbt downloads nothing.
 - ``check_files``: every repository-relative file that the job will read exists in the task. ``queue_files`` derives them from the collector plans of the
-  modes that a publisher queue runs.
+  modes that a publisher queue runs, and ``check_queue_files`` does both for a queue, and only in a task.
 
 The check opens a socket and reads files. It makes no request that needs a grant.
 """
@@ -278,6 +278,10 @@ def check_build(layer: str, mode: str, profiles: Path) -> None:
     report(layer, "build", findings, started)
 
 
+# The root of a need that stands for a runnable plan mode that has no file list here, so the check refuses it instead of passing it unchecked.
+UNENUMERATED = "unenumerated"
+
+
 @dataclass(frozen=True)
 class Need:
     """One file that a collector mode reads: the mode, the root that its reader resolves the path from (``code`` or ``mirror``) and the path.
@@ -357,8 +361,29 @@ def hud_plans() -> list[Path]:
     return [contract.PLAN_PATH, contract.RANGE_PLAN_PATH]
 
 
+def census_plans() -> list[Path]:
+    contract = importlib.import_module("scripts.acquisition.census_acs_api_contract")
+    return [contract.PLAN_PATH, contract.PR_PLAN_PATH]
+
+
+def census_detailed_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.census_acs_detailed_contract").PLAN_PATH]
+
+
+def hcai_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.hcai_util_contract").PLAN_PATH]
+
+
 # The locked plans of each plan-based collector, from the plan paths its contract holds.
-PLAN_PATHS = {"cms_owners_org": cms_plans, "onc_mu_hospital": onc_plans, "bls_api_v2": bls_plans, "hud_api": hud_plans}
+PLAN_PATHS = {
+    "cms_owners_org": cms_plans,
+    "onc_mu_hospital": onc_plans,
+    "bls_api_v2": bls_plans,
+    "hud_api": hud_plans,
+    "census_acs_api": census_plans,
+    "census_acs_detailed": census_detailed_plans,
+    "hcai_util_workbook": hcai_plans,
+}
 
 
 def contract_needs(mode: str) -> list[Need]:
@@ -367,8 +392,6 @@ def contract_needs(mode: str) -> list[Need]:
 
 # The file lists the publisher owns, by collector mode: what the mode's locked plans read at the code root while they load.
 MODE_FILES = {"mmd_api": mmd_needs, **{mode: partial(contract_needs, mode) for mode in PLAN_PATHS}}
-# Modes that re-hash every operational input of the controls from the mirror root before they plan (``redownload.planned``).
-MIRROR_CONFIG_MODES = frozenset(PLAN_PATHS)
 CONFIG_PREFIX = "config/acquisition/"
 
 
@@ -378,6 +401,13 @@ def mirror_config_needs(mode: str, controls: Path) -> list[Need]:
     if document is None:
         return [Need(mode, "mirror", str(controls))]
     return [Need(mode, "mirror", key) for key in sorted(document.get("operational_sha256", {})) if key.startswith(CONFIG_PREFIX)]
+
+
+def runnable_plan_modes() -> frozenset[str]:
+    """The plan modes that the harness can run, from the runtime's own lists: the planned modes and the staged plan modes, without the manual ones."""
+    redownload = importlib.import_module("scripts.acquisition.redownload")
+    stored_mirror = importlib.import_module("scripts.acquisition.stored_mirror")
+    return frozenset((set(redownload.PLANNED) | set(stored_mirror.PLAN_MODES)) - redownload.MANUAL_MODES)
 
 
 def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool = False) -> list[Need]:
@@ -393,17 +423,28 @@ def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool =
     ]
     lanes = {redownload.TASK, *([redownload.TASK_KEYED] if keys else [])}
     modes = sorted({redownload.handler_mode(item) for item in units if redownload.lane_of(item) in lanes})
-    needs = [need for mode in modes if mode in MODE_FILES for need in MODE_FILES[mode]()]
+    runnable = runnable_plan_modes()
+    # A mode in ``redownload.PLANNED`` re-hashes every operational input of the controls from the mirror root before it plans (``redownload.planned``).
+    controlled = set(redownload.PLANNED) - redownload.MANUAL_MODES
+    needs: list[Need] = []
     for mode in modes:
-        if mode in MIRROR_CONFIG_MODES and controls is not None:
+        if mode in MODE_FILES:
+            needs.extend(MODE_FILES[mode]())
+        elif mode in runnable:
+            needs.append(Need(mode, UNENUMERATED, ""))
+        if mode in controlled and controls is not None:
             needs.extend(mirror_config_needs(mode, controls))
-    planned = [mode for mode in modes if mode in stored_mirror.PLAN_MODES]
+    planned = [mode for mode in modes if mode in runnable]
     if planned:
         needs.append(Need("+".join(planned), "mirror", stored_mirror.PLAN_INPUTS_NAME, nonempty=True))
     return list(dict.fromkeys(needs))
 
 
 def check_need(need: Need, base: Path) -> Finding:
+    if need.root == UNENUMERATED:
+        return Finding(
+            "mode_files_unenumerated", False, f"{need.owner}: a runnable plan mode with no file list in the startup check, so its files would go unchecked"
+        )
     path = base / need.path
     label = f"{need.owner} {need.root} root: {need.path}"
     if not need.nonempty:
@@ -422,5 +463,11 @@ def check_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | Non
         return
     started = time.monotonic()
     bases = {"code": Path.cwd(), **(roots or {})}
-    findings = [check_need(need, bases[need.root]) for need in files]
+    findings = [check_need(need, bases.get(need.root, Path.cwd())) for need in files]
     report(job, "files", findings or [Finding("input_files", True, "none named")], started)
+
+
+def check_queue_files(job: str, queue: Path, *, controls: Path | None, keys: bool, roots: Mapping[str, Path] | None = None) -> None:
+    """The file check of a publisher queue. Outside a task it reads neither the queue nor any collector plan."""
+    if in_ecs_job():
+        check_files(job, queue_files(json.loads(queue.read_text(encoding="utf-8")), controls=controls, keys=keys), roots)

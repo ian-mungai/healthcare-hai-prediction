@@ -133,3 +133,18 @@ def test_a_queue_without_mmd_units_names_no_mmd_file() -> None:
     other = {"queue": [{"disposition": "api", "mode": "bls_api_v2", "flags": []}]}
     check(startup_check.queue_files(other) == [], "only the modes the queue runs name files")
     check(startup_check.queue_files({}) == [], "an empty queue names none")
+
+
+def test_outside_a_task_the_publisher_discovers_no_plan_and_checks_no_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The startup check does nothing outside an ECS task, so it must not read the queue, import a collector or read a collection plan either."""
+    for name in ("AWS_EXECUTION_ENV", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI"):
+        monkeypatch.delenv(name, raising=False)
+    network = install_network(monkeypatch, Network())
+    mmd_tree(monkeypatch, tmp_path / "code", leave_out="plan")
+    seen: list[str] = []
+    real_read_json, real_queue_files = startup_check.read_json, startup_check.queue_files
+    monkeypatch.setattr(startup_check, "read_json", lambda path: seen.append(f"read_json {path}") or real_read_json(path))
+    monkeypatch.setattr(startup_check, "queue_files", lambda *arguments, **keywords: seen.append("queue_files") or real_queue_files(*arguments, **keywords))
+    with pytest.raises(Reached):
+        run_job(monkeypatch, tmp_path / "workspace")
+    check(seen == [] and network.seen == [], f"the startup check discovered plans or connected outside a task: {seen} {network.seen}")

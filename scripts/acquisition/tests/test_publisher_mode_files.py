@@ -9,7 +9,7 @@ from typing import Any
 
 import pytest
 
-from scripts.acquisition import collect_mmd_api, mmd_api_contract, publisher_run
+from scripts.acquisition import collect_mmd_api, mmd_api_contract, publisher_run, stored_mirror
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.tests.test_publisher_run import Cloud, environment, staged
 from scripts.infrastructure import startup_check
@@ -18,11 +18,21 @@ from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[3]
 PLAN_FILES = {
-    "cms_owners_org": "cms_owners_plan",
-    "onc_mu_hospital": "onc_mu_hospital_plan",
-    "bls_api_v2": "bls_api_plan",
-    "hud_api": "hud_api_plan",
+    "cms_owners_org": ("cms_owners_plan",),
+    "onc_mu_hospital": ("onc_mu_hospital_plan",),
+    "bls_api_v2": ("bls_api_plan",),
+    "hud_api": (
+        "hud_api_plan",
+        "hud_api_plan_2021q2_2025q4",
+    ),
+    "census_acs_api": (
+        "census_acs_api_plan",
+        "census_acs_api_plan_dp02pr",
+    ),
+    "census_acs_detailed": ("census_acs_detailed_plan",),
+    "hcai_util_workbook": ("hcai_util_2018_2025_plan",),
 }
+KEYED = ("bls_api_v2", "hud_api", "census_acs_api", "census_acs_detailed")
 CONFIG_KEYS = ("config/acquisition/example_plan.json", "config/acquisition/example_code_versions.json")
 OTHER_KEY = "data/redownload_checks/example/job.json"
 
@@ -35,8 +45,12 @@ def unit(mode: str) -> dict:
     return {"disposition": "api", "mode": mode, "flags": []}
 
 
+def plans_of(mode: str) -> list[dict]:
+    return [json.loads((ROOT / f"config/acquisition/{name}.json").read_text()) for name in PLAN_FILES[mode]]
+
+
 def plan_of(mode: str) -> dict:
-    return json.loads((ROOT / f"config/acquisition/{PLAN_FILES[mode]}.json").read_text())
+    return plans_of(mode)[0]
 
 
 def legacy_paths(mode: str) -> list[str]:
@@ -48,7 +62,7 @@ def legacy_paths(mode: str) -> list[str]:
 
 def code_paths(mode: str) -> list[str]:
     """Every file the mode reads at the code root: the legacy registry and, for BLS, the county adjacency references of the plan."""
-    references = [item["path"] for item in plan_of(mode).get("references") or []]
+    references = [item["path"] for plan in plans_of(mode) for item in plan.get("references") or []]
     return [*legacy_paths(mode), *references]
 
 
@@ -135,7 +149,7 @@ def test_bls_names_each_county_adjacency_file(on_host: None, tmp_path: Path) -> 
     check(adjacency[3] in str(caught.value), "the removed file is named")
 
 
-@pytest.mark.parametrize("mode", ["bls_api_v2", "hud_api"])
+@pytest.mark.parametrize("mode", KEYED)
 def test_keyed_modes_name_files_only_when_the_task_has_keys(tmp_path: Path, mode: str) -> None:
     world = World(tmp_path, mode)
     check(startup_check.queue_files({"queue": [unit(mode)]}, controls=world.controls, keys=False) == [], "a task without keys does not run the mode")
@@ -190,7 +204,7 @@ def test_mmd_names_the_legacy_registry_and_the_template_at_the_code_root(on_host
 
 def staged_world(world: World, listing: dict[str, str]) -> tuple[dict[str, bytes], str, bytes]:
     """The staged inputs of the entry point test: the mirror tree of the world inside the inputs archive."""
-    queue = json.dumps({"queue": [unit("cms_owners_org")]}).encode()
+    queue = json.dumps({"queue": [unit(world.mode)]}).encode()
     files = {"mirror/data/redownload_checks/example/queue.json": queue, "publisher_hosts.json": b"{}"}
     files["publisher_manifest.json"] = b'{"queue": "mirror/data/redownload_checks/example/queue.json"}'
     files["mirror/data/redownload_checks/example/controls.json"] = world.controls.read_bytes()
@@ -201,8 +215,11 @@ def staged_world(world: World, listing: dict[str, str]) -> tuple[dict[str, bytes
     return stage, digest, queue
 
 
-def run_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, listing: dict[str, str]) -> Cloud:
-    world = World(tmp_path, "cms_owners_org")
+def run_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, listing: dict[str, str], mode: str = "cms_owners_org", controlled: str = "") -> Cloud:
+    """Run the publisher entry point on a queue of one mode. ``controlled`` is an operational input that the controls bind and the mirror lacks."""
+    world = World(tmp_path, mode)
+    if controlled:
+        world.controls.write_text(json.dumps({"operational_sha256": {key: "0" * 64 for key in (*CONFIG_KEYS, controlled)}}))
     monkeypatch.chdir(world.code)
     stage, digest, queue = staged_world(world, listing)
     cloud = Cloud(stage)
@@ -212,8 +229,7 @@ def run_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, listing: dict[str
 
     monkeypatch.setattr(harness, "run_from", started)
     monkeypatch.setattr(publisher_run, "install_plan_inputs", lambda *_arguments: None)
-    monkeypatch.setenv("HAI_TASK_KEYS", "1")
-    environ = environment(tmp_path / "workspace", digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(queue).hexdigest()}
+    environ = environment(tmp_path / "workspace", digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(queue).hexdigest(), "HAI_TASK_KEYS": "1"}
     publisher_run.main(environ, cloud.factory)
     return cloud
 
@@ -226,3 +242,34 @@ def test_the_entry_point_stops_on_an_empty_plan_listing_before_it_restores_state
 def test_the_entry_point_starts_with_a_listing_and_both_roots(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     with pytest.raises(Reached):
         run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64})
+
+
+@pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
+def test_the_entry_point_names_a_controlled_plan_missing_from_the_mirror_for_census_and_hcai(
+    on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    plan = f"config/acquisition/{PLAN_FILES[mode][0]}.json"
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
+        run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64}, mode, controlled=plan)
+    check(f"{mode} mirror root: {plan}" in str(caught.value), f"the controlled plan and its mode are named: {caught.value}")
+
+
+@pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
+def test_the_entry_point_stops_on_an_empty_plan_listing_for_census_and_hcai(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> None:
+    with pytest.raises(startup_check.StartupCheckError, match="plan_inputs_empty"):
+        run_entry(monkeypatch, tmp_path, {}, mode)
+
+
+def test_every_runnable_plan_mode_has_a_file_enumerator() -> None:
+    """The runtime lists the runnable plan modes (``PLANNED`` and ``PLAN_MODES`` without the manual modes). The check covers every one."""
+    runnable = (set(harness.PLANNED) | set(stored_mirror.PLAN_MODES)) - harness.MANUAL_MODES
+    check(runnable <= set(startup_check.MODE_FILES), f"modes the check would silently skip: {sorted(runnable - set(startup_check.MODE_FILES))}")
+
+
+def test_a_runnable_plan_mode_without_an_enumerator_is_refused(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setitem(harness.PLANNED, "future_plan_mode", ("future_contract", "load_plan", "batches", "batch_id"))
+    monkeypatch.setattr(harness, "PLAIN_TASK_MODES", harness.PLAIN_TASK_MODES | {"future_plan_mode"})
+    world = World(tmp_path, "cms_owners_org")
+    needs = startup_check.queue_files({"queue": [unit("future_plan_mode")]}, controls=world.controls, keys=True)
+    with pytest.raises(startup_check.StartupCheckError, match="mode_files_unenumerated future_plan_mode"):
+        startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
