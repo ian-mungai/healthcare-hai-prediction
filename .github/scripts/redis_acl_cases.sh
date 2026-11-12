@@ -112,6 +112,11 @@ check "it reads one field in database 1" test "$(as_model -n 1 hget entity field
 check "it reads a whole hash in database 1" test "$(as_model -n 1 hgetall entity | tr '\n' ' ')" = "field value "
 check "it reads the marker in database 2" test "$(as_model -n 2 hgetall hai:fs:marker | tr '\n' ' ')" = "state ready "
 check "it checks that a key exists" test "$(as_model -n 1 exists entity)" = "1"
+# One feature database per online model set (online_protocol.py SET_DATABASES: 3, 4 and 5), beside database 1 and the control database 2.
+for set_database in 3 4 5; do
+  check "the default user can write database $set_database" test "$(as_default -n "$set_database" hset entity field value)" = "1"
+  check "it reads a Feast hash in database $set_database" test "$(as_model -n "$set_database" hget entity field)" = "value"
+done
 # redis-py sends CLIENT SETINFO when it connects and ignores the error, so the user does not need it. Redis 7.0 does not know the subcommand
 # (ERR) and Redis 7.2 refuses it (NOPERM).
 setinfo_reply="$(as_model client setinfo lib-name feast)"
@@ -122,7 +127,7 @@ check "it names its connection" test "$(as_model client setname model_api)" = "O
 # A connection starts in database 0 and an ACL cannot refuse that, so the user can read it. Nothing is meant to live there (online_protocol.py: "0 stays empty"),
 # and the user cannot write it.
 check "it cannot write database 0, which a connection starts in" refused "$(as_model -n 0 set keep changed)"
-check "it cannot select a fourth database" refused "$(as_model -n 3 ping)"
+check "it cannot select a sixth database, only the five the design uses" refused "$(as_model -n 6 ping)"
 check "it cannot write a hash" refused "$(as_model -n 1 hset entity field changed)"
 check "it cannot set a string" refused "$(as_model -n 1 set key value)"
 check "it cannot delete a key" refused "$(as_model -n 1 del entity)"
