@@ -21,7 +21,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import owner_commands, owner_list_host_cases
+from scripts.infrastructure import owner_commands, owner_list_host_cases, services_code_inputs
 from scripts.infrastructure.run_activation_inputs_e2e import (
     ADMIN,
     PLATFORM_DEFAULT_LOG_GROUPS,
@@ -215,8 +215,24 @@ def features_checks(body: str) -> dict[str, bool]:
     return checks
 
 
+def services_code_sample() -> dict[str, Any]:
+    """The file that services_code_inputs writes for a synthetic installation that runs MLflow: supported settings kept, installer role and bucket set."""
+    existing = {
+        "aws_region": "us-west-2",
+        "mlflow_artifact_bucket": "example-project-mlflow-dev",
+        "mlflow_enabled": True,
+        "mlflow_task_role_arn": f"arn:aws:iam::{owner_commands.ACCOUNT}:role/example_project_mlflow_task_dev",
+        "project_name": "example-project",
+    }
+    role = f"arn:aws:iam::{owner_commands.ACCOUNT}:role/example_project_host_code_fetch_task_dev"
+    document, _ = services_code_inputs.build(existing, role, "example-project-data-dev")
+    return document
+
+
 def command_checks(text: str, folder: Path) -> dict[str, bool]:
     workspace = Workspace(folder / "workspace")
+    code_body = owner_commands.section(text, CODE)
+    code_sample = services_code_sample()
     silver_body = owner_commands.section(text, SILVER)
     sample = owner_commands.example_json(silver_body) or {}
     features_sample = owner_commands.example_json(owner_commands.section(text, FEATURES)) or {}
@@ -225,16 +241,40 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
         "jobs_gold.json": gold_sample(sample) if sample else {},
         "jobs_features.json": features_sample,
         "platform_features.json": platform_sample(),
-        "services_code.json": owner_commands.example_json(owner_commands.section(text, CODE)) or {},
+        "services_code.json": code_sample,
     }
     wrapper = make_wrapper(workspace, samples)
-    code_example = owner_commands.example_json(owner_commands.section(text, CODE)) or {}
+    code_lines = [line.strip() for line in owner_commands.commands(code_body)]
+    tool_lines = [line for line in code_lines if "scripts.infrastructure.services_code_inputs" in line]
+    shasums = [index for index, line in enumerate(code_lines) if line.startswith("shasum -a 256 <RECORD_DIR>/services_code.json")]
+    plans = [index for index, line in enumerate(code_lines) if "terraform.sh --services" in line and " plan " in line and "--preparation-sha256" in line]
     checks: dict[str, bool] = {
         "the reviewed jobs file of the list is valid JSON with a root and variables": sample.get("root") == "jobs" and "variables" in sample,
-        "the reviewed services file of the code list names the code one-shot role and the bucket": code_example.get("root") == "services"
-        and sorted(code_example.get("variables", {})) == ["code_bucket_name", "code_fetch_task_role_arn"],
+        "the code list writes the services file with services_code_inputs from the existing rendered settings, not as hand-written JSON": len(tool_lines) == 1
+        and "--existing infra/services/deployment.auto.tfvars.json" in tool_lines[0]
+        and "--role-file <RECORD_DIR>/host_code_fetch_role.json" in tool_lines[0]
+        and "--bucket-file <RECORD_DIR>/data_bucket.txt" in tool_lines[0]
+        and "--output <RECORD_DIR>/services_code.json" in tool_lines[0]
+        and owner_commands.example_json(code_body) is None,
+        "the code list saves the code one-shot role for the tool": any(
+            line.startswith("terraform -chdir=infra/iam output -json host_code_fetch_role") and line.endswith("> <RECORD_DIR>/host_code_fetch_role.json")
+            for line in code_lines
+        ),
+        "the code list saves the bucket name for the tool": any(
+            line.endswith("> <RECORD_DIR>/data_bucket.txt") and "<DATA_BUCKET>" in line for line in code_lines
+        ),
+        "the code list writes the services file, binds its complete bytes by digest and only then plans": bool(tool_lines and shasums and plans)
+        and code_lines.index(tool_lines[0]) < min(shasums) < min(plans),
+        "the code list keeps the check that the plan changes at most the code one-shot task definition": "must change at most the code one-shot task definition"
+        in code_body
+        and "a setting was lost" in code_body,
+        "the file the tool writes for an installation that runs MLflow keeps that setting and sets the code one-shot role and the bucket": code_sample.get(
+            "variables", {}
+        ).get("mlflow_enabled")
+        is True
+        and sorted(code_sample.get("variables", {}))
+        == sorted(["code_bucket_name", "code_fetch_task_role_arn", "mlflow_artifact_bucket", "mlflow_enabled", "mlflow_task_role_arn"]),
     }
-    code_body = owner_commands.section(text, CODE)
     policy_apply, services_plan = code_body.find("manage_policies apply --admin-profile <ADMIN_PROFILE>"), code_body.find("terraform.sh --services")
     checks["the code list applies the project user's policy with the policy manager under the administrator profile before the services apply"] = (
         0 <= policy_apply < services_plan
