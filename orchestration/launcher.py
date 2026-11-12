@@ -1330,6 +1330,7 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "template": "spark_read",
         "module": "scripts.lakehouse.pins",
         "writes": (),
+        "contract_files": ("dbt/models/silver/staging/_bronze__sources.yml",),
         "aws": True,
         "grammar": {"pin": None, "verify": None, "--run": "value"},
     },
@@ -1369,7 +1370,14 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
     },
     "smoke": {"template": "spark_write", "domains": ("acquisition",), "module": "scripts.lakehouse.smoke", "writes": (), "aws": True, "grammar": {}},
     "bronze_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_bronze_e2e", "writes": ("data/e2e/bronze",), "aws": False, "grammar": {}},
-    "pins_e2e": {"template": "spark_e2e", "module": "scripts.lakehouse.run_pins_e2e", "writes": ("data/e2e/pins",), "aws": False, "grammar": {}},
+    "pins_e2e": {
+        "template": "spark_e2e",
+        "module": "scripts.lakehouse.run_pins_e2e",
+        "writes": ("data/e2e/pins",),
+        "contract_files": ("dbt/models/silver/staging/_bronze__sources.yml",),
+        "aws": False,
+        "grammar": {},
+    },
     # The offline gold publish: the cases and the single steps run on a local file-based Iceberg catalog (no Polaris, no S3, network none).
     "gold_publish_e2e": {
         "template": "spark_e2e",
