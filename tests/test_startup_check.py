@@ -173,3 +173,16 @@ def test_a_hanging_connect_is_cut_off_within_the_bound(monkeypatch: pytest.Monke
     with pytest.raises(startup_check.StartupCheckError, match="timed out after 0.3 s"):
         startup_check.check_environment("silver", polaris=True)
     check(time.monotonic() - started < 1.5, "all connects share one bound")
+
+
+@pytest.mark.parametrize("bytes_value", ["SYNTHETIC_NOT_A_NUMBER", "0", ""])
+def test_an_incomplete_spill_setting_is_named_without_its_value(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], bytes_value: str
+) -> None:
+    host_environment(monkeypatch)
+    install_network(monkeypatch, Network())
+    monkeypatch.setenv("HAI_DUCKDB_MAX_TEMP_BYTES", bytes_value)
+    check(drive(monkeypatch, tmp_path, "build") == 1, "the build phase stops")
+    text = "\n".join(first_lines(capsys)[:4])
+    check("dbt_target_refused temporary_storage_settings_incomplete" in text, f"the cause is named in the first lines: {text}")
+    check("SYNTHETIC_NOT_A_NUMBER" not in text, f"the value is not repeated: {text}")

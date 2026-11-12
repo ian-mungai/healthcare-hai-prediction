@@ -274,6 +274,8 @@ def check_build(layer: str, mode: str, profiles: Path) -> None:
             target = pipeline_build.build_target(layer, mode)
         except pipeline_error as error:
             findings.append(Finding("dbt_target_refused", False, str(error)))
+        except ecs_engine.TemporaryStorageError:
+            findings.append(Finding("dbt_target_refused", False, "temporary_storage_settings_incomplete"))
         else:
             findings.append(check_target(target, profiles))
     report(layer, "build", findings, started)
