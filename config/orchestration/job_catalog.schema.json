@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://healthcare-hai-prediction.invalid/orchestration/job_catalog.schema.json",
-  "title": "ECS broker jobs",
-  "description": "The closed table of the lean ECS broker. A step names its job, or null when the broker answers it without a task. A job names its deadline, the container whose log the logs route shows and the variables each container receives.",
+  "title": "ECS job catalog",
+  "description": "The closed table of the jobs that the direct ECS launch runs. A step names its job, or null when it launches no task. A job names its deadline, the container whose log the logs route shows and the variables each container receives.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -98,7 +98,7 @@
           },
           "needs_bronze_request": {
             "const": true,
-            "description": "The run stages bronze_request.json beside its code archive. The broker reads and checks it before it starts the task and passes its values to the containers"
+            "description": "The run stages bronze_request.json beside its code archive. The launch preflight reads and checks it before it starts the task and passes its values to the containers"
           },
           "needs_publisher_request": {
             "const": true,
@@ -106,7 +106,7 @@
           },
           "needs_serving_request": {
             "const": true,
-            "description": "The run stages serving_request.json beside its code archive. The broker reads and checks it before it starts the task, binds every attempt to the first one it checked and passes the request to the serve container"
+            "description": "The run stages serving_request.json beside its code archive. The launch preflight reads and checks it before it starts the task, binds every attempt to the first one it checked and passes the request to the serve container"
           }
         }
       }

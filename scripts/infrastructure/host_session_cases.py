@@ -880,6 +880,100 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
     }
 
 
+def code_install_places_the_code_and_redeploys_nothing() -> dict[str, bool]:
+    """The cutover of a renamed mounted file: the code lands on a running host while the services keep their current definitions, so no deployment
+    starts a container from a checkout that lacks a file an old definition still mounts."""
+    host, session, lines = build(code_fetch=True, checkout=OLD_SHA)
+    session.host_on()
+    before = len(host.log)
+    session.install_code((CODE_RUN, CODE_SHA))
+    after = host.log[before:]
+    runs = [entry["options"] for entry in after if entry["operation"] == "run-task"]
+    return {
+        "the host shows the new code": host.checkout == CODE_SHA,
+        "only the code one-shot starts, with the run ID and the code digest": len(runs) == 1
+        and runs[0]["--task-definition"] == [CODE_FETCH_FAMILY]
+        and code_environment(runs[0]) == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA},
+        "no service is updated, no deployment is forced": not any(entry["operation"] == "update-service" for entry in after),
+        "the host capacity is not changed": not any(entry["operation"] == "set-desired-capacity" for entry in after),
+        "host_prepare does not run again": not any(
+            entry["options"].get("--task-definition") == [FAMILIES["host_prepare"]] for entry in after if entry["operation"] == "run-task"
+        ),
+        "the step is reported": any("code_installed" in line for line in lines),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def code_install_on_a_stopped_host_is_refused() -> dict[str, bool]:
+    host, session, _ = build(code_fetch=True, checkout=OLD_SHA)
+    message = failure(lambda: session.install_code((CODE_RUN, CODE_SHA)))
+    return {
+        "the install says the host is off": message is not None and "host" in message and "off" in message,
+        "the host is not turned on": not any(entry["operation"] == "set-desired-capacity" for entry in host.log),
+        "no task starts": not any(entry["operation"] == "run-task" for entry in host.log),
+        "the host keeps its checkout": host.checkout == OLD_SHA,
+    }
+
+
+def code_install_failure_keeps_the_old_checkout_and_the_host_on() -> dict[str, bool]:
+    host, session, _ = build({"exit_code:code_fetch=1"}, code_fetch=True, checkout=OLD_SHA)
+    session.host_on()
+    message = failure(lambda: session.install_code((CODE_RUN, CODE_SHA)))
+    return {
+        "a refused fetch fails the install": message is not None and "code_fetch" in message,
+        "the host keeps the old checkout": host.checkout == OLD_SHA,
+        "the host stays on, so the running services keep their files": host.desired == 1,
+        "no service is updated": not any(entry["operation"] == "update-service" for entry in host.log),
+    }
+
+
+def code_install_without_the_one_shot_is_refused() -> dict[str, bool]:
+    host, session, _ = build()
+    session.host_on()
+    message = failure(lambda: session.install_code((CODE_RUN, CODE_SHA)))
+    return {
+        "the install refuses code it cannot place": message is not None and "code_fetch" in message,
+        "no task starts after the host is on": not any(entry["operation"] == "run-task" for entry in host.log),
+    }
+
+
+def code_command_is_checked_before_any_call() -> dict[str, bool]:
+    module = session_module()
+    refused = {
+        "no code at all": ["code"],
+        "a run ID without a digest": ["code", "--code-run", CODE_RUN],
+        "a digest without a run ID": ["code", "--code-sha256", CODE_SHA],
+        "a malformed run ID": ["code", "--code-run", "latest", "--code-sha256", CODE_SHA],
+        "a malformed digest": ["code", "--code-run", CODE_RUN, "--code-sha256", "A" * 64],
+    }
+    installed: list[tuple[str, str]] = []
+
+    class Recorder:
+        def install_code(self, code: tuple[str, str]) -> None:
+            installed.append(code)
+
+    def exit_code(argv: list[str]) -> int:
+        try:
+            return module.main(argv)
+        except SystemExit as error:
+            return int(error.code or 0)
+
+    original, restore = module.open_session, module.install_termination_handler
+    module.open_session = Recorder
+    module.install_termination_handler = lambda: lambda: None
+    try:
+        codes = {name: exit_code(argv) for name, argv in refused.items()}
+        refused_installs = list(installed)
+        accepted = exit_code(["code", "--code-run", CODE_RUN, "--code-sha256", CODE_SHA])
+    finally:
+        module.open_session, module.install_termination_handler = original, restore
+    return {
+        **{f"{name} is a usage error": code == 2 for name, code in codes.items()},
+        "a refused option opens no install": refused_installs == [],
+        "a well-formed pair reaches install_code": accepted == 0 and installed == [(CODE_RUN, CODE_SHA)],
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "happy_start": happy_start,
     "registration_timeout": registration_timeout,
@@ -927,6 +1021,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_fetch_launch_retries_stay_inside_the_limit": code_fetch_launch_retries_stay_inside_the_limit,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
+    "code_install_places_the_code_and_redeploys_nothing": code_install_places_the_code_and_redeploys_nothing,
+    "code_install_on_a_stopped_host_is_refused": code_install_on_a_stopped_host_is_refused,
+    "code_install_failure_keeps_the_old_checkout_and_the_host_on": code_install_failure_keeps_the_old_checkout_and_the_host_on,
+    "code_install_without_the_one_shot_is_refused": code_install_without_the_one_shot_is_refused,
+    "code_command_is_checked_before_any_call": code_command_is_checked_before_any_call,
 }
 
 

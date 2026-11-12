@@ -2,12 +2,19 @@
 
     .venv/bin/python -m scripts.lakehouse.code_archive build --output <new folder> [--revision HEAD]
     .venv/bin/python -m scripts.lakehouse.code_archive check <code.tar.gz> <code.sha256>
+    .venv/bin/python -m scripts.lakehouse.code_archive cutover --old-revision <OLD> --new-revision <NEW>
 
 ``git archive`` alone cannot pass the first layer pin: the dbt packages are installed, not tracked, and the task has no network to install them. The builder
 exports the revision, installs the packages of that revision's lock from the pinned local archive (``dbt_package_archive``, no network) and writes both
 into one tar under ``dbt_packages/``. Names, order, owners, times and the gzip header are fixed, so the same revision and the same pinned packages always give
 the same bytes. The digest file holds the SHA-256 of the tarball, which is the value the launch passes to the task as the code digest.
 ``check`` applies the layout that the layer driver's pin phase needs, before anything is staged or claimed.
+
+A host runs the Airflow services from a checkout that their task definitions mount file by file. When a revision renames such a file, no order of two steps
+(new checkout, then new definitions, or the reverse) leaves every running service its files. ``build --overlap-from <OLD>`` writes the transition release:
+the revision plus the mounted files of the old revision that the new one lacks, taken from the old revision. With it the order is safe: the transition
+release first, the new definitions next, the plain release last. ``cutover`` lists, for each step and for the two wrong orders, the mounted paths that
+step's release lacks.
 """
 
 from __future__ import annotations
@@ -40,15 +47,76 @@ class ArchiveError(ValueError):
     """The code archive cannot be built, or it lacks what the layer pin needs."""
 
 
-def git(arguments: list[str], root: Path) -> str:
+def git(arguments: list[str], root: Path, strip: bool = True) -> str:
     done = run_command("git", arguments, cwd=root, timeout=300)
     if done.returncode:
         raise ArchiveError(f"git {arguments[0]} failed: {done.stderr.strip()[-300:]}")
-    return done.stdout.strip()
+    return done.stdout.strip() if strip else done.stdout
 
 
-def compose(git_tar: Path, packages: Path, output: Path) -> str:
-    """Write the deterministic ``output`` tarball from a ``git archive`` tar and an installed package folder; return the commit ID it carries."""
+SERVICES_FOLDER = "infra/services"
+CHECKOUT_PATH = re.compile(r'"\$\{local\.code_path\}/([A-Za-z0-9_./-]+)"')
+LAUNCH_FILES = re.compile(r"airflow_launch_files = \{\n(.*?)\n  \}", re.DOTALL)
+LAUNCH_FILE = re.compile(r'= "([A-Za-z0-9_./-]+)"')
+
+
+def mounted_paths(services_text: str) -> set[str]:
+    """The repository paths (files or folders) that the services stack mounts from the host checkout: the checkout volumes and the launch files."""
+    paths = set(CHECKOUT_PATH.findall(services_text))
+    for block in LAUNCH_FILES.findall(services_text):
+        paths.update(LAUNCH_FILE.findall(block))
+    return paths
+
+
+def tree_files(root: Path, commit: str) -> set[str]:
+    return {line for line in git(["ls-tree", "-r", "--name-only", commit], root).splitlines() if line}
+
+
+def services_text(root: Path, commit: str) -> str:
+    """The Terraform files of the services stack at ``commit``."""
+    names = [name for name in tree_files(root, commit) if name.startswith(f"{SERVICES_FOLDER}/") and name.endswith(".tf") and name.count("/") == 2]
+    return "\n".join(git(["show", f"{commit}:{name}"], root) for name in sorted(names))
+
+
+def present(path: str, files: set[str]) -> bool:
+    """A mounted path exists in a release as a file or as a folder with files in it."""
+    return path in files or any(name.startswith(f"{path}/") for name in files)
+
+
+def overlap_members(root: Path, old: str, new: str) -> dict[str, bytes]:
+    """The files that the old revision's definitions mount and the new revision lacks, with their content at the old revision."""
+    old_files, new_files = tree_files(root, old), tree_files(root, new)
+    gone = sorted(path for path in mounted_paths(services_text(root, old)) if path in old_files and not present(path, new_files))
+    return {path: git(["show", f"{old}:{path}"], root, strip=False).encode() for path in gone}
+
+
+def cutover_report(root: Path, old: str, new: str) -> dict[str, object]:
+    """For every step of the rollout and for the two wrong orders, the mounted paths the release of that step lacks. ``safe`` is true when no step of the right
+    order lacks one."""
+    old_files, new_files = tree_files(root, old), tree_files(root, new)
+    old_mounts, new_mounts = mounted_paths(services_text(root, old)), mounted_paths(services_text(root, new))
+    transition = new_files | set(overlap_members(root, old, new))
+
+    def lacking(mounts: set[str], files: set[str]) -> list[str]:
+        return sorted(path for path in mounts if not present(path, files))
+
+    states = {
+        "old definitions on the old release": lacking(old_mounts, old_files),
+        "old definitions on the transition release": lacking(old_mounts, transition),
+        "both generations on the transition release": lacking(old_mounts | new_mounts, transition),
+        "new definitions on the transition release": lacking(new_mounts, transition),
+        "new definitions on the final release": lacking(new_mounts, new_files),
+        "old definitions on the final release": lacking(old_mounts, new_files),
+        "new definitions on the old release": lacking(new_mounts, old_files),
+    }
+    wrong = ("old definitions on the final release", "new definitions on the old release")
+    return {"safe": not any(paths for name, paths in states.items() if name not in wrong), "states": states}
+
+
+def compose(git_tar: Path, packages: Path, output: Path, extras: dict[str, bytes] | None = None) -> str:
+    """Write the deterministic ``output`` tarball from a ``git archive`` tar and an installed package folder; return the commit ID it carries.
+
+    ``extras`` are added after the revision's files, in name order, with the revision's newest time: the old-revision files of a transition release."""
     with tarfile.open(git_tar) as source:
         revision = str(source.pax_headers.get("comment", ""))
         if not REVISION.fullmatch(revision):
@@ -64,6 +132,14 @@ def compose(git_tar: Path, packages: Path, output: Path) -> str:
         ):
             for member in members:
                 target.addfile(member, source.extractfile(member) if member.isfile() else None)
+            taken = {member.name.rstrip("/") for member in members}
+            for name, data in sorted((extras or {}).items()):
+                parts = Path(name).parts
+                if name.startswith("/") or ".." in parts or parts[:1] == (PACKAGES,) or name in taken:
+                    raise ArchiveError(f"an extra file may not shadow a file of the revision or enter {PACKAGES}: {name}")
+                info = tarfile.TarInfo(name)
+                info.size, info.mode, info.mtime, info.uid, info.gid, info.uname, info.gname = len(data), 0o644, mtime, 0, 0, "", ""
+                target.addfile(info, io.BytesIO(data))
             for path in sorted(packages.rglob("*")):
                 info = tarfile.TarInfo(f"{PACKAGES}/{path.relative_to(packages).as_posix()}")
                 info.mtime, info.uid, info.gid, info.uname, info.gname = mtime, 0, 0, "", ""
@@ -79,8 +155,10 @@ def compose(git_tar: Path, packages: Path, output: Path) -> str:
     return revision
 
 
-def build(output: Path, revision: str = "HEAD", root: Path = ROOT) -> dict[str, str]:
-    """Export ``revision``, install its locked dbt packages from the pinned local archive and write ``code.tar.gz`` and ``code.sha256`` to a new folder."""
+def build(output: Path, revision: str = "HEAD", root: Path = ROOT, overlap_from: str = "") -> dict[str, str]:
+    """Export ``revision``, install its locked dbt packages from the pinned local archive and write ``code.tar.gz`` and ``code.sha256`` to a new folder.
+
+    With ``overlap_from`` (an older revision) the archive is the transition release: it also holds the old revision's mounted files that ``revision`` lacks."""
     from scripts.lakehouse import dbt_package_archive  # needs PyYAML, which the task images do not carry, so only the host build imports it
 
     if output.exists():
@@ -101,11 +179,12 @@ def build(output: Path, revision: str = "HEAD", root: Path = ROOT) -> dict[str, 
         archive = root / json.loads(record.read_text())["archive"]["path"]
         dbt_package_archive.install(root, folder / Path(LOCK).name, record, archive, packages, hashlib.sha256(record.read_bytes()).hexdigest())
         output.mkdir(parents=True)
-        revision_id = compose(git_tar, packages, output / "code.tar.gz")
+        extras = overlap_members(root, git(["rev-parse", "--verify", f"{overlap_from}^{{commit}}"], root), commit) if overlap_from else {}
+        revision_id = compose(git_tar, packages, output / "code.tar.gz", extras)
     digest = hashlib.sha256((output / "code.tar.gz").read_bytes()).hexdigest()
     (output / "code.sha256").write_text(digest + "\n")
     check(output / "code.tar.gz", output / "code.sha256")
-    return {"revision": revision_id, "sha256": digest, "folder": str(output)}
+    return {"revision": revision_id, "sha256": digest, "folder": str(output), "overlap": sorted(extras)}
 
 
 def check(archive: Path, digest_file: Path | None = None, expected: str = "") -> str:
@@ -142,12 +221,24 @@ def main() -> int:
     built = commands.add_parser("build", help="write code.tar.gz and code.sha256 for a revision into a new folder")
     built.add_argument("--output", type=Path, required=True)
     built.add_argument("--revision", default="HEAD")
+    built.add_argument("--overlap-from", default="", help="an older revision: also carry its mounted files that --revision lacks (the transition release)")
+    cutover = commands.add_parser("cutover", help="list the mounted paths each rollout step lacks; exit 1 unless the right order is safe")
+    cutover.add_argument("--old-revision", required=True)
+    cutover.add_argument("--new-revision", default="HEAD")
     checked = commands.add_parser("check", help="refuse an archive the layer pin cannot use")
     checked.add_argument("archive", type=Path)
     checked.add_argument("digest", type=Path)
     args = parser.parse_args()
     try:
-        result = build(args.output, args.revision) if args.command == "build" else {"sha256": check(args.archive, args.digest)}
+        if args.command == "cutover":
+            report = cutover_report(
+                ROOT,
+                git(["rev-parse", "--verify", f"{args.old_revision}^{{commit}}"], ROOT),
+                git(["rev-parse", "--verify", f"{args.new_revision}^{{commit}}"], ROOT),
+            )
+            sys.stdout.write(json.dumps(report, indent=2) + "\n")
+            return 0 if report["safe"] else 1
+        result = build(args.output, args.revision, overlap_from=args.overlap_from) if args.command == "build" else {"sha256": check(args.archive, args.digest)}
     except (ArchiveError, OSError, KeyError, ValueError, tarfile.TarError) as error:
         sys.stderr.write(f"code archive refused: {error}\n")
         return 1

@@ -21,6 +21,7 @@ import os
 import re
 import shutil
 import sys
+import tarfile
 import tempfile
 import time
 import traceback
@@ -774,6 +775,121 @@ def case_builder_output_is_the_same_bytes_every_time(case: Case) -> None:
     require(digest == case.digest, "the builder wrote different bytes for the same commit and packages")
 
 
+CUTOVER_OLD = """locals {
+  airflow_launch_files = {
+    code_jobs_table    = "config/orchestration/old_table.json"
+    code_launch_config = "config/orchestration/launch.json"
+  }
+  airflow_code_volumes = merge({
+    code_dags   = "${local.code_path}/dags"
+    code_client = "${local.code_path}/orchestration/client.py"
+  }, local.airflow_launch_volumes)
+}
+"""
+CUTOVER_FILES = {"dags/a.py": b"a\n", "orchestration/client.py": b"c\n", "config/orchestration/launch.json": b"{}\n"}
+
+
+def cutover_repository(folder: Path, renamed: bool = True) -> tuple[Path, str, str]:
+    """A throwaway repository with two commits: the first mounts a table file, the second renames it (or only edits another file) and mounts the new name."""
+    source = folder / "cutover_src"
+    (source / "infra/services").mkdir(parents=True)
+    identity = ["-c", "user.name=E2E", "-c", "user.email=e2e@example.invalid"]
+
+    def write(files: dict[str, bytes]) -> None:
+        for relative, data in files.items():
+            (source / relative).parent.mkdir(parents=True, exist_ok=True)
+            (source / relative).write_bytes(data)
+
+    def commit(message: str) -> str:
+        for arguments in (["add", "-A"], [*identity, "commit", "-q", "-m", message]):
+            done = run_command("git", arguments, cwd=source, timeout=60)
+            require(done.returncode == 0, done.stderr)
+        return run_command("git", ["rev-parse", "HEAD"], cwd=source, timeout=60).stdout.strip()
+
+    require(run_command("git", ["init", "-q"], cwd=source, timeout=60).returncode == 0, "git init failed")
+    write({**CUTOVER_FILES, "config/orchestration/old_table.json": b'{"table": 1}\n', "infra/services/airflow.tf": CUTOVER_OLD.encode()})
+    old = commit("old")
+    if renamed:
+        (source / "config/orchestration/old_table.json").rename(source / "config/orchestration/new_table.json")
+        write({"infra/services/airflow.tf": CUTOVER_OLD.replace("old_table", "new_table").encode()})
+    else:
+        write({"dags/a.py": b"changed\n"})
+    return source, old, commit("new")
+
+
+def archive_names(path: Path) -> set[str]:
+    with tarfile.open(path) as tar:
+        return set(tar.getnames())
+
+
+def case_cutover_names_the_files_an_old_definition_still_mounts(case: Case) -> None:
+    source, old, new = cutover_repository(case.root)
+    mounted = code_archive.mounted_paths(code_archive.services_text(source, old))
+    require(mounted == {"dags", "orchestration/client.py", "config/orchestration/old_table.json", "config/orchestration/launch.json"}, sorted(mounted))
+    overlap = code_archive.overlap_members(source, old, new)
+    require(overlap == {"config/orchestration/old_table.json": b'{"table": 1}\n'}, sorted(overlap))
+
+
+def case_cutover_without_a_rename_carries_nothing(case: Case) -> None:
+    source, old, new = cutover_repository(case.root, renamed=False)
+    require(code_archive.overlap_members(source, old, new) == {}, "a revision that renames no mounted file needs no overlap")
+    require(code_archive.cutover_report(source, old, new)["safe"] is True, "the order matters only for a renamed file")
+
+
+def case_transition_release_holds_both_names_and_the_final_only_the_new(case: Case) -> None:
+    source, old, new = cutover_repository(case.root)
+    packages = case.root / "cutover_packages"
+    (packages / "dbt_utils").mkdir(parents=True)
+    (packages / "dbt_utils/dbt_project.yml").write_text("name: dbt_utils\n")
+    git_tar = case.root / "cutover.tar"
+    done = run_command("git", ["archive", "--format=tar", f"--output={git_tar}", new], cwd=source, timeout=60)
+    require(done.returncode == 0, done.stderr)
+    final, transition = case.root / "final.tar.gz", case.root / "transition.tar.gz"
+    code_archive.compose(git_tar, packages, final)
+    code_archive.compose(git_tar, packages, transition, code_archive.overlap_members(source, old, new))
+    names = {path: archive_names(path) for path in (final, transition)}
+    require("config/orchestration/new_table.json" in names[final] and "config/orchestration/old_table.json" not in names[final], sorted(names[final]))
+    require(
+        {"config/orchestration/new_table.json", "config/orchestration/old_table.json"} <= names[transition],
+        "the transition release lacks one of the two names",
+    )
+    require(names[transition] - names[final] == {"config/orchestration/old_table.json"}, "the transition release holds more than the old name")
+    again = case.root / "transition_again.tar.gz"
+    code_archive.compose(git_tar, packages, again, code_archive.overlap_members(source, old, new))
+    require(sha_of(again) == sha_of(transition), "the transition release is not the same bytes every time")
+
+
+def case_transition_release_refuses_an_extra_that_shadows_or_enters_the_packages(case: Case) -> None:
+    source, old, new = cutover_repository(case.root)
+    packages = case.root / "refuse_packages"
+    (packages / "dbt_utils").mkdir(parents=True)
+    (packages / "dbt_utils/dbt_project.yml").write_text("name: dbt_utils\n")
+    git_tar = case.root / "refuse.tar"
+    done = run_command("git", ["archive", "--format=tar", f"--output={git_tar}", new], cwd=source, timeout=60)
+    require(done.returncode == 0, done.stderr)
+    for name in ("dags/a.py", "dbt_packages/dbt_utils/extra.sql", "../escape.json", "/absolute.json"):
+        try:
+            code_archive.compose(git_tar, packages, case.root / "refused.tar.gz", {name: b"x"})
+        except code_archive.ArchiveError:
+            continue
+        raise AssertionError(f"an extra named {name} was accepted")
+
+
+def case_cutover_is_safe_in_order_and_unsafe_out_of_order(case: Case) -> None:
+    source, old, new = cutover_repository(case.root)
+    report = code_archive.cutover_report(source, old, new)
+    states = report["states"]
+    require(report["safe"] is True, report)
+    for name in ("old definitions on the old release", "old definitions on the transition release", "both generations on the transition release"):
+        require(states[name] == [], (name, states[name]))
+    for name in ("new definitions on the transition release", "new definitions on the final release"):
+        require(states[name] == [], (name, states[name]))
+    require(states["old definitions on the final release"] == ["config/orchestration/old_table.json"], "the final release alone strands an old definition")
+    require(
+        states["new definitions on the old release"] == ["config/orchestration/new_table.json"], "the services apply before the code strands a new definition"
+    )
+
+
 def case_dry_run_leaves_no_state_that_blocks_the_real_run(case: Case) -> None:
     require(case.phase("silver", "pin", extra=["--dry-run"]) == 0, case.err)
     require(not STATE, "a dry run wrote state to the bucket")
@@ -1152,6 +1268,11 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,
+    "cutover: the files an old definition still mounts are named from the old revision": case_cutover_names_the_files_an_old_definition_still_mounts,
+    "cutover: a revision that renames no mounted file carries nothing": case_cutover_without_a_rename_carries_nothing,
+    "cutover: the transition release holds both names, the final one only the new": case_transition_release_holds_both_names_and_the_final_only_the_new,
+    "cutover: an extra that shadows a member or enters the packages is refused": case_transition_release_refuses_an_extra_that_shadows_or_enters_the_packages,
+    "cutover: every step in order is safe and the two wrong orders are not": case_cutover_is_safe_in_order_and_unsafe_out_of_order,
     "a dry run leaves no state that blocks the real run": case_dry_run_leaves_no_state_that_blocks_the_real_run,
     "a refused dbt upload does not fail the gold upload": case_dbt_upload_failure_does_not_fail_the_gold_upload,
     "a wrong code digest stops the first phase": case_wrong_code_digest,

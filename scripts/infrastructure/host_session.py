@@ -614,6 +614,19 @@ class Session:
             if not succeeded:
                 self.stop_after_failure("start", keep_on)
 
+    def install_code(self, code: tuple[str, str]) -> None:
+        """Show the staged code archive ``code`` (run ID, code digest) as /data/repo on a host that is already on, and redeploy nothing.
+
+        Used when the code and the service definitions must change in separate steps: the running services keep the files their current definitions mount, and
+        a failed fetch leaves the previous checkout. It never turns the host on and never forces a deployment, so a stopped host is refused.
+        """
+        if CODE_FETCH not in self.names.one_shot:
+            raise HostSessionError("code needs the code_fetch one-shot; apply the services stack with code_fetch_task_role_arn first")
+        if not self.active_instances():
+            raise HostSessionError("the host is off or has no connected container instance; run start first")
+        self.place_code(code)
+        self.step("code_installed", f"{code[0]}, no service redeployed")
+
     def bootstrap(self, again: bool = False, keep_on: bool = False) -> None:
         """Run polaris_bootstrap once, only after postgres and polaris are stable. Once begun, any failure or SIGTERM stops the host unless ``keep_on``."""
         if self.marker.exists() and not again:
@@ -666,6 +679,9 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
     start.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
     start.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
+    install = commands.add_parser("code", help="host already on: show a staged code archive as /data/repo and redeploy no service")
+    install.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo")
+    install.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
     bootstrap = commands.add_parser("bootstrap", help="run polaris_bootstrap once")
     bootstrap.add_argument("--again", action="store_true", help="run it again although it already ran")
     bootstrap.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
@@ -678,7 +694,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, interrupted or terminated step, 2 on a configuration error."""
     arguments = build_parser().parse_args(argv)
     code = None
-    if arguments.command == "start" and (arguments.code_run is not None or arguments.code_sha256 is not None):
+    if (arguments.command == "start" and (arguments.code_run is not None or arguments.code_sha256 is not None)) or arguments.command == "code":
         if not CODE_RUN_ID.fullmatch(arguments.code_run or "") or not CODE_SHA256.fullmatch(arguments.code_sha256 or ""):
             sys.stderr.write("usage: give --code-run <run ID> and --code-sha256 <64 lowercase hex characters> together\n")
             return 2
@@ -692,6 +708,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "start":
             session.start(arguments.keep_on, code=code)
+        elif arguments.command == "code":
+            session.install_code(code)
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "stop":
