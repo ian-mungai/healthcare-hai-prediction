@@ -43,16 +43,14 @@ def validate_task_credentials(*, require_catalog: bool = True) -> bool:
     if re.fullmatch(r"/v2/credentials/[A-Za-z0-9_-]+", os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "")) is None:
         raise RuntimeError("task_credential_provider_missing")
     if require_catalog:
-        endpoint = urlsplit(os.environ.get("POLARIS_URI", ""))
-        if (
-            endpoint.scheme not in ("http", "https")
-            or not endpoint.hostname
-            or endpoint.username
-            or endpoint.password
-            or endpoint.query
-            or endpoint.fragment
-            or endpoint.path != "/api/catalog"
-        ):
+        try:
+            endpoint = urlsplit(os.environ.get("POLARIS_URI", ""))
+            parts = (endpoint.scheme, endpoint.hostname, endpoint.username, endpoint.password, endpoint.query, endpoint.fragment, endpoint.path)
+        except ValueError:
+            # The parser's message repeats the address, so the refusal carries its fixed reason only.
+            raise RuntimeError("task_catalog_endpoint_refused") from None
+        scheme, hostname, username, password, query, fragment, path = parts
+        if scheme not in ("http", "https") or not hostname or username or password or query or fragment or path != "/api/catalog":
             raise RuntimeError("task_catalog_endpoint_refused")
     return True
 

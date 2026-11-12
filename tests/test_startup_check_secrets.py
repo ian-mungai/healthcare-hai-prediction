@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from scripts.infrastructure import startup_check
+from scripts.lakehouse import ecs_engine
 from tests.startup_check_support import Network, host_environment, install_network
 from tests.support import check
 
@@ -102,3 +103,29 @@ def test_an_unreadable_dbt_profile_does_not_echo_its_content(monkeypatch: pytest
     text = output_of(capsys, lambda: startup_check.check_build("silver", "real", profiles))
     free_of_secrets(text)
     check("dbt_profile_unreadable" in text, f"the cause is named: {text}")
+
+
+@pytest.mark.parametrize(
+    "address", ["http://[SYNTHETIC_PASSWORD]/api/catalog", "http://[SYNTHETIC_PASSWORD:5000/api/catalog", f"http://{EMBEDDED}@[::1/api/catalog"]
+)
+def test_a_malformed_catalog_address_is_refused_by_the_shared_validator_with_its_fixed_reason(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    """The validator is shared with the build target selection, so its refusal must be the fixed reason and carry no parser message or chained error."""
+    host_environment(monkeypatch, polaris=address)
+    with pytest.raises(RuntimeError) as caught:
+        ecs_engine.validate_task_credentials(require_catalog=True)
+    check(str(caught.value) == "task_catalog_endpoint_refused", f"the refusal is the fixed reason: {caught.value!s}")
+    check(caught.value.__cause__ is None and caught.value.__suppress_context__, "no parser error is chained to it")
+
+
+@pytest.mark.parametrize("address", ["http://[SYNTHETIC_PASSWORD]/api/catalog", "http://[SYNTHETIC_PASSWORD:5000/api/catalog"])
+def test_a_malformed_catalog_address_is_named_as_a_credentials_finding(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], address: str
+) -> None:
+    host_environment(monkeypatch, polaris=address)
+    install_network(monkeypatch, Network())
+    text = output_of(capsys, lambda: startup_check.check_environment("silver", polaris=True))
+    free_of_secrets(text)
+    check("credentials task_catalog_endpoint_refused" in text and "internal_error" not in text, f"the named finding is shown: {text}")
+    text = output_of(capsys, lambda: startup_check.check_build("silver", "real", tmp_path / "profiles.yml"))
+    free_of_secrets(text)
+    check("dbt_target_refused task_catalog_endpoint_refused" in text, f"the build check names the refusal: {text}")
