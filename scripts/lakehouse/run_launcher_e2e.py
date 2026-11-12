@@ -580,11 +580,74 @@ def hold_forever(env: Env) -> None:
     env.daemon.script = lambda container: None
 
 
-def catch_interrupt() -> Any:
-    """Make SIGINT raise ``KeyboardInterrupt`` here, even when the invoker left it ignored (a background job does); return the earlier handler."""
-    saved = signal.getsignal(signal.SIGINT)
-    signal.signal(signal.SIGINT, signal.default_int_handler)
-    return saved
+class PoolSignal:
+    """The one SIGINT that a pool case sends to its own process, kept from reaching anything but the pool.
+
+    The handler is installed before the helper thread can signal and stays until the helper has been joined and the case has cleaned up, so no point
+    between the pool's return and the end of the cleanup is exposed. A signal that the helper sent is raised as ``KeyboardInterrupt`` only while the
+    main thread is inside the pool's entry function (``build_cases``); anywhere else it is recorded and ``check`` turns it into a case failure. A signal
+    the helper did not send (an interrupt of the run) is raised as usual. The handler is also installed when the invoker left SIGINT ignored, as a
+    background job does."""
+
+    def __init__(self, pool_entry: Callable[..., Any]) -> None:
+        self.entry = getattr(pool_entry, "__code__", None)
+        self.returned = threading.Event()
+        self.failures: list[BaseException] = []
+        self.late: list[float] = []
+        self.sent = False
+        self.delivered = False
+        self.saved: Any = None
+        self.thread: threading.Thread | None = None
+
+    def install(self) -> None:
+        self.saved = signal.signal(signal.SIGINT, self.handle)
+
+    def uninstall(self) -> None:
+        """Restore the earlier handler. A helper that outlived its deadline may still signal, so the scoped handler then stays."""
+        if self.thread is None or not self.thread.is_alive():
+            signal.signal(signal.SIGINT, self.saved)
+
+    def send(self) -> None:
+        """Interrupt the pool from the helper thread once, unless the pool has already returned."""
+        if not self.returned.is_set() and not self.delivered:
+            self.delivered = self.sent = True
+            os.kill(os.getpid(), signal.SIGINT)
+
+    def handle(self, signum: int, frame: Any) -> None:
+        if not self.sent:
+            raise KeyboardInterrupt
+        self.sent = False
+        while frame is not None:
+            if frame.f_code is self.entry:
+                raise KeyboardInterrupt
+            frame = frame.f_back
+        self.late.append(time.monotonic())
+
+    def drive(self, body: Callable[[], None]) -> Callable[[], None]:
+        """The helper thread's function: a failed helper is the case's failure, and it still interrupts a pool that has not returned, so that pool
+        does not run to its own deadline."""
+
+        def run() -> None:
+            try:
+                body()
+            except Exception as error:
+                self.failures.append(error)
+                self.send()
+
+        return run
+
+    def finish(self, thread: threading.Thread, seconds: float = 150.0) -> None:
+        """The pool has returned: let the helper end within a deadline. The handler stays installed."""
+        self.returned.set()
+        self.thread = thread
+        join_driver(thread, self.failures, seconds)
+
+    def check(self) -> None:
+        """Fail the case when the helper failed or an interrupt arrived outside the pool."""
+        if self.failures:
+            raise CaseFailure(f"the interrupt helper failed: {type(self.failures[0]).__name__}: {self.failures[0]}") from self.failures[0]
+        if self.late:
+            raise CaseFailure("the interrupt arrived after the pool had returned, outside the pool's own handling")
 
 
 def orphan_names(env: Env) -> list[str]:
@@ -8609,17 +8672,10 @@ class PoolFaultClient(launcher.LauncherClient):
 
 
 def join_driver(thread: threading.Thread, failures: list[BaseException], seconds: float = 150.0) -> None:
-    """Join a case's helper thread within a deadline. A SIGINT sent after the pool returned lands here as a ``KeyboardInterrupt``: it is taken as a failure of
-    the case (the helper signalled late) and never leaves the case, so the runner goes on to the next one."""
-    deadline = time.monotonic() + seconds
-    while thread.is_alive():
-        try:
-            thread.join(1.0)
-        except KeyboardInterrupt:
-            failures.append(RuntimeError("an interrupt arrived after the pool had returned"))
-        if time.monotonic() > deadline:
-            failures.append(TimeoutError(f"the helper thread did not end within {seconds:g} s"))
-            return
+    """Join a case's helper thread within a deadline; a helper that outlasts it is a failure of the case."""
+    thread.join(seconds)
+    if thread.is_alive():
+        failures.append(TimeoutError(f"the helper thread did not end within {seconds:g} s"))
 
 
 @case("staging_pool_socket_loss", stub_host=True, pool_fault="socket_loss")
@@ -8655,19 +8711,10 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
     fault = str(env.settings.get("pool_fault", "plain"))
     names = [f"l1a_pool_{fault}_a", f"l1a_pool_{fault}_b"]
     jobs = [(name, tuple(staging.BASE), frozenset[str]()) for name in names]
-    saved_sigint = catch_interrupt()
+    pool_signal = PoolSignal(staging.build_cases)
     gate = env.daemon.add_gate("remove", "before")  # one removal stays unresolved while the pool is interrupted
     interrupted: list[BaseException] = []
-    driver_failures: list[BaseException] = []
-    pool_returned = threading.Event()
     observed: dict[str, Any] = {}
-
-    def interrupt_when_running() -> None:
-        try:
-            drive_interrupt()
-        except Exception as error:
-            # A failed driver is the case's failure: it is raised by the case once the pool has returned, never by a signal outside the pool's try.
-            driver_failures.append(error)
 
     def drive_interrupt() -> None:
         try:
@@ -8677,9 +8724,7 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
                 "two workers",
             )
         finally:
-            # The interrupt stops a pool that still runs; once the pool has returned, a signal would land in the case's own cleanup.
-            if not pool_returned.is_set():
-                os.kill(os.getpid(), signal.SIGINT)
+            pool_signal.send()
         try:
             env.wait(lambda: all(a["cancel_intent"] for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:")), 10, "cancel intents")
             observed["persisted_without_fallback"] = True
@@ -8697,7 +8742,8 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
         observed["joined_before_gate_opened"] = bool(observed.get("returned"))
         gate.release()
 
-    thread = threading.Thread(target=interrupt_when_running)
+    pool_signal.install()
+    thread = threading.Thread(target=pool_signal.drive(drive_interrupt))
     thread.start()
     begun = time.monotonic()
     try:
@@ -8706,15 +8752,13 @@ def staging_pool_interrupt(env: Env) -> dict[str, bool]:
         interrupted.append(error)
     finally:
         observed["returned"] = time.monotonic()
-        pool_returned.set()
-        join_driver(thread, driver_failures)
-        signal.signal(signal.SIGINT, saved_sigint)
+        pool_signal.finish(thread)
         staging.TEST_REGISTRY = None
         staging.launcher_client = saved_factory
         for name in names:
             shutil.rmtree(staging.CASES / name, ignore_errors=True)
-    if driver_failures:
-        raise CaseFailure(f"the interrupt driver failed: {type(driver_failures[0]).__name__}: {driver_failures[0]}") from driver_failures[0]
+        pool_signal.uninstall()
+    pool_signal.check()
     took = time.monotonic() - begun
     state = env.state()
     attempts = [a for a in state["attempts"].values() if a["owner"].startswith("alloc:")]
@@ -8745,8 +8789,8 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
     fault_client = PoolFaultClient(env.config)
     fault_client.fault, fault_client.failed, fault_client.acknowledged = str(env.settings.get("pool_fault", "unavailable")), set(), []
     staging.launcher_client = lambda: fault_client
-    saved_sigint = catch_interrupt()
-    returned = threading.Event()
+    pool_signal = PoolSignal(staging.build_cases)
+    returned = pool_signal.returned
     observed: dict[str, Any] = {}
     # Parallel shards share the case folder, so each fault's case keeps its own folder names.
     fault = str(env.settings.get("pool_fault", "plain"))
@@ -8755,7 +8799,7 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
     def interrupt() -> None:
         env.wait(lambda: len([a for a in env.state()["attempts"].values() if a["phase"] == "started" and a["owner"].startswith("alloc:")]) == 2, 30)
         observed["at"] = time.monotonic()
-        os.kill(os.getpid(), signal.SIGINT)
+        pool_signal.send()
         returned.wait(8)  # rescue the unfixed joining path, without claiming its cancellation was successful
         allocation = next(a["owner"].partition(":")[2] for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:"))
         observed["allocation"] = allocation
@@ -8767,7 +8811,8 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
                 env.wait_ended(a["id"])
         fault_client.fault = ""
 
-    thread = threading.Thread(target=interrupt)
+    pool_signal.install()
+    thread = threading.Thread(target=pool_signal.drive(interrupt))
     thread.start()
     error: BaseException | None = None
     try:
@@ -8776,13 +8821,13 @@ def staging_pool_cancel_unresolved(env: Env) -> dict[str, bool]:
         error = caught
     finally:
         observed["return_at"] = time.monotonic()
-        returned.set()
-        thread.join(20)
-        signal.signal(signal.SIGINT, saved_sigint)
+        pool_signal.finish(thread, 20)
         staging.TEST_REGISTRY = None
         staging.launcher_client = saved_factory
         for name in names:
             shutil.rmtree(staging.CASES / name, ignore_errors=True)
+        pool_signal.uninstall()
+    pool_signal.check()
     allocation = observed["allocation"]
     if env.state()["allocations"][allocation]["state"] == "held":
         env.client().release_allocation(allocation)
@@ -8817,8 +8862,8 @@ def staging_pool_launcher_gone(env: Env) -> dict[str, bool]:
     fault_client = PoolFaultClient(env.config)
     fault_client.fault, fault_client.failed, fault_client.acknowledged = "gone_after_cancel", set(), []
     staging.launcher_client = lambda: fault_client
-    saved_sigint = catch_interrupt()
-    returned = threading.Event()
+    pool_signal = PoolSignal(staging.build_cases)
+    returned = pool_signal.returned
     observed: dict[str, Any] = {}
     names = ["l1a_gone_a", "l1a_gone_b"]
     gate = env.daemon.add_gate("remove", "before")  # the cancelled containers stay until the launcher is back, so no attempt ends early
@@ -8826,7 +8871,7 @@ def staging_pool_launcher_gone(env: Env) -> dict[str, bool]:
     def interrupt() -> None:
         env.wait(lambda: len([a for a in env.state()["attempts"].values() if a["phase"] == "started" and a["owner"].startswith("alloc:")]) == 2, 30)
         observed["at"] = time.monotonic()
-        os.kill(os.getpid(), signal.SIGINT)
+        pool_signal.send()
         returned.wait(20)
         attempts = [a for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:")]
         observed["allocation"] = attempts[0]["owner"].partition(":")[2]
@@ -8837,7 +8882,8 @@ def staging_pool_launcher_gone(env: Env) -> dict[str, bool]:
         for a in attempts:
             env.wait_ended(a["id"])
 
-    thread = threading.Thread(target=interrupt)
+    pool_signal.install()
+    thread = threading.Thread(target=pool_signal.drive(interrupt))
     thread.start()
     error: BaseException | None = None
     try:
@@ -8846,13 +8892,13 @@ def staging_pool_launcher_gone(env: Env) -> dict[str, bool]:
         error = caught
     finally:
         observed["return_at"] = time.monotonic()
-        returned.set()
-        thread.join(40)
-        signal.signal(signal.SIGINT, saved_sigint)
+        pool_signal.finish(thread, 40)
         staging.TEST_REGISTRY = None
         staging.launcher_client = saved_factory
         for name in names:
             shutil.rmtree(staging.CASES / name, ignore_errors=True)
+        pool_signal.uninstall()
+    pool_signal.check()
     allocation = observed["allocation"]
     if env.state()["allocations"][allocation]["state"] == "held":
         env.client().release_allocation(allocation)
@@ -8882,15 +8928,15 @@ def staging_pool_removal_held(env: Env) -> dict[str, bool]:
     pool_client = PoolFaultClient(env.config)
     pool_client.fault, pool_client.failed, pool_client.acknowledged = "", set(), []
     staging.launcher_client = lambda: pool_client
-    saved_sigint = catch_interrupt()
-    returned = threading.Event()
+    pool_signal = PoolSignal(staging.build_cases)
+    returned = pool_signal.returned
     observed: dict[str, Any] = {}
     names = ["l1a_removal_a", "l1a_removal_b"]
     gate = env.daemon.add_gate("remove", "before")  # Docker removal hangs; the launcher keeps answering with the attempt in exiting
 
     def interrupt() -> None:
         env.wait(lambda: len([a for a in env.state()["attempts"].values() if a["phase"] == "started" and a["owner"].startswith("alloc:")]) == 2, 30)
-        os.kill(os.getpid(), signal.SIGINT)
+        pool_signal.send()
         env.wait(lambda: all(a["cancel_intent"] for a in env.state()["attempts"].values() if a["owner"].startswith("alloc:")), 10, "cancel intents")
         observed["persisted_at"] = time.monotonic()
         returned.wait(8)  # rescue an unbounded wait without claiming it was bounded
@@ -8903,7 +8949,8 @@ def staging_pool_removal_held(env: Env) -> dict[str, bool]:
         for a in attempts:
             env.wait_ended(a["id"])
 
-    thread = threading.Thread(target=interrupt)
+    pool_signal.install()
+    thread = threading.Thread(target=pool_signal.drive(interrupt))
     thread.start()
     error: BaseException | None = None
     try:
@@ -8912,13 +8959,13 @@ def staging_pool_removal_held(env: Env) -> dict[str, bool]:
         error = caught
     finally:
         observed["return_at"] = time.monotonic()
-        returned.set()
-        thread.join(40)
-        signal.signal(signal.SIGINT, saved_sigint)
+        pool_signal.finish(thread, 40)
         staging.TEST_REGISTRY = None
         staging.launcher_client = saved_factory
         for name in names:
             shutil.rmtree(staging.CASES / name, ignore_errors=True)
+        pool_signal.uninstall()
+    pool_signal.check()
     allocation = observed["allocation"]
     if env.state()["allocations"][allocation]["state"] == "held":
         env.client().release_allocation(allocation)
