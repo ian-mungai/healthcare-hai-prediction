@@ -319,6 +319,10 @@ def _host_room_cases(
 
     env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
 
+    def stack(name: str) -> str:
+        """The folder of one Terraform stack in the fixture workspace: the directory the renderer hands Terraform as -chdir (no repository file is read)."""
+        return str((workspace / "infra" / name).resolve())
+
     def invoke(variables: dict[str, Any]) -> Any:
         prep.write_text(json.dumps(document | {"variables": variables}, sort_keys=True) + "\n")
         return run_command(
@@ -348,7 +352,7 @@ def _host_room_cases(
     checks["host_jobs_get_the_services_job_room_and_its_binding"] = (
         result.returncode == 0
         and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
-        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_capacity_binding"]]
+        and asked == [["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]]
     )
     rendered = output.read_bytes()
     for name, text, code in (
@@ -374,7 +378,7 @@ def _host_room_cases(
     checks["publisher_gets_the_services_job_room_and_its_binding"] = (
         result.returncode == 0
         and json.loads(output.read_text()) == values | publisher_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
-        and asked == [["-chdir=" + str((workspace / "infra/services").resolve()), "output", "-json", "host_capacity_binding"]]
+        and asked == [["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]]
     )
     rendered = output.read_bytes()
     for name, text, code in (("a_failed_services_output", "", 1), ("a_null_binding", "null", 0)):

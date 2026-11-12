@@ -86,6 +86,8 @@
     "lakehouse_features": [
       "^scripts/lakehouse/(feature_allowlist|feature_sources|run_feature_sources_e2e|feature_columns|run_feature_columns_e2e|feature_shards|run_duckdb_bounds_cases|task_capacity|run_task_capacity_cases)\\.py$",
       "^monitoring/(current_window|drift_check)\\.py$",
+      "^(monitoring|scripts/training)/aws_run\\.py$",
+      "^dags/gold_transform_dag\\.py$",
       "^scripts/ci/groups/lakehouse_features\\.sh$",
       "^config/quality/feature_cases\\.json$",
       "^feature_store/",
