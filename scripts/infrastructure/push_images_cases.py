@@ -56,6 +56,8 @@ Case = Callable[[], dict[str, bool]]
 def scratch_root(directory: Path) -> Path:
     """A scratch repository root: links to everything in the repository except the folders of the two image files, which hold copies.
 
+    The metadata copy starts with the three OpenMetadata digests unresolved, as before the owner records them, whatever the repository file holds.
+
     The check reads build contexts and local pins through the root, so the links keep it valid. Only the two copies and the variable file are written.
     """
     for entry in REPO_ROOT.iterdir():
@@ -72,6 +74,11 @@ def scratch_root(directory: Path) -> Path:
                 shutil.copy(entry, directory / top / copied / entry.name)
             elif entry.name != "images.auto.tfvars.json":
                 (directory / top / copied / entry.name).symlink_to(entry)
+    metadata = directory / METADATA_FILE
+    document = json.loads(metadata.read_text(encoding="utf-8"))
+    for key in METADATA_KEY.values():
+        document["images"][key]["digest"] = "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
+    metadata.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
     return directory
 
 
