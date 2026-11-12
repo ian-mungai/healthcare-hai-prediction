@@ -133,6 +133,9 @@ FAMILY_NAME = re.compile(r"[a-z][a-z0-9_]*")
 # The frozen record of a host job cap change follows the reason in the hold value: the host families the reviewed jobs inputs select, their digest, the
 # project identity and the services capacity binding. Only the change's own hold carries it, and every rewrite of that hold keeps it.
 FROZEN_MARK = " | frozen "
+FROZEN_KEYS = {"jobs_sha256", "families", "project", "environment", "binding"}
+SHA256_HEX = re.compile(r"[0-9a-f]{64}")
+PROJECT_NAME = re.compile(r"[a-z][a-z0-9_]{2,79}")
 
 
 def finish_command(token: str) -> str:
@@ -204,18 +207,34 @@ def frozen_suffix(record: dict[str, Any]) -> str:
 
 
 def read_frozen(value: str | None) -> dict[str, Any] | None:
-    """The frozen record in a hold value, or None when the value has none or a malformed one."""
+    """The frozen record in a hold value, None when the value has no record mark, and a refusal when the record after the mark is not exactly the schema:
+    a complete lowercase SHA-256, a project and environment that the configuration allows, sorted full family names of that project and environment and,
+    when present, a capacity binding in the rendered form. A record that does not match is never read as authority."""
     if value is None or FROZEN_MARK not in value:
         return None
+    from scripts.infrastructure.render_jobs_config import BINDING_FORM  # one form of the binding for the renderer and the record
+
+    refusal = ServicesApplyError(
+        "the frozen record in the launch hold is malformed, so it is not trusted and nothing was changed. Freeze the reviewed jobs inputs again with "
+        "hold --migration --jobs-inputs and --jobs-sha256"
+    )
     try:
         record = json.loads(value.rsplit(FROZEN_MARK, 1)[1])
     except ValueError:
-        return None
-    if not isinstance(record, dict) or not isinstance(record.get("families"), list) or not all(isinstance(name, str) for name in record["families"]):
-        return None
-    if not all(isinstance(record.get(key), str) for key in ("jobs_sha256", "project", "environment")) or not isinstance(record.get("binding", ""), str):
-        return None
-    return record
+        raise refusal from None
+    if not isinstance(record, dict) or not {"jobs_sha256", "families", "project", "environment"} <= set(record) <= FROZEN_KEYS:
+        raise refusal
+    digest, families, project, environment = record["jobs_sha256"], record["families"], record["project"], record["environment"]
+    if not (isinstance(digest, str) and SHA256_HEX.fullmatch(digest) and isinstance(project, str) and PROJECT_NAME.fullmatch(project)):
+        raise refusal
+    if environment not in ("dev", "prod") or not isinstance(families, list) or families != sorted(set(families)):
+        raise refusal
+    name = re.compile(f"{re.escape(project)}_{environment}_job_[a-z][a-z0-9_]*_host")
+    if not all(isinstance(family, str) and name.fullmatch(family) for family in families):
+        raise refusal
+    if "binding" in record and not (isinstance(record["binding"], str) and BINDING_FORM.fullmatch(record["binding"])):
+        raise refusal
+    return dict(record)
 
 
 def jobs_registration_problem(cli: Any, settings: dict[str, str], frozen: dict[str, Any] | None) -> str | None:
@@ -388,16 +407,32 @@ class Steps:
         the change starts with, and it replaces any earlier record. A hold over a pending host job cap change keeps its name and its frozen record, so a
         plain hold never turns it into a hold that settle or resolve can clear."""
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        text = reason.strip()[:200]
+        if FROZEN_MARK in reason or FROZEN_MARK in text:
+            raise ServicesApplyError(
+                f"the hold reason may not contain {FROZEN_MARK.strip()!r} with its spaces, which separates the frozen record. Nothing was changed"
+            )
         if frozen is not None and not migration:
             raise ServicesApplyError("a frozen jobs selection belongs only to the hold of a host job cap change (--migration)")
+        found = self.read_hold()
+        pending = found is not None and found.startswith(MIGRATION_HOLD)
+        existing: dict[str, Any] | None = None
+        try:
+            existing = read_frozen(found) if pending else None
+        except ServicesApplyError:
+            if frozen is None:
+                raise  # a malformed record is never carried over; fresh reviewed inputs repair it
         record: dict[str, Any] | None
-        if migration and frozen is not None:
+        if frozen is not None:
+            dropped = sorted(set(existing["families"]) - set(frozen["families"])) if existing is not None else []
+            if existing is not None and (dropped or (existing["project"], existing["environment"]) != (frozen["project"], frozen["environment"])):
+                raise ServicesApplyError(
+                    f"the pending host job cap change froze {', '.join(dropped) or 'another project identity'}, which these jobs inputs do not select. The "
+                    "frozen selection stays until the change is finished; freeze inputs that select every frozen family. Nothing was changed"
+                )
             named, record = True, frozen
         else:
-            found = self.read_hold()
-            pending = found is not None and found.startswith(MIGRATION_HOLD)
-            named, record = migration or pending, read_frozen(found) if pending else None
-        text = reason.replace(FROZEN_MARK, " ").strip()[:200]
+            named, record = migration or pending, existing
         self.write(f"{MIGRATION_HOLD if named else 'held'} by services_apply at {stamp}: {text}{frozen_suffix(record) if named and record else ''}")
         self.clock.sleep(HOLD_SETTLE_SECONDS)
         self.report(f"launch hold: set, waited {HOLD_SETTLE_SECONDS} s for any RunTask already allowed")
