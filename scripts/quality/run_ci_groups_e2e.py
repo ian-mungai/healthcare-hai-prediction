@@ -68,6 +68,16 @@ PYTHON = ROOT / ".venv" / "bin" / "python"
 RUNNER = "scripts/quality/run_ci_groups_e2e.py"
 GROUP_FILES = "scripts/ci/groups"
 BODY_FILES = tuple(sorted(path.relative_to(ROOT).as_posix() for path in (ROOT / GROUP_FILES).glob("*.sh")))
+
+
+def stack_config_reads() -> list[str]:
+    """The repository files that the Terraform checks copy into every stack folder, read from the list in the group file."""
+    found = re.search(r"for config_read_by_stacks in ([^;]+); do", (ROOT / GROUP_FILES / "terraform_checks.sh").read_text(encoding="utf-8"))
+    if found is None:
+        raise ValueError("terraform_checks.sh no longer lists the files its stacks read in a config_read_by_stacks loop")
+    return found.group(1).split()
+
+
 COPIED = (
     ".env.example",
     ".github/workflows/ci.yml",
@@ -2808,6 +2818,7 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
         "config/lakehouse/bronze_tables.json",
         "config/lakehouse/aws_bronze_grants.json",
         *BODY_FILES,
+        *stack_config_reads(),
     ]
     names += [path.relative_to(ROOT).as_posix() for path in (ROOT / "scripts/infrastructure").glob("*.sh")]
     for name in names:
