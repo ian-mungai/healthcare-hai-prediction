@@ -274,6 +274,83 @@ def pasteable_checks(body: str, folder: Path) -> dict[str, bool]:
     return checks
 
 
+WRAPPER = owner_commands.ROOT / "scripts" / "infrastructure" / "terraform.sh"
+# The .env spellings the project's dotenv parser accepts for the two settings the first block reads. The other required keys follow in every variant.
+DOTENV_VARIANTS = {
+    "unquoted": ("AWS_REGION=us-west-2", "AWS_PROFILE=example_project_dev"),
+    "double quoted": ('AWS_REGION="us-west-2"', 'AWS_PROFILE="example_project_dev"'),
+    "single quoted": ("AWS_REGION='us-west-2'", "AWS_PROFILE='example_project_dev'"),
+    "an export prefix, spaces around the equals sign and a comment": (
+        "export AWS_REGION = us-west-2  # the region",
+        "export AWS_PROFILE = example_project_dev",
+    ),
+}
+DOTENV_REST = (f"AWS_ACCOUNT_ID={owner_commands.ACCOUNT}", "PROJECT_NAME=example_project", "ENVIRONMENT=dev", "S3_BUCKET=example-project-data-dev")
+
+
+def printed_resolve_hint(folder: Path) -> str:
+    """What the real wrapper prints after a failed services apply: its ``resolve_hint`` function, taken from terraform.sh and run with a synthetic token."""
+    found = re.search(r"^  resolve_hint\(\) \{\n.*?^  \}\n", WRAPPER.read_text(encoding="utf-8"), re.S | re.M)
+    work = folder / "resolve_hint"
+    work.mkdir(parents=True, exist_ok=True)
+    if found is None:
+        return ""
+    script = f"python_bin=.venv/bin/python\ntoken='example-host:4242:20261112T000000Z:0123abcd'\n{found.group(0)}resolve_hint\n"
+    (work / "block.sh").write_text(script, encoding="utf-8")
+    return run_command("bash", ["block.sh"], cwd=work, timeout=30).stderr
+
+
+def recovery_checks(body: str, folder: Path) -> dict[str, bool]:
+    """The recovery path of a failed services apply: the owner supplies the statement and the lock token, no printed or written placeholder is needed."""
+    lines = [line.strip() for line in owner_commands.commands(body)]
+    reads = {match.group(1): index for index, line in enumerate(lines) if (match := re.fullmatch(r"read -r ([A-Z][A-Z0-9_]*)", line))}
+    resolves = [(index, line) for index, line in enumerate(lines) if "services_apply resolve" in line]
+    passed = re.search(r'--statement "\$([A-Z][A-Z0-9_]*)" --token "\$([A-Z][A-Z0-9_]*)"$', resolves[0][1]) if len(resolves) == 1 else None
+    placeholders = sorted(set(re.findall(r"<[A-Za-z][A-Za-z0-9_ ]*>", body)))
+    printed = printed_resolve_hint(folder)
+    return {
+        "the code list's recovery block prompts for the statement and the lock token and passes both to resolve as quoted variables": bool(passed)
+        and passed is not None
+        and passed.group(1) != passed.group(2)
+        and all(name in reads and reads[name] < resolves[0][0] for name in passed.groups()),
+        "the code list does not send the owner to the command that the failure prints": "exactly as the failure printed" not in body
+        and "as the failure prints" not in body,
+        "no angle-bracket placeholder, lower case included, remains in the code list"
+        + (f": {', '.join(placeholders)}" if placeholders else ""): not placeholders,
+        "the wrapper's failure output still prints a placeholder statement, the hazard that the recovery block avoids": re.search(
+            r"--statement '<[^>]+>'", printed
+        )
+        is not None,
+    }
+
+
+def dotenv_checks(body: str, folder: Path) -> dict[str, bool]:
+    """The first block reads the profile and the region through the project's dotenv parser: its two assignments run in bash and zsh on each .env spelling."""
+    lines = [line.strip() for line in owner_commands.commands(body)]
+    assignments = [line for line in lines if line.startswith(("PROJECT_PROFILE=", "REGION="))]
+    checks = {
+        "the code list reads the project profile and the region through the project's dotenv parser, not by text extraction": len(assignments) == 2
+        and all("scripts.infrastructure.project_setting" in line and "sed" not in line for line in assignments)
+    }
+    for number, (label, (region, profile)) in enumerate(DOTENV_VARIANTS.items()):
+        work = folder / f"dotenv_{number}"
+        (work / ".venv" / "bin").mkdir(parents=True, exist_ok=True)
+        python = work / ".venv" / "bin" / "python"
+        python.write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n', encoding="utf-8")
+        python.chmod(0o700)
+        (work / ".env").write_text("\n".join([region, profile, *DOTENV_REST]) + "\n", encoding="utf-8")
+        (work / "block.sh").write_text("\n".join([*assignments, 'printf \'%s|%s\\n\' "$PROJECT_PROFILE" "$REGION"']) + "\n", encoding="utf-8")
+        environment = owner_commands.environment(work) | {"PYTHONPATH": str(owner_commands.ROOT)}
+        shells = {"bash": run_command("bash", ["block.sh"], cwd=work, env=environment, timeout=60).stdout.strip()}
+        if ZSH.exists():
+            shells["/bin/zsh"] = run_command("/bin/zsh", ["block.sh"], cwd=work, env=environment, timeout=60).stdout.strip()
+        for shell, printed in shells.items():
+            checks[f"the code list's profile and region assignments give example_project_dev and us-west-2 under {shell} for .env with {label} values"] = (
+                printed == "example_project_dev|us-west-2"
+            )
+    return checks
+
+
 def command_checks(text: str, folder: Path) -> dict[str, bool]:
     workspace = Workspace(folder / "workspace")
     code_body = owner_commands.section(text, CODE)
@@ -351,6 +428,8 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     checks["the code list stages the code before it starts the host"] = bool(stagings and host_starts) and max(stagings) < min(host_starts)
     checks["the code list resolves a failed services apply with the apply lock token"] = "services_apply resolve" in code_body and "--token" in code_body
     checks.update(pasteable_checks(code_body, folder))
+    checks.update(recovery_checks(code_body, folder))
+    checks.update(dotenv_checks(code_body, folder))
     for heading in (SILVER, GOLD, FEATURES, CODE):
         check = owner_commands.check_shell_section if heading == CODE else owner_commands.check_section
         problems = check(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})

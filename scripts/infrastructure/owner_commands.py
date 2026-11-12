@@ -114,6 +114,8 @@ def shell_values(record_dir: Path, overrides: dict[str, str] | None = None) -> d
         "SERVICES_INPUTS_SHA256": "b" * 64,
         "CODE_DIR": str(record_dir / "code_20261031T120000Z-abcdef12"),
         "PWD": "/work",
+        "RESOLVE_STATEMENT": "checked the failed apply and the services",
+        "LOCK_TOKEN": "example-host:4242:20261112T000000Z:0123abcd",
     }
 
 
