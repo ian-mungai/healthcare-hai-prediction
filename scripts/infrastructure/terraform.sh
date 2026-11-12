@@ -12,6 +12,7 @@ identity_probe=false
 mlflow_retention=false
 athena_retention=false
 keep_launch_hold=false
+continue_token=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -34,6 +35,11 @@ while [[ $# -gt 0 ]]; do
       [[ "$keep_launch_hold" == false ]] || { printf 'Select --keep-launch-hold once.\n' >&2; exit 2; }
       keep_launch_hold=true
       shift
+      ;;
+    --continue-launch-hold)
+      [[ -z "$continue_token" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --continue-launch-hold apply lock token.\n' >&2; exit 2; }
+      continue_token="$2"
+      shift 2
       ;;
     --identity-probe)
       [[ "$identity_probe" == false ]] || { printf 'Select the identity probe once.\n' >&2; exit 2; }
@@ -76,9 +82,20 @@ case "$action" in
   plan|apply|validate) ;;
   *) printf 'Use plan, apply or validate.\n' >&2; exit 2 ;;
 esac
-if [[ "$keep_launch_hold" == true && ( "$stack" != services || "$action" != apply ) ]]; then
-  printf -- '--keep-launch-hold is allowed only with --services apply.\n' >&2
+if [[ ( "$keep_launch_hold" == true || -n "$continue_token" ) && ( "$stack" != services || "$action" != apply ) ]]; then
+  printf -- '--keep-launch-hold and --continue-launch-hold are allowed only with --services apply.\n' >&2
   exit 2
+fi
+if [[ "$keep_launch_hold" == true && -n "$continue_token" ]]; then
+  printf -- '--continue-launch-hold already keeps the launch hold: give only one of the two options.\n' >&2
+  exit 2
+fi
+if [[ -n "$continue_token" && ! "$continue_token" =~ ^[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}$ ]]; then
+  printf -- '--continue-launch-hold needs the apply lock token that settle --keep-hold printed.\n' >&2
+  exit 2
+fi
+if [[ -n "$continue_token" ]]; then
+  keep_launch_hold=true
 fi
 for argument in "$@"; do
   case "$argument" in
@@ -170,15 +187,29 @@ if [[ "$stack" == services && "$action" == apply ]]; then
   # hold before the apply changes anything, and clear the hold and release the lock only after the ECS services reach steady state. A failed
   # apply or settle leaves both until the owner resolves them with the lock's token.
   reason="terraform.sh --services apply ${plan_path##*/}"
-  token="$("$python_bin" -m scripts.infrastructure.services_apply lock --reason "$reason")" || {
+  lock_args=(--reason "$reason")
+  hold_args=(--reason "$reason")
+  if [[ -n "$continue_token" ]]; then
+    lock_args+=(--continue-token "$continue_token")
+  fi
+  if [[ "$keep_launch_hold" == true ]]; then
+    # A host job cap change: the hold names it, so only finish (after the jobs apply registered every host revision) clears it.
+    hold_args+=(--migration)
+  fi
+  token="$("$python_bin" -m scripts.infrastructure.services_apply lock "${lock_args[@]}")" || {
     printf 'The apply lock was not taken, so the services apply did not start.\n' >&2
     exit 1
   }
   resolve_hint() {
+    if [[ "$keep_launch_hold" == true ]]; then
+      printf 'The launch hold and the apply lock stay set, so no host job launches and no other services apply starts. Check the apply and the services, apply the jobs stack, then run:\n' >&2
+      printf '  %s -m scripts.infrastructure.services_apply finish --token %s --statement %s\n' "$python_bin" "'$token'" "'jobs applied at the new cap'" >&2
+      return
+    fi
     printf 'The launch hold and the apply lock stay set, so no host job launches and no other services apply starts. Check the apply and the services, then run:\n' >&2
     printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s --token %s\n' "$python_bin" "'<what you checked>'" "'$token'" >&2
   }
-  "$python_bin" -m scripts.infrastructure.services_apply hold --reason "$reason" || {
+  "$python_bin" -m scripts.infrastructure.services_apply hold "${hold_args[@]}" || {
     printf 'The launch hold could not be set, so the services apply did not start. The apply lock stays set, so no host job launches and no other services apply starts. Check the hold, then run:\n' >&2
     printf '  %s -m scripts.infrastructure.services_apply resolve --statement %s --token %s\n' "$python_bin" "'<what you checked>'" "'$token'" >&2
     exit 1

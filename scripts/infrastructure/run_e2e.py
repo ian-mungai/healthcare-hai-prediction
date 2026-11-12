@@ -1789,18 +1789,34 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     evidence.check(step, "launch_hold_names_the_plan", "--reason" in holds[1] and "reviewed.tfplan" in " ".join(holds[1]))
     evidence.check(step, "apply_identity_verified", (workspace / "identity_called").is_file())
     evidence.check(step, "image_record_unchanged", sha256(images.read_bytes()) == images_before)
-    # Host job cap change: --keep-launch-hold leaves the hold and the lock set after the apply, so the jobs apply can follow before launches resume.
-    before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
-    step, result = evidence.run("wrapper_services_apply_keep_hold", [*wrapper, "--keep-launch-hold", "apply", "reviewed.tfplan"], workspace, environment)
-    holds = [json.loads(line) for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()][before_holds:]
-    evidence.check(step, "lock_hold_then_settle_that_keeps_the_hold", result.returncode == 0 and [item[0] for item in holds] == ["lock", "hold", "settle"])
-    evidence.check(step, "settle_gets_the_token_and_keep_hold", holds[-1][-3:] == ["--token", "standin-host:1:20261110T220000Z:0123abcd", "--keep-hold"])
-    step, result = evidence.run(
-        "wrapper_keep_hold_needs_a_services_apply", ["/bin/bash", "scripts/infrastructure/terraform.sh", "--keep-launch-hold", "plan"], workspace, environment
+    # Host job cap change: --keep-launch-hold names the change in the hold and leaves it and the lock set after the apply, so the jobs apply can follow
+    # and only finish ends it. --continue-launch-hold answers a failed jobs apply with another services apply under the same lock.
+    lock_id = "standin-host:1:20261110T220000Z:0123abcd"
+    for label, options, lock_extra in (
+        ("keep", ["--keep-launch-hold"], []),
+        ("continue", ["--continue-launch-hold", lock_id], ["--continue-token", lock_id]),
+    ):
+        before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
+        step, result = evidence.run(f"wrapper_services_apply_{label}_hold", [*wrapper, *options, "apply", "reviewed.tfplan"], workspace, environment)
+        holds = [json.loads(line) for line in (workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()][before_holds:]
+        evidence.check(step, "lock_hold_then_settle_that_keeps_the_hold", result.returncode == 0 and [item[0] for item in holds] == ["lock", "hold", "settle"])
+        evidence.check(step, "lock_continues_only_when_asked", holds[0][-len(lock_extra) :] == lock_extra if lock_extra else "--continue-token" not in holds[0])
+        evidence.check(step, "hold_names_the_cap_change", "--migration" in holds[1])
+        evidence.check(step, "settle_gets_the_token_and_keep_hold", holds[-1][-3:] == ["--token", lock_id, "--keep-hold"])
+    (workspace / "apply_fails").write_text("stand-in failure", encoding="utf-8")
+    step, result = evidence.run("wrapper_services_apply_keep_hold_failed", [*wrapper, "--keep-launch-hold", "apply", "reviewed.tfplan"], workspace, environment)
+    (workspace / "apply_fails").unlink()
+    evidence.check(
+        step, "failed_apply_names_finish_not_resolve", result.returncode == 1 and "services_apply finish" in result.stderr and lock_id in result.stderr
     )
-    evidence.check(step, "keep_hold_refused_outside_a_services_apply", result.returncode == 2 and "--keep-launch-hold" in result.stderr)
-    step, result = evidence.run("wrapper_keep_hold_on_a_plan", [*wrapper, "--keep-launch-hold", "plan"], workspace, environment)
-    evidence.check(step, "keep_hold_refused_on_a_services_plan", result.returncode == 2 and "--keep-launch-hold" in result.stderr)
+    for label, arguments in (
+        ("outside_a_services_apply", ["/bin/bash", "scripts/infrastructure/terraform.sh", "--keep-launch-hold", "plan"]),
+        ("on_a_services_plan", [*wrapper, "--keep-launch-hold", "plan"]),
+        ("both_options", [*wrapper, "--keep-launch-hold", "--continue-launch-hold", lock_id, "apply", "reviewed.tfplan"]),
+        ("a_malformed_token", [*wrapper, "--continue-launch-hold", "not a token", "apply", "reviewed.tfplan"]),
+    ):
+        step, result = evidence.run(f"wrapper_keep_hold_refused_{label}", arguments, workspace, environment)
+        evidence.check(step, "refused_before_any_step", result.returncode == 2 and "launch-hold" in result.stderr)
     # Launch hold during services applies (owner A, Nov 10 2026): a failed apply keeps the hold, and a hold that cannot be set stops the apply.
     for marker, label in (
         ("apply_fails", "failed_services_apply_keeps_the_hold"),

@@ -12,7 +12,9 @@ fixture defaults. A completeness check reads the variables of the stacks, so a n
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -842,6 +844,153 @@ def host_job_cap_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
+PROCEDURE_LOCK = "standin-host:1:20261110T220000Z:0123abcd"  # an apply lock token in its shape, not a credential
+PROCEDURE_STUB = (
+    "import json, sys\nfrom pathlib import Path\n"
+    "with Path('services_apply_calls.jsonl').open('a') as calls:\n    calls.write(json.dumps(sys.argv[1:]) + '\\n')\n"
+    f"if sys.argv[1] == 'lock':\n    print('{PROCEDURE_LOCK}')\n"
+)
+
+
+def procedure_lines() -> list[str]:
+    """The command lines of the owner procedure in the docstring of services_apply.py: the indented lines between its first sentence and the next section."""
+    document = ast.get_docstring(ast.parse((ROOT / "scripts/infrastructure/services_apply.py").read_text())) or ""
+    section = document[document.index("Changing the host job cap") : document.index("Run from the repository root")]
+    return [line[4:] for line in section.splitlines() if line.startswith("    ")]
+
+
+def procedure_commands(lines: list[str]) -> dict[str, list[str]]:
+    """The lines of the procedure by kind: assignments, the wrapper commands, the services_apply commands and the policy commands."""
+    kinds: dict[str, list[str]] = {"assignments": [], "wrapper": [], "services_apply": [], "policies": [], "other": []}
+    for line in lines:
+        if line.startswith(("bash ", "bash\t")):
+            kinds["wrapper"].append(line)
+        elif "scripts.infrastructure.services_apply" in line:
+            kinds["services_apply"].append(line)
+        elif "infra.iam.scripts.manage_policies" in line:
+            kinds["policies"].append(line)
+        elif re.match(r"(export )?[A-Z_]+=", line):
+            kinds["assignments"].append(line)
+        else:
+            kinds["other"].append(line)
+    return kinds
+
+
+def procedure_arguments(line: str, module: str, environment: dict[str, str]) -> list[str]:
+    """The arguments the line gives the module, with the shell variables of the procedure filled in."""
+    inner = re.search(r"\$\((.*?) \| sed ", line)
+    text = re.sub(r"\$\{?([A-Z_]+)\}?", lambda match: environment.get(match[1], match[0]), inner.group(1) if inner else line)
+    words = shlex.split(text.removeprefix("export "))
+    return words[words.index(module) + 1 :]
+
+
+def procedure_cases(workspace: Workspace) -> dict[str, bool]:
+    """Run each command shape of the owner procedure as written, for the default cap and for a reviewed lower cap: the wrapper commands through
+    terraform.sh with inert tools, the services_apply and policy commands through their real argument parsers."""
+    checks: dict[str, bool] = {}
+    lines = procedure_lines()
+    kinds = procedure_commands(lines)
+    checks["the procedure has no placeholder in angle brackets"] = not any(re.search(r"<[A-Za-z]", line) for line in lines)
+    checks["the procedure lists wrapper, services_apply and policy commands"] = bool(kinds["wrapper"] and kinds["services_apply"] and kinds["policies"])
+    services_apply = importlib.import_module("scripts.infrastructure.services_apply")
+    policies = importlib.import_module("infra.iam.scripts.manage_policies")
+    literals = {
+        match[1]: match[2]
+        for line in kinds["assignments"]
+        if (match := re.match(r"(export )?([A-Z_]+)=([^\s\"$()]+)$", line)) is not None and (match := (match[1], match[2], match[3])) is not None
+    }
+    checks["the procedure names the inputs files, the interpreter and the wrapper as literals"] = {
+        "SERVICES_INPUTS",
+        "JOBS_INPUTS",
+        "PY",
+        "TF",
+    } <= literals.keys()
+    for stack, name in (("services", "SERVICES"), ("jobs", "JOBS")):
+        derived = [line for line in kinds["assignments"] if line.startswith(f"{name}_SHA=")]
+        checks[f"the {stack} digest is the SHA-256 of the inputs file"] = (
+            len(derived) == 1 and "shasum -a 256" in derived[0] and f'"${name}_INPUTS"' in derived[0]
+        )
+    (workspace.root / "scripts/infrastructure/services_apply.py").write_text(PROCEDURE_STUB)
+    (workspace.root / ".env").write_text(workspace.environment_file.read_text())
+    environment_base = {"PY": sys.executable, "TF": literals["TF"], "TOKEN": PROCEDURE_LOCK, "ADMIN_PROFILE": ADMIN, "DIGEST": "0" * 64}
+    for label, cap in (("default cap", None), ("reviewed cap 22528", 22528)):
+        variables: dict[str, Any] = {} if cap is None else {"host_job_cap_mib": cap}
+        for stack, key in (("services", "SERVICES_INPUTS"), ("jobs", "JOBS_INPUTS")):
+            path = workspace.root / literals[key]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            document = {"schema_version": 1, "root": stack, "variables": variables if stack == "services" else {"host_jobs_enabled": True}}
+            path.write_text(json.dumps(document, sort_keys=True) + "\n")
+        environment = {
+            **environment_base,
+            "SERVICES_SHA": hashlib.sha256((workspace.root / literals["SERVICES_INPUTS"]).read_bytes()).hexdigest(),
+            "JOBS_SHA": hashlib.sha256((workspace.root / literals["JOBS_INPUTS"]).read_bytes()).hexdigest(),
+            "SERVICES_INPUTS": literals["SERVICES_INPUTS"],
+            "JOBS_INPUTS": literals["JOBS_INPUTS"],
+        }
+        binding = f"job_memory_mib={cap or 23552} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+        workspace.outputs.write_text(json.dumps({name: {"value": value} for name, value in {**SERVICES_FOUNDATION, "host_capacity_binding": binding}.items()}))
+        arrays = [line for line in kinds["assignments"] if "=(" in line]
+        for line in kinds["wrapper"]:
+            stack = next(item for item in ("services", "jobs", "iam") if f"--{item}" in line or f"{item.upper()}_FLAGS" in line)
+            applying = " apply " in f" {line} "
+            cap_variables = variables if stack == "services" else ({"host_jobs_enabled": True} if stack == "jobs" else None)
+            siblings = [row for row in ROWS if row.stack == stack]
+            off = {
+                row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None
+            }
+            workspace.clear(stack)
+            workspace.run(stack, cap_variables)
+            rendered = dict(workspace.written(stack) or {})
+            extra: dict[str, Any] = {}
+            if stack == "iam":
+                rendered = {
+                    "aws_profile": "example_project_dev",
+                    "aws_region": "us-west-2",
+                    "data_bucket_name": "example-project-data-dev",
+                    "environment": "dev",
+                    "expected_account_id": ACCOUNT,
+                    "project_name": "example_project",
+                    **rendered,
+                }
+                extra = {"admin_profile": ADMIN}
+            elif stack == "services":
+                rendered["image_digests"] = {}
+            workspace.plan.write_text(json.dumps(plan_document(rendered, off, extra)))
+            workspace.clear(stack)
+            workspace.calls.unlink(missing_ok=True)
+            (workspace.root / "services_apply_calls.jsonl").unlink(missing_ok=True)
+            (workspace.root / "procedure_step.sh").write_text("set -euo pipefail\n" + "\n".join([*arrays, line]) + "\n")
+            result = run_command(
+                "bash", ["procedure_step.sh"], cwd=workspace.root, env=workspace.environment() | environment | {"PYTHON_BIN": sys.executable}, timeout=60
+            )
+            written = workspace.written(stack) or {}
+            ok = result.returncode == 0 and (stack != "services" or written.get("host_job_cap_mib") == cap)
+            if applying and stack == "services":
+                holds = [json.loads(item) for item in (workspace.root / "services_apply_calls.jsonl").read_text().splitlines()]
+                ok = ok and [item[0] for item in holds] == ["lock", "hold", "settle"] and "--migration" in holds[1] and holds[-1][-1] == "--keep-hold"
+            if "--continue-launch-hold" in line:
+                holds = [json.loads(item) for item in (workspace.root / "services_apply_calls.jsonl").read_text().splitlines()]
+                ok = ok and holds[0][-2:] == ["--continue-token", PROCEDURE_LOCK]
+            checks[f"{label}: {line[:100]}"] = ok
+        for line in kinds["services_apply"]:
+            try:
+                parsed = services_apply.build_parser().parse_args(procedure_arguments(line, "scripts.infrastructure.services_apply", environment))
+                ok = parsed.command in {"status", "finish"} and (
+                    parsed.command != "finish" or parsed.token == PROCEDURE_LOCK and bool(parsed.statement.strip())
+                )
+            except SystemExit:
+                ok = False
+            checks[f"{label}: parsed by services_apply: {line[:90]}"] = ok
+        for line in kinds["policies"]:
+            try:
+                parsed = policies.build_parser().parse_args(procedure_arguments(line, "infra.iam.scripts.manage_policies", environment))
+                ok = parsed.action in {"plan", "apply"} and parsed.admin_profile == ADMIN and (parsed.action != "apply" or parsed.digest == "0" * 64)
+            except SystemExit:
+                ok = False
+            checks[f"{label}: parsed by manage_policies: {line[:90]}"] = ok
+    return checks
+
+
 def scratch_root_cases(workspace: Workspace) -> dict[str, bool]:
     """The jobs scratch root through the renderer and the wrapper: only the scratch mount boot creates, or a folder inside it, is admitted."""
     checks: dict[str, bool] = {}
@@ -889,6 +1038,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["wrapper"] = wrapper_cases(workspace)
         results["scratch_size"] = scratch_size_cases(workspace)
         results["host_job_cap"] = host_job_cap_cases(workspace)
+        results["procedure"] = procedure_cases(workspace)
         results["scratch_root"] = scratch_root_cases(workspace)
         results["committed_defaults"] = {name: ok for row in COMMITTED_DEFAULTS for name, ok in committed_default_cases(workspace, row).items()}
     output.mkdir(parents=True)

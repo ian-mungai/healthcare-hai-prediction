@@ -503,7 +503,7 @@ def run(arguments: argparse.Namespace, environment: Mapping[str, str], session_f
     return 0
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     profile = argparse.ArgumentParser(add_help=False)
     profile.add_argument("--admin-profile", required=True, help="The administrator AWS profile; it is never read from .env.")
     profile.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
@@ -517,6 +517,11 @@ def main() -> None:
     export = commands.add_parser("export", parents=[profile], help="Write the live policies as templates with placeholders; read-only.")
     export.add_argument("--output-directory", type=Path, default=POLICIES_DIRECTORY, help="Where to write the templates; use a scratch directory to compare.")
     export.set_defaults(policies=None, digest=None)
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
     arguments = parser.parse_args()
     try:
         raise SystemExit(run(arguments, os.environ))

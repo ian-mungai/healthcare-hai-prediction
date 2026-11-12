@@ -16,22 +16,67 @@ preflight refuses every host launch, and the fit probe rereads the hold before e
 
 Changing the host job cap, and the move of the cap from Parameter Store to the Airflow environment (Nov 11 2026). The cap is the services input
 ``host_job_cap_mib``. The jobs stack must register host revisions at the new cap after every change, and the launch preflight refuses a revision whose job
-memory is above the cap. So the services and jobs applies are one change, and launches stay held between them. In this order:
+memory is above the cap, so the services apply and the jobs apply are one change. The hold of that change names it (``held for a host job cap change``).
+Plain ``settle`` and ``resolve`` refuse to clear it and print the ``finish`` command. ``finish`` clears the hold and the lock only when the services are
+stable and the latest active revision of every host family carries the current services binding and its job memory.
 
-1. Check that no host job or DAG run is active and that ``status`` shows a clear hold and no lock. For the move, stage the release that carries the new launch
-   code first. New code with the old container environment, and old code with the new one, both fail the build of the launch services at once ("is not
-   set in the Airflow service environment"), before any AWS call, so neither mix starts a task. Only code and environment from the same release launch.
-2. ``bash scripts/infrastructure/terraform.sh --services --keep-launch-hold apply <PLAN>``. It takes the lock, sets the hold, applies, waits for steady
-   state and then keeps the hold and the lock set. It prints the ``resolve`` command with the lock token. For the move, this apply deletes the retired
-   Parameter Store parameter, which needs the project user's current grant on it.
-3. For the move only: apply the IAM stack and the project user policies. They drop the grants on the retired parameter, so they come after step 2.
-4. Render and apply the jobs stack (``terraform.sh --jobs``), so every host revision carries the new cap as its job memory.
-5. Run ``resolve`` with the printed token. It clears the hold and the lock once the services are stable. Launches resume with matching code, environment
-   and revisions.
+Before step 1, save your current reviewed services inputs (the file you pass to ``--preparation-inputs`` today) as ``SERVICES_INPUTS`` below, with
+``"host_job_cap_mib": 22528`` (or your cap) added to its ``variables``; leave the key out to keep the default of 26816. Save your current reviewed jobs
+inputs as ``JOBS_INPUTS``. Run every command from the repository root in one shell.
 
-The window is from the hold of step 2 to step 5: the preflight refuses every host launch, so a run started in it fails and nothing is lost. Without
-``--keep-launch-hold`` the hold ends at steady state, and with a lower cap the next launch is refused by the revision check (a failed run, no task) until
-the jobs apply has registered revisions at the new cap.
+    set -euo pipefail
+    PY=.venv/bin/python
+    TF=scripts/infrastructure/terraform.sh
+    SERVICES_INPUTS=data/local_keep/host_job_cap/services_inputs.json
+    JOBS_INPUTS=data/local_keep/host_job_cap/jobs_inputs.json
+    SERVICES_SHA="$(shasum -a 256 "$SERVICES_INPUTS" | cut -d ' ' -f 1)"
+    JOBS_SHA="$(shasum -a 256 "$JOBS_INPUTS" | cut -d ' ' -f 1)"
+    SERVICES_FLAGS=(--services --preparation-inputs "$SERVICES_INPUTS" --preparation-sha256 "$SERVICES_SHA")
+    JOBS_FLAGS=(--jobs --preparation-inputs "$JOBS_INPUTS" --preparation-sha256 "$JOBS_SHA")
+
+1. Check that nothing runs. In the Airflow UI (Browse, DAG runs) no run is in state running, and ``status`` shows a clear hold and no lock. For the move,
+   the release that carries the new launch code is checked out on the host first (the host session start with its code run). New code with the old
+   container environment, and old code with the new one, both fail the build of the launch services at once ("is not set in the Airflow service
+   environment"), before any AWS call, so neither mix starts a task. Only code and environment of the same release launch.
+
+    "$PY" -m scripts.infrastructure.services_apply status
+
+2. Plan the services stack with the reviewed inputs and their digest.
+
+    bash "$TF" "${SERVICES_FLAGS[@]}" plan -out=host_job_cap.tfplan
+
+3. Apply that plan. It takes the lock, sets the change hold, applies, waits for steady state and keeps the hold and the lock. For the move, this apply
+   deletes the retired Parameter Store parameter, which needs the project user's current grant on it. Then read the lock token.
+
+    bash "$TF" "${SERVICES_FLAGS[@]}" --keep-launch-hold apply host_job_cap.tfplan
+    TOKEN="$("$PY" -m scripts.infrastructure.services_apply status | sed -n 's/^apply lock: //p')"
+
+4. For the move only: apply the IAM stack and the project user policies. They drop the grants on the retired parameter, so they come after step 3.
+
+    : "${ADMIN_PROFILE:?export ADMIN_PROFILE, the administrator AWS profile name, first}"
+    bash "$TF" --iam --admin-profile "$ADMIN_PROFILE" plan -out=host_job_cap.tfplan
+    bash "$TF" --iam --admin-profile "$ADMIN_PROFILE" apply host_job_cap.tfplan
+    DIGEST="$("$PY" -m infra.iam.scripts.manage_policies plan --admin-profile "$ADMIN_PROFILE" | sed -n 's/^Plan digest: //p')"
+    export CONFIRM_IAM_POLICIES=apply-healthcare-hai-prediction-policies
+    "$PY" -m infra.iam.scripts.manage_policies apply --admin-profile "$ADMIN_PROFILE" --digest "$DIGEST"
+
+5. Plan and apply the jobs stack, so every host revision carries the new cap as its job memory.
+
+    bash "$TF" "${JOBS_FLAGS[@]}" plan -out=host_job_cap.tfplan
+    bash "$TF" "${JOBS_FLAGS[@]}" apply host_job_cap.tfplan
+
+6. End the change. It reads the registered revisions and refuses, naming the first family that does not match, until step 5 has registered them all.
+
+    "$PY" -m scripts.infrastructure.services_apply finish --token "$TOKEN" --statement 'jobs applied at the new cap'
+
+Recovery. A failed jobs apply leaves the hold: fix the cause and repeat step 5. A failed services apply also leaves it (the wrapper prints the finish
+command): if the services changed in part, correct the inputs, repeat step 2 and apply under the same lock, then continue from step 4.
+
+    bash "$TF" "${SERVICES_FLAGS[@]}" --continue-launch-hold "$TOKEN" apply host_job_cap.tfplan
+
+The window is from the hold of step 3 to ``finish``: the preflight refuses every host launch, so a run started in it fails and nothing is lost; start it
+again after step 6. Without ``--keep-launch-hold`` the hold ends at steady state, and with a lower cap the next launch is refused by the revision check
+(a failed run, no task) until the jobs apply has registered revisions at the new cap.
 
 Run from the repository root, for example: ``.venv/bin/python -m scripts.infrastructure.services_apply resolve --statement '<what you checked>'``. The
 profile and region come from ``.env``. Every AWS call goes through ``AwsCli`` with the project profile, and every wait has a deadline.
@@ -66,6 +111,55 @@ POLL_SECONDS = 15
 CALL_SECONDS = 60
 TOKEN = re.compile(r"[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}")
 RESOLVE_COMMAND = "python -m scripts.infrastructure.services_apply resolve --statement '<what you checked>'"
+# The hold of a host job cap change names it, so no plain settle or resolve ends it: only finish does, after the jobs apply registered every host revision.
+MIGRATION_HOLD = "held for a host job cap change"
+FINISH_STATEMENT = "jobs applied at the new cap"
+HOST_CAPACITY_LABEL = "hai.host_capacity"
+JOB_MEMORY = re.compile(r"job_memory_mib=([1-9][0-9]*) ")
+
+
+def finish_command(token: str) -> str:
+    """The exact command that ends a pending host job cap change once the jobs apply registered every host revision."""
+    return f"python -m scripts.infrastructure.services_apply finish --token '{token}' --statement '{FINISH_STATEMENT}'"
+
+
+def registration_problem(definitions: dict[str, dict[str, Any]], binding: str) -> str | None:
+    """None when the latest revision of every given host family is active, carries ``binding`` on its init container and has the job memory of
+    ``binding`` as its task memory; else a sentence naming the first family that does not. No host family at all is a problem."""
+    job = JOB_MEMORY.match(binding)
+    if job is None:
+        return f"the services capacity binding {binding[:80]!r} is not in the rendered form"
+    if not definitions:
+        return "no host job revision is registered"
+    for family, found in sorted(definitions.items()):
+        init = next((item for item in found.get("containerDefinitions") or [] if isinstance(item, dict) and item.get("name") == "init"), {})
+        labels = init.get("dockerLabels")
+        label = str(labels.get(HOST_CAPACITY_LABEL) or "") if isinstance(labels, dict) else ""
+        if found.get("status") != "ACTIVE":
+            return f"{family} has no active revision"
+        if label != binding:
+            return f"{family} is bound to {label[:120] or 'no capacity binding'}, but the services give {binding}"
+        if str(found.get("memory", "")) != job[1]:
+            return f"{family} is registered at {str(found.get('memory', ''))[:20]} MiB, the services give a job {job[1]} MiB"
+    return None
+
+
+def jobs_registration_problem(cli: Any, settings: dict[str, str]) -> str | None:
+    """Read the latest active revision of every host family of the project and the services capacity binding, and return ``registration_problem``."""
+    from scripts.infrastructure.render_jobs_config import host_job_room  # reads the services outputs only when finish first needs them
+
+    _, binding = host_job_room()
+    prefix = f"{settings['project_name']}_{settings['environment']}_job_"
+    try:
+        listed = cli.call_bounded("ecs", "list-task-definition-families", ["--family-prefix", prefix, "--status", "ACTIVE"], timeout=CALL_SECONDS)
+        families = sorted(name for name in listed.get("families", []) if str(name).endswith("_host"))
+        definitions = {
+            name: cli.call_bounded("ecs", "describe-task-definition", ["--task-definition", name], timeout=CALL_SECONDS).get("taskDefinition", {})
+            for name in families
+        }
+    except StorageError as error:
+        raise ServicesApplyError(f"the registered host revisions could not be read ({error.code})") from None
+    return registration_problem(definitions, binding)
 
 
 class ServicesApplyError(Exception):
@@ -137,8 +231,10 @@ class Steps:
         clock: Any = None,
         report: Callable[[str], None] | None = None,
         lock: LockStore | None = None,
+        registered: Callable[[], str | None] | None = None,
     ) -> None:
         self.put, self.get, self.stable, self.lock_store = put, get, stable, lock
+        self.registered = registered
         self.clock = clock or Clock()
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
 
@@ -152,23 +248,50 @@ class Steps:
         if found != value:
             raise ServicesApplyError("the launch hold did not read back as written")
 
-    def hold(self, reason: str) -> None:
-        """Set the hold before the apply changes anything, then wait the settle window so a RunTask that a fit check allowed just before has its reply."""
+    def pending_change(self) -> bool:
+        """True while the hold is the host job cap change form, which only ``finish`` ends. An unreadable hold raises, so it is never read as clear."""
+        try:
+            found = self.get()
+        except Exception as error:  # a refused or failed read leaves the hold unknown
+            raise ServicesApplyError(f"the launch hold could not be read ({type(error).__name__}: {str(error)[:200]})") from None
+        return found is not None and found.startswith(MIGRATION_HOLD)
+
+    @staticmethod
+    def pending_refusal(action: str, token: str | None) -> ServicesApplyError:
+        """The refusal of a plain ``action`` while a host job cap change awaits its jobs apply, with the exact command that ends it."""
+        end = f"After the jobs apply, run {finish_command(token)}" if token else "The apply lock is missing; read status and start a new services apply"
+        return ServicesApplyError(
+            f"{action} does not clear the launch hold of a host job cap change, because the jobs apply is pending. The hold stays set. {end}"
+        )
+
+    def hold(self, reason: str, migration: bool = False) -> None:
+        """Set the hold before the apply changes anything, then wait the settle window so a RunTask that a fit check allowed just before has its reply.
+        With ``migration`` the hold names a host job cap change, which only ``finish`` ends."""
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.write(f"held by services_apply at {stamp}: {reason.strip()[:200]}")
+        self.write(f"{MIGRATION_HOLD if migration else 'held'} by services_apply at {stamp}: {reason.strip()[:200]}")
         self.clock.sleep(HOLD_SETTLE_SECONDS)
         self.report(f"launch hold: set, waited {HOLD_SETTLE_SECONDS} s for any RunTask already allowed")
 
-    def lock(self) -> str:
+    def lock(self, continue_token: str | None = None) -> str:
         """Take the apply lock before the hold: create the lock parameter without overwrite, valued with a new token, and return the token. While
-        another apply holds it AWS refuses the create, and this raises naming the holder; nothing changes."""
+        another apply holds it AWS refuses the create, and this raises naming the holder; nothing changes. With ``continue_token`` it takes no new lock:
+        it returns that token while it holds the lock and a host job cap change is pending, so a failed jobs apply can be answered with another services
+        apply (a fix or a restore) under the same lock; anything else raises."""
         if self.lock_store is None:
             raise ServicesApplyError("no apply lock store is configured")
+        if continue_token is not None:
+            if TOKEN.fullmatch(continue_token) is None or self.lock_store.get() != continue_token or not self.pending_change():
+                raise ServicesApplyError("no host job cap change is pending under that apply lock token, so there is nothing to continue. Nothing was changed")
+            return continue_token
         token = new_token()
         try:
             self.lock_store.create(token)
         except LockHeld:
             holder = self.lock_store.get()
+            if holder and self.pending_change():
+                raise ServicesApplyError(
+                    f"a host job cap change holds the apply lock ({holder}), so this apply did not start. After its jobs apply, run {finish_command(holder)}"
+                ) from None
             raise ServicesApplyError(
                 f"another services apply holds the apply lock ({holder}), so this apply did not start. Wait for it to finish. If it failed, check it "
                 f"and run {RESOLVE_COMMAND} --token '{holder}'"
@@ -232,12 +355,51 @@ class Steps:
         No token, a malformed one or a lock held by another token changes nothing. With ``keep_hold`` it waits for steady state and then leaves the
         hold and the lock set, for a change that needs the jobs stack applied next (the host job cap); ``resolve`` with the token ends them."""
         _, token = self.require_lock(token)
+        if not keep_hold and self.pending_change():
+            raise self.pending_refusal("settle", token)
         self.wait_stable(token)
         if keep_hold:
-            self.report(f"launch hold: kept set after the services reached steady state. After the jobs apply, run {RESOLVE_COMMAND} --token '{token}'")
+            self.hold_for_change(token)
             return
         self.write(LAUNCH_HOLD_CLEAR)
         self.report("launch hold: cleared after the services reached steady state")
+        self.release(token)
+
+    def hold_for_change(self, token: str) -> None:
+        """Rewrite the hold to the host job cap change form after the services reached steady state, and keep the lock until ``finish``."""
+        stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        self.write(f"{MIGRATION_HOLD} by services_apply at {stamp}: jobs apply pending")
+        self.report(f"launch hold: kept set for a host job cap change. After the jobs apply, run {finish_command(token)}")
+
+    def finish(self, token: str | None, statement: str) -> None:
+        """End a host job cap change: with this apply's own token, a pending change, stable services and every host revision registered at the
+        current services binding (the jobs apply done), clear the hold and delete the lock. Anything else changes nothing and says what is missing."""
+        if not statement.strip():
+            raise ServicesApplyError("finish needs --statement with what you checked. The launch hold stays set")
+        _, token = self.require_lock(token)
+        if not self.pending_change():
+            raise ServicesApplyError(
+                "no host job cap change is pending, so there is nothing to finish. Use settle after an apply or resolve after a failed one"
+            )
+        if not self.services_settled():
+            raise ServicesApplyError(f"the services are not stable yet. The launch hold stays set; run {finish_command(token)} again once they are")
+        if self.registered is None:
+            raise ServicesApplyError("no check of the registered host revisions is configured, so the launch hold stays set")
+        try:
+            problem = self.registered()
+        except ServicesApplyError:
+            raise
+        except Exception as error:  # a refused read or an unreadable services output leaves the registration unknown
+            raise ServicesApplyError(
+                f"the registered host revisions could not be checked ({type(error).__name__}: {str(error)[:200]}). The launch hold stays set"
+            ) from None
+        if problem is not None:
+            raise ServicesApplyError(
+                f"the jobs apply has not registered every host revision at the current services ({problem}). The launch hold stays set; apply the jobs "
+                f"stack, then run {finish_command(token)}"
+            )
+        self.write(LAUNCH_HOLD_CLEAR)
+        self.report(f"launch hold: cleared after the host revisions matched the services ({statement.strip()[:200]})")
         self.release(token)
 
     def resolve(self, statement: str, token: str | None = None) -> None:
@@ -249,8 +411,12 @@ class Steps:
             raise ServicesApplyError("resolve needs --statement with what you checked. The launch hold stays set")
         if token is not None:
             self.require_lock(token)
+            if self.pending_change():
+                raise self.pending_refusal("resolve", token)
             owned, taken = token, False
         else:
+            if self.pending_change():
+                raise self.pending_refusal("resolve", self.lock_store.get() if self.lock_store is not None else None)
             owned, taken = self.lock(), True
         try:
             settled = self.services_settled()
@@ -332,7 +498,13 @@ def open_steps() -> Steps:
             sessions.append(open_session())
         return bool(sessions[0].services_stable())
 
-    return Steps(put=put, get=get, stable=stable, lock=LockStore(create=lock_create, get=lock_get, delete=lock_delete))
+    return Steps(
+        put=put,
+        get=get,
+        stable=stable,
+        lock=LockStore(create=lock_create, get=lock_get, delete=lock_delete),
+        registered=lambda: jobs_registration_problem(cli, settings),
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -340,11 +512,18 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     lock = commands.add_parser("lock", help="take the apply lock before the hold and print its token (terraform.sh runs it)")
     lock.add_argument("--reason", required=True, help="what is being applied, for example the saved plan")
+    lock.add_argument("--continue-token", help="continue under the lock of a pending host job cap change instead of taking a new one")
     hold = commands.add_parser("hold", help="set the launch hold before a services apply (terraform.sh runs it)")
     hold.add_argument("--reason", required=True, help="what is being applied, for example the saved plan")
+    hold.add_argument("--migration", action="store_true", help="name a host job cap change, which only finish ends")
     settle = commands.add_parser("settle", help="after a successful services apply: wait for steady state, clear the hold, release the lock")
     settle.add_argument("--token", required=True, help="the apply lock token that lock printed")
     settle.add_argument("--keep-hold", action="store_true", help="wait for steady state but keep the hold and the lock until resolve (the jobs apply follows)")
+    finish = commands.add_parser(
+        "finish", help="after the jobs apply of a host job cap change: clear the hold and the lock once every host revision matches the services"
+    )
+    finish.add_argument("--token", required=True, help="the apply lock token that settle --keep-hold printed")
+    finish.add_argument("--statement", required=True, help="what you checked")
     resolve = commands.add_parser("resolve", help="after a failed apply or settle: clear the hold and the lock once the services are stable")
     resolve.add_argument("--statement", required=True, help="what you checked")
     resolve.add_argument("--token", help="the apply lock token, required while a lock is held")
@@ -358,9 +537,11 @@ def main(argv: list[str] | None = None) -> int:
     try:
         steps = open_steps()
         if arguments.command == "lock":
-            sys.stdout.write(f"{steps.lock()}\n")
+            sys.stdout.write(f"{steps.lock(continue_token=arguments.continue_token)}\n")
         elif arguments.command == "hold":
-            steps.hold(arguments.reason)
+            steps.hold(arguments.reason, migration=arguments.migration)
+        elif arguments.command == "finish":
+            steps.finish(arguments.token, arguments.statement)
         elif arguments.command == "settle":
             steps.settle(arguments.token, keep_hold=arguments.keep_hold)
         elif arguments.command == "resolve":

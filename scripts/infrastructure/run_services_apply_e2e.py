@@ -88,7 +88,11 @@ class MemoryLock:
         self.value = None
 
 
-def steps(store: Store, clock: Clock, stable: Callable[[], bool], lock: MemoryLock | None = None) -> Any:
+MIGRATION = "held for a host job cap change"
+FINISH = "services_apply finish"
+
+
+def steps(store: Store, clock: Clock, stable: Callable[[], bool], lock: MemoryLock | None = None, registered: Callable[[], str | None] | None = None) -> Any:
     """Steps over the stand-in hold and an apply lock held by this apply's token (``OWN_LOCK``) unless another lock is given."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
     require(hasattr(module, "Steps"), "services_apply has no Steps that a later GitHub Actions apply can reuse")
@@ -96,7 +100,7 @@ def steps(store: Store, clock: Clock, stable: Callable[[], bool], lock: MemoryLo
     held = MemoryLock(OWN_LOCK) if lock is None else lock
     store.lock = held
     store_lock = module.LockStore(create=held.create, get=held.get, delete=held.delete)
-    return module.Steps(put=store.put, get=store.get, stable=stable, clock=clock, report=lines.append, lock=store_lock), module
+    return module.Steps(put=store.put, get=store.get, stable=stable, clock=clock, report=lines.append, lock=store_lock, registered=registered), module
 
 
 def hold_is_written_and_settles_before_the_apply() -> None:
@@ -123,24 +127,6 @@ def settle_clears_only_after_steady_state() -> None:
     puts = [entry for entry in store.log if entry[1] == "put"]
     require([entry[2] for entry in puts] == ["clear"] and store.value == "clear", f"settle did not clear the hold once: {store.log}")
     require(puts[0][0] > 1000.0, "settle cleared the hold before polling the services")
-
-
-def settle_can_keep_the_hold_for_the_jobs_apply() -> None:
-    """A change of the host job cap needs the jobs stack applied after the services. ``settle`` with keep_hold waits for steady state and then leaves
-    the hold and the apply lock set, so no host job launches between the two applies; the hold is cleared by ``resolve`` with the lock's token."""
-    clock = Clock()
-    store = Store(clock, "held by services_apply")
-    answers = iter([False, True, True])
-    current, _ = steps(store, clock, lambda: next(answers))
-    current.settle(OWN_LOCK, keep_hold=True)
-    require(clock.now > 1000.0, "settle with keep_hold returned before polling the services")
-    require(
-        store.value == "held by services_apply" and not [entry for entry in store.log if entry[1] == "put"],
-        f"settle with keep_hold changed the hold: {store.log}",
-    )
-    require(store.lock.value == OWN_LOCK, "settle with keep_hold released the apply lock")
-    current.settle(OWN_LOCK)
-    require(store.value == "clear" and store.lock.value is None, "a later plain settle did not clear the hold and the lock")
 
 
 def settle_that_never_reaches_steady_state_keeps_the_hold() -> None:
@@ -375,21 +361,239 @@ def settle_deletes_its_own_lock_after_clearing_the_hold() -> None:
     require(order == ["put-parameter", "delete-parameter"], f"the lock was not deleted after the hold was cleared: {order}")
 
 
-def settle_with_keep_hold_through_the_command() -> None:
-    """The command form: ``settle --token T --keep-hold`` waits for steady state, prints the resolve command with the token and leaves the hold and
-    the lock; ``resolve`` with that token then clears both."""
+def pending_migration() -> tuple[Store, Clock, Any, list[str]]:
+    """The state after ``settle`` kept the hold for a host job cap change: the hold names the change, the lock is this apply's, the jobs apply is pending.
+    ``answers`` is what the registration check says, newest last; it starts with the jobs apply not done."""
+    clock = Clock()
+    store = Store(clock, "held by services_apply")
+    answers = ["family silver_host is registered at 23552 MiB, the services give a job 22528 MiB"]
+    current, _ = steps(store, clock, lambda: True, registered=lambda: answers[-1] if answers[-1] else None)
+    current.settle(OWN_LOCK, keep_hold=True)
+    return store, clock, current, answers
+
+
+def settle_keeps_a_hold_that_only_the_jobs_registration_ends() -> None:
+    """``settle`` with keep_hold waits for steady state and then rewrites the hold to the host job cap change form and keeps the lock."""
+    clock = Clock()
+    store = Store(clock, "held by services_apply")
+    answers = iter([False, True])
+    current, _ = steps(store, clock, lambda: next(answers))
+    current.settle(OWN_LOCK, keep_hold=True)
+    require(clock.now > 1000.0, "settle with keep_hold returned before polling the services")
+    require(str(store.value).startswith(MIGRATION), f"the kept hold does not name the host job cap change: {store.value!r}")
+    require(store.lock.value == OWN_LOCK, "settle with keep_hold released the apply lock")
+
+
+def no_plain_path_clears_a_pending_migration_hold() -> None:
+    """Plain settle, resolve with the token and resolve without one all refuse while the jobs apply is pending: the hold and the lock stay, the
+    resolve without a token does not even take the lock, and every refusal prints the finish command with the lock's token."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    for label, call in (
+        ("settle", lambda current: current.settle(OWN_LOCK)),
+        ("resolve with the token", lambda current: current.resolve("services stable; jobs have not been applied", OWN_LOCK)),
+        ("resolve without a token", lambda current: current.resolve("services stable; jobs have not been applied")),
+    ):
+        store, _, current, _ = pending_migration()
+        held, writes = store.value, len([entry for entry in store.log if entry[1] == "put"])
+        try:
+            call(current)
+        except module.ServicesApplyError as error:
+            require(
+                FINISH in str(error) and f"--token '{OWN_LOCK}'" in str(error), f"{label}: the refusal does not give the finish command with the token: {error}"
+            )
+        else:
+            raise AssertionError(f"{label} cleared a pending host job cap change")
+        require(store.value == held and store.lock.value == OWN_LOCK, f"{label}: the refusal changed the hold or the lock")
+        require(len([entry for entry in store.log if entry[1] == "put"]) == writes, f"{label}: the refusal wrote the hold")
+
+
+def finish_clears_the_hold_only_after_the_jobs_registration() -> None:
+    """finish refuses while the registration check names a gap (the jobs apply not run, or failed), while the services are unstable, with another token,
+    and when no migration is pending; it clears the hold and the lock once the registration check passes."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    store, clock, current, answers = pending_migration()
+    for label, token in (("with the jobs apply not run", OWN_LOCK), ("with another token", "other-host:2:20261110T221000Z:87654321")):
+        try:
+            current.finish(token, "jobs applied at the new cap")
+        except module.ServicesApplyError as error:
+            if token == OWN_LOCK:
+                require("registered at 23552 MiB" in str(error), f"finish {label} does not name the gap: {error}")
+        else:
+            raise AssertionError(f"finish {label} cleared the hold")
+        require(str(store.value).startswith(MIGRATION) and store.lock.value == OWN_LOCK, f"finish {label} changed the hold or the lock")
+    answers.append("family gold_host is registered at 23552 MiB, the services give a job 22528 MiB")  # a failed jobs apply left one family behind
+    try:
+        current.finish(OWN_LOCK, "jobs applied at the new cap")
+    except module.ServicesApplyError as error:
+        require("gold_host" in str(error), f"finish after a partly failed jobs apply does not name the family: {error}")
+    else:
+        raise AssertionError("finish cleared the hold after a failed jobs apply")
+    unstable, _, again, _ = pending_migration()
+    again.stable = lambda: False
+    again.clock = Clock()
+    try:
+        again.finish(OWN_LOCK, "jobs applied at the new cap")
+    except module.ServicesApplyError:
+        pass
+    else:
+        raise AssertionError("finish cleared the hold while the services were unstable")
+    require(str(unstable.value).startswith(MIGRATION), "finish with unstable services changed the hold")
+    answers.append("")  # the jobs apply registered every host revision at the current services binding
+    current.finish(OWN_LOCK, "jobs applied at the new cap")
+    require(store.value == "clear" and store.lock.value is None, f"finish after the registration did not clear both: {store.value!r} {store.lock.value!r}")
+    plain = Store(Clock(), "held by services_apply")
+    other, _ = steps(plain, Clock(), lambda: True, registered=lambda: None)
+    try:
+        other.finish(OWN_LOCK, "jobs applied at the new cap")
+    except module.ServicesApplyError as error:
+        require("settle" in str(error) or "resolve" in str(error), f"finish without a pending change does not point to resolve: {error}")
+    else:
+        raise AssertionError("finish cleared a hold that is not a host job cap change")
+    require(plain.value == "held by services_apply", "finish changed a hold that is not a host job cap change")
+    unchecked = Store(Clock(), MIGRATION + " by services_apply at 2026-11-11T00:00:00Z: jobs apply pending")
+    bare, _ = steps(unchecked, Clock(), lambda: True)
+    try:
+        bare.finish(OWN_LOCK, "jobs applied at the new cap")
+    except module.ServicesApplyError:
+        pass
+    else:
+        raise AssertionError("finish cleared the hold with no registration check configured")
+
+
+def a_services_apply_can_continue_under_the_pending_lock() -> None:
+    """A failed jobs apply may need the services restored or fixed: lock with the continue token returns the same token only while that token holds
+    the lock and the hold is the host job cap change form. Otherwise it refuses and changes nothing. The hold of the continued apply is again the
+    change form, so no plain settle or resolve can end it."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    store, _, current, _ = pending_migration()
+    require(current.lock(continue_token=OWN_LOCK) == OWN_LOCK, "lock did not continue under the pending lock")
+    current.hold("terraform.sh --services apply restore.tfplan", migration=True)
+    require(str(store.value).startswith(MIGRATION), f"the continued hold is not the change form: {store.value!r}")
+    for token in ("other-host:2:20261110T221000Z:87654321", "not a token"):
+        try:
+            current.lock(continue_token=token)
+        except module.ServicesApplyError:
+            pass
+        else:
+            raise AssertionError(f"lock continued with {token!r}")
+    plain = Store(Clock(), "held by services_apply")
+    other, _ = steps(plain, Clock(), lambda: True)
+    try:
+        other.lock(continue_token=OWN_LOCK)
+    except module.ServicesApplyError:
+        pass
+    else:
+        raise AssertionError("lock continued without a pending host job cap change")
+    refused, _ = steps(Store(Clock(), MIGRATION + " by services_apply at 2026-11-11T00:00:00Z: x"), Clock(), lambda: True, lock=MemoryLock(OWN_LOCK))
+    try:
+        refused.lock()
+    except module.ServicesApplyError as error:
+        require(FINISH in str(error) and f"--token '{OWN_LOCK}'" in str(error), f"a second apply is not pointed to finish: {error}")
+    else:
+        raise AssertionError("a second apply took the lock during a pending host job cap change")
+
+
+def registration_problem_reads_every_host_revision() -> None:
+    """The real registration check: every active host family's latest revision must carry the current services binding on its init container and
+    the job memory of that binding as its task memory; no host family at all, an inactive one, a missing label and a stale memory are each named."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    binding = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+    old = binding.replace("22528", "23552")
+
+    def definition(label: str | None, memory: str = "22528", status: str = "ACTIVE") -> dict[str, Any]:
+        init = {"name": "init", "dockerLabels": {"hai.host_capacity": label} if label else {}}
+        return {"status": status, "memory": memory, "containerDefinitions": [init, {"name": "job"}]}
+
+    good = {"example_dev_job_silver_host": definition(binding), "example_dev_job_gold_host": definition(binding)}
+    require(module.registration_problem(good, binding) is None, "a registered set at the current binding is refused")
+    require("no host" in str(module.registration_problem({}, binding)), "no registered host family is not named")
+    for label, bad, named in (
+        ("a stale binding", {**good, "example_dev_job_gold_host": definition(old, "23552")}, "gold_host"),
+        ("a missing label", {**good, "example_dev_job_gold_host": definition(None)}, "gold_host"),
+        ("a stale task memory", {**good, "example_dev_job_silver_host": definition(binding, "23552")}, "silver_host"),
+        ("an inactive revision", {**good, "example_dev_job_silver_host": definition(binding, status="INACTIVE")}, "silver_host"),
+    ):
+        problem = module.registration_problem(bad, binding)
+        require(problem is not None and named in problem, f"{label} is not named: {problem}")
+
+
+def jobs_registration_reads_the_project_host_families() -> None:
+    """The reader behind finish asks ECS for the active families of the project prefix, keeps the ``_host`` ones and describes each one's latest
+    revision; the services binding comes from the services output."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    binding = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+    asked: list[tuple[str, list[str]]] = []
+    revision = {"status": "ACTIVE", "memory": "22528", "containerDefinitions": [{"name": "init", "dockerLabels": {"hai.host_capacity": binding}}]}
+
+    class Cli:
+        def call_bounded(self, service: str, operation: str, arguments: list[str], timeout: float = 0) -> dict[str, Any]:
+            asked.append((f"{service} {operation}", arguments))
+            if operation == "list-task-definition-families":
+                return {"families": ["example_dev_job_silver_host", "example_dev_job_silver", "example_dev_job_gold_host"]}
+            return {"taskDefinition": revision}
+
+    with mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)):
+        problem = module.jobs_registration_problem(Cli(), {"project_name": "example", "environment": "dev"})
+    require(problem is None, f"matching revisions are refused: {problem}")
+    require(
+        asked[0] == ("ecs list-task-definition-families", ["--family-prefix", "example_dev_job_", "--status", "ACTIVE"]),
+        f"the families were not listed by prefix: {asked}",
+    )
+    described = [arguments[1] for operation, arguments in asked if operation == "ecs describe-task-definition"]
+    require(
+        described == ["example_dev_job_gold_host", "example_dev_job_silver_host"], f"not every host family was described, or a Fargate one was: {described}"
+    )
+    revision["memory"] = "23552"
+    with mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)):
+        problem = module.jobs_registration_problem(Cli(), {"project_name": "example", "environment": "dev"})
+    require(problem is not None and "23552" in problem, f"a stale task memory is not named: {problem}")
+
+
+def finish_through_the_command() -> None:
+    """The command forms. ``settle --keep-hold`` leaves the change form; plain ``settle`` and ``resolve`` exit 1 and change nothing; ``finish`` exits 1
+    while the registration check names a gap and 0 once it passes, and then ``resolve`` is no longer needed."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
     mine = OWN_LOCK
     aws = AwsStandIn(value="held by services_apply", lock=mine)
     with mock.patch.object(module.Steps, "wait_stable", lambda self, token: None):
         code, out, err = run_real_output(["settle", "--token", mine, "--keep-hold"], aws)
-    require(code == 0, f"settle --keep-hold failed: exit {code} {err}")
-    require(aws.value == "held by services_apply" and aws.lock == mine, f"settle --keep-hold changed the hold or the lock: {aws.value!r} {aws.lock!r}")
-    require(f"--token '{mine}'" in out + err and "resolve" in out + err, f"settle --keep-hold does not print the resolve command with the token: {out} {err}")
-    require(not any(command[1:3] in (["ssm", "put-parameter"], ["ssm", "delete-parameter"]) for command in aws.commands), "settle --keep-hold wrote the store")
-    with mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
-        code, _, err = run_real_output(["resolve", "--statement", "jobs applied", "--token", mine], aws)
-    require(code == 0 and aws.value == "clear" and aws.lock is None, f"resolve after settle --keep-hold did not clear both: exit {code} {err}")
+    require(code == 0 and str(aws.value).startswith(MIGRATION) and aws.lock == mine, f"settle --keep-hold: exit {code} {aws.value!r} {aws.lock!r} {err}")
+    require(FINISH in out + err and f"--token '{mine}'" in out + err, f"settle --keep-hold does not print the finish command with the token: {out} {err}")
+    held = aws.value
+    for arguments in (["settle", "--token", mine], ["resolve", "--statement", "x", "--token", mine], ["resolve", "--statement", "x"]):
+        with (
+            mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
+            mock.patch.object(module.Steps, "wait_stable", lambda self, token: None),
+        ):
+            code, _, err = run_real_output(arguments, aws)
+        require(
+            code == 1 and FINISH in err and aws.value == held and aws.lock == mine,
+            f"{arguments[0]} cleared or accepted a pending host job cap change: exit {code} {err}",
+        )
+    gap = mock.patch.object(module, "jobs_registration_problem", lambda *_: "family silver_host is registered at 23552 MiB")
+    with gap, mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True):
+        code, _, err = run_real_output(["finish", "--token", mine, "--statement", "jobs applied at the new cap"], aws)
+    require(code == 1 and "silver_host" in err and aws.value == held and aws.lock == mine, f"finish before the registration: exit {code} {err}")
+    with (
+        mock.patch.object(module, "jobs_registration_problem", lambda *_: None),
+        mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
+    ):
+        code, _, err = run_real_output(["finish", "--token", mine, "--statement", "jobs applied at the new cap"], aws)
+    require(
+        code == 0 and aws.value == "clear" and aws.lock is None,
+        f"finish after the registration did not clear both: exit {code} {aws.value!r} {aws.lock!r} {err}",
+    )
+
+
+def the_hold_command_can_write_the_change_form() -> None:
+    """``hold --migration`` and ``lock --continue-token`` exist as commands, so the wrapper can run a continued apply."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    parsed = module.build_parser().parse_args(["hold", "--reason", "x", "--migration"])
+    require(parsed.migration is True, "hold has no --migration option")
+    parsed = module.build_parser().parse_args(["lock", "--reason", "x", "--continue-token", OWN_LOCK])
+    require(parsed.continue_token == OWN_LOCK, "lock has no --continue-token option")
+    parsed = module.build_parser().parse_args(["finish", "--token", OWN_LOCK, "--statement", "x"])
+    require(parsed.command == "finish", "there is no finish command")
 
 
 def resolve_clears_the_hold_and_the_lock_with_its_token() -> None:
@@ -523,8 +727,14 @@ CASES: dict[str, Callable[[], None]] = {
     "hold_is_written_and_settles_before_the_apply": hold_is_written_and_settles_before_the_apply,
     "settle_clears_only_after_steady_state": settle_clears_only_after_steady_state,
     "settle_that_never_reaches_steady_state_keeps_the_hold": settle_that_never_reaches_steady_state_keeps_the_hold,
-    "settle_can_keep_the_hold_for_the_jobs_apply": settle_can_keep_the_hold_for_the_jobs_apply,
-    "settle_with_keep_hold_through_the_command": settle_with_keep_hold_through_the_command,
+    "settle_keeps_a_hold_that_only_the_jobs_registration_ends": settle_keeps_a_hold_that_only_the_jobs_registration_ends,
+    "no_plain_path_clears_a_pending_migration_hold": no_plain_path_clears_a_pending_migration_hold,
+    "finish_clears_the_hold_only_after_the_jobs_registration": finish_clears_the_hold_only_after_the_jobs_registration,
+    "a_services_apply_can_continue_under_the_pending_lock": a_services_apply_can_continue_under_the_pending_lock,
+    "registration_problem_reads_every_host_revision": registration_problem_reads_every_host_revision,
+    "jobs_registration_reads_the_project_host_families": jobs_registration_reads_the_project_host_families,
+    "finish_through_the_command": finish_through_the_command,
+    "the_hold_command_can_write_the_change_form": the_hold_command_can_write_the_change_form,
     "resolve_needs_a_statement_and_steady_state": resolve_needs_a_statement_and_steady_state,
     "a_hold_that_cannot_be_written_raises": a_hold_that_cannot_be_written_raises,
     "the_hold_name_is_the_terraform_default": the_hold_name_is_the_terraform_default,

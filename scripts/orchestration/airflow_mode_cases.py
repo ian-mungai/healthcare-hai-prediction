@@ -1019,13 +1019,24 @@ def migration_states_launch_nothing_and_the_procedure_is_written() -> None:
                 )
     apply = (ROOT / "scripts/infrastructure/services_apply.py").read_text()
     wrapper = (ROOT / "scripts/infrastructure/terraform.sh").read_text()
-    steps = re.findall(r"^\d\. .*(?:\n   .*)*", apply[apply.index("Changing the host job cap") : apply.index("Run from the repository root")], re.M)
-    require(len(steps) == 5, f"the owner procedure does not have five numbered steps: {len(steps)}")
-    text = " ".join(steps)
-    require(all(part in text for part in ("--keep-launch-hold", "resolve", "terraform.sh --jobs", "IAM stack")), "a step of the owner procedure is missing")
-    require("--keep-launch-hold" in wrapper and "--keep-hold" in wrapper and "--keep-hold" in apply, "the procedure names a hold option that the commands lack")
-    where = [next(number for number, step in enumerate(steps, 1) if part in step) for part in ("--keep-launch-hold", "IAM stack", "terraform.sh --jobs")]
-    require(where == [2, 3, 4] and steps[4].lstrip("5. ").startswith("Run ``resolve``"), f"the owner procedure is out of order: {where}")
+    text = apply[apply.index("Changing the host job cap") : apply.index("Run from the repository root")]
+    require(
+        "--keep-launch-hold" in wrapper and "--continue-launch-hold" in wrapper and "--keep-hold" in apply,
+        "the procedure names a hold option that the commands lack",
+    )
+    order = (
+        "services_apply status",
+        "plan -out=host_job_cap.tfplan",
+        "--keep-launch-hold apply",
+        '--iam --admin-profile "$ADMIN_PROFILE" apply',
+        "manage_policies apply",
+        '"${JOBS_FLAGS[@]}" apply',
+        "services_apply finish",
+    )
+    where = [text.find(part) for part in order]
+    require(all(position >= 0 for position in where) and where == sorted(where), f"the owner procedure is incomplete or out of order: {where}")
+    require("--preparation-inputs" in text and "--preparation-sha256" in text, "the procedure leaves out the preparation inputs of the reviewed plan")
+    # Every command of the procedure is run as written by scripts.infrastructure.run_activation_inputs_e2e (procedure_cases).
 
 
 def cap_setting_is_rendered_by_the_services_stack() -> None:
