@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "note": "Publications of the old single-path features runs (Nov 5 to 7 2026), retired with the old-design features tables. A reader of the real features namespace ignores every publish_runs row whose run ID is older than retired_before and refuses a named run that is older. The fixture namespace features_e2e has no entry. The last single-path run is 20261107T133742Z-14bad53c; the first per-model run is 20261112T193636Z-460308ca.",
+  "namespaces": {
+    "features": {
+      "retired_before": "20261112T000000Z",
+      "retired_runs": [
+        "20261106T000414Z-48f409da",
+        "20261106T174122Z-2cb62a84",
+        "20261107T040158Z-aa694e7a",
+        "20261107T052755Z-4d0bcf0c",
+        "20261107T133742Z-14bad53c"
+      ]
+    }
+  }
+}

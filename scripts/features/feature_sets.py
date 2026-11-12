@@ -6,7 +6,8 @@
   domain matrices stay in base because the model sets are built from them (the ``ruca_zip`` mask of the pivot models reads gold's POS snapshot, which a
   model set run does not have) and because the training extract, the serving and monitoring code and the historical reader still read them.
 - ``m1`` to ``m6`` publish one table each, ``feature_matrix_<set>``, built from the domain matrices of the newest committed base run
-  (``newest_base_row``). The run records the base run it read as ``base_run`` in its publish record.
+  (``newest_base_row``). The run records the base run it read as ``base_run`` in its publish record. Runs of the old single path (before the
+  cutover in ``retired_publications``) are never a base run of the real namespace.
 
 ``online_action`` decides what the Feast phase does with a set: nothing for base, offline only for a set the rules keep offline, a held online load when the
 set's schema hash differs from the hash of a Production model of that set, otherwise the online load. The Production models are the newest Production
@@ -22,6 +23,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from scripts.features import retired_publications
 from scripts.lakehouse.gold_publish_record import PublishError
 
 if TYPE_CHECKING:
@@ -81,10 +83,15 @@ def column_change_notes(schema: Mapping[str, Any]) -> dict[str, str]:
     return {entry["table"]: COLUMN_CHANGE_NOTE for entry in schema["model_sets"].values()}
 
 
-def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str]) -> Mapping[str, Any] | None:
-    """The newest committed row whose snapshot set names every base table. ``rows`` are in commit order, oldest first. A run of the single path counts."""
+def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str], namespace: str | None = None) -> Mapping[str, Any] | None:
+    """The newest committed row whose snapshot set names every base table. ``rows`` are in commit order, oldest first. A run of the single path counts.
+
+    With a ``namespace``, a row of a run that the namespace retired (``retired_publications``) never counts."""
     wanted = set(base_tables)
-    return next((row for row in reversed(rows) if wanted <= set(row["snapshot_set"])), None)
+    return next(
+        (row for row in reversed(rows) if wanted <= set(row["snapshot_set"]) and not (namespace and retired_publications.is_retired(namespace, row["run_id"]))),
+        None,
+    )
 
 
 def production_models(records: Mapping[str, Mapping[str, Any] | None], feature_set: str) -> dict[str, str | None]:

@@ -753,7 +753,7 @@ def case_compose_service(fixture: Fixture, scratch: Path) -> Checks:
 
 
 def case_features_publish_job(fixture: Fixture, scratch: Path) -> Checks:
-    """E06a launcher part (LB42): the offline features publish suite runs as a closed spark_e2e job with the features and gold contracts read-only."""
+    """E06a launcher part (LB42): the offline features publish suite runs as a closed spark_e2e job with the features contracts read-only."""
     spec = launcher.SPARK_JOBS.get("features_publish_e2e", {})
     checks: Checks = {
         "shape": spec.get("template") == "spark_e2e"
@@ -761,12 +761,12 @@ def case_features_publish_job(fixture: Fixture, scratch: Path) -> Checks:
         and spec.get("writes") == ("data/e2e/feature_store",)
         and spec.get("aws") is False
         and spec.get("contract") is True
-        and spec.get("contract_files") == ("data_contracts/lakehouse/features_publish.json",)
+        and spec.get("contract_files") == ("data_contracts/lakehouse/features_publish.json", "data_contracts/features")
         and spec.get("grammar") == {"--case": "values", "--stamp": "value"}
     }
     if not checks["shape"]:
         return checks
-    cases = ["happy_and_types", "retry_and_new_publication", "version_two", "interruption_between_fast_forwards", "tamper"]
+    cases = ["happy_and_types", "retry_and_new_publication", "version_two", "interruption_between_fast_forwards", "tamper", "republish_after_retirement"]
     arguments = ["--case", *cases, "--stamp", "20261023T041210Z"]
     checks["grammar_accepts_cases_and_stamp"] = launcher.validate_spark_args("features_publish_e2e", arguments) == arguments
     checks["grammar_accepts_stamp_only"] = launcher.validate_spark_args("features_publish_e2e", ["--stamp", "20261023T041210Z"]) == [
@@ -789,6 +789,7 @@ def case_features_publish_job(fixture: Fixture, scratch: Path) -> Checks:
         (str(ROOT / "config"), "/workspace/config", True),
         (str(ROOT / "data_contracts/lakehouse/gold_contract.json"), "/workspace/data_contracts/lakehouse/gold_contract.json", True),
         (str(ROOT / "data_contracts/lakehouse/features_publish.json"), "/workspace/data_contracts/lakehouse/features_publish.json", True),
+        (str(ROOT / "data_contracts/features"), "/workspace/data_contracts/features", True),
         (str(ROOT / "data/e2e/feature_store"), "/workspace/data/e2e/feature_store", False),
     }
     gold = {(mount.source, mount.target, mount.read_only) for mount in renderer.spark_mounts("gold_publish_e2e", SimpleNamespace(run_folder=None))}

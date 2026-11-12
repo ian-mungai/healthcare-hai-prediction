@@ -39,6 +39,7 @@ Check = dict[str, bool]
 Case = Callable[["Features"], Check]
 STAMP = ""
 COLUMN_TYPES = "DESCRIBE {table}"
+DROP_TABLE = "DROP TABLE IF EXISTS {table} PURGE"
 SELECT_VALUE = "SELECT c001__value__number FROM {table} VERSION AS OF {snapshot} WHERE spine_key = '990001:2022'"
 COUNT_NULLS = "SELECT count(*) FROM {table} VERSION AS OF {snapshot} WHERE {column} IS NULL"
 HAS_KEY = "SELECT count(*) FROM {table} VERSION AS OF {snapshot} WHERE spine_key = '{key}'"
@@ -248,12 +249,47 @@ def tamper(h: Features) -> Check:
     return checks
 
 
+def republish_after_retirement(h: Features) -> Check:
+    """The retirement of the old tables: after the catalog drops every table (with or without ``publish_runs``), a new run creates each table, and the runs
+    table when it is gone, from its export."""
+    h.committed("a", "a")
+    spark = h.restore("a")
+    checks = h.begin()
+    ctx = h.features_context("a", work="probe_drop")
+    for name in [*ctx.plan.tables, ctx.plan.runs_table]:
+        spark.sql(DROP_TABLE.format(table=ctx.fq(name)))
+    checks["every table and the runs table are gone after the drop"] = not any(
+        publish.table_exists(ctx, name) for name in [*ctx.plan.tables, ctx.plan.runs_table]
+    )
+    fresh = h.features_context("v2", work="after_drop")
+    run_steps(fresh)
+    head = publish.published_head(fresh)
+    checks["the publish creates the runs table with the new run as its only row"] = [row["run_id"] for row in publish.published_runs(fresh)] == [fresh.run_id]
+    checks["the publish creates every contract table at the new set"] = (
+        head is not None and set(head["snapshot_set"]) == set(fresh.plan.tables) and head_matches(fresh, head) == []
+    )
+    spark = h.restore("a")
+    ctx = h.features_context("a", work="probe_keep_runs")
+    for name in ctx.plan.tables:
+        spark.sql(DROP_TABLE.format(table=ctx.fq(name)))
+    kept = h.features_context("v2", work="after_drop_keep_runs")
+    run_steps(kept)
+    head = publish.published_head(kept)
+    runs = [row["run_id"] for row in publish.published_runs(kept)]
+    checks["a publish over dropped tables and a kept runs table adds its row after the old one"] = runs == [ctx.run_id, kept.run_id]
+    checks["the head of the kept runs table is the new run with every table at it"] = (
+        head is not None and head["run_id"] == kept.run_id and head_matches(kept, head) == []
+    )
+    return checks
+
+
 CASES: dict[str, Case] = {
     "happy_and_types": happy_and_types,
     "retry_and_new_publication": retry_and_new_publication,
     "version_two": version_two,
     "interruption_between_fast_forwards": interruption_between_fast_forwards,
     "tamper": tamper,
+    "republish_after_retirement": republish_after_retirement,
 }
 
 

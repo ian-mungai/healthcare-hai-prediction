@@ -1396,7 +1396,8 @@ SPARK_JOBS: dict[str, dict[str, Any]] = {
         "writes": ("data/e2e/feature_store",),
         "aws": False,
         "contract": True,
-        "contract_files": ("data_contracts/lakehouse/features_publish.json",),
+        # The features plan loads the feature schema (the model set tables), so the job mounts the feature contract folder as the gold publish job does.
+        "contract_files": ("data_contracts/lakehouse/features_publish.json", "data_contracts/features"),
         "grammar": {"--case": "values", "--stamp": "value"},
     },
     "gold_publish_local": {

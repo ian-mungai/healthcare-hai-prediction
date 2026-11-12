@@ -50,7 +50,8 @@ SENTINEL = "sentinel-secret-9f31c2"
 STORE_VALUE = "pw-from-store-7d2e41"
 ISSUED = "issued-token"
 LOCAL_YAML_SHA256 = "d534a5b5ae3c615401fb28efb11c7e7ce65d9181a7de2a1df73abeb09269704f"
-RUN = online_cases.RUN_A
+# A run of the real namespace must follow the retirement cutover (``retired_publications``); the fixture cases keep the October run IDs.
+RUN = "20261113T120000Z-0a1b2c3d"
 PORT_OF_NOTHING = "http://127.0.0.1:9/api/catalog"
 
 
@@ -321,7 +322,7 @@ def consumed_registry(mode: str) -> tuple[str, str]:
     """Run a full AWS apply in ``mode`` and return the registry path and the registry bootstrap setting the backend consumed."""
     schema = feast_cases.synthetic_schema()
     with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
-        catalog, _ = feast_cases.stub_features(schema)
+        catalog, _ = feast_cases.stub_features(schema, run=RUN)
         catalog.namespace = reads.NAMESPACES[mode]
         environ, store, server = prepared(FEAST_RUN_FOLDER=raw)
         backend = PathBackend(schema, [], environ)
@@ -383,7 +384,7 @@ def case_fa3(c: Checker) -> None:
     schema = feast_cases.synthetic_schema()
     with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
         folder = Path(raw)
-        catalog, _ = feast_cases.stub_features(schema)
+        catalog, _ = feast_cases.stub_features(schema, run=RUN)
         catalog.namespace = "features"
         guarded = GuardedCatalog(catalog)
         environ, store, server = prepared(FEAST_RUN_FOLDER=str(folder))
@@ -1699,7 +1700,7 @@ def case_fa27(c: Checker) -> None:
     """FA27: ``FEATURE_SET=all``, the value the broker and the override generator give a run of the single path, reaches ``feast_job`` from the environment
     (the layer driver passes no flag for it) and runs the single path on the AWS profile."""
     schema = feast_cases.synthetic_schema()
-    catalog, _ = feast_cases.stub_features(schema)
+    catalog, _ = feast_cases.stub_features(schema, run=RUN)
     with tempfile.TemporaryDirectory(prefix="feast_aws_all_") as raw:
         world = Deployed(Path(raw), ProductionBucket())
         world.guarded = GuardedCatalog(catalog)

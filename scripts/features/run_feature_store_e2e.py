@@ -1760,6 +1760,38 @@ def feature_set_cases(report: Report) -> None:
         "a run of the single path counts as a base run",
         feature_sets.newest_base_row([row("20261109T010000Z-00000001", legacy)], base) is not None,
     )
+    retired_run, fresh_run = row("20261107T133742Z-14bad53c", base), row("20261113T010000Z-00000005", base)
+
+    def newest_in(namespace: str, rows: list[dict[str, Any]]) -> str | None:
+        """The run ID of the newest base row of the namespace, None for no base run or for a call that fails."""
+        try:
+            found = feature_sets.newest_base_row(rows, base, namespace=namespace)
+        except Exception:
+            return "raised"
+        return None if found is None else str(found["run_id"])
+
+    report.case(
+        "F18",
+        "FS7",
+        "a run committed before the features cutover is no base run: the newest base run is the first row after it, or none",
+        newest_in("features", [retired_run]) is None and newest_in("features", [retired_run, fresh_run]) == fresh_run["run_id"],
+    )
+    report.case(
+        "F19",
+        "FS7",
+        "the cutover covers the real features namespace only: the same old row is a base run in the fixture namespace",
+        newest_in("features_e2e", [retired_run]) == retired_run["run_id"],
+    )
+    cutover = (
+        json.loads((ROOT / "data_contracts/features/retired_publications.json").read_text()).get("namespaces", {}).get("features", {}).get("retired_before", "")
+    )
+    report.case(
+        "F20",
+        "FS7",
+        "the recorded cutover follows the last single-path run (20261107T133742Z) and precedes the first per-model run (20261112T193636Z)",
+        isinstance(cutover, str) and "20261107T133742Z" < cutover <= "20261112T193636Z",
+        cutover=cutover,
+    )
     names = json.loads(feature_sets.MODEL_CONTRACT.read_text())["registered_models"]
     hashes = {name: schema_module.set_schema_sha256(name, schema=schema) for name in feature_sets.MODEL_SETS}
 

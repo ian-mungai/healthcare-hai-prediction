@@ -130,7 +130,7 @@ def pin_base(ctx: Context, path: Path, source_run: str | None) -> dict[str, Any]
         return previous
     if not source_run:
         raise PublishError("the model set pin names no base run: the job must name the base run its chain just published")
-    newest = feature_sets.newest_base_row(published_runs(ctx), ctx.plan.tables)
+    newest = feature_sets.newest_base_row(published_runs(ctx), ctx.plan.tables, ctx.namespace)
     if newest is None:
         raise PublishError(f"no committed base run exists, so base run {source_run} cannot be the newest")
     if newest["run_id"] != source_run:

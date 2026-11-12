@@ -152,9 +152,9 @@ def runs_row(run_id: str, committed: datetime | str, snapshot_set: Any) -> dict[
 
 
 def stub_features(
-    schema: dict[str, Any] | None = None, *, runs: list[dict[str, Any]] | None = None, log: list[str] | None = None
+    schema: dict[str, Any] | None = None, *, runs: list[dict[str, Any]] | None = None, log: list[str] | None = None, run: str = RUN_A
 ) -> tuple[StubCatalog, dict[str, int]]:
-    """A catalog holding the schema's tables, the spine and a ``publish_runs`` table whose head names every table's main snapshot."""
+    """A catalog holding the schema's tables, the spine and a ``publish_runs`` table whose head (the run ``run``) names every table's main snapshot."""
     schema = schema or synthetic_schema()
     catalog = StubCatalog(log=log)
     snapshots = {}
@@ -171,7 +171,7 @@ def stub_features(
     for index, name in enumerate(("int_spine_validation_measures", "int_county_adjacency"), start=2100):
         snapshots[name] = index
         catalog.tables[name] = StubTable(name, index, {"support_key": "string"}, [{"support_key": "synthetic"}])
-    rows = runs if runs is not None else [runs_row(RUN_A, T0, snapshots)]
+    rows = runs if runs is not None else [runs_row(run, T0, snapshots)]
     catalog.tables[reads.RUNS_TABLE] = StubTable(reads.RUNS_TABLE, 3000, {}, rows)
     return catalog, snapshots
 
@@ -241,6 +241,27 @@ def case_e17_base_run(c: Checker) -> None:
     c.check("the scan of an old runs table does not select the missing column", "base_run" not in old.tables[reads.RUNS_TABLE].selected)
     bad = catalog_of([{**runs_row(RUN_B, T0, good), "base_run": "not-a-run-id"}])
     c.refused("a base run that is not a run ID is refused", lambda: reads.read_publication(bad, namespace), "base_run")
+
+
+def case_e17_retired(c: Checker) -> None:
+    """The publications recorded before the features cutover are no publication of the real namespace: the head skips them, a named one is refused by name,
+    and the fixture namespace is untouched."""
+    good = {"feature_matrix_a": 11, "int_hospital_spine": 12}
+    old_run, newer_run = "20261107T133742Z-14bad53c", "20261113T010000Z-1a2b3c4d"
+
+    def stub(namespace: str, runs: list[dict[str, Any]]) -> StubCatalog:
+        catalog, _ = stub_features(runs=runs)
+        catalog.namespace = namespace
+        return catalog
+
+    only_old = stub("features", [runs_row(old_run, T0, good)])
+    c.refused("a namespace whose only rows are older than the cutover has no publication", lambda: reads.read_publication(only_old, "features"), "retired")
+    c.refused("a named run older than the cutover is refused by name", lambda: reads.read_publication(only_old, "features", old_run), old_run)
+    mixed = stub("features", [runs_row(old_run, T0 + timedelta(days=30), good), runs_row(newer_run, T0, good)])
+    c.check("the head skips a retired row even when its commit time is the newest", reads.read_publication(mixed, "features").run_id == newer_run)
+    c.refused("the base run of a model set row that is retired is refused", lambda: reads.read_publication(mixed, "features", old_run), "retired")
+    fixture = stub("features_e2e", [runs_row(old_run, T0, good)])
+    c.check("the same old row is readable in the fixture namespace", reads.read_publication(fixture, "features_e2e").run_id == old_run)
 
 
 def case_e17_base_history(c: Checker) -> None:
@@ -2209,6 +2230,7 @@ def case_e17_history(c: Checker) -> None:
 LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E17_select": (case_e17_select, "LC1 LC2 LC3 LH7"),
     "E17_base_run": (case_e17_base_run, "LC1"),
+    "E17_retired": (case_e17_retired, "LC1 FS7"),
     "E17_base_history": (case_e17_base_history, "LC4 LC6"),
     "E17_before": (case_e17_before, "LC4"),
     "E17_during": (case_e17_during, "LC5 LC8 LC9"),

@@ -30,6 +30,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from scripts.features import retired_publications
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCHEMA_PATH = REPO_ROOT / "data_contracts/features/feature_schema.json"
 DEPLOYMENT_PATH = Path("/workspace/infra/deployment.auto.tfvars.json")
@@ -144,8 +146,11 @@ def parse_snapshot_set(run_id: str, raw: Any) -> dict[str, int]:
 def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None = None) -> Publication:
     """The head ``publish_runs`` row, or the row of the named run.
 
-    The head is the newest ``committed_at``, ties broken by the larger ``run_id``: the order of the gold head query in ``gold_publish.py``.
+    The head is the newest ``committed_at``, ties broken by the larger ``run_id``: the order of the gold head query in ``gold_publish.py``. A run that the
+    namespace retired (``retired_publications``) is no publication: the head skips it and a named one is refused by name.
     """
+    if run_id is not None and retired_publications.is_retired(namespace, run_id):
+        raise ReadError(f"publish run {run_id} is retired: {namespace} ignores the runs before {retired_publications.cutover(namespace)}")
     table = load_table(catalog, namespace, RUNS_TABLE)
     fields = ("run_id", "committed_at", "snapshot_set", *(("base_run",) if "base_run" in iceberg_columns(table) else ()))
     rows = table.scan(selected_fields=fields).to_arrow().to_pylist()
@@ -161,6 +166,12 @@ def read_publication(catalog: IcebergCatalog, namespace: str, run_id: str | None
         except (TypeError, ValueError):
             raise ReadError(f"publish run {identity}: committed_at is not a time") from None
         parsed.append((committed, identity, row.get("snapshot_set"), row.get("base_run")))
+    live = [item for item in parsed if not retired_publications.is_retired(namespace, item[1])]
+    if not live:
+        raise ReadError(
+            f"{namespace}.{RUNS_TABLE} has no committed publication: its {len(parsed)} rows are retired runs before {retired_publications.cutover(namespace)}"
+        )
+    parsed = live
     if run_id is None:
         committed, identity, raw, base = max(parsed, key=lambda item: (item[0], item[1]))
     else:
