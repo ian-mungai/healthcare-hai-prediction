@@ -1524,6 +1524,8 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
 
 
 def handle(unit: dict, run: Run) -> dict:
+    """Every unit's one entry point. The bound config is checked at the code root again right before the unit uses it, so no handler can skip it."""
+    verify_config_inputs(run)
     adapters = ADAPTERS if run.adapters is None else run.adapters
     mode = handler_mode(unit)
     if mode in adapters:
