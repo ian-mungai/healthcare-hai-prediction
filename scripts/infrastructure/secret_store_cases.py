@@ -277,8 +277,23 @@ def store_deadline(root: Path) -> dict[str, bool]:
     }
 
 
+HOST_JOB_CAP_FILE = "infra/services/main.tf"
+HOST_JOB_CAP_LABEL = re.compile(r'\s+"host_job_cap"\s*\{')
+
+
+def host_job_cap_block(relative: str, after_type: str, body: str) -> bool:
+    """True only for the one parameter the services stack manages by owner decision: a plain ``String`` named by ``host_job_cap_parameter_name``."""
+    return (
+        relative == HOST_JOB_CAP_FILE
+        and HOST_JOB_CAP_LABEL.match(after_type) is not None
+        and re.search(r'^\s*type\s*=\s*"String"\s*$', body, re.MULTILINE) is not None
+        and re.search(r"^\s*name\s*=\s*var\.host_job_cap_parameter_name\s*$", body, re.MULTILINE) is not None
+    )
+
+
 def source_offenders(root: Path) -> list[str]:
-    """The Terraform files that declare a secret or a parameter; a data source of a public AWS parameter (``/aws/service/...``) is no offender."""
+    """The Terraform files that declare a secret or a parameter; a data source of a public AWS parameter (``/aws/service/...``) and the host job cap
+    parameter of the services stack (a plain String that holds a memory size) are no offenders."""
     found = []
     for path in sorted((root / "infra").rglob("*.tf")):
         if ".terraform" in path.parts:
@@ -288,6 +303,12 @@ def source_offenders(root: Path) -> list[str]:
             body = text[match.end() : text.find("\n}", match.end())]
             if match.group(2) == "aws_ssm_parameter" and match.group(1) == "data" and re.search(r'^\s*name\s*=\s*"/aws/service/', body, re.MULTILINE):
                 continue
+            if (
+                match.group(1) == "resource"
+                and match.group(2) == "aws_ssm_parameter"
+                and host_job_cap_block(str(path.relative_to(root)), text[match.end() :], body)
+            ):
+                continue
             found.append(str(path.relative_to(root)))
     return found
 
@@ -296,6 +317,19 @@ def variable_defaults(root: Path, names: Iterable[str]) -> list[str | None]:
     """The default of each named variable in ``infra/iam/variables.tf``, or ``None`` when it has none."""
     text = (root / secret_store.VARIABLES).read_text()
     return [(found.group(1) if (found := re.search(rf'variable "{name}" \{{[^}}]*?default\s*=\s*"([^"]*)"', text, re.DOTALL)) else None) for name in names]
+
+
+def host_job_cap_exemption_is_narrow() -> bool:
+    """A SecureString, another name, another label or another file is still an offender."""
+    after = ' "host_job_cap" {'
+    good = '  name = var.host_job_cap_parameter_name\n  type = "String"\n'
+    return (
+        host_job_cap_block(HOST_JOB_CAP_FILE, after, good)
+        and not host_job_cap_block(HOST_JOB_CAP_FILE, after, good.replace('"String"', '"SecureString"'))
+        and not host_job_cap_block(HOST_JOB_CAP_FILE, after, good.replace("host_job_cap_parameter_name", "other_name"))
+        and not host_job_cap_block(HOST_JOB_CAP_FILE, ' "other" {', good)
+        and not host_job_cap_block("infra/iam/main.tf", after, good)
+    )
 
 
 def terraform_names(root: Path) -> dict[str, bool]:
@@ -326,6 +360,7 @@ def terraform_names(root: Path) -> dict[str, bool]:
         "the shared keys keep their Secrets Manager names and are not parameters": sorted(name or "" for name in shared_defaults) == sorted(secret_store.SHARED)
         and not any(name.startswith("/") for name in secret_store.SHARED),
         "no Terraform file declares a secret, a secret version, a parameter or a secret data source": not offenders,
+        "the host job cap exemption accepts only the plain String parameter of the services stack": host_job_cap_exemption_is_narrow(),
     }
 
 
