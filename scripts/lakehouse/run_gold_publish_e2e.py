@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -444,10 +445,9 @@ def materialization(path: Path, folders: dict[str, Any]) -> str:
 
 def silver_plan_steps() -> list[dict[str, Any]]:
     """Silver publishes every model it builds, each a table in the build file, the staging copies keyed by the grain their test proves."""
-    import yaml
-
     from scripts.lakehouse import silver_publish
 
+    yaml = importlib.import_module("yaml")
     plan = silver_publish.publish_plan("real")
     project = yaml.safe_load((ROOT / "dbt/dbt_project.yml").read_text())
     models = {path.stem: path for path in (ROOT / "dbt/models/silver").rglob("*.sql")}
