@@ -1095,6 +1095,48 @@ DELETED_MODULE_ROUND_THREE += [
         reason="cannot read the import roots",
     ),
 ]
+# Inputs of the third review: Python options that take a value (-W, -X), attached forms, flag clusters and where option parsing ends (-c, a script, --).
+DELETED_MODULE_ROUND_FOUR = [
+    Case(
+        f"deleted module, command string with interpreter options {label} remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, COMMAND_FILE: f'COMMAND = "{prefix} -m {DEAD_PATH} --check"\n'},
+        delete=[DEAD_FILE],
+        reason=f"{COMMAND_FILE}:1: {DEAD_PATH} {LEFTOVER}",
+    )
+    for label, prefix in [
+        ("-u -W ignore -X dev", "python3.12 -u -W ignore -X dev"),
+        ("-W ignore", "python -W ignore"),
+        ("-X dev", ".venv/bin/python -X dev"),
+        ("attached -Wignore -Xdev", "python -Wignore -Xdev"),
+        ("clustered flags", "python -bBdEIqsSvx -OO -uB"),
+        ("ending a cluster with -W", "python -uW ignore"),
+        ("--check-hash-based-pycs with its value", "python --check-hash-based-pycs always"),
+    ]
+]
+DELETED_MODULE_ROUND_FOUR += [
+    Case(
+        "deleted module, command string with the module attached to -m remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, COMMAND_FILE: f'COMMAND = "python -W ignore -m{DEAD_PATH}"\n'},
+        delete=[DEAD_FILE],
+        reason=f"{COMMAND_FILE}:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, -m after the end of interpreter options is no reference",
+        "removed-names",
+        True,
+        committed={
+            **DEAD_MODULE,
+            COMMAND_FILE: f'AFTER_DASHES = "python -- -m {DEAD_PATH}"\nAFTER_PROGRAM = "python -c \'pass\' -m {DEAD_PATH}"\n'
+            f'ATTACHED_PROGRAM = "python -cpass -m {DEAD_PATH}"\nAFTER_SCRIPT = "python -W ignore tool.py -m {DEAD_PATH}"\n'
+            f'AFTER_STDIN = "python - -m {DEAD_PATH}"\nOTHER_MODULE = "python -W {DEAD_PATH} -m other.{DEAD_STEM}"\n',
+        },
+        delete=[DEAD_FILE],
+    ),
+]
 DELETED_MODULE_CASES = [
     Case(
         "deleted module, its function name is an unrelated local variable",
@@ -1202,6 +1244,7 @@ DELETED_MODULE_CASES = [
     ),
     *DELETED_MODULE_ROUND_TWO,
     *DELETED_MODULE_ROUND_THREE,
+    *DELETED_MODULE_ROUND_FOUR,
     Case(
         "function removed from a file that stays, an unrelated word elsewhere still counts",
         "removed-names",

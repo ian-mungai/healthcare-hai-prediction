@@ -803,10 +803,13 @@ def refers_to(dotted: str, prefixes: set[str]) -> bool:
 
 
 def command_modules(text: str) -> list[str]:
-    """Return the modules a command written in one string runs with ``-m``: the word after ``-m`` when a Python program, with only flags between, precedes it.
+    """Return the modules a command written in one string runs with ``-m``, reading the interpreter options as CPython does.
 
-    The program is ``python``, ``python3.12`` or a path to one, either behind a launcher (``uv run python``) or not, or a shell variable named like Python.
-    The string is split like a shell line, or at spaces when its quotes do not pair.
+    A Python program is ``python``, ``python3.12`` or a path to one, behind a launcher (``uv run python``) or not, or a shell variable named like Python.
+    After it come options: ``-W`` and ``-X`` take a value (the rest of the word, or the next word), as does ``--check-hash-based-pycs``; other letters
+    are flags that may share a word (``-uB``, ``-OO``); ``-m`` takes the module (attached or the next word). A word that is not an option, ``-``,
+    ``--`` and ``-c`` end the options, so a later ``-m`` belongs to the script or the program, not to Python. The string is split like a shell line,
+    or at spaces when its quotes do not pair.
     """
     if "-m" not in text:
         return []
@@ -816,13 +819,32 @@ def command_modules(text: str) -> list[str]:
         words = text.split()
     words = [word.strip("`'\"()") for word in words]
     modules = []
-    for index, word in enumerate(words[:-1]):
-        before = index - 1
-        while before >= 0 and words[before].startswith("-"):
-            before -= 1
-        module = words[index + 1].rstrip(".,;:")
-        if word == "-m" and before >= 0 and PYTHON_PROGRAM.fullmatch(Path(words[before]).name) and DOTTED_WORD.fullmatch(module):
-            modules.append(module)
+    for program, word in enumerate(words):
+        if not PYTHON_PROGRAM.fullmatch(Path(word).name):
+            continue
+        index = program + 1
+        while index < len(words) and words[index].startswith("-") and words[index] not in ("-", "--"):
+            option = words[index]
+            if option == "--check-hash-based-pycs":
+                index += 2
+            elif option.startswith("--"):
+                index += 1
+            else:
+                letters = option[1:]
+                position = next((place for place, letter in enumerate(letters) if letter in "WXcm"), None)
+                if position is None:
+                    index += 1
+                    continue
+                letter, attached = letters[position], letters[position + 1 :]
+                if letter == "c":
+                    break
+                if letter == "m":
+                    value = attached or (words[index + 1] if index + 1 < len(words) else "")
+                    if DOTTED_WORD.fullmatch(value.rstrip(".,;:")):
+                        modules.append(value.rstrip(".,;:"))
+                    break
+                index += 1 if attached else 2
+            continue
     return modules
 
 
