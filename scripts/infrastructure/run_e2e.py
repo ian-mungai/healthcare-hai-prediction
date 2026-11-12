@@ -625,11 +625,19 @@ def shown_units(unit):
             dropins[path.name] = (f"{label}/{unit}.d/{path.name}", path.read_text(encoding="utf-8"))
     shown.extend(dropins[name] for name in sorted(dropins))
     return shown
+# Boot no longer calls systemctl cat; this stand-in goes away once the removed-names single-word fix lands.
+def cat(unit):
+    shown = shown_units(unit)
+    for label, text in shown:
+        sys.stdout.write(f"# {label}\\n{text}\\n")
+    return 0 if shown else 1
 arguments = sys.argv[1:]
 with (Path(os.environ["BOOT_STATE"]) / "systemctl.log").open("a", encoding="utf-8") as log:
     log.write(" ".join(arguments) + "\\n")
 if os.environ.get("BOOT_SYSTEMCTL_STALL", "\\0") in " ".join(arguments):
     os.execv("/bin/sleep", ["sleep", "45"])
+if arguments[:1] == ["cat"]:
+    sys.exit(cat(arguments[1]))
 main(arguments, BUILTIN, execute)
 """
 # The ECS-optimized image ships a systemd-coredump pipe handler and set-user-ID dumps on.
