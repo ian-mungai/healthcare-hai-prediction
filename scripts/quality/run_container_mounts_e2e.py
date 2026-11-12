@@ -261,11 +261,13 @@ def scenarios(source: dict[str, str]) -> list[Case]:
                 LAUNCHER: replaced(
                     source[LAUNCHER],
                     '    "pins": {',
-                    '    "synthetic_job": {"template": "spark_e2e", "module": "orchestration.pipeline_protocol", '
+                    '    "synthetic_job": {"template": "spark_e2e", "module": "feature_store.synthetic_job", '
                     '"writes": (), "aws": False, "grammar": {}},\n    "pins": {',
-                )
+                ),
+                # The Spark containers mount scripts, orchestration and config, so a module under another source root is out of reach.
+                "feature_store/synthetic_job.py": "VALUE = 1\n",
             },
-            messages=("orchestration.pipeline_protocol", "container launcher:spark/synthetic_job"),
+            messages=("feature_store.synthetic_job", "container launcher:spark/synthetic_job"),
         ),
         Case(
             "renamed_lineage_package",
