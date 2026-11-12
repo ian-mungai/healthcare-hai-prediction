@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure import openmetadata_ingest as ingest
+from scripts.infrastructure import startup_check
 
 # The catalog is reached over the bridge at the host's address: an http URL whose host is a private IPv4 address, port 8585 and the path /api, and nothing else.
 API_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):8585/api")
@@ -53,6 +54,11 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     if not token:
         sys.stderr.write("openmetadata_host_ingest: OM_INGESTION_TOKEN is not set\n")
         return 2
+    try:
+        startup_check.check_phase("metadata", "ingest")
+    except startup_check.StartupCheckError as refusal:
+        sys.stderr.write(f"openmetadata_host_ingest: {refusal}\n")
+        return 1
     run = ingest.run_workflow if workflow is None else workflow
 
     def aimed(config: dict[str, Any]) -> None:

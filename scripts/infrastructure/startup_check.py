@@ -3,8 +3,9 @@
 A job on the EC2 host or on Fargate runs this at the start of its first code step, from the staged code. It checks only what the job needs, each check with a
 fixed bound, and logs one line per check on stderr. Failures come first. A run outside an ECS task checks nothing.
 
-- ``check_environment``: the task environment is recognised, the task credential source is the native provider, the host services the job needs accept a TCP
-  connect at their configured addresses, and S3 and ECR accept a connect on 443. The connects run side by side and share one bound.
+- ``check_phase`` and ``check_environment``: the task environment is recognised, the task credential source is the native provider, the host services the
+  job needs (Polaris, MLflow, OpenMetadata, Redis) accept a TCP connect at their configured addresses, and S3 and ECR accept a connect on 443. The connects run
+  side by side and share one bound. ``JOB_PHASES`` holds, for every host job, the phases that check and the services each needs.
 - ``check_build``: the dbt target that the build selects (``pipeline_build.build_target``) and, for a profile that lists DuckDB extensions, that its extension
   directory exists and holds each of them, so dbt downloads nothing.
 - ``check_files``: every repository-relative file that the job will read exists in the task. ``queue_files`` derives them from the collector plans of the
@@ -15,6 +16,7 @@ The check opens a socket and reads files. It makes no request that needs a grant
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import socket
@@ -26,7 +28,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from orchestration.pipeline_protocol import PipelineError
 from scripts.lakehouse import ecs_engine
 
 # One bound for all connects of a check. They run side by side, so a check adds at most this and a little more.
@@ -34,6 +35,22 @@ CONNECT_SECONDS = 3.0
 # ECS gives these to every container of a task, on Fargate and on the host.
 ECS_MARKERS = ("ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# The host jobs of config/orchestration/host_jobs.json, the phase at which each checks and the host services that phase needs. A phase that is not listed
+# checks nothing. The first code step of a job is its first listed phase; the layer jobs check their build separately (``check_build``).
+JOB_PHASES: dict[str, dict[str, tuple[str, ...]]] = {
+    "silver": {"pin": ("polaris",)},
+    "gold": {"pin": ("polaris",)},
+    "features": {"pin": ("polaris",), "feast": ("polaris", "redis")},
+    "bronze": {"pin": (), "load": ("polaris",)},
+    "train": {"prepare": (), "extract": ("polaris",), "train": ("mlflow",)},
+    "promote": {"promote": ("mlflow",)},
+    "drift": {"baseline": ("mlflow",), "current": ("polaris",)},
+    "serve": {"serve": ("mlflow",)},
+    "metadata": {"ingest": ("openmetadata",)},
+    "publisher": {"run": ()},
+}
+# The variable that holds each service address. Redis runs on the host of POLARIS_URI, as scripts.features.feast_aws derives it.
+SERVICE_VARIABLES = {"polaris": "POLARIS_URI", "mlflow": "MLFLOW_TRACKING_URI", "openmetadata": "OM_API"}
 
 
 class StartupCheckError(RuntimeError):
@@ -138,7 +155,20 @@ def report(job: str, label: str, findings: list[Finding], started: float) -> Non
         raise StartupCheckError("startup check failed: " + "; ".join(f"{finding.name} {finding.detail}" for finding in failed))
 
 
-def check_environment(job: str, *, polaris: bool = False, mlflow: bool = False) -> None:
+def redis_target() -> tuple[str, str, int] | Finding:
+    online_protocol = importlib.import_module("scripts.features.online_protocol")
+    target = service_target("redis", "POLARIS_URI")
+    return Finding("redis_address_unusable", False, target.detail) if isinstance(target, Finding) else ("redis", target[1], online_protocol.PORT)
+
+
+def check_phase(job: str, phase: str) -> None:
+    """Check the environment for one phase of a host job, with the services that ``JOB_PHASES`` lists for it. An unlisted phase checks nothing."""
+    needs = JOB_PHASES[job].get(phase)
+    if needs is not None:
+        check_environment(job, polaris="polaris" in needs, mlflow="mlflow" in needs, openmetadata="openmetadata" in needs, redis="redis" in needs)
+
+
+def check_environment(job: str, *, polaris: bool = False, mlflow: bool = False, openmetadata: bool = False, redis: bool = False) -> None:
     """The first-step check: the task environment and credentials, the host services that the job needs, and S3 and ECR."""
     if not in_ecs_job():
         return
@@ -148,13 +178,19 @@ def check_environment(job: str, *, polaris: bool = False, mlflow: bool = False) 
     if environment.ok:
         findings.append(check_credentials(catalog=polaris))
     targets: list[tuple[str, str, int]] = []
-    for needed, name, variable in ((polaris, "polaris", "POLARIS_URI"), (mlflow, "mlflow", "MLFLOW_TRACKING_URI")):
+    for needed, name in ((polaris, "polaris"), (mlflow, "mlflow"), (openmetadata, "openmetadata")):
         if needed:
-            target = service_target(name, variable)
+            target = service_target(name, SERVICE_VARIABLES[name])
             if isinstance(target, Finding):
                 findings.append(target)
             else:
                 targets.append(target)
+    if redis:
+        target = redis_target()
+        if isinstance(target, Finding):
+            findings.append(target)
+        else:
+            targets.append(target)
     endpoints = endpoint_targets()
     if isinstance(endpoints, Finding):
         findings.append(endpoints)
@@ -165,8 +201,7 @@ def check_environment(job: str, *, polaris: bool = False, mlflow: bool = False) 
 
 
 def profile_output(profiles: Path, target: str) -> Mapping | None:
-    import yaml
-
+    yaml = importlib.import_module("yaml")
     document = yaml.safe_load(profiles.read_text(encoding="utf-8"))
     for profile in document.values():
         if isinstance(profile, dict) and target in (profile.get("outputs") or {}):
@@ -205,13 +240,14 @@ def check_build(layer: str, mode: str, profiles: Path) -> None:
     if not in_ecs_job():
         return
     started = time.monotonic()
-    from scripts.lakehouse import pipeline_build
+    pipeline_error = importlib.import_module("orchestration.pipeline_protocol").PipelineError
+    pipeline_build = importlib.import_module("scripts.lakehouse.pipeline_build")
 
     findings = [check_task_environment()]
     if layer != "features":
         try:
             target = pipeline_build.build_target(layer, mode)
-        except PipelineError as error:
+        except pipeline_error as error:
             findings.append(Finding("dbt_target_refused", False, str(error)))
         else:
             findings.append(check_target(target, profiles))
@@ -228,9 +264,10 @@ def read_json(path: str | Path) -> Mapping | None:
 
 def mmd_files() -> list[str]:
     """The files that ``mmd_api_contract.load_plan`` and ``collect_mmd_api.task_inputs`` read, derived from the contract's plan list and the plans."""
-    from scripts.acquisition import collect_mmd_api, mmd_api_contract
-    from scripts.acquisition.data_paths import current
-    from scripts.acquisition.source_registry import canonical_hash, load_registry, registry_version_paths
+    collect_mmd_api = importlib.import_module("scripts.acquisition.collect_mmd_api")
+    mmd_api_contract = importlib.import_module("scripts.acquisition.mmd_api_contract")
+    current = importlib.import_module("scripts.acquisition.data_paths").current
+    registry = importlib.import_module("scripts.acquisition.source_registry")
 
     names: list[str] = []
     for sha, path in mmd_api_contract.PLANS.items():
@@ -246,8 +283,8 @@ def mmd_files() -> list[str]:
         if sha == mmd_api_contract.ADDITIONS_PLAN_SHA256:
             lock = mmd_api_contract.ADDITIONS_LOCK_PATH
             try:
-                if plan.get("registry_sha256") != canonical_hash(load_registry()):
-                    lock = registry_version_paths(plan["registry_sha256"])["additions_lock"]
+                if plan.get("registry_sha256") != registry.canonical_hash(registry.load_registry()):
+                    lock = registry.registry_version_paths(plan["registry_sha256"])["additions_lock"]
             except (OSError, ValueError, KeyError):
                 pass
             names.append(str(lock))
@@ -261,8 +298,8 @@ MODE_FILES = {"mmd_api": mmd_files}
 
 def queue_files(document: Mapping) -> list[tuple[str, str]]:
     """The (mode, path) of every file that the modes of a publisher queue read, by the same handler rule that the stored mirror uses to carry them."""
-    from scripts.acquisition import redownload, stored_mirror
-
+    redownload = importlib.import_module("scripts.acquisition.redownload")
+    stored_mirror = importlib.import_module("scripts.acquisition.stored_mirror")
     units = [unit for unit in document.get("queue", []) if isinstance(unit, dict) and unit.get("disposition") in stored_mirror.ACTIVE]
     modes = sorted({redownload.handler_mode({"flags": [], **unit}) for unit in units if "mode" in unit})
     return [(mode, path) for mode in modes if mode in MODE_FILES for path in MODE_FILES[mode]()]

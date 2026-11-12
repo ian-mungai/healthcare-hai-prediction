@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import startup_check
 from scripts.lakehouse import bronze, bronze_pin, provenance, task_capacity
 from scripts.lakehouse.bronze_dispatch import NAMESPACES, DispatchError, check_dispatch
 from scripts.process import TimeoutExpired, run_command
@@ -304,6 +305,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     folder = work / "state" / args.run
     dry = args.dry_run or os.environ.get("BRONZE_DRY_RUN", "") in DRY_VALUES
     try:
+        startup_check.check_phase("bronze", args.phase)
         task_capacity.apply()
         if not args.bucket:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
@@ -323,7 +325,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             job.folder.mkdir(parents=True, exist_ok=True)
             (job.folder / DRY_MARKER).write_text("this task is a dry run: no phase may write to the catalog or the bucket\n")
         dispatch(job, args.phase, args)
-    except (StepError, DispatchError, bronze.BronzeError, task_capacity.CapacityError, OSError, ValueError, KeyError, tarfile.TarError) as error:
+    except (
+        StepError,
+        DispatchError,
+        bronze.BronzeError,
+        task_capacity.CapacityError,
+        startup_check.StartupCheckError,
+        OSError,
+        ValueError,
+        KeyError,
+        tarfile.TarError,
+    ) as error:
         sys.stderr.write(f"bronze_run: step {args.phase} (run {args.run}) failed: {error}\n")
         return 1
     return 0

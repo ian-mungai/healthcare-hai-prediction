@@ -910,9 +910,9 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
 
 
 def startup(job: Job, phase: str) -> None:
-    """The host job startup check at the first code step (pin) and at the start of the build, whose image holds the DuckDB extensions."""
-    if phase == "pin":
-        startup_check.check_environment(job.layer, polaris=True)
+    """The host job startup check at the first code step (pin), at the start of the build (whose image holds the DuckDB extensions) and before Feast."""
+    if phase in ("pin", "feast"):
+        startup_check.check_phase(job.layer, phase)
     elif phase == "build":
         startup_check.check_build(job.layer, job.mode, job.folder / "snapshot/project/profiles.yml")
 

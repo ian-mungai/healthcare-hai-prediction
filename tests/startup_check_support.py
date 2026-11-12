@@ -32,9 +32,9 @@ FORBIDDEN = (
 
 
 class Network:
-    """Stands in for the socket connect. A host in ``refuse`` fails with its exception, loopback uses a real socket and every other host answers."""
+    """Stands in for the socket connect. A host or a (host, port) pair in ``refuse`` fails with its exception. Loopback uses a real socket; others answer."""
 
-    def __init__(self, refuse: dict[str, Exception] | None = None, delay: float = 0.0) -> None:
+    def __init__(self, refuse: dict[str | tuple[str, int], Exception] | None = None, delay: float = 0.0) -> None:
         self.refuse = refuse or {}
         self.delay = delay
         self.seen: list[tuple[str, int]] = []
@@ -43,8 +43,9 @@ class Network:
         self.seen.append((host, port))
         if self.delay:
             time.sleep(self.delay)
-        if host in self.refuse:
-            raise self.refuse[host]
+        for key in ((host, port), host):
+            if key in self.refuse:
+                raise self.refuse[key]
         if host.startswith("127."):
             socket.create_connection((host, port), timeout=timeout).close()
 

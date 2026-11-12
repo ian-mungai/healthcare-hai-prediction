@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from orchestration import serving_contract
+from scripts.infrastructure import startup_check
 from scripts.serving import deploy, manifests
 
 
@@ -25,6 +26,7 @@ def main() -> int:
     parser.add_argument("--request", type=Path, help="a request file; without it the request is read from SERVING_REQUEST")
     args = parser.parse_args()
     try:
+        startup_check.check_phase("serve", "serve")
         raw = json.loads(args.request.read_text() if args.request else os.environ["SERVING_REQUEST"])
         request = serving_contract.parameters_for("serving_deploy_dag", raw)
         uri = os.environ["MODEL_API_MANIFEST_URI"]
@@ -42,7 +44,7 @@ def main() -> int:
             mode=request["deploy_mode"],
             deployment_id=args.run,
         )
-    except (deploy.DeployRefused, ValueError, KeyError, OSError, TypeError) as error:
+    except (deploy.DeployRefused, startup_check.StartupCheckError, ValueError, KeyError, OSError, TypeError) as error:
         sys.stderr.write(f"serve_deploy refused: {error}\n")
         return 2
     sys.stdout.write(

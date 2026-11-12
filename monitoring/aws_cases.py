@@ -20,6 +20,7 @@ from unittest import mock
 
 from monitoring import drift_cases, reader_cases
 from monitoring.drift_check import HAI_TYPES, CheckError
+from scripts.infrastructure import startup_check
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -290,6 +291,7 @@ TASK_READER_VARIABLES = {
     "POLARIS_CLIENT_SECRET": "reader-secret",
     "AWS_REGION": "us-west-2",
     "AWS_EXECUTION_ENV": "AWS_ECS_FARGATE",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/00000000-0000-0000-0000-000000000000",
 }
 
 
@@ -305,6 +307,7 @@ def current_phase_prepares_the_aws_feature_reader(folder: Path) -> Problems:
     with (
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
         mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
+        mock.patch.object(startup_check, "open_connection", lambda *_arguments: None),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", capture),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
@@ -346,6 +349,7 @@ def current_phase_environment_selects_the_aws_branch_of_the_real_reader(folder: 
     with (
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
         mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
+        mock.patch.object(startup_check, "open_connection", lambda *_arguments: None),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", stop),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
