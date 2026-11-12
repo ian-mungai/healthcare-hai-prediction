@@ -1311,6 +1311,7 @@ def home_path_cases() -> list[Case]:
     """Cases for home paths: no home is exempt, so the old analytics home is flagged in every position it once passed in."""
     home = OLD_ANALYTICS_HOME
     mac_users = HOME_PATH.split("jdoe")[0]
+    mixed_users = mac_users.swapcase()
     flagged = {
         "old analytics home at the end of a line": f"The home is {home}",
         "old analytics home before a sentence-final period": f"The home is {home}.",
@@ -1366,6 +1367,27 @@ def home_path_cases() -> list[Case]:
         "YAML scalar with an escaped-quote home component": f'command: "cat {LINUX_HOME}\\"jdoe\\"/private.txt"',
         "JSON string with an escaped-quote closed home root": f'"cat \\"{LINUX_HOME}\\"jdoe/private.txt"',
         "doubled backslash before an encoded home name": f"{LINUX_HOME}\\\\x6adoe/private.txt",
+        "local file address with an empty host and a mixed-case user folder": f"file://{mixed_users}jdoe/private.txt",
+        "local file address with a lower-case user folder": f"file://{mac_users.lower()}jdoe/private.txt",
+        "local file address with a named local host": f"file://localhost{mixed_users}jdoe/private.txt",
+        "local file address with an upper-case local host and user folder": f"file://LOCALHOST{mac_users.upper()}jdoe/private.txt",
+        "local file address with one slash": f"file:{mac_users.lower()}jdoe/private.txt",
+        "local file address with a shared folder climbing out": f"file://localhost{mac_users.lower()}Shared/../jdoe/private.txt",
+        "local file address with an upper-case shared folder climbing out": f"file://{mac_users.upper()}SHARED/../jdoe/private.txt",
+        "percent-encoded local file address": "file%3A%2F%2F%2F" + "uSeRs%2Fjdoe%2Fprivate.txt",
+        "shared folder with a bracket in a quoted component": f'{mac_users}Shared/"team[1]"/../../jdoe/private.txt',
+        "shared folder with a parenthesis in a quoted component": f'{mac_users}Shared/"team(1)"/../../jdoe/private.txt',
+        "shared folder with a semicolon in a quoted component": f'{mac_users}Shared/"team;one"/../../jdoe/private.txt',
+        "shared folder with a bracket in a single-quoted component": f"{mac_users}Shared/'team[1]'/../../jdoe/private.txt",
+        "shared folder with nested brackets in a quoted component": f'{mac_users}Shared/"a[b[c]]"/../../jdoe/private.txt',
+        "shared folder with a space in a quoted component": f'{mac_users}Shared/"team one"/../../jdoe/private.txt',
+        "shared folder with a pipe and a comma in a single-quoted component": f"{mac_users}Shared/'a|b,c'/../../jdoe/private.txt",
+        "shared folder with a brace in a quoted component": f'{mac_users}Shared/"team{{1}}"/../../jdoe/private.txt',
+        "shared folder with quoted brackets below a lower-case user folder": f'{mac_users.lower()}Shared/"team[1]"/../../jdoe/private.txt',
+        "shared folder with brackets in a JSON string": f'{{"command": "cat {mac_users}Shared/\\"team[1]\\"/../../jdoe/private.txt"}}',
+        "shared folder with brackets in a percent-encoded quoted component": f"{mac_users}Shared/%22team[1]%22/../../jdoe/private.txt",
+        "shared folder with an unquoted bracket component": f"{mac_users}Shared/team[1]/../../jdoe/private.txt",
+        "shared folder with an unquoted brace component": f"{mac_users}Shared/{{a,b}}/../../jdoe/private.txt",
     }
     cases = [Case(name, "privacy-scan", False, {"notes.md": f"Log at {text}\n"}, reason=HOME_REASON) for name, text in flagged.items()]
     # The macOS shared folder is no user's home. Only the macOS root has this folder, so the Linux twin above stays flagged.
@@ -1382,6 +1404,16 @@ def home_path_cases() -> list[Case]:
         "lower-case user folder placeholder": f"{mac_users.lower()}<name>/run.log",
         "user folder route in an address path": "GET https://example.invalid/api/v1/users/login",
         "user folder route that follows another folder": "/api/v1/users/login",
+        "local file address with a placeholder": f"file://{mixed_users}<name>/run.log",
+        "local file address to a shared folder file": f"file://{mixed_users}Shared/run.log",
+        "local file address to a shared folder path that stays inside": f"file://localhost{mac_users.lower()}shared/a/../b/run.log",
+        "file address with a host named like the user folder": "file://" + mixed_users[1:] + "login",
+        "file address with a remote host": "file://example.invalid" + mixed_users.lower() + "login",
+        "web address on a host named like a local host": "https://localhost" + mixed_users.lower() + "login",
+        "shared folder with a quoted bracket component that stays inside": f'{mac_users}Shared/"team[1]"/run.log',
+        "shared folder with a quoted space component that stays inside": f"{mac_users}Shared/'team one'/a/../b/run.log",
+        "shared folder with a bracket component that stays inside": f"{mac_users}Shared/team[1]/run.log",
+        "two quoted shared folder arguments": f'cat "{mac_users}Shared/a.log" "/tmp/b"',
         "Linux home placeholder in angle brackets": f"{LINUX_HOME}<user>/run.log",
         "Linux home placeholder variable": f"{LINUX_HOME}$USER/run.log",
         "Linux home placeholder in braces": f"{LINUX_HOME}{{user}}/run.log",

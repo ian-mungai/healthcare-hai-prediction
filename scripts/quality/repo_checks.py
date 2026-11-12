@@ -191,8 +191,9 @@ HOME_NAME_CHAR = r"[^ \t\r\n\f\v/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
 HOME_QUOTES = "\"'`"
 # The roots below which a folder is a user's home: the macOS and Linux roots (the macOS Shared folder is no home), and a Windows drive with either separator
 # or escaped backslashes. The macOS and Windows file systems ignore case, so those roots and the Shared folder match in any case. The Linux root is exact.
-# Another case of the macOS root must start a path, so a route such as /v1/users/login is no home.
-MAC_USERS = r"(?:/Users|(?<![\w/.})\]-])/(?i:users))"
+# Another case of the macOS root must start a path (or follow a local file address), so a route such as /v1/users/login is no home.
+FILE_URI = r"(?<=(?i:file:))|(?<=(?i:file://))|(?<=(?i:file://localhost))"  # A local file address starts a path at its root.
+MAC_USERS = r"(?:/Users|(?:(?<![\w/.})\]-])|" + FILE_URI + r")/(?i:users))"
 HOME_ROOT = r"(?:" + MAC_USERS + r"/(?!(?i:Shared)/)|/home/|(?<![\w])[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))"
 HOME_PATH_PATTERN = re.compile(
     # A name; a name after quotes that close the root or open the name (not a plus sign, which joins a variable); or a quoted name that starts with a space.
@@ -209,7 +210,8 @@ HOME_PATH_PATTERN = re.compile(
 )
 SHARED_FOLDER = "/Us" + "ers/Shared"  # Built here, so this file holds no path the scan flags.
 QUOTES_OUT = str.maketrans("", "", HOME_QUOTES)  # The shell drops the quotes around a component.
-SHARED_PATH = re.compile(MAC_USERS + r"/(?i:Shared)/([^\s<>()\[\]{},;|&*?]*)")
+# The rest of a Shared path runs to the end of its token: a quoted part holds any character, an unquoted one stops at white space and shell operators.
+SHARED_PATH = re.compile(MAC_USERS + r"/(?i:Shared)/((?:\"[^\"]*\"|'[^']*'|`[^`]*`|[^\s\"'`<>()|&;])*)")
 HOME_FIRST_PART = re.compile(HOME_ROOT + r"([^/\\\s\"'`<>]+)")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
