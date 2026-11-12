@@ -48,7 +48,9 @@ def cells(header: list[str], values: dict[str, str | None]) -> Cells:
     return row
 
 
-def data_row(number: str, owner_type: str, owner: str | None, admin: str | None, equipment: str, header: list[str] = HEADER, **more: str | None) -> Cells:
+def data_row(
+    number: str, owner_type: str | None, owner: str | None, admin: str | None, equipment: str, header: list[str] = HEADER, **more: str | None
+) -> Cells:
     values: dict[str, str | None] = {
         "Description": "d",
         "FAC_NO": number,
@@ -500,7 +502,8 @@ def workbook_with_a_text_in_a_numeric_cell(path: Path) -> None:
             match = cell.search(raw) if name == "xl/worksheets/sheet2.xml" else None
             if match is not None:
                 reference = re.search(rb'\br="([A-Z]+[0-9]+)"', match.group())
-                check(reference is not None, "the synthetic cell has no coordinate")
+                if reference is None:
+                    raise AssertionError("the synthetic cell has no coordinate")
                 raw = raw[: match.start()] + b'<c r="' + reference[1] + b'" t="n"><v>' + SOURCE_MARKER.encode() + b"</v></c>" + raw[match.end() :]
             changed.writestr(name, raw)
     path.write_bytes(buffer.getvalue())
@@ -525,8 +528,17 @@ def test_the_loader_reports_an_unreadable_workbook_by_its_fixed_code_only(monkey
     workbook_with_a_text_in_a_numeric_cell(source)
 
     class Store:
-        def download(self, _bucket: str, _key: str, _version: str, target: Path) -> None:
-            target.write_bytes(source.read_bytes())
+        def list_keys(self, _bucket: str, _prefix: str) -> list[tuple[str, str]]:
+            raise AssertionError("the loader must not list keys for one item")
+
+        def list_current(self, _bucket: str, _prefix: str) -> list[tuple[str, str]]:
+            raise AssertionError("the loader must not list current keys for one item")
+
+        def get(self, _bucket: str, _key: str, _version_id: str) -> bytes:
+            raise AssertionError("the loader must download the workbook, not read it into memory")
+
+        def download(self, _bucket: str, _key: str, _version_id: str, path: Path) -> None:
+            path.write_bytes(source.read_bytes())
 
     item = {
         "table": TABLE,
