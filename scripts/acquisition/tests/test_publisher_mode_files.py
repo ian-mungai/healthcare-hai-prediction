@@ -76,7 +76,8 @@ def code_paths(mode: str) -> list[str]:
     """Every file the mode reads at the code root: the legacy registry and, for BLS, the county adjacency references of the plan."""
     references = [item["path"] for plan in plans_of(mode) for item in plan.get("references") or []]
     releases = [plan["access_release"]["path"] for plan in plans_of(mode) if plan.get("access_release")]
-    return [*legacy_paths(mode), *references, *releases]
+    terms = [plan["terms"]["path"] for plan in plans_of(mode) if plan.get("terms")]
+    return [*legacy_paths(mode), *references, *releases, *terms]
 
 
 class World:
@@ -290,7 +291,7 @@ def test_a_runnable_plan_mode_without_an_enumerator_is_refused(on_host: None, mo
     monkeypatch.setattr(harness, "PLAIN_TASK_MODES", harness.PLAIN_TASK_MODES | {"future_plan_mode"})
     world = World(tmp_path, "cms_owners_org")
     needs = startup_check.queue_files({"queue": [unit("future_plan_mode")]}, controls=world.controls, keys=True)
-    with pytest.raises(startup_check.StartupCheckError, match="mode_files_unenumerated future_plan_mode"):
+    with pytest.raises(startup_check.StartupCheckError, match=f"mode_files_unenumerated mode#{startup_check.digest('future_plan_mode')}"):
         startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
 
 
@@ -347,3 +348,14 @@ def test_the_hcai_access_release_missing_from_the_code_root_is_named(on_host: No
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
     check(f"hcai_util_workbook code root: release {startup_check.file_digest(release)}" in str(caught.value), f"the release is named: {caught.value}")
+
+
+def test_the_hud_terms_record_missing_from_the_code_root_is_named_before_the_loader_runs(on_host: None, tmp_path: Path) -> None:
+    """``hud_api_contract.load_plan`` reads the terms record the plan names in ``terms.path``, as it reads the references and the access release."""
+    world = World(tmp_path, "hud_api")
+    terms = plan_of("hud_api")["terms"]["path"]
+    check(terms in code_paths("hud_api"), "the world holds the terms record")
+    (world.code / terms).unlink()
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
+        world.check()
+    check(f"hud_api code root: terms {startup_check.file_digest(terms)}" in str(caught.value), f"the terms record is named: {caught.value}")

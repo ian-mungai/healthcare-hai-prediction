@@ -9,6 +9,29 @@ from urllib.parse import urlsplit
 
 # ECS sets one of these in a job's containers: Fargate in the cloud and EC2 on the job host. Both read their credentials from the task provider.
 TASK_ENVIRONMENTS = frozenset({"AWS_ECS_FARGATE", "AWS_ECS_EC2"})
+# A task reads its credentials from the native provider only, so any of these in the environment is refused.
+FORBIDDEN_CREDENTIAL_VARIABLES = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_DEFAULT_PROFILE",
+    "AWS_SHARED_CREDENTIALS_FILE",
+    "AWS_CONFIG_FILE",
+    "AWS_ROLE_ARN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+    "AWS_CONTAINER_AUTHORIZATION_TOKEN",
+)
+
+
+def refusal_code(error: BaseException, fallback: str) -> str:
+    """The code of a refusal, read from its one plain string argument. The text conversion of the error is never called, because a subclass can write
+    to a log or a stream when it converts, so only an argument that is a built-in string is taken, and anything else gives ``fallback``."""
+    arguments = BaseException.args.__get__(error)
+    code = arguments[0] if len(arguments) == 1 else None
+    return code if type(code) is str and re.fullmatch(r"[a-z_]{1,64}", code) else fallback
 
 
 def in_task() -> bool:
@@ -24,21 +47,7 @@ def validate_task_credentials(*, require_catalog: bool = True) -> bool:
     """Reject profile and static credentials when a native task provider is required."""
     if not in_task():
         return False
-    forbidden = (
-        "AWS_ACCESS_KEY_ID",
-        "AWS_SECRET_ACCESS_KEY",
-        "AWS_SESSION_TOKEN",
-        "AWS_PROFILE",
-        "AWS_DEFAULT_PROFILE",
-        "AWS_SHARED_CREDENTIALS_FILE",
-        "AWS_CONFIG_FILE",
-        "AWS_ROLE_ARN",
-        "AWS_WEB_IDENTITY_TOKEN_FILE",
-        "AWS_CONTAINER_CREDENTIALS_FULL_URI",
-        "AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
-        "AWS_CONTAINER_AUTHORIZATION_TOKEN",
-    )
-    if any(os.environ.get(name) for name in forbidden):
+    if any(os.environ.get(name) for name in FORBIDDEN_CREDENTIAL_VARIABLES):
         raise RuntimeError("task_credential_source_refused")
     if re.fullmatch(r"/v2/credentials/[A-Za-z0-9_-]+", os.environ.get("AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "")) is None:
         raise RuntimeError("task_credential_provider_missing")

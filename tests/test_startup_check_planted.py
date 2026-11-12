@@ -5,7 +5,6 @@ The markers are synthetic. A marker stands for a credential, a token, a key, an 
 
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import os
@@ -17,9 +16,13 @@ from pathlib import Path
 
 import pytest
 
+from orchestration.pipeline_protocol import PipelineError
 from scripts.acquisition import hcai_util_contract
 from scripts.infrastructure import startup_check
+from scripts.lakehouse import ecs_engine, pipeline_build
 from scripts.process import run_command
+from tests.startup_check_faults import MARKER as FAULT_MARKER
+from tests.startup_check_faults import LeakyRefusal
 from tests.startup_check_support import FORBIDDEN, Network, host_environment, install_network
 from tests.support import check
 from tests.test_startup_check import drive
@@ -318,6 +321,7 @@ def refuse(host, port, timeout):
     raise OSError(111, os.environ["PLANT"])
 
 check.open_connection = refuse
+check.ISOLATED = False
 getattr(check, sys.argv[1])(*sys.argv[2:])
 """
 
@@ -347,22 +351,42 @@ def test_a_process_that_ends_in_an_uncaught_error_never_prints_a_planted_value(m
         check(not leaked and "StartupCheckError" in text, f"{entry}: {leaked} {text[:1200]}")
 
 
-def calls_of(tree: ast.AST, name: str) -> list[ast.Call]:
-    return [node for node in ast.walk(tree) if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == name]
+class LeakyPipelineRefusal(PipelineError):
+    """A build refusal whose text conversion writes the marker to every sink it can reach, like the credential refusal of the fault module."""
+
+    def __str__(self) -> str:
+        logging.getLogger("dependency").warning("value %s", FAULT_MARKER)
+        sys.stderr.write(FAULT_MARKER + "\n")
+        return "fixture_role_session_refused"
+
+    __repr__ = __str__
 
 
-def test_the_module_builds_fixed_phrases_from_literals_and_never_prints_an_exception() -> None:
-    """The structure that keeps the output safe: ``phrase`` takes only a literal (or the one spill code constant), and no exception is formatted."""
-    tree = ast.parse(Path(startup_check.__file__).read_text())
-    loose = [
-        ast.unparse(call) for call in calls_of(tree, "phrase") if not (isinstance(call.args[0], ast.Constant) or ast.unparse(call.args[0]) == "SPILL_CODE")
-    ]
-    check(not loose, f"phrase is called with something that is not a literal: {loose}")
-    formatted = [
-        ast.unparse(node)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FormattedValue) and isinstance(node.value, ast.Name) and node.value.id in {"error", "exception", "failure", "refusal"}
-    ]
-    check(not formatted, f"an exception is formatted into text: {formatted}")
-    represented = [ast.unparse(call) for call in calls_of(tree, "repr")]
-    check(not represented, f"repr is used: {represented}")
+def test_an_exception_whose_text_conversion_writes_is_never_converted_by_the_real_drivers(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], caplog: pytest.LogCaptureFixture
+) -> None:
+    """The validator and the build target are shared code, so their refusal is read from its plain code argument, never from its text conversion."""
+    runs = {
+        "credential refusal at pin": lambda: drive(monkeypatch, tmp_path, "pin"),
+        "credential refusal at build": lambda: drive(monkeypatch, tmp_path, "build"),
+        "build refusal": lambda: drive(monkeypatch, tmp_path, "build"),
+    }
+    for name, run in runs.items():
+        host_environment(monkeypatch)
+        install_network(monkeypatch, Network())
+        if name == "build refusal":
+            monkeypatch.setattr(pipeline_build, "build_target", refuse_build)
+        else:
+            monkeypatch.setattr(ecs_engine, "validate_task_credentials", refuse_credentials)
+            monkeypatch.setattr(pipeline_build, "validate_task_credentials", refuse_credentials)
+        text = observe(capsys, caplog, run)
+        check(FAULT_MARKER not in text and "startup_check:" in text, f"{name}: {text[:700]}")
+        check("task_credential_source_refused" in text or "fixture_role_session_refused" in text, f"{name}: the fixed code is named: {text[:700]}")
+
+
+def refuse_credentials(*_arguments: object, **_keywords: object) -> bool:
+    raise LeakyRefusal("task_credential_source_refused")
+
+
+def refuse_build(*_arguments: object, **_keywords: object) -> str:
+    raise LeakyPipelineRefusal("fixture_role_session_refused")

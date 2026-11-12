@@ -308,6 +308,7 @@ def current_phase_prepares_the_aws_feature_reader(folder: Path) -> Problems:
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
         mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
         mock.patch.object(startup_check, "open_connection", lambda *_arguments: None),
+        mock.patch.object(startup_check, "ISOLATED", False),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", capture),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
@@ -350,6 +351,7 @@ def current_phase_environment_selects_the_aws_branch_of_the_real_reader(folder: 
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
         mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
         mock.patch.object(startup_check, "open_connection", lambda *_arguments: None),
+        mock.patch.object(startup_check, "ISOLATED", False),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", stop),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])

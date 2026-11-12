@@ -52,6 +52,8 @@ class Network:
 
 def host_environment(monkeypatch: pytest.MonkeyPatch, execution: str | None = "AWS_ECS_EC2", polaris: str = POLARIS_URI, mlflow: str = "") -> None:
     """The environment of a job container on the host: ECS markers, the task credential provider, the region and the service addresses."""
+    # The checks run in this process for the tests of the checks. The tests of the isolation turn the child process back on.
+    monkeypatch.setattr(startup_check, "ISOLATED", False)
     for name in FORBIDDEN:
         monkeypatch.delenv(name, raising=False)
     if execution is None:

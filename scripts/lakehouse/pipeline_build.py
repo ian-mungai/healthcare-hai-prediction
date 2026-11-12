@@ -21,7 +21,7 @@ from typing import Any
 
 from orchestration.pipeline_protocol import PipelineError, read_record, safe_name
 from scripts.lakehouse import duckdb_bounds
-from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings, in_task, validate_task_credentials
+from scripts.lakehouse.ecs_engine import TemporaryStorageError, duckdb_temp_settings, in_task, refusal_code, validate_task_credentials
 
 IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parquet(?)'
 
@@ -40,7 +40,7 @@ def build_target(layer: str, mode: str) -> str:
     try:
         task = validate_task_credentials(require_catalog=layer == "silver" and mode == "real")
     except RuntimeError as error:
-        raise PipelineError(str(error)) from None
+        raise PipelineError(refusal_code(error, "task_credential_check_failed")) from None
     if layer == "gold":
         return "pinned_silver_bounded" if bounded else "pinned_silver"
     if mode == "publish_fixture":
