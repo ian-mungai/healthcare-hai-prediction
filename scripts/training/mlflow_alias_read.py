@@ -1,6 +1,6 @@
 """Read the version that a registered model alias names from the MLflow REST API, with the Python standard library only.
 
-The owner command ``promote_owner`` runs in the host environment, which has no MLflow package. The pinned server (MLflow 3.17.0) answers
+The owner command ``promote_owner`` runs in the host environment, which has no MLflow package. The pinned server (MLflow 3.17.2) answers
 
 ``GET {tracking_uri}/api/2.0/mlflow/registered-models/alias?name=<model>&alias=<alias>``
 
@@ -43,7 +43,7 @@ VERSION = re.compile(r"[0-9]+")
 
 
 def missing_alias_message(alias: str) -> str:
-    """The message MLflow 3.17.0 gives with the code ``INVALID_PARAMETER_VALUE`` when the registered model exists and the alias is not set."""
+    """The message MLflow 3.17.2 gives with the code ``INVALID_PARAMETER_VALUE`` when the registered model exists and the alias is not set."""
     return f"Registered model alias {alias} not found."
 
 

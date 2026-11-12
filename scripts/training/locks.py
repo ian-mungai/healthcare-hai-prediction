@@ -16,7 +16,7 @@ from jsonschema import Draft202012Validator
 
 ROOT = Path(__file__).resolve().parents[2]
 TRAINING = {
-    "mlflow": "3.17.0",
+    "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
     "xgboost": "3.4.1",
     "shap": "0.52.0",
@@ -29,7 +29,7 @@ TRAINING = {
     "dvc-s3": "3.3.0",
 }
 API = {
-    "mlflow": "3.17.0",
+    "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
     "xgboost": "3.4.1",
     "fastapi": "0.142.4",
@@ -38,9 +38,9 @@ API = {
     "redis": "8.1.0",
     "prometheus-client": "0.26.0",
 }
-SERVER: dict[str, str | None] = {"mlflow": "3.17.0", "boto3": None, "psycopg2-binary": None}
+SERVER: dict[str, str | None] = {"mlflow": "3.17.2", "boto3": None, "psycopg2-binary": None}
 APPROVED: dict[str, dict[str, str | None]] = {"training": dict(TRAINING), "mlflow_server": SERVER, "prediction_api": dict(API)}
-RECENT = {"mlflow": "3.17.2", "mlflow-skinny": "3.17.2", "shap": "0.54.1", "linearmodels": "7.1", "libpysal": "4.15.1", "feast": "0.67.0", "fastapi": "0.161.0"}
+RECENT = {"shap": "0.54.1", "linearmodels": "7.1", "libpysal": "4.15.1", "feast": "0.67.0", "fastapi": "0.161.0"}
 PIN = re.compile(r"([A-Za-z0-9][A-Za-z0-9_.-]*)==([A-Za-z0-9][A-Za-z0-9.!+_-]*)(.*)")
 HASHES = re.compile(r"(?:\s+--hash=sha256:[0-9a-f]{64})+")
 

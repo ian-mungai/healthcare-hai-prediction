@@ -331,7 +331,7 @@ class NotFound(Exception):
 
 
 class InvalidParameter(Exception):
-    """The error the MLflow 3.17.0 client raises (``RestException``) for an HTTP 400: the code is a prefix of the message, as the client formats it."""
+    """The error the MLflow 3.17.2 client raises (``RestException``) for an HTTP 400: the code is a prefix of the message, as the client formats it."""
 
     error_code = "INVALID_PARAMETER_VALUE"
 
@@ -1533,7 +1533,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         require(registry.champion(store, "hai_model_missing") is None, "a registered model that does not exist (404) was not read as no champion")
         require(
             registry.champion(store, name) is None,
-            "a registered model without the production alias (400, the message of MLflow 3.17.0) was not read as no champion",
+            "a registered model without the production alias (400, the message of MLflow 3.17.2) was not read as no champion",
         )
         other = InvalidParameter(f"Invalid alias name: '{registry.CHAMPION_ALIAS}'. Aliases may not contain spaces.")
         wrong_code = InvalidParameter(f"Registered model alias {registry.CHAMPION_ALIAS} not found.")

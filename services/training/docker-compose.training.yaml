@@ -2,7 +2,7 @@ name: hai-training
 
 services:
   training:
-    image: hai-training:3.17.0
+    image: hai-training:3.17.2
     user: "10006:10006"
     entrypoint: [/opt/hai/deadline_run]
   feature-store:

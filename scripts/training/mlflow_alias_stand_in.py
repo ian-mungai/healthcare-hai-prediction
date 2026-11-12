@@ -1,4 +1,4 @@
-"""A local HTTP stand-in for the model alias endpoint of the MLflow 3.17.0 tracking server, for offline end-to-end cases of the owner command.
+"""A local HTTP stand-in for the model alias endpoint of the MLflow 3.17.2 tracking server, for offline end-to-end cases of the owner command.
 
 ``GET /api/2.0/mlflow/registered-models/alias?name=<model>&alias=<alias>`` answers as the pinned server does with the basic-auth app:
 

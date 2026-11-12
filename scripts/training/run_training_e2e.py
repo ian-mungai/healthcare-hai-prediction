@@ -27,7 +27,7 @@ ALL = sorted([*CMS, "feature_matrix_hospital:c001__value__number", "feature_matr
 # Registered and servable, but location identity never enters a feature list (owner decision, Nov 8 2026).
 LOCATION = ["feature_matrix_hospital_window:county_fips", "feature_matrix_hospital_window:state_code"]
 TRAINING_PINS = {
-    "mlflow": "3.17.0",
+    "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
     "xgboost": "3.4.1",
     "shap": "0.52.0",
@@ -39,9 +39,9 @@ TRAINING_PINS = {
     "dvc": "3.67.1",
     "dvc-s3": "3.3.0",
 }
-SERVER_PINS = {"mlflow": "3.17.0", "boto3": "1.0.0", "psycopg2-binary": "2.0.0"}
+SERVER_PINS = {"mlflow": "3.17.2", "boto3": "1.0.0", "psycopg2-binary": "2.0.0"}
 API_PINS = {
-    "mlflow": "3.17.0",
+    "mlflow": "3.17.2",
     "scikit-learn": "1.9.1",
     "xgboost": "3.4.1",
     "fastapi": "0.142.4",
@@ -137,7 +137,7 @@ def _lock_fixture(folder: Path) -> None:
         "images": {},
     }
     for image, direct in (("training", TRAINING_PINS), ("mlflow_server", SERVER_PINS), ("prediction_api", API_PINS)):
-        pins = {**direct, "mlflow-skinny": "3.17.0"}
+        pins = {**direct, "mlflow-skinny": "3.17.2"}
         source, lock = folder / image / "requirements.in", folder / image / "requirements.txt"
         source.parent.mkdir(parents=True)
         source.write_text("".join(f"{name}=={pin}\n" for name, pin in sorted(direct.items())), encoding="utf-8")
@@ -563,7 +563,7 @@ def _lock_cases(report: Report, scratch: Path) -> None:
     first = run("approved_synthetic_locks")
     second = run("repeated_synthetic_locks")
     report.assertion("equal_lock_inputs_give_equal_records", first is not None and first == second)
-    run("unapproved_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.0", "unapproved==1.0"), "is not on the approved version list")
+    run("unapproved_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.2", "unapproved==1.0"), "is not on the approved version list")
     run("recent_direct_pin", lambda f: replace(f, "training", "requirements.in", "shap==0.52.0", "shap==0.54.1"), "is not on the approved version list")
 
     def unapproved_matched_pin(folder: Path) -> None:
@@ -578,13 +578,13 @@ def _lock_cases(report: Report, scratch: Path) -> None:
         _edit(folder / "wheels.json", change_wheel)
 
     run("unapproved_matched_pin", unapproved_matched_pin, "is not on the approved version list")
-    run("unpinned_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.0", "mlflow>=3.17.0"), "exact pin")
+    run("unpinned_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.2", "mlflow>=3.17.2"), "exact pin")
     run("missing_direct", lambda f: replace(f, "training", "requirements.in", "shap==0.52.0\n", ""), "required packages")
     run("unhashed_lock", lambda f: replace(f, "training", "requirements.txt", "--hash=sha256:", "--hash=md5:"), "sha256")
     run("lock_without_binary_policy", lambda f: replace(f, "training", "requirements.txt", "--only-binary=:all:\n", ""), "only-binary")
     run(
         "duplicate_lock_package",
-        lambda f: replace(f, "training", "requirements.txt", "--only-binary=:all:", "--only-binary=:all:\nmlflow==3.17.0 --hash=sha256:" + "a" * 64),
+        lambda f: replace(f, "training", "requirements.txt", "--only-binary=:all:", "--only-binary=:all:\nmlflow==3.17.2 --hash=sha256:" + "a" * 64),
         "duplicate package",
     )
     run("unlocked_direct", lambda f: replace(f, "training", "requirements.txt", "xgboost==3.4.1", "xgboost==3.4.0"), "lock pin")
@@ -595,7 +595,7 @@ def _lock_cases(report: Report, scratch: Path) -> None:
         ("prediction_api", "scikit-learn"),
         ("prediction_api", "xgboost"),
     ):
-        pin = "3.17.0" if package.startswith("mlflow") else TRAINING_PINS[package]
+        pin = "3.17.2" if package.startswith("mlflow") else TRAINING_PINS[package]
         run(
             f"mismatched_{image}_{package}",
             partial(replace, image=image, filename="requirements.txt", before=f"{package}=={pin}", after=f"{package}==0.0.1"),
@@ -606,10 +606,10 @@ def _lock_cases(report: Report, scratch: Path) -> None:
         _edit(folder / "wheels.json", lambda d: d["images"]["training"][5].update(filename=filename))
 
     for filename, cause in (
-        ("mlflow-3.17.0-cp312-cp312-manylinux_2_17_x86_64.whl", "wheel platform"),
-        ("mlflow-3.17.0-cp312-cp312-macosx_11_0_arm64.whl", "wheel platform"),
-        ("mlflow-3.17.0-cp311-cp311-manylinux_2_17_aarch64.whl", "wheel Python"),
-        ("mlflow-3.17.0.tar.gz", "wheel filename"),
+        ("mlflow-3.17.2-cp312-cp312-manylinux_2_17_x86_64.whl", "wheel platform"),
+        ("mlflow-3.17.2-cp312-cp312-macosx_11_0_arm64.whl", "wheel platform"),
+        ("mlflow-3.17.2-cp311-cp311-manylinux_2_17_aarch64.whl", "wheel Python"),
+        ("mlflow-3.17.2.tar.gz", "wheel filename"),
     ):
         run(
             "wrong_artifact_" + filename,
@@ -619,8 +619,8 @@ def _lock_cases(report: Report, scratch: Path) -> None:
     run("missing_wheel_evidence", lambda f: _edit(f / "wheels.json", lambda d: d["images"].pop("training")), "wheel inventory")
     run("missing_package_wheel", lambda f: _edit(f / "wheels.json", lambda d: d["images"]["training"].pop()), "wheel inventory")
     run("unbound_wheel_hash", lambda f: _edit(f / "wheels.json", lambda d: d["images"]["training"][0].update(sha256="0" * 64)), "wheel hash")
-    run("native_arm64_wheel", partial(artifact_filename, filename="mlflow-3.17.0-cp312-cp312-manylinux_2_17_aarch64.whl"))
-    run("older_stable_abi_wheel", partial(artifact_filename, filename="mlflow-3.17.0-cp39-abi3-manylinux_2_17_aarch64.whl"))
+    run("native_arm64_wheel", partial(artifact_filename, filename="mlflow-3.17.2-cp312-cp312-manylinux_2_17_aarch64.whl"))
+    run("older_stable_abi_wheel", partial(artifact_filename, filename="mlflow-3.17.2-cp39-abi3-manylinux_2_17_aarch64.whl"))
     run("wrong_wheel_version", partial(artifact_filename, filename="mlflow-0.0.1-py3-none-any.whl"), "wheel filename")
 
     def multiline_lock(folder: Path) -> None:
@@ -628,7 +628,7 @@ def _lock_cases(report: Report, scratch: Path) -> None:
 
     run("continued_lock_lines", multiline_lock)
     run("empty_lock", lambda f: replace(f, "training", "requirements.txt", (f / "training/requirements.txt").read_text(), ""), "no pinned packages")
-    run("duplicate_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.0", "mlflow==3.17.0\nmlflow==3.17.0"), "duplicate package")
+    run("duplicate_direct", lambda f: replace(f, "training", "requirements.in", "mlflow==3.17.2", "mlflow==3.17.2\nmlflow==3.17.2"), "duplicate package")
 
     def recent_transitive(folder: Path) -> None:
         path = folder / "mlflow_server/requirements.txt"

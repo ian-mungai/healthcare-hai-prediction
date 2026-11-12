@@ -49,7 +49,7 @@ def absent(error: Exception) -> bool:
 def alias_unset(error: Exception, alias: str) -> bool:
     """Tell the answer for an alias that is not set on an existing registered model from any other failure.
 
-    MLflow 3.17.0 answers HTTP 400 with the code ``INVALID_PARAMETER_VALUE`` and the message ``Registered model alias <alias> not found.``. The REST client
+    MLflow 3.17.2 answers HTTP 400 with the code ``INVALID_PARAMETER_VALUE`` and the message ``Registered model alias <alias> not found.``. The REST client
     keeps the code as a prefix of the message. Another message with the same code (an invalid alias name) is a failure.
     """
     message = missing_alias_message(alias)

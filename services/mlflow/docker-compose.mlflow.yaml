@@ -20,7 +20,7 @@ services:
       retries: 24
 
   mlflow:
-    image: hai-mlflow:3.17.0
+    image: hai-mlflow:3.17.2
     user: "10005:10005"
     entrypoint: [mlflow, server]
     command:

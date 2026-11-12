@@ -133,16 +133,16 @@
     "mlflow": {
       "kind": "build",
       "context": "services/mlflow",
-      "local_tag": "hai-mlflow:3.17.0",
-      "tag": "3.17.0-arm64",
+      "local_tag": "hai-mlflow:3.17.2",
+      "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64",
       "runs_as": "ECS service on the host when mlflow_enabled is true"
     },
     "training": {
       "kind": "build",
       "context": "services/training",
-      "local_tag": "hai-training:3.17.0",
-      "tag": "3.17.0-arm64",
+      "local_tag": "hai-training:3.17.2",
+      "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64 and the DVC lock lists Apple silicon, x86 Linux and Arm Linux hashes; the linux/arm64 build has not been run yet",
       "runs_as": "job task"
     },
