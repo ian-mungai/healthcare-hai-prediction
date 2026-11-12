@@ -92,7 +92,10 @@ def test_a_plan_file_that_is_not_in_the_task_is_named_before_anything_runs(monke
     paths = mmd_tree(monkeypatch, tmp_path / "code", leave_out="plan")
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_job(monkeypatch, tmp_path / "workspace")
-    check(str(paths["plan"]) in str(caught.value) and "mmd_api" in str(caught.value), f"the missing file and its collector are named: {caught.value}")
+    check(
+        f"mmd_api code root: plan {startup_check.file_digest(paths['plan'])}" in str(caught.value),
+        f"the missing file and its collector are named: {caught.value}",
+    )
 
 
 @pytest.mark.parametrize("leave_out", ["report", "reference", "original", "lock", "template"])
@@ -102,7 +105,7 @@ def test_every_file_the_mmd_plan_load_reads_is_checked(monkeypatch: pytest.Monke
     paths = mmd_tree(monkeypatch, tmp_path / "code", leave_out=leave_out)
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_job(monkeypatch, tmp_path / "workspace")
-    check(str(paths[leave_out]) in str(caught.value), f"{leave_out} is named: {caught.value}")
+    check(startup_check.file_digest(paths[leave_out]) in str(caught.value), f"{leave_out} is named: {caught.value}")
 
 
 def test_the_environment_is_checked_before_any_aws_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

@@ -9,7 +9,19 @@ from typing import Any
 
 import pytest
 
-from scripts.acquisition import collect_mmd_api, mmd_api_contract, publisher_run, stored_mirror
+from scripts.acquisition import (
+    bls_api_contract,
+    census_acs_api_contract,
+    census_acs_detailed_contract,
+    cms_owners_contract,
+    collect_mmd_api,
+    hcai_util_contract,
+    hud_api_contract,
+    mmd_api_contract,
+    onc_mu_contract,
+    publisher_run,
+    stored_mirror,
+)
 from scripts.acquisition import redownload as harness
 from scripts.acquisition.tests.test_publisher_run import Cloud, environment, staged
 from scripts.infrastructure import startup_check
@@ -63,7 +75,8 @@ def legacy_paths(mode: str) -> list[str]:
 def code_paths(mode: str) -> list[str]:
     """Every file the mode reads at the code root: the legacy registry and, for BLS, the county adjacency references of the plan."""
     references = [item["path"] for plan in plans_of(mode) for item in plan.get("references") or []]
-    return [*legacy_paths(mode), *references]
+    releases = [plan["access_release"]["path"] for plan in plans_of(mode) if plan.get("access_release")]
+    return [*legacy_paths(mode), *references, *releases]
 
 
 class World:
@@ -112,7 +125,7 @@ def test_a_legacy_registry_file_missing_from_the_code_root_is_named(on_host: Non
     (world.code / missing).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"{mode} code root: {missing}" in str(caught.value), f"the mode, root and file are named: {caught.value}")
+    check(f"{mode} code root: legacy_registry {startup_check.file_digest(missing)}" in str(caught.value), f"the mode, root and file are named: {caught.value}")
 
 
 @pytest.mark.parametrize("mode", PLAN_FILES)
@@ -121,7 +134,10 @@ def test_an_operational_input_missing_from_the_mirror_root_is_named(on_host: Non
     (world.mirror / CONFIG_KEYS[1]).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"{mode} mirror root: {CONFIG_KEYS[1]}" in str(caught.value), f"the mirror file is named with its root: {caught.value}")
+    check(
+        f"{mode} mirror root: config_input {startup_check.file_digest(CONFIG_KEYS[1])}" in str(caught.value),
+        f"the mirror file is named with its root: {caught.value}",
+    )
 
 
 def test_the_mirror_list_is_the_config_keys_of_the_controls_and_nothing_else(tmp_path: Path) -> None:
@@ -144,9 +160,9 @@ def test_bls_names_each_county_adjacency_file(on_host: None, tmp_path: Path) -> 
     adjacency = [item["path"] for item in plan_of("bls_api_v2")["references"]]
     check(len(adjacency) == 5, f"the plan names five adjacency files: {len(adjacency)}")
     (world.code / adjacency[3]).unlink()
-    with pytest.raises(startup_check.StartupCheckError, match="county_adjacency") as caught:
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(adjacency[3] in str(caught.value), "the removed file is named")
+    check(f"reference {startup_check.file_digest(adjacency[3])}" in str(caught.value), "the removed file is named by its kind and digest")
 
 
 @pytest.mark.parametrize("mode", KEYED)
@@ -198,7 +214,7 @@ def test_mmd_names_the_legacy_registry_and_the_template_at_the_code_root(on_host
     check(set(legacy_paths("cms_owners_org")) <= named and str(template) in named, f"legacy registry and template are code root files: {sorted(named)}")
     startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
     (world.code / template).unlink()
-    with pytest.raises(startup_check.StartupCheckError, match="template_plan.json"):
+    with pytest.raises(startup_check.StartupCheckError, match=f"template {startup_check.file_digest(template)}"):
         startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
 
 
@@ -251,7 +267,10 @@ def test_the_entry_point_names_a_controlled_plan_missing_from_the_mirror_for_cen
     plan = f"config/acquisition/{PLAN_FILES[mode][0]}.json"
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64}, mode, controlled=plan)
-    check(f"{mode} mirror root: {plan}" in str(caught.value), f"the controlled plan and its mode are named: {caught.value}")
+    check(
+        f"{mode} mirror root: config_input {startup_check.file_digest(plan)}" in str(caught.value),
+        f"the controlled plan and its mode are named: {caught.value}",
+    )
 
 
 @pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
@@ -273,3 +292,58 @@ def test_a_runnable_plan_mode_without_an_enumerator_is_refused(on_host: None, mo
     needs = startup_check.queue_files({"queue": [unit("future_plan_mode")]}, controls=world.controls, keys=True)
     with pytest.raises(startup_check.StartupCheckError, match="mode_files_unenumerated future_plan_mode"):
         startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
+
+
+CONTRACTS = {
+    "cms_owners_org": cms_owners_contract,
+    "onc_mu_hospital": onc_mu_contract,
+    "bls_api_v2": bls_api_contract,
+    "hud_api": hud_api_contract,
+    "census_acs_api": census_acs_api_contract,
+    "census_acs_detailed": census_acs_detailed_contract,
+    "hcai_util_workbook": hcai_util_contract,
+}
+
+
+@pytest.mark.parametrize("mode", PLAN_FILES)
+def test_a_code_root_plan_that_is_absent_or_unreadable_fails_by_name_instead_of_dropping_its_files(
+    on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
+) -> None:
+    world = World(tmp_path, mode)
+    plan = tmp_path / "staged_plan.json"
+    monkeypatch.setattr(CONTRACTS[mode], "PLAN_PATH", plan)
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
+        world.check()
+    check(f"{mode} code root: plan {startup_check.file_digest(plan)}" in str(caught.value), f"the absent plan is named: {caught.value}")
+    plan.write_text("{not json SYNTHETIC")
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_unreadable") as caught:
+        world.check()
+    check(
+        f"plan {startup_check.file_digest(plan)}" in str(caught.value) and "SYNTHETIC" not in str(caught.value), f"the unreadable plan is named: {caught.value}"
+    )
+
+
+@pytest.mark.parametrize("mode", PLAN_FILES)
+def test_a_plan_lock_missing_from_the_code_root_is_named(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> None:
+    world = World(tmp_path, mode)
+    plan = tmp_path / "staged_plan.json"
+    plan.write_text(json.dumps(plan_of(mode)))
+    monkeypatch.setattr(CONTRACTS[mode], "PLAN_PATH", plan)
+    lock = plan.with_suffix(".lock.json")
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
+        world.check()
+    check(f"lock {startup_check.file_digest(lock)}" in str(caught.value), f"the lock is named: {caught.value}")
+    lock.write_text("[]")
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_unreadable"):
+        world.check()
+    lock.write_text("{}")
+    world.check()
+
+
+def test_the_hcai_access_release_missing_from_the_code_root_is_named(on_host: None, tmp_path: Path) -> None:
+    world = World(tmp_path, "hcai_util_workbook")
+    release = plan_of("hcai_util_workbook")["access_release"]["path"]
+    (world.code / release).unlink()
+    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
+        world.check()
+    check(f"hcai_util_workbook code root: release {startup_check.file_digest(release)}" in str(caught.value), f"the release is named: {caught.value}")

@@ -68,12 +68,12 @@ def test_a_dbt_target_that_would_download_extensions_is_named_before_the_build(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Live failure 2: the host job was not treated as a task, so dbt selected the session profile and tried to download an extension."""
-    host_environment(monkeypatch, execution="AWS_ECS_UNKNOWN")
+    host_environment(monkeypatch, execution="AWS_ECS_EXTERNAL")
     install_network(monkeypatch, Network())
     profile_with_extensions(ROOT / "dbt/profiles.yml", profiles_of(tmp_path), tmp_path / "extensions")
     check(drive(monkeypatch, tmp_path, "build") == 1, "the build phase stops")
     text = "\n".join(first_lines(capsys)[:4])
-    check("task_environment_unrecognised" in text and "AWS_ECS_UNKNOWN" in text, f"the environment value is named: {text}")
+    check("task_environment_unrecognised" in text and "AWS_ECS_EXTERNAL" in text, f"the environment value is named: {text}")
     check(
         "dbt_target_downloads_extensions lakehouse_session_bounded" in text and "iceberg" in text, f"the selected target and its extensions are named: {text}"
     )
