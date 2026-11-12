@@ -46,11 +46,20 @@ UPSTREAM_NAME = {
 RELEASE = {"openmetadata_server": "2.0.7", "openmetadata_ingestion": "2.0.7", "openmetadata_search": "3.3.2"}
 ACCOUNT = str(2 * 10**11 + 7)
 OTHER = "sha256:" + "ab" * 32
+UNRESOLVED = "TO_RESOLVE: owner reads the linux/arm64 digest and pushes; image pushes need the owner"
 SERVICES_FILE = "infra/services/images.json"
 METADATA_FILE = "config/metadata/images.json"
 DIGEST_FILE = "infra/services/images.auto.tfvars.json"
 
 Case = Callable[[], dict[str, bool]]
+
+
+def unresolve(path: Path) -> None:
+    """Start the copied metadata image file with its three OpenMetadata digests unread, as the cases expect, whatever digests the repository has recorded."""
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for key in METADATA_KEY.values():
+        document["images"][key]["digest"] = UNRESOLVED
+    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
 
 
 def scratch_root(directory: Path) -> Path:
@@ -72,6 +81,8 @@ def scratch_root(directory: Path) -> Path:
         for entry in (REPO_ROOT / top / copied).iterdir():
             if entry.name == "images.json":
                 shutil.copy(entry, directory / top / copied / entry.name)
+                if top == "config":
+                    unresolve(directory / top / copied / entry.name)
             elif entry.name != "images.auto.tfvars.json":
                 (directory / top / copied / entry.name).symlink_to(entry)
     metadata = directory / METADATA_FILE
