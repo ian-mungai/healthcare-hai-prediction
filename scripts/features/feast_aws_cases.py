@@ -11,6 +11,7 @@ The report lists case names, failure-mode IDs, check names and verdicts only.
 from __future__ import annotations
 
 import abc
+import ast
 import builtins
 import contextlib
 import hashlib
@@ -1784,6 +1785,68 @@ def feature_sets_module() -> Any:
     return importlib.import_module("scripts.features.feature_sets")
 
 
+def image_files(dockerfile: str) -> set[str]:
+    """The repository files that the Dockerfile's COPY lines put into the image, as repository-relative paths."""
+    files: set[str] = set()
+    for line in dockerfile.splitlines():
+        parts = line.split()
+        if parts and parts[0] == "COPY":
+            files.update(part for part in parts[1:-1] if not part.startswith("--"))
+    return files
+
+
+def first_party_imports(path: Path, root: Path) -> set[str]:
+    """The repository files a module imports when it loads: module level statements only, never ``TYPE_CHECKING`` blocks or function bodies."""
+    tree = ast.parse(path.read_text())
+    found: set[str] = set()
+
+    def visit(nodes: list[ast.stmt]) -> None:
+        for node in nodes:
+            if isinstance(node, ast.If) and "TYPE_CHECKING" in ast.unparse(node.test):
+                continue
+            names: list[str] = []
+            if isinstance(node, ast.Import):
+                names = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+                names = [node.module, *(f"{node.module}.{alias.name}" for alias in node.names)]
+            for name in names:
+                if name.split(".")[0] in ("scripts", "orchestration", "monitoring", "feature_store"):
+                    parts = name.split(".")
+                    for end in range(1, len(parts) + 1):
+                        for candidate in ("/".join(parts[:end]) + ".py", "/".join(parts[:end]) + "/__init__.py"):
+                            if (root / candidate).is_file():
+                                found.add(candidate)
+            for field in ("body", "orelse", "finalbody"):
+                inner = getattr(node, field, None)
+                if isinstance(inner, list) and not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                    visit(inner)
+            for handler in getattr(node, "handlers", []):
+                visit(handler.body)
+
+    visit(tree.body)
+    return found
+
+
+def case_fa30(c: Checker) -> None:
+    """FA30: every repository module that the model API's entry point imports at load time is copied into its image, so the image can start."""
+    root = feast_job.REPO.parent
+    held = image_files((root / "services/model_api/Dockerfile").read_text())
+    pending, seen = ["scripts/serving/main.py"], set()
+    while pending:
+        current = pending.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        pending.extend(first_party_imports(root / current, root))
+    missing = sorted(seen - held)
+    c.check(f"the image holds every module the entry point imports ({len(seen)} found; missing {missing})", not missing)
+    c.check(
+        "the walk reaches the publication reader and the retirement record loader",
+        {"scripts/features/publication_reads.py", "scripts/features/retired_publications.py"} <= seen,
+    )
+    c.check("the image holds the retirement record that the loader reads", "data_contracts/features/retired_publications.json" in held)
+
+
 CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA1": (case_fa1, "FA1"),
     "FA2": (case_fa2, "FA2"),
@@ -1814,4 +1877,5 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA27": (case_fa27, "FA27"),
     "FA28": (case_fa28, "FA28"),
     "FA29": (case_fa29, "FA29"),
+    "FA30": (case_fa30, "FA30"),
 }
