@@ -16,6 +16,7 @@ import re
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -3436,6 +3437,58 @@ def run_privacy_scope_case() -> tuple[bool, str]:
         return ok, f"{codes}; value leaked={leaked}\n" + full.stderr
 
 
+WORK_BOUND_ROOTS = 256
+WORK_BOUND_LENGTH = 1024 * 1024
+WORK_BOUND_FACTOR = 40  # Peak traced bytes per byte of token. The scan itself uses about 18, and one copy of the long folder per root would use over 250.
+WORK_BOUND_PROGRAM = """
+import json, sys, time, tracemalloc
+from scripts.quality.repo_checks import home_path_found
+
+roots, length, outer, nested = int(sys.argv[1]), int(sys.argv[2]), sys.argv[3], sys.argv[4]
+results = {}
+for name, climbs in (("climbs out", 2 * roots + 1), ("stays inside", 2 * roots)):
+    token = outer + nested * roots + "../" * climbs + "j" + "!" * (length - 1)
+    tracemalloc.start()
+    started = time.perf_counter()
+    found = home_path_found(token)
+    seconds = time.perf_counter() - started
+    peak = tracemalloc.get_traced_memory()[1]
+    tracemalloc.stop()
+    results[name] = {"found": found, "peak": peak, "size": len(token), "seconds": round(seconds, 2)}
+print(json.dumps(results))
+"""
+
+
+def run_privacy_work_case() -> tuple[bool, str]:
+    """A token with many nested home roots and one long surviving folder is judged with memory in proportion to its size, not to roots times length."""
+    outer = f"{HOME_PATH.split('jdoe')[0]}Shared/"
+    nested = f"{HOME_WORD}/$USER/"
+    result = run_command(
+        str(ROOT / ".venv/bin/python"),
+        ["-B", "-c", WORK_BOUND_PROGRAM, str(WORK_BOUND_ROOTS), str(WORK_BOUND_LENGTH), outer, nested],
+        cwd=ROOT,
+        timeout=900,
+    )
+    try:
+        measured = json.loads(result.stdout)
+    except ValueError:
+        return False, f"no measurement: exit {result.returncode}\n{result.stdout}{result.stderr}"
+    expected = {"climbs out": True, "stays inside": False}
+    lines = []
+    ok = result.returncode == 0
+    for name, found in expected.items():
+        row = measured[name]
+        limit = WORK_BOUND_FACTOR * row["size"]
+        good = row["found"] is found and row["peak"] <= limit
+        ok = ok and good
+        verdict = f"found={row['found']} (expected {found}), peak {row['peak']} bytes for {row['size']} (limit {limit}), {row['seconds']} s"
+        lines.append(f"{'ok' if good else 'WRONG'} {name}: {verdict}")
+    return ok, "\n".join(lines)
+
+
+PRIVACY_WORK_RUNNER = ("privacy work bound", run_privacy_work_case)
+
+
 def account_probe(repo: Path) -> tuple[set[str], str]:
     """Run the privacy scan over probe files in ``repo``; return the probe files it flagged and its output."""
     probes = {"exempt_arn": account_arn(EXEMPT_ACCOUNT), "exempt_field": account_field(EXEMPT_ACCOUNT).strip()}
@@ -4414,12 +4467,14 @@ def main() -> int:
             failures += 1
             sys.stdout.write("".join(f"       {line}\n" for line in output.strip().splitlines()[-12:]))
     extra = 0
+    runners: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = ()
     if not args.hook_probe and args.hook is None:
-        for label, runner in (
+        runners = (
             ("commit-range", run_range_case),
             ("workflow ranges", run_workflow_range_case),
             ("verbose commit", run_verbose_case),
             ("privacy scope", run_privacy_scope_case),
+            PRIVACY_WORK_RUNNER,
             ("account exemption plant", run_account_plant_case),
             ("writing samples", run_writing_case),
             ("writing kinds", run_writing_kinds_case),
@@ -4431,13 +4486,16 @@ def main() -> int:
             ("typecheck cold caches", run_typecheck_cold_case),
             ("source lint coverage", run_lint_coverage_case),
             ("head and pinned-tools checks", run_worktree_checks_case),
-        ):
-            extra += 1
-            ok, output = runner()
-            sys.stdout.write(f"{'ok' if ok else 'WRONG':<6} {label}\n")
-            if not ok:
-                failures += 1
-                sys.stdout.write(output)
+        )
+    elif args.hook == "privacy-scan" and not args.case:
+        runners = (PRIVACY_WORK_RUNNER,)
+    for label, runner in runners:
+        extra += 1
+        ok, output = runner()
+        sys.stdout.write(f"{'ok' if ok else 'WRONG':<6} {label}\n")
+        if not ok:
+            failures += 1
+            sys.stdout.write(output)
     sys.stdout.write(f"{len(cases) + extra - failures} of {len(cases) + extra} cases behaved as expected\n")
     return 1 if failures else 0
 

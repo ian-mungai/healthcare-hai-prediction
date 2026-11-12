@@ -204,6 +204,7 @@ FILE_URL_ROOT = re.compile(r"(?P<mac>/(?i:users)/)")
 FILE_URL = re.compile(r"(?<![\w+.-])file:\S*", re.IGNORECASE)
 HOME_HINT = re.compile(r"home|users|~|file:", re.IGNORECASE)
 TILDE_NAME = re.compile(r"(?<![\w~/])~[^\W\d]" + HOME_NAME_CHAR + r"*/")  # A named tilde. A bare ~/ and a tilde inside an address name no user.
+FOLDER_KEPT = 16  # The longest folder whose own text still matters to the home path rules.
 ENCODED_FOLDER = re.compile(r"[^/\\\s\"'`<>]+")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
@@ -1806,10 +1807,22 @@ def home_root_found(kind: str, root: str, rest: str, segments: list[int] | None,
     return normal.casefold().startswith(prefix.casefold()) and name_found(normal[len(prefix) :], 0, None, 0)
 
 
+def folder_stand_in(folder: str) -> str:
+    """A folder that the path rules read as the folder is read: a short one as written, a long one as a bounded name or a bounded non-name.
+
+    The rules compare a folder only with the names root, Users, home and Shared, and read the first character, the quotes before it and the percent
+    escapes of the rest as name_found does, so a long folder cannot equal a name and one answer from name_found stands for all of its text.
+    """
+    if len(folder) <= FOLDER_KEPT:
+        return folder
+    return ("A" if name_found(folder, 0, None, 0) else "<") * (FOLDER_KEPT + 1)
+
+
 def folded_tails(text: str, starts: set[int], separators: re.Pattern[str], joiner: str) -> dict[int, str]:
     """For each start, a short path that normalizes like ``text[start:]``: the folders that climb out of the start and the first two folders that stay.
 
-    Each start is the position after a separator. One pass from the right keeps the work linear however many home roots the text holds.
+    Each start is the position after a separator. One pass from the right reads each folder once and keeps a bounded stand-in for it, so work and
+    storage stay linear however many home roots the text holds and however long a folder that survives them is.
     """
     tails: dict[int, str] = {}
     if not starts:
@@ -1820,14 +1833,14 @@ def folded_tails(text: str, starts: set[int], separators: re.Pattern[str], joine
     stop = len(text)
     begins = [match.end() for match in separators.finditer(text, first)]
     for begin in [*reversed(begins), first]:
-        part = text[begin:stop]
-        if part == "..":
+        size = stop - begin
+        if size == 2 and text.startswith("..", begin):
             climbs += 1
-        elif part not in ("", "."):
+        elif size > 1 or (size == 1 and text[begin] != "."):
             if climbs:
                 climbs -= 1
             else:
-                names.appendleft(part)
+                names.appendleft(folder_stand_in(text[begin:stop]))
         if begin in starts:
             tails[begin] = joiner.join([".."] * min(climbs, 3) + list(names))
         stop = begin - 1
