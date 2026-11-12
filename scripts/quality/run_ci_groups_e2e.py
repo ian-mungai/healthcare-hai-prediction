@@ -642,6 +642,32 @@ def admission_case(work: Path, out: Path) -> dict[str, Any]:
     return {"case": "every_worker_has_a_limit", "passed": all(checks.values()), "checks": checks, "exit": code, "workers": workers}
 
 
+def feature_check_case(work: Path, out: Path) -> dict[str, Any]:
+    """The feature sources check and the feature columns check are items of their own: one each in a run of the whole suites or of the first shard of their
+    suite, none in another shard, and no shard function runs them."""
+    sources, columns = FEATURE_COUNTS["sources"], FEATURE_COUNTS["columns"]
+    runs = (
+        ("features", "features", "", 1, 1),
+        ("sources_first", "feature_sources", f"1/{sources}", 1, 0),
+        ("sources_other", "feature_sources", f"2/{sources}", 0, 0),
+        ("columns_first", "feature_columns", f"1/{columns}", 0, 1),
+        ("columns_other", "feature_columns", f"2/{columns}", 0, 0),
+    )
+    checks: dict[str, bool] = {}
+    for label, part, shard, sources_checks, columns_checks in runs:
+        extra = {"CI_SCOPE": "full", "CI_PART": part, "CI_ADMISSION_ONLY": "1", **({"FEATURE_SHARD": shard} if shard else {})}
+        code, log, _ = run_entry(work, out, f"feature_checks_{label}", extra)
+        listed = re.search(r"^admitted workers: (.*)$", log, re.MULTILINE)
+        workers = listed.group(1).split() if listed else []
+        found = (workers.count("lakehouse_features_sources_check"), workers.count("lakehouse_features_columns_check"))
+        checks[f"{label}_items"] = code == 0 and "has no limit" not in log and found == (sources_checks, columns_checks)
+    body = (work / GROUP_FILES / "lakehouse_features.sh").read_text(encoding="utf-8")
+    shard_functions = re.findall(r"^lakehouse_features_(?:sources|columns)\(\) \{.*?^\}", body, re.MULTILINE | re.DOTALL)
+    checks["two_shard_functions_found"] = len(shard_functions) == 2
+    checks["shard_functions_run_no_check"] = not any("--check" in function for function in shard_functions)
+    return {"case": "feature_checks_are_items_of_their_own", "passed": all(checks.values()), "checks": checks}
+
+
 def write_markdown_probes(work: Path) -> list[Path]:
     probes = [work / "docs" / name for name in MARKDOWN_PROBES]
     for probe in probes:
@@ -1705,6 +1731,7 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
     for part in ("core", "all", "launcher", "silver", "features", "feature_sources", "feature_columns"):
         cases.append(gate_failure_case(work, out, part))
     cases.append(admission_case(work, out))
+    cases.append(feature_check_case(work, out))
     cases.append(layer_skip_case(work, out))
     cases.append(gates_before_launcher_case(work, out, "launcher", gate_fails=False))
     cases += [gates_before_launcher_case(work, out, part, gate_fails=True) for part in ("launcher", "all")]
@@ -1729,6 +1756,14 @@ FEATURE_COMMANDS = (
     "scripts.lakehouse.feature_columns --check",
     "scripts.lakehouse.run_feature_columns_e2e",
 )
+FEATURE_ENTRIES = [
+    "lakehouse_features_sources",
+    "lakehouse_features_sources_check",
+    "lakehouse_features_columns",
+    "lakehouse_features_columns_check",
+    "lakehouse_features_combine",
+    "lakehouse_features_store",
+]
 OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.bridge_references --check",
     "scripts.lakehouse.run_bridge_references_e2e",
@@ -2220,7 +2255,9 @@ WORKER_KINDS = (
     "lakehouse_gold_model_metadata_e2e",
     "lakehouse_features_store",
     "lakehouse_features_sources",
+    "lakehouse_features_sources_check",
     "lakehouse_features_columns",
+    "lakehouse_features_columns_check",
     "combine_feature_sources",
     "combine_feature_columns",
     "hook_privacy",
@@ -2431,11 +2468,7 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
             body += f"  if [[ ! -f \"{signal}\" ]]; then printf 'output acknowledgment deadline exceeded\\n' >&2; return 3; fi\n"
         body += "  printf 'OUTPUT last @ENTRY@_%s\\n' \"$key\"\n" + ("  return 3\n" if fail else "")
         group = "lakehouse_features" if part.startswith("feature") else f"lakehouse_{part}"
-        entries = (
-            ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"]
-            if group == "lakehouse_features"
-            else ["lakehouse_gold_checks" if part == "gold" else group]
-        )
+        entries = FEATURE_ENTRIES if group == "lakehouse_features" else ["lakehouse_gold_checks" if part == "gold" else group]
         (tree / GROUP_FILES / f"{group}.sh").write_text(
             "#!/usr/bin/env bash\n" + "\n".join(f"{entry}() {{\n{body.replace('@ENTRY@', entry)}}}\n" for entry in entries)
         )
@@ -2470,7 +2503,8 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
         saved = sorted((quality / "saved_item_logs").glob("*.log"))
         outputs = [line for line in run.stdout.splitlines() if line.startswith("OUTPUT ")]
         retained = [line for path in saved for line in path.read_text().splitlines() if line.startswith("OUTPUT ")]
-        expected_count = 15 if parallel else 1
+        suite_items = sum(FEATURE_COUNTS.values()) + 2 * len(FEATURE_COUNTS)
+        expected_count = 1 + suite_items if parallel else 1
         checks = {
             "expected_exit": (run.returncode != 0) == fail,
             "acknowledged_output": len(list(ack.iterdir())) == expected_count,
@@ -3988,7 +4022,7 @@ def isolation_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 STAND_IN_ENTRIES = {
     "lakehouse_gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
     "launcher": ["launcher_e2e"],
-    "lakehouse_features": ["lakehouse_features_sources", "lakehouse_features_columns", "lakehouse_features_combine", "lakehouse_features_store"],
+    "lakehouse_features": FEATURE_ENTRIES,
     "orchestration_checks": ["orchestration_checks_sdk_runtime", "orchestration_checks"],
 }
 # A stand-in group file reads every variable that run_group passes to a group, so an unbound variable stops the run, and runs one real timed command.
@@ -4059,8 +4093,8 @@ def variable_cases(work: Path, out: Path) -> list[dict[str, Any]]:
         "silver": ["lakehouse_silver"],
         "gold": ["lakehouse_gold_checks", "lakehouse_gold_writer_setup", "lakehouse_gold_model_metadata_e2e"],
         "features": STAND_IN_ENTRIES["lakehouse_features"],
-        "feature_sources": ["lakehouse_features_sources", "lakehouse_features_combine"],
-        "feature_columns": ["lakehouse_features_columns", "lakehouse_features_combine"],
+        "feature_sources": ["lakehouse_features_sources", "lakehouse_features_sources_check", "lakehouse_features_combine"],
+        "feature_columns": ["lakehouse_features_columns", "lakehouse_features_columns_check", "lakehouse_features_combine"],
     }
     cases = [
         stand_in_run(work, out, "full_all", {"CI_SCOPE": "full", "CI_PART": "all"}, everything),

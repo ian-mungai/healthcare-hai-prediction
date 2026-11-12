@@ -396,6 +396,14 @@
       "job": "Feature Columns (Shard 1 of 4)",
       "minutes": 30
     },
+    "lakehouse_features_sources_check": {
+      "job": "Feature Sources (Shard 1 of 16)",
+      "minutes": 20
+    },
+    "lakehouse_features_columns_check": {
+      "job": "Feature Columns (Shard 1 of 4)",
+      "minutes": 30
+    },
     "combine_feature_sources": {
       "job": "Feature Combined Evidence",
       "minutes": 10

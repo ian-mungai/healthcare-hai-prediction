@@ -475,6 +475,12 @@ for group in ${run_groups[@]+"${run_groups[@]}"}; do
       fi
       count_variable="feature_${suite}_shards"
       count="${!count_variable}"
+      # The suite's static check is an item of its own, run beside the first shard (or once when no shard is named).
+      if [[ -z "$feature_shard" || "${feature_shard%%/*}" == 1 ]]; then
+        item="lakehouse_features_${suite}_check"
+        printf -v "item_group_$item" '%s' "$group"
+        shared+=("$item")
+      fi
       for ((index = 1; index <= count; index++)); do
         if [[ -n "$feature_shard" && "${feature_shard%%/*}" != "$index" ]]; then
           continue
