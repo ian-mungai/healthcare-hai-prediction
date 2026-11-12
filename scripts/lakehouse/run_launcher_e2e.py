@@ -8351,7 +8351,9 @@ def catalog_client(env: Env) -> dict[str, bool]:
     finally:
         (catalog.STATE, catalog.BOOTSTRAPPED, catalog.DEPLOYMENT, catalog.TEST_REGISTRY, catalog.request) = saved
     stored = {name: env.stand_in.values.get(name, "") for name in first_use}
-    values = [*env.stand_in.values.values(), *issued.values()]
+    # Fixed client IDs (prefixes without a trailing dash) are not secrets and other checks write them too; only this run's random values are leak markers.
+    fixed = {prefix for prefix in COMPOSE_ENV_NAMES.values() if not prefix.endswith("-")}
+    values = [value for value in (*env.stand_in.values.values(), *issued.values()) if value not in fixed]
     return {
         "up started Polaris through the launcher and reported it": "Polaris is running on 127.0.0.1:8181" in outputs["up"],
         "the first start generated the catalog secrets in Parameter Store": all(stored.values())
