@@ -33,7 +33,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from scripts.features import feature_fixture
 
@@ -322,6 +322,12 @@ def probes() -> list[Probe]:
     return [onc_probe(), care_probe(), places_probe(), source_probe(), reason_probe()]
 
 
+class CaseRecorder(Protocol):
+    """Anything that records one check with its verdict: the report of this module or the one of the feature store run."""
+
+    def case(self, case: str, modes: str, name: str, ok: bool, **evidence: Any) -> bool: ...
+
+
 class Report:
     """The steps of one run, printed as a JSON list."""
 
@@ -334,7 +340,7 @@ class Report:
         return ok
 
 
-def permuted_ties(report: Report) -> None:
+def permuted_ties(report: CaseRecorder) -> None:
     """Run every probe over all orders of its tie rows, then the same with the tie-break removed from a copy of the model text."""
     duckdb = importlib.import_module("duckdb")
     for probe in probes():
@@ -365,7 +371,7 @@ def instant(value: Any) -> str:
     return value.isoformat() if isinstance(value, date) else str(value)
 
 
-def built_ties(report: Report, run_folder: Path) -> None:
+def built_ties(report: CaseRecorder, run_folder: Path) -> None:
     """Check the tie rows of the fixture hospital in a features build against the winners of the rule."""
     duckdb = importlib.import_module("duckdb")
     rows = feature_fixture.gold_rows()

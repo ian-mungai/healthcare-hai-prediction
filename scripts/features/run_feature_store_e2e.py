@@ -299,7 +299,7 @@ def base_pin_cases(report: Report) -> None:
             "B02",
             "FS3",
             "a retry after a newer base run was committed returns the pin unchanged",
-            bool(pin_base) and pin_base(context(later), path, BASE_RUN_2) == record,
+            pin_base is not None and pin_base(context(later), path, BASE_RUN_2) == record,
         )
 
         def pin_with(spark: FakeSpark, source: str | None) -> Any:
@@ -339,7 +339,9 @@ def base_pin_cases(report: Report) -> None:
             "an extra key": {**record, "extra": 1},
             "a missing table": {**record, "snapshot_set": dict(list(record.get("snapshot_set", {}).items())[:-1])},
         }
-        refused = {label: bool(check) and refuses(partial(check, document, RUN, "publish_fixture", set(domain)), "base pin") for label, document in bad.items()}
+        refused = {
+            label: check is not None and refuses(partial(check, document, RUN, "publish_fixture", set(domain)), "base pin") for label, document in bad.items()
+        }
         report.case("B08", "FS3", "a base pin record of another shape, run, namespace or table set is refused", all(refused.values()), refused=refused)
         committed = {"feature_matrix_m1": 1000}
         publish_dir = Path(folder) / "publish"
@@ -1505,7 +1507,7 @@ def model_set_cases(report: Report) -> None:
         all(flags) and len(flags) == 6,
         flags=flags,
     )
-    views = getattr(schema_module, "model_views_in_definitions", lambda text: {})(definitions)
+    views: dict[str, tuple[str, bool, list[str]]] = getattr(schema_module, "model_views_in_definitions", lambda text: {})(definitions)
     report.case(
         "M04",
         "FS5",
@@ -1516,7 +1518,7 @@ def model_set_cases(report: Report) -> None:
         ),
         views=sorted(views),
     )
-    services = getattr(schema_module, "model_services_in_definitions", lambda text: {})(definitions)
+    services: dict[str, list[str]] = getattr(schema_module, "model_services_in_definitions", lambda text: {})(definitions)
     report.case(
         "M05",
         "FS5",
@@ -1524,7 +1526,7 @@ def model_set_cases(report: Report) -> None:
         all(services.get(f"model_{set_id}") == [f"model_{set_id}_view", *LABEL_VIEW_NAMES] for set_id in MODEL_SETS),
         services=sorted(services),
     )
-    domain = getattr(schema_module, "servable_in_definitions", lambda text: [])(definitions)
+    domain: list[str] = getattr(schema_module, "servable_in_definitions", lambda text: [])(definitions)
     report.case(
         "M06", "FS5", "the domain predictor views stay registered beside the model views until nothing reads them", len(domain) == len(schema["servable"]) > 0
     )
@@ -1555,7 +1557,11 @@ def model_set_cases(report: Report) -> None:
         )
         missing, message = attempt(planted_root(base, "missing", lambda root: (root / LIST_FOLDER / "m5_spatial.json").unlink()))
         report.case("M10", "FS1", "a set whose list file is missing is refused and the file is named", missing is None and "m5_spatial" in message)
-        shorter = planted_root(base, "shorter", edit_list("m1_ols", lambda refs: refs.pop()))
+
+        def drop_last(refs: list[str]) -> None:
+            refs.pop()
+
+        shorter = planted_root(base, "shorter", edit_list("m1_ols", drop_last))
         short_schema, _ = attempt(shorter)
         changed = getattr(schema_module, "set_schema_sha256", lambda name, **options: "")
         report.case(
@@ -1595,7 +1601,7 @@ def service_mapping_cases(report: Report) -> None:
 
     schema = schema_module.load_schema()
     definitions = (ROOT / schema_module.DEFINITIONS).read_text()
-    served = getattr(schema_module, "service_references_in_definitions", lambda text: {})(definitions)
+    served: dict[str, tuple[str, ...]] = getattr(schema_module, "service_references_in_definitions", lambda text: {})(definitions)
     window = "feature_matrix_hospital_window"
     offline = getattr(schema_module, "offline_group_references", lambda: ())()
     report.case(
@@ -1617,13 +1623,14 @@ def service_mapping_cases(report: Report) -> None:
         lists=len(lists),
     )
     mapping = getattr(schema_module, "service_references", None)
-    equal = {}
+    equal: dict[str, bool | str] = {}
     for set_id in MODEL_SETS:
         try:
             domain, _, _ = training_extract.model_references(ROOT, schema, set_id)
             equal[set_id] = (
                 bool(offline)
                 and set(offline) <= set(domain)
+                and mapping is not None
                 and sorted(mapping(schema, set_id, [name for name in domain if name not in offline])) == sorted(served.get(f"model_{set_id}", ())) != []
             )
         except Exception as error:
@@ -1655,9 +1662,7 @@ def service_mapping_cases(report: Report) -> None:
         ("an offline group attribute", f"{window}:state_code"),
         ("the other offline group attribute", f"{window}:county_fips"),
     ):
-        refused[label] = (
-            bool(mapping) and refuses(lambda reference=reference: mapping(schema, "m1", [reference]), reference.split(":", 1)[1]) if reference else False
-        )
+        refused[label] = mapping is not None and refuses(partial(mapping, schema, "m1", [reference]), reference.split(":", 1)[1]) if reference else False
     report.case(
         "M17",
         "FS5",
@@ -1938,7 +1943,8 @@ class RunsSpark:
     A select that names a column the table lacks fails, as Spark's analysis does; a column the select gives as a typed null reads null."""
 
     def __init__(self, columns: list[str], rows: list[dict[str, Any]], exists: bool = True) -> None:
-        self.columns, self.rows, self.exists, self.statements = list(columns), rows, exists, []
+        self.columns, self.rows, self.exists = list(columns), rows, exists
+        self.statements: list[str] = []
         self.catalog = self
 
     def tableExists(self, name: str) -> bool:
@@ -1956,7 +1962,7 @@ class RunsSpark:
             self.exists, self.columns = True, re.findall(r"`(\w+)` \w+", text)
         elif match := re.match(r"SELECT (.+?) FROM ", text):
             for row in self.rows:
-                values = []
+                values: list[object] = []
                 for item in match[1].split(", "):
                     name = item.strip("`")
                     if item.startswith("CAST(NULL"):
@@ -2754,12 +2760,12 @@ def build_cases(report: Report, build: LocalBuild, base: Path) -> None:
     other = open_db(second / "staging.duckdb")
     this = open_db(staging)
     try:
-        differing = rows(other, "select * from feature_build_inputs")[0], rows(this, "select * from feature_build_inputs")[0]
+        pair_of_inputs = rows(other, "select * from feature_build_inputs")[0], rows(this, "select * from feature_build_inputs")[0]
         names = [
             row[0]
             for row in rows(this, "select column_name from information_schema.columns where table_name = 'feature_build_inputs' order by ordinal_position")
         ]
-        changed = [name for name, a, b in zip(names, *differing, strict=True) if a != b]
+        changed = [name for name, a, b in zip(names, *pair_of_inputs, strict=True) if a != b]
         report.case(
             "E06b",
             "A8, H7",
