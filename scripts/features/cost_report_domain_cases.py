@@ -19,7 +19,7 @@ import importlib
 import json
 import math
 import sys
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -137,7 +137,7 @@ def same(found: float | None, wanted: float | None) -> bool:
     return math.isclose(found, wanted, rel_tol=1e-12, abs_tol=1e-12)
 
 
-def count_differences(found: dict[tuple[str, int], tuple[int, ...]], wanted: dict[tuple[str, int], tuple[int, ...]], limit: int = 12) -> list[str]:
+def count_differences(found: Mapping[tuple[str, int], tuple[int, ...]], wanted: Mapping[tuple[str, int], tuple[int, ...]], limit: int = 12) -> list[str]:
     """The control and fiscal year keys where the count model and the expected counts differ, each with both count triples; at most ``limit`` keys."""
     return [
         f"{key[0]} {key[1]}: found {found.get(key)} wanted {wanted.get(key)}" for key in sorted(set(found) | set(wanted)) if found.get(key) != wanted.get(key)

@@ -1140,7 +1140,7 @@ class SetHooks(Hooks):
     """The Feast stand-in of a set load: the entity hashes go to the set's own database."""
 
     def __init__(self, server: Any, version: str, layout: Any, **actions: Callable[..., None]) -> None:
-        super().__init__(server, version, **actions)
+        super().__init__(server, version, KEYS, **actions)
         self.layout = layout
 
     def materialize(self, start: datetime, end: datetime) -> None:

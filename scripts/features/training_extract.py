@@ -346,8 +346,10 @@ def extract(
     if (output / "extract.done.json").exists():
         done = verify_done(output, "extract", code_digest)
         manifests = [name for name in done["outputs"] if name.startswith("manifest_") and name.endswith(".json")]
-        expected = {f"manifest_{hai}.json" for hai in params["hai_types"]}
-        if set(manifests) != expected or any(json.loads((output / name).read_bytes()).get("parameters_sha256") != parameters_sha for name in manifests):
+        expected_manifests = {f"manifest_{hai}.json" for hai in params["hai_types"]}
+        if set(manifests) != expected_manifests or any(
+            json.loads((output / name).read_bytes()).get("parameters_sha256") != parameters_sha for name in manifests
+        ):
             raise ExtractError("completed extract belongs to different training parameters")
         return {"resumed": True, "outputs": sorted(done["outputs"])}
     selected = None if params["features_run"] == "latest" else params["features_run"]

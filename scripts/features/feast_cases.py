@@ -811,14 +811,15 @@ def case_e32_set_hold(c: Checker) -> None:
 
     with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
         folder = Path(raw)
-        for label, feature_set, production, online, loaded in (
+        cases: list[tuple[str, str, list[str | None], str, bool]] = [
             ("base", "base", [], "none", False),
             ("an offline set", "m3", ["0" * 64], "offline", False),
             ("no Production model", "m1", [], "load", True),
             ("a Production model with the same hash", "m1", [mine], "load", True),
             ("a Production model with another hash", "m1", ["0" * 64], "hold", False),
             ("a Production model without the hash tag", "m1", [None], "hold", False),
-        ):
+        ]
+        for label, feature_set, production, online, loaded in cases:
             sub = folder / label.replace(" ", "_")
             sub.mkdir()
             record, calls = materialize(feature_set, production, sub)
