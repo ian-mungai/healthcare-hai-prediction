@@ -68,7 +68,7 @@ terraform_checks() {
   timed "terraform_checks: services move proof" "$python_bin" -m scripts.infrastructure.run_services_move_e2e --output-directory "$e2e_output/services_move"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
   timed "terraform_checks: serving transition on the first apply" "$python_bin" -m scripts.infrastructure.run_serving_transition_e2e --output-directory "$e2e_output/serving_transition"
-  # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that .github/actions/setup installs on a hosted runner. A
+  # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that the core job of .github/workflows/ci.yml installs on a hosted runner. A
   # missing server fails the case.
   timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh
   static_failed=0

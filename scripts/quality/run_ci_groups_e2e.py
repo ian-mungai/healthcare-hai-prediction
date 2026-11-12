@@ -8,7 +8,7 @@ and before the launcher E2E, that a failing gate fails every part, that the full
 and that the entry plan alone (``CI_LIST_ONLY=1``) runs nothing.
 A static case requires the group functions in scripts/ci/groups/ to start the secret store E2E, the gold writer set-up mode and the scratch worktree E2E.
 Body-file cases: a staged edit to each body file selects its group (and the layers downstream of it) and the repository group, never another group;
-the pull request template selects none and the dispatcher, the workflow and the setup action select every group; planted drift for each rule of the guard
+the pull request template selects none and the dispatcher and the workflow select every group; planted drift for each rule of the guard
 scripts/quality/ci_group_files.py fails with the file and group named. Dry-run cases run the dispatcher with a stand-in ``timed`` that only prints the
 command: a missing or unreadable body file stops the run with its name, the full local run names the same groups, gold units and acquisition shards as
 the GitHub jobs (a planted workflow with three shards differs), a failed shard stops the run before the combining step and a missing shard fails it.
@@ -3532,8 +3532,8 @@ def staged_edit_case(
 
 def body_file_cases(work: Path) -> list[dict[str, Any]]:
     """An edit to a body file selects its own group (and the layers downstream of a lakehouse layer) and the repository group, which runs the guard, and no
-    other group in the core and layer parts (a body file lies below scripts/, so the launcher part runs too). The dispatcher, the workflow and the
-    setup action select every group."""
+    other group in the core and layer parts (a body file lies below scripts/, so the launcher part runs too). The dispatcher and the workflow
+    select every group."""
     cases = [
         {
             "case": "every_body_file_has_an_expected_selection",
@@ -3574,7 +3574,7 @@ def body_file_cases(work: Path) -> list[dict[str, Any]]:
             WITH_LAYERS,
             "selects every group",
         )
-        for path in (".github/workflows/ci.yml", ".github/actions/setup/action.yml")
+        for path in (".github/workflows/ci.yml",)
     ]
     return cases
 
@@ -4393,7 +4393,6 @@ ESCALATING_PATHS = (
     "config/quality/ci_groups.json",
     "scripts/ci/groups/launcher.sh",
     ".github/workflows/ci.yml",
-    ".github/actions/setup/action.yml",
     ".pre-commit-config.yaml",
     "scripts/acquisition/run_checks_ci.sh",
     "scripts/acquisition/run_checks_ci_e2e.sh",

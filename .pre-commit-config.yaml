@@ -226,7 +226,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: tflint
-        # Terraform recommended preset plus the pinned AWS ruleset (.tflint.hcl); the plugin is installed with `tflint --init`, by the setup action on the hosted runner.
+        # Terraform recommended preset plus the pinned AWS ruleset (.tflint.hcl); the plugin is installed with `tflint --init`, by the install step of the lint tools in .github/workflows/ci.yml on the hosted runner.
         # Exceptions: .linter_allowlist.
         name: Terraform follows the TFLint recommended and AWS rules
         entry: .venv/bin/python -m scripts.quality.lint_tools tflint
@@ -274,7 +274,7 @@ repos:
         types: [text]
         stages: [pre-commit, manual]
       - id: check-jsonschema
-        # Workflows and actions against the bundled GitHub schemas, every *.schema.json against its metaschema and the contracts mapped in config/quality/json_schemas.json;
+        # Workflows against the bundled GitHub schema, every *.schema.json against its metaschema and the contracts mapped in config/quality/json_schemas.json;
         # check-jsonschema is installed by scripts/quality/install_lint_tools.py.
         name: Workflows and JSON contracts satisfy their schemas (check-jsonschema)
         entry: .venv/bin/python -m scripts.quality.lint_tools check-jsonschema

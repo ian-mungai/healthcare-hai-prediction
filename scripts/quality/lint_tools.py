@@ -221,7 +221,7 @@ def expand(patterns: list[str], files: list[str]) -> list[str]:
 
 
 def check_jsonschema() -> int:
-    """check-jsonschema on the mapped JSON contracts, the workflows and actions (bundled schemas) and every *.schema.json against its metaschema."""
+    """check-jsonschema on the mapped JSON contracts, the workflows (bundled schema) and every *.schema.json against its metaschema."""
     binary = program("check-jsonschema")
     mapping = json.loads((ROOT / SCHEMA_MAP).read_text(encoding="utf-8"))
     files = paths(tracked=True)
