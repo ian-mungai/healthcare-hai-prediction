@@ -21,6 +21,7 @@ import traceback
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -1248,7 +1249,7 @@ def schema_evolution(h: Harness) -> Check:
         spark = h.restore("r1")
         refused = h.context(8 + index, version, work=f"evolve_{version}")
         columns_before = columns(refused, table)
-        message = refusal_of(lambda ctx=refused: step(ctx, "candidates"))
+        message = refusal_of(partial(step, refused, "candidates"))
         checks[f"{variant} is refused and the message names the table and the column"] = table in message and column in message
         checks[f"{variant} changes no column, creates no branch and moves no main"] = (
             columns(refused, table) == columns_before

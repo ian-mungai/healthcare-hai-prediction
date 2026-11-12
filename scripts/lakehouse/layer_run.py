@@ -712,7 +712,7 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
     if client is not None:
         check_input_versions(job, bucket, client)
         check_input_objects(job, bucket, client)
-    pin_flags = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
+    pin_flags: list[str | Path] = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
     for step in ("candidates", "reconcile", "backup", "commit"):
         step_flags = pin_flags if step == "commit" else []
         run_publish(
