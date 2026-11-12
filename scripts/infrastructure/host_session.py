@@ -78,7 +78,7 @@ class HostSessionError(Exception):
 
 
 class TaskExitError(HostSessionError):
-    """A one-shot task ran to its end and a container exited with a code other than 0."""
+    """A one-shot task ran to its end and a container exited with a code other than 0. A task that never started has no exit code and is not this error."""
 
 
 class TerminationRequested(Exception):
@@ -435,7 +435,10 @@ class Session:
         stopped_task = self.wait(f"{key} task stop", stopped, seconds, TASK_POLL_SECONDS)
         exits = {item.get("name"): item.get("exitCode") for item in stopped_task.get("containers", [])}
         if not exits or any(code != 0 for code in exits.values()):
-            raise TaskExitError(f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}")
+            message = f"{key} exit codes: {exits}; stop reason: {category(stopped_task.get('stoppedReason'), STOPPED_REASONS)}"
+            # Only a container that ran to its end with a nonzero exit code proves that its script ran. A task that never started has no exit code.
+            ran = bool(exits) and all(isinstance(code, int) for code in exits.values()) and stopped_task.get("stopCode") != "TaskFailedToStart"
+            raise TaskExitError(message) if ran else HostSessionError(message)
         self.step(key, f"exit codes {exits}")
 
     def described(self, key: str, arns: list[str]) -> list[dict[str, Any]]:

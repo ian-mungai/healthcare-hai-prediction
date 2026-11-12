@@ -21,6 +21,7 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
 
@@ -141,7 +142,8 @@ def checkout_files(host: Path) -> dict[str, bytes]:
 def leftovers(host: Path, *releases: str) -> list[str]:
     """The entries of repo_releases that are not a release folder of ``releases`` and not a hidden bookkeeping file."""
     folder = host / "repo_releases"
-    return sorted(item.name for item in folder.iterdir() if item.name not in releases and not item.name.startswith(".")) if folder.is_dir() else []
+    known = tuple(releases)
+    return sorted(item.name for item in folder.iterdir() if not item.name.startswith((".", *known))) if folder.is_dir() else []
 
 
 @contextmanager
@@ -537,6 +539,143 @@ def the_script_fits_the_run_task_override_limit() -> dict[str, bool]:
     return {"the script as a command override with its three variables stays under the 8192 characters RunTask accepts": len(overrides) <= 8192}
 
 
+def damaged_selected_release() -> tuple[Any, Path, Path, str, str]:
+    """A host that shows release A with one file missing, after release B was shown first; returns the script, the host, the archive of A and both digests."""
+    script, host, archives, _ = fixture()
+    (path_a, sha_a), (path_b, sha_b) = archives[RUN_A], archives[RUN_B]
+    call(script, host, environment(RUN_B, sha_b), StandInS3({RUN_B: path_b}))
+    call(script, host, environment(RUN_A, sha_a), StandInS3({RUN_A: path_a}))
+    (host / "repo_releases" / sha_a / "code" / "config" / "third.json").unlink()
+    return script, host, path_a, sha_a, sha_b
+
+
+def repair_with_renames(script: Any, host: Path, path: Path, sha: str, stop_after: int | None) -> list[bool]:
+    """Repair the damaged selected release and record after every rename whether repo still shows the readable file ``dags/marker.py``.
+
+    With ``stop_after`` the fetch is interrupted right after that rename.
+    """
+    original, states = os.replace, list[bool]()
+
+    def replace(source: Any, target: Any) -> None:
+        original(source, target)
+        states.append((host / "repo" / "dags" / "marker.py").is_file())
+        if stop_after == len(states):
+            raise KeyboardInterrupt
+
+    worker = Worker("repair", lambda: script.run(host, FETCH_DIR, StandInS3({RUN_A: path})))
+    with task_environment(environment(RUN_A, sha)), mock.patch.object(os, "replace", replace):
+        worker.start()
+        joined(worker)
+    return states
+
+
+def repair_of_the_selected_release_keeps_repo_readable_at_every_rename() -> dict[str, bool]:
+    script, host, path, sha, sha_b = damaged_selected_release()
+    states = repair_with_renames(script, host, path, sha, None)
+    checks = {
+        "a repair renames at least twice": len(states) >= 2,
+        "repo shows a readable file after every rename": bool(states) and all(states),
+        "the repaired checkout shows every file of the archive": checkout_files(host) == archive_files(path),
+        "the previous release stays the previous link": os.readlink(host / "repo.previous") == f"repo_releases/{sha_b}/code",
+    }
+    for stop in range(1, len(states) + 1):
+        script, host, path, sha, _ = damaged_selected_release()
+        stopped = repair_with_renames(script, host, path, sha, stop)
+        retry, _ = call(script, host, environment(RUN_A, sha), StandInS3({RUN_A: path}))
+        checks[f"interrupted after rename {stop}: repo shows a readable file"] = (
+            len(stopped) == stop and stopped[-1] and (host / "repo" / "dags" / "marker.py").is_file()
+        )
+        checks[f"interrupted after rename {stop}: the retry succeeds and shows every file"] = retry == 0 and checkout_files(host) == archive_files(path)
+    return checks
+
+
+def services_inputs_files() -> dict[str, Any]:
+    """A synthetic existing rendered services inputs file, the role and bucket files of the owner note and where the cases write."""
+    account = "".join(["123"] * 4)
+    work = Path(tempfile.mkdtemp(prefix="services_inputs_case_"))
+    role = f"arn:aws:iam::{account}:role/example_project_host_code_fetch_task_dev"
+    existing = {
+        "aws_profile": "example_profile",
+        "aws_region": "example-region-1",
+        "cluster_name": "example-cluster",
+        "environment": "dev",
+        "expected_account_id": account,
+        "log_group_names": {"airflow": "example-log-group"},
+        "mlflow_artifact_bucket": "example-mlflow-artifacts",
+        "mlflow_enabled": True,
+        "mlflow_host_ip": "10.0.1.20",
+        "mlflow_task_role_arn": f"arn:aws:iam::{account}:role/example_project_mlflow_task_dev",
+        "model_api_rate_per_minute": 120,
+        "monitoring_enabled": True,
+        "project_name": "example-project",
+        "code_bucket_name": "example-old-bucket",
+        "code_fetch_task_role_arn": f"arn:aws:iam::{account}:role/example_project_old_host_code_fetch_task_dev",
+    }
+    (work / "existing.json").write_text(json.dumps(existing), encoding="utf-8")
+    (work / "role.json").write_text(json.dumps({"name": "example_project_host_code_fetch_task_dev", "arn": role}), encoding="utf-8")
+    (work / "bucket.txt").write_text("example-data-bucket\n", encoding="utf-8")
+    return {"work": work, "existing": existing, "role": role}
+
+
+def run_inputs_tool(files: dict[str, Any], **changes: str) -> tuple[int, str]:
+    """Run the services inputs tool on the synthetic files; ``changes`` replace an argument by name. Returns the exit code and what it printed."""
+    from scripts.infrastructure import services_code_inputs
+
+    work = files["work"]
+    arguments = {"existing": work / "existing.json", "role-file": work / "role.json", "bucket-file": work / "bucket.txt", "output": work / "services_code.json"}
+    arguments.update({name.replace("_", "-"): Path(value) for name, value in changes.items()})
+    out = io.StringIO()
+    with redirect_stdout(out), redirect_stderr(out):
+        code = services_code_inputs.main([item for name, value in arguments.items() for item in (f"--{name}", str(value))])
+    return code, out.getvalue()
+
+
+def services_inputs_keep_every_existing_supported_setting() -> dict[str, bool]:
+    from scripts.infrastructure import render_platform_config
+
+    files = services_inputs_files()
+    code, text = run_inputs_tool(files)
+    output = files["work"] / "services_code.json"
+    written = json.loads(output.read_text(encoding="utf-8")) if output.is_file() else {}
+    wanted = {
+        name: value
+        for name, value in files["existing"].items()
+        if name in {"mlflow_artifact_bucket", "mlflow_enabled", "mlflow_task_role_arn", "model_api_rate_per_minute", "monitoring_enabled"}
+    }
+    wanted.update(code_bucket_name="example-data-bucket", code_fetch_task_role_arn=files["role"])
+    digest = hashlib.sha256(output.read_bytes()).hexdigest() if output.is_file() else ""
+    rendered = render_platform_config.stack_preparation(output, digest, "services") if output.is_file() else {}
+    return {
+        "the tool succeeds": code == 0,
+        "the file holds every supported existing setting and the new role and bucket, and nothing else": written.get("variables") == wanted,
+        "the file names the services root and schema version": written.get("root") == "services" and written.get("schema_version") == 1,
+        "the renderer accepts the file by its digest and keeps mlflow_enabled": rendered.get("mlflow_enabled") is True
+        and rendered.get("code_bucket_name") == "example-data-bucket",
+        "the output names no ARN and no account": "arn:aws" not in text and "".join(["123"] * 4) not in text,
+        "the output names the kept settings": "mlflow_enabled" in text,
+    }
+
+
+def services_inputs_refuse_what_they_cannot_carry() -> dict[str, bool]:
+    from scripts.infrastructure import services_code_inputs
+
+    files = services_inputs_files()
+    missing, missing_text = run_inputs_tool(files, existing=files["work"] / "absent.json")
+    (files["work"] / "role.json").write_text(json.dumps({"arn": "arn:aws:iam::not-a-role"}), encoding="utf-8")
+    bad_role, _ = run_inputs_tool(files)
+    uncarried = sorted(services_code_inputs.declared_variables() - services_code_inputs.supported_variables() - services_code_inputs.rendered_variables())
+    checks = {
+        "a missing existing file is refused": missing != 0 and "existing" in missing_text,
+        "a role ARN of another form is refused and nothing is written": bad_role != 0 and not (files["work"] / "services_code.json").exists(),
+    }
+    if uncarried:
+        carried = services_inputs_files()
+        (carried["work"] / "existing.json").write_text(json.dumps({**carried["existing"], uncarried[0]: "x"}), encoding="utf-8")
+        refused, text = run_inputs_tool(carried)
+        checks["a declared setting that no preparation file can carry is refused by name"] = refused != 0 and uncarried[0] in text
+    return checks
+
+
 def the_task_runs_the_script_as_its_main_program() -> dict[str, bool]:
     text = SCRIPT.read_text()
     return {
@@ -569,6 +708,9 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "restore_with_no_verified_checkout_leaves_none_selected": restore_with_no_verified_checkout_leaves_none_selected,
     "restore_after_a_failed_install_keeps_the_selected_checkout": restore_after_a_failed_install_keeps_the_selected_checkout,
     "the_script_fits_the_run_task_override_limit": the_script_fits_the_run_task_override_limit,
+    "repair_of_the_selected_release_keeps_repo_readable_at_every_rename": repair_of_the_selected_release_keeps_repo_readable_at_every_rename,
+    "services_inputs_keep_every_existing_supported_setting": services_inputs_keep_every_existing_supported_setting,
+    "services_inputs_refuse_what_they_cannot_carry": services_inputs_refuse_what_they_cannot_carry,
 }
 CASE_ERRORS = (AssertionError, LookupError, OSError, TypeError, ValueError, AttributeError, NameError, ImportError)
 

@@ -50,7 +50,8 @@ class ScriptedHost(StandInHost):
 
     ``registered`` is the command of the registered task definition and ``fetch_dir`` the folder of the image's own fetch script (/opt/hai in the task).
     ``after_install`` runs on the folder after every successful install task, to damage what the install left. ``commands`` lists where each task's
-    command came from: ``override`` or ``registered``.
+    command came from: ``override`` or ``registered``, and ``modes`` the CODE_MODE of each task. A task whose mode is in ``never_starts`` fails the way
+    ECS reports a container that cannot start: no script runs, the container has no exit code and the stop code is TaskFailedToStart.
     """
 
     def __init__(self, root: Path, registered: str, fetch_dir: Path, client: StandInS3, faults: set[str] | None = None) -> None:
@@ -58,16 +59,40 @@ class ScriptedHost(StandInHost):
         self.root, self.registered, self.fetch_dir, self.client = root, registered, fetch_dir, client
         self.after_install: Callable[[Path], None] | None = None
         self.commands: list[str] = []
+        self.modes: list[str] = []
+        self.never_starts: set[str] = set()
+        self.unstarted: set[str] = set()
+        self.next_unstarted = False
         self.output = io.StringIO()
+
+    def ecs_run_task(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        launched = super().ecs_run_task(options)
+        if self.next_unstarted:
+            self.next_unstarted = False
+            self.unstarted.add(launched["tasks"][0]["taskArn"])
+        return launched
+
+    def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        described = super().ecs_describe_tasks(options)
+        for task in described["tasks"]:
+            if task["taskArn"] in self.unstarted and task["lastStatus"] == "STOPPED":
+                task["containers"][0].pop("exitCode", None)
+                task["containers"][0]["reason"] = "CannotPullContainerError"
+                task["stopCode"], task["stoppedReason"] = "TaskFailedToStart", "Task failed to start"
+        return described
 
     def code_fetch_exit(self, options: dict[str, list[str]], code: int) -> int:
         containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
         entry: dict[str, Any] = next((item for item in containers if item.get("name") == "code_fetch"), {})
         variables = {item["name"]: item["value"] for item in entry.get("environment", [])}
         self.commands.append("override" if entry.get("command") else "registered")
+        self.modes.append(variables.get("CODE_MODE", "install"))
         text = entry["command"][0] if entry.get("command") else self.registered
         if code != 0:
             return code
+        if self.modes[-1] in self.never_starts:
+            self.next_unstarted = True
+            return 1
         exit_code = self.execute(text, {"DATA_BUCKET_NAME": BUCKET, **variables})
         if exit_code == 0 and "CODE_MODE" not in variables and self.after_install is not None:
             self.after_install(self.root)
@@ -268,6 +293,37 @@ def the_override_of_every_code_task_fits_the_run_task_limit() -> dict[str, bool]
     }
 
 
+def a_task_that_never_starts_leaves_the_healthy_selected_checkout() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    (path_a, sha_a), (path_b, sha_b) = archives[RUN_A], archives[RUN_B]
+    release(host.root, sha_b, path_b, select=False)
+    release(host.root, sha_a, path_a)
+    (host.root / "repo.previous").symlink_to(f"repo_releases/{sha_b}/code")
+    host.never_starts.add("install")
+    message = start_for(session, RUN_A, sha_a)
+    return {
+        "start fails": message is not None,
+        "the message says that what repo shows is not known": message is not None and "not known" in message,
+        "no task runs the restore mode": host.modes == ["install"],
+        "repo still shows the requested healthy release": shown(host.root) == archive_files(path_a),
+        "no service is deployed": deployments(host) == 0,
+    }
+
+
+def a_verification_task_that_never_starts_is_reported_as_unknown_state() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    (path_a, sha_a), (_, sha_b) = archives[RUN_A], archives[RUN_B]
+    release(host.root, sha_a, path_a)
+    host.never_starts.add("verify")
+    message = start_for(session, RUN_B, sha_b)
+    return {
+        "start fails": message is not None,
+        "the message says that what repo shows is not known": message is not None and "not known" in message,
+        "no task runs the restore mode": host.modes == ["install", "verify"],
+        "no service is deployed": deployments(host) == 0,
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "old_installer_with_an_interrupted_cache_selects_no_partial_checkout": old_installer_with_an_interrupted_cache_selects_no_partial_checkout,
     "verification_failure_restores_the_previous_checkout": verification_failure_restores_the_previous_checkout,
@@ -276,4 +332,6 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "start_without_code_refuses_a_selected_release_that_is_incomplete": start_without_code_refuses_a_selected_release_that_is_incomplete,
     "complete_install_with_the_reviewed_installer_and_the_old_image": complete_install_with_the_reviewed_installer_and_the_old_image,
     "the_override_of_every_code_task_fits_the_run_task_limit": the_override_of_every_code_task_fits_the_run_task_limit,
+    "a_task_that_never_starts_leaves_the_healthy_selected_checkout": a_task_that_never_starts_leaves_the_healthy_selected_checkout,
+    "a_verification_task_that_never_starts_is_reported_as_unknown_state": a_verification_task_that_never_starts_is_reported_as_unknown_state,
 }

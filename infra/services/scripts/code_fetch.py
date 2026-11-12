@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 SHA256 = re.compile(r"[a-f0-9]{64}")
-SELECTED = re.compile(r"repo_releases/([a-f0-9]{64})/code")
+SELECTED = re.compile(r"repo_releases/([a-f0-9]{64}(?:\.r[0-9]+)?)/code")
 LOCK_SECONDS = 600
 
 
@@ -23,10 +23,11 @@ def same(first: Any, second: Any) -> bool:
     return hashlib.file_digest(first, "sha256").digest() == hashlib.file_digest(second, "sha256").digest()
 
 
-def verified(release: Path, digest: str) -> bool:
+def verified(release: Path) -> bool:
+    """True when the release folder holds the archive with the digest that starts its name and a code folder with every member of it."""
     try:
         with (release / "code.tar.gz").open("rb") as stream:
-            if hashlib.file_digest(stream, "sha256").hexdigest() != digest:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != release.name[:64]:
                 return False
             stream.seek(0)
             with tarfile.open(fileobj=stream) as tar:
@@ -59,9 +60,9 @@ def show(host: Path, name: str, target: str) -> None:
 
 
 def install(host: Path, fetch_dir: Path, client: Any, run_id: str, digest: str) -> int:
-    link, current = host / "repo", selected(host)
+    link, current, releases = host / "repo", selected(host), host / "repo_releases"
     if not run_id:
-        if current is not None and not verified(host / "repo_releases" / current, current):
+        if current is not None and not verified(releases / current):
             sys.stderr.write(f"code_fetch refused: repo shows release {current[:12]}, which is not complete\n")
             return 1
         if (link / "dags").is_dir():
@@ -70,68 +71,68 @@ def install(host: Path, fetch_dir: Path, client: Any, run_id: str, digest: str) 
         sys.stderr.write("code_fetch refused: the host has no checkout; give --code-run and --code-sha256\n")
         return 1
     if link.exists() and not link.is_symlink() and any(link.iterdir()):
-        sys.stderr.write("code_fetch refused: repo is a folder with content; move it aside first\n")
+        sys.stderr.write("code_fetch refused: repo is a folder with content\n")
         return 1
-    releases = host / "repo_releases"
     releases.mkdir(parents=True, exist_ok=True)
-    release, partial, replaced = releases / digest, releases / f"{digest}.partial", releases / f"{digest}.replaced"
-    shutil.rmtree(replaced, ignore_errors=True)
-    if not verified(release, digest):
+    partial = releases / f"{digest}.partial"
+    shutil.rmtree(partial, ignore_errors=True)
+    folders = sorted((item for item in releases.iterdir() if re.fullmatch(digest + r"(\.r[0-9]+)?", item.name)), key=lambda item: int(item.name[66:] or 0))
+    good = next((item for item in reversed(folders) if verified(item)), None)
+    if good is None:
         try:
-            shutil.rmtree(partial, ignore_errors=True)
             partial.mkdir()
             sys.path.insert(0, str(fetch_dir))
             code = int(importlib.import_module("fetch_code").main(client, partial, partial / "no_tools"))
-            if code == 0 and not verified(partial, digest):
-                sys.stderr.write("code_fetch refused: the unpacked release does not match its archive\n")
+            if code == 0 and not verified(partial):
+                sys.stderr.write("code_fetch refused: the release does not match its archive\n")
                 code = 1
             if code != 0:
                 return code
-            if release.exists():
-                os.replace(release, replaced)
-            os.replace(partial, release)
+            good = releases / (f"{digest}.r{int(folders[-1].name[66:] or 0) + 1}" if folders else digest)
+            os.replace(partial, good)
         finally:
             shutil.rmtree(partial, ignore_errors=True)
-            shutil.rmtree(replaced, ignore_errors=True)
-    if current == digest:
+    if current == good.name:
         sys.stdout.write(f"code_fetch: repo already shows {digest[:12]}\n")
         return 0
     if link.is_symlink():
-        show(host, "repo.previous", os.readlink(link))
+        if (current or "")[:64] != digest:
+            show(host, "repo.previous", os.readlink(link))
     else:
         (host / "repo.previous").unlink(missing_ok=True)
-    show(host, "repo", f"repo_releases/{digest}/code")
+    show(host, "repo", f"repo_releases/{good.name}/code")
     sys.stdout.write(f"code_fetch: repo now shows run {run_id} code {digest[:12]}\n")
     return 0
 
 
 def verify(host: Path, digest: str) -> int:
-    if selected(host) != digest:
-        sys.stderr.write("code_fetch verify failed: repo does not show this release\n")
-    elif not verified(host / "repo_releases" / digest, digest):
-        sys.stderr.write("code_fetch verify failed: the release does not hold every file of its archive\n")
+    now = selected(host)
+    if now is None or now[:64] != digest:
+        sys.stderr.write("code_fetch: repo does not show this release\n")
+    elif not verified(host / "repo_releases" / now):
+        sys.stderr.write("code_fetch: the release does not hold every file of its archive\n")
     else:
-        sys.stdout.write(f"code_fetch verify: ok {digest[:12]}\n")
+        sys.stdout.write(f"code_fetch: ok {digest[:12]}\n")
         return 0
     return 1
 
 
 def restore(host: Path, digest: str) -> int:
     link, current, earlier = host / "repo", selected(host), selected(host, "repo.previous")
-    if current is not None and current != digest and verified(host / "repo_releases" / current, current):
-        sys.stdout.write(f"code_fetch restore: repo shows the verified release {current[:12]}\n")
+    if current is not None and current[:64] != digest and verified(host / "repo_releases" / current):
+        sys.stdout.write(f"code_fetch: repo shows the verified release {current[:12]}\n")
         return 0
     if current is None and (link / "dags").is_dir():
-        sys.stdout.write("code_fetch restore: repo is a checkout folder\n")
+        sys.stdout.write("code_fetch: repo is a checkout folder\n")
         return 0
-    if earlier is not None and earlier != current and verified(host / "repo_releases" / earlier, earlier):
+    if earlier is not None and earlier != current and verified(host / "repo_releases" / earlier):
         show(host, "repo", f"repo_releases/{earlier}/code")
-        sys.stdout.write(f"code_fetch restore: repo shows the previous release {earlier[:12]} again\n")
+        sys.stdout.write(f"code_fetch: repo shows the previous release {earlier[:12]} again\n")
         return 0
     if link.is_symlink():
         link.unlink()
     link.mkdir(exist_ok=True)
-    sys.stderr.write("code_fetch restore failed: no verified checkout; repo is an empty folder\n")
+    sys.stderr.write("code_fetch: no verified checkout; repo is an empty folder\n")
     return 1
 
 
@@ -151,10 +152,10 @@ def lock(host: Path) -> Any:
 def run(host: Path, fetch_dir: Path, client: Any = None) -> int:
     mode, run_id, digest = os.environ.get("CODE_MODE", "install"), os.environ.get("CODE_RUN_ID", ""), os.environ.get("CODE_SHA256", "")
     if mode not in {"install", "verify", "restore"}:
-        sys.stderr.write("code_fetch refused: CODE_MODE is not install, verify or restore\n")
+        sys.stderr.write("code_fetch refused: unknown CODE_MODE\n")
         return 1
     if (bool(run_id) != bool(digest) and mode == "install") or (digest and not SHA256.fullmatch(digest)) or (mode == "verify" and not digest):
-        sys.stderr.write("code_fetch refused: give both a run ID and a 64-character lowercase hex code digest\n")
+        sys.stderr.write("code_fetch refused: CODE_RUN_ID and a 64-hex CODE_SHA256 go together\n")
         return 1
     try:
         handle = lock(host)
