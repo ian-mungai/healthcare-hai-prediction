@@ -61,6 +61,8 @@ from scripts.process import run_command
 CONNECT_SECONDS = 3.0
 # The bound of the child process: its imports, its connects and its file reads.
 CHILD_SECONDS = 60.0
+# The part of that bound that is kept for removing the private folder: the child and the read of its result stop before it. A short bound keeps a quarter.
+CLEANUP_SECONDS = 5.0
 # Run the checks in a child process. The tests of the checks themselves run them in this process, with socket stand-ins.
 ISOLATED = True
 CHILD_MODULE = "scripts.infrastructure.startup_check_child"
@@ -276,6 +278,8 @@ CODES = frozenset(
     }
 )
 ERROR_NAMES = frozenset(errno.errorcode.values())
+# A scheme before a slash, as in an address, or an at sign, as in a user and secret before a host. A path with either is never shown.
+ADDRESS_FORM = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*:/|@")
 # What a finding's code says of its outcome. ``credentials`` has both: its reason is the child's label.
 PASSING = frozenset({*SERVICES, "task_environment", "dbt_target", "input_file", "plan_inputs", "input_files"})
 EITHER = frozenset({"credentials"})
@@ -551,7 +555,8 @@ def need_codes(need: Need) -> frozenset[str]:
 def relative_path(need: Need, code: Path) -> str | None:
     """The path of a code root need below the code root, as text that may be shown, or ``None``.
 
-    It shows only a path under the code root that is printable and that the privacy scan's home-path rule does not flag. The rule is the scan's own function."""
+    It shows only a path under the code root that is printable, that has no address form (a scheme or a user and secret before a host) and that the privacy
+    scan's line check passes with no finding of any kind, on the exact text that would print. The check is the scan's own function."""
     if need.root != "code":
         return None
     root = os.path.normpath(code)
@@ -559,11 +564,13 @@ def relative_path(need: Need, code: Path) -> str | None:
     if not full.startswith(root.rstrip(os.sep) + os.sep):
         return None
     text = Path(full).relative_to(root).as_posix()
+    if not text.isprintable() or ADDRESS_FORM.search(need.path) or ADDRESS_FORM.search(text):
+        return None
     try:
-        flagged = "home-path" in importlib.import_module("scripts.quality.repo_checks").line_privacy(text, [])
+        findings = importlib.import_module("scripts.quality.repo_checks").line_privacy(f"{need.kind if need.kind in FILE_KINDS else 'input'} {text}", [])
     except ImportError:
         return None
-    return None if flagged or not text.isprintable() else text
+    return None if findings else text
 
 
 def need_where(need: Need, code: Path) -> Detail:
@@ -744,9 +751,11 @@ def remove_contents(directory: int, deadline: float) -> None:
 def run_child(request: dict[str, Any]) -> list[str]:
     """Run the request in the isolated child and return the lines it wrote to its result file. The child's streams are captured and dropped.
 
-    One deadline covers the child, the read of its result and the removal of its folder. The folder is used through one descriptor, so renaming it or
-    replacing a file in it changes nothing that this function opens."""
+    One deadline covers the child, the read of its result and the removal of its folder. The child and the read stop at a cutoff that leaves
+    ``CLEANUP_SECONDS`` (a quarter of a short bound) before the deadline, so the removal always has its time. The folder is used through one descriptor, so
+    renaming it or replacing a file in it changes nothing that this function opens."""
     deadline = time.monotonic() + CHILD_SECONDS
+    cutoff = deadline - min(CLEANUP_SECONDS, CHILD_SECONDS / 4)
     name = tempfile.mkdtemp(prefix="startup_check_")
     try:
         directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -757,12 +766,12 @@ def run_child(request: dict[str, Any]) -> list[str]:
                 ["-s", "-B", "-P", "-m", CHILD_MODULE, name],
                 cwd=Path(name),
                 env=child_environment(name, request),
-                timeout=remaining(deadline),
+                timeout=remaining(cutoff),
                 errors="replace",
             )
             if done.returncode != 0:
                 raise InvalidRecords
-            return read_result(directory, deadline)
+            return read_result(directory, cutoff)
         finally:
             try:
                 remove_contents(directory, deadline)

@@ -16,6 +16,15 @@ from tests.support import check
 
 # The privacy scan flags a home-directory path with a user name. The pieces are joined here so that this file holds no such path itself.
 HOME_PATH = "data/" + "ho" + "me/synthetic_name/plan.json"
+# Other findings of the privacy scan, joined from pieces for the same reason: an account ID, a machine temporary path and a phone number.
+SCANNER_PATHS = {
+    "an account ID": "config/" + "account" + "_id=" + "123456789012" + ".json",
+    "a machine temporary path": "data/" + "va" + "r/folders/ab/cd_synthetic/plan.json",
+    "a phone number": "data/" + "555" + "-123-" + "4567" + "/plan.json",
+}
+# A credential-bearing address, with a user, a secret, a host and a token, as a configured path may be written.
+CREDENTIAL_URI = "https://SYNTHETIC_USER:SYNTHETIC_PASSWORD@SYNTHETIC_HOST/SYNTHETIC_PATH?token=SYNTHETIC_TOKEN"
+SECRETS = ("SYNTHETIC_USER", "SYNTHETIC_PASSWORD", "SYNTHETIC_HOST", "SYNTHETIC_PATH", "SYNTHETIC_TOKEN")
 
 
 def shown_for(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], code: Path, need: startup_check.Need) -> str:
@@ -85,3 +94,26 @@ def test_a_present_file_under_the_code_root_prints_its_relative_path_too(
     (tmp_path / "synthetic_present.json").write_text("{}")
     startup_check.check_files("publisher", [startup_check.Need("hcai_util_workbook", "code", "synthetic_present.json")], {"code": tmp_path})
     check("ok input_file hcai_util_workbook code root: input synthetic_present.json" in capsys.readouterr().err, "the passing file is named by its path")
+
+
+def test_a_credential_bearing_address_under_the_code_root_prints_its_kind_and_digest_and_no_part_of_it(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    host_environment(monkeypatch)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(startup_check.StartupCheckError) as caught:
+        startup_check.check_files("publisher", [startup_check.Need("hcai_util_workbook", "code", CREDENTIAL_URI, kind="plan")], {"code": tmp_path})
+    shown = capsys.readouterr().err + str(caught.value)
+    check(f"code root: plan {startup_check.file_digest(CREDENTIAL_URI)}" in shown, f"the kind and the digest are named: {shown}")
+    leaked = [secret for secret in SECRETS if secret in shown]
+    check(not leaked, f"the output carries {leaked}: {shown}")
+
+
+@pytest.mark.parametrize("finding", list(SCANNER_PATHS))
+def test_a_path_with_a_privacy_scan_finding_other_than_a_home_path_prints_its_kind_and_digest(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path, finding: str
+) -> None:
+    path = SCANNER_PATHS[finding]
+    shown = shown_for(monkeypatch, capsys, tmp_path, startup_check.Need("hcai_util_workbook", "code", path, kind="plan"))
+    check(f"code root: plan {startup_check.file_digest(path)}" in shown, f"{finding}: the kind and the digest are named: {shown}")
+    check(path.rsplit("/", 1)[-1] not in shown, f"{finding}: the path is not shown: {shown}")
