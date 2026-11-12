@@ -7,14 +7,13 @@ checks make no Docker call: the image checks are launcher requests (``image``, `
 1. The Compose file pins PostgreSQL by digest and the Airflow image by the ``hai-`` tag of ``services/orchestration/Dockerfile``, publishes only
    loopback ports and mounts no socket, AWS folder or lakehouse secret; the Dockerfile builds on the recorded digests, installs nothing and adds only
    the entrypoint and the two labels; the constraints file has its recorded SHA-256. Each check also refuses a mutated input.
-2. The broker templates validate against their schema and the launcher's closed table.
-3. The interface-only import check: DAG files import only Airflow, the standard library (never ``subprocess``), ``orchestration.interface`` and
+2. The interface-only import check: DAG files import only Airflow, the standard library (never ``subprocess``), ``orchestration.interface`` and
    ``orchestration.client``; the client only the standard library and the interface.
-4. The ``transform_dag`` graph validator on plain graphs: the required graph passes and each mutation fails.
-5. The Docker-call check over every orchestration source file.
-6. With the built image, through the launcher: the image's labels, user and last layers; every DAG file imports in the image with no error or
+3. The ``transform_dag`` graph validator on plain graphs: the required graph passes and each mutation fails.
+4. The Docker-call check over every orchestration source file.
+5. With the built image, through the launcher: the image's labels, user and last layers; every DAG file imports in the image with no error or
    cycle; the graph validator on real Airflow DAG objects; every installed distribution equals the constraints file.
-7. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
+6. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
    Files needing Airflow or PostgreSQL types are listed as pending in the report and in ``config/quality/mypy_runtimes.json``.
    Check them in their runtime environment with ``scripts.quality.typecheck --runtime orchestration_image`` and both strict flags.
 
@@ -40,7 +39,6 @@ from unittest import mock
 
 from orchestration import launcher
 from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
-from scripts.orchestration.broker import BrokerError, load_templates
 from scripts.process import run_command
 from scripts.quality import lock_env
 from scripts.quality.repo_checks import load_yaml
@@ -54,18 +52,11 @@ DAG_MODULES = {"orchestration.interface", "orchestration.client", "orchestration
 NEVER_IN_DAGS = {"subprocess", "docker", "scripts"}
 PACKAGE_MANAGERS = re.compile(r"\b(pip|pip3|uv|apt|apt-get|apk|npm|conda|poetry|curl|wget)\b")
 A1_FILES = (
-    "scripts/orchestration/broker.py",
-    "scripts/orchestration/supervisor.py",
     "scripts/orchestration/ledger.py",
     "scripts/orchestration/offline_checks.py",
     "scripts/orchestration/in_image_checks.py",
     "scripts/orchestration/db_dump.py",
     "scripts/orchestration/sentinel.py",
-    "scripts/orchestration/fake_engine.py",
-    "scripts/orchestration/run_broker_e2e.py",
-    "scripts/orchestration/run_stack_e2e.py",
-    "scripts/orchestration/run_supervisor_e2e.py",
-    "scripts/orchestration/run_real_e2e.py",
     "orchestration/client.py",
     "orchestration/graph.py",
 )
@@ -511,11 +502,6 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
         results["Dockerfile builds the pinned base plus the entrypoint and the labels, nothing installed"] = {"ok": not docker, "problems": docker}
         constraints = constraints_problems((ROOT / platform["airflow"]["constraints"]["path"]).read_bytes(), platform)
         results["constraints pin list of the orchestration lock group is the recorded one"] = {"ok": not constraints, "problems": constraints}
-        try:
-            templates = load_templates()
-            results["broker templates validate against their schema and the launcher's table"] = {"ok": True, "templates": sorted(templates["templates"])}
-        except BrokerError as error:
-            results["broker templates validate against their schema and the launcher's table"] = {"ok": False, "problems": [str(error)]}
         dag_files = sorted((ROOT / "dags").glob("*.py"))
         imports = [problem for path in dag_files for problem in dag_import_problems(path.name, path.read_text())] + interface_problems()
         results["interface-only imports"] = {"ok": not imports, "problems": imports}

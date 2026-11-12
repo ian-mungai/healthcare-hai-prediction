@@ -1,6 +1,6 @@
 """Record explicit static or in-process placement proof without AWS or Docker access.
 
-Run with --proof S for pure contracts or --proof D for real broker and launcher handlers with synthetic transports.
+Run with --proof S for pure contracts.
 Native worker, Terraform and actual AWS proofs remain separate lead-run gates.
 """
 
@@ -23,9 +23,7 @@ SOURCES = (
     "orchestration/interface.py",
     "orchestration/client.py",
     "orchestration/fake.py",
-    "scripts/orchestration/broker.py",
     "scripts/orchestration/ecs_target_cases.py",
-    "scripts/orchestration/ecs_submission_cases.py",
     "scripts/orchestration/ecs_fake_api.py",
     "scripts/orchestration/run_ecs_target_e2e.py",
     "scripts/orchestration/run_contracts_e2e.py",
@@ -50,15 +48,13 @@ def hashes() -> dict[str, str]:
 def main() -> int:
     """Run the requested proof level and save failures with source identity and cleanup status."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--proof", choices=("S", "D", "T", "A"), required=True)
+    parser.add_argument("--proof", choices=("S", "T", "A"), required=True)
     parser.add_argument("--lane", choices=("A",), default="A")
-    parser.add_argument("--case", action="append", choices=("selector", "sizing", "contracts", "submission"))
+    parser.add_argument("--case", action="append", choices=("selector", "sizing", "contracts"))
     args = parser.parse_args()
-    if args.proof not in ("S", "D"):
-        parser.error("this increment supplies S and in-process D only. T and A require the coordinating agent's integrated runtime and cloud inputs")
-    selected = args.case or (["selector", "sizing", "contracts"] if args.proof == "S" else ["submission"])
-    if (args.proof == "S" and "submission" in selected) or (args.proof == "D" and selected != ["submission"]):
-        parser.error("the case selection does not match the requested proof level")
+    if args.proof != "S":
+        parser.error("this increment supplies S only. T and A require the coordinating agent's integrated runtime and cloud inputs")
+    selected = args.case or ["selector", "sizing", "contracts"]
     started = datetime.now(UTC)
     folder = ROOT / "data/e2e/ecs_target" / started.strftime("%Y%m%dT%H%M%S_%fZ")
     folder.mkdir(parents=True)
@@ -70,12 +66,8 @@ def main() -> int:
                 checks[name] = selector_cases()
             elif name == "sizing":
                 checks[name] = sizing_cases()
-            elif name == "contracts":
-                checks[name] = contract_cases(ROOT)
             else:
-                from scripts.orchestration.ecs_submission_cases import submission_cases
-
-                checks[name] = submission_cases(ROOT, folder / "submission")
+                checks[name] = contract_cases(ROOT)
     except Exception as error:
         checks["runner"] = {"completed": False, "exception_type": type(error).__name__}
     failed = [f"{group}.{name}" for group, values in checks.items() for name, value in values.items() if value is False]
@@ -84,7 +76,7 @@ def main() -> int:
     report = {
         "started_utc": started.isoformat(),
         "proof": args.proof,
-        "scope": "pure contracts" if args.proof == "S" else "in-process broker and launcher handlers",
+        "scope": "pure contracts",
         "command": [".venv/bin/python", "-m", "scripts.orchestration.run_ecs_target_e2e", *sys.argv[1:]],
         "source_sha256": before,
         "classification": "Synthetic",

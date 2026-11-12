@@ -1263,16 +1263,6 @@ def case_graph(fixture: Fixture, scratch: Path) -> Checks:
         and 'build_job_chain("pin_silver", asset="gold")' in gold_dag
         and 'build_job_chain("pin_gold", asset="features")' in features_dag
     )
-    supervisor = (ROOT / "scripts/orchestration/supervisor.py").read_text()
-    match = re.search(r"PIPELINE_DAGS = \(([^)]*)\)", supervisor)
-    names = set(re.findall(r'"([a-z_]+)"', match.group(1))) if match else set()
-    checks["supervisor_dags"] = {
-        "silver_transform_dag",
-        "gold_transform_dag",
-        FEATURES_DAG,
-        "training_dag",
-        "model_promotion_dag",
-    } == names
     return checks
 
 

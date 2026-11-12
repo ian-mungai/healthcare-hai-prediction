@@ -28,7 +28,7 @@ SQLFLUFF_LIMIT = 1500
 CHECKS = ("ruff", "shell-syntax", "shellcheck", "actionlint", "yamllint", "build-contexts", "hadolint", "gofmt", "go-vet", "sql")
 PRIVATE = {".git", ".venv", ".tools", "data", "plans", "node_modules", ".aws", ".codex", ".agents"}
 SHELLS = {"sh", "bash", "dash", "zsh", "ksh"}
-TINY_FIXTURE_REASON = "synthetic dbt project of the transform scheduler E2E, built and checked by scripts/orchestration/run_transform_e2e.py"
+TINY_FIXTURE_REASON = "synthetic dbt project left from the retired transform scheduler E2E"
 EXCLUDED_SQL = {
     "services/analytics/bronze.sql": "DuckDB CLI init script whose LOAD, CREATE SECRET and ATTACH statements are outside the pinned grammar",
     "tests/orchestration/fixtures/tiny/models/catalog_marker.sql": TINY_FIXTURE_REASON,

@@ -2073,7 +2073,7 @@ def metadata_uses_the_host_containers() -> None:
     )
 
 
-RUNTIME_MODULES = ("orchestration.client", "scripts.orchestration.broker")
+RUNTIME_MODULES = ("orchestration.client",)
 RUNTIME_NAMES = ("BrokerClient", "submit_and_wait", "from_session", "hai_job_launch_mode")
 
 

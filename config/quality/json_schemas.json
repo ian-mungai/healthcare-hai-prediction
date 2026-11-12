@@ -11,12 +11,6 @@
   ],
   "pairs": [
     {
-      "schema": "config/orchestration/broker_templates.schema.json",
-      "files": [
-        "config/orchestration/broker_templates.json"
-      ]
-    },
-    {
       "schema": "config/orchestration/ecs_jobs.schema.json",
       "files": [
         "config/orchestration/ecs_jobs.json"

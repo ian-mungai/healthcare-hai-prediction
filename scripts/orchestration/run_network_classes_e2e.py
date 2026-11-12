@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import platform
+import secrets
 import socket
 import sys
 import tempfile
@@ -22,10 +23,13 @@ from orchestration.network_policy import CLASSES, PROXY_IMAGE
 from orchestration.pipeline_protocol import PipelineError, read_bytes
 from scripts.lakehouse.run_gold_publish_e2e import Session
 from scripts.orchestration import traffic_probe
-from scripts.orchestration.run_transform_e2e import new_run_id
 
 ROOT = Path(__file__).resolve().parents[2]
 LISTEN_SECONDS = 1800
+
+
+def new_run_id() -> str:
+    return f"{datetime.now(UTC):%Y%m%dT%H%M%SZ}-{secrets.token_hex(4)}"
 
 
 class HostListener:

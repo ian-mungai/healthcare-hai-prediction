@@ -70,8 +70,6 @@ def main() -> int:
         checks[f"ci_{name}"] = {"ok": "orchestration_checks" in selected["run"], "groups": selected["run"]}
     policy = load(ROOT / "services/orchestration/egress_proxy.json")
     checks["fixed_proxy_policy"] = {"ok": policy["image"] == PROXY_IMAGE and policy["classes"] == list(CLASSES)}
-    templates = json.loads((ROOT / "config/orchestration/broker_templates.json").read_text())["templates"]
-    checks["l2_deferred"] = {"ok": all("lineage" not in row for value in templates.values() for row in value["modes"].values())}
     folder = ROOT / "data/e2e/pipeline_light" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
     folder.mkdir(parents=True)
     report = {
