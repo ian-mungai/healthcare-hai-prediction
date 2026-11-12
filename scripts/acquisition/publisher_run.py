@@ -229,9 +229,10 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
     state_parent = workspace_of(env) / "state"
     state_root = state_parent / "run"
-    restore_state(s3, state_root, env)
+    restored_from = restore_state(s3, state_root, env)
     arguments = argparse.Namespace(
         queue=queue,
+        restored_from=restored_from,
         state_root=state_root,
         state_parent=state_parent,
         manual_folder=None,

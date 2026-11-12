@@ -620,6 +620,161 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
 
     scenario("report_reader_refuses_a_state_root_owned_by_another_run", report_reader_binding)
 
+    def continuation(label: str) -> tuple[Any, str]:
+        """A finished first run, and the digest of the controls that own its state root."""
+        run, unit, web = build(label)
+        web.serve(unit["url"], (200, b"a\n1\n"))
+        harness.execute(run)
+        return run, read_json(run.state_root / "run.json")["controls_sha256"]
+
+    def freeze_next(run: Any, named: Any = None, scope: bool = False) -> str:
+        """Freeze the next implementation's controls with a passing review. A scope file changes them the way new code does."""
+        if scope:
+            run.queue_path.with_name("scope.json").write_bytes(encoded_json({"sources": ["ALPHA"]}))
+        frozen = harness.runtime_controls(run) | ({} if named is None else {"continues_controls_sha256": named})
+        run.queue_path.with_name("controls.json").write_bytes(encoded_json(frozen))
+        sha = harness.digest(encoded_json(frozen))
+        run.queue_path.with_name("independent_review.json").write_bytes(
+            encoded_json({"status": "passed", "reviewer": "synthetic E2E fixture", "reviewed_controls_sha256": sha})
+        )
+        return sha
+
+    def restored(run: Any, named: bool = True) -> Any:
+        """The task's next run over the same state root, with the state it restored from the prior state the request named."""
+        again = harness.Run(run.queue_path, run.state_root, base=run.base, opener=run.opener, sleep=lambda _n: None)
+        again.restored_from = "raw/run3_state/synthetic/state.tar.gz" if named else None
+        return again
+
+    def history_digests(run: Any) -> list[str]:
+        return [item["controls_sha256"] for item in read_json(run.state_root / "run.json").get("controls_history", [])]
+
+    def refuses(run: Any, text: str, preview: bool = False) -> None:
+        """The run is refused for this reason, and nothing in the state root changes."""
+        before = tree(run.state_root)
+        try:
+            harness.execute(run, allow_network=not preview)
+        except ValueError as failure:
+            require(text in str(failure), f"Refused for another reason: {failure}")
+            require(tree(run.state_root) == before, "A refused continuation changed the state root")
+            return
+        raise ValueError("A continuation that must be refused was accepted")
+
+    def named_predecessor_continues() -> None:
+        run, first = continuation("continues")
+        before = read_json(run.state_root / "run.json")
+        second = freeze_next(run, [first])
+        harness.execute(restored(run))
+        after = read_json(run.state_root / "run.json")
+        require(after["controls_sha256"] == second, f"The current controls do not bind the root: {after}")
+        require(
+            after["queue_sha256"] == before["queue_sha256"] and after["started_at_utc"] == before["started_at_utc"],
+            "The transition changed the queue or start time",
+        )
+        require(history_digests(run) == [first, second], f"The controls history is wrong: {after.get('controls_history')}")
+        require(after["controls_history"][0]["bound_at_utc"] == before["started_at_utc"], "The history lost the first binding time")
+        datetime.fromisoformat(after["controls_history"][1]["bound_at_utc"])
+
+    scenario("a_named_predecessor_and_prior_state_let_new_controls_continue_a_saved_root", named_predecessor_continues)
+
+    def predecessor_not_listed() -> None:
+        run, _first = continuation("not_listed")
+        freeze_next(run, scope=True)
+        refuses(restored(run), "State root belongs to another reviewed implementation")
+
+    scenario("new_controls_without_the_predecessor_are_refused", predecessor_not_listed)
+
+    def no_prior_state() -> None:
+        run, first = continuation("no_prior")
+        freeze_next(run, [first])
+        refuses(restored(run, named=False), "State root belongs to another reviewed implementation")
+        refuses(
+            harness.Run(run.queue_path, run.state_root, base=run.base, opener=run.opener, sleep=lambda _n: None),
+            "State root belongs to another reviewed implementation",
+        )
+
+    scenario("a_listed_predecessor_without_a_named_prior_state_is_refused", no_prior_state)
+
+    def other_queue() -> None:
+        run, first = continuation("other_queue")
+        record = read_json(run.state_root / "run.json")
+        (run.state_root / "run.json").write_bytes(encoded_json(record | {"queue_sha256": "c" * 64}))
+        freeze_next(run, [first])
+        refuses(restored(run), "State root belongs to another queue")
+
+    scenario("a_different_queue_is_refused_even_with_a_listed_predecessor", other_queue)
+
+    def unrelated_digest() -> None:
+        run, first = continuation("unrelated")
+        freeze_next(run, ["e" * 64])
+        refuses(restored(run), "State root belongs to another reviewed implementation")
+        require(first not in history_digests(run) and "controls_history" not in read_json(run.state_root / "run.json"), "A refusal wrote a history")
+
+    scenario("a_third_unrelated_digest_is_refused", unrelated_digest)
+
+    def malformed_predecessor() -> None:
+        for label, named in (
+            ("upper", ["A" * 64]),
+            ("short", ["a" * 63]),
+            ("nonhex", ["g" * 64]),
+            ("number", [7]),
+            ("text", "a" * 64),
+            ("empty", []),
+            ("repeat", ["a" * 64, "a" * 64]),
+            ("padded", [" " + "a" * 63]),
+        ):
+            run, first = continuation(f"malformed_{label}")
+            freeze_next(run, named)
+            refuses(restored(run), "Malformed continuation controls")
+            require(first == read_json(run.state_root / "run.json")["controls_sha256"], "A malformed predecessor changed the ownership record")
+
+    scenario("a_malformed_predecessor_is_refused", malformed_predecessor)
+
+    def rerun_is_idempotent() -> None:
+        run, first = continuation("idempotent")
+        second = freeze_next(run, [first])
+        harness.execute(restored(run))
+        saved = (run.state_root / "run.json").read_bytes()
+        harness.execute(restored(run))
+        harness.execute(restored(run, named=False))
+        require((run.state_root / "run.json").read_bytes() == saved, "A rerun with the same controls changed the ownership record")
+        require(history_digests(run) == [first, second], "A rerun added to the controls history")
+
+    scenario("a_rerun_after_a_transition_changes_nothing", rerun_is_idempotent)
+
+    def next_controls_list_the_newest() -> None:
+        run, first = continuation("next_controls")
+        second = freeze_next(run, [first])
+        harness.execute(restored(run))
+        third = freeze_next(run, [second])
+        harness.execute(restored(run))
+        require(read_json(run.state_root / "run.json")["controls_sha256"] == third, "The newest controls do not bind the root")
+        require(history_digests(run) == [first, second, third], f"The controls history is wrong: {history_digests(run)}")
+
+    scenario("a_later_run_listing_only_the_newest_predecessor_continues", next_controls_list_the_newest)
+
+    def older_predecessor() -> None:
+        run, first = continuation("older")
+        second = freeze_next(run, [first])
+        harness.execute(restored(run))
+        freeze_next(run, [first, "d" * 64])
+        refuses(restored(run), "State root belongs to another reviewed implementation")
+        require(read_json(run.state_root / "run.json")["controls_sha256"] == second, "An older predecessor took over the root")
+
+    scenario("a_predecessor_older_than_the_current_controls_is_refused", older_predecessor)
+
+    def readers_follow_the_binding() -> None:
+        run, first = continuation("readers")
+        second = freeze_next(run, [first])
+        saved = (run.state_root / "run.json").read_bytes()
+        require(harness.execute(restored(run), allow_network=False).get("planned") == 0, "A preview refused a root the new controls continue")
+        refuses(restored(run, named=False), "State root belongs to another run's controls", preview=True)
+        require((run.state_root / "run.json").read_bytes() == saved, "A preview rewrote the ownership record")
+        harness.execute(restored(run))
+        require(harness.report(restored(run))["outcomes"] == {"exact_match": 1}, "A report no longer reads the continued root")
+        require(read_json(run.state_root / "run.json")["controls_sha256"] == second, "The execution did not take over the root")
+
+    scenario("readers_accept_a_continued_root_without_writing_to_it", readers_follow_the_binding)
+
     def cli_default_root() -> None:
         run, _alpha, _beta, _web = scoped("cli_default_root")
         approve_fixture(harness.Run(run.queue_path, run.queue_path.with_name("run"), base=run.base))

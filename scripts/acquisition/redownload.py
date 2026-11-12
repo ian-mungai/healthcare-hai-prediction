@@ -101,6 +101,7 @@ class Run:
     lane_approval: Path | None = None
     task_keys: Callable[[str], Any] | None = None
     task_storage: Any = None
+    restored_from: str | None = None
     sleep: Callable = time.sleep
     cache: dict[str, Any] = field(default_factory=dict)
 
@@ -306,17 +307,61 @@ def run_records(run: Run) -> tuple[Path, Path]:
     return controls_path, run.queue_path.with_name("independent_review.json")
 
 
+CONTINUES = "continues_controls_sha256"
+DIGEST_TEXT = re.compile(r"[a-f0-9]{64}")
+
+
+def continued_controls(frozen: Mapping[str, Any]) -> list[str]:
+    """The reviewed predecessor controls the frozen controls may continue, or none. The field is part of the hashed controls, so the review covers it.
+
+    A predecessor is the SHA-256 of an earlier implementation's controls (64 lowercase hexadecimal characters). The list is never empty and holds no repeat.
+    """
+    if CONTINUES not in frozen:
+        return []
+    named = frozen[CONTINUES]
+    require(
+        isinstance(named, list)
+        and bool(named)
+        and all(isinstance(item, str) and DIGEST_TEXT.fullmatch(item) for item in named)
+        and len(set(named)) == len(named),
+        "Malformed continuation controls",
+    )
+    return named
+
+
+def may_continue(run: Run, saved: Any, predecessors: list[str]) -> bool:
+    """Other controls own the state root: it continues only if the request named the restored prior state and the current controls name those controls."""
+    return run.restored_from is not None and isinstance(saved, str) and saved in predecessors
+
+
+def write_replacing(path: Path, body: bytes) -> None:
+    """Replace one file atomically: complete bytes or the old file, never a partial one."""
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
+    try:
+        with os.fdopen(descriptor, "wb") as handle:
+            handle.write(body)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(name, path)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
+
+
 def review_gate(run: Run) -> str:
     """A separate passing review binds every runtime module, dependency, queue and operational input."""
     path, review_path = run_records(run)
     require(path.is_file(), "Execution controls need an independent review")
     actual = runtime_controls(run)
-    require(read_json(path) == actual, "Execution controls changed; independent review required")
-    sha = digest(encoded_json(actual))
+    frozen = read_json(path)
+    predecessors = continued_controls(frozen)
+    require({name: value for name, value in frozen.items() if name != CONTINUES} == actual, "Execution controls changed; independent review required")
+    sha = digest(encoded_json(frozen))
     review = read_json(review_path)
     require(review.get("status") == "passed" and review.get("reviewed_controls_sha256") == sha, "Passing independent review missing or stale")
     require(run.byte_cap <= BYTE_CAP, "Byte cap exceeds approved limit")
     run.cache["controls"] = actual
+    run.cache["continues"] = predecessors
     return sha
 
 
@@ -427,7 +472,13 @@ def started_at(run: Run) -> datetime:
         )
     record = read_json(path)
     require(record["queue_sha256"] == accepted(run).queue_sha256, "State root belongs to another queue")
-    require(record.get("controls_sha256") == run.cache["controls_sha256"], "State root belongs to another reviewed implementation")
+    current = run.cache["controls_sha256"]
+    if record.get("controls_sha256") != current:
+        require(may_continue(run, record.get("controls_sha256"), run.cache.get("continues", [])), "State root belongs to another reviewed implementation")
+        history = record.get("controls_history") or [{"controls_sha256": record["controls_sha256"], "bound_at_utc": record["started_at_utc"]}]
+        entry = {"controls_sha256": current, "bound_at_utc": datetime.now(UTC).isoformat()}
+        record = record | {"controls_sha256": current, "controls_history": [*history, entry]}
+        write_replacing(path, encoded_json(record))
     return datetime.fromisoformat(record["started_at_utc"])
 
 
@@ -1719,7 +1770,8 @@ def require_run_binding(run: Run) -> None:
     require(frozen_path.is_file(), "The chosen queue has no frozen controls")
     frozen = read_json(frozen_path)
     record = read_json(run.state_root / "run.json")
-    require(record.get("controls_sha256") == digest(encoded_json(frozen)), "State root belongs to another run's controls")
+    saved = record.get("controls_sha256")
+    require(saved == digest(encoded_json(frozen)) or may_continue(run, saved, continued_controls(frozen)), "State root belongs to another run's controls")
     require(frozen.get("state_root") == root_label(run), "The chosen queue's controls bind a different state root")
     load_queue(run)
     require(record.get("queue_sha256") == accepted(run).queue_sha256, "State root belongs to another queue")
@@ -1824,6 +1876,7 @@ def run_from(
         lane_approval=getattr(args, "lane_approval", None),
         task_keys=partial(task_role.TaskKeys, environment=environment) if switched[task_role.KEYS_VARIABLE] else None,
         task_storage=storage,
+        restored_from=getattr(args, "restored_from", None),
     )
 
 

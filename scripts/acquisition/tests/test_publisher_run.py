@@ -186,6 +186,30 @@ def finished_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Clou
     return cloud, environ, bound
 
 
+def test_the_task_tells_the_harness_which_prior_state_it_restored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    stage, digest = staged()
+    cloud = Cloud(stage)
+    bound = hashlib.sha256(b"{}").hexdigest()
+    earlier = tmp_path / "earlier"
+    fill_state(earlier, ["x"])
+    key = publisher_run.save_state(cloud, earlier, environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound})["key"]
+    seen: list[str | None] = []
+
+    def named_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
+        seen.append(args.restored_from)
+        return harness.Run(args.queue, args.state_root)
+
+    monkeypatch.setattr(harness, "run_from", named_run)
+    monkeypatch.setattr(harness, "execute", lambda *_args, **_kwargs: {"attempted": 0})
+    publisher_run.main(
+        environment(tmp_path / "next", digest) | {"PUBLISHER_QUEUE_SHA256": bound, "PUBLISHER_PRIOR_STATE": saved_reference(cloud, key)}, cloud.factory
+    )
+    check(seen == [key], f"the harness is told the restored state: {seen}")
+    fresh = Cloud(staged()[0])
+    publisher_run.main(environment(tmp_path / "first", digest) | {"PUBLISHER_QUEUE_SHA256": bound}, fresh.factory)
+    check(seen == [key, None], f"a first task names no prior state: {seen}")
+
+
 def test_a_finished_task_names_its_final_state_at_a_key_fixed_by_the_queue_and_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cloud, _, bound = finished_task(monkeypatch, tmp_path)
     states = [key for key in cloud.puts if key.startswith(f"raw/run3_state/{bound}/")]

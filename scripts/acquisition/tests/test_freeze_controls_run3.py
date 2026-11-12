@@ -76,3 +76,34 @@ def test_a_code_tree_other_than_the_one_running_is_refused(tmp_path: Path) -> No
     with pytest.raises(SystemExit) as stopped:
         freezer().main(["--queue", str(queue), "--data-root", str(tmp_path / "mac"), "--state-parent", str(tmp_path / "state"), "--code-root", str(tmp_path)])
     check("code root" in str(stopped.value), "the freeze runs from the code tree it binds")
+
+
+def test_a_named_predecessor_is_frozen_into_the_controls_and_the_task_gate_accepts_it(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    queue = write_data_root(tmp_path / "mac")
+    predecessor = "c" * 64
+    freezer().main(
+        ["--queue", str(queue), "--data-root", str(tmp_path / "mac"), "--state-parent", str(tmp_path / "state"), "--continues-controls-sha256", predecessor]
+    )
+    frozen = json.loads((queue.parent / "controls.json").read_text())
+    digest = hashlib.sha256(encoded_json(frozen)).hexdigest()
+    check(frozen["continues_controls_sha256"] == [predecessor], "the predecessor is part of the frozen controls")
+    check(capsys.readouterr().out.strip() == f"controls_sha256 {digest}", "the review binds the digest of the controls with the predecessor")
+    mirror = tmp_path / "mirror"
+    shutil.copytree(tmp_path / "mac", mirror)
+    (mirror / QUEUE_FOLDER / "independent_review.json").write_bytes(encoded_json({"status": "passed", "reviewed_controls_sha256": digest}))
+    task_state = tmp_path / "task_state"
+    run = redownload.Run(queue_path=mirror / QUEUE_FOLDER / "queue.json", state_root=task_state / "run", state_parent=task_state, stored_root=mirror)
+    check(
+        redownload.review_gate(run) == digest and run.cache["continues"] == [predecessor],
+        "the task gate accepts the reviewed controls and reads the predecessor",
+    )
+
+
+@pytest.mark.parametrize("named", ["C" * 64, "c" * 63, "not a digest"])
+def test_a_malformed_predecessor_is_refused_before_any_controls_are_written(tmp_path: Path, named: str) -> None:
+    queue = write_data_root(tmp_path / "mac")
+    with pytest.raises(ValueError, match="Malformed continuation controls"):
+        freezer().main(
+            ["--queue", str(queue), "--data-root", str(tmp_path / "mac"), "--state-parent", str(tmp_path / "state"), "--continues-controls-sha256", named]
+        )
+    check(not (queue.parent / "controls.json").exists(), "nothing is written for a malformed predecessor")
