@@ -68,13 +68,17 @@ def build(root: Path, reader: Any, *, features_run: str, population: str, hai_ty
     publication = reader.publication(selected)
     if selected is not None and publication.run_id != selected:
         raise CheckError("publication_mismatch", "the feature reader selected another publication")
-    if "int_hospital_spine" not in publication.snapshot_set:
-        raise CheckError("publication_incomplete", f"publication {publication.run_id} has no int_hospital_spine snapshot")
+    # A model set publication holds its own table; the population spine lives in the snapshots of the base run that it read.
+    base = publication if publication.base_run is None else reader.publication(publication.base_run)
+    if base.run_id != (publication.base_run or publication.run_id):
+        raise CheckError("publication_mismatch", f"the feature reader selected another publication than base run {publication.base_run}")
+    if "int_hospital_spine" not in base.snapshot_set:
+        raise CheckError("publication_incomplete", f"publication {base.run_id} has no int_hospital_spine snapshot")
     history = reader.historical(sorted(reference_of[name] for name in features), publication.run_id)
     if history.publication != publication or history.feature_schema_sha256 != reader.schema_sha256:
         raise CheckError("publication_mismatch", "the historical features came from another publication or schema")
     held = {row["spine_key"]: row for row in history.frame.to_pylist()}
-    spine = reader.consistent(publication, lambda: reader.scan(publication, "int_hospital_spine", training_extract.SPINE_FIELDS))
+    spine = reader.consistent(base, lambda: reader.scan(base, "int_hospital_spine", training_extract.SPINE_FIELDS))
     rows = []
     for entry in sorted(spine, key=lambda item: item["spine_key"]):
         match = training_extract.KEY.fullmatch(entry["spine_key"])
