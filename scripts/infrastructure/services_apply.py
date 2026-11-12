@@ -18,9 +18,12 @@ Changing the host job cap, and the move of the cap from Parameter Store to the A
 ``host_job_cap_mib``. The jobs stack must register host revisions at the new cap after every change, and the launch preflight refuses a revision whose job
 memory is above the cap, so the services apply and the jobs apply are one change. The hold of that change names it (``held for a host job cap change``).
 Plain ``settle`` and ``resolve`` refuse to clear it and print the ``finish`` command, and a plain ``hold`` keeps the name of a pending change when it
-rewrites the hold. ``finish`` clears the hold and the lock only when the services are stable and every host family the rendered jobs inputs select
-(``infra/jobs/deployment.auto.tfvars.json``, which step 5 wrote: ``host_jobs`` while ``host_jobs_enabled``, and the publisher while
-``publisher_job_enabled``) has an active latest revision that carries the current services binding and its job memory.
+rewrites the hold. The hold that starts the change takes the reviewed jobs inputs (``--jobs-inputs`` and their ``--jobs-sha256``) and freezes, in the hold
+value that only this change owns, the host families they select (``host_jobs`` while ``host_jobs_enabled``, and the publisher while
+``publisher_job_enabled``), the digest, the project identity and, once the services settled, the capacity binding. ``finish`` clears the hold and the lock
+only when the services are stable, the services give the frozen binding and every frozen family has an active latest revision that carries that binding and
+its job memory. It never takes a later render as the selection: it refuses when the rendered jobs inputs (``infra/jobs/deployment.auto.tfvars.json``, which
+step 5 wrote) disagree with the frozen selection, binding or identity.
 
 Before step 1, save your current reviewed services inputs (the file you pass to ``--preparation-inputs`` today) as ``SERVICES_INPUTS`` below, with
 ``"host_job_cap_mib": 22528`` (or your cap) added to its ``variables``; leave the key out to keep the default of 26816. Save your current reviewed jobs
@@ -47,10 +50,11 @@ inputs as ``JOBS_INPUTS``. Run every command from the repository root in one she
 
     bash "$TF" "${SERVICES_FLAGS[@]}" plan -out=host_job_cap.tfplan
 
-3. Apply that plan. It takes the lock, sets the change hold, applies, waits for steady state and keeps the hold and the lock. For the move, this apply
-   deletes the retired Parameter Store parameter, which needs the project user's current grant on it. Then read the lock token.
+3. Apply that plan. It takes the lock, sets the change hold with the reviewed jobs inputs frozen in it, applies, waits for steady state, adds the
+   services binding to the frozen record and keeps the hold and the lock. For the move, this apply deletes the retired Parameter Store parameter, which
+   needs the project user's current grant on it. Then read the lock token.
 
-    bash "$TF" "${SERVICES_FLAGS[@]}" --keep-launch-hold apply host_job_cap.tfplan
+    bash "$TF" "${SERVICES_FLAGS[@]}" --keep-launch-hold --jobs-inputs "$JOBS_INPUTS" --jobs-sha256 "$JOBS_SHA" apply host_job_cap.tfplan
     TOKEN="$("$PY" -m scripts.infrastructure.services_apply status | sed -n 's/^apply lock: //p')"
 
 4. For the move only: apply the IAM stack and the project user policies. They drop the grants on the retired parameter, so they come after step 3.
@@ -67,13 +71,14 @@ inputs as ``JOBS_INPUTS``. Run every command from the repository root in one she
     bash "$TF" "${JOBS_FLAGS[@]}" plan -out=host_job_cap.tfplan
     bash "$TF" "${JOBS_FLAGS[@]}" apply host_job_cap.tfplan
 
-6. End the change. It reads the registered revisions of the host families that step 5 selected and refuses, naming the first family that has no active
+6. End the change. It reads the registered revisions of the host families frozen in step 3 and refuses, naming the first family that has no active
    revision or does not match, until step 5 has registered them all. Run it from the same checkout as step 5, which rendered the jobs inputs.
 
     "$PY" -m scripts.infrastructure.services_apply finish --token "$TOKEN" --statement 'jobs applied at the new cap'
 
 Recovery. A failed jobs apply leaves the hold: fix the cause and repeat step 5. A failed services apply also leaves it (the wrapper prints the finish
-command): if the services changed in part, correct the inputs, repeat step 2 and apply under the same lock, then continue from step 4.
+command): if the services changed in part, correct the inputs, repeat step 2 and apply under the same lock, then continue from step 4. The frozen record
+stays; give ``--jobs-inputs`` and ``--jobs-sha256`` to that command again only to freeze other reviewed jobs inputs.
 
     bash "$TF" "${SERVICES_FLAGS[@]}" --continue-launch-hold "$TOKEN" apply host_job_cap.tfplan
 
@@ -98,6 +103,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from orchestration.ecs_preflight import LAUNCH_HOLD_CLEAR
@@ -124,6 +130,9 @@ JOB_MEMORY = re.compile(r"job_memory_mib=([1-9][0-9]*) ")
 JOBS_INPUTS_RENDERED = REPO_ROOT / "infra" / "jobs" / "deployment.auto.tfvars.json"
 JOBS_HOST_VARIABLES = REPO_ROOT / "infra" / "jobs" / "host.tf"
 FAMILY_NAME = re.compile(r"[a-z][a-z0-9_]*")
+# The frozen record of a host job cap change follows the reason in the hold value: the host families the reviewed jobs inputs select, their digest, the
+# project identity and the services capacity binding. Only the change's own hold carries it, and every rewrite of that hold keeps it.
+FROZEN_MARK = " | frozen "
 
 
 def finish_command(token: str) -> str:
@@ -152,10 +161,30 @@ def registration_problem(definitions: dict[str, dict[str, Any]], binding: str) -
     return None
 
 
-def expected_host_families(prefix: str) -> list[str]:
-    """The host task definition families the rendered jobs inputs select, each as ``<prefix><family>_host``: ``host_jobs`` (the default of the jobs stack
-    when the inputs do not name it) while ``host_jobs_enabled`` is true, and the publisher while ``publisher_job_enabled`` is true. A missing or unreadable
-    rendered file is an error, so a finish never runs against a guessed selection."""
+def selected_host_families(values: dict[str, Any], prefix: str) -> list[str]:
+    """The host task definition families that jobs inputs select, each as ``<prefix><family>_host``: ``host_jobs`` (the default of the jobs stack when
+    the inputs do not name it) while ``host_jobs_enabled`` is true, and the publisher while ``publisher_job_enabled`` is true."""
+    bad = "the host_jobs of the jobs inputs are not a list of family names"
+    names: list[Any] = []
+    if values.get("host_jobs_enabled") is True:
+        selected = values.get("host_jobs")
+        if selected is None:
+            match = re.search(r'variable "host_jobs" \{.*?default\s*=\s*\[([^\]]*)\]', JOBS_HOST_VARIABLES.read_text(), re.DOTALL)
+            if match is None:
+                raise ConfigurationError(f"{JOBS_HOST_VARIABLES.name} has no default for host_jobs")
+            selected = re.findall(r'"([^"]+)"', match.group(1))
+        if not isinstance(selected, list):
+            raise ServicesApplyError(bad)
+        names.extend(selected)
+    if values.get("publisher_job_enabled") is True:
+        names.append("publisher")
+    if not all(isinstance(name, str) and FAMILY_NAME.fullmatch(name) for name in names):
+        raise ServicesApplyError(bad)
+    return sorted({f"{prefix}{name}_host" for name in names})
+
+
+def rendered_jobs_values() -> dict[str, Any]:
+    """The jobs inputs the last jobs plan or apply rendered. A missing or unreadable file is an error, so finish never runs against a guessed selection."""
     try:
         rendered = json.loads(JOBS_INPUTS_RENDERED.read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -166,34 +195,52 @@ def expected_host_families(prefix: str) -> list[str]:
         raise ServicesApplyError(
             f"the rendered jobs inputs {JOBS_INPUTS_RENDERED.name} are not one JSON object. Plan the jobs stack again with the reviewed inputs"
         )
-    bad = f"the host_jobs of the rendered jobs inputs {JOBS_INPUTS_RENDERED.name} are not a list of family names"
-    names: list[Any] = []
-    if rendered.get("host_jobs_enabled") is True:
-        selected = rendered.get("host_jobs")
-        if selected is None:
-            match = re.search(r'variable "host_jobs" \{.*?default\s*=\s*\[([^\]]*)\]', JOBS_HOST_VARIABLES.read_text(), re.DOTALL)
-            if match is None:
-                raise ConfigurationError(f"{JOBS_HOST_VARIABLES.name} has no default for host_jobs")
-            selected = re.findall(r'"([^"]+)"', match.group(1))
-        if not isinstance(selected, list):
-            raise ServicesApplyError(bad)
-        names.extend(selected)
-    if rendered.get("publisher_job_enabled") is True:
-        names.append("publisher")
-    if not all(isinstance(name, str) and FAMILY_NAME.fullmatch(name) for name in names):
-        raise ServicesApplyError(bad)
-    return sorted({f"{prefix}{name}_host" for name in names})
+    return rendered
 
 
-def jobs_registration_problem(cli: Any, settings: dict[str, str]) -> str | None:
-    """Read the latest active revision of every host family the rendered jobs inputs select and the services capacity binding, and return
-    ``registration_problem``. A selected family that ECS does not list has no active revision and is named; a listed family that is not selected is not
-    read."""
+def frozen_suffix(record: dict[str, Any]) -> str:
+    """The text that follows the reason in the hold value of a host job cap change."""
+    return FROZEN_MARK + json.dumps(record, sort_keys=True, separators=(",", ":"))
+
+
+def read_frozen(value: str | None) -> dict[str, Any] | None:
+    """The frozen record in a hold value, or None when the value has none or a malformed one."""
+    if value is None or FROZEN_MARK not in value:
+        return None
+    try:
+        record = json.loads(value.rsplit(FROZEN_MARK, 1)[1])
+    except ValueError:
+        return None
+    if not isinstance(record, dict) or not isinstance(record.get("families"), list) or not all(isinstance(name, str) for name in record["families"]):
+        return None
+    if not all(isinstance(record.get(key), str) for key in ("jobs_sha256", "project", "environment")) or not isinstance(record.get("binding", ""), str):
+        return None
+    return record
+
+
+def jobs_registration_problem(cli: Any, settings: dict[str, str], frozen: dict[str, Any] | None) -> str | None:
+    """Check the host families that the change froze when it started, never a later render. Refuse when nothing was frozen; return a sentence when the
+    project identity or the services binding differ from the frozen ones, when a frozen family has no active latest revision at the frozen binding
+    (``registration_problem``), or when the rendered jobs inputs disagree with the frozen selection, binding or identity; else None."""
     from scripts.infrastructure.render_jobs_config import host_job_room  # reads the services outputs only when finish first needs them
 
-    _, binding = host_job_room()
+    if frozen is None:
+        raise ServicesApplyError(
+            "the host job cap change has no frozen jobs selection from its start, so finish has nothing to check. Run hold --migration with "
+            "--jobs-inputs and --jobs-sha256, then settle --keep-hold with the lock token, then the jobs apply"
+        )
+    binding = frozen.get("binding")
+    if not binding:
+        raise ServicesApplyError(
+            "the frozen record has no services capacity binding yet. Run settle --keep-hold with the lock token once the services are stable"
+        )
+    if (frozen["project"], frozen["environment"]) != (settings["project_name"], settings["environment"]):
+        return f"the change froze project {frozen['project']} environment {frozen['environment']}, not {settings['project_name']} {settings['environment']}"
+    _, current = host_job_room()
+    if current != binding:
+        return f"the services now give {current}, but the change froze {binding}"
     prefix = f"{settings['project_name']}_{settings['environment']}_job_"
-    expected = expected_host_families(prefix)
+    expected = sorted(frozen["families"])
     try:
         listed = cli.call_bounded("ecs", "list-task-definition-families", ["--family-prefix", prefix, "--status", "ACTIVE"], timeout=CALL_SECONDS)
         active = {str(name) for name in listed.get("families", [])}
@@ -205,7 +252,19 @@ def jobs_registration_problem(cli: Any, settings: dict[str, str]) -> str | None:
         }
     except StorageError as error:
         raise ServicesApplyError(f"the registered host revisions could not be read ({error.code})") from None
-    return registration_problem(definitions, binding)
+    problem = registration_problem(definitions, binding)
+    if problem is not None:
+        return problem
+    rendered = rendered_jobs_values()
+    if (rendered.get("project_name"), rendered.get("environment")) != (settings["project_name"], settings["environment"]):
+        return "the rendered jobs inputs belong to another project identity than the change froze"
+    selected = selected_host_families(rendered, prefix)
+    if selected != expected:
+        differing = sorted(set(selected) ^ set(expected))
+        return f"the rendered jobs inputs select other host families than the change froze (they differ on {', '.join(differing)})"
+    if expected and rendered.get("host_capacity_binding") != binding:
+        return f"the rendered jobs inputs carry the binding {str(rendered.get('host_capacity_binding'))[:120]}, not the frozen {binding}"
+    return None
 
 
 class ServicesApplyError(Exception):
@@ -267,7 +326,8 @@ class Clock:
 
 class Steps:
     """The steps around one services apply. ``put`` and ``get`` write and read the hold parameter, ``stable`` is True once every ECS service is
-    settled (it raises on a failed rollout), and ``report`` prints one line per finished step."""
+    settled (it raises on a failed rollout), and ``report`` prints one line per finished step. ``freeze`` turns the path and digest of the reviewed jobs
+    inputs into the frozen record that the hold of a host job cap change carries, and ``binding`` reads the services capacity binding."""
 
     def __init__(
         self,
@@ -278,9 +338,12 @@ class Steps:
         report: Callable[[str], None] | None = None,
         lock: LockStore | None = None,
         registered: Callable[[], str | None] | None = None,
+        binding: Callable[[], str] | None = None,
+        freeze: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> None:
         self.put, self.get, self.stable, self.lock_store = put, get, stable, lock
         self.registered = registered
+        self.binding, self.freeze = binding, freeze
         self.clock = clock or Clock()
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
 
@@ -294,13 +357,22 @@ class Steps:
         if found != value:
             raise ServicesApplyError("the launch hold did not read back as written")
 
-    def pending_change(self) -> bool:
-        """True while the hold is the host job cap change form, which only ``finish`` ends. An unreadable hold raises, so it is never read as clear."""
+    def read_hold(self) -> str | None:
+        """The hold value. An unreadable hold raises, so it is never read as clear."""
         try:
-            found = self.get()
+            return self.get()
         except Exception as error:  # a refused or failed read leaves the hold unknown
             raise ServicesApplyError(f"the launch hold could not be read ({type(error).__name__}: {str(error)[:200]})") from None
+
+    def pending_change(self) -> bool:
+        """True while the hold is the host job cap change form, which only ``finish`` ends."""
+        found = self.read_hold()
         return found is not None and found.startswith(MIGRATION_HOLD)
+
+    def pending_record(self) -> dict[str, Any] | None:
+        """The frozen record of the pending host job cap change, or None when the hold is not that form or carries no valid record."""
+        found = self.read_hold()
+        return read_frozen(found) if found is not None and found.startswith(MIGRATION_HOLD) else None
 
     @staticmethod
     def pending_refusal(action: str, token: str | None) -> ServicesApplyError:
@@ -310,13 +382,23 @@ class Steps:
             f"{action} does not clear the launch hold of a host job cap change, because the jobs apply is pending. The hold stays set. {end}"
         )
 
-    def hold(self, reason: str, migration: bool = False) -> None:
+    def hold(self, reason: str, migration: bool = False, frozen: dict[str, Any] | None = None) -> None:
         """Set the hold before the apply changes anything, then wait the settle window so a RunTask that a fit check allowed just before has its reply.
-        With ``migration`` the hold names a host job cap change, which only ``finish`` ends. A hold over a pending host job cap change keeps that name,
-        so a plain hold never turns it into a hold that settle or resolve can clear."""
+        With ``migration`` the hold names a host job cap change, which only ``finish`` ends; ``frozen`` is then the record of the reviewed jobs inputs that
+        the change starts with, and it replaces any earlier record. A hold over a pending host job cap change keeps its name and its frozen record, so a
+        plain hold never turns it into a hold that settle or resolve can clear."""
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        named = migration or self.pending_change()
-        self.write(f"{MIGRATION_HOLD if named else 'held'} by services_apply at {stamp}: {reason.strip()[:200]}")
+        if frozen is not None and not migration:
+            raise ServicesApplyError("a frozen jobs selection belongs only to the hold of a host job cap change (--migration)")
+        record: dict[str, Any] | None
+        if migration and frozen is not None:
+            named, record = True, frozen
+        else:
+            found = self.read_hold()
+            pending = found is not None and found.startswith(MIGRATION_HOLD)
+            named, record = migration or pending, read_frozen(found) if pending else None
+        text = reason.replace(FROZEN_MARK, " ").strip()[:200]
+        self.write(f"{MIGRATION_HOLD if named else 'held'} by services_apply at {stamp}: {text}{frozen_suffix(record) if named and record else ''}")
         self.clock.sleep(HOLD_SETTLE_SECONDS)
         self.report(f"launch hold: set, waited {HOLD_SETTLE_SECONDS} s for any RunTask already allowed")
 
@@ -414,9 +496,13 @@ class Steps:
         self.release(token)
 
     def hold_for_change(self, token: str) -> None:
-        """Rewrite the hold to the host job cap change form after the services reached steady state, and keep the lock until ``finish``."""
+        """Rewrite the hold to the host job cap change form after the services reached steady state, and keep the lock until ``finish``. The frozen record
+        stays and gains the services capacity binding, which is final once the services are stable."""
+        record = self.pending_record()
+        if record is not None and self.binding is not None:
+            record = {**record, "binding": self.binding()}
         stamp = datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
-        self.write(f"{MIGRATION_HOLD} by services_apply at {stamp}: jobs apply pending")
+        self.write(f"{MIGRATION_HOLD} by services_apply at {stamp}: jobs apply pending{frozen_suffix(record) if record else ''}")
         self.report(f"launch hold: kept set for a host job cap change. After the jobs apply, run {finish_command(token)}")
 
     def finish(self, token: str | None, statement: str) -> None:
@@ -546,13 +632,31 @@ def open_steps() -> Steps:
             sessions.append(open_session())
         return bool(sessions[0].services_stable())
 
-    return Steps(
-        put=put,
-        get=get,
-        stable=stable,
-        lock=LockStore(create=lock_create, get=lock_get, delete=lock_delete),
-        registered=lambda: jobs_registration_problem(cli, settings),
+    def services_binding() -> str:
+        from scripts.infrastructure.render_jobs_config import host_job_room  # reads the services outputs, which settle needs once the services are stable
+
+        return host_job_room()[1]
+
+    def freeze(path: str, sha256: str) -> dict[str, Any]:
+        from scripts.infrastructure.render_jobs_config import TargetError, preparation_values
+
+        try:
+            values = preparation_values(Path(path), sha256, "jobs")
+        except TargetError as error:
+            raise ConfigurationError(str(error)) from None
+        prefix = f"{settings['project_name']}_{settings['environment']}_job_"
+        return {
+            "jobs_sha256": sha256,
+            "families": selected_host_families(values, prefix),
+            "project": settings["project_name"],
+            "environment": settings["environment"],
+        }
+
+    steps = Steps(
+        put=put, get=get, stable=stable, lock=LockStore(create=lock_create, get=lock_get, delete=lock_delete), binding=services_binding, freeze=freeze
     )
+    steps.registered = lambda: jobs_registration_problem(cli, settings, steps.pending_record())
+    return steps
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -564,6 +668,8 @@ def build_parser() -> argparse.ArgumentParser:
     hold = commands.add_parser("hold", help="set the launch hold before a services apply (terraform.sh runs it)")
     hold.add_argument("--reason", required=True, help="what is being applied, for example the saved plan")
     hold.add_argument("--migration", action="store_true", help="name a host job cap change, which only finish ends")
+    hold.add_argument("--jobs-inputs", help="with --migration: the reviewed jobs inputs file, whose host families the change freezes for finish")
+    hold.add_argument("--jobs-sha256", help="with --jobs-inputs: the SHA-256 of that file's bytes")
     settle = commands.add_parser("settle", help="after a successful services apply: wait for steady state, clear the hold, release the lock")
     settle.add_argument("--token", required=True, help="the apply lock token that lock printed")
     settle.add_argument("--keep-hold", action="store_true", help="wait for steady state but keep the hold and the lock until finish (the jobs apply follows)")
@@ -581,13 +687,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     """Run one subcommand: 0 on success, 1 on a failed step (the hold stays as it was), 2 on a configuration error."""
-    arguments = build_parser().parse_args(argv)
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    if arguments.command == "hold":
+        if (arguments.jobs_inputs is None) != (arguments.jobs_sha256 is None):
+            parser.error("--jobs-inputs and --jobs-sha256 go together")
+        if arguments.jobs_inputs is not None and not arguments.migration:
+            parser.error("--jobs-inputs and --jobs-sha256 belong to the hold of a host job cap change (--migration)")
     try:
         steps = open_steps()
         if arguments.command == "lock":
             sys.stdout.write(f"{steps.lock(continue_token=arguments.continue_token)}\n")
         elif arguments.command == "hold":
-            steps.hold(arguments.reason, migration=arguments.migration)
+            if arguments.jobs_inputs is not None and steps.freeze is None:
+                raise ServicesApplyError("no reader of the reviewed jobs inputs is configured")
+            frozen = steps.freeze(arguments.jobs_inputs, arguments.jobs_sha256) if arguments.jobs_inputs is not None and steps.freeze is not None else None
+            steps.hold(arguments.reason, migration=arguments.migration, frozen=frozen)
         elif arguments.command == "finish":
             steps.finish(arguments.token, arguments.statement)
         elif arguments.command == "settle":

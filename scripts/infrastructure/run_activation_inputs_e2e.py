@@ -968,6 +968,8 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
             if applying and stack == "services":
                 holds = [json.loads(item) for item in (workspace.root / "services_apply_calls.jsonl").read_text().splitlines()]
                 ok = ok and [item[0] for item in holds] == ["lock", "hold", "settle"] and "--migration" in holds[1] and holds[-1][-1] == "--keep-hold"
+                frozen_inputs = ["--jobs-inputs", literals["JOBS_INPUTS"], "--jobs-sha256", environment["JOBS_SHA"]]
+                ok = ok and (holds[1][-4:] == frozen_inputs if "--continue-launch-hold" not in line else "--jobs-inputs" not in holds[1])
             if "--continue-launch-hold" in line:
                 holds = [json.loads(item) for item in (workspace.root / "services_apply_calls.jsonl").read_text().splitlines()]
                 ok = ok and holds[0][-2:] == ["--continue-token", PROCEDURE_LOCK]

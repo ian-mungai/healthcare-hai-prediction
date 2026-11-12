@@ -13,6 +13,8 @@ mlflow_retention=false
 athena_retention=false
 keep_launch_hold=false
 continue_token=""
+jobs_inputs=""
+jobs_sha256=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -39,6 +41,16 @@ while [[ $# -gt 0 ]]; do
     --continue-launch-hold)
       [[ -z "$continue_token" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --continue-launch-hold apply lock token.\n' >&2; exit 2; }
       continue_token="$2"
+      shift 2
+      ;;
+    --jobs-inputs)
+      [[ -z "$jobs_inputs" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --jobs-inputs path of the reviewed jobs inputs.\n' >&2; exit 2; }
+      jobs_inputs="$2"
+      shift 2
+      ;;
+    --jobs-sha256)
+      [[ -z "$jobs_sha256" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one --jobs-sha256 SHA-256 of the reviewed jobs inputs.\n' >&2; exit 2; }
+      jobs_sha256="$2"
       shift 2
       ;;
     --identity-probe)
@@ -93,6 +105,22 @@ fi
 if [[ -n "$continue_token" && ! "$continue_token" =~ ^[A-Za-z0-9._-]+:[0-9]+:[0-9]{8}T[0-9]{6}Z:[0-9a-f]{8}$ ]]; then
   printf -- '--continue-launch-hold needs the apply lock token that settle --keep-hold printed.\n' >&2
   exit 2
+fi
+if [[ ( -n "$jobs_inputs" && -z "$jobs_sha256" ) || ( -z "$jobs_inputs" && -n "$jobs_sha256" ) ]]; then
+  printf -- '--jobs-inputs and --jobs-sha256 go together; both belong to --keep-launch-hold or --continue-launch-hold.\n' >&2
+  exit 2
+fi
+if [[ -n "$jobs_inputs" && "$keep_launch_hold" != true && -z "$continue_token" ]]; then
+  printf -- '--jobs-inputs and --jobs-sha256 are allowed only with --keep-launch-hold or --continue-launch-hold.\n' >&2
+  exit 2
+fi
+if [[ "$keep_launch_hold" == true && -z "$jobs_inputs" ]]; then
+  printf -- '--keep-launch-hold starts a host job cap change, which freezes the reviewed jobs inputs: add --jobs-inputs and --jobs-sha256.\n' >&2
+  exit 2
+fi
+if [[ -n "$jobs_inputs" ]]; then
+  [[ -f "$jobs_inputs" ]] || { printf -- '--jobs-inputs is not a file, so no launch hold was set.\n' >&2; exit 2; }
+  [[ "$("$python_bin" -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$jobs_inputs")" == "$jobs_sha256" ]] || { printf -- '--jobs-sha256 differs from the bytes of --jobs-inputs, so no launch hold was set.\n' >&2; exit 2; }
 fi
 if [[ -n "$continue_token" ]]; then
   keep_launch_hold=true
@@ -195,6 +223,9 @@ if [[ "$stack" == services && "$action" == apply ]]; then
   if [[ "$keep_launch_hold" == true ]]; then
     # A host job cap change: the hold names it, so only finish (after the jobs apply registered every host revision) clears it.
     hold_args+=(--migration)
+    if [[ -n "$jobs_inputs" ]]; then
+      hold_args+=(--jobs-inputs "$jobs_inputs" --jobs-sha256 "$jobs_sha256")
+    fi
   fi
   token="$("$python_bin" -m scripts.infrastructure.services_apply lock "${lock_args[@]}")" || {
     printf 'The apply lock was not taken, so the services apply did not start.\n' >&2

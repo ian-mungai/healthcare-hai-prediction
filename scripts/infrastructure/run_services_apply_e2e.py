@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import importlib
 import io
 import json
@@ -541,10 +542,44 @@ def rendered_jobs_inputs(content: dict[str, Any] | None) -> Iterator[Path]:
             yield path
 
 
+FROZEN_MARK = " | frozen "
+
+
+def frozen_suffix(families: list[str], binding: str | None = BINDING, project: str = "example_project", environment: str = "dev") -> str:
+    """The frozen record the hold of a pending change carries after the reason: the selected host families, the digest of the reviewed jobs inputs, the
+    project identity and, once the services applied, the capacity binding."""
+    record: dict[str, Any] = {"jobs_sha256": "0" * 64, "families": sorted(families), "project": project, "environment": environment}
+    if binding is not None:
+        record["binding"] = binding
+    return FROZEN_MARK + json.dumps(record, sort_keys=True, separators=(",", ":"))
+
+
+def frozen_record(value: Any) -> dict[str, Any]:
+    """The frozen record parsed from a hold value, or an assertion error."""
+    text = str(value)
+    require(FROZEN_MARK in text, f"the hold carries no frozen record: {text!r}")
+    return dict(json.loads(text.rsplit(FROZEN_MARK, 1)[1]))
+
+
+def rendered_values(selection: dict[str, Any], binding: str = BINDING, project: str = "example_project", environment: str = "dev") -> dict[str, Any]:
+    """The jobs inputs file a render writes: the identity, the reviewed selection and, while host jobs or the publisher are on, the capacity binding."""
+    values: dict[str, Any] = {"project_name": project, "environment": environment, **selection}
+    if selection.get("host_jobs_enabled") is True or selection.get("publisher_job_enabled") is True:
+        values["host_capacity_binding"] = binding
+    return values
+
+
+def reviewed_jobs_inputs(directory: Path, variables: dict[str, Any]) -> tuple[Path, str]:
+    """The reviewed jobs preparation inputs in the file form the owner passes to the jobs stack, and the SHA-256 of its bytes."""
+    path = directory / "jobs_inputs.json"
+    path.write_text(json.dumps({"schema_version": 1, "root": "jobs", "variables": variables}, sort_keys=True) + "\n")
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def jobs_registration_reads_the_project_host_families() -> None:
-    """The reader behind finish asks ECS for the active families of the project prefix and describes the latest revision of each host family that
-    the rendered jobs inputs select (the publisher too); the services binding comes from the services output. A selected family that ECS does not
-    list is named, and a listed family the inputs do not select is not described."""
+    """The reader behind finish asks ECS for the active families of the project prefix and describes the latest revision of each host family of the
+    frozen selection (the publisher too); the services binding comes from the services output. A frozen family that ECS does not list is named, and
+    a listed family the selection does not hold is not described."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
     asked: list[tuple[str, list[str]]] = []
     revision = host_revision()
@@ -561,11 +596,12 @@ def jobs_registration_reads_the_project_host_families() -> None:
 
     everything = ["example_dev_job_silver_host", "example_dev_job_silver", "example_dev_job_gold_host", "example_dev_job_train_host"]
     settings = {"project_name": "example", "environment": "dev"}
+    frozen = json.loads(frozen_suffix(["example_dev_job_gold_host", "example_dev_job_silver_host"], project="example")[len(FROZEN_MARK) :])
     with (
         mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, BINDING)),
-        rendered_jobs_inputs({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}),
+        rendered_jobs_inputs(rendered_values({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}, project="example")),
     ):
-        problem = module.jobs_registration_problem(Cli(everything), settings)
+        problem = module.jobs_registration_problem(Cli(everything), settings, frozen)
         require(problem is None, f"matching revisions are refused: {problem}")
         require(
             asked[0] == ("ecs list-task-definition-families", ["--family-prefix", "example_dev_job_", "--status", "ACTIVE"]),
@@ -576,10 +612,10 @@ def jobs_registration_reads_the_project_host_families() -> None:
             described == ["example_dev_job_gold_host", "example_dev_job_silver_host"],
             f"not every selected host family was described, or an unselected or Fargate one was: {described}",
         )
-        problem = module.jobs_registration_problem(Cli(["example_dev_job_silver_host", "example_dev_job_silver"]), settings)
+        problem = module.jobs_registration_problem(Cli(["example_dev_job_silver_host", "example_dev_job_silver"]), settings, frozen)
         require(problem is not None and "gold_host" in problem, f"a selected family that ECS does not list is not named: {problem}")
         revision["memory"] = "23552"
-        problem = module.jobs_registration_problem(Cli(everything), settings)
+        problem = module.jobs_registration_problem(Cli(everything), settings, frozen)
         require(problem is not None and "23552" in problem, f"a stale task memory is not named: {problem}")
 
 
@@ -603,13 +639,17 @@ class EcsStandIn(AwsStandIn):
         return super().__call__(command, **extra)
 
 
-def finish_over_ecs(rendered: dict[str, Any] | None, families: Mapping[str, dict[str, Any] | None]) -> tuple[int, str, EcsStandIn]:
-    """The real ``finish`` command over the stand-in ECS and the given rendered jobs inputs, with stable services and a pending host job cap change."""
+def finish_over_ecs(
+    rendered: dict[str, Any] | None, families: Mapping[str, dict[str, Any] | None], frozen_names: list[str], binding: str = BINDING
+) -> tuple[int, str, EcsStandIn]:
+    """The real ``finish`` command over the stand-in ECS and the given rendered jobs inputs, with stable services and a pending host job cap change
+    whose frozen record holds ``frozen_names`` (family names without the project prefix and the ``_host`` suffix)."""
     module = importlib.import_module("scripts.infrastructure.services_apply")
-    aws = EcsStandIn(families, value=PENDING, lock=OWN_LOCK)
+    value = PENDING + frozen_suffix([f"{PREFIX}{name}_host" for name in frozen_names])
+    aws = EcsStandIn(families, value=value, lock=OWN_LOCK)
     with (
         rendered_jobs_inputs(rendered),
-        mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, BINDING)),
+        mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)),
         mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
     ):
         code, _, err = run_real_output(["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"], aws)
@@ -617,10 +657,11 @@ def finish_over_ecs(rendered: dict[str, Any] | None, families: Mapping[str, dict
 
 
 def finish_needs_every_expected_host_family() -> None:
-    """The real finish command binds to the host families the rendered jobs inputs select, the publisher too: one that ECS does not list, one whose
-    revision is inactive, a missing publisher and a stale family each refuse, name the family and leave the hold and the lock. The complete set
-    clears both. The default selection is the nine families; a family the inputs do not select does not matter; no inputs refuse."""
-    selected = {"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True}
+    """The real finish command binds to the host families of the frozen selection, the publisher too: one that ECS does not list, one whose revision
+    is inactive, a missing publisher and a stale family each refuse, name the family and leave the hold and the lock. The complete set clears both. The
+    default selection is the nine families; a family the frozen selection does not hold does not matter; no rendered inputs refuse."""
+    names = ["gold", "publisher", "silver"]
+    selected = rendered_values({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True})
     everything = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(), f"{PREFIX}publisher_host": host_revision()}
     for label, families, named in (
         ("only silver registered", {f"{PREFIX}silver_host": host_revision()}, "gold_host"),
@@ -629,23 +670,175 @@ def finish_needs_every_expected_host_family() -> None:
         ("the publisher missing", {**everything, f"{PREFIX}publisher_host": None}, "publisher_host"),
         ("an expected family stale", {**everything, f"{PREFIX}gold_host": host_revision(memory="23552")}, "gold_host"),
     ):
-        code, err, aws = finish_over_ecs(selected, families)
+        code, err, aws = finish_over_ecs(selected, families, names)
         require(code == 1 and named in err, f"finish with {label}: exit {code} {err}")
-        require(aws.value == PENDING and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
-    code, err, aws = finish_over_ecs(selected, everything)
+        require(str(aws.value).startswith(PENDING) and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+    code, err, aws = finish_over_ecs(selected, everything, names)
     require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with every expected family did not clear both: exit {code} {err} {aws.value!r}")
     nine = {f"{PREFIX}{name}_host": host_revision() for name in ALL_FAMILIES}
-    code, err, aws = finish_over_ecs({"host_jobs_enabled": True}, {**nine, f"{PREFIX}train_host": None})
-    require(code == 1 and "train_host" in err and aws.value == PENDING, f"finish with the default selection and one family missing: exit {code} {err}")
-    code, err, aws = finish_over_ecs({"host_jobs_enabled": True}, nine)
+    default = rendered_values({"host_jobs_enabled": True})
+    code, err, aws = finish_over_ecs(default, {**nine, f"{PREFIX}train_host": None}, ALL_FAMILIES)
+    require(
+        code == 1 and "train_host" in err and str(aws.value).startswith(PENDING), f"finish with the default selection and one family missing: exit {code} {err}"
+    )
+    code, err, aws = finish_over_ecs(default, nine, ALL_FAMILIES)
     require(code == 0 and aws.value == "clear", f"finish with the default selection and all nine registered: exit {code} {err}")
     code, err, aws = finish_over_ecs(
-        {"host_jobs_enabled": True, "host_jobs": ["silver"]}, {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")}
+        rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]}),
+        {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")},
+        ["silver"],
     )
-    require(code == 0 and aws.value == "clear", f"finish refused over a family the inputs do not select: exit {code} {err}")
-    for label, rendered in (("no rendered inputs", None), ("no host family selected", {"host_jobs_enabled": False, "publisher_job_enabled": False})):
-        code, err, aws = finish_over_ecs(rendered, {f"{PREFIX}silver_host": host_revision()})
-        require(code == 1 and aws.value == PENDING and aws.lock == OWN_LOCK, f"finish with {label}: exit {code} {err}")
+    require(code == 0 and aws.value == "clear", f"finish refused over a family the frozen selection does not hold: exit {code} {err}")
+    code, err, aws = finish_over_ecs(None, {f"{PREFIX}silver_host": host_revision()}, ["silver"])
+    require(code == 1 and str(aws.value).startswith(PENDING) and aws.lock == OWN_LOCK, f"finish with no rendered inputs: exit {code} {err}")
+
+
+def run_command_path(arguments: list[str], aws: AwsStandIn, rendered: dict[str, Any] | None = None, binding: str = BINDING) -> tuple[int, str, str]:
+    """A real command with stable services, the services output ``binding`` and the given rendered jobs inputs; the steady-state wait does not sleep."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    with (
+        rendered_jobs_inputs(rendered),
+        mock.patch("scripts.infrastructure.render_jobs_config.host_job_room", lambda: (22528, binding)),
+        mock.patch.object(module.Steps, "services_settled", lambda self: True, create=True),
+        mock.patch.object(module.Steps, "wait_stable", lambda self, token: None),
+    ):
+        return run_real_output(arguments, aws)
+
+
+def start_change(aws: AwsStandIn, directory: Path, variables: dict[str, Any]) -> tuple[Path, str]:
+    """Start a host job cap change as the wrapper does for its services apply: the hold of the change over the reviewed jobs inputs and their digest,
+    then the settle that keeps the hold once the services are stable."""
+    inputs, digest = reviewed_jobs_inputs(directory, variables)
+    code, _, err = run_command_path(
+        ["hold", "--reason", "terraform.sh --services apply reviewed.tfplan", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], aws
+    )
+    require(code == 0 and str(aws.value).startswith(MIGRATION), f"the change did not start: exit {code} {aws.value!r} {err}")
+    code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
+    require(code == 0 and str(aws.value).startswith(MIGRATION) and aws.lock == OWN_LOCK, f"settle --keep-hold: exit {code} {aws.value!r} {err}")
+    return inputs, digest
+
+
+def the_migration_start_freezes_the_selection_binding_and_identity() -> None:
+    """The hold that starts a host job cap change takes the reviewed jobs inputs by path and digest and records, in the hold value that only this change
+    owns, the selected host families (the publisher too), the digest, the project identity and, after the services settled, the capacity binding. A plain
+    hold and a continued hold without inputs keep that record; a continued hold with other inputs replaces it and drops the old binding until the next
+    settle. A wrong digest, inputs without the change form and one flag without the other change nothing."""
+    selection = {"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True}
+    with tempfile.TemporaryDirectory() as directory:
+        aws = AwsStandIn(lock=OWN_LOCK)
+        inputs, digest = reviewed_jobs_inputs(Path(directory), selection)
+        code, _, err = run_command_path(["hold", "--reason", "a services apply", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], aws)
+        require(code == 0 and str(aws.value).startswith(MIGRATION) and "a services apply" in str(aws.value), f"the start hold: exit {code} {aws.value!r} {err}")
+        families = [f"{PREFIX}gold_host", f"{PREFIX}publisher_host", f"{PREFIX}silver_host"]
+        frozen = frozen_record(aws.value)
+        require(
+            frozen == {"jobs_sha256": digest, "families": families, "project": "example_project", "environment": "dev"},
+            f"the frozen record before the services settled is wrong: {frozen}",
+        )
+        code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
+        frozen = frozen_record(aws.value)
+        require(
+            code == 0 and frozen.get("binding") == BINDING and frozen["families"] == families, f"settle --keep-hold lost or missed the record: {frozen} {err}"
+        )
+        for label, arguments in (
+            ("a plain hold", ["hold", "--reason", "retry"]),
+            ("a continued hold without inputs", ["hold", "--reason", "retry", "--migration"]),
+        ):
+            code, _, err = run_command_path(arguments, aws)
+            require(
+                code == 0 and frozen_record(aws.value) == frozen and str(aws.value).startswith(MIGRATION),
+                f"{label} changed the frozen record: {aws.value!r} {err}",
+            )
+        (Path(directory) / "other").mkdir()
+        other, other_digest = reviewed_jobs_inputs(Path(directory) / "other", {"host_jobs_enabled": True, "host_jobs": ["silver"]})
+        code, _, err = run_command_path(["hold", "--reason", "restart", "--migration", "--jobs-inputs", str(other), "--jobs-sha256", other_digest], aws)
+        replaced = frozen_record(aws.value)
+        require(
+            code == 0 and replaced["families"] == [f"{PREFIX}silver_host"] and replaced["jobs_sha256"] == other_digest and "binding" not in replaced,
+            f"a continued hold with other inputs did not replace the record: {replaced} {err}",
+        )
+        before = aws.value
+        for label, arguments in (
+            ("a wrong digest", ["hold", "--reason", "x", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", "0" * 64]),
+            ("inputs without the change form", ["hold", "--reason", "x", "--jobs-inputs", str(inputs), "--jobs-sha256", digest]),
+            ("a digest without inputs", ["hold", "--reason", "x", "--migration", "--jobs-sha256", digest]),
+            ("inputs without a digest", ["hold", "--reason", "x", "--migration", "--jobs-inputs", str(inputs)]),
+        ):
+            code, _, err = run_command_path(arguments, aws)
+            require(code != 0 and aws.value == before, f"{label} was accepted or changed the hold: exit {code} {aws.value!r} {err}")
+
+
+def finish_checks_the_frozen_selection_not_a_later_render() -> None:
+    """The review sequence through the real commands: the change starts over silver and gold, a partial jobs update registers silver only, then a
+    render that selects silver alone follows with no apply. Finish refuses and names the unfinished gold family, whether gold is stale or missing,
+    and leaves the hold and the lock. It also refuses when every frozen family is registered but the render disagrees with the frozen record, carries
+    another binding or another project identity, or when the services binding is no longer the frozen one, and when the change froze nothing. The
+    complete registration with the matching render clears both, and a deselection that was frozen stays ignored."""
+    both = {"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}
+    silver_only = rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]})
+    registered = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision()}
+
+    def finish(
+        frozen_variables: dict[str, Any], families: Mapping[str, dict[str, Any] | None], rendered: dict[str, Any] | None, binding: str = BINDING
+    ) -> tuple[int, str, EcsStandIn, Any]:
+        with tempfile.TemporaryDirectory() as directory:
+            aws = EcsStandIn(families, lock=OWN_LOCK)
+            start_change(aws, Path(directory), frozen_variables)
+            before = aws.value
+            code, _, err = run_command_path(["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"], aws, rendered, binding)
+        return code, err, aws, before
+
+    for label, families in (
+        ("gold stale after the partial update", {**registered, f"{PREFIX}gold_host": host_revision(memory="23552")}),
+        ("gold missing after the partial update", {**registered, f"{PREFIX}gold_host": None}),
+    ):
+        code, err, aws, before = finish(both, families, silver_only)
+        require(code == 1 and "gold_host" in err, f"finish with {label} and a narrower render: exit {code} {err}")
+        require(aws.value == before and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+    code, err, aws, before = finish(both, registered, silver_only)
+    require(
+        code == 1 and "gold_host" in err and "render" in err and aws.value == before,
+        f"a narrower render with every frozen family registered: exit {code} {err}",
+    )
+    for label, rendered, binding in (
+        ("another binding in the render", rendered_values(both, binding=BINDING.replace("22528", "23552")), BINDING),
+        ("another project in the render", rendered_values(both, project="other_project"), BINDING),
+        ("another environment in the render", rendered_values(both, environment="prod"), BINDING),
+        ("a services binding that is not the frozen one", rendered_values(both), BINDING.replace("22528", "23552")),
+    ):
+        code, err, aws, before = finish(both, registered, rendered, binding)
+        require(code == 1 and aws.value == before and aws.lock == OWN_LOCK, f"finish with {label}: exit {code} {err} {aws.value!r}")
+    code, err, aws, _ = finish(both, registered, rendered_values(both))
+    require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with the frozen selection fully registered did not clear both: exit {code} {err}")
+    code, err, aws, _ = finish(
+        {"host_jobs_enabled": True, "host_jobs": ["silver"]}, {**registered, f"{PREFIX}gold_host": host_revision(memory="23552")}, silver_only
+    )
+    require(code == 0 and aws.value == "clear", f"a frozen deselection was not ignored: exit {code} {err}")
+    publisher = {"host_jobs_enabled": True, "host_jobs": ["silver"], "publisher_job_enabled": True}
+    code, err, aws, before = finish(publisher, {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}publisher_host": None}, rendered_values(publisher))
+    require(code == 1 and "publisher_host" in err and aws.value == before, f"a frozen publisher that is not registered: exit {code} {err}")
+
+
+def finish_refuses_a_change_that_froze_nothing() -> None:
+    """The review sequence over a change that was started without reviewed jobs inputs, so nothing was frozen: the services settle, a partial jobs update
+    leaves gold stale, and a render that selects silver alone follows. Finish refuses and says what the change lacks, instead of taking the render as the
+    selection, and leaves the hold and the lock."""
+    both = {"host_jobs_enabled": True, "host_jobs": ["gold", "silver"]}
+    stale_gold = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")}
+    narrower = rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]})
+    for label, value in (("a legacy marker", PENDING), ("a change started without inputs", None)):
+        aws = EcsStandIn(stale_gold, value=value, lock=OWN_LOCK)
+        if value is None:
+            code, _, err = run_command_path(["hold", "--reason", "no inputs given", "--migration"], aws)
+            require(code == 0 and str(aws.value).startswith(MIGRATION) and FROZEN_MARK not in str(aws.value), f"{label}: the start hold: exit {code} {err}")
+            code, _, err = run_command_path(["settle", "--token", OWN_LOCK, "--keep-hold"], aws)
+            require(code == 0 and aws.lock == OWN_LOCK, f"{label}: settle --keep-hold: exit {code} {err}")
+        before = aws.value
+        code, _, err = run_command_path(["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"], aws, narrower)
+        require(code == 1 and "frozen" in err, f"{label}: finish did not refuse for the missing frozen selection: exit {code} {err}")
+        require(aws.value == before and aws.lock == OWN_LOCK, f"{label}: finish changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+        code, _, err = run_command_path(["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"], aws, rendered_values(both))
+        require(code == 1 and aws.value == before, f"{label}: finish cleared a change over a stale gold family: exit {code} {err}")
 
 
 def a_plain_hold_never_downgrades_a_pending_host_job_cap_change() -> None:
@@ -868,6 +1061,9 @@ CASES: dict[str, Callable[[], None]] = {
     "jobs_registration_reads_the_project_host_families": jobs_registration_reads_the_project_host_families,
     "finish_through_the_command": finish_through_the_command,
     "finish_needs_every_expected_host_family": finish_needs_every_expected_host_family,
+    "the_migration_start_freezes_the_selection_binding_and_identity": the_migration_start_freezes_the_selection_binding_and_identity,
+    "finish_checks_the_frozen_selection_not_a_later_render": finish_checks_the_frozen_selection_not_a_later_render,
+    "finish_refuses_a_change_that_froze_nothing": finish_refuses_a_change_that_froze_nothing,
     "a_plain_hold_never_downgrades_a_pending_host_job_cap_change": a_plain_hold_never_downgrades_a_pending_host_job_cap_change,
     "the_hold_command_can_write_the_change_form": the_hold_command_can_write_the_change_form,
     "resolve_needs_a_statement_and_steady_state": resolve_needs_a_statement_and_steady_state,

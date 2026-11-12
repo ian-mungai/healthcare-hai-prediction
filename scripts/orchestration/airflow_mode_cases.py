@@ -1027,7 +1027,7 @@ def migration_states_launch_nothing_and_the_procedure_is_written() -> None:
     order = (
         "services_apply status",
         "plan -out=host_job_cap.tfplan",
-        "--keep-launch-hold apply",
+        '--keep-launch-hold --jobs-inputs "$JOBS_INPUTS" --jobs-sha256 "$JOBS_SHA" apply',
         '--iam --admin-profile "$ADMIN_PROFILE" apply',
         "manage_policies apply",
         '"${JOBS_FLAGS[@]}" apply',

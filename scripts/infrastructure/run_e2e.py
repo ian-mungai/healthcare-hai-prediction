@@ -1792,8 +1792,13 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     # Host job cap change: --keep-launch-hold names the change in the hold and leaves it and the lock set after the apply, so the jobs apply can follow
     # and only finish ends it. --continue-launch-hold answers a failed jobs apply with another services apply under the same lock.
     lock_id = "standin-host:1:20261110T220000Z:0123abcd"
+    # The change freezes the reviewed jobs inputs when it starts, so the wrapper takes their path and digest and checks them before the lock.
+    jobs_inputs = workspace / "jobs_inputs.json"
+    jobs_inputs.write_text(json.dumps({"schema_version": 1, "root": "jobs", "variables": {"host_jobs_enabled": True}}, sort_keys=True) + "\n", encoding="utf-8")
+    jobs_digest = sha256(jobs_inputs.read_bytes())
+    keep = ["--keep-launch-hold", "--jobs-inputs", str(jobs_inputs), "--jobs-sha256", jobs_digest]
     for label, options, lock_extra in (
-        ("keep", ["--keep-launch-hold"], []),
+        ("keep", keep, []),
         ("continue", ["--continue-launch-hold", lock_id], ["--continue-token", lock_id]),
     ):
         before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
@@ -1802,9 +1807,14 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         evidence.check(step, "lock_hold_then_settle_that_keeps_the_hold", result.returncode == 0 and [item[0] for item in holds] == ["lock", "hold", "settle"])
         evidence.check(step, "lock_continues_only_when_asked", holds[0][-len(lock_extra) :] == lock_extra if lock_extra else "--continue-token" not in holds[0])
         evidence.check(step, "hold_names_the_cap_change", "--migration" in holds[1])
+        evidence.check(
+            step,
+            "hold_freezes_the_jobs_inputs_only_when_the_change_starts",
+            holds[1][-4:] == ["--jobs-inputs", str(jobs_inputs), "--jobs-sha256", jobs_digest] if label == "keep" else "--jobs-inputs" not in holds[1],
+        )
         evidence.check(step, "settle_gets_the_token_and_keep_hold", holds[-1][-3:] == ["--token", lock_id, "--keep-hold"])
     (workspace / "apply_fails").write_text("stand-in failure", encoding="utf-8")
-    step, result = evidence.run("wrapper_services_apply_keep_hold_failed", [*wrapper, "--keep-launch-hold", "apply", "reviewed.tfplan"], workspace, environment)
+    step, result = evidence.run("wrapper_services_apply_keep_hold_failed", [*wrapper, *keep, "apply", "reviewed.tfplan"], workspace, environment)
     (workspace / "apply_fails").unlink()
     evidence.check(
         step, "failed_apply_names_finish_not_resolve", result.returncode == 1 and "services_apply finish" in result.stderr and lock_id in result.stderr
@@ -1814,9 +1824,23 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
         ("on_a_services_plan", [*wrapper, "--keep-launch-hold", "plan"]),
         ("both_options", [*wrapper, "--keep-launch-hold", "--continue-launch-hold", lock_id, "apply", "reviewed.tfplan"]),
         ("a_malformed_token", [*wrapper, "--continue-launch-hold", "not a token", "apply", "reviewed.tfplan"]),
+        ("keep_without_the_jobs_inputs", [*wrapper, "--keep-launch-hold", "apply", "reviewed.tfplan"]),
+        ("jobs_inputs_without_the_change_hold", [*wrapper, "--jobs-inputs", str(jobs_inputs), "--jobs-sha256", jobs_digest, "apply", "reviewed.tfplan"]),
+        ("jobs_inputs_without_a_digest", [*wrapper, "--keep-launch-hold", "--jobs-inputs", str(jobs_inputs), "apply", "reviewed.tfplan"]),
+        ("a_digest_of_other_bytes", [*wrapper, "--keep-launch-hold", "--jobs-inputs", str(jobs_inputs), "--jobs-sha256", "0" * 64, "apply", "reviewed.tfplan"]),
+        (
+            "missing_jobs_inputs",
+            [*wrapper, "--keep-launch-hold", "--jobs-inputs", str(workspace / "absent.json"), "--jobs-sha256", jobs_digest, "apply", "reviewed.tfplan"],
+        ),
     ):
+        before_holds = len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines())
         step, result = evidence.run(f"wrapper_keep_hold_refused_{label}", arguments, workspace, environment)
-        evidence.check(step, "refused_before_any_step", result.returncode == 2 and "launch-hold" in result.stderr)
+        evidence.check(
+            step,
+            "refused_before_any_step",
+            result.returncode == 2 and ("launch-hold" in result.stderr or "--jobs-" in result.stderr),
+        )
+        evidence.check(step, "no_lock_and_no_hold", len((workspace / "services_apply_calls.jsonl").read_text(encoding="utf-8").splitlines()) == before_holds)
     # Launch hold during services applies (owner A, Nov 10 2026): a failed apply keeps the hold, and a hold that cannot be set stops the apply.
     for marker, label in (
         ("apply_fails", "failed_services_apply_keeps_the_hold"),
