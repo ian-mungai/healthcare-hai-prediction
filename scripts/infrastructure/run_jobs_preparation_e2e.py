@@ -354,12 +354,21 @@ def _host_room_cases(
         and json.loads(output.read_text()) == values | host_variables | {"host_job_memory_mib": 23552, "host_capacity_binding": binding}
         and asked == [["-chdir=" + stack("services"), "output", "-json", "host_capacity_binding"]]
     )
+    lowered = binding.replace("23552", "22528")
+    answer(json.dumps(lowered), 0)
+    result = invoke(host_variables)
+    checks["host_jobs_get_a_cap_below_the_room"] = result.returncode == 0 and json.loads(output.read_text()) == values | host_variables | {
+        "host_job_memory_mib": 22528,
+        "host_capacity_binding": lowered,
+    }
+    answer(json.dumps(binding), 0)
+    result = invoke(host_variables)
     rendered = output.read_bytes()
     for name, text, code in (
         ("a_failed_services_output", "", 1),
         ("a_binding_that_is_not_text", "23552", 0),
         ("a_binding_in_another_form", json.dumps("job_memory_mib=23552"), 0),
-        ("a_binding_that_does_not_add_up", json.dumps(binding.replace("23552", "24576")), 0),
+        ("a_binding_above_the_room", json.dumps(binding.replace("23552", "24576")), 0),
         ("a_job_room_below_one_job", json.dumps("job_memory_mib=2048 usable_memory_mib=9216 system_reserve_mib=2048 service_reservations_mib=5120"), 0),
         ("a_null_binding", "null", 0),
     ):

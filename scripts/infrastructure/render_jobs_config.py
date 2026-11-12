@@ -26,8 +26,8 @@ from scripts.process import TimeoutExpired, run_command
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
 SERVICES_DIRECTORY = REPO_ROOT / "infra/services"
 JOB_ROOM_FLOOR_MIB = 4096
-# The services output host_capacity_binding: the job room and the usable-memory inputs and service reservations it comes from. The jobs stack labels the
-# init container of every host revision with it, and the launch preflight runs a host job only from a revision bound to the current inputs.
+# The services output host_capacity_binding: the job memory (the host job cap) and the usable-memory inputs and reservations it must fit. The jobs stack
+# labels the init container of every host revision with it, and the launch preflight runs a host job only from a revision bound to the current inputs.
 BINDING_FORM = re.compile(
     r"job_memory_mib=(?P<job>[1-9][0-9]*) usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+) "
     r"service_reservations_mib=(?P<services>[0-9]+)"
@@ -52,9 +52,9 @@ def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
         binding = None
     form = BINDING_FORM.fullmatch(binding) if isinstance(binding, str) else None
     room = int(form["job"]) if form is not None else 0
-    if form is None or room != int(form["usable"]) - int(form["reserve"]) - int(form["services"]) or room < JOB_ROOM_FLOOR_MIB:
+    if form is None or room > int(form["usable"]) - int(form["reserve"]) - int(form["services"]) or room < JOB_ROOM_FLOOR_MIB:
         raise ConfigurationError(
-            "Host jobs need the job room from the services stack output host_capacity_binding (job_memory_mib of at least 4096 MiB, equal to "
+            "Host jobs need the job room from the services stack output host_capacity_binding (job_memory_mib of at least 4096 MiB, at most "
             "usable_memory_mib less system_reserve_mib and service_reservations_mib). "
             "Apply the services stack, then render again. No Terraform action was run."
         )

@@ -17,7 +17,7 @@ from scripts.infrastructure.policy_evaluator import POLICY_VARIABLE, Request, as
 R, A, P, E, B = "eu-west-1", "111111111111", "example_project", "dev", "example-project-ci-bucket"
 VALUES = {"AWS_REGION": R, "AWS_ACCOUNT_ID": A, "PROJECT_NAME": P, "ENVIRONMENT": E, "DATA_BUCKET_NAME": B}
 TAG = {"Project": P}
-# The policy files of the project user, by the service part of their name. ssmcap holds the Terraform grants on the host job cap parameter.
+# The policy files of the project user, by the service part of their name. ssmcap holds the services apply command's grants on the launch hold and apply lock.
 SERVICES = ("autoscaling", "cloudwatch", "dlm", "ec2", "ecr", "ecs", "iam", "logs", "s3", "secretsmanager", "sns", "ssm", "ssmcap", "sts")
 USER = "example_project_dev"
 LEAF = "0" * 64
@@ -129,12 +129,9 @@ AWS_POLARIS_PARAMETERS = (*AWS_READER_PARAMETERS, *AWS_WRITER_PARAMETERS)
 # The catalog setup creates these two passwords as the project user. PutParameter carries the condition key ssm:Overwrite (a string), so an explicit
 # Deny on Overwrite = true keeps the two names create-only. The grant is limited to the two names.
 OPENMETADATA_PASSWORDS = ("openmetadata_admin_password", "openmetadata_db_password")
-# Host job cap parameter writer (owner A, Nov 10 2026): the services stack creates the host job cap as a Terraform aws_ssm_parameter, so the project
-# user manages that one name (put, read, delete and tag it) and lists parameter metadata, which ssm:DescribeParameters allows only on "*".
-HOST_JOB_CAP = "host_job_cap"
-HOST_JOB_CAP_STATEMENT = "ManageHostJobCapParameter"
-HOST_JOB_CAP_LISTING = "ListParameterMetadataForTerraform"
-HOST_JOB_CAP_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource")
+# The services stack no longer manages a Parameter Store parameter (Nov 11 2026: the host job cap is an Airflow container setting), so the project user holds
+# no grant on the parameter that carried the cap and no metadata listing; the cases below pin both refusals.
+RETIRED_CAP_PARAMETER = "host_job_cap"
 # Launch hold during services applies (owner A, Nov 10 2026): the services apply command puts and reads the hold; it never deletes or tags it.
 HOST_LAUNCH_HOLD = "host_launch_hold"
 HOST_LAUNCH_HOLD_STATEMENT = "SetHostLaunchHold"
@@ -143,7 +140,6 @@ HOST_LAUNCH_HOLD_ACTIONS = ("PutParameter", "GetParameter")
 SERVICES_APPLY_LOCK = "services_apply_lock"
 SERVICES_APPLY_LOCK_STATEMENT = "ManageServicesApplyLock"
 SERVICES_APPLY_LOCK_ACTIONS = ("PutParameter", "GetParameter", "DeleteParameter")
-HOST_JOB_CAP_NEIGHBORS = ("host_job_cap_extra", "host_job_cap/child", "host_job_capacity", "host_job")
 OPENMETADATA_STATEMENT = "SetUpOpenMetadataPasswords"
 OPENMETADATA_DENY = "DenyOpenMetadataPasswordOverwrite"
 OPENMETADATA_NEIGHBORS = (
@@ -293,13 +289,10 @@ def approved_requests() -> dict[str, list[Request]]:
         add("ssm", "GetParameter", parameter(name), region=None)
         add("ssm", "PutParameter", parameter(name), region=None)
     add("ssm", "GetParameters", PUBLIC_PARAMETER, region=None)
-    for action in HOST_JOB_CAP_ACTIONS:
-        ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None))
     for action in HOST_LAUNCH_HOLD_ACTIONS:
         ops["ssmcap"].append(request(f"ssm:{action}", parameter(HOST_LAUNCH_HOLD), region=None))
     for action in SERVICES_APPLY_LOCK_ACTIONS:
         ops["ssmcap"].append(request(f"ssm:{action}", parameter(SERVICES_APPLY_LOCK), region=None))
-    ops["ssmcap"].append(request("ssm:DescribeParameters", "*"))
     add(
         "ssm",
         "StartSession",
@@ -1174,36 +1167,18 @@ def aws_polaris_pair_cases() -> Iterator[Case]:
             yield Case(f"aws pair: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
 
 
-def host_job_cap_cases() -> Iterator[Case]:
-    """The host job cap parameter that the services stack manages: every parameter action on that one name is allowed exactly when Terraform needs it,
-    no neighbouring name, region, account or folder gets any of them, and the metadata listing is allowed on "*" only through its own statement."""
+def launch_hold_cases() -> Iterator[Case]:
+    """The launch hold and the apply lock of the services apply command: every parameter action on those two names is allowed exactly when the command
+    needs it, no neighbouring name, region, account or folder gets any of them, the parameter that carried the host job cap and the metadata listing are
+    refused, and the grants reach no other parameter or key."""
     for action in PARAMETER_ACTIONS:
-        allowed = action in HOST_JOB_CAP_ACTIONS
         yield Case(
-            f"host job cap: {action} {HOST_JOB_CAP}",
-            request(f"ssm:{action}", parameter(HOST_JOB_CAP), region=None),
-            allowed,
-            HOST_JOB_CAP_STATEMENT if allowed else None,
+            f"retired host job cap: refuse {action} {RETIRED_CAP_PARAMETER}", request(f"ssm:{action}", parameter(RETIRED_CAP_PARAMETER), region=None), False
         )
-    yield Case(
-        f"host job cap: overwrite {HOST_JOB_CAP} at a later apply",
-        request("ssm:PutParameter", parameter(HOST_JOB_CAP), extra={"ssm:Overwrite": "true"}, region=None),
-        True,
-    )
-    for name in HOST_JOB_CAP_NEIGHBORS:
-        for action in HOST_JOB_CAP_ACTIONS:
-            yield Case(f"host job cap: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
-    for label, resource in (
-        ("another region", parameter(HOST_JOB_CAP).replace(f":{R}:", ":eu-west-2:")),
-        ("another account", parameter(HOST_JOB_CAP).replace(f":{A}:", ":222222222222:")),
-        ("another folder", parameter(HOST_JOB_CAP).replace(f"/{PARAMETER_FOLDER}/", "/another_project/")),
-    ):
-        for action in HOST_JOB_CAP_ACTIONS:
-            yield Case(f"host job cap: refuse {action} {HOST_JOB_CAP} in {label}", request(f"ssm:{action}", resource, region=None), False)
-    for name in ("postgres_password", "redis_password", OPENMETADATA_PASSWORDS[0], "aws_polaris_gold_client_secret"):
-        for action in ("DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource"):
-            yield Case(f"host job cap: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
-    yield Case("host job cap: list parameter metadata", request("ssm:DescribeParameters", "*"), True, HOST_JOB_CAP_LISTING)
+    for action in ("DeleteParameter", "AddTagsToResource", "RemoveTagsFromResource", "ListTagsForResource"):
+        for name in ("postgres_password", "redis_password", OPENMETADATA_PASSWORDS[0], "aws_polaris_gold_client_secret"):
+            yield Case(f"parameter grants: refuse {action} {name}", request(f"ssm:{action}", parameter(name), region=None), False)
+    yield Case("parameter grants: no parameter metadata listing", request("ssm:DescribeParameters", "*"), False)
     for action in PARAMETER_ACTIONS:
         allowed = action in HOST_LAUNCH_HOLD_ACTIONS
         yield Case(
@@ -1234,10 +1209,10 @@ def host_job_cap_cases() -> Iterator[Case]:
     ):
         for action in SERVICES_APPLY_LOCK_ACTIONS:
             yield Case(f"apply lock: refuse {action} in {label}", request(f"ssm:{action}", resource, region=None), False)
-    yield Case("host job cap: no parameter listing in another region", request("ssm:DescribeParameters", "*", region="eu-west-2"), False)
+    yield Case("parameter grants: no parameter listing in another region", request("ssm:DescribeParameters", "*", region="eu-west-2"), False)
     key = arn("kms", "key/00000000-0000-0000-0000-000000000000")
     for action in ("Decrypt", "Encrypt", "GenerateDataKey"):
-        yield Case(f"host job cap: refuse kms:{action}", request(f"kms:{action}", key), False)
+        yield Case(f"parameter grants: refuse kms:{action}", request(f"kms:{action}", key), False)
 
 
 def openmetadata_password_cases() -> Iterator[Case]:
@@ -1836,11 +1811,11 @@ def delivery_cases() -> Iterator[Case]:
         yield Case(f"delivery refused: saved plans: {role} puts a saved plan", request("s3:PutObject", PLAN_OBJECTS[0]), False, None, f"delivery_{role}")
     # The state keys stay readable and unwritable for the plan role while it saves plans.
     yield Case("delivery allowed: terraform_plan still reads a state key", request("s3:GetObject", STATE_KEYS[0]), True, None, plan_role)
-    # Delivery plan role and the host job cap policy (owner A, Nov 10 2026): the plan role mirrors neither ssmcap read.
+    # Delivery plan role (owner A, Nov 10 2026): the plan role lists no parameter metadata and no parameter tags.
     yield Case("delivery refused: terraform_plan lists parameter metadata", request("ssm:DescribeParameters", "*"), False, None, plan_role)
     yield Case(
-        "delivery refused: terraform_plan lists the tags of the host job cap",
-        request("ssm:ListTagsForResource", parameter(HOST_JOB_CAP)),
+        "delivery refused: terraform_plan lists the tags of the launch hold",
+        request("ssm:ListTagsForResource", parameter(HOST_LAUNCH_HOLD)),
         False,
         None,
         plan_role,
@@ -2344,7 +2319,7 @@ def current_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from project_parameter_grid_cases()
     yield from aws_polaris_pair_cases()
     yield from openmetadata_password_cases()
-    yield from host_job_cap_cases()
+    yield from launch_hold_cases()
     yield from forbidden_cases()
     yield from snapshot_cases()
     yield from execution_cases()

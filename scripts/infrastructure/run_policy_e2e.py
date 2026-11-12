@@ -389,8 +389,6 @@ AWS_PAIRS = ("ssm", "SetUpAwsPolarisPairs")
 OPENMETADATA_PLACEHOLDERS = tuple(f"{name.upper()}_NAME" for name in policy_cases.OPENMETADATA_PASSWORDS)
 OPENMETADATA_PASSWORDS = ("ssm", policy_cases.OPENMETADATA_STATEMENT)
 OPENMETADATA_DENY = ("ssm", policy_cases.OPENMETADATA_DENY)
-HOST_JOB_CAP_PLACEHOLDER = "HOST_JOB_CAP_PARAMETER_NAME"
-HOST_JOB_CAP = ("ssmcap", policy_cases.HOST_JOB_CAP_STATEMENT)
 HOST_LAUNCH_HOLD_PLACEHOLDER = "HOST_LAUNCH_HOLD_PARAMETER_NAME"
 HOST_LAUNCH_HOLD = ("ssmcap", policy_cases.HOST_LAUNCH_HOLD_STATEMENT)
 SERVICES_APPLY_LOCK_PLACEHOLDER = "SERVICES_APPLY_LOCK_PARAMETER_NAME"
@@ -415,7 +413,6 @@ def expected_grants(names: dict[str, Any]) -> dict[tuple[str, str], set[str]]:
         AWS_PAIRS: {parameter_arn(names[key]) for key in AWS_POLARIS_PLACEHOLDERS},
         OPENMETADATA_PASSWORDS: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
         OPENMETADATA_DENY: {parameter_arn(names[key]) for key in OPENMETADATA_PLACEHOLDERS},
-        HOST_JOB_CAP: {parameter_arn(names[HOST_JOB_CAP_PLACEHOLDER])},
         HOST_LAUNCH_HOLD: {parameter_arn(names[HOST_LAUNCH_HOLD_PLACEHOLDER])},
         SERVICES_APPLY_LOCK: {parameter_arn(names[SERVICES_APPLY_LOCK_PLACEHOLDER])},
     }
@@ -497,7 +494,6 @@ def check_names(documents: dict[str, dict[str, Any]], variables: Path = VARIABLE
         approved[placeholder] = {folder + name}
     for placeholder, name in zip(OPENMETADATA_PLACEHOLDERS, policy_cases.OPENMETADATA_PASSWORDS, strict=True):
         approved[placeholder] = {folder + name}
-    approved[HOST_JOB_CAP_PLACEHOLDER] = {folder + policy_cases.HOST_JOB_CAP}
     approved[HOST_LAUNCH_HOLD_PLACEHOLDER] = {folder + policy_cases.HOST_LAUNCH_HOLD}
     approved[SERVICES_APPLY_LOCK_PLACEHOLDER] = {folder + policy_cases.SERVICES_APPLY_LOCK}
     for placeholder, expected_names in approved.items():
@@ -541,7 +537,6 @@ def check_name_source(directory: Path = POLICY_DIRECTORY, owner_directory: Path 
         | expected[INJECT]
         | expected[AWS_PAIRS]
         | expected[OPENMETADATA_PASSWORDS]
-        | expected[HOST_JOB_CAP]
         | expected[HOST_LAUNCH_HOLD]
         | expected[SERVICES_APPLY_LOCK]
     )
@@ -630,7 +625,7 @@ def name_defects(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     with tempfile.TemporaryDirectory(prefix="policy_name_defects_") as scratch:
         root = Path(scratch)
         original = VARIABLES.read_text(encoding="utf-8")
-        for sibling in (*secret_store.OPENMETADATA_FILES, *secret_store.FEATURES_PAIR_FILES, *secret_store.HOST_JOB_CAP_FILES):
+        for sibling in (*secret_store.OPENMETADATA_FILES, *secret_store.FEATURES_PAIR_FILES, *secret_store.LAUNCH_HOLD_FILES):
             shutil.copy(VARIABLES.parent / sibling, root / sibling)
 
         def changed_variables(old: str, new: str, label: str) -> Path:

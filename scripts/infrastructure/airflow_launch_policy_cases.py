@@ -97,8 +97,8 @@ def container_instance(cluster: str = CLUSTER, identifier: str = "0123456789abcd
     return f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{cluster}/{identifier}"
 
 
-# The parameter the services stack writes the current host job cap to (infra/iam/airflow_launch.tf host_job_cap_parameter_name).
-HOST_CAP = "/healthcare_hai_prediction/host_job_cap"
+# The parameter that carried the host job cap until Nov 11 2026, when the cap became an Airflow container setting: the launch role reads it no more.
+RETIRED_CAP = "/healthcare_hai_prediction/host_job_cap"
 # The launch hold the services apply command sets and clears (infra/iam/airflow_launch.tf host_launch_hold_parameter_name).
 HOLD = "/healthcare_hai_prediction/host_launch_hold"
 # The services apply lock: a present lock refuses every host launch, so the launch role reads it (infra/iam/airflow_launch.tf).
@@ -117,7 +117,6 @@ def values(families: list[str]) -> dict[str, str]:
         "TASK_ARN_PATTERN": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/*",
         "LOG_GROUP_NAME": LOG_GROUP,
         "DATA_BUCKET_NAME": BUCKET,
-        "HOST_JOB_CAP_PARAMETER_NAME": HOST_CAP,
         "HOST_LAUNCH_HOLD_PARAMETER_NAME": HOLD,
         "SERVICES_APPLY_LOCK_PARAMETER_NAME": APPLY_LOCK,
         "RECORD_PREFIX": RECORD_PREFIX,
@@ -260,14 +259,11 @@ def job_cases() -> list[Case]:
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter",
         False,
     )
-    # Current host job cap at launch (owner A, Nov 10 2026): one read of the cap the services stack writes, nothing else on it or beside it.
-    cap = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}"
-    add("read the host job cap", "ssm:GetParameter", cap, True)
-    add("read the host job cap by the plural call", "ssm:GetParameters", cap, False)
-    add("write the host job cap", "ssm:PutParameter", cap, False)
-    add("delete the host job cap", "ssm:DeleteParameter", cap, False)
-    add("read a sibling of the host job cap", "ssm:GetParameter", f"{cap}_extra", False)
-    add("read a parameter beside the host job cap", "ssm:GetParameter", cap.replace("host_job_cap", "host_job_cap_previous"), False)
+    # The host job cap is an Airflow container setting (Nov 11 2026): the launch role reads no parameter for it, whatever the call.
+    retired = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{RETIRED_CAP}"
+    add("read the retired host job cap parameter", "ssm:GetParameter", retired, False)
+    add("read the retired host job cap parameter by the plural call", "ssm:GetParameters", retired, False)
+    add("write the retired host job cap parameter", "ssm:PutParameter", retired, False)
     hold = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}"
     add("read the launch hold", "ssm:GetParameter", hold, True)
     add("set the launch hold", "ssm:PutParameter", hold, False)
@@ -516,7 +512,7 @@ RESOURCES = (
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
     Resource("signed publish record", SIGNED_ARN, NONE, NONE),
-    Resource("host job cap", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOST_CAP}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
+    Resource("retired host job cap parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{RETIRED_CAP}", NONE, NONE),
     Resource("launch hold", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("apply lock", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{APPLY_LOCK}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
@@ -649,7 +645,7 @@ WIDENING_ACTIONS = {
     "PassNamedJobRoles": ("sts:AssumeRole", "iam:AttachRolePolicy"),
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
-    "ReadHostJobCap": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
+    "ReadLaunchHoldAndApplyLock": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
     "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
@@ -719,8 +715,8 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
             appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}{SIGNED}"}),
         ),
         ("jobs", "regression_a_parameter_prefix", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}/*"})),
-        ("jobs", "ReadHostJobCap_a_parameter_prefix", replaced(jobs, "ReadHostJobCap", Resource=f"{ssm}/healthcare_hai_prediction/*")),
-        ("jobs", "ReadHostJobCap_a_name_prefix", replaced(jobs, "ReadHostJobCap", Resource=f"{ssm}{HOST_CAP}*")),
+        ("jobs", "ReadLaunchHoldAndApplyLock_a_parameter_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}/healthcare_hai_prediction/*")),
+        ("jobs", "ReadLaunchHoldAndApplyLock_a_name_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}{HOLD}*")),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("jobs", "ReadStagedRunRecords_delete_the_digest", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:DeleteObject"])),
         (
@@ -949,7 +945,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
         Grant(
             "ssm:GetParameter",
-            tuple(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}" for name in (HOST_CAP, HOLD, APPLY_LOCK)),
+            tuple(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}" for name in (HOLD, APPLY_LOCK)),
             {},
         ),
     ]

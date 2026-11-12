@@ -307,7 +307,7 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadHostJobCap", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
     ])
     error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the three reads of fixed objects and the container instance list, which names the cluster ARN, go without one."
   }
@@ -383,38 +383,33 @@ run "no_grant_reads_the_signed_record" {
   assert {
     condition = !anytrue(flatten([
       for policy in [aws_iam_role_policy.airflow_launch_jobs[0].policy, aws_iam_role_policy.airflow_launch_records[0].policy] : [
-        for statement in jsondecode(policy).Statement : statement.Sid != "ReadHostJobCap" && anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
+        for statement in jsondecode(policy).Statement : statement.Sid != "ReadLaunchHoldAndApplyLock" && anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
       ]
     ]))
-    error_message = "Signing the first publishes is a manual step: the launch role reads no Parameter Store value but the host job cap, whatever the broker's signed parameter name is."
+    error_message = "Signing the first publishes is a manual step: the launch role reads no Parameter Store value but the launch hold and the apply lock, whatever the broker's signed parameter name is."
   }
 }
 
-run "launch_role_reads_only_the_host_job_cap_parameter" {
+run "launch_role_reads_only_the_launch_hold_and_the_apply_lock" {
   command = plan
 
-  # Current host job cap at launch (owner A, Nov 10 2026): one read of one parameter, no batch read, no write and no other name.
+  # The host job cap is an Airflow container setting (Nov 11 2026), so the launch role reads no parameter for it. What stays: one read of the launch hold and
+  # one of the apply lock, no batch read, no write and no other name.
   assert {
     condition = (
-      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadHostJobCap"]) == 1 &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0] == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_job_cap", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_launch_hold", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/services_apply_lock"] &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadHostJobCap"][0] == "ssm:GetParameter" &&
-      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadHostJobCap"][0] == "Allow"
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadLaunchHoldAndApplyLock"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadLaunchHoldAndApplyLock"][0] == ["arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/host_launch_hold", "arn:aws:ssm:eu-west-1:111111111111:parameter/healthcare_hai_prediction/services_apply_lock"] &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Action if statement.Sid == "ReadLaunchHoldAndApplyLock"][0] == "ssm:GetParameter" &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Effect if statement.Sid == "ReadLaunchHoldAndApplyLock"][0] == "Allow"
     )
-    error_message = "The launch role reads exactly the host job cap, launch hold and apply lock parameters, with ssm:GetParameter only."
-  }
-}
-
-run "host_job_cap_grant_follows_the_named_parameter" {
-  command = plan
-
-  variables {
-    host_job_cap_parameter_name = "/example_project/host_job_cap"
+    error_message = "The launch role reads exactly the launch hold and apply lock parameters, with ssm:GetParameter only."
   }
 
   assert {
-    condition     = contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0], "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/host_job_cap")
-    error_message = "The host job cap grant follows the parameter name the services stack writes."
+    condition = !anytrue(flatten([
+      for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : [for resource in flatten([statement.Resource]) : strcontains(resource, "host_job_cap")]
+    ]))
+    error_message = "No statement of the launch role names the parameter that carried the host job cap until the cap became an Airflow container setting."
   }
 }
 
@@ -426,19 +421,9 @@ run "launch_hold_grant_follows_the_named_parameter" {
   }
 
   assert {
-    condition     = contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadHostJobCap"][0], "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/launch_hold")
+    condition     = contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "ReadLaunchHoldAndApplyLock"][0], "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/launch_hold")
     error_message = "The launch role reads the launch hold the services apply command writes, by its parameter name."
   }
-}
-
-run "a_host_job_cap_parameter_name_with_a_wildcard_is_refused" {
-  command = plan
-
-  variables {
-    host_job_cap_parameter_name = "/healthcare_hai_prediction/*"
-  }
-
-  expect_failures = [var.host_job_cap_parameter_name]
 }
 
 run "launch_records_are_written_once_under_their_prefix" {

@@ -3,6 +3,9 @@ mock_provider "aws" {
 }
 
 variables {
+  # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use. The default is the room the live stack leaves, which the
+  # larger fixtures here do not have.
+  host_job_cap_mib                = 4096
   aws_profile                     = "example_project_dev"
   environment                     = "dev"
   project_name                    = "example_project"

@@ -40,7 +40,7 @@ variable "host_scratch_root" {
 }
 
 variable "host_job_memory_mib" {
-  description = "Memory MiB of every host job, the publisher included: the services stack output host_job_memory_mib (host memory less the operating system reserve and the always-on services' reservations), rendered by scripts/infrastructure/render_jobs_config.py. One job runs at a time, so each job gets the whole room and its engines derive their limits from it."
+  description = "Memory MiB of every host job, the publisher included: the services stack output host_job_memory_mib (its host job cap host_job_cap_mib, which fits the memory the always-on services leave), rendered by scripts/infrastructure/render_jobs_config.py. One job runs at a time, so each job gets the whole room and its engines derive their limits from it."
   type        = number
   default     = null
   nullable    = true
@@ -60,10 +60,10 @@ variable "host_capacity_binding" {
   validation {
     condition = var.host_capacity_binding == null ? !(var.host_jobs_enabled || var.publisher_job_enabled) : try(
       [for parts in [regex("^job_memory_mib=([1-9][0-9]*) usable_memory_mib=([1-9][0-9]*) system_reserve_mib=([0-9]+) service_reservations_mib=([0-9]+)$", var.host_capacity_binding)] :
-      tonumber(parts[0]) == tonumber(parts[1]) - tonumber(parts[2]) - tonumber(parts[3])][0],
+      tonumber(parts[0]) <= tonumber(parts[1]) - tonumber(parts[2]) - tonumber(parts[3])][0],
       false
     )
-    error_message = "Host jobs and the publisher need host_capacity_binding from the services stack output: job_memory_mib=<n> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, where the job memory is the usable memory less the reserve and the reservations."
+    error_message = "Host jobs and the publisher need host_capacity_binding from the services stack output: job_memory_mib=<n> usable_memory_mib=<n> system_reserve_mib=<n> service_reservations_mib=<n>, where the job memory is at most the usable memory less the reserve and the reservations."
   }
 }
 
@@ -104,7 +104,7 @@ locals {
   host_families = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
-  # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the memory the always-on services leave (host_job_memory_mib, from the services stack).
+  # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the host job cap (host_job_memory_mib, from the services stack).
   # A job derives its threads, memory and spill cap from these task-level limits when it starts, so the host rewrites no engine value.
   host_cpu_cap    = 3072
   host_memory_cap = var.host_job_memory_mib

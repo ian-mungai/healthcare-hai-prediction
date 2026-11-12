@@ -65,6 +65,7 @@ CLOSED = "the chain is closed until the first silver and gold publishes are sign
 JOB_MODE = "real"
 NO_STAGED_CODE = "0" * 64  # the bound code digest of a job that fetches no staged code
 CAPACITY_LABEL = "hai.host_capacity"  # the label of a host revision's init container that binds it to the host capacity (infra/jobs/host.tf)
+HOST_JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"  # the host job cap in MiB that the services stack renders into every Airflow container (host_job_cap_mib)
 CAPACITY_FORM = re.compile(r"usable_memory_mib=[1-9][0-9]* system_reserve_mib=[0-9]+")  # HAI_LAUNCH_HOST_CAPACITY, from the services stack
 BINDING_FORM = re.compile(
     r"job_memory_mib=(?P<job>[1-9][0-9]*) (?P<inputs>usable_memory_mib=(?P<usable>[1-9][0-9]*) system_reserve_mib=(?P<reserve>[0-9]+)) "
@@ -269,22 +270,6 @@ def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
     return read
 
 
-def ssm_host_cap_reader(ssm: Any, name: str) -> Callable[[], str | None]:
-    """Read the current host job cap (MiB) that the services stack writes to Parameter Store, or None while the parameter does not exist."""
-
-    def read() -> str | None:
-        try:
-            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
-                return None
-            raise TaskUnavailable("host_job_cap_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("host_job_cap_unreadable") from None
-
-    return read
-
-
 # Launch hold during services applies (owner A, Nov 10 2026): the owner command around every services apply writes HELD_PREFIX... before it
 # changes anything and LAUNCH_HOLD_CLEAR only after the ECS services reach steady state. Any other value, or no parameter, holds every host launch.
 LAUNCH_HOLD_CLEAR = "clear"
@@ -332,15 +317,27 @@ def held(value: str | None) -> str | None:
 
 
 def cap_value(raw: str | None) -> int | None:
-    """The host job cap in MiB, or None when the parameter is missing or not a whole number above 0."""
+    """The host job cap in MiB, or None when the setting is missing or not a whole number above 0."""
     text = (raw or "").strip()
     return int(text) if text.isdecimal() and text.isascii() and int(text) > 0 else None
+
+
+def host_cap_reader(value: str) -> Callable[[], str | None]:
+    """The reader of the host job cap (MiB) that the services stack renders into the Airflow environment as ``HAI_LAUNCH_HOST_JOB_CAP_MIB``. The
+    environment of a container does not change, so the reader answers the checked value. A value that is not a whole number of MiB above 0 fails the
+    build of the launch services, by the setting's name."""
+    cap = cap_value(value)
+    if cap is None:
+        raise LaunchRefused(
+            f"{HOST_JOB_CAP_SETTING} {value[:40]!r} is not a whole number of MiB above 0. Set host_job_cap_mib in the services stack, apply it, then run again"
+        )
+    return lambda: str(cap)
 
 
 class HeldCapProbe:
     """The fit probe of host launches: before every RunTask the launcher asks it for the host's free room. It rereads the launch hold and the host
     job cap each time: while the hold is set, or the cap is unreadable, the room is unavailable (the launcher waits and never sends); otherwise the
-    free memory is never more than the current cap, so a cap that a services apply lowered after the preflight withholds the RunTask."""
+    free memory is never more than the host job cap, so the host never gets a job above the cap."""
 
     def __init__(self, inner: Any, hold: Callable[[], str | None], cap: Callable[[], str | None], monotonic: Callable[[], float] = time.monotonic) -> None:
         self.inner, self.hold, self.cap, self.monotonic = inner, hold, cap, monotonic
@@ -571,7 +568,7 @@ class Preflight:
         if request.template == "drift_run":  # the only write of a job step, after every refusal
             self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
         # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
-        # probe gives no more than the current host job cap, so a cap lowered after this check withholds the RunTask (launch hold, owner A).
+        # probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=max(spec.need.memory_mib, job_memory))
         return replace(spec, task_definition=revision, need=need)
 
@@ -655,7 +652,7 @@ class Preflight:
         into ``HAI_LAUNCH_HOST_CAPACITY`` (``usable_memory_mib=<n> system_reserve_mib=<n>``). The jobs stack labels the init container
         of every host revision it registers with the binding it was sized from (label ``hai.host_capacity``: the job memory, the same two inputs and the
         service reservations, from the services output ``host_capacity_binding``). A revision without the label (registered before the job memory came
-        from ``host_usable_memory_mib``), bound to other inputs, with a label whose job memory is not the inputs less the reservations, or with task
+        from ``host_usable_memory_mib``), bound to other inputs, with a label whose job memory is above the inputs less the reservations, or with task
         memory other than that job memory is refused. The launch runs the returned ARN, so a revision registered after this check never runs in its
         place."""
         capacity = self.require_capacity(job)
@@ -677,8 +674,8 @@ class Preflight:
             raise LaunchRefused(
                 f"the latest active revision {name} of the {job} host job is bound to {bound[:200]}, but the current host capacity is {capacity}. {again}"
             )
-        if int(binding["job"]) != int(binding["usable"]) - int(binding["reserve"]) - int(binding["services"]):
-            raise LaunchRefused(f"the binding {bound[:200]} of the latest active revision {name} of the {job} host job does not add up. {again}")
+        if int(binding["job"]) > int(binding["usable"]) - int(binding["reserve"]) - int(binding["services"]):
+            raise LaunchRefused(f"the binding {bound[:200]} of the latest active revision {name} of the {job} host job gives a job more than the room. {again}")
         if str(found.get("memory", "")) != binding["job"]:
             raise LaunchRefused(
                 f"the latest active revision {name} of the {job} host job has {str(found.get('memory', ''))[:20]} MiB of task memory, but its binding "
@@ -700,17 +697,20 @@ class Preflight:
             )
 
     def require_within_cap(self, job: str, name: str, job_memory: int) -> None:
-        """Current host job cap at launch (owner A, Nov 10 2026): read the cap the services stack wrote at its last apply, at every host launch, and
-        refuse a revision whose binding gives a job more memory. The cap counts the service reservations as applied, which the jobs stack only learns
-        at its next render, so a services change that shrank the room refuses the old revision instead of overfilling the host."""
+        """Host job cap at launch (Nov 11 2026): the services stack renders the cap into the Airflow environment (``HAI_LAUNCH_HOST_JOB_CAP_MIB``, from
+        its variable ``host_job_cap_mib``). Refuse a host launch while the cap is missing or invalid, and a revision whose binding gives a job more
+        memory. The jobs stack learns the cap at its next render, so a lowered cap refuses the old revision instead of overfilling the host."""
         raw = self.read(self.host_job_cap)
         if raw is None:
             raise LaunchRefused(
-                f"the host job cap parameter was not found, so no {job} host job launches. Apply the services stack, which writes it, then run again"
+                f"the host job cap ({HOST_JOB_CAP_SETTING}) is missing, so no {job} host job launches. "
+                "Set host_job_cap_mib in the services stack and apply it, then run again"
             )
         text = raw.strip()
         if not (text.isdecimal() and text.isascii()) or int(text) <= 0:
-            raise LaunchRefused(f"the host job cap {raw[:40]!r} is not a whole number of MiB above 0. Apply the services stack, then run again")
+            raise LaunchRefused(
+                f"the host job cap {raw[:40]!r} is not a whole number of MiB above 0. Set host_job_cap_mib in the services stack, apply it, then run again"
+            )
         cap = int(text)
         if job_memory > cap:
             raise LaunchRefused(

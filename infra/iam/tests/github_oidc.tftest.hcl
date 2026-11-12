@@ -222,15 +222,14 @@ run "plan_role_holds_no_write_and_no_secret_read" {
   }
 }
 
-run "plan_role_reads_no_host_job_cap_metadata" {
+run "plan_role_reads_no_parameter_metadata" {
   command = plan
 
   variables {
     github_oidc_enabled = true
   }
 
-  # Delivery plan role and the host job cap policy (owner A, Nov 10 2026): the plan role does not mirror the ssmcap listing and tag reads, and the
-  # delivery boundary stays unchanged.
+  # Delivery plan role (owner A, Nov 10 2026): the plan role holds no parameter listing or tag read, and the delivery boundary stays unchanged.
   assert {
     condition = alltrue([
       for action in ["ssm:DescribeParameters", "ssm:ListTagsForResource", "ssm:GetParameter"] :

@@ -36,17 +36,17 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
    revision writes no training code-run binding
    (``unbound_revision_is_refused``). A bound revision runs by its exact ARN,
    so a revision registered after the check never runs in its place (``bound_revision_runs_by_its_exact_arn``).
-11. Current host job cap at launch (owner A, Nov 10 2026): the preflight reads the host job cap the services stack writes to SSM at every host launch
-   and refuses a revision whose label gives a job more memory, or any launch while the cap is missing or malformed
-   (``revision_above_the_host_job_cap_is_refused``). A revision at or below the cap runs, and a cap lowered later refuses the next launch
-   (``revision_within_the_host_job_cap_runs``). The production reader that ``airflow_steps.services()`` wires sends one exact GetParameter per
-   launch and refuses on a missing or denied parameter (``production_reader_reads_the_host_job_cap``), and a constant reader in its place fails
-   those checks (``a_constant_cap_reader_is_caught``).
+11. Host job cap setting (Nov 11 2026, replacing the SSM parameter of owner A, Nov 10 2026): the services stack renders the cap into every Airflow
+   container as ``HAI_LAUNCH_HOST_JOB_CAP_MIB`` from its one variable ``host_job_cap_mib``, and the preflight refuses a revision whose label gives a job
+   more memory, or any launch while the cap is missing or malformed (``revision_above_the_host_job_cap_is_refused``). A revision at or below the cap
+   runs (``revision_within_the_host_job_cap_runs``). The production wiring of ``airflow_steps.services()`` reads the cap from the environment alone, with
+   no SSM call, and fails visibly on a missing or invalid value; a process with a lower cap refuses the revision and one with a higher cap runs it
+   (``production_cap_comes_from_the_environment``). A constant reader in its place fails those checks (``a_constant_cap_reader_is_caught``), and the
+   services stack renders the setting from its variable with no cap parameter left (``cap_setting_is_rendered_by_the_services_stack``).
 12. Launch hold during services applies (owner A, Nov 10 2026): the preflight refuses every host launch while the hold is set or its parameter is
-   missing (``launch_during_the_hold_is_refused``); the fit probe rereads the hold and the cap before every RunTask, so a hold set or a cap lowered
-   after the preflight sends no RunTask (``a_hold_set_after_the_preflight_withholds_runtask``, ``a_cap_lowered_during_the_apply_withholds_runtask``);
-   a raised cap lets the next launch run (``a_cap_raised_by_the_apply_lets_the_next_launch_run``) and a cleared hold lets a launch run
-   (``a_cleared_hold_lets_the_launch_run``).
+   missing (``launch_during_the_hold_is_refused``); the fit probe rereads the hold before every RunTask, so a hold set after the preflight sends no
+   RunTask (``a_hold_set_after_the_preflight_withholds_runtask``, ``a_hold_set_after_the_probe_withholds_runtask``), the fit probe never offers more
+   memory than the cap (``the_fit_probe_never_offers_more_than_the_cap``) and a cleared hold lets a launch run (``a_cleared_hold_lets_the_launch_run``).
 """
 
 from __future__ import annotations
@@ -184,7 +184,8 @@ class Rig:
         preflight, steps = importlib.import_module("orchestration.ecs_preflight"), importlib.import_module("orchestration.airflow_steps")
         self.host_cap = host_cap
         self.built: Any = None  # the production launch services, when held_rig builds them
-        self.cloud: list[str] = []  # the staged-input S3 reads and writes and the SSM read of the host job cap, in order
+        self.cap_reads = 0  # how often the preflight asked for the host job cap
+        self.cloud: list[str] = []  # the staged-input S3 reads and writes, in order
         self.ecs, self.logs, self.stage = RevisionEcs(), FakeLogs(), StageBucket(self.cloud)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
         self.time = FakeClock()
@@ -233,8 +234,8 @@ class Rig:
         self.stage_runs(BRONZE_RUN, SILVER_RUN, GOLD_RUN, FEATURES_RUN, PROMOTE_RUN, DRIFT_RUN, SERVE_RUN, PUBLISHER_RUN, str(TRAIN_PARAMS["run_id"]))
 
     def read_host_cap(self) -> str | None:
-        """The stand-in of the SSM GetParameter call that reads the current host job cap the services stack writes."""
-        self.cloud.append("ssm:GetParameter host_job_cap")
+        """The stand-in of the host job cap reader: the value the services stack renders into the environment."""
+        self.cap_reads += 1
         return self.host_cap
 
     def aws_calls(self) -> list[str]:
@@ -798,10 +799,10 @@ def unbound_revision_is_refused() -> None:
 
 def revision_bound_to_another_capacity_is_refused() -> None:
     """A revision bound to another usable memory (here the nominal 32768 MiB) is refused. So is a revision whose label names the current inputs but
-    does not add up, and one whose task memory is not the job memory of its label (a label that does not describe its own revision)."""
+    gives a job more than the room, and one whose task memory is not the job memory of its label (a label that does not describe its own revision)."""
     for memory, label, named in (
         (25600, NOMINAL_BINDING, ("bound to job_memory_mib=25600", CAPACITY)),
-        (25600, BINDING.replace(f"job_memory_mib={JOB_MEMORY}", "job_memory_mib=25600"), ("does not add up",)),
+        (25600, BINDING.replace(f"job_memory_mib={JOB_MEMORY}", "job_memory_mib=25600"), ("more than the room",)),
         (25600, BINDING, ("25600 MiB", f"{JOB_MEMORY} MiB")),
     ):
         rig = Rig()
@@ -818,7 +819,7 @@ def malformed_capacity_refuses() -> None:
     name before any ECS call or record, and no cloud-reading gate masks it."""
     steps = importlib.import_module("orchestration.airflow_steps")
     require(steps.HOST_CAPACITY in steps.SETTINGS, "the rendered host capacity is not a required launch setting")
-    environment = {name: f"example-{name.lower()}" for name in steps.SETTINGS if name != steps.HOST_CAPACITY}
+    environment = {name: value for name, value in launch_environment("example-scratch").items() if name != steps.HOST_CAPACITY}
     with mock.patch.dict("os.environ", environment, clear=True):
         error = refuses(Exception, steps.services)
     require(f"{steps.HOST_CAPACITY} is not set" in str(error), f"a missing host capacity setting is not named: {error}")
@@ -841,16 +842,18 @@ def malformed_capacity_refuses() -> None:
         require(not rig.aws_calls(), f"{template}: a malformed capacity made an AWS call before the refusal: {rig.aws_calls()}")
 
 
+CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"
+
+
 def revision_above_the_host_job_cap_is_refused() -> None:
-    """Current host job cap at launch (owner A, Nov 10 2026): the services stack writes the current job room (usable memory less the system reserve
-    and every service reservation) to one SSM parameter, and the preflight reads it at every host launch. A revision whose label gives a job more
-    memory than that cap is refused by name; so is a launch while the parameter is missing or not a whole number of MiB. Nothing is recorded and no
-    task starts."""
+    """Host job cap setting (Nov 11 2026): the services stack renders the cap (the job room the owner chose) into the Airflow environment, and the
+    preflight checks it at every host launch. A revision whose label gives a job more memory than that cap is refused by name; so is a launch while the
+    cap is missing or not a whole number of MiB. Nothing is recorded and no task starts."""
     steps = importlib.import_module("orchestration.airflow_steps")
-    require("HAI_LAUNCH_HOST_CAP_PARAMETER" in steps.SETTINGS, "the host job cap parameter name is not a required launch setting")
+    require(CAP_SETTING in steps.SETTINGS, "the host job cap setting is not a required launch setting")
     for cap, named in (
         (str(JOB_MEMORY - 1), ("host job cap", str(JOB_MEMORY - 1), str(JOB_MEMORY))),
-        (None, ("host job cap", "not found")),
+        (None, ("host job cap", CAP_SETTING, "missing")),
         ("23552.5", ("host job cap", "not a whole number")),
         ("", ("host job cap", "not a whole number")),
     ):
@@ -858,52 +861,49 @@ def revision_above_the_host_job_cap_is_refused() -> None:
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
         require(all(part in str(error) for part in named), f"the refusal for the cap {cap!r} does not name {named}: {error}")
-        require("ssm:GetParameter host_job_cap" in rig.cloud, f"the cap {cap!r} was not read from the parameter: {rig.cloud}")
+        require(rig.cap_reads >= 1, f"the cap {cap!r} was not read")
         require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision over the cap {cap!r} launched or wrote a record")
 
 
 def revision_within_the_host_job_cap_runs() -> None:
-    """A revision whose job memory equals the cap, or is below it, runs, and the cap is read again at every launch (never cached), so a cap the
-    services stack lowered later refuses the next launch."""
+    """A revision whose job memory equals the cap, or is below it, runs, and the preflight reads the cap once per launch."""
     for cap in (str(JOB_MEMORY), str(JOB_MEMORY + 1024)):
         rig = Rig(host_cap=cap)
         with world(rig, "silver_transform_dag", SILVER) as current:
             require(current.step("pin_bronze") == "succeeded", f"a revision within the cap {cap} did not run")
-        require(rig.tasks_started() == 1 and rig.cloud.count("ssm:GetParameter host_job_cap") == 1, f"the cap {cap} was not read once: {rig.cloud}")
+        require(rig.tasks_started() == 1 and rig.cap_reads == 1, f"the cap {cap} was not read once: {rig.cap_reads}")
     rig = Rig()
+    rig.ecs.register("example_dev_job_silver_host", 20480, BINDING.replace(f"job_memory_mib={JOB_MEMORY}", "job_memory_mib=20480"))
     with world(rig, "silver_transform_dag", SILVER) as current:
-        require(current.step("pin_bronze") == "succeeded", "the first launch within the cap did not run")
-    rig.host_cap = str(JOB_MEMORY - 1024)
-    with world(rig, "gold_transform_dag", GOLD) as current:
-        error = refuses(LaunchRefused, lambda: current.step("pin_silver"))
-    require("host job cap" in str(error), f"a lowered cap did not refuse the next launch: {error}")
-    require(rig.cloud.count("ssm:GetParameter host_job_cap") == 2 and rig.tasks_started() == 1, f"the cap was not read at every launch: {rig.cloud}")
+        require(current.step("pin_bronze") == "succeeded", "a revision sized to a cap below the room did not run")
 
 
-CAP_PARAMETER = "/healthcare_hai_prediction/host_job_cap"
+def launch_environment(scratch: str, cap: str | None = str(JOB_MEMORY), **extra: str) -> dict[str, str]:
+    """The Airflow launch environment the services stack renders, in stand-in values: the scratch folder is a real folder, the capacity and the host job
+    cap are in their rendered forms, and ``cap`` None leaves the cap setting out."""
+    steps = importlib.import_module("orchestration.airflow_steps")
+    environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
+    environment |= {"HAI_LAUNCH_HOST_CAPACITY": CAPACITY, **extra}
+    environment.pop(CAP_SETTING, None)
+    if cap is not None:
+        environment[CAP_SETTING] = cap
+    return environment
 
 
-class CapSsm:
-    """The SSM client of the production launch services: it answers GetParameter for the host job cap from a queue of values or errors, records every
-    request, and refuses any other parameter or operation, so a reader that skips the call or asks for something else fails. The last answer repeats."""
+class RecordingSsm:
+    """The SSM client of the production launch services when no parameter is meant to be read: it records every request and refuses it, so a reader that
+    still asks for the host job cap fails the launch."""
 
-    def __init__(self, answers: list[str | Exception]) -> None:
-        self.answers = list(answers)
+    def __init__(self) -> None:
         self.requests: list[dict[str, Any]] = []
 
     def get_parameter(self, **request: Any) -> dict[str, Any]:
         self.requests.append(dict(request))
-        if request.get("Name") != CAP_PARAMETER:
-            raise client_error("AccessDeniedException", "GetParameter", f"the launch role may not read {request.get('Name')}")
-        answer = self.answers.pop(0) if len(self.answers) > 1 else self.answers[0]  # the last answer stays, as a lasting refusal does
-        if isinstance(answer, Exception):
-            raise answer
-        return {"Parameter": {"Name": CAP_PARAMETER, "Type": "String", "Value": answer}}
+        raise client_error("AccessDeniedException", "GetParameter", f"the launch role may not read {request.get('Name')}")
 
 
-def production_cap_reader(ssm: CapSsm) -> Any:
-    """The host job cap reader that ``airflow_steps.services()`` wires, built with a stand-in boto3 session whose SSM client is ``ssm``, from the
-    Airflow environment the services stack renders. It returns the production preflight's reader, never a reader of this module."""
+def production_services(ssm: Any, environment: dict[str, str]) -> Any:
+    """The launch services that ``airflow_steps.services()`` builds from ``environment`` with a stand-in boto3 session whose SSM client is ``ssm``."""
     steps = importlib.import_module("orchestration.airflow_steps")
 
     class Session:
@@ -913,73 +913,79 @@ def production_cap_reader(ssm: CapSsm) -> Any:
         def client(self, name: str, config: Any = None) -> Any:
             return ssm if name == "ssm" else FakeEcs() if name == "ecs" else FakeLogs() if name == "logs" else FakeS3()
 
-    with tempfile.TemporaryDirectory() as scratch:
-        environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
-        environment |= {"HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER, "HAI_LAUNCH_HOST_CAPACITY": CAPACITY}
-        provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
-        with (
-            mock.patch.dict("os.environ", environment, clear=True),
-            mock.patch.dict(sys.modules, {"orchestration.ecs_launch_provider": provider}),
-            mock.patch("boto3.session.Session", Session),
-        ):
-            built = steps.services()
-    require(not ssm.requests, f"building the launch services read the cap before any launch: {ssm.requests}")
-    return built.preflight.host_job_cap
-
-
-def check_production_cap_reader() -> None:
-    """The production reader, through the shipped preflight and DAG runtime: one exact GetParameter per launch (the rendered name, no decryption
-    flag), a value that changes between launches is read again, and a missing parameter or a denied read launches no task."""
-    ssm = CapSsm([str(JOB_MEMORY), str(JOB_MEMORY - 1)])
-    rig = Rig()
-    rig.preflight.host_job_cap = production_cap_reader(ssm)
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        require(current.step("pin_bronze") == "succeeded", "a revision at the cap the production reader returned did not run")
-    require(ssm.requests == [{"Name": CAP_PARAMETER}], f"the production reader did not send exactly one GetParameter for the cap: {ssm.requests}")
-    with world(rig, "gold_transform_dag", GOLD) as current:
-        error = refuses(LaunchRefused, lambda: current.step("pin_silver"))
-    require("host job cap" in str(error) and str(JOB_MEMORY - 1) in str(error), f"a cap lowered between launches did not refuse the next launch: {error}")
-    require(ssm.requests == [{"Name": CAP_PARAMETER}] * 2 and rig.tasks_started() == 1, f"the cap was not read again at the next launch: {ssm.requests}")
-    for answer, named in (
-        (client_error("ParameterNotFound", "GetParameter"), "not found"),
-        (client_error("AccessDeniedException", "GetParameter"), "host_job_cap_unreadable"),
+    provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
+    with (
+        mock.patch.dict("os.environ", environment, clear=True),
+        mock.patch.dict(sys.modules, {"orchestration.ecs_launch_provider": provider}),
+        mock.patch("boto3.session.Session", Session),
     ):
-        ssm = CapSsm([answer])
+        return steps.services()
+
+
+def check_production_cap_setting() -> None:
+    """The production wiring, through the shipped preflight and DAG runtime: the cap is the value of the environment setting, a process with a cap
+    below the revision refuses it, one with the cap at or above it runs it, no SSM call asks for the cap, and a missing or invalid setting fails the
+    build of the launch services by its name."""
+    for cap, runs in ((str(JOB_MEMORY), True), (str(JOB_MEMORY + 1024), True), (str(JOB_MEMORY - 1024), False)):
+        ssm = RecordingSsm()
+        with tempfile.TemporaryDirectory() as scratch:
+            built = production_services(ssm, launch_environment(scratch, cap))
+        require(built.preflight.host_job_cap() == cap, f"the production reader does not return the environment cap {cap}: {built.preflight.host_job_cap()!r}")
         rig = Rig()
-        rig.preflight.host_job_cap = production_cap_reader(ssm)
+        rig.preflight.host_job_cap = built.preflight.host_job_cap
         with world(rig, "silver_transform_dag", SILVER) as current:
-            error = refuses(Exception, lambda: current.step("pin_bronze"))
-        require(named in str(error), f"the production reader's {type(answer).__name__} is not named: {type(error).__name__}: {error}")
-        # A missing parameter refuses at once. A denied read is unavailable: the step asks again within its bound, then fails.
-        expected = 1 if named == "not found" else len(ssm.requests)
-        require(
-            len(ssm.requests) == expected >= 1 and all(item == {"Name": CAP_PARAMETER} for item in ssm.requests),
-            f"the refused launch did not send only the exact GetParameter for the cap: {ssm.requests}",
-        )
-        require(rig.tasks_started() == 0 and not rig.records.calls, f"a launch went ahead after {named}")
+            if runs:
+                require(current.step("pin_bronze") == "succeeded", f"a revision at or below the environment cap {cap} did not run")
+                require(rig.tasks_started() == 1, f"the launch under the cap {cap} started {rig.tasks_started()} tasks")
+            else:
+                error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
+                require("host job cap" in str(error) and cap in str(error), f"a revision above the environment cap {cap} was not refused by name: {error}")
+                require(rig.tasks_started() == 0 and not rig.records.calls, f"a revision above the environment cap {cap} launched or wrote a record")
+        require(not ssm.requests, f"the host job cap was read through SSM: {ssm.requests}")
+    for cap in (None, "", "0", "-1", "23552.5", "many", "0x5c00"):
+        with tempfile.TemporaryDirectory() as scratch:
+            error = refuses(Exception, partial(production_services, RecordingSsm(), launch_environment(scratch, cap)))
+        require(CAP_SETTING in str(error), f"the launch services build did not name {CAP_SETTING} for the cap {cap!r}: {type(error).__name__}: {error}")
 
 
-def production_reader_reads_the_host_job_cap() -> None:
-    """Finding 2 of the SSM cap review: the launch suite runs the production SSM reader and its wiring in ``airflow_steps.services()``, not a reader
-    of its own."""
-    check_production_cap_reader()
+def production_cap_comes_from_the_environment() -> None:
+    """The launch suite runs the production reader and its wiring in ``airflow_steps.services()``, not a reader of its own."""
+    check_production_cap_setting()
 
 
 def a_constant_cap_reader_is_caught() -> None:
-    """Mutation: the production ``ssm_host_cap_reader`` swapped for a reader that always answers 999999 MiB and never calls SSM. The production
-    reader checks must fail, so the suite cannot pass with the cap read removed."""
+    """Mutation: the production cap reader swapped for a reader that always answers 999999 MiB whatever the environment says. The production checks
+    must fail, so the suite cannot pass with the environment read removed."""
     preflight = importlib.import_module("orchestration.ecs_preflight")
     steps = importlib.import_module("orchestration.airflow_steps")
 
-    def constant(_ssm: Any, _name: str) -> Callable[[], str | None]:
+    def constant(_value: str) -> Callable[[], str | None]:
         return lambda: "999999"
 
-    with mock.patch.object(preflight, "ssm_host_cap_reader", constant), mock.patch.object(steps, "ssm_host_cap_reader", constant):
+    with mock.patch.object(preflight, "host_cap_reader", constant), mock.patch.object(steps, "host_cap_reader", constant):
         try:
-            check_production_cap_reader()
+            check_production_cap_setting()
         except AssertionError:
             return
-    raise AssertionError("a constant 999999 MiB cap reader passed the production reader checks")
+    raise AssertionError("a constant 999999 MiB cap reader passed the production cap checks")
+
+
+def cap_setting_is_rendered_by_the_services_stack() -> None:
+    """The services stack renders the cap into every Airflow container from its one variable, the job room it hands to the jobs stack is that variable,
+    and the stack manages no Parameter Store parameter."""
+    airflow = (ROOT / "infra/services/airflow.tf").read_text()
+    main = (ROOT / "infra/services/main.tf").read_text()
+    variables = (ROOT / "infra/services/variables.tf").read_text()
+    require(
+        re.search(r"HAI_LAUNCH_HOST_JOB_CAP_MIB\s*=\s*tostring\(local\.host_job_memory_mib\)", airflow) is not None,
+        "the services stack does not render the cap into the Airflow environment from the job memory local",
+    )
+    require(
+        re.search(r"host_job_memory_mib\s*=\s*var\.host_job_cap_mib\b", main) is not None,
+        "the job memory local is not the one variable host_job_cap_mib",
+    )
+    require('variable "host_job_cap_mib"' in variables, "the services stack has no host_job_cap_mib variable")
+    require("aws_ssm_parameter" not in main + airflow, "the services stack still manages a Parameter Store parameter")
 
 
 HOLD_PARAMETER = "/healthcare_hai_prediction/host_launch_hold"
@@ -990,8 +996,8 @@ HELD = "held by services_apply at 2026-11-10T20:00:00Z"
 
 
 class LaunchSsm:
-    """The SSM client of the production launch services for the launch hold and the host job cap: a queue of answers per name (the last repeats),
-    every request recorded in order, and an access refusal for any other name."""
+    """The SSM client of the production launch services for the launch hold and the apply lock: a queue of answers per name (the last repeats),
+    every request recorded in order, and an access refusal for any other name (the host job cap is not a parameter)."""
 
     def __init__(self, answers: Mapping[str, Sequence[str | Exception]]) -> None:
         self.answers = {name: list(values) for name, values in answers.items()}
@@ -1021,34 +1027,17 @@ def no_lock() -> list[str | Exception]:
     return [client_error("ParameterNotFound", "GetParameter")]
 
 
-def held_rig(hold: Sequence[str | Exception], cap: Sequence[str | Exception], lock: Sequence[str | Exception] | None = None) -> tuple[Rig, LaunchSsm]:
+def held_rig(hold: Sequence[str | Exception], lock: Sequence[str | Exception] | None = None, cap: str = str(JOB_MEMORY)) -> tuple[Rig, LaunchSsm]:
     """A rig whose preflight hold and cap readers and whose fit probe wrapper are the production ones from ``airflow_steps.services()``, wired to a
-    stand-in SSM client. Before the launch hold exists the production pieces are missing and the case fails on that, not on a type error."""
+    stand-in SSM client for the hold and the apply lock and to the environment cap ``cap``. Before the launch hold exists the production pieces are
+    missing and the case fails on that, not on a type error."""
     steps = importlib.import_module("orchestration.airflow_steps")
-    ssm = LaunchSsm({HOLD_PARAMETER: hold, CAP_PARAMETER: cap, LOCK_PARAMETER: no_lock() if lock is None else lock})
-
-    class Session:
-        def __init__(self, region_name: str) -> None:
-            self.region = region_name
-
-        def client(self, name: str, config: Any = None) -> Any:
-            return ssm if name == "ssm" else FakeEcs() if name == "ecs" else FakeLogs() if name == "logs" else FakeS3()
+    ssm = LaunchSsm({HOLD_PARAMETER: hold, LOCK_PARAMETER: no_lock() if lock is None else lock})
 
     with tempfile.TemporaryDirectory() as scratch:
-        environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
-        environment |= {
-            "HAI_LAUNCH_HOST_CAP_PARAMETER": CAP_PARAMETER,
-            "HAI_LAUNCH_HOST_HOLD_PARAMETER": HOLD_PARAMETER,
-            "HAI_LAUNCH_APPLY_LOCK_PARAMETER": LOCK_PARAMETER,
-            "HAI_LAUNCH_HOST_CAPACITY": CAPACITY,
-        }
-        provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
-        with (
-            mock.patch.dict("os.environ", environment, clear=True),
-            mock.patch.dict(sys.modules, {"orchestration.ecs_launch_provider": provider}),
-            mock.patch("boto3.session.Session", Session),
-        ):
-            built = steps.services()
+        built = production_services(
+            ssm, launch_environment(scratch, cap, HAI_LAUNCH_HOST_HOLD_PARAMETER=HOLD_PARAMETER, HAI_LAUNCH_APPLY_LOCK_PARAMETER=LOCK_PARAMETER)
+        )
     require("HAI_LAUNCH_HOST_HOLD_PARAMETER" in steps.SETTINGS, "the launch hold parameter name is not a required launch setting")
     hold_reader = getattr(built.preflight, "host_launch_hold", None)
     require(callable(hold_reader), "the production preflight has no launch hold reader")
@@ -1073,7 +1062,7 @@ def held_rig(hold: Sequence[str | Exception], cap: Sequence[str | Exception], lo
 def the_production_launcher_rechecks_at_send() -> None:
     """The launcher that ``airflow_steps.services()`` builds rereads the hold and the cap at the send boundary: its ``send_check`` is the fit
     probe's ``authorize``."""
-    rig, _ = held_rig([CLEAR], [str(JOB_MEMORY)])
+    rig, _ = held_rig([CLEAR])
     launcher = rig.built.launcher
     check = getattr(launcher, "send_check", None)
     require(
@@ -1086,7 +1075,7 @@ def launch_during_the_hold_is_refused() -> None:
     """Launch hold during services applies (owner A, Nov 10 2026): while the hold is set, or while the hold parameter is missing (fail closed), the
     preflight refuses every host launch by name before any record or ECS call: zero tasks."""
     for hold, named in (([HELD], "launch hold"), ([client_error("ParameterNotFound", "GetParameter")], "launch hold")):
-        rig, ssm = held_rig(hold, [str(JOB_MEMORY)])
+        rig, ssm = held_rig(hold)
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
         require(named in str(error), f"the hold {hold[0]!r} is not named: {error}")
@@ -1097,7 +1086,7 @@ def launch_during_the_hold_is_refused() -> None:
 def a_hold_set_after_the_preflight_withholds_runtask() -> None:
     """Forced order: the preflight reads a clear hold, then the services apply sets the hold before the launcher's fit check. The fit probe rereads
     the hold before every RunTask, so no RunTask is sent; the launch closes without a task when its window ends."""
-    rig, ssm = held_rig([CLEAR, HELD], [str(JOB_MEMORY)])
+    rig, ssm = held_rig([CLEAR, HELD])
     with world(rig, "silver_transform_dag", SILVER) as current:
         refuses(Exception, lambda: current.step("pin_bronze"))
     require(ssm.reads(HOLD_PARAMETER) >= 2, f"the fit probe did not reread the hold: {ssm.requests}")
@@ -1107,20 +1096,11 @@ def a_hold_set_after_the_preflight_withholds_runtask() -> None:
 def a_hold_set_after_the_probe_withholds_runtask() -> None:
     """Forced order: the preflight and the fit probe read a clear hold, then the services apply sets the hold before the send. The send boundary
     rereads the hold immediately before RunTask, so no RunTask is sent."""
-    rig, ssm = held_rig([CLEAR, CLEAR, HELD], [str(JOB_MEMORY)])
+    rig, ssm = held_rig([CLEAR, CLEAR, HELD])
     with world(rig, "silver_transform_dag", SILVER) as current:
         refuses(Exception, lambda: current.step("pin_bronze"))
     require(ssm.reads(HOLD_PARAMETER) >= 3, f"the send boundary did not reread the hold: {ssm.requests}")
     require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent after the hold was set behind the probe")
-
-
-def a_cap_lowered_after_the_probe_withholds_runtask() -> None:
-    """Forced order: the cap the preflight and the probe read is lowered before the send. The send boundary rereads the cap, so no RunTask is sent."""
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY), str(JOB_MEMORY), str(JOB_MEMORY - 1024)])
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        refuses(Exception, lambda: current.step("pin_bronze"))
-    require(ssm.reads(CAP_PARAMETER) >= 3, f"the send boundary did not reread the cap: {ssm.requests}")
-    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent above a cap lowered behind the probe")
 
 
 def a_slow_authorization_withholds_runtask() -> None:
@@ -1137,7 +1117,7 @@ def a_slow_authorization_withholds_runtask() -> None:
         window + config.connect_timeout + config.read_timeout < apply.HOLD_SETTLE_SECONDS,
         f"authorization {window} s plus one RunTask attempt is not below the drain wait {apply.HOLD_SETTLE_SECONDS} s",
     )
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)])
+    rig, ssm = held_rig([CLEAR])
     ssm.slow_after, ssm.slow_seconds, ssm.slow_clock = 2, window + 1, rig.time
     with world(rig, "silver_transform_dag", SILVER) as current:
         refuses(Exception, lambda: current.step("pin_bronze"))
@@ -1153,7 +1133,7 @@ def a_present_or_unreadable_apply_lock_refuses_launch() -> None:
         ("crash between the hold clear and the lock delete", [APPLY_LOCK_VALUE]),
         ("lock unreadable", [client_error("AccessDeniedException", "GetParameter")]),
     ):
-        rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)], lock)
+        rig, ssm = held_rig([CLEAR], lock)
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(Exception, lambda: current.step("pin_bronze"))
         require(ssm.reads(LOCK_PARAMETER) >= 1, f"{label}: the apply lock was not read: {ssm.requests}")
@@ -1165,7 +1145,7 @@ def an_apply_lock_taken_after_the_probe_withholds_runtask() -> None:
     """Forced order: the preflight and the fit probe find no apply lock, then a services apply takes the lock before the send. The send
     boundary rereads the lock, so no RunTask is sent."""
     missing = client_error("ParameterNotFound", "GetParameter")
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)], [missing, missing, APPLY_LOCK_VALUE])
+    rig, ssm = held_rig([CLEAR], [missing, missing, APPLY_LOCK_VALUE])
     with world(rig, "silver_transform_dag", SILVER) as current:
         refuses(Exception, lambda: current.step("pin_bronze"))
     require(ssm.reads(LOCK_PARAMETER) >= 3, f"the send boundary did not reread the apply lock: {ssm.requests}")
@@ -1175,42 +1155,29 @@ def an_apply_lock_taken_after_the_probe_withholds_runtask() -> None:
 def a_padded_clear_value_holds_launches() -> None:
     """The hold is clear only for the exact value "clear": a padded or differently written value holds every host launch."""
     for value in (" clear ", "clear\n", "Clear", "CLEAR"):
-        rig, _ = held_rig([value], [str(JOB_MEMORY)])
+        rig, _ = held_rig([value])
         with world(rig, "silver_transform_dag", SILVER) as current:
             error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
         require("launch hold" in str(error) and rig.tasks_started() == 0, f"the hold value {value!r} let a launch run: {error}")
 
 
-def a_cap_lowered_during_the_apply_withholds_runtask() -> None:
-    """Forced order, cap decrease: the preflight accepts the revision at the old cap, then the apply lowers the cap below the job memory before
-    the fit check. The probe gives the job no more than the current cap, so no RunTask is sent and the launch closes without a task."""
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY), str(JOB_MEMORY - 1024)])
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        refuses(Exception, lambda: current.step("pin_bronze"))
-    require(ssm.reads(CAP_PARAMETER) >= 2, f"the fit probe did not reread the cap: {ssm.requests}")
-    require(rig.ecs.count("run_task") == 0 and rig.tasks_started() == 0, "RunTask was sent above the lowered cap")
-
-
-def a_cap_raised_by_the_apply_lets_the_next_launch_run() -> None:
-    """Forced order, cap increase: a launch above the old cap is refused; after the apply raises the cap and clears the hold, the next launch runs
-    once."""
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY - 1), str(JOB_MEMORY + 1024)])
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        error = refuses(LaunchRefused, lambda: current.step("pin_bronze"))
-    require("host job cap" in str(error) and rig.tasks_started() == 0, f"the launch above the old cap was not refused: {error}")
-    with world(rig, "silver_transform_dag", SILVER) as current:
-        require(current.step("pin_bronze") == "succeeded", "the launch after the cap increase did not run")
-    require(rig.tasks_started() == 1, f"the launch after the cap increase started {rig.tasks_started()} tasks")
+def the_fit_probe_never_offers_more_than_the_cap() -> None:
+    """The fit probe the launcher asks before every RunTask gives the job no more memory than the environment cap, even when the host has more free."""
+    cap = JOB_MEMORY - 1024
+    rig, _ = held_rig([CLEAR], cap=str(cap))
+    probe = rig.launcher.probe
+    free = probe.inner.free().memory_mib
+    require(free > cap, f"the stand-in host has no more free memory than the cap {cap}: {free}")
+    require(probe.free().memory_mib == cap, f"the fit probe offers {probe.free().memory_mib} MiB, not the cap {cap}")
 
 
 def a_cleared_hold_lets_the_launch_run() -> None:
-    """After the apply reaches steady state the hold is cleared: the launch runs, and the hold and the cap are read by the preflight and before the
-    RunTask."""
-    rig, ssm = held_rig([CLEAR], [str(JOB_MEMORY)])
+    """After the apply reaches steady state the hold is cleared: the launch runs, and the hold is read by the preflight and before the RunTask."""
+    rig, ssm = held_rig([CLEAR])
     with world(rig, "silver_transform_dag", SILVER) as current:
         require(current.step("pin_bronze") == "succeeded", "a launch with a clear hold did not run")
     require(rig.tasks_started() == 1, "a launch with a clear hold did not start exactly one task")
-    require(ssm.reads(HOLD_PARAMETER) >= 2 and ssm.reads(CAP_PARAMETER) >= 2, f"the hold and the cap were not read twice: {ssm.requests}")
+    require(ssm.reads(HOLD_PARAMETER) >= 2, f"the hold was not read twice: {ssm.requests}")
 
 
 def bound_revision_runs_by_its_exact_arn() -> None:
@@ -1699,7 +1666,7 @@ def services_build_the_session_adapter() -> None:
             return fake if name == "ecs" else FakeLogs() if name == "logs" else FakeS3()
 
     with tempfile.TemporaryDirectory() as scratch:
-        environment = {name: scratch if name.endswith("SCRATCH_PATH") else f"example-{name.lower()}" for name in steps.SETTINGS}
+        environment = launch_environment(scratch)
         provider = SimpleNamespace(BrokerlessEcsRunTaskOperator=StandInLaunchOperator)
         with (
             mock.patch.dict("os.environ", environment, clear=True),
@@ -1925,19 +1892,18 @@ CASES: dict[str, Callable[[], None]] = {
     "malformed_capacity_refuses": malformed_capacity_refuses,
     "revision_above_the_host_job_cap_is_refused": revision_above_the_host_job_cap_is_refused,
     "revision_within_the_host_job_cap_runs": revision_within_the_host_job_cap_runs,
-    "production_reader_reads_the_host_job_cap": production_reader_reads_the_host_job_cap,
+    "production_cap_comes_from_the_environment": production_cap_comes_from_the_environment,
+    "cap_setting_is_rendered_by_the_services_stack": cap_setting_is_rendered_by_the_services_stack,
     "a_constant_cap_reader_is_caught": a_constant_cap_reader_is_caught,
     "launch_during_the_hold_is_refused": launch_during_the_hold_is_refused,
     "a_hold_set_after_the_preflight_withholds_runtask": a_hold_set_after_the_preflight_withholds_runtask,
-    "a_cap_lowered_during_the_apply_withholds_runtask": a_cap_lowered_during_the_apply_withholds_runtask,
     "the_production_launcher_rechecks_at_send": the_production_launcher_rechecks_at_send,
     "a_hold_set_after_the_probe_withholds_runtask": a_hold_set_after_the_probe_withholds_runtask,
-    "a_cap_lowered_after_the_probe_withholds_runtask": a_cap_lowered_after_the_probe_withholds_runtask,
+    "the_fit_probe_never_offers_more_than_the_cap": the_fit_probe_never_offers_more_than_the_cap,
     "a_slow_authorization_withholds_runtask": a_slow_authorization_withholds_runtask,
     "a_padded_clear_value_holds_launches": a_padded_clear_value_holds_launches,
     "a_present_or_unreadable_apply_lock_refuses_launch": a_present_or_unreadable_apply_lock_refuses_launch,
     "an_apply_lock_taken_after_the_probe_withholds_runtask": an_apply_lock_taken_after_the_probe_withholds_runtask,
-    "a_cap_raised_by_the_apply_lets_the_next_launch_run": a_cap_raised_by_the_apply_lets_the_next_launch_run,
     "a_cleared_hold_lets_the_launch_run": a_cleared_hold_lets_the_launch_run,
     "bound_revision_runs_by_its_exact_arn": bound_revision_runs_by_its_exact_arn,
     "five_dags_run_end_to_end": five_dags_run_end_to_end,

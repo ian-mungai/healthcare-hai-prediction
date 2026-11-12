@@ -26,6 +26,7 @@ from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings, client_conf
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_preflight import (
     GATE,
+    HOST_JOB_CAP_SETTING,
     TABLE_MAP_FILE,
     HeldCapProbe,
     InputNotReady,
@@ -33,12 +34,12 @@ from orchestration.ecs_preflight import (
     PreflightSettings,
     S3CodeRuns,
     bronze_request_reader,
+    host_cap_reader,
     load_tables,
     publisher_request_reader,
     s3_digest_reader,
     s3_object_reader,
     serving_request_reader,
-    ssm_host_cap_reader,
     ssm_launch_hold_reader,
 )
 from orchestration.interface import SubmissionRequest
@@ -58,7 +59,7 @@ SETTINGS = (
     "HAI_LAUNCH_MLFLOW_URI",
     "HAI_LAUNCH_SCRATCH_PATH",
     "HAI_LAUNCH_HOST_CAPACITY",
-    "HAI_LAUNCH_HOST_CAP_PARAMETER",
+    HOST_JOB_CAP_SETTING,
     "HAI_LAUNCH_HOST_HOLD_PARAMETER",
     "HAI_LAUNCH_APPLY_LOCK_PARAMETER",
 )
@@ -114,7 +115,7 @@ def services() -> LaunchServices:
     )
     scratch = Path(values["HAI_LAUNCH_SCRATCH_PATH"])
     hold = ssm_launch_hold_reader(ssm, values["HAI_LAUNCH_HOST_HOLD_PARAMETER"], values["HAI_LAUNCH_APPLY_LOCK_PARAMETER"])
-    cap = ssm_host_cap_reader(ssm, values["HAI_LAUNCH_HOST_CAP_PARAMETER"])
+    cap = host_cap_reader(values[HOST_JOB_CAP_SETTING])
     clock = Clock()
     probe = host_fit_probe(EcsFitProbe(adapter.ecs, values["HAI_LAUNCH_CLUSTER"], lambda: shutil.disk_usage(scratch).free), hold, cap)
     store = S3LaunchStore(s3, values["HAI_LAUNCH_BUCKET"], launch_record_prefix())

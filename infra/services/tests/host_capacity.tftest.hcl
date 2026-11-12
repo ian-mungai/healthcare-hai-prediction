@@ -25,6 +25,9 @@ variables {
   mlflow_artifact_bucket          = "example-project-data-dev"
   # TEST FIXTURE ONLY, not a measured value: an explicit override of the 32768 MiB default, as the owner sets it from the ECS registered memory of the host.
   host_usable_memory_mib = 30720
+  # TEST FIXTURE ONLY, not a measured value: the cap the owner sets (host_job_cap_mib). Here it equals the job room of this fixture (30720 usable MiB less the
+  # 2048 MiB system reserve and the 7632 MiB the four optional services and Airflow reserve).
+  host_job_cap_mib = 21040
 
   log_group_names = {
     postgres   = "/example/postgres"
@@ -123,12 +126,12 @@ run "service_cpu_reservations_fit_beside_a_full_job" {
   }
 }
 
-run "the_job_memory_room_is_the_usable_memory_less_the_system_reserve_and_the_service_reservations" {
+run "the_job_memory_is_the_cap_and_fits_the_room" {
   command = plan
 
   assert {
-    condition     = output.host_job_memory_mib == var.host_usable_memory_mib - var.host_system_reserve_mib - output.reserved_memory_mib && var.host_system_reserve_mib == 2048
-    error_message = "One job gets the memory ECS can place on the host less the 2 GiB safety margin and less every always-on service reservation, not the nominal host memory."
+    condition     = output.host_job_memory_mib == var.host_job_cap_mib && var.host_system_reserve_mib == 2048
+    error_message = "One job gets exactly the memory of the one cap value host_job_cap_mib, and the system reserve stays 2048 MiB."
   }
 
   assert {
@@ -138,12 +141,12 @@ run "the_job_memory_room_is_the_usable_memory_less_the_system_reserve_and_the_se
 
   assert {
     condition     = output.host_job_memory_mib >= 4096 && output.host_job_memory_mib < var.host_usable_memory_mib
-    error_message = "The job room is a usable job size and smaller than the usable memory."
+    error_message = "The cap is a usable job size and smaller than the usable memory."
   }
 
   assert {
-    condition     = output.host_capacity_binding == "job_memory_mib=${output.host_job_memory_mib} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}"
-    error_message = "The capacity binding names the job room and the usable memory, the safety margin and the service reservations it comes from (owner decision A, Nov 10 2026: host launch capacity binding)."
+    condition     = output.host_capacity_binding == "job_memory_mib=${var.host_job_cap_mib} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}"
+    error_message = "The capacity binding names the cap and the usable memory, the safety margin and the service reservations it fits (owner decision A, Nov 10 2026: host launch capacity binding)."
   }
 
   assert {
@@ -157,7 +160,7 @@ run "the_job_memory_room_is_the_usable_memory_less_the_system_reserve_and_the_se
   }
 }
 
-run "a_1024_mib_reserve_keeps_the_job_and_the_reservations_inside_the_usable_memory" {
+run "a_smaller_reserve_leaves_the_cap_unchanged" {
   command = plan
 
   variables {
@@ -171,21 +174,33 @@ run "a_1024_mib_reserve_keeps_the_job_and_the_reservations_inside_the_usable_mem
   }
 
   assert {
-    condition     = output.host_job_memory_mib == var.host_usable_memory_mib - 1024 - output.reserved_memory_mib
-    error_message = "The job room follows the usable memory and the reserve, so no job size is typed by hand."
+    condition     = output.host_job_memory_mib == var.host_job_cap_mib
+    error_message = "More room does not change the cap: the owner raises host_job_cap_mib to use it."
   }
 }
 
-run "a_larger_system_reserve_shrinks_the_job_room" {
+run "a_larger_system_reserve_that_removes_the_room_for_the_cap_is_refused" {
   command = plan
 
   variables {
     host_system_reserve_mib = 4096
   }
 
+  # The cap (21040) no longer fits: 30720 less 4096 less 7632 leaves 18992 MiB. The owner lowers host_job_cap_mib in the same change.
+  expect_failures = [output.host_job_memory_mib]
+}
+
+run "a_larger_system_reserve_with_a_lowered_cap_is_accepted" {
+  command = plan
+
+  variables {
+    host_system_reserve_mib = 4096
+    host_job_cap_mib        = 18992
+  }
+
   assert {
     condition     = output.host_job_memory_mib == var.host_usable_memory_mib - 4096 - output.reserved_memory_mib
-    error_message = "The job room follows the system reserve, so no job size is typed by hand."
+    error_message = "A cap equal to the room left by the larger reserve is accepted."
   }
 }
 
@@ -199,12 +214,12 @@ run "the_default_usable_memory_is_the_current_host_size" {
   }
 
   assert {
-    condition     = var.host_usable_memory_mib == 32768 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
-    error_message = "Without an owner value the job room comes from the current host size (32768 MiB) less the 2048 MiB system reserve and the service reservations."
+    condition     = var.host_usable_memory_mib == 32768 && output.host_job_memory_mib == var.host_job_cap_mib && var.host_job_cap_mib <= 32768 - 2048 - output.reserved_memory_mib
+    error_message = "Without an owner value the room comes from the current host size (32768 MiB) less the 2048 MiB system reserve and the service reservations, and the cap fits it."
   }
 
   assert {
-    condition = output.host_capacity_binding == "job_memory_mib=${32768 - 2048 - output.reserved_memory_mib} usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}" && alltrue([
+    condition = output.host_capacity_binding == "job_memory_mib=${var.host_job_cap_mib} usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=${output.reserved_memory_mib}" && alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
         contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAPACITY=usable_memory_mib=32768 system_reserve_mib=2048") if startswith(container.name, "airflow")
@@ -328,53 +343,91 @@ run "an_unknown_job_family_name_is_refused" {
   expect_failures = [var.host_job_families]
 }
 
-run "the_host_job_cap_is_written_to_one_standard_parameter" {
+run "the_host_job_cap_is_rendered_into_every_airflow_container" {
   command = plan
 
-  # Current host job cap at launch (owner A, Nov 10 2026): the launch preflight reads this parameter at every host launch and refuses a revision
-  # whose hai.host_capacity label gives a job more memory.
+  # Host job cap setting (Nov 11 2026): the one variable host_job_cap_mib is the cap of the Airflow environment, the job memory the jobs stack gets and the
+  # capacity binding. The hold and the apply lock stay Parameter Store parameters that the services apply command manages.
   assert {
-    condition = (
-      aws_ssm_parameter.host_job_cap.name == "/healthcare_hai_prediction/host_job_cap" &&
-      aws_ssm_parameter.host_job_cap.type == "String" &&
-      aws_ssm_parameter.host_job_cap.tier == "Standard" &&
-      aws_ssm_parameter.host_job_cap.value == tostring(output.host_job_memory_mib)
-    )
-    error_message = "The services stack writes the current job room (usable memory less the system reserve and every service reservation) to one standard String parameter."
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=21040") &&
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_HOLD_PARAMETER=/healthcare_hai_prediction/host_launch_hold") &&
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_APPLY_LOCK_PARAMETER=/healthcare_hai_prediction/services_apply_lock") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container carries the cap as HAI_LAUNCH_HOST_JOB_CAP_MIB and still names the launch hold and the apply lock parameters."
+  }
+}
+
+run "the_default_cap_is_the_current_job_room_of_the_live_stack" {
+  command = plan
+
+  # The live stack runs MLflow and none of Marquez, OpenMetadata and monitoring on the 32768 MiB host: the services reserve 3904 MiB, so one job has
+  # 32768 - 2048 - 3904 = 26816 MiB. The default of host_job_cap_mib is that figure (one host job at a time, set from the Airflow pool of one slot).
+  variables {
+    marquez_enabled                 = false
+    openmetadata_persistent_enabled = false
+    monitoring_enabled              = false
+    host_usable_memory_mib          = null
+    host_job_cap_mib                = null
+  }
+
+  assert {
+    condition     = var.host_job_cap_mib == 26816 && output.reserved_memory_mib == 3904 && output.host_job_memory_mib == 26816 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
+    error_message = "The default cap is 26816 MiB, the job room the live services leave today."
   }
 
   assert {
     condition = alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_CAP_PARAMETER=/healthcare_hai_prediction/host_job_cap") &&
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_HOLD_PARAMETER=/healthcare_hai_prediction/host_launch_hold") &&
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_APPLY_LOCK_PARAMETER=/healthcare_hai_prediction/services_apply_lock") if startswith(container.name, "airflow")
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=26816") if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "Every Airflow container names the host job cap parameter and the launch hold parameter, so the launch preflight reads the cap the services stack wrote and the hold the services apply command sets."
+    error_message = "Every Airflow container carries the default cap of 26816 MiB."
   }
 }
 
-run "a_larger_reserve_lowers_the_written_cap" {
+run "a_cap_above_the_job_room_is_refused" {
   command = plan
 
+  # All four optional services on the 32768 MiB host leave 23088 MiB, below the default cap of 26816 MiB.
   variables {
-    host_system_reserve_mib = 4096
+    host_usable_memory_mib = null
+    host_job_cap_mib       = null
   }
 
-  assert {
-    condition     = aws_ssm_parameter.host_job_cap.value == tostring(var.host_usable_memory_mib - 4096 - output.reserved_memory_mib)
-    error_message = "The written cap follows the inputs, so a larger reserve or a larger service reservation lowers it at the next services apply."
-  }
+  expect_failures = [output.host_job_memory_mib]
 }
 
-run "a_host_job_cap_parameter_name_with_a_wildcard_is_refused" {
+run "a_cap_of_zero_is_refused" {
   command = plan
 
   variables {
-    host_job_cap_parameter_name = "/healthcare_hai_prediction/*"
+    host_job_cap_mib = 0
   }
 
-  expect_failures = [var.host_job_cap_parameter_name]
+  expect_failures = [var.host_job_cap_mib]
+}
+
+run "a_cap_that_is_not_a_whole_number_is_refused" {
+  command = plan
+
+  variables {
+    host_job_cap_mib = 21040.5
+  }
+
+  expect_failures = [var.host_job_cap_mib]
+}
+
+run "a_cap_at_or_above_the_host_memory_is_refused" {
+  command = plan
+
+  variables {
+    host_job_cap_mib = 32768
+  }
+
+  expect_failures = [var.host_job_cap_mib]
 }

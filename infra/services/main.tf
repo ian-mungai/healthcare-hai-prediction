@@ -207,9 +207,10 @@ locals {
   reserved_memory_mib = sum([for service in local.services : sum([for container in service.containers : container.memoryReservation])])
   hard_memory_mib     = sum([for container in local.all_containers : container.memory])
   memory_budget_mib   = var.host_memory_mib - var.other_services_reserve_mib
-  # The job room starts from the memory ECS can place (host_usable_memory_mib, by default the current host size).
-  host_job_memory_mib = var.host_usable_memory_mib - var.host_system_reserve_mib - local.reserved_memory_mib
-  # The capacity binding (owner A, Nov 10 2026): the job room and the inputs it comes from. The jobs stack labels the init container of every host
+  # The job memory is the one cap value the owner sets (host_job_cap_mib). It is rendered into the Airflow containers, whose own reservations are part of
+  # reserved_memory_mib, so it cannot be computed from the room without a cycle; the output host_job_memory_mib checks that it fits the room instead.
+  host_job_memory_mib = var.host_job_cap_mib
+  # The capacity binding (owner A, Nov 10 2026): the job memory (the cap) and the inputs it must fit. The jobs stack labels the init container of every host
   # revision with it, and the launch preflight runs a host job only from a revision bound to the usable-memory inputs in HAI_LAUNCH_HOST_CAPACITY.
   host_capacity_binding = format(
     "job_memory_mib=%d usable_memory_mib=%d system_reserve_mib=%d service_reservations_mib=%d",
@@ -383,14 +384,7 @@ moved {
   to   = aws_ecs_service.serving["streamlit"]
 }
 
-# Current host job cap at launch (owner A, Nov 10 2026): the job room this apply leaves on the host, read by the launch preflight at every host launch.
-# Host job cap parameter writer (owner A, Nov 10 2026): Terraform manages the parameter, so the project user may put, read, delete and tag this one name.
-resource "aws_ssm_parameter" "host_job_cap" {
-  #checkov:skip=CKV2_AWS_34:The host job cap is a memory size in MiB, not a secret; the Airflow launch role reads it with ssm:GetParameter and no key.
-  name        = var.host_job_cap_parameter_name
-  description = "Memory MiB one host job may get: the usable host memory less the system reserve and every always-on service reservation."
-  type        = "String"
-  tier        = "Standard"
-  data_type   = "text"
-  value       = tostring(local.host_job_memory_mib)
-}
+# Retired host job cap parameter (Nov 11 2026): earlier applies of this stack wrote the cap to the Parameter Store parameter
+# /healthcare_hai_prediction/host_job_cap. The first services apply after this change deletes it from AWS and from the state, and that delete needs the
+# project user's ssmcap grant on it. So the owner applies this stack first, with the code of the new preflight staged, and applies the IAM stack and the
+# project user policies, which no longer hold that grant, only after it (never before).

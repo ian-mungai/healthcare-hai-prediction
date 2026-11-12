@@ -43,10 +43,10 @@ locals {
     HAI_LAUNCH_POLARIS_URI   = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:8181/api/catalog"
     HAI_LAUNCH_MLFLOW_URI    = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:5100"
     HAI_LAUNCH_SCRATCH_PATH  = "/opt/hai/job_scratch"
-    # The usable-memory inputs a host revision must be bound to (owner A, Nov 10 2026). Variables only: the job room also counts the reservations of
-    # these Airflow containers, so it cannot be named here without a cycle.
-    # The parameter that holds the current host job cap (owner A, Nov 10 2026), read by the preflight at every host launch.
-    HAI_LAUNCH_HOST_CAP_PARAMETER  = var.host_job_cap_parameter_name
+    # The host job cap in MiB (Nov 11 2026), read by the preflight at every host launch: the one variable host_job_cap_mib. It comes from the variable alone,
+    # because the room it must fit counts the reservations of these Airflow containers, so it cannot be computed here without a cycle.
+    HAI_LAUNCH_HOST_JOB_CAP_MIB = tostring(local.host_job_memory_mib)
+    # The usable-memory inputs a host revision must be bound to (owner A, Nov 10 2026). Variables only, for the same reason.
     HAI_LAUNCH_HOST_HOLD_PARAMETER = var.host_launch_hold_parameter_name
     # A present or unreadable services apply lock refuses every host launch (round 4, owner A, Nov 10 2026).
     HAI_LAUNCH_APPLY_LOCK_PARAMETER = var.services_apply_lock_parameter_name

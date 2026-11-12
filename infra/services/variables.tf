@@ -418,15 +418,15 @@ variable "host_usable_memory_mib" {
   }
 }
 
-variable "host_job_cap_parameter_name" {
-  description = "Parameter Store name the stack writes the current host job cap to (output host_job_memory_mib, in MiB). The launch preflight reads it at every host launch and refuses a revision whose hai.host_capacity label gives a job more memory. The IAM stack grants the Airflow launch role a read of this one name."
-  type        = string
-  default     = "/healthcare_hai_prediction/host_job_cap"
+variable "host_job_cap_mib" {
+  description = "The host job cap in MiB: the memory one host job gets (one host job runs at a time). The stack renders it into every Airflow container as HAI_LAUNCH_HOST_JOB_CAP_MIB, which the launch preflight reads at every host launch (a missing or invalid value refuses the launch), and hands it to the jobs stack as the job memory (output host_job_memory_mib) and in the capacity binding. It must fit the room the services leave: the usable memory less host_system_reserve_mib and the always-on service reservations (output host_job_memory_mib refuses a larger cap). The default is the room the live services leave today: MLflow on a 32768 MiB host reserves 3904 MiB, so 32768 - 2048 - 3904 = 26816 MiB. After a change, apply this stack, render the jobs stack from it (render_jobs_config) and apply that too."
+  type        = number
+  default     = 26816
   nullable    = false
 
   validation {
-    condition     = length(var.host_job_cap_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.host_job_cap_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.host_job_cap_parameter_name))
-    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
+    condition     = var.host_job_cap_mib > 0 && var.host_job_cap_mib < var.host_memory_mib && var.host_job_cap_mib == floor(var.host_job_cap_mib)
+    error_message = "Use a whole number of MiB above 0 and below the nominal host memory host_memory_mib."
   }
 }
 
@@ -455,7 +455,7 @@ variable "services_apply_lock_parameter_name" {
 }
 
 variable "host_system_reserve_mib" {
-  description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The job room (output host_job_memory_mib) is the usable memory less this margin and the always-on service reservations."
+  description = "Safety margin in MiB that no task reservation gets: the operating system, Docker and the ECS agent below the nominal host memory, and memory the reservations do not count within the usable memory. The room for the host job cap (host_job_cap_mib) is the usable memory less this margin and the always-on service reservations."
   type        = number
   default     = 2048
   nullable    = false
@@ -467,7 +467,7 @@ variable "host_system_reserve_mib" {
 }
 
 variable "host_job_memory_floor_mib" {
-  description = "Smallest job room in MiB the services may leave on the host; a plan that leaves less is refused at the host_job_memory_mib output."
+  description = "Smallest job room in MiB the services may leave on the host; a plan whose cap host_job_cap_mib is below it is refused at the host_job_memory_mib output."
   type        = number
   default     = 4096
   nullable    = false

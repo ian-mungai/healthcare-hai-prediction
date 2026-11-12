@@ -34,18 +34,6 @@ variable "airflow_launch_record_prefix" {
   }
 }
 
-variable "host_job_cap_parameter_name" {
-  description = "Parameter Store name of the current host job cap that the services stack writes (its variable of the same name). The Airflow launch role may read this one name, and the project user may manage it so the services apply can create, update and delete it."
-  type        = string
-  default     = "/healthcare_hai_prediction/host_job_cap"
-  nullable    = false
-
-  validation {
-    condition     = length(var.host_job_cap_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.host_job_cap_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.host_job_cap_parameter_name))
-    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
-  }
-}
-
 variable "host_launch_hold_parameter_name" {
   description = "Parameter Store name of the launch hold that the services apply command sets and clears (the services variable of the same name). The Airflow launch role may read this one name; the project user may put and read it."
   type        = string
@@ -103,9 +91,8 @@ locals {
     TASK_ARN_PATTERN                = "${local.ecs_arn}:task/${local.cluster_name}/*"
     LOG_GROUP_NAME                  = format(local.platform_name, "jobs")
     DATA_BUCKET_NAME                = var.data_bucket_name
-    HOST_JOB_CAP_PARAMETER_NAME     = var.host_job_cap_parameter_name
     HOST_LAUNCH_HOLD_PARAMETER_NAME = var.host_launch_hold_parameter_name
-    # The launch role reads the services apply lock (ReadHostJobCap); the project user's ssmcap policy grants its create, read and delete.
+    # The launch role reads the services apply lock (ReadLaunchHoldAndApplyLock); the project user's ssmcap policy grants its create, read and delete.
     SERVICES_APPLY_LOCK_PARAMETER_NAME = var.services_apply_lock_parameter_name
     RECORD_PREFIX                      = var.airflow_launch_record_prefix
     REQUEST_OBJECT_ARNS                = jsonencode(local.airflow_launch_request_arns)

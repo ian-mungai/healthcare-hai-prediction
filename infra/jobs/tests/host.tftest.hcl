@@ -417,15 +417,33 @@ run "the_capacity_binding_has_the_rendered_form" {
   expect_failures = [var.host_capacity_binding]
 }
 
-run "the_capacity_binding_adds_up" {
+run "the_capacity_binding_may_not_give_a_job_more_than_the_room" {
   command = plan
 
+  # The room is the usable memory less the reserve and the reservations: 30720 - 2048 - 5120 = 23552 MiB, below the 25600 MiB the binding gives a job.
   variables {
     host_jobs_enabled     = true
-    host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=5120"
+    host_job_memory_mib   = 25600
+    host_capacity_binding = "job_memory_mib=25600 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
   }
 
   expect_failures = [var.host_capacity_binding]
+}
+
+run "a_job_memory_below_the_room_is_accepted" {
+  command = plan
+
+  # The services cap host_job_cap_mib may be lower than the room it must fit (Nov 11 2026): every host job gets the cap.
+  variables {
+    host_jobs_enabled     = true
+    host_job_memory_mib   = 20480
+    host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.host["silver"].memory == "20480"
+    error_message = "A host job gets the cap even when the room is larger."
+  }
 }
 
 run "the_capacity_binding_gives_the_job_room" {

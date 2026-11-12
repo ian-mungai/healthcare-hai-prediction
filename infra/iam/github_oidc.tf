@@ -135,8 +135,8 @@ locals {
   # only the project's own repositories, buckets, cluster and the like, and a statement that the project policies limit by tag keeps
   # its tag condition. Only the region condition is added. State is read by key below. A refresh of the storage stack reads bucket
   # configuration and heads the bucket (s3:ListBucket), and the stack has no object resource, so no object read needs an exception.
-  # ssm:DescribeParameters and ssm:ListTagsForResource come from the project user's host job cap policy (ssmcap); the delivery boundary does not
-  # allow them, so the plan role does not mirror them (owner A, Nov 10 2026: delivery plan role and the host job cap policy).
+  # ssm:DescribeParameters and ssm:ListTagsForResource are not in the delivery boundary, so the plan role does not mirror them (owner A, Nov 10 2026:
+  # delivery plan role; the project user's ssmcap policy listed them for the host job cap parameter until Nov 11 2026).
   github_plan_unreadable       = ["secretsmanager:GetSecretValue", "ssm:GetParameter", "ssm:GetParameters", "ssm:DescribeParameters", "ssm:ListTagsForResource", "logs:GetLogEvents", "logs:FilterLogEvents", "ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ec2:GetConsoleOutput", "ec2:GetConsoleScreenshot", "ec2:GetPasswordData", "logs:GetLogRecord", "logs:GetQueryResults", "s3:ListBucketVersions", "s3:ListBucketMultipartUploads", "s3:ListMultipartUploadParts"]
   github_policy_shared_secrets = [var.census_secret_name, var.bls_secret_name, var.hud_secret_name, var.jev_secret_name]
   github_plan_read_statements = flatten([

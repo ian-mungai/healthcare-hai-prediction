@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
-from scripts.infrastructure.secret_store import SecretStoreError, features_pair_names, host_job_cap_names, openmetadata_names, policy_names, variable_names
+from scripts.infrastructure.secret_store import SecretStoreError, features_pair_names, launch_hold_names, openmetadata_names, policy_names, variable_names
 
 POLICIES_DIRECTORY = Path(__file__).resolve().parents[1] / "policies"
 VARIABLES_FILE = Path(__file__).resolve().parents[1] / "variables.tf"
@@ -63,7 +63,7 @@ def terraform_names(variables: Path = VARIABLES_FILE) -> dict[str, Sequence[str]
             **variable_names(variables),
             **openmetadata_names(variables),
             **features_pair_names(variables),
-            **host_job_cap_names(variables),
+            **launch_hold_names(variables),
         }
     except (OSError, SecretStoreError) as error:
         raise PolicyRenderError(f"the names cannot be read from {variables.name}: {error}") from None

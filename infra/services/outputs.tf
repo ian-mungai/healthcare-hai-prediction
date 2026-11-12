@@ -53,17 +53,17 @@ output "reserved_memory_mib" {
 }
 
 output "host_job_memory_mib" {
-  description = "Memory MiB one job gets on the host: the usable (ECS registered) memory less the safety margin host_system_reserve_mib and the always-on service reservations. render_jobs_config passes it to the jobs stack as host_job_memory_mib."
+  description = "Memory MiB one job gets on the host: the host job cap host_job_cap_mib. It must fit the room that the usable (ECS registered) memory leaves after the safety margin host_system_reserve_mib and the always-on service reservations. render_jobs_config passes it to the jobs stack as host_job_memory_mib."
   value       = local.host_job_memory_mib
 
   precondition {
     condition     = local.host_job_memory_mib >= var.host_job_memory_floor_mib
-    error_message = "The always-on service reservations and the system reserve leave less than host_job_memory_floor_mib for one job on the host."
+    error_message = "The host job cap host_job_cap_mib is below host_job_memory_floor_mib, the smallest job memory the services may leave."
   }
 
   precondition {
     condition     = local.host_job_memory_mib + local.reserved_memory_mib + var.host_system_reserve_mib <= var.host_usable_memory_mib
-    error_message = "The job room, the always-on service reservations and the safety margin together exceed the memory ECS can place on the host."
+    error_message = "The host job cap host_job_cap_mib, the always-on service reservations and the safety margin together exceed the memory ECS can place on the host. Lower host_job_cap_mib or the reservations."
   }
 }
 

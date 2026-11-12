@@ -5,6 +5,9 @@ mock_provider "aws" {
 # Prometheus, Grafana and the StatsD exporter run as one task behind monitoring_enabled. These cases turn the flag on with Marquez also on, the largest memory load the
 # stack plans today, and pin the flag-off plan in the first case. Every case reads the plan only: no image runs and nothing reaches AWS.
 variables {
+  # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use. The default is the room the live stack leaves, which the
+  # larger fixtures here do not have.
+  host_job_cap_mib            = 4096
   aws_profile                 = "example_project_dev"
   environment                 = "dev"
   project_name                = "example_project"

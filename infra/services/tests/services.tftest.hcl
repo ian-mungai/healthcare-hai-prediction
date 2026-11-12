@@ -3,6 +3,9 @@ mock_provider "aws" {
 }
 
 variables {
+  # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use. The default is the room the live stack leaves, which the
+  # larger fixtures here do not have.
+  host_job_cap_mib            = 4096
   aws_profile                 = "example_project_dev"
   environment                 = "dev"
   project_name                = "example_project"
@@ -1202,11 +1205,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "ec138288e0dae247f3ad1f26331c0a90ea68329508f2e43e0868bfaf93b11703"
-      "airflow_apiserver/airflow_migrate"           = "eb5376c30ad62a23ece6caabb5bbb40c625c7241fed2056e64eca3f4479226b3"
-      "airflow_dag_processor/airflow_dag_processor" = "977754372c89c9f0826a4545e69a2686b16aa2934f248357537c66970633bdab"
-      "airflow_scheduler/airflow_scheduler"         = "434d2eac83bcf1cd718d0a641bc93f576a5a1d81127a96fc2a4c874fae7e9f79"
-      "airflow_triggerer/airflow_triggerer"         = "956ff20e5716328c38da977a6a8d6d1933943528306a1617f63b2a3c9603dc1c"
+      "airflow_apiserver/airflow_apiserver"         = "1552ce9fec2ad02881e784f6578332f73083e24d8974a6fb479e10d4ac727650"
+      "airflow_apiserver/airflow_migrate"           = "7b1d7d53a29466cb9e05def699a2050662ec12411756d5ace5b95a6211c1c5bb"
+      "airflow_dag_processor/airflow_dag_processor" = "cb1b59be81b54f7a5d13b800ea4f64026275e306554f7d4df267a1614c025230"
+      "airflow_scheduler/airflow_scheduler"         = "3b15d48a5ec317152c0971a11fec867311224f86aa5369a98aa9f0f3158c87de"
+      "airflow_triggerer/airflow_triggerer"         = "082466276ddf34922f1cc1dda72ff2ed0bba2bf1daa42338148fab8f31e350c5"
       "host_prepare/host_prepare"                   = "4d8c9dad92ef904aa63c94480dd49e17225cbedad17021fb0a5da1b4a25b80ca"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
@@ -2945,7 +2948,7 @@ run "launch_mounts_are_always_present" {
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
           length(setsubtract(
-            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH", "HAI_LAUNCH_HOST_CAPACITY"],
+            ["AWS_REGION", "HAI_LAUNCH_POOL", "HAI_LAUNCH_CLUSTER", "HAI_LAUNCH_FAMILY_PREFIX", "HAI_LAUNCH_PROJECT_TAG", "HAI_LAUNCH_LOG_GROUP", "HAI_LAUNCH_HOST_PROVIDER", "HAI_LAUNCH_BUCKET", "HAI_LAUNCH_POLARIS_URI", "HAI_LAUNCH_MLFLOW_URI", "HAI_LAUNCH_SCRATCH_PATH", "HAI_LAUNCH_HOST_CAPACITY", "HAI_LAUNCH_HOST_JOB_CAP_MIB"],
             [for item in container.environment : item.name]
           )) == 0
           && !anytrue([for item in container.environment : item.name == "HAI_LAUNCH_SIGNED_PARAMETER"])
