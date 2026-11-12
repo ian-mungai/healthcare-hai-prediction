@@ -322,3 +322,14 @@ def test_the_command_line_takes_the_prior_state_as_one_named_set(monkeypatch: py
         verifier.main([*named, *window, *prior[:2]], again.task_storage, tmp_path)
     with pytest.raises(SystemExit):
         verifier.main([*named, *window, *prior[:5], "0" * 64], again.task_storage, tmp_path)
+
+
+def test_a_reference_only_unit_passes_the_verifier_as_it_passes_the_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from scripts.acquisition.tests.test_task_raw_store import reference_run
+
+    bucket = Stamped(SINCE + timedelta(hours=1))
+    run, _unit = reference_run(monkeypatch, tmp_path, bucket, STORED)
+    harness.execute(run)
+    monkeypatch.setattr(verifier, "retrieved_at", lambda _receipt: SINCE + timedelta(hours=1))
+    report = checked(run, SINCE)
+    check(report == {"outcomes": 1, "verified": 1, "not_verified": [], "outside_window": []}, str(report))

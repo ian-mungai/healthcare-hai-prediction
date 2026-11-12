@@ -664,12 +664,6 @@ def route_id_of(unit: dict, registry: dict) -> str:
     return str(next(route["route_id"] for route in source["file_routes"] if canonical_url(route.get("url") or "") == wanted))
 
 
-# The stored artifacts a fresh download repeats: its data or API pages, or for a reference capture, which holds no data, the reference document a person
-# saved. Proofs and derived files are made fresh.
-DOWNLOADED_ROLES = frozenset({"data", "api_page"})
-REFERENCE_ROLES = frozenset({"dictionary", "methodology", "layout"})
-
-
 def link_download(result: Any, target: Path) -> None:
     """Put a download into its capture folder by a hard link. A folder an interrupted attempt already filled is reused when its file is this download.
 
@@ -701,7 +695,7 @@ def fresh_capture(unit: dict, run: Run, results: list[Any], registry: dict, comp
     (root / "raw").mkdir(parents=True, exist_ok=True)
     made = {path for path, _, _ in companions}
     kept = [item for item in stored["artifacts"] if item["storage_path"] not in made]
-    repeated = [item for item in kept if item["role"] in DOWNLOADED_ROLES] or [item for item in kept if item["role"] in REFERENCE_ROLES]
+    repeated = restored_outcomes.repeated_artifacts(kept)
     artifacts = []
     for index, (result, earlier) in enumerate(zip(results, repeated, strict=True), 1):
         target = root / "raw" / result.path.name

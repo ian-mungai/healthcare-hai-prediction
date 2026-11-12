@@ -644,3 +644,56 @@ def test_a_registry_route_with_no_address_decides_nothing(monkeypatch: pytest.Mo
     next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])["file_routes"].append({"route_id": "blank", "url": None})
     monkeypatch.setattr(harness, "load_registry", lambda **_options: copy.deepcopy(registry))
     check(harness.execute(run)["outcomes"] == {"exact_match": 1}, "a blank route blocks nothing")
+
+
+def reference_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bucket: TaskS3, fresh: bytes) -> tuple[harness.Run, dict]:
+    """A unit whose stored capture holds one reference document and no data, as a dictionary or algorithm download does."""
+    fixture, unit = stored_unit(monkeypatch, tmp_path, STORED, "a.csv")
+    path = tmp_path / unit["receipt"]
+    document = read_json(path)
+    for artifact in document["artifacts"]:
+        artifact["role"] = "dictionary"
+    path.write_bytes(encoded_json(document))
+    unit["receipt_sha256"] = harness.digest(path.read_bytes())
+    return task_run(tmp_path, fixture, opener=opener(Web({unit["url"]: fresh})), task_storage=storage(bucket)), unit
+
+
+@pytest.mark.parametrize(("fresh", "label"), [(STORED, "exact_match"), (b"a,b\n3,4\n", "changed_needs_review")], ids=["same document", "changed document"])
+def test_a_reference_only_unit_survives_the_restore_recheck(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fresh: bytes, label: str) -> None:
+    bucket = TaskS3()
+    run, _unit = reference_run(monkeypatch, tmp_path, bucket, fresh)
+    check(harness.execute(run)["outcomes"] == {label: 1}, "the capture path accepts a reference-only unit")
+    check(harness.execute(restart(run))["attempted"] == 0, "the restored reference outcome verifies and is not attempted again")
+
+
+def test_a_reference_only_unit_labelled_exact_after_a_change_still_stops_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    bucket = TaskS3()
+    run, unit = reference_run(monkeypatch, tmp_path, bucket, b"a,b\n3,4\n")
+    harness.execute(run)
+    rewrite_outcome(run, unit, outcome="exact_match")
+    with pytest.raises(ValueError, match="claims a match"):
+        harness.execute(restart(run))
+
+
+def artifact_set(*roles: str) -> dict:
+    return {"artifacts": [{"role": role, "stored_file_name": f"{role}.csv", "artifact_id": role, "sha256": "0" * 64} for role in roles]}
+
+
+@pytest.mark.parametrize(
+    ("stored", "fresh", "message"),
+    [
+        (("dictionary",), ("export_receipt", "layout_proof"), "no data"),
+        (("dictionary",), (), "no data"),
+        (("data",), ("dictionary",), "no data"),
+        (("data",), ("export_receipt",), "no data"),
+        (("api_page", "dictionary"), ("dictionary",), "no data"),
+    ],
+    ids=["neither", "nothing", "data unit left with a reference", "data unit left with no data", "api unit left with a reference"],
+)
+def test_coverage_refuses_a_capture_without_what_its_stored_capture_holds(stored: tuple, fresh: tuple, message: str) -> None:
+    from scripts.acquisition import restored_outcomes
+    from scripts.acquisition.source_registry import RegistryError
+
+    unit = {"mode": "file", "source_id": "X"}
+    with pytest.raises(RegistryError, match=message):
+        restored_outcomes.require_coverage(unit, None, artifact_set(*stored), artifact_set(*fresh), [])

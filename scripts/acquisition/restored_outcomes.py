@@ -17,7 +17,9 @@ from scripts.acquisition.s3_store import fingerprint
 from scripts.acquisition.source_registry import RegistryError, read_json, require
 from scripts.acquisition.transport import canonical_url
 
+# The stored artifacts a fresh download repeats and a restore compares: a capture's data or API pages or, only when it holds none, its reference documents.
 DATA_ROLES = frozenset({"data", "api_page"})
+REFERENCE_ROLES = frozenset({"dictionary", "methodology", "layout"})
 CLAIMS = frozenset({"exact_match", "changed_needs_review"})
 KNOWN_OUTCOMES = CLAIMS | {"blocked", "unavailable"}
 CHARGE_KINDS = frozenset({"received_bytes", "injected_received_bytes", "persisted_copy_bytes"})
@@ -66,16 +68,29 @@ def bind(unit: dict, stored: dict, receipt: dict, manifests: list[dict], item: d
         require(listed.get(item["key"], {}).get("sha256") == item["sha256"], "Restored outcome names a manifest without its receipt")
 
 
-def data_artifacts(document: dict) -> dict[str, dict]:
-    return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in DATA_ROLES}
+def compared_roles(stored: list[dict]) -> frozenset[str]:
+    """The roles a fresh capture repeats from this stored artifact list: data and API pages or, with none, the reference documents."""
+    return DATA_ROLES if any(item["role"] in DATA_ROLES for item in stored) else REFERENCE_ROLES
 
 
-def compared(unit: dict, document: dict) -> dict[str, dict]:
+def repeated_artifacts(stored: list[dict]) -> list[dict]:
+    """The stored artifacts a fresh capture repeats. The capture path and the restore recheck both choose through ``compared_roles``."""
+    roles = compared_roles(stored)
+    return [item for item in stored if item["role"] in roles]
+
+
+def data_artifacts(document: dict, stored: dict) -> dict[str, dict]:
+    """The artifacts of ``document`` in the roles the stored capture's own artifacts choose."""
+    roles = compared_roles(stored["artifacts"])
+    return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in roles}
+
+
+def compared(unit: dict, document: dict, stored: dict) -> dict[str, dict]:
     """The artifacts that decide a unit's outcome. An MMD capture is decided by its one derived file, whatever the stored export is called."""
     if is_mmd(unit):
         derived = [item for item in document["artifacts"] if item["role"] == "data"]
         return {"data": derived[0]} if len(derived) == 1 else {}
-    return data_artifacts(document)
+    return data_artifacts(document, stored)
 
 
 def members_of(entries: list[dict]) -> dict[tuple[str, ...], dict]:
@@ -100,10 +115,10 @@ def require_coverage(unit: dict, run: Any, stored: dict, receipt: dict, entries:
     """Whatever its label says, a capture must hold its data: every data artifact of the receipt has its object, or its archive has the reviewed members."""
     from scripts.acquisition.redownload import PLANNED
 
-    fresh = data_artifacts(receipt)
+    fresh = data_artifacts(receipt, stored)
     require(bool(fresh), "Restored outcome names a capture with no data")
     if unit["mode"] not in PLANNED and not is_mmd(unit):
-        require(set(fresh) == set(data_artifacts(stored)), "Restored outcome names a capture with other data files than its unit")
+        require(set(fresh) == set(data_artifacts(stored, stored)), "Restored outcome names a capture with other data files than its unit")
     members = members_of(entries)
     for artifact in fresh.values():
         direct = direct_entry(artifact, entries)
@@ -122,7 +137,7 @@ def same_data(unit: dict, run: Any, stored: dict, receipt: dict, entries: list[d
     """The comparison again, from the stored capture and the bytes just read. An archive compares member by member, as its container is never stored."""
     from scripts.acquisition.redownload import compare_files, ensure_stored, receipt_file, same_content
 
-    old, new = compared(unit, stored), compared(unit, receipt)
+    old, new = compared(unit, stored, stored), compared(unit, receipt, stored)
     if set(old) != set(new):
         return False
     for name, artifact in new.items():
@@ -149,8 +164,10 @@ def same_data(unit: dict, run: Any, stored: dict, receipt: dict, entries: list[d
 
 def container_changed(stored: dict, receipt: dict, entries: list[dict]) -> bool:
     """A rebuilt archive may differ only in what its stored members do not show, such as a comment, so a changed label on it cannot be disproved from them."""
-    old = data_artifacts(stored)
-    return any(direct_entry(item, entries) is None and item["sha256"] != old.get(name, {}).get("sha256") for name, item in data_artifacts(receipt).items())
+    old = data_artifacts(stored, stored)
+    return any(
+        direct_entry(item, entries) is None and item["sha256"] != old.get(name, {}).get("sha256") for name, item in data_artifacts(receipt, stored).items()
+    )
 
 
 def active_units(run: Any) -> dict[str, dict]:
