@@ -14,7 +14,7 @@ from scripts.training import auto_promotion
 from scripts.training.lane_b_cases import Cases, require
 
 RUN = "20261024T000000Z-1234abcd"
-RESEARCH = {
+RESEARCH: dict[str, Any] = {
     "schema": 1,
     "hai_type": "HAI_1",
     "base_run": "20261023T000000Z-5678abcd",
@@ -27,7 +27,7 @@ RESEARCH = {
 }
 VERSION = "4"
 OFFLINE = {f"{index:06d}:2023": 0.5 + index / 100 for index in range(40)}
-ROWS = [
+ROWS: list[dict[str, Any]] = [
     {
         "ccn": f"{index:06d}",
         "window_year": 2023,
@@ -50,7 +50,7 @@ ROWS = [
     }
     for index in range(60)
 ]
-REPORT = {
+REPORT: dict[str, Any] = {
     "hai_type": "HAI_1",
     "requests": 100,
     "statuses": {"200": 100},
@@ -217,7 +217,12 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
 
     def notice_reaches_the_topic() -> None:
         sent: list[dict[str, Any]] = []
-        client = SimpleNamespace(publish=lambda **kwargs: sent.append(kwargs) or {"MessageId": "m-1"})
+
+        def publish(**kwargs: Any) -> dict[str, str]:
+            sent.append(kwargs)
+            return {"MessageId": "m-1"}
+
+        client = SimpleNamespace(publish=publish)
         require(
             auto_promotion.notify(client, "arn:aws:sns:example-region:example-account:alerts", "HAI_1", "promoted", "m2 version 4") == "m-1", "no message ID"
         )
