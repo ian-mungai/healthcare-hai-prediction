@@ -282,6 +282,7 @@ def main_prepares_the_environment_of_the_dvc_and_mlflow_clients(folder: Path) ->
     return problems if kept == "s3://another/dvc/" else [*problems, "a caller's DVC remote was replaced"]
 
 
+# The task variables mark an ECS task, so the phase derives engine limits first; these cases stub that step, which reads container memory that a Mac host lacks.
 TASK_READER_VARIABLES = {
     "DATA_BUCKET_NAME": "bucket-for-tests",
     "POLARIS_URI": "http://10.0.1.20:8181/api/catalog",
@@ -303,6 +304,7 @@ def current_phase_prepares_the_aws_feature_reader(folder: Path) -> Problems:
 
     with (
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", capture),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
@@ -343,6 +345,7 @@ def current_phase_environment_selects_the_aws_branch_of_the_real_reader(folder: 
 
     with (
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
         mock.patch.object(importlib.import_module("monitoring.current_window"), "open_reader", stop),
     ):
         aws_run().main(["current", f"--run={RUN}", f"--work={work}"])
