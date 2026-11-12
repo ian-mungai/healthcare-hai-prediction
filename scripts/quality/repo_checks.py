@@ -630,45 +630,63 @@ def target_names(target: ast.expr) -> set[str]:
 def walrus_names(node: ast.AST) -> set[str]:
     """Return the names the walrus operators in the expressions of one statement bind in the scope that holds the statement.
 
-    A comprehension binds its walrus names in the scope around it, so they count. A lambda body is a scope of its own, so it does not count.
-    The statements nested in this one are not entered: the caller visits them.
+    A comprehension binds its walrus names in the scope around it, so they count. A lambda body and parameters are a scope of their own, so they
+    do not count, but the default values of a lambda run in the scope around it, so they do. The statements nested in this one are not entered:
+    the caller visits them.
     """
-    names: set[str] = set()
+    if isinstance(node, ast.Lambda):
+        defaults = [*node.args.defaults, *(default for default in node.args.kw_defaults if default is not None)]
+        return {name for default in defaults for name in walrus_names(default)}
+    names = target_names(node.target) if isinstance(node, ast.NamedExpr) else set()
     for child in ast.iter_child_nodes(node):
-        if isinstance(child, ast.stmt | ast.Lambda):
-            continue
-        if isinstance(child, ast.NamedExpr):
-            names |= target_names(child.target)
-        names |= walrus_names(child)
+        if not isinstance(child, ast.stmt):
+            names |= walrus_names(child)
+    return names
+
+
+def pattern_names(pattern: ast.pattern) -> set[str]:
+    """Return the names a match pattern captures: a capture, an as-pattern, a star capture, a mapping rest and a class keyword capture."""
+    names: set[str] = set()
+    for node in ast.walk(pattern):
+        if isinstance(node, ast.MatchAs | ast.MatchStar) and node.name:
+            names.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            names.add(node.rest)
     return names
 
 
 def module_bindings(body: list[ast.stmt]) -> set[str]:
     """Return the names a scope's statements bind in that scope.
 
-    A function, class, import alias, assignment or walrus binds its name here. The blocks that open no scope (if, loops, try, with and match) are
-    searched for the same bindings, but a loop target is not a binding. The body of a function or class is never entered: its names are local to
-    it. A comprehension or generator variable, a lambda parameter and a function parameter never bind here.
+    A function, class, import alias, type alias, assignment, annotated assignment with a value, augmented assignment, loop target, with target,
+    match capture or walrus binds its name here. The blocks that open no scope (if, loops, try, with and match) are searched for the same
+    bindings. An annotation without a value, a del and a temporary except alias bind nothing. The body of a function or class is never entered:
+    its names are local to it. A comprehension or generator variable, a lambda parameter and a function parameter never bind here.
     """
     names: set[str] = set()
     for node in body:
         names |= walrus_names(node)
         if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             names.add(node.name)
+        elif isinstance(node, ast.TypeAlias):
+            names |= target_names(node.name)
         elif isinstance(node, ast.Import | ast.ImportFrom):
             names |= {alias.asname or alias.name.partition(".")[0] for alias in node.names}
-        elif isinstance(node, ast.Assign | ast.AnnAssign | ast.AugAssign):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names |= {name for target in targets for name in target_names(target)}
-        elif isinstance(node, ast.If | ast.For | ast.AsyncFor | ast.While):
+        elif isinstance(node, ast.Assign):
+            names |= {name for target in node.targets for name in target_names(target)}
+        elif isinstance(node, ast.AnnAssign | ast.AugAssign):
+            names |= target_names(node.target) if node.value is not None else set()
+        elif isinstance(node, ast.If | ast.While):
             names |= module_bindings(node.body) | module_bindings(node.orelse)
+        elif isinstance(node, ast.For | ast.AsyncFor):
+            names |= target_names(node.target) | module_bindings(node.body) | module_bindings(node.orelse)
         elif isinstance(node, ast.With | ast.AsyncWith):
-            names |= module_bindings(node.body)
+            names |= {name for item in node.items if item.optional_vars for name in target_names(item.optional_vars)} | module_bindings(node.body)
         elif isinstance(node, ast.Try | ast.TryStar):
             names |= module_bindings(node.body) | module_bindings(node.orelse) | module_bindings(node.finalbody)
             names |= {name for handler in node.handlers for name in module_bindings(handler.body)}
         elif isinstance(node, ast.Match):
-            names |= {name for case in node.cases for name in module_bindings(case.body)}
+            names |= {name for case in node.cases for name in pattern_names(case.pattern) | module_bindings(case.body)}
     return names
 
 
