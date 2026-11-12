@@ -17,6 +17,7 @@ import functools
 import importlib
 import io
 import json
+import ntpath
 import os
 import posixpath
 import re
@@ -185,39 +186,27 @@ PRIVACY_FIX = (
     " If it is meant to be public, add a reasoned entry to .privacy_allowlist"
 )
 ALLOWLIST = ".privacy_allowlist"
-# A user name is a run of characters that are not delimiters, so a name in any script (or an emoji, or a no-break space) is a name. ASCII whitespace, path
-# separators, quotes, brackets and the placeholder openers < $ { * % are delimiters, so /home/<user>, /home/$USER, /home/{user} and /home/* stay placeholders.
-HOME_NAME_CHAR = r"[^ \t\r\n\f\v/\\<>$(){}\[\]\"'`*%,;:|&?=!#@~]"
+# A home path is /home/<name>, /Users/<name> (the macOS Shared folder excepted), C:\Users\<name> or ~<name>/. A name starts with any character that is not a
+# delimiter, so a name in any script, an emoji or a no-break space is a name. ASCII white space, path separators, quotes, brackets and the placeholder openers
+# < $ { * % are delimiters, so /home/<user>, /home/$USER, /home/{user} and /home/* are placeholders.
+HOME_DELIMITERS = " \t\r\n\f\v/\\<>$(){}[]\"'`*%,;:|&?=!#@~"
+HOME_NAME_CHAR = "[^" + re.escape(HOME_DELIMITERS) + "]"
 HOME_QUOTES = "\"'`"
-# The roots below which a folder is a user's home: the macOS and Linux roots (the macOS Shared folder is no home), and a Windows drive with either separator
-# or escaped backslashes. The macOS and Windows file systems ignore case, so those roots and the Shared folder match in any case. The Linux root is exact.
-# Another case of the macOS root must start a path (or follow a local file address), so a route such as /v1/users/login is no home.
-FILE_URI = r"(?<=(?i:file:))|(?<=(?i:file://))|(?<=(?i:file://localhost))"  # A local file address starts a path at its root.
-MAC_USERS = r"(?:/Users|(?:(?<![\w/.})\]-])|" + FILE_URI + r")/(?i:users))"
-HOME_ROOT = r"(?:" + MAC_USERS + r"/(?!(?i:Shared)/)|/home/|(?<![\w])[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))"
-HOME_PATH_PATTERN = re.compile(
-    # A name; a name after quotes that close the root or open the name (not a plus sign, which joins a variable); or a quoted name that starts with a space.
-    "(?:"
-    + HOME_ROOT
-    + f"(?:{HOME_NAME_CHAR}+|[{HOME_QUOTES}]+(?!\\+){HOME_NAME_CHAR})"
-    + "|(?<!["
-    + HOME_QUOTES
-    + "])"
-    + HOME_ROOT
-    + f"[{HOME_QUOTES}][ \\t]+{HOME_NAME_CHAR}"
-    # A named tilde. A bare ~/ and a tilde inside an address (a slash before it) name no user.
-    + f"|(?<![\\w~/])~[^\\W\\d]{HOME_NAME_CHAR}*/)"
-)
-SHARED_FOLDER = "/Us" + "ers/Shared"  # Built here, so this file holds no path the scan flags.
-QUOTES_OUT = str.maketrans("", "", HOME_QUOTES)  # The shell drops the quotes around a component.
-# The rest of a Shared path runs to the end of its token: a quoted part holds any character, an unquoted one stops at white space and shell operators.
-SHARED_PATH = re.compile(MAC_USERS + r"/(?i:Shared)/((?:\"[^\"]*\"|'[^']*'|`[^`]*`|[^\s\"'`<>()|&;])*)")
-HOME_FIRST_PART = re.compile(HOME_ROOT + r"([^/\\\s\"'`<>]+)")
+HOME_SPACES = " \t\r\n\f\v"
+SHELL_BREAKS = HOME_SPACES + "()|&;"  # Outside quotes these end a shell word.
+# The roots of a home. The macOS and Windows file systems ignore case, so their roots match in any case. Another case of the macOS root must start a path (or be
+# the path of a local file address), so a route such as /v1/users/login is no home. The Linux root is exact.
+HOME_ROOT = re.compile(r"(?P<linux>/home/)|(?P<mac>(?:/Users|(?<![\w/.})\]-])/(?i:users))/)|(?P<windows>(?<!\w)[A-Za-z]:(?:/|\\+)(?i:Users)(?:/|\\+))")
+FILE_URL_ROOT = re.compile(r"(?P<mac>/(?i:users)/)")
+FILE_URL = re.compile(r"(?<![\w+.-])file:\S*", re.IGNORECASE)
+HOME_HINT = re.compile(r"home|users|~|file:", re.IGNORECASE)
+TILDE_NAME = re.compile(r"(?<![\w~/])~[^\W\d]" + HOME_NAME_CHAR + r"*/")  # A named tilde. A bare ~/ and a tilde inside an address name no user.
+ENCODED_FOLDER = re.compile(r"[^/\\\s\"'`<>]+")
 ENCODED_PART = re.compile(r"%[0-9A-Fa-f]{2}|\\(?:x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}|[0-3][0-7]{2})")
 PLACEHOLDER_PART = re.compile(r"%[A-Za-z_]\w*%|%\(\w+\)s")
 ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{2})|u([0-9A-Fa-f]{4})|U([0-9A-Fa-f]{8})|([0-3][0-7]{2})|([/\"'\\]))")
 PRIVACY_PATTERNS = {
-    "home-path": ("home-directory path with a user name", HOME_PATH_PATTERN),
+    "home-path": ("home-directory path with a user name", HOME_ROOT),
     "temp-path": ("machine temporary path", re.compile(r"/var/" + r"folders/[A-Za-z0-9_+-]+/[A-Za-z0-9_+-]+")),
     "email": ("email address", re.compile(r"\b[A-Za-z0-9._%+-]+@((?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,})\b")),
     "phone": (
@@ -1715,26 +1704,127 @@ def decoded_views(line: str) -> set[str]:
     return views
 
 
-def shared_escapes(view: str) -> bool:
-    """Whether a path through the macOS Shared folder climbs out of it, so that it cannot be shown to stay inside."""
-    for match in SHARED_PATH.finditer(view):
-        resolved = posixpath.normpath(SHARED_FOLDER + "/" + match.group(1).translate(QUOTES_OUT)).lower()
-        if resolved != SHARED_FOLDER.lower() and not resolved.startswith(SHARED_FOLDER.lower() + "/"):
+def lex_words(text: str) -> list[tuple[str, list[int]]]:
+    """Split text into shell words: the value of each, with quotes and escapes resolved, and the lexical segment of each character.
+
+    A quote (double, single or backtick) holds any character. A backslash escapes a quote, a space or a backslash outside quotes, and a quote or a backslash
+    inside double quotes. Any other backslash stays, so a Windows path keeps its separators. A character that a quote or an escape puts right below a
+    home root has another segment than the root.
+    """
+    words = []
+    chars: list[str] = []
+    segments: list[int] = []
+    segment = 0
+    quote = ""
+    started = False
+    index = 0
+    while index < len(text):
+        char = text[index]
+        following = text[index + 1 : index + 2]
+        if quote:
+            if char == quote:
+                quote = ""
+                segment += 1
+            else:
+                if char == "\\" and quote == '"' and following and following in '"\\`$':
+                    index += 1
+                    char = following
+                chars.append(char)
+                segments.append(segment)
+        elif char in SHELL_BREAKS:
+            if started:
+                words.append(("".join(chars), segments))
+                chars, segments, started = [], [], False
+            segment += 1
+        else:
+            started = True
+            if char in HOME_QUOTES:
+                quote = char
+                segment += 1
+            elif char == "\\" and following and following in "\"'` \\":
+                index += 1
+                segment += 1
+                chars.append(following)
+                segments.append(segment)
+                segment += 1
+            else:
+                chars.append(char)
+                segments.append(segment)
+        index += 1
+    if started:
+        words.append(("".join(chars), segments))
+    return words
+
+
+def name_found(rest: str, root_segment: int, segments: list[int] | None, base: int) -> bool:
+    """Whether the folder at the start of ``rest``, the path below a home root, is a concrete name and not a placeholder.
+
+    Quotes that stay in the text are literal characters of a quoted reading (an escaped quote), so they are skipped. A folder that starts with an escape is
+    a name unless the whole folder is a placeholder. A space is a name character only when a quote or an escape put it right below the root.
+    """
+    start = 0
+    while start < len(rest) and rest[start] in HOME_QUOTES:
+        start += 1
+    if start == len(rest):
+        return False
+    first = rest[start]
+    if first in HOME_SPACES:
+        stop = start
+        while stop < len(rest) and rest[stop] in " \t":
+            stop += 1
+        return segments is not None and stop < len(rest) and rest[stop] not in HOME_DELIMITERS and segments[base + start] != root_segment
+    if first == "%":
+        folder = ENCODED_FOLDER.match(rest, start)
+        return bool(folder and ENCODED_PART.search(folder.group()) and not PLACEHOLDER_PART.fullmatch(folder.group()))
+    return first not in HOME_DELIMITERS
+
+
+def home_root_found(kind: str, root: str, rest: str, segments: list[int] | None, base: int) -> bool:
+    """Apply the one rule to the path ``rest`` below a home root.
+
+    The path is a finding when its first folder is a concrete name, as written or after the path is normalized. The macOS Shared folder is no home, but
+    only while the normalized path stays inside it.
+    """
+    folder = rest.split("/", 1)[0]
+    if kind == "mac" and folder.casefold() == "shared":
+        resolved = posixpath.normpath("/Users/Shared/" + rest[len(folder) + 1 :]).casefold()
+        return resolved != "/users/shared" and not resolved.startswith("/users/shared/")
+    if name_found(rest, segments[base - 1] if segments else 0, segments, base):
+        return True
+    if ".." not in rest:
+        return False
+    prefix = {"linux": "/home/", "mac": "/Users/", "windows": root[0] + ":\\Users\\"}[kind]
+    normal = (ntpath if kind == "windows" else posixpath).normpath(prefix + rest)
+    return normal.casefold().startswith(prefix.casefold()) and name_found(normal[len(prefix) :], 0, None, 0)
+
+
+def file_url_found(value: str) -> bool:
+    """Whether a local file address, with any host (localhost, an IP address or another name), has a home path with a user name."""
+    for url in FILE_URL.finditer(value):
+        try:
+            path = urllib.parse.urlsplit(url.group()).path
+        except ValueError:
+            continue
+        root = FILE_URL_ROOT.match(path)
+        if root and home_root_found("mac", root.group(), path[root.end() :], None, 0):
             return True
     return False
 
 
-def encoded_home_part(view: str) -> bool:
-    """Whether the folder below a home root hides its name in an escape, unless the whole folder is a placeholder."""
-    return any(ENCODED_PART.search(match.group(1)) and not PLACEHOLDER_PART.fullmatch(match.group(1)) for match in HOME_FIRST_PART.finditer(view))
+def word_has_home(value: str, segments: list[int]) -> bool:
+    """Whether one shell word holds a home path with a user name."""
+    roots = list(HOME_ROOT.finditer(value))
+    for position, root in enumerate(roots):
+        stop = roots[position + 1].start() if position + 1 < len(roots) else len(value)
+        if home_root_found(str(root.lastgroup), root.group(), value[root.end() : stop], segments, root.end()):
+            return True
+    return TILDE_NAME.search(value) is not None or file_url_found(value)
 
 
 def home_path_found(line: str) -> bool:
     """Whether a line holds a home path with a user name, in its text or in any decoded reading of it."""
-    return any(
-        HOME_PATH_PATTERN.search(view) or shared_escapes(view) or encoded_home_part(view)
-        for view in (decoded_views(line) if "%" in line or "\\" in line else {line})
-    )
+    views = decoded_views(line) if "%" in line or "\\" in line else {line}
+    return any(word_has_home(value, segments) for view in views if HOME_HINT.search(view) for value, segments in lex_words(view))
 
 
 def line_privacy(line: str, values: list[str]) -> list[str]:
