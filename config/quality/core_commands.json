@@ -30,6 +30,7 @@
     "\"$python_bin\" -m scripts.infrastructure.run_policy_e2e --output-directory \"$policy_output\"",
     "\"$python_bin\" -m scripts.infrastructure.run_push_images_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_secret_store_e2e",
+    "\"$python_bin\" -m scripts.infrastructure.run_services_apply_e2e",
     "\"$python_bin\" -m scripts.infrastructure.run_services_move_e2e --output-directory \"$e2e_output/services_move\"",
     "\"$python_bin\" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory \"$e2e_output/serving_release_real\"",
     "\"$python_bin\" -m scripts.infrastructure.run_serving_transition_e2e --output-directory \"$e2e_output/serving_transition\"",
