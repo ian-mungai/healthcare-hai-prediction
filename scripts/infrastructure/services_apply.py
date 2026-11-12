@@ -15,7 +15,7 @@ It is not managed by Terraform, so no apply can clear it. ``clear`` lets host la
 preflight refuses every host launch, and the fit probe rereads the hold before every RunTask. This command writes any other value as one JSON object with
 separate fields (``state``, ``by``, ``at``, ``reason`` and, for a host job cap change, ``frozen``), so the preflight needs no parser and reason text is only
 ever the reason. A hold that earlier code wrote as text reads as a pending change without a record when it starts with the change marker, and as a plain hold
-otherwise.
+otherwise. A value that repeats a member name at any depth is malformed, never read from its last repeat.
 
 Changing the host job cap, and the move of the cap from Parameter Store to the Airflow environment (Nov 11 2026). The cap is the services input
 ``host_job_cap_mib``. The jobs stack must register host revisions at the new cap after every change, and the launch preflight refuses a revision whose job
@@ -253,6 +253,15 @@ class HoldView:
     malformed: bool = False
 
 
+def no_repeated_members(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """The ``object_pairs_hook`` of the hold value: a member name that repeats in one object, at any depth, is an error, because ``json`` would keep only
+    the last repeat and could turn a pending change into a plain hold or swap its frozen selection."""
+    names = [name for name, _ in pairs]
+    if len(names) != len(set(names)):
+        raise ValueError("a member name repeats")
+    return dict(pairs)
+
+
 def read_hold_value(value: str | None) -> HoldView:
     """Read a hold value. None and a plain hold are not pending. A text value of earlier code that starts with the change marker is pending without a
     record, whatever follows the marker, so text is never authority; the owner freezes the reviewed jobs inputs again."""
@@ -261,7 +270,7 @@ def read_hold_value(value: str | None) -> HoldView:
     if not value.lstrip().startswith(("{", "[")):
         return HoldView(pending=value.startswith(MIGRATION_HOLD))
     try:
-        fields = json.loads(value)
+        fields = json.loads(value, object_pairs_hook=no_repeated_members)
     except ValueError:
         return HoldView(pending=True, malformed=True)
     if not isinstance(fields, dict) or not {"state", "by", "at", "reason"} <= set(fields) <= HOLD_KEYS:

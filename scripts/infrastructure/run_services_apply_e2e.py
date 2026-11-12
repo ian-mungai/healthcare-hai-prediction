@@ -1042,6 +1042,56 @@ def a_malformed_frozen_record_is_refused_with_the_hold_unchanged() -> None:
             )
 
 
+def a_duplicate_json_member_makes_the_hold_malformed() -> None:
+    """A hold value that repeats a member name at any object depth (the outer state, the frozen record, or a field inside the record) is malformed, not
+    read from the last repeat: json would keep the final member and could turn a pending change into a plain hold or swap its selection. So a plain hold,
+    both settle modes, both resolve forms and finish each refuse with the hold and the lock unchanged, and fresh reviewed jobs inputs repair each value."""
+    silver = f"{PREFIX}silver_host"
+    both = json.dumps(frozen_dict([f"{PREFIX}gold_host", silver]))
+    only = json.dumps(frozen_dict([silver]))
+    head = '"by":"services_apply","at":"x","reason":"pending"'
+    values = [
+        ("a duplicate outer state", f'{{"state":"{MIGRATION}","state":"held",{head}}}'),
+        ("a duplicate outer state, the plain one first", f'{{"state":"held","state":"{MIGRATION}",{head}}}'),
+        ("a duplicate frozen member", f'{{"state":"{MIGRATION}",{head},"frozen":{both},"frozen":{only}}}'),
+        (
+            "a duplicate field inside the frozen record",
+            pending_value(frozen_dict([f"{PREFIX}gold_host", silver])).replace('"families": [', '"families": ["' + silver + '"], "families": [', 1),
+        ),
+        (
+            "a repeated digest with the same value",
+            pending_value(frozen_dict([silver])).replace('"jobs_sha256"', '"jobs_sha256": "' + "0" * 64 + '", "jobs_sha256"', 1),
+        ),
+        ("a duplicate reason", f'{{"state":"{MIGRATION}",{head},"reason":"again"}}'),
+    ]
+    arguments_list = (
+        ["hold", "--reason", "retry"],
+        ["settle", "--token", OWN_LOCK],
+        ["settle", "--token", OWN_LOCK, "--keep-hold"],
+        ["resolve", "--statement", "checked stable", "--token", OWN_LOCK],
+        ["resolve", "--statement", "checked stable"],
+        ["finish", "--token", OWN_LOCK, "--statement", "jobs applied at the new cap"],
+    )
+    registered = {silver: host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")}
+    rendered = rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]})
+    for label, value in values:
+        require(value.count("{") >= 1 and json.loads(value, object_pairs_hook=lambda pairs: dict(pairs)) is not None, f"{label}: the test value is not JSON")
+        for arguments in arguments_list:
+            aws = EcsStandIn(registered, value=value, lock=OWN_LOCK)
+            code, _, err = run_command_path(arguments, aws, rendered)
+            require(code == 1, f"{label}: {arguments[0]} {arguments[2:3]} was not refused: exit {code} {err}")
+            require(aws.value == value and aws.lock == OWN_LOCK, f"{label}: {arguments[0]} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
+        with tempfile.TemporaryDirectory() as directory:
+            repaired = AwsStandIn(value=value, lock=OWN_LOCK)
+            inputs, digest = reviewed_jobs_inputs(Path(directory), {"host_jobs_enabled": True, "host_jobs": ["silver"]})
+            code, _, err = run_command_path(["hold", "--reason", "repair", "--migration", "--jobs-inputs", str(inputs), "--jobs-sha256", digest], repaired)
+            mended = hold_fields(repaired.value)
+            require(
+                code == 0 and mended is not None and mended["state"] == MIGRATION and mended["frozen"]["jobs_sha256"] == digest,
+                f"{label}: fresh reviewed inputs did not repair the hold: exit {code} {repaired.value!r} {err}",
+            )
+
+
 def the_launch_preflight_blocks_every_structured_hold() -> None:
     """The structured hold value is one JSON object, so the launch preflight (orchestration/ecs_preflight.py: exactly ``clear`` means no hold, any other
     value holds every launch and shows its first 120 characters) needs no parser. The values the commands write are not ``clear``, and the first 120
@@ -1305,6 +1355,7 @@ CASES: dict[str, Callable[[], None]] = {
     "finish_refuses_a_change_that_froze_nothing": finish_refuses_a_change_that_froze_nothing,
     "a_continued_hold_cannot_drop_a_pending_family": a_continued_hold_cannot_drop_a_pending_family,
     "a_reason_can_never_become_the_frozen_record": a_reason_can_never_become_the_frozen_record,
+    "a_duplicate_json_member_makes_the_hold_malformed": a_duplicate_json_member_makes_the_hold_malformed,
     "the_launch_preflight_blocks_every_structured_hold": the_launch_preflight_blocks_every_structured_hold,
     "a_malformed_frozen_record_is_refused_with_the_hold_unchanged": a_malformed_frozen_record_is_refused_with_the_hold_unchanged,
     "the_recovery_text_states_the_limit_on_a_continued_hold": the_recovery_text_states_the_limit_on_a_continued_hold,
