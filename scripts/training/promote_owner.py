@@ -154,8 +154,8 @@ def main(arguments: Sequence[str] | None = None, environ: Mapping[str, str] | No
             lease = promote_lease.resolve(
                 client, bucket, options.model, options.run, options.owner, options.reason, at, mlflow_restarter(environ), production.alias, production.record
             )
-            shown = {"resolved": lease.key, "run_id": options.run, "outcome": "abandoned", "production_record": production.key}
-            sys.stdout.write(json.dumps(shown, sort_keys=True) + "\n")
+            outcome = {"resolved": lease.key, "run_id": options.run, "outcome": "abandoned", "production_record": production.key}
+            sys.stdout.write(json.dumps(outcome, sort_keys=True) + "\n")
     except ReceiptError as error:
         sys.stderr.write(f"{error}\n")
         return 2

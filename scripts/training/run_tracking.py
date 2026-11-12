@@ -238,7 +238,7 @@ def log_child(store: TrackingStore, experiment: str, parent_id: str | None, spec
     child_id = (
         str(kept.info.run_id)
         if kept is not None
-        else create_run_once(store, experiment_id, run, spec.step_key, spec.tags | ({} if parent_id is None else {PARENT_LINK: parent_id}), spec.step_key)
+        else create_run_once(store, experiment_id, run, spec.step_key, {**spec.tags, **({} if parent_id is None else {PARENT_LINK: parent_id})}, spec.step_key)
     )
     populate(store, child_id, spec, kept)
     store.set_terminated(child_id, "FINISHED")

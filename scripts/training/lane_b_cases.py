@@ -33,13 +33,14 @@ RUN = "20261024T000000Z-1234abcd"
 PUBLICATION = "20261023T000000Z-1234abcd"
 GOLD = "20261022T000000Z-1234abcd"
 BASE = "20261023T000000Z-5678abcd"
+MODEL = "m1"
 PARAMETERS = {
     "features_run": "latest",
     "population": "primary",
     "hai_types": list(training_contract.HAI_TYPES),
     "trigger": "manual",
     "mlflow": "local",
-    "model": "m1",
+    "model": MODEL,
 }
 REGISTRY_ID = "12345678-1234-4234-8234-123456789abc"
 
@@ -576,8 +577,7 @@ def extraction_cases(cases: Cases, folder: Path) -> None:
     cases.check(
         "extract_manifest_names_the_feature_set_and_its_schema_hash",
         lambda: require(
-            (manifest["feature_set"], manifest["feature_set_schema_sha256"])
-            == (PARAMETERS["model"], feature_schema.set_schema_sha256(PARAMETERS["model"], schema=reader.schema)),
+            (manifest["feature_set"], manifest["feature_set_schema_sha256"]) == (MODEL, feature_schema.set_schema_sha256(MODEL, schema=reader.schema)),
             f"the manifest does not name the model's set and its schema hash: {manifest.get('feature_set')} {manifest.get('feature_set_schema_sha256')}",
         ),
     )
