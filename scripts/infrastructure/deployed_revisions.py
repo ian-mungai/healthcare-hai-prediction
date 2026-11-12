@@ -6,9 +6,10 @@
 The latest registered revision of a family says nothing about what runs: a failed or rolled-back deployment leaves the service on an older revision, and a
 replacement task of that service then starts from the older definition. So the check follows the deployment. For every project service it reads the
 service (one PRIMARY deployment, rollout COMPLETED, the desired count running, nothing pending), every running task (each on the deployment's revision) and
-the exact revision the deployment names (its volumes and the secrets of its containers). A service named by ``--in`` must carry each ``--volume`` with a
-source path that ends in the given text. A ``--forbid-secret`` name or a ``--forbid-suffix`` source path in any deployed revision is a problem. Anything
-that cannot be read is a problem too, never a pass. The report names services and revision numbers only: no ARN, no account ID, no parameter name.
+the exact revision the deployment names (its volumes and the secrets of its containers). A service named by ``--in`` must be in the local service names, or
+nothing is queried and the check fails; it must also carry each ``--volume`` with a source path that ends in the given text. A ``--forbid-secret`` name or a
+``--forbid-suffix`` source path in any deployed revision is a problem. Anything that cannot be read is a
+problem too, never a pass. The report names services and revision numbers only: no ARN, no account ID, no parameter name.
 Exit 0 when there is no problem, 1 when there is one, 2 for a usage or configuration error.
 """
 
@@ -86,6 +87,13 @@ def deployed_problems(session: Session, rules: Rules | dict[str, Any]) -> list[s
         )
     )
     names = session.names
+    absent = [
+        f"{key}: the service is not in the local service names; the output is incomplete, so nothing was checked"
+        for key in wanted.required_in
+        if key not in names.services
+    ]
+    if absent:
+        return absent
     by_name = {name: key for key, name in names.services.items()}
     problems: list[str] = []
     try:

@@ -6,6 +6,8 @@ tasks and the registered definitions. Nothing leaves the machine.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import re
 from collections.abc import Callable
@@ -124,13 +126,19 @@ class World:
         return CompletedProcess(argv, 252, "", "unknown command")
 
 
-def build(faults: set[str] | None = None) -> tuple[World, Session, list[str]]:
+def build(faults: set[str] | None = None, omit: tuple[str, ...] = ()) -> tuple[World, Session, list[str]]:
+    """A session on the stand-in; ``omit`` drops service keys from the local names, as an incomplete service_names output would."""
     world, lines = World(faults), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, world.runner)
-    names = Names(CLUSTER, GROUP, PROVIDER, PROJECT, dict(SERVICES), {})
+    names = Names(CLUSTER, GROUP, PROVIDER, PROJECT, {key: name for key, name in SERVICES.items() if key not in omit}, {})
     clock = Clock(lambda: 0.0, lambda seconds: None)
     session = Session(cli, names, clock, Path("unused_marker"), lines.append)
     return world, session, lines
+
+
+def served(session: Session) -> Callable[[], Session]:
+    """A stand-in for open_session that hands back ``session``."""
+    return lambda: session
 
 
 def check(session: Session) -> list[str]:
@@ -247,12 +255,40 @@ def the_command_maps_problems_to_the_exit_code() -> dict[str, bool]:
     for label, faults in (("clean", set()), ("old", {"describe_services_fails"})):
         world, session, _ = build(faults)
         original = module.open_session
-        module.open_session = lambda session=session: session
+        module.open_session = served(session)
         try:
             results[label] = module.main(["--volume", "code_jobs_table=/config/orchestration/ecs_broker_jobs.json", "--in", "airflow_scheduler"])
         finally:
             module.open_session = original
     return {"a clean stack exits 0": results["clean"] == 0, "a problem exits 1": results["old"] == 1}
+
+
+def a_required_service_missing_from_the_local_outputs_fails() -> dict[str, bool]:
+    """A service named by --in that the local service_names output lacks is refused before any ECS call, with or without a volume rule (Part E has none)."""
+    checks: dict[str, bool] = {}
+    for label, arguments in (
+        ("a volume check", ["--volume", "code_jobs_table=/config/orchestration/ecs_broker_jobs.json", "--in", "airflow_scheduler"]),
+        ("a secret check", ["--forbid-secret", "BROKER_TOKEN", "--in", "airflow_scheduler", "--in", "airflow_apiserver"]),
+    ):
+        world, session, _ = build(omit=("airflow_scheduler",))
+        original = deployed_revisions.open_session
+        deployed_revisions.open_session = served(session)
+        output = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(output):
+                code = deployed_revisions.main(arguments)
+        finally:
+            deployed_revisions.open_session = original
+        text = output.getvalue()
+        checks[f"{label} exits 1 though the other services are clean"] = code == 1
+        checks[f"{label} names the missing service"] = "airflow_scheduler" in text and "not in the local service names" in text
+        checks[f"{label} queries no ECS state before it refuses"] = world.calls == []
+        checks[f"{label} names no ARN or account ID"] = "arn:" not in text and re.search(r"[0-9]{12}", text) is None
+    world, session, _ = build(omit=("airflow_scheduler",))
+    checks["a service that is not required may be absent and the rest is still checked"] = deployed_revisions.deployed_problems(
+        session, {"required_in": ["airflow_apiserver"]}
+    ) == [] and bool(world.calls)
+    return checks
 
 
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
@@ -267,4 +303,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "unreadable_state_fails_instead_of_passing": unreadable_state_fails_instead_of_passing,
     "the_report_names_no_arn_or_account": the_report_names_no_arn_or_account,
     "the_command_maps_problems_to_the_exit_code": the_command_maps_problems_to_the_exit_code,
+    "a_required_service_missing_from_the_local_outputs_fails": a_required_service_missing_from_the_local_outputs_fails,
 }
