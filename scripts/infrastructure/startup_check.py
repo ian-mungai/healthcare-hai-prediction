@@ -25,6 +25,7 @@ import threading
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -254,6 +255,18 @@ def check_build(layer: str, mode: str, profiles: Path) -> None:
     report(layer, "build", findings, started)
 
 
+@dataclass(frozen=True)
+class Need:
+    """One file that a collector mode reads: the mode, the root that its reader resolves the path from (``code`` or ``mirror``) and the path.
+
+    A ``nonempty`` need is a JSON listing that must hold at least one entry."""
+
+    owner: str
+    root: str
+    path: str
+    nonempty: bool = False
+
+
 def read_json(path: str | Path) -> Mapping | None:
     try:
         document = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -262,57 +275,129 @@ def read_json(path: str | Path) -> Mapping | None:
     return document if isinstance(document, dict) else None
 
 
-def mmd_files() -> list[str]:
-    """The files that ``mmd_api_contract.load_plan`` and ``collect_mmd_api.task_inputs`` read, derived from the contract's plan list and the plans."""
-    collect_mmd_api = importlib.import_module("scripts.acquisition.collect_mmd_api")
-    mmd_api_contract = importlib.import_module("scripts.acquisition.mmd_api_contract")
-    current = importlib.import_module("scripts.acquisition.data_paths").current
+def legacy_registry_files(owner: str, registry_sha256: object) -> list[Need]:
+    """The legacy registry files at the code root that a plan bound to an older registry loads, from the committed version catalog."""
     registry = importlib.import_module("scripts.acquisition.source_registry")
+    catalog = read_json(registry.VERSION_CATALOG_PATH) or {}
+    if not registry_sha256 or registry_sha256 == catalog.get("current_registry_sha256"):
+        return []
+    versions = [item for item in catalog.get("legacy_versions", []) if item.get("registry_sha256") == registry_sha256]
+    return [Need(owner, "code", entry["path"]) for version in versions for entry in version.get("files", {}).values()]
 
-    names: list[str] = []
-    for sha, path in mmd_api_contract.PLANS.items():
-        names.append(str(path))
+
+def plan_needs(owner: str, plan_path: str | Path) -> list[Need]:
+    """The code root files that one locked plan reads while it loads: its legacy registry and the references it lists."""
+    current = importlib.import_module("scripts.acquisition.data_paths").current
+    plan = read_json(plan_path)
+    if plan is None:
+        return []
+    references = plan.get("references") or []
+    references = list(references.values()) if isinstance(references, dict) else references
+    return [*legacy_registry_files(owner, plan.get("registry_sha256")), *(Need(owner, "code", str(current(item["path"]))) for item in references)]
+
+
+def mmd_needs() -> list[Need]:
+    """The code root files that ``mmd_api_contract.load_plan`` and ``collect_mmd_api.task_inputs`` read, from the contract's plan list and the plans."""
+    collect_mmd_api = importlib.import_module("scripts.acquisition.collect_mmd_api")
+    contract = importlib.import_module("scripts.acquisition.mmd_api_contract")
+    current = importlib.import_module("scripts.acquisition.data_paths").current
+    needs: list[Need] = []
+    for sha, path in contract.PLANS.items():
+        needs.append(Need("mmd_api", "code", str(path)))
         plan = read_json(path)
         if plan is None:
             continue
-        report_path = str(current(plan.get("comparison_report", "")))
-        names.append(report_path)
-        names.extend(str(current(reference["path"])) for reference in (plan.get("references") or {}).values())
-        comparison = read_json(report_path)
-        names.extend(str(current(item["original_path"])) for item in (comparison or {}).get("years", []))
-        if sha == mmd_api_contract.ADDITIONS_PLAN_SHA256:
-            lock = mmd_api_contract.ADDITIONS_LOCK_PATH
-            try:
-                if plan.get("registry_sha256") != registry.canonical_hash(registry.load_registry()):
-                    lock = registry.registry_version_paths(plan["registry_sha256"])["additions_lock"]
-            except (OSError, ValueError, KeyError):
-                pass
-            names.append(str(lock))
-    names.append(str(collect_mmd_api.TEMPLATE))
-    return names
+        needs.extend(plan_needs("mmd_api", path))
+        report = str(current(plan.get("comparison_report", "")))
+        needs.append(Need("mmd_api", "code", report))
+        needs.extend(Need("mmd_api", "code", str(current(item["original_path"]))) for item in (read_json(report) or {}).get("years", []))
+        if sha == contract.ADDITIONS_PLAN_SHA256 and not legacy_registry_files("mmd_api", plan.get("registry_sha256")):
+            needs.append(Need("mmd_api", "code", str(contract.ADDITIONS_LOCK_PATH)))
+    needs.append(Need("mmd_api", "code", str(collect_mmd_api.TEMPLATE)))
+    return needs
 
 
-# The file lists the publisher owns, by collector mode: the files that a mode's locked plans read while they load.
-MODE_FILES = {"mmd_api": mmd_files}
+def cms_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.cms_owners_contract").PLAN_PATH]
 
 
-def queue_files(document: Mapping) -> list[tuple[str, str]]:
-    """The (mode, path) of every file that the modes of a publisher queue read, by the same handler rule that the stored mirror uses to carry them."""
+def onc_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.onc_mu_contract").PLAN_PATH]
+
+
+def bls_plans() -> list[Path]:
+    return [importlib.import_module("scripts.acquisition.bls_api_contract").PLAN_PATH]
+
+
+def hud_plans() -> list[Path]:
+    contract = importlib.import_module("scripts.acquisition.hud_api_contract")
+    return [contract.PLAN_PATH, contract.RANGE_PLAN_PATH]
+
+
+# The locked plans of each plan-based collector, from the plan paths its contract holds.
+PLAN_PATHS = {"cms_owners_org": cms_plans, "onc_mu_hospital": onc_plans, "bls_api_v2": bls_plans, "hud_api": hud_plans}
+
+
+def contract_needs(mode: str) -> list[Need]:
+    return [need for path in PLAN_PATHS[mode]() for need in plan_needs(mode, path)]
+
+
+# The file lists the publisher owns, by collector mode: what the mode's locked plans read at the code root while they load.
+MODE_FILES = {"mmd_api": mmd_needs, **{mode: partial(contract_needs, mode) for mode in PLAN_PATHS}}
+# Modes that re-hash every operational input of the controls from the mirror root before they plan (``redownload.planned``).
+MIRROR_CONFIG_MODES = frozenset(PLAN_PATHS)
+CONFIG_PREFIX = "config/acquisition/"
+
+
+def mirror_config_needs(mode: str, controls: Path) -> list[Need]:
+    """The operational inputs under ``config/acquisition/`` that the controls bind, read from the mirror root, or the controls file if unreadable."""
+    document = read_json(controls)
+    if document is None:
+        return [Need(mode, "mirror", str(controls))]
+    return [Need(mode, "mirror", key) for key in sorted(document.get("operational_sha256", {})) if key.startswith(CONFIG_PREFIX)]
+
+
+def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool = False) -> list[Need]:
+    """Every file that the modes this task attempts read, by the lane and handler rule of the harness, and the plan listing that the plan modes need.
+
+    A keyed mode counts only when the task has keys. ``controls`` is the controls file beside the queue."""
     redownload = importlib.import_module("scripts.acquisition.redownload")
     stored_mirror = importlib.import_module("scripts.acquisition.stored_mirror")
-    units = [unit for unit in document.get("queue", []) if isinstance(unit, dict) and unit.get("disposition") in stored_mirror.ACTIVE]
-    modes = sorted({redownload.handler_mode({"flags": [], **unit}) for unit in units if "mode" in unit})
-    return [(mode, path) for mode in modes if mode in MODE_FILES for path in MODE_FILES[mode]()]
+    units = [
+        {"flags": [], **item}
+        for item in document.get("queue", [])
+        if isinstance(item, dict) and item.get("disposition") in stored_mirror.ACTIVE and "mode" in item
+    ]
+    lanes = {redownload.TASK, *([redownload.TASK_KEYED] if keys else [])}
+    modes = sorted({redownload.handler_mode(item) for item in units if redownload.lane_of(item) in lanes})
+    needs = [need for mode in modes if mode in MODE_FILES for need in MODE_FILES[mode]()]
+    for mode in modes:
+        if mode in MIRROR_CONFIG_MODES and controls is not None:
+            needs.extend(mirror_config_needs(mode, controls))
+    planned = [mode for mode in modes if mode in stored_mirror.PLAN_MODES]
+    if planned:
+        needs.append(Need("+".join(planned), "mirror", stored_mirror.PLAN_INPUTS_NAME, nonempty=True))
+    return list(dict.fromkeys(needs))
 
 
-def check_files(job: str, files: Iterable[tuple[str, str]], root: Path | None = None) -> None:
-    """Every named file exists. A path that is not absolute is read from ``root`` (the working folder), where the job's loaders read it."""
+def check_need(need: Need, base: Path) -> Finding:
+    path = base / need.path
+    label = f"{need.owner} {need.root} root: {need.path}"
+    if not need.nonempty:
+        return Finding("input_file", True, label) if path.is_file() else Finding("input_file_missing", False, label)
+    if not path.is_file():
+        return Finding("plan_inputs_missing", False, f"{label}: the staged listing of plan input files is absent, so no plan file reaches the code root")
+    document = read_json(path)
+    if not document:
+        return Finding("plan_inputs_empty", False, f"{label}: the staged listing of plan input files holds no entry, so no plan file reaches the code root")
+    return Finding("plan_inputs", True, f"{label} ({len(document)} files)")
+
+
+def check_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | None = None) -> None:
+    """Every named file exists under the root that its reader uses (``code`` defaults to the working folder). A listing must hold an entry."""
     if not in_ecs_job():
         return
     started = time.monotonic()
-    base = Path.cwd() if root is None else root
-    findings = []
-    for owner, name in files:
-        found = (base / name).is_file()
-        findings.append(Finding("input_file" if found else "input_file_missing", found, f"{owner}: {name}"))
+    bases = {"code": Path.cwd(), **(roots or {})}
+    findings = [check_need(need, bases[need.root]) for need in files]
     report(job, "files", findings or [Finding("input_files", True, "none named")], started)

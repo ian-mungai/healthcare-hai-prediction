@@ -65,7 +65,13 @@ def mmd_tree(monkeypatch: pytest.MonkeyPatch, root: Path, leave_out: str = "") -
 
 def run_job(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> Cloud:
     stage, digest = staged(
-        {"mirror/data/q/queue.json": QUEUE, "publisher_hosts.json": b"{}", "publisher_manifest.json": b'{"queue": "mirror/data/q/queue.json"}'}
+        {
+            "mirror/data/q/queue.json": QUEUE,
+            "mirror/plan_inputs.json": json.dumps({"data/x": hashlib.sha256(b"x").hexdigest()}).encode(),
+            "mirror/data/x": b"x",
+            "publisher_hosts.json": b"{}",
+            "publisher_manifest.json": b'{"queue": "mirror/data/q/queue.json"}',
+        }
     )
     cloud = Cloud(stage)
 
@@ -73,6 +79,7 @@ def run_job(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> Cloud:
         raise Reached
 
     monkeypatch.setattr(harness, "run_from", started)
+    monkeypatch.setattr(harness, "REPO_ROOT", workspace / "code_root")
     environ = environment(workspace, digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(QUEUE).hexdigest()}
     publisher_run.main(environ, cloud.factory)
     return cloud
