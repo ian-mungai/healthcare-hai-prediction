@@ -1003,7 +1003,7 @@ quality = [
   "duckdb-engine==0.17.0; sys_platform == 'linux'",
   "duckdb==1.5.6; sys_platform == 'linux'",
   # Held at the version the former per-image lock fixed (Nov 3 2026). Delete a line to take the newest release at the next lock.
-  "certifi==2026.7.22; sys_platform == 'linux'",
+  "certifi==2026.10.19; sys_platform == 'linux'",
   "mistune==3.3.4; sys_platform == 'linux'",
   "narwhals==2.26.0; sys_platform == 'linux'",
   "numpy==2.5.3; sys_platform == 'linux'",
