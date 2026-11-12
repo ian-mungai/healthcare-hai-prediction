@@ -2091,7 +2091,7 @@ GROUP_B5B = (
         "ONC_PI__fixture_att",
         "hospital_attestations.csv",
         sha("z3"),
-        1,
+        2,
         records=(
             cc(
                 npi="1234567893",
