@@ -118,6 +118,7 @@ variables {
 #   host address out of that interface (policy rule "from <host address> lookup 10001"), so a job cannot reach Polaris, the catalog, Redis or MLflow
 #   at the host address (found in the first live run); the fix needs a rule for the bridge subnet ahead of every rule of amazon-ec2-net-utils;
 # - the subnet that Docker really uses is never read, so the rule and docker0 can name different subnets, or boot guesses it from unit files and environment files and guesses wrong;
+# - docker0 later gets another, a secondary or no address while Docker runs, and the guard that the timer and the agent's pre-start run still accepts it, or the first read of docker0 succeeds after its deadline;
 # - the rule is set once, lost when the interface's network setup or a reconfiguration drops it, and never restored, or a host that cannot set it joins the cluster.
 
 run "job_firewall_is_a_second_table_beside_the_unchanged_metadata_rule" {
@@ -350,7 +351,11 @@ run "the_job_bridge_subnet_is_read_from_docker0_and_routed_ahead_of_the_interfac
           "Docker did not start, so the job bridge subnet cannot be checked and the host does not join the cluster.",
           "ip -o -4 addr show dev docker0",
           "docker0 did not appear within $docker_bridge_wait_seconds seconds",
-          "if [ \"$bridge_addresses\" != \"$docker_bridge_address\" ]; then",
+          "if ! bridge_address_exact \"$shown\" \"$docker_bridge_address\"; then",
+          "remaining=$((deadline - SECONDS))",
+          "query_seconds=$((remaining - 1))",
+          "timeout --kill-after=1 \"$query_seconds\" ip -o -4 addr show dev docker0",
+          "docker0 answered after the $docker_bridge_wait_seconds second limit",
           "docker0 holds $bridge_addresses instead of the required $docker_bridge_address ($docker_bridge_subnet)"
         ] : strcontains(local.host_user_data, text)
       ]) &&
@@ -380,12 +385,17 @@ run "the_job_bridge_subnet_is_read_from_docker0_and_routed_ahead_of_the_interfac
         "Could not set the routing rule for the job bridge.",
         "The job bridge routing rule is not ahead of every table rule.",
         "docker0 does not hold the required address",
+        "docker_running() {",
+        "systemctl is-active --quiet docker.service",
+        "bridge_address_exact \"$shown\" \"$bridge_address\"",
+        "  declare -f bridge_address_exact\n",
+        "alone (it has another or a secondary address, or is missing while Docker runs).",
         "  route) ensure_bridge_rule ;;",
         "&& bridge_rule_present \\\n    && bridge_rule_first\n}",
         "  ensure_bridge_rule || return 1\n"
       ] : strcontains(local.host_user_data, text)
     ])
-    error_message = "The guard sets the bridge rule with apply and route, checks it with check (so the timer restores it and stops Docker when it cannot), and names each failure."
+    error_message = "The guard sets the bridge rule with apply and route, checks it with check (so the timer restores it and stops Docker when it cannot), and names each failure. It holds docker0 to the same single exact address as boot, and a missing docker0 passes only while Docker is not running."
   }
 
   assert {

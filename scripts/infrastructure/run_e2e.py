@@ -385,7 +385,7 @@ else:
     sys.exit(f"aws stand-in: unsupported arguments {arguments}")
 """,
     "ip": """
-import os, sys
+import os, sys, time
 from pathlib import Path
 state = Path(os.environ["BOOT_STATE"])
 arguments = sys.argv[1:]
@@ -411,11 +411,22 @@ if arguments[:5] == ["-o", "-4", "addr", "show", "to"] and len(arguments) == 6:
         print(f"3: ens6    inet {arguments[5]}/24 brd 10.40.0.255 scope global ens6")
 elif arguments == ["-o", "-4", "addr", "show", "dev", "docker0"]:
     # docker0 holds the address the Docker stand-in gave it when it started, else the address a case planted before the boot.
+    # The file holds one address per line, each optionally followed by a flag such as secondary. A case can make the bridge appear late and answer slowly.
     started = state / "docker0"
-    address = started.read_text(encoding="utf-8") if started.exists() else os.environ.get("BOOT_DOCKER0_ADDRESS")
-    if not address:
+    text = started.read_text(encoding="utf-8") if started.exists() else os.environ.get("BOOT_DOCKER0_ADDRESS", "")
+    if os.environ.get("BOOT_DOCKER0_LATE_READ") and started.exists():
+        counter = state / "docker0_reads"
+        reads = (int(counter.read_text(encoding="utf-8")) if counter.exists() else 0) + 1
+        counter.write_text(str(reads), encoding="utf-8")
+        if reads < int(os.environ["BOOT_DOCKER0_LATE_READ"]):
+            text = ""
+        elif reads == int(os.environ["BOOT_DOCKER0_LATE_READ"]):
+            time.sleep(float(os.environ["BOOT_DOCKER0_ANSWER_SECONDS"]))
+    if not text.strip():
         sys.exit('Device "docker0" does not exist.')
-    print(f"5: docker0    inet {address} brd 172.17.255.255 scope global docker0")
+    for line in text.splitlines():
+        address, _, flag = line.partition(" ")
+        print(f"5: docker0    inet {address} brd 172.17.255.255 scope global {flag + ' ' if flag else ''}docker0")
 elif arguments == ["-4", "rule", "show"]:
     print("\\n".join(listing()))
 elif arguments[:3] == ["-4", "rule", "add"] and len(arguments) == 9 and arguments[3] == "to" and arguments[5:8] == ["lookup", "main", "priority"]:
@@ -2586,6 +2597,11 @@ BOOT_BRIDGE_PLAIN_CASES = {
     "boot_bridge_rule_dropped_when_the_address_comes_up",
     "boot_docker_exec_start_reset_removes_the_flag",
     "boot_rerun_changes_nothing",
+    "boot_bridge_lost_after_boot",
+    "boot_bridge_extra_address_after_boot",
+    "boot_bridge_extra_address_listed_first",
+    "boot_bridge_expected_address_secondary",
+    "boot_bridge_other_subnet_after_docker_restart",
 }
 # Files that exist on the image before boot, by case. Another bridge subnet reaches Docker through its environment file (a vendor unit that expands
 # $DOCKER_NETWORK_OPTIONS), a vendor flag or the daemon file; a local drop-in that resets ExecStart= and starts Docker without the flag leaves the default.
@@ -2615,8 +2631,21 @@ BOOT_BRIDGE_REFUSED_CASES = {
     "boot_docker_subnet_from_the_daemon_file",
     "boot_docker_never_starts",
     "boot_docker_bridge_never_appears",
+    "boot_docker_bridge_late_success",
+    "boot_docker_bridge_late_success_uncapped",
 }
 BOOT_RERUN_CASES = {"boot_rerun_changes_nothing"}
+# A bridge that changes after a good boot, by case: the new content of the stand-in's docker0 file (empty removes the bridge), or None for a Docker restart
+# that picks up another subnet from the vendor unit. The persistent guard must refuse each one while Docker runs.
+BOOT_LIFECYCLE_CASES = {
+    "boot_bridge_lost_after_boot": "",
+    "boot_bridge_extra_address_after_boot": "172.17.0.1/16\n10.99.0.1/16\n",
+    "boot_bridge_extra_address_listed_first": "10.99.0.1/16\n172.17.0.1/16\n",
+    "boot_bridge_expected_address_secondary": "172.17.0.1/16 secondary\n",
+    "boot_bridge_other_subnet_after_docker_restart": None,
+}
+# A read of docker0 that starts before the deadline and answers after it: reads one and two find no bridge and read three answers after 4.5 seconds.
+BOOT_LATE_ANSWER = {"BOOT_DOCKER0_LATE_READ": "3", "BOOT_DOCKER0_ANSWER_SECONDS": "4.5"}
 BOOT_BRIDGE_REFUSED_MESSAGE = "docker0 holds 10.99.0.1/16 instead of the required 172.17.0.1/16"
 
 
@@ -2673,6 +2702,55 @@ def run_rerun_case(evidence: Evidence, root: Path, environment: dict[str, str], 
     evidence.check(step, "docker_started_once", starts == 1 and read_lines(state / "events.log").count("start docker.service") == 1)
     evidence.check(step, "cluster_joined_last_again", config[-1] == f"ECS_CLUSTER={BOOT_VALUES['cluster_name']}")
     evidence.check(step, "daemon_file_not_created", not (root / BOOT_DOCKER_DAEMON_FILE).exists())
+
+
+def run_bridge_lifecycle_case(evidence: Evidence, name: str, root: Path, environment: dict[str, str]) -> None:
+    """Change the bridge after a good boot while Docker runs: the agent's pre-start guard must refuse, and the timer must request the visible stop."""
+    state, tools = root / "state", root / "tools"
+    guard = str(root / BOOT_PATHS["guard_script"])
+    watch = unit_command(root, "platform_imds_watch.service", "ExecStart=")
+    restart_agent = [str(tools / "systemctl"), "restart", "ecs.service"]
+    refusal = "docker0 does not hold the required address"
+
+    def agent_starts() -> int:
+        return read_lines(state / "events.log").count("start ecs.service")
+
+    step, result = evidence.run(f"{name}_agent_starts_on_the_good_bridge", restart_agent, root, environment)
+    evidence.check(step, "agent_started", result.returncode == 0 and agent_starts() == 1)
+    step, result = evidence.run(f"{name}_timer_accepts_the_good_bridge", watch, root, environment)
+    evidence.check(step, "timer_quiet", result.returncode == 0 and not result.stderr)
+    changed = BOOT_LIFECYCLE_CASES[name]
+    if changed is None:
+        (root / BOOT_VENDOR_UNITS).mkdir(exist_ok=True)
+        (root / BOOT_VENDOR_UNITS / "docker.service").write_text(BOOT_VENDOR_FLAG_UNIT, encoding="utf-8")
+        step, result = evidence.run(f"{name}_docker_restarted", [str(tools / "systemctl"), "restart", "docker.service"], root, environment)
+        evidence.check(
+            step,
+            "restart_ended_in_the_agent_refusal_with_another_subnet",
+            result.returncode != 0 and refusal in result.stderr and (state / "docker0").read_text(encoding="utf-8") == "10.99.0.1/16",
+        )
+    elif changed:
+        (state / "docker0").write_text(changed, encoding="utf-8")
+    else:
+        (state / "docker0").unlink()
+    started = agent_starts()
+    step, result = evidence.run(f"{name}_agent_start_refused", restart_agent, root, environment)
+    evidence.check(step, "agent_refused_with_the_reason", result.returncode != 0 and refusal in result.stderr)
+    evidence.check(step, "agent_not_started", agent_starts() == started)
+    step, result = evidence.run(f"{name}_guard_check_fails", [guard, "check"], root, environment)
+    evidence.check(step, "check_refuses_the_bridge", result.returncode != 0)
+    (state / "systemctl.log").write_text("", encoding="utf-8")
+    step, result = evidence.run(f"{name}_timer_requests_the_stop", watch, root, environment)
+    evidence.check(step, "timer_failed_visibly", result.returncode != 0 and "could not be restored" in result.stderr)
+    evidence.check(step, "containers_stopped", read_lines(state / "systemctl.log")[-1].split()[:3] == ["stop", "ecs.service", "docker.service"])
+    if not changed and changed is not None:
+        # Docker is stopped now, and before Docker starts a missing bridge is allowed: the check passes and Docker's own start brings the bridge back.
+        step, result = evidence.run(f"{name}_allowed_before_docker_starts", [guard, "check"], root, environment)
+        evidence.check(step, "missing_bridge_accepted_while_docker_is_stopped", result.returncode == 0)
+        step, result = evidence.run(f"{name}_docker_started_again", [str(tools / "systemctl"), "start", "docker.service"], root, environment)
+        evidence.check(
+            step, "docker_started_and_bridge_back", result.returncode == 0 and (state / "docker0").read_text(encoding="utf-8") == BOOT_BRIDGE_ADDRESS
+        )
 
 
 def run_bridge_rule_cases(evidence: Evidence, root: Path, environment: dict[str, str]) -> None:
@@ -2805,6 +2883,9 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
         "boot_docker_never_starts": ({}, {"BOOT_DOCKERD_FAIL": "1"}, "Docker did not start"),
         "boot_docker_bridge_never_appears": ({}, {"BOOT_DOCKERD_NO_BRIDGE": "1"}, "docker0 did not appear within 6 seconds"),
         "boot_rerun_changes_nothing": ({}, {}, None),
+        "boot_docker_bridge_late_success": ({}, BOOT_LATE_ANSWER, "docker0 did not appear within 6 seconds"),
+        "boot_docker_bridge_late_success_uncapped": ({}, BOOT_LATE_ANSWER, "docker0 answered after the 6 second limit"),
+        **{name: ({}, {}, None) for name in BOOT_LIFECYCLE_CASES},
         "boot_with_misplaced_dependency": ({}, {}, None),
         "boot_with_privileged_containers_allowed": ({}, {}, None),
         "boot_without_the_privilege_setting": ({}, {}, None),
@@ -2824,6 +2905,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
         "boot_docker_subnet_from_the_daemon_file": "Checking the job bridge subnet",
         "boot_docker_never_starts": "Starting Docker",
         "boot_docker_bridge_never_appears": "Waiting for docker0",
+        "boot_docker_bridge_late_success": "Waiting for docker0",
+        "boot_docker_bridge_late_success_uncapped": "Waiting for docker0",
     }
     planted_privilege = {
         "boot_with_privileged_containers_allowed": "false",
@@ -2841,6 +2924,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
             if name in planted_privilege
             else replace_once(template, 'current_step="Finding the data volume"\n', "")
             if name == "boot_with_the_step_lost_in_a_substitution"
+            else replace_once(template, "query_seconds=$((remaining - 1))", "query_seconds=30")
+            if name == "boot_docker_bridge_late_success_uncapped"
             else template
         )
         root, environment, step, result = boot_host(
@@ -2933,6 +3018,8 @@ def run_host_boot_cases(evidence: Evidence, bash: str, only: frozenset[str] | No
             check_bridge_rule(evidence, step, root, log, name)
             if name in BOOT_RERUN_CASES:
                 run_rerun_case(evidence, root, environment, bash)
+            if name in BOOT_LIFECYCLE_CASES:
+                run_bridge_lifecycle_case(evidence, name, root, environment)
             if planted:
                 run_planted_dependency_defect(evidence, root, environment)
             elif name not in planted_privilege and name not in INTERFACE_ATTACH_CALLS and name not in BOOT_BRIDGE_PLAIN_CASES:

@@ -156,6 +156,12 @@ fi
 # and route), so Docker and the ECS agent do not start without it, the timer puts it back within 10 seconds when a network reconfiguration drops
 # it and stops both services when it cannot, and boot sets it again once the host address is up, because the interface's own network setup can
 # drop it. Boot fails at that step when the rule cannot be set.
+# docker0 passes only with exactly one IPv4 address, the required one, and that address not marked secondary. Boot and the guard share this
+# function (declare -f writes it into the guard), so the first start and every later check hold the bridge to the same contract.
+# $1 is the output of ip -o -4 addr show dev docker0 and $2 is the required address.
+bridge_address_exact() {
+  awk -v address="$2" '{ for (i = 1; i <= NF; i++) { if ($i == "inet") { count++; if ($(i + 1) == address) matched++ } if ($i == "secondary") secondary = 1 } } END { exit !(count == 1 && matched == 1 && !secondary) }' <<<"$1"
+}
 step "Writing the metadata firewall files"
 command -v nft >/dev/null || run_within 300 "Installing nftables" dnf install -y -q nftables
 mkdir -p "$(dirname "$nft_rules_file")" "$(dirname "$guard_script")" "$systemd_directory/docker.service.d" "$systemd_directory/ecs.service.d"
@@ -175,12 +181,15 @@ grep -qxF "$include_line" "$nftables_config" 2>/dev/null || echo "$include_line"
   echo '#!/bin/bash'
   printf 'rules_file=%q\n' "$nft_rules_file"
   printf 'bridge_address=%q\nbridge_subnet=%q\nbridge_priority=%q\n' "$docker_bridge_address" "$docker_bridge_subnet" "$bridge_rule_priority"
+  declare -f bridge_address_exact
   cat <<'GUARD'
 # apply loads both tables in one transaction and checks them. check confirms that the metadata table and the job table
 # both exist and that user 65534 cannot connect to the metadata service (curl status 7 or 28). enforce loads both tables
 # again when either is missing and stops the ECS agent and Docker when it cannot. route alone sets the job bridge routing rule.
 # The bridge rule sends a reply to a job container through the main table (docker0), ahead of the numbered tables of amazon-ec2-net-utils.
-# docker0, once it exists, must hold the address the rule names, or the rule would name another subnet.
+# docker0 must hold the address the rule names as its only IPv4 address (bridge_address_exact), or the rule would name another subnet. While Docker runs,
+# a missing docker0 fails too. A missing docker0 passes only while Docker is not running, which covers the checks before its first start and its own
+# pre-start check, because Docker creates the bridge itself.
 # The rule counts only in its plain form (seven fields): a rule with a suffix such as suppress_prefixlength cannot select the bridge route.
 bridge_rule_present() {
   local rules
@@ -192,15 +201,27 @@ bridge_rule_first() {
   rules=$(timeout --kill-after=5 10 ip -4 rule show) || return 1
   awk -v limit="$bridge_priority" '{ priority = $1; sub(/:$/, "", priority); table = ""; for (i = 1; i < NF; i++) if ($i == "lookup") table = $(i + 1); if (table ~ /^[0-9]+$/ && priority + 0 <= limit + 0) bad = 1 } END { exit bad }' <<<"$rules"
 }
+docker_running() {
+  local status=0
+  timeout --kill-after=5 10 systemctl is-active --quiet docker.service || status=$?
+  if [ "$status" -eq 0 ]; then return 0; fi
+  if [ "$status" -eq 3 ]; then return 1; fi
+  echo "Could not tell whether Docker runs." >&2
+  return 2
+}
 bridge_address_ok() {
-  local shown status=0
+  local shown status=0 running=0
   shown=$(timeout --kill-after=5 10 ip -o -4 addr show dev docker0 2>/dev/null) || status=$?
-  if [ "$status" -eq 1 ]; then return 0; fi
+  if [ "$status" -eq 1 ]; then
+    docker_running || running=$?
+    if [ "$running" -eq 1 ]; then return 0; fi
+    return 1
+  fi
   if [ "$status" -ne 0 ]; then return 1; fi
-  awk -v address="$bridge_address" '{ for (i = 1; i < NF; i++) if ($i == "inet" && $(i + 1) == address) found = 1 } END { exit !found }' <<<"$shown"
+  bridge_address_exact "$shown" "$bridge_address"
 }
 ensure_bridge_rule() {
-  bridge_address_ok || { echo "docker0 does not hold the required address $bridge_address." >&2; return 1; }
+  bridge_address_ok || { echo "docker0 does not hold the required address $bridge_address alone (it has another or a secondary address, or is missing while Docker runs)." >&2; return 1; }
   if ! bridge_rule_present; then
     timeout --kill-after=5 10 ip -4 rule add to "$bridge_subnet" lookup main priority "$bridge_priority" || { echo "Could not set the routing rule for the job bridge." >&2; return 1; }
     bridge_rule_present || { echo "The job bridge routing rule is missing after it was added." >&2; return 1; }
@@ -475,22 +496,34 @@ step "Waiting for docker0"
 deadline=$((SECONDS + docker_bridge_wait_seconds))
 while :; do
   current_step="Waiting for docker0"
-  status=0
-  shown=$(run_within 30 "Reading the address of docker0" ip -o -4 addr show dev docker0) || status=$?
-  if [ "$status" -eq 0 ] && [ -n "$shown" ]; then break; fi
-  if ((SECONDS >= deadline)); then
+  remaining=$((deadline - SECONDS))
+  if ((remaining < 2)); then
     echo "docker0 did not appear within $docker_bridge_wait_seconds seconds, so the job bridge subnet cannot be checked and the host does not join the cluster."
     exit 1
   fi
-  sleep "$docker_bridge_poll_seconds"
+  query_seconds=$((remaining - 1))
+  if ((query_seconds > 30)); then query_seconds=30; fi
+  log "Reading the address of docker0 (limit $query_seconds seconds)"
+  status=0
+  shown=$(timeout --kill-after=1 "$query_seconds" ip -o -4 addr show dev docker0) || status=$?
+  if [ "$status" -eq 0 ] && [ -n "$shown" ]; then
+    if ((SECONDS >= deadline)); then
+      echo "docker0 answered after the $docker_bridge_wait_seconds second limit, so the answer is refused and the host does not join the cluster."
+      exit 1
+    fi
+    break
+  fi
+  pause=$((deadline - SECONDS))
+  if ((pause > docker_bridge_poll_seconds)); then pause=$docker_bridge_poll_seconds; fi
+  if ((pause > 0)); then sleep "$pause"; fi
 done
 step "Checking the job bridge subnet"
-bridge_addresses=$(awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { printf "%s%s", separator, $(i + 1); separator = " " } }' <<<"$shown")
-if [ "$bridge_addresses" != "$docker_bridge_address" ]; then
-  echo "docker0 holds $bridge_addresses instead of the required $docker_bridge_address ($docker_bridge_subnet), so the host does not join the cluster. Docker received another bridge address: remove the option that sets it, in the daemon file or on the command line."
+if ! bridge_address_exact "$shown" "$docker_bridge_address"; then
+  bridge_addresses=$(awk '{ for (i = 1; i < NF; i++) if ($i == "inet") { printf "%s%s%s", separator, $(i + 1), ($0 ~ /secondary/ ? " (secondary)" : ""); separator = ", " } }' <<<"$shown")
+  echo "docker0 holds $bridge_addresses instead of the required $docker_bridge_address ($docker_bridge_subnet) alone, so the host does not join the cluster. Docker received another bridge address: remove the option that sets it, in the daemon file or on the command line."
   exit 1
 fi
-log "docker0 holds $bridge_addresses, the subnet of the routing rule."
+log "docker0 holds $docker_bridge_address alone, the subnet of the routing rule."
 step "Writing the ECS agent configuration"
 cat >>"$ecs_config_file" <<CONFIG
 ECS_ENABLE_TASK_IAM_ROLE=true

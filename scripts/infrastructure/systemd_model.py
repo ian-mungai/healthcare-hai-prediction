@@ -4,7 +4,7 @@
 # stops or restarts the units that require it (Requires= and BindsTo=) and the units that are PartOf= it, dependents
 # first; a reload reaches the units that list the reloaded unit in ReloadPropagatedFrom=. RequiresMountsFor= requires the
 # mount of each listed path, so a start fails while a path is not a mount point (a nofail mount whose device is missing). It
-# does not model failure restarts, timers, sockets, mount units, job queues or parallel starts.
+# does not model failure restarts, timers, sockets, mount units, job queues or parallel starts. is-active answers from the unit states.
 import json
 import os
 import sys
@@ -207,5 +207,8 @@ def main(arguments: list[str], builtin: dict[str, str], execute: Execute) -> Non
     elif command in ("start", "stop", "restart", "reload"):
         for name in names:
             getattr(manager, command)(name)
+    elif command == "is-active":
+        # Like systemctl is-active: status 0 when every named unit is active, else 3.
+        sys.exit(0 if all(name in manager.active for name in names if not name.startswith("-")) else 3)
     else:
         sys.exit(f"systemctl stand-in: unsupported arguments {arguments}")
