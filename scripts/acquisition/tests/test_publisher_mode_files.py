@@ -126,7 +126,7 @@ def test_a_legacy_registry_file_missing_from_the_code_root_is_named(on_host: Non
     (world.code / missing).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"{mode} code root: legacy_registry {startup_check.file_digest(missing)}" in str(caught.value), f"the mode, root and file are named: {caught.value}")
+    check(f"{mode} code root: legacy_registry {missing}" in str(caught.value), f"the mode, root and file are named: {caught.value}")
 
 
 @pytest.mark.parametrize("mode", PLAN_FILES)
@@ -163,7 +163,7 @@ def test_bls_names_each_county_adjacency_file(on_host: None, tmp_path: Path) -> 
     (world.code / adjacency[3]).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"reference {startup_check.file_digest(adjacency[3])}" in str(caught.value), "the removed file is named by its kind and digest")
+    check(f"reference {adjacency[3]}" in str(caught.value), "the removed file is named by its kind and relative path")
 
 
 @pytest.mark.parametrize("mode", KEYED)
@@ -215,7 +215,7 @@ def test_mmd_names_the_legacy_registry_and_the_template_at_the_code_root(on_host
     check(set(legacy_paths("cms_owners_org")) <= named and str(template) in named, f"legacy registry and template are code root files: {sorted(named)}")
     startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
     (world.code / template).unlink()
-    with pytest.raises(startup_check.StartupCheckError, match=f"template {startup_check.file_digest(template)}"):
+    with pytest.raises(startup_check.StartupCheckError, match=f"template {template}"):
         startup_check.check_files("publisher", needs, {"code": world.code, "mirror": world.mirror})
 
 
@@ -268,10 +268,7 @@ def test_the_entry_point_names_a_controlled_plan_missing_from_the_mirror_for_cen
     plan = f"config/acquisition/{PLAN_FILES[mode][0]}.json"
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64}, mode, controlled=plan)
-    check(
-        f"{mode} mirror root: config_input {startup_check.file_digest(plan)}" in str(caught.value),
-        f"the controlled plan and its mode are named: {caught.value}",
-    )
+    check(f"{mode} mirror root: config_input" in str(caught.value), f"the controlled plan's mode, root and kind are named: {caught.value}")
 
 
 @pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
@@ -347,7 +344,7 @@ def test_the_hcai_access_release_missing_from_the_code_root_is_named(on_host: No
     (world.code / release).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"hcai_util_workbook code root: release {startup_check.file_digest(release)}" in str(caught.value), f"the release is named: {caught.value}")
+    check(f"hcai_util_workbook code root: release {release}" in str(caught.value), f"the release is named: {caught.value}")
 
 
 def test_the_hud_terms_record_missing_from_the_code_root_is_named_before_the_loader_runs(on_host: None, tmp_path: Path) -> None:
@@ -358,4 +355,4 @@ def test_the_hud_terms_record_missing_from_the_code_root_is_named_before_the_loa
     (world.code / terms).unlink()
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         world.check()
-    check(f"hud_api code root: terms {startup_check.file_digest(terms)}" in str(caught.value), f"the terms record is named: {caught.value}")
+    check(f"hud_api code root: terms {terms}" in str(caught.value), f"the terms record is named: {caught.value}")

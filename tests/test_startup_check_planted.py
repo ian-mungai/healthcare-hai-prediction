@@ -252,8 +252,8 @@ def test_a_planted_file_need_never_reaches_the_output(
     listing.write_text(json.dumps({f"data/{TAIL}": "SYNTHETIC_KEY"}))
     needs = [
         startup_check.Need(f"{USER}@SYNTHETIC_HOST", "SYNTHETIC_ROOT", f"https://{USER}@SYNTHETIC_HOST/{TAIL}"),
-        startup_check.Need("SYNTHETIC_KEY+hcai_util_workbook", "code", f"https://{USER}@SYNTHETIC_HOST/{TAIL}"),
-        startup_check.Need("hcai_util_workbook", "code", present.name),
+        startup_check.Need("SYNTHETIC_KEY+hcai_util_workbook", "mirror", f"https://{USER}@SYNTHETIC_HOST/{TAIL}"),
+        startup_check.Need("hcai_util_workbook", "mirror", present.name),
         startup_check.Need("hcai_util_workbook", "mirror", listing.name, nonempty=True),
         startup_check.Need("SYNTHETIC_PASSWORD", startup_check.UNENUMERATED, ""),
     ]

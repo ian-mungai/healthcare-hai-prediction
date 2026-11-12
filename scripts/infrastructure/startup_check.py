@@ -14,17 +14,24 @@ fixed bound, and logs one line per check on stderr. Failures come first. A run o
 The check opens a socket and reads files. It makes no request that needs a grant.
 
 The checks run in a child Python process (``startup_check_child``), started without user site packages, bytecode files and the current folder on its
-path, with a minimal environment passed by name, in a private folder. (``-I`` cannot be used with ``-m`` and a path variable, so its effects are set by
-flags and the explicit environment.)
+path, with an environment that holds only the settings its request needs (a forbidden credential variable shows as a fixed presence marker, never its value),
+in a private folder. (``-I`` cannot be used with ``-m`` and a path variable, so its effects are set by flags and the explicit environment.)
 The child's standard output and error go to a pipe that the parent reads and never prints, so nothing that a dependency logs, warns, dumps or prints reaches
-the job output. The child reports only records: a reason code and parts from a closed grammar (a fixed phrase, a listed name, a parsed host and port, a digest,
-a count). The parent parses every record strictly, checks each code and part against its own fixed lists, and prints the text from its own phrases. Anything
-else, an unparseable line, an unknown code, a crash or a timeout, ends as ``startup_check_internal_error``. The parent never calls the text conversion of an
-exception.
+the job output. The child reports only reason codes: each finding is a code, its outcome and fixed phrases and names from the parent's own lists. It reports no
+number, digest or address. The parent opens the result file once, without following a link, reads it up to a byte limit under one deadline, parses every record
+strictly and binds the transcript to its request: it requires exactly the findings that the request makes mandatory, derives the counts and the elapsed time
+itself, and adds any context (an endpoint; a file's kind with its repository-relative path when it is under the code root and passes the privacy
+scan's home-path rule, else its digest) from its own inputs, never from the child. A queue run's findings show mode, root and kind only. Anything else,
+an unparseable line, an unknown code, a missing or extra finding, a crash or a timeout, ends as ``startup_check_internal_error``.
+The parent never calls the text conversion of an exception.
+
+Every entry point is a job-entry boundary (``guarded``). It runs the check to its end, prints the fixed diagnostics, and raises one ``StartupCheckError`` that
+holds fixed text and none of the request's arguments, from a frame that holds none, so a caller's diagnostic hook sees no raw path or value.
 """
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import errno
 import functools
@@ -32,10 +39,10 @@ import hashlib
 import importlib
 import ipaddress
 import json
-import math
 import os
 import re
 import socket
+import stat
 import sys
 import tempfile
 import threading
@@ -64,7 +71,10 @@ RESULT_NAME = "results.jsonl"
 REQUEST_NAME = "request.json"
 MAX_LINE_CHARACTERS = 4096
 MAX_RECORDS = 5000
+MAX_PARTS = 32
 MAX_RESULT_BYTES = 2_000_000
+# What the child sees of a forbidden credential variable that is set: the marker, never the value. The validator needs only the presence.
+PRESENT = "1"
 # ECS gives these to every container of a task, on Fargate and on the host.
 ECS_MARKERS = ("ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -179,7 +189,8 @@ KNOWN_MODES = frozenset(
     }
 )
 JOBS = frozenset({*JOB_PHASES, "unlisted"})
-CHECK_LABELS = frozenset({"environment", "build", "files", "checks"})
+# The label of each kind of request in the summary line. The parent takes it from the request, never from the child.
+CHECK_LABELS = {"environment": "environment", "build": "build", "files": "files", "queue": "files"}
 TASK_VALUES = " or ".join(sorted(ecs_engine.TASK_ENVIRONMENTS))
 # The lists that a label part is checked against, by name.
 LABEL_SETS: dict[str, frozenset[str]] = {
@@ -232,9 +243,8 @@ PHRASES = frozenset(
         "does not read as a JSON object",
         ": the staged listing of plan input files is absent, so no plan file reaches the code root",
         ": the staged listing of plan input files holds no entry, so no plan file reaches the code root",
-        "(",
-        "files)",
         "none named",
+        "an unlisted mode",
     }
 )
 CODES = frozenset(
@@ -266,10 +276,33 @@ CODES = frozenset(
     }
 )
 ERROR_NAMES = frozenset(errno.errorcode.values())
-DIGEST = re.compile(r"[0-9a-f]{12}")
-MODE_DIGEST = re.compile(r"mode#[0-9a-f]{12}")
-LARGEST_COUNT = 10_000_000
-LARGEST_SECONDS = 1_000_000.0
+# What a finding's code says of its outcome. ``credentials`` has both: its reason is the child's label.
+PASSING = frozenset({*SERVICES, "task_environment", "dbt_target", "input_file", "plan_inputs", "input_files"})
+EITHER = frozenset({"credentials"})
+BUILD_CODES = frozenset(
+    {
+        "dbt_target_refused",
+        "dbt_profile_unreadable",
+        "dbt_target_unknown",
+        "dbt_target",
+        "dbt_target_downloads_extensions",
+        "dbt_extension_directory_missing",
+        "dbt_extension_missing",
+    }
+)
+FILE_CODES = frozenset(
+    {
+        "input_file",
+        "input_file_missing",
+        "input_file_unreadable",
+        "plan_inputs",
+        "plan_inputs_missing",
+        "plan_inputs_empty",
+        "input_files",
+        "mode_files_unenumerated",
+    }
+)
+CHILD_CODES = CODES - {"startup_check_internal_error"}
 
 
 class StartupCheckError(RuntimeError):
@@ -312,16 +345,8 @@ def variable(name: str) -> Detail:
     return (("v", name),) if name in VARIABLES else phrase("an unlisted variable")
 
 
-def count(number: int) -> Detail:
-    return (("n", int(number)),)
-
-
-def seconds(value: float) -> Detail:
-    return (("t", float(value)),)
-
-
 def endpoint(host: str, port: int) -> Detail:
-    """A host and port. The host shows only as an IP address or an AWS service endpoint of a known Region, else as a digest."""
+    """A host and port from the parent's own inputs. The host shows only as an IP address or an AWS service endpoint of a known Region, else as a digest."""
     if "%" not in host:
         try:
             return (("h", "ip", ipaddress.ip_address(host).compressed, int(port)),)
@@ -332,15 +357,27 @@ def endpoint(host: str, port: int) -> Detail:
     return (("h", "digest", digest(host), int(port)),)
 
 
+def known_mode(owner: str) -> bool:
+    return bool(owner) and all(part in KNOWN_MODES for part in owner.split("+"))
+
+
 def mode_label(owner: str) -> Detail:
-    """A collector mode, or modes joined by a plus sign, when the harness knows each; else a digest."""
-    known = bool(owner) and all(part in KNOWN_MODES for part in owner.split("+"))
-    return (("m", owner if known else f"mode#{digest(owner)}"),)
+    """A collector mode, or modes joined by a plus sign, when the harness knows each; else a digest. Only the parent uses it, on a need that it holds."""
+    return (("m", owner if known_mode(owner) else f"mode#{digest(owner)}"),)
 
 
 def file_label(kind: str, path: str) -> Detail:
-    """A file by its kind and the digest of its path, because a configured path may carry anything."""
+    """A file by its kind and the digest of its path, because a configured path may carry anything. Only the parent uses it, on a need that it holds."""
     return (("f", kind if kind in FILE_KINDS else "input", digest(path)),)
+
+
+def mode_part(owner: str) -> Detail:
+    """The mode as the child may name it: a listed mode, else a fixed phrase. It never carries a digest."""
+    return (("m", owner),) if known_mode(owner) else phrase("an unlisted mode")
+
+
+def kind_part(kind: str) -> Detail:
+    return (("f", kind if kind in FILE_KINDS else "input"),)
 
 
 def file_digest(path: str | Path) -> str:
@@ -363,32 +400,29 @@ def error_detail(error: BaseException) -> Detail:
 
 @dataclass(frozen=True)
 class Finding:
+    """One check's result: its code, its outcome, the reason in fixed phrases and, for a file, where it is by lists only."""
+
     name: str
     ok: bool
     detail: Detail
+    where: Detail = ()
 
     def __post_init__(self) -> None:
         if self.name not in CODES or not isinstance(self.detail, tuple):
             raise TypeError("a finding takes a listed code and a detail of parts")
 
 
-# ---- the parent: strict parsing of the child's records and the text it prints, from its own lists ----
+# ---- the parent: strict parsing of the child's records, the binding to the request, and the text it prints, from its own lists and inputs ----
 
-
-def is_int(value: object, largest: int = LARGEST_COUNT) -> bool:
-    return type(value) is int and 0 <= value <= largest
-
-
-def is_number(value: object) -> bool:
-    return type(value) in (int, float) and math.isfinite(float(value)) and 0.0 <= float(value) <= LARGEST_SECONDS
+Report = tuple[str, bool, str]
 
 
 def valid_part(part: object) -> Part:
-    """One part of a detail, or ``InvalidRecords``. Each kind has its own shape and its own list."""
+    """One part of a detail, or ``InvalidRecords``. Each kind has its own shape and its own list. No part carries a number, a digest or an address."""
     if type(part) is not list or not part or type(part[0]) is not str:
         raise InvalidRecords
     kind, *values = part
-    shapes = {"p": 1, "v": 1, "l": 2, "m": 1, "f": 2, "h": 3, "n": 1, "t": 1, "g": 1, "r": 1}
+    shapes = {"p": 1, "v": 1, "l": 2, "m": 1, "f": 1, "r": 1}
     if kind not in shapes or len(values) != shapes[kind]:
         raise InvalidRecords
     if kind == "p":
@@ -398,15 +432,9 @@ def valid_part(part: object) -> Part:
     elif kind == "l":
         ok = type(values[0]) is str and values[0] in LABEL_SETS and values[1] in LABEL_SETS[values[0]]
     elif kind == "m":
-        ok = type(values[0]) is str and (bool(MODE_DIGEST.fullmatch(values[0])) or all(item in KNOWN_MODES for item in values[0].split("+")))
+        ok = type(values[0]) is str and known_mode(values[0])
     elif kind == "f":
-        ok = values[0] in FILE_KINDS and type(values[1]) is str and bool(DIGEST.fullmatch(values[1]))
-    elif kind == "h":
-        ok = valid_host(values[0], values[1]) and is_int(values[2], 65535)
-    elif kind == "n":
-        ok = is_int(values[0])
-    elif kind in ("t", "g"):
-        ok = is_number(values[0])
+        ok = values[0] in FILE_KINDS
     else:
         ok = values[0] in ERROR_NAMES
     if not ok:
@@ -414,36 +442,24 @@ def valid_part(part: object) -> Part:
     return tuple(part)
 
 
-def valid_host(form: object, text: object) -> bool:
-    if type(text) is not str:
-        return False
-    if form == "digest":
-        return bool(DIGEST.fullmatch(text))
-    if form == "aws":
-        return bool(AWS_HOST.fullmatch(text))
-    if form != "ip" or "%" in text:
-        return False
-    try:
-        return ipaddress.ip_address(text).compressed == text
-    except ValueError:
-        return False
+def valid_parts(parts: object) -> Detail:
+    if type(parts) is not list or len(parts) > MAX_PARTS:
+        raise InvalidRecords
+    return tuple(valid_part(part) for part in parts)
 
 
 def valid_record(record: object) -> dict[str, Any]:
-    """One record of the transcript: a finding, the summary or the end, with exactly its keys."""
+    """One record of the transcript: a finding or the end, with exactly its keys. A finding's outcome must agree with its code."""
     if type(record) is not dict:
         raise InvalidRecords
     kind = record.get("k")
     if kind == "e" and set(record) == {"k"}:
         return {"k": "e"}
-    if kind == "s" and set(record) == {"k", "j", "l", "n", "x", "t"}:
-        if record["j"] not in JOBS or record["l"] not in CHECK_LABELS or not is_int(record["n"]) or not is_int(record["x"]) or not is_number(record["t"]):
+    if kind == "f" and set(record) == {"k", "c", "o", "d", "w"}:
+        code, passed = record["c"], record["o"]
+        if code not in CHILD_CODES or type(passed) is not bool or (code not in EITHER and passed != (code in PASSING)):
             raise InvalidRecords
-        return dict(record)
-    if kind == "f" and set(record) == {"k", "c", "o", "d"}:
-        if record["c"] not in CODES or type(record["o"]) is not bool or type(record["d"]) is not list:
-            raise InvalidRecords
-        return {"k": "f", "c": record["c"], "o": record["o"], "d": tuple(valid_part(part) for part in record["d"])}
+        return {"k": "f", "c": code, "o": passed, "d": valid_parts(record["d"]), "w": valid_parts(record["w"])}
     raise InvalidRecords
 
 
@@ -452,7 +468,7 @@ def reject_constant(_name: str) -> None:
 
 
 def parse_records(lines: list[str]) -> list[dict[str, Any]]:
-    """The transcript of the child, or ``InvalidRecords``: findings, then one summary, then the end, and nothing after it."""
+    """The findings of the child's transcript, or ``InvalidRecords``: findings, then one end record, and nothing after it."""
     if not lines or len(lines) > MAX_RECORDS:
         raise InvalidRecords
     records = []
@@ -463,27 +479,20 @@ def parse_records(lines: list[str]) -> list[dict[str, Any]]:
             records.append(valid_record(json.loads(line, parse_constant=reject_constant)))
         except Exception:
             raise InvalidRecords from None
-    kinds = [record["k"] for record in records]
-    if kinds[-2:] != ["s", "e"] or kinds.count("s") != 1 or kinds.count("e") != 1 or set(kinds[:-2]) != ({"f"} if len(kinds) > 2 else set()):
+    if records[-1]["k"] != "e" or any(record["k"] != "f" for record in records[:-1]):
         raise InvalidRecords
-    return records
+    return records[:-1]
 
 
 def text_of(part: Part) -> str:
-    """The text of one validated part. Only the parent's own lists and the parsed numbers are in it."""
+    """The text of one part. A part of the child is validated against the lists; a part of the parent comes from its own inputs."""
     kind = part[0]
     if kind == "h":
         return f"host#{part[2]}:{part[3]}" if part[1] == "digest" else f"{part[2]}:{part[3]}"
     if kind == "f":
-        return f"{part[1]} {part[2]}"
+        return " ".join(str(item) for item in part[1:])
     if kind == "l":
         return str(part[2])
-    if kind == "n":
-        return str(part[1])
-    if kind == "t":
-        return f"{part[1]:.2f} s"
-    if kind == "g":
-        return f"{part[1]:g} s"
     return str(part[1])
 
 
@@ -491,57 +500,184 @@ def render(detail: Iterable[Part]) -> str:
     return " ".join(text_of(part) for part in detail)
 
 
-def emit(records: list[dict[str, Any]]) -> None:
-    """Print the validated transcript on stderr, failures first, and raise when one failed."""
-    findings = [record for record in records if record["k"] == "f"]
-    failed = [record for record in findings if not record["o"]]
-    for record in failed:
-        sys.stderr.write(f"startup_check: FAILED {record['c']} {render(record['d'])}\n")
-    for record in findings:
-        if record["o"]:
-            sys.stderr.write(f"startup_check: ok {record['c']} {render(record['d'])}\n")
-    summary = next(record for record in records if record["k"] == "s")
-    sys.stderr.write(f"startup_check: {summary['j']} {summary['l']}: {summary['n']} checks, {summary['x']} failed, {summary['t']:.1f} s\n")
+def same(record: Mapping[str, Any], finding: Finding) -> bool:
+    return record["c"] == finding.name and record["o"] == finding.ok
+
+
+def bind_environment(flags: Mapping[str, bool], findings: list[dict[str, Any]]) -> list[Report]:
+    """The findings of an environment request: the ones that the parent's own environment settles, the credentials, and one per connect it expects."""
+    leading, targets = environment_plan(**flags)
+    if len(findings) != len(leading) + len(targets):
+        raise InvalidRecords
+    reports: list[Report] = []
+    for record, mine in zip(findings, leading, strict=False):
+        if mine is None:
+            if record["c"] != "credentials":
+                raise InvalidRecords
+            reports.append((record["c"], record["o"], render(record["d"])))
+        elif same(record, mine):
+            reports.append((mine.name, mine.ok, render(mine.detail)))
+        else:
+            raise InvalidRecords
+    for record, (name, host, port) in zip(findings[len(leading) :], targets, strict=True):
+        if record["c"] not in (name, f"{name}_unreachable"):
+            raise InvalidRecords
+        reason = f" {CONNECT_SECONDS:g} s" if ("p", "timed out after") in record["d"] else ""
+        reports.append((record["c"], record["o"], render((*endpoint(host, port), *record["d"])) + reason))
+    return reports
+
+
+def bind_build(layer: str, findings: list[dict[str, Any]]) -> list[Report]:
+    """A build request: the task environment, from the parent's own environment, and, unless the layer writes its own profile, one target finding."""
+    environment = check_task_environment()
+    if len(findings) != (1 if layer == "features" else 2) or not same(findings[0], environment):
+        raise InvalidRecords
+    reports = [(environment.name, environment.ok, render(environment.detail))]
+    if layer != "features":
+        if findings[1]["c"] not in BUILD_CODES:
+            raise InvalidRecords
+        reports.append((findings[1]["c"], findings[1]["o"], render(findings[1]["d"])))
+    return reports
+
+
+def need_codes(need: Need) -> frozenset[str]:
+    if need.root == UNENUMERATED:
+        return frozenset({"mode_files_unenumerated"})
+    if need.nonempty:
+        return frozenset({"plan_inputs", "plan_inputs_missing", "plan_inputs_empty"})
+    return frozenset({"input_file", "input_file_missing"} | ({"input_file_unreadable"} if need.kind in ("plan", "lock") else set()))
+
+
+def relative_path(need: Need, code: Path) -> str | None:
+    """The path of a code root need below the code root, as text that may be shown, or ``None``.
+
+    It shows only a path under the code root that is printable and that the privacy scan's home-path rule does not flag. The rule is the scan's own function."""
+    if need.root != "code":
+        return None
+    root = os.path.normpath(code)
+    full = os.path.normpath(os.path.join(root, need.path))
+    if not full.startswith(root.rstrip(os.sep) + os.sep):
+        return None
+    text = Path(full).relative_to(root).as_posix()
+    try:
+        flagged = "home-path" in importlib.import_module("scripts.quality.repo_checks").line_privacy(text, [])
+    except ImportError:
+        return None
+    return None if flagged or not text.isprintable() else text
+
+
+def need_where(need: Need, code: Path) -> Detail:
+    """Where a need is, from the parent's own copy of it: its mode and root, and its kind with the relative path or, when that may not show, the digest."""
+    if need.root == UNENUMERATED:
+        return mode_label(need.owner)
+    where = join(mode_label(need.owner), label("root", need.root, phrase("an unlisted")), phrase("root:"))
+    shown = relative_path(need, code)
+    return join(where, (("f", need.kind if need.kind in FILE_KINDS else "input", shown),) if shown else file_label(need.kind, need.path))
+
+
+def bind_files(needs: list[Need], code: Path, findings: list[dict[str, Any]]) -> list[Report]:
+    """A files request: one finding per need, in order, with a code that its need allows, and where each is from the parent's own needs."""
+    if not needs:
+        if len(findings) != 1 or findings[0]["c"] != "input_files":
+            raise InvalidRecords
+        return [("input_files", True, render(findings[0]["d"]))]
+    if len(findings) != len(needs):
+        raise InvalidRecords
+    reports = []
+    for record, need in zip(findings, needs, strict=True):
+        if record["c"] not in need_codes(need):
+            raise InvalidRecords
+        reports.append((record["c"], record["o"], render((*need_where(need, code), *record["d"]))))
+    return reports
+
+
+def bind_queue(findings: list[dict[str, Any]]) -> list[Report]:
+    """A queue request: the parent holds no needs, so it takes one or more file findings, each placed by the child's lists only, with no digest."""
+    if not findings or any(record["c"] not in FILE_CODES for record in findings):
+        raise InvalidRecords
+    return [(record["c"], record["o"], render((*record["w"], *record["d"]))) for record in findings]
+
+
+def bind(request: Mapping[str, Any], findings: list[dict[str, Any]]) -> list[Report]:
+    """The reports of a validated transcript, bound to the request that was made, or ``InvalidRecords`` when the transcript is not the one it requires."""
+    kind = request["kind"]
+    if kind == "environment":
+        return bind_environment(request["flags"], findings)
+    if kind == "build":
+        return bind_build(request["layer"], findings)
+    if kind == "files":
+        return bind_files([Need(**item) for item in request["needs"]], Path(request.get("roots", {}).get("code") or request["cwd"]), findings)
+    return bind_queue(findings)
+
+
+def line_of(code: str, text: str) -> str:
+    return f"{code} {text}".rstrip()
+
+
+def emit(request: Mapping[str, Any], reports: list[Report], elapsed: float) -> str | None:
+    """Print the bound reports on stderr, failures first, then the summary from the parent's own counts. Return the failure message, or ``None``."""
+    failed = [report for report in reports if not report[1]]
+    for code, _, text in failed:
+        sys.stderr.write(f"startup_check: FAILED {line_of(code, text)}\n")
+    for code, passed, text in reports:
+        if passed:
+            sys.stderr.write(f"startup_check: ok {line_of(code, text)}\n")
+    job = request["job"] if request["job"] in JOBS else "unlisted"
+    sys.stderr.write(f"startup_check: {job} {CHECK_LABELS[request['kind']]}: {len(reports)} checks, {len(failed)} failed, {elapsed:.1f} s\n")
     sys.stderr.flush()
-    if failed:
-        raise StartupCheckError("startup check failed: " + "; ".join(f"{record['c']} {render(record['d'])}" for record in failed))
+    return "startup check failed: " + "; ".join(line_of(code, text) for code, _, text in failed) if failed else None
 
 
-def guarded[T](function: Callable[..., T]) -> Callable[..., T]:
-    """The top level of every entry point. Any other error ends as a fixed code, with no message, no chained error and no traceback text."""
+INTERNAL_ERROR = "startup check failed: startup_check_internal_error"
+
+
+def shielded(function: Callable[..., str | None], arguments: tuple[Any, ...], keywords: dict[str, Any]) -> str | None:
+    """Run one entry point and return its failure message. Any error ends as the fixed internal error: no message, no chained error and no traceback leaves."""
+    try:
+        return function(*arguments, **keywords)
+    except Exception:
+        sys.stderr.write("startup_check: FAILED startup_check_internal_error\n")
+        sys.stderr.flush()
+        return INTERNAL_ERROR
+
+
+def guarded[**P](function: Callable[P, str | None]) -> Callable[P, None]:
+    """The job-entry boundary of an entry point. The check, the diagnostics and every failure (expected, internal and a timeout) end inside ``shielded``.
+
+    The one error raised here holds fixed text, and this frame drops the request's arguments before it raises, so a hook that captures the locals of the
+    frames between the job and the raise sees no raw path or value."""
 
     @functools.wraps(function)
-    def wrapper(*arguments: Any, **keywords: Any) -> T:
-        try:
-            return function(*arguments, **keywords)
-        except StartupCheckError:
-            raise
-        except Exception:
-            sys.stderr.write("startup_check: FAILED startup_check_internal_error\n")
-            sys.stderr.flush()
-            raise StartupCheckError("startup check failed: startup_check_internal_error") from None
+    def wrapper(*arguments: P.args, **keywords: P.kwargs) -> None:
+        message = shielded(function, arguments, keywords)
+        del arguments, keywords
+        if message is not None:
+            raise StartupCheckError(message)
 
     return wrapper
 
 
-def child_environment_names() -> tuple[str, ...]:
-    """The only variables that the child gets from this process, by name: what the checks read, and the tests' additions."""
-    names = (
-        *ECS_MARKERS,
-        *SERVICE_VARIABLES.values(),
-        "AWS_EXECUTION_ENV",
-        "AWS_REGION",
-        "AWS_DEFAULT_REGION",
-        *ecs_engine.FORBIDDEN_CREDENTIAL_VARIABLES,
-        "HAI_DUCKDB_TEMP_DIRECTORY",
-        "HAI_DUCKDB_MAX_TEMP_BYTES",
-        *CHILD_ENV_EXTRA,
-    )
-    return tuple(dict.fromkeys(names))
+def child_environment_names(request: Mapping[str, Any]) -> tuple[str, ...]:
+    """The only variables that the child gets from this process, by name: the settings that its request needs, and the tests' additions."""
+    kind = request["kind"]
+    names: list[str] = []
+    if kind == "environment":
+        flags = request["flags"]
+        names = ["AWS_EXECUTION_ENV", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "AWS_REGION", "AWS_DEFAULT_REGION"]
+        names += [SERVICE_VARIABLES[name] for name in ("polaris", "mlflow", "openmetadata") if flags[name]]
+        names += ["POLARIS_URI"] if flags["redis"] else []
+    elif kind == "build":
+        names = ["AWS_EXECUTION_ENV"]
+        if request["layer"] != "features":
+            names += ["AWS_CONTAINER_CREDENTIALS_RELATIVE_URI", "HAI_DUCKDB_TEMP_DIRECTORY", "HAI_DUCKDB_MAX_TEMP_BYTES"]
+            names += ["POLARIS_URI"] if request["layer"] == "silver" and request["mode"] == "real" else []
+    return tuple(dict.fromkeys([*names, *CHILD_ENV_EXTRA]))
 
 
-def child_environment(folder: str) -> dict[str, str]:
-    environment = {name: os.environ[name] for name in child_environment_names() if name in os.environ}
+def child_environment(folder: str, request: Mapping[str, Any]) -> dict[str, str]:
+    environment = {name: os.environ[name] for name in child_environment_names(request) if name in os.environ}
+    if request["kind"] in ("environment", "build") and request.get("layer") != "features":
+        environment.update({name: PRESENT for name in ecs_engine.FORBIDDEN_CREDENTIAL_VARIABLES if os.environ.get(name)})
     return {**environment, "PATH": "/usr/bin:/bin", "HOME": folder, "TMPDIR": folder, "PYTHONPATH": str(REPOSITORY)}
 
 
@@ -549,23 +685,99 @@ def dump(records: Iterable[dict[str, Any]]) -> list[str]:
     return [json.dumps(record, separators=(",", ":"), allow_nan=False) for record in records]
 
 
-def run_child(request: dict[str, Any]) -> list[str]:
-    """Run the request in the isolated child and return the lines it wrote to its result file. The child's streams are captured and dropped."""
-    with tempfile.TemporaryDirectory(prefix="startup_check_") as name:
-        folder = Path(name)
-        (folder / REQUEST_NAME).write_text(json.dumps(request), encoding="utf-8")
-        done = run_command(
-            sys.executable, ["-s", "-B", "-P", "-m", CHILD_MODULE, name], cwd=folder, env=child_environment(name), timeout=CHILD_SECONDS, errors="replace"
-        )
-        results = folder / RESULT_NAME
-        if done.returncode != 0 or not results.is_file() or results.stat().st_size > MAX_RESULT_BYTES:
+def remaining(deadline: float) -> float:
+    return max(0.1, deadline - time.monotonic())
+
+
+def write_request(directory: int, request: Mapping[str, Any]) -> None:
+    descriptor = os.open(REQUEST_NAME, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+        stream.write(json.dumps(request))
+
+
+def read_result(directory: int, deadline: float) -> list[str]:
+    """Open the result file once, without following a link or blocking on a special file, check the descriptor and read at most the limit plus one."""
+    try:
+        descriptor = os.open(RESULT_NAME, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+    except OSError:
+        raise InvalidRecords from None
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise InvalidRecords
-        return results.read_text(encoding="utf-8").splitlines()
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_RESULT_BYTES:
+            if time.monotonic() > deadline:
+                raise TimeoutError("the result was not read in time")
+            block = os.read(descriptor, min(65536, MAX_RESULT_BYTES + 1 - total))
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+    except OSError:
+        raise InvalidRecords from None
+    finally:
+        os.close(descriptor)
+    if total > MAX_RESULT_BYTES:
+        raise InvalidRecords
+    return b"".join(chunks).decode("utf-8").splitlines()
 
 
-def run_checks(request: dict[str, Any]) -> list[dict[str, Any]]:
-    """The validated transcript of one request. In this process the same records go through the same strict parser."""
-    return parse_records(run_child(request) if ISOLATED else dump(execute(request)))
+def remove_contents(directory: int, deadline: float) -> None:
+    """Delete everything in the folder behind the descriptor, never following a link, and fail when the deadline has passed."""
+    with os.scandir(directory) as entries:
+        found = [(entry.name, entry.is_dir(follow_symlinks=False)) for entry in entries]
+    for name, is_folder in found:
+        if time.monotonic() > deadline:
+            raise TimeoutError("the private folder was not removed in time")
+        if is_folder:
+            inner = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            try:
+                remove_contents(inner, deadline)
+            finally:
+                os.close(inner)
+            os.rmdir(name, dir_fd=directory)
+        else:
+            os.unlink(name, dir_fd=directory)
+
+
+def run_child(request: dict[str, Any]) -> list[str]:
+    """Run the request in the isolated child and return the lines it wrote to its result file. The child's streams are captured and dropped.
+
+    One deadline covers the child, the read of its result and the removal of its folder. The folder is used through one descriptor, so renaming it or
+    replacing a file in it changes nothing that this function opens."""
+    deadline = time.monotonic() + CHILD_SECONDS
+    name = tempfile.mkdtemp(prefix="startup_check_")
+    try:
+        directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            write_request(directory, request)
+            done = run_command(
+                sys.executable,
+                ["-s", "-B", "-P", "-m", CHILD_MODULE, name],
+                cwd=Path(name),
+                env=child_environment(name, request),
+                timeout=remaining(deadline),
+                errors="replace",
+            )
+            if done.returncode != 0:
+                raise InvalidRecords
+            return read_result(directory, deadline)
+        finally:
+            try:
+                remove_contents(directory, deadline)
+            finally:
+                os.close(directory)
+    finally:
+        with contextlib.suppress(FileNotFoundError):
+            os.rmdir(name)
+
+
+def run_checks(request: dict[str, Any]) -> str | None:
+    """Run one request, validate and bind its transcript, print it and return the failure message, or ``None``. Without a child the same records are parsed."""
+    started = time.monotonic()
+    findings = parse_records(run_child(request) if ISOLATED else dump(execute(request)))
+    return emit(request, bind(request, findings), time.monotonic() - started)
 
 
 # The root of a need that stands for a runnable plan mode that has no file list here, so the check refuses it instead of passing it unchecked.
@@ -804,16 +1016,15 @@ def service_target(name: str, name_variable: str) -> tuple[str, str, int] | Find
 
 def probe(targets: list[tuple[str, str, int]]) -> list[Finding]:
     """Connect to every target at the same time. A connect that is not done at the shared bound fails as timed out, and no thread outlives the process."""
-    outcomes: dict[int, tuple[BaseException | None, float]] = {}
+    outcomes: dict[int, BaseException | None] = {}
 
     def attempt(index: int, host: str, port: int) -> None:
-        started = time.monotonic()
         try:
             open_connection(host, port, CONNECT_SECONDS)
         except BaseException as error:
-            outcomes[index] = (error, time.monotonic() - started)
+            outcomes[index] = error
         else:
-            outcomes[index] = (None, time.monotonic() - started)
+            outcomes[index] = None
 
     threads = [threading.Thread(target=attempt, args=(index, host, port), daemon=True) for index, (_, host, port) in enumerate(targets)]
     for thread in threads:
@@ -822,15 +1033,14 @@ def probe(targets: list[tuple[str, str, int]]) -> list[Finding]:
     for thread in threads:
         thread.join(max(0.0, deadline - time.monotonic()))
     findings = []
-    for index, (name, host, port) in enumerate(targets):
-        outcome = outcomes.get(index)
-        where = endpoint(host, port)
-        if outcome is None:
-            findings.append(Finding(f"{name}_unreachable", False, join(where, phrase("timed out after"), (("g", CONNECT_SECONDS),))))
-        elif outcome[0] is not None:
-            findings.append(Finding(f"{name}_unreachable", False, join(where, error_detail(outcome[0]))))
+    for index, (name, _host, _port) in enumerate(targets):
+        error = outcomes.get(index)
+        if index not in outcomes:
+            findings.append(Finding(f"{name}_unreachable", False, phrase("timed out after")))
+        elif error is not None:
+            findings.append(Finding(f"{name}_unreachable", False, error_detail(error)))
         else:
-            findings.append(Finding(name, True, join(where, seconds(outcome[1]))))
+            findings.append(Finding(name, True, ()))
     return findings
 
 
@@ -854,11 +1064,13 @@ def redis_target() -> tuple[str, str, int] | Finding:
     return Finding("redis_address_unusable", False, target.detail) if isinstance(target, Finding) else ("redis", target[1], online_protocol.PORT)
 
 
-def environment_findings(*, polaris: bool, mlflow: bool, openmetadata: bool, redis: bool) -> list[Finding]:
+def environment_plan(*, polaris: bool, mlflow: bool, openmetadata: bool, redis: bool) -> tuple[list[Finding | None], list[tuple[str, str, int]]]:
+    """What the environment settles without a connect, in the order of the findings, and the connects that follow it. The parent builds the same plan from its
+    own environment to bind a transcript to its request. ``None`` stands for the credential check, which only the child makes."""
     environment = check_task_environment()
-    findings = [environment]
+    findings: list[Finding | None] = [environment]
     if environment.ok:
-        findings.append(check_credentials(catalog=polaris))
+        findings.append(None)
     targets: list[tuple[str, str, int]] = []
     for needed, name in ((polaris, "polaris"), (mlflow, "mlflow"), (openmetadata, "openmetadata")):
         if needed:
@@ -878,7 +1090,12 @@ def environment_findings(*, polaris: bool, mlflow: bool, openmetadata: bool, red
         findings.append(endpoints)
     else:
         targets.extend(endpoints)
-    return [*findings, *probe(targets)]
+    return findings, targets
+
+
+def environment_findings(*, polaris: bool, mlflow: bool, openmetadata: bool, redis: bool) -> list[Finding]:
+    leading, targets = environment_plan(polaris=polaris, mlflow=mlflow, openmetadata=openmetadata, redis=redis)
+    return [*(check_credentials(catalog=polaris) if item is None else item for item in leading), *probe(targets)]
 
 
 def profile_output(profiles: Path, target: str) -> Mapping | None:
@@ -952,29 +1169,24 @@ def build_findings(layer: str, mode: str, profiles: Path) -> list[Finding]:
 
 def check_need(need: Need, base: Path) -> Finding:
     if need.root == UNENUMERATED:
-        return Finding(
-            "mode_files_unenumerated",
-            False,
-            join(mode_label(need.owner), phrase("is a runnable plan mode with no file list in the startup check, so its files would go unchecked")),
-        )
+        reason = phrase("is a runnable plan mode with no file list in the startup check, so its files would go unchecked")
+        return Finding("mode_files_unenumerated", False, reason, mode_part(need.owner))
     path = base / need.path
-    where = join(mode_label(need.owner), label("root", need.root, phrase("an unlisted")), phrase("root:"), file_label(need.kind, need.path))
+    where = join(mode_part(need.owner), label("root", need.root, phrase("an unlisted")), phrase("root:"), kind_part(need.kind))
     if not need.nonempty:
         if not path.is_file():
-            return Finding("input_file_missing", False, where)
+            return Finding("input_file_missing", False, (), where)
         if need.kind in ("plan", "lock") and read_json(path) is None:
-            return Finding("input_file_unreadable", False, join(where, phrase("does not read as a JSON object")))
-        return Finding("input_file", True, where)
+            return Finding("input_file_unreadable", False, phrase("does not read as a JSON object"), where)
+        return Finding("input_file", True, (), where)
     if not path.is_file():
-        return Finding(
-            "plan_inputs_missing", False, join(where, phrase(": the staged listing of plan input files is absent, so no plan file reaches the code root"))
-        )
+        return Finding("plan_inputs_missing", False, phrase(": the staged listing of plan input files is absent, so no plan file reaches the code root"), where)
     document = read_json(path)
     if not document:
         return Finding(
-            "plan_inputs_empty", False, join(where, phrase(": the staged listing of plan input files holds no entry, so no plan file reaches the code root"))
+            "plan_inputs_empty", False, phrase(": the staged listing of plan input files holds no entry, so no plan file reaches the code root"), where
         )
-    return Finding("plan_inputs", True, join(where, phrase("("), count(len(document)), phrase("files)")))
+    return Finding("plan_inputs", True, (), where)
 
 
 def file_findings(files: Iterable[Need], roots: Mapping[str, Path], code: Path) -> list[Finding]:
@@ -983,32 +1195,22 @@ def file_findings(files: Iterable[Need], roots: Mapping[str, Path], code: Path) 
     return findings or [Finding("input_files", True, phrase("none named"))]
 
 
-def records_of(job: str, check_label: str, findings: list[Finding], started: float) -> list[dict[str, Any]]:
-    """The records the child reports: one per finding, the summary and the end."""
-    records: list[dict[str, Any]] = [{"k": "f", "c": item.name, "o": item.ok, "d": [list(part) for part in item.detail]} for item in findings]
-    failed = sum(1 for item in findings if not item.ok)
-    records.append(
-        {
-            "k": "s",
-            "j": job if job in JOBS else "unlisted",
-            "l": check_label,
-            "n": len(findings),
-            "x": failed,
-            "t": round(time.monotonic() - started, 2),
-        }
-    )
+def records_of(findings: list[Finding]) -> list[dict[str, Any]]:
+    """The records the child reports: one per finding, in order, and the end. The child reports no count, no time and no job: the parent derives them."""
+    records: list[dict[str, Any]] = [
+        {"k": "f", "c": item.name, "o": item.ok, "d": [list(part) for part in item.detail], "w": [list(part) for part in item.where]} for item in findings
+    ]
     return [*records, {"k": "e"}]
 
 
 def execute(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     """Run one request and return its records. This is the only code the child runs after its imports."""
-    started = time.monotonic()
-    kind, job = request["kind"], request["job"]
+    kind = request["kind"]
     code = Path(request["cwd"])
     if kind == "environment":
-        return records_of(job, "environment", environment_findings(**request["flags"]), started)
+        return records_of(environment_findings(**request["flags"]))
     if kind == "build":
-        return records_of(job, "build", build_findings(request["layer"], request["mode"], Path(request["profiles"])), started)
+        return records_of(build_findings(request["layer"], request["mode"], Path(request["profiles"])))
     roots = {name: Path(path) for name, path in request.get("roots", {}).items()}
     if kind == "queue":
         document = json.loads(Path(request["queue"]).read_text(encoding="utf-8"))
@@ -1016,7 +1218,7 @@ def execute(request: Mapping[str, Any]) -> list[dict[str, Any]]:
         needs = queue_files(document, controls=controls, keys=request["keys"])
     else:
         needs = [Need(**item) for item in request["needs"]]
-    return records_of(job, "files", file_findings(needs, roots, code), started)
+    return records_of(file_findings(needs, roots, code))
 
 
 # ---- the parent: the entry points ----
@@ -1026,45 +1228,36 @@ def absolute(path: str | Path) -> str:
     return str(Path(path).absolute())
 
 
-@guarded
-def check_phase(job: str, phase: str) -> None:
-    """Check the environment for one phase of a host job, with the services that ``JOB_PHASES`` lists for it. An unlisted phase checks nothing."""
+def run_phase(job: str, phase: str) -> str | None:
     needs = JOB_PHASES[job].get(phase)
-    if needs is not None:
-        check_environment(job, polaris="polaris" in needs, mlflow="mlflow" in needs, openmetadata="openmetadata" in needs, redis="redis" in needs)
+    if needs is None:
+        return None
+    return run_environment(job, polaris="polaris" in needs, mlflow="mlflow" in needs, openmetadata="openmetadata" in needs, redis="redis" in needs)
 
 
-@guarded
-def check_environment(job: str, *, polaris: bool = False, mlflow: bool = False, openmetadata: bool = False, redis: bool = False) -> None:
-    """The first-step check: the task environment and credentials, the host services that the job needs, and S3 and ECR."""
+def run_environment(job: str, *, polaris: bool = False, mlflow: bool = False, openmetadata: bool = False, redis: bool = False) -> str | None:
     if not in_ecs_job():
-        return
+        return None
     flags = {"polaris": polaris, "mlflow": mlflow, "openmetadata": openmetadata, "redis": redis}
-    emit(run_checks({"kind": "environment", "job": job, "cwd": absolute("."), "flags": flags}))
+    return run_checks({"kind": "environment", "job": job, "cwd": absolute("."), "flags": flags})
 
 
-@guarded
-def check_build(layer: str, mode: str, profiles: Path) -> None:
-    """The check at the start of the build: the target it would select and what that target needs on disk. A features build writes its own profile."""
+def run_build(layer: str, mode: str, profiles: Path) -> str | None:
     if not in_ecs_job():
-        return
-    emit(run_checks({"kind": "build", "job": layer, "cwd": absolute("."), "layer": layer, "mode": mode, "profiles": absolute(profiles)}))
+        return None
+    return run_checks({"kind": "build", "job": layer, "cwd": absolute("."), "layer": layer, "mode": mode, "profiles": absolute(profiles)})
 
 
-@guarded
-def check_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | None = None) -> None:
-    """Every named file exists under the root that its reader uses (``code`` defaults to the working folder). A listing must hold an entry."""
+def run_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | None = None) -> str | None:
     if not in_ecs_job():
-        return
+        return None
     given = {name: absolute(path) for name, path in (roots or {}).items()}
-    emit(run_checks({"kind": "files", "job": job, "cwd": absolute("."), "roots": given, "needs": [dataclasses.asdict(need) for need in files]}))
+    return run_checks({"kind": "files", "job": job, "cwd": absolute("."), "roots": given, "needs": [dataclasses.asdict(need) for need in files]})
 
 
-@guarded
-def check_queue_files(job: str, queue: Path, *, controls: Path | None, keys: bool, roots: Mapping[str, Path] | None = None) -> None:
-    """The file check of a publisher queue. Outside a task it reads neither the queue nor any collector plan."""
+def run_queue(job: str, queue: Path, *, controls: Path | None, keys: bool, roots: Mapping[str, Path] | None = None) -> str | None:
     if not in_ecs_job():
-        return
+        return None
     given = {name: absolute(path) for name, path in (roots or {}).items()}
     request = {
         "kind": "queue",
@@ -1075,4 +1268,17 @@ def check_queue_files(job: str, queue: Path, *, controls: Path | None, keys: boo
         "controls": absolute(controls) if controls else "",
         "keys": keys,
     }
-    emit(run_checks(request))
+    return run_checks(request)
+
+
+# Each entry point runs inside the boundary. A failure ends as its fixed text and one ``StartupCheckError``; outside an ECS task it checks nothing.
+# ``check_phase``: the environment for one phase of a host job, with the services that ``JOB_PHASES`` lists for it. An unlisted phase checks nothing.
+# ``check_environment``: the first-step check: the task environment and credentials, the host services that the job needs, and S3 and ECR.
+# ``check_build``: the check at the start of the build: the target it would select and what that target needs on disk. A features build writes its own profile.
+# ``check_files``: every named file exists under the root that its reader uses (``code`` is the working folder). A listing must hold an entry.
+# ``check_queue_files``: the file check of a publisher queue. Outside a task it reads neither the queue nor any collector plan.
+check_phase = guarded(run_phase)
+check_environment = guarded(run_environment)
+check_build = guarded(run_build)
+check_files = guarded(run_files)
+check_queue_files = guarded(run_queue)

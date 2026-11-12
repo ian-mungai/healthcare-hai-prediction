@@ -89,23 +89,21 @@ def test_a_plan_file_that_is_not_in_the_task_is_named_before_anything_runs(monke
     """Live failure 3: the publisher read the MMD collection plan, which was not in the task."""
     host_environment(monkeypatch)
     install_network(monkeypatch, Network())
-    paths = mmd_tree(monkeypatch, tmp_path / "code", leave_out="plan")
+    mmd_tree(monkeypatch, tmp_path / "code", leave_out="plan")
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_job(monkeypatch, tmp_path / "workspace")
-    check(
-        f"mmd_api code root: plan {startup_check.file_digest(paths['plan'])}" in str(caught.value),
-        f"the missing file and its collector are named: {caught.value}",
-    )
+    check("mmd_api code root: plan" in str(caught.value), f"the missing file's collector, root and kind are named, and no digest of it: {caught.value}")
 
 
 @pytest.mark.parametrize("leave_out", ["report", "reference", "original", "lock", "template"])
 def test_every_file_the_mmd_plan_load_reads_is_checked(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, leave_out: str) -> None:
     host_environment(monkeypatch)
     install_network(monkeypatch, Network())
-    paths = mmd_tree(monkeypatch, tmp_path / "code", leave_out=leave_out)
+    mmd_tree(monkeypatch, tmp_path / "code", leave_out=leave_out)
     with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
         run_job(monkeypatch, tmp_path / "workspace")
-    check(startup_check.file_digest(paths[leave_out]) in str(caught.value), f"{leave_out} is named: {caught.value}")
+    kind = {"lock": "additions_lock"}.get(leave_out, leave_out)
+    check(f"mmd_api code root: {kind}" in str(caught.value), f"the kind of the missing file is named: {caught.value}")
 
 
 def test_the_environment_is_checked_before_any_aws_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

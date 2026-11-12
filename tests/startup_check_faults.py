@@ -16,6 +16,9 @@ import warnings
 from pathlib import Path
 
 MARKER = "SYNTHETIC_FAULT_MARKER"
+# Synthetic secrets that a faulty child puts in the value fields of a transcript, by the fault that does it.
+FORGED_SECRETS = {"forged_digest": "a1b2c3d4e5f6", "forged_ip": "203.0.113.47", "forged_count": "314159"}
+FORGED_TRANSCRIPTS = (*FORGED_SECRETS, "contradictory_summary", "empty_summary", "empty_end", "wrong_check")
 
 
 class LeakyRefusal(RuntimeError):
@@ -88,12 +91,13 @@ def install(fault: str, folder: Path) -> None:
         os._exit(3)
     elif fault == "hang":
         time.sleep(300)
-    elif fault in ("garbage_line", "free_text", "unknown_code", "no_end"):
+    elif fault in ("garbage_line", "free_text", "unknown_code", "no_end", *FORGED_TRANSCRIPTS):
         lines = {
             "garbage_line": ["{not json " + MARKER],
             "free_text": [json.dumps({"k": "f", "c": "credentials", "o": True, "d": [["p", "native provider " + MARKER]]}), json.dumps({"k": "e"})],
             "unknown_code": [json.dumps({"k": "f", "c": MARKER, "o": True, "d": []}), json.dumps({"k": "e"})],
             "no_end": [json.dumps({"k": "f", "c": "credentials", "o": True, "d": [["p", "native task provider"]]})],
+            **forged_transcripts(),
         }[fault]
         (folder / "results.jsonl").write_text("\n".join(lines) + "\n")
         os._exit(0)
@@ -107,6 +111,7 @@ def install(fault: str, folder: Path) -> None:
                     "safe_path": sys.flags.safe_path,
                     "no_user_site": sys.flags.no_user_site,
                     "dont_write_bytecode": sys.flags.dont_write_bytecode,
+                    "values": dict(os.environ),
                     "home": os.environ.get("HOME", ""),
                     "tmp": os.environ.get("TMPDIR", ""),
                 }
@@ -114,3 +119,22 @@ def install(fault: str, folder: Path) -> None:
         )
     else:
         raise ValueError(fault)
+
+
+def forged_transcripts() -> dict[str, list[str]]:
+    """Complete transcripts in the form that an earlier child wrote: findings, one summary and the end. Each one is a lie that the parent must not print."""
+    ok = {"k": "f", "c": "credentials", "o": True}
+    end = json.dumps({"k": "e"})
+
+    def summary(label: str, checks: int, failed: int) -> str:
+        return json.dumps({"k": "s", "j": "silver", "l": label, "n": checks, "x": failed, "t": 0.25})
+
+    return {
+        "forged_digest": [json.dumps({**ok, "d": [["f", "plan", FORGED_SECRETS["forged_digest"]]]}), summary("environment", 1, 0), end],
+        "forged_ip": [json.dumps({**ok, "d": [["h", "ip", FORGED_SECRETS["forged_ip"], 443]]}), summary("environment", 1, 0), end],
+        "forged_count": [json.dumps({**ok, "d": [["n", int(FORGED_SECRETS["forged_count"])]]}), summary("environment", 1, 0), end],
+        "contradictory_summary": [json.dumps({**ok, "d": [["p", "native task provider"]]}), summary("environment", 0, 999), end],
+        "empty_summary": [summary("environment", 0, 0), end],
+        "empty_end": [end],
+        "wrong_check": [json.dumps({"k": "f", "c": "input_files", "o": True, "d": [["p", "none named"]]}), summary("files", 1, 0), end],
+    }
