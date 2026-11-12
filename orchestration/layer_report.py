@@ -15,17 +15,13 @@ The report of silver is the input of the gold report (a passed report). Every wa
 from __future__ import annotations
 
 import argparse
-import gzip
 import hashlib
-import io
 import json
 import logging
 import os
 import stat
-import tarfile
 import tempfile
 import time
-import zlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -40,13 +36,10 @@ LAYERS = ("silver", "gold")
 DEFAULT_DIRECTORY = Path("/opt/airflow/logs/layer_reports")
 LISTING_PREFIX = "lakehouse/"
 LISTING_LIMIT = acceptance.LIMIT
-ARCHIVE_LIMIT = 512 * 1024 * 1024
-UNPACKED_LIMIT = 8 * 1024 * 1024 * 1024
-MEMBER_LIMIT = 8 * 1024 * 1024
+ARCHIVE_LIMIT = acceptance.ARCHIVE_LIMIT
 DEADLINE_SECONDS = 720.0  # the evidence task stops at 15 minutes
-CHUNK = 1 << 20
+CHUNK = acceptance.CHUNK
 LOG = logging.getLogger(__name__)
-CONTRACT_FILES = (*acceptance.CONTRACT.values(), acceptance.BRONZE_MAP, str(acceptance.pins.SOURCES))
 
 
 class ReportError(RuntimeError):
@@ -207,22 +200,6 @@ def read_object(access: ReportAccess, key: str, limit: int, what: str) -> bytes:
     return data
 
 
-class StagedContract:
-    """The files of the publish contract as the staged ``code.tar.gz`` holds them: read in one pass from regular members, never unpacked."""
-
-    def __init__(self, commit: str, files: Mapping[str, str]) -> None:
-        self.commit = commit
-        self.files = dict(files)
-
-    def read(self, revision: str, path: str) -> str:
-        """The reader that ``scripts.lakehouse.layer_acceptance`` takes in place of ``git show``."""
-        if revision != self.commit:
-            raise acceptance.AcceptanceError("the staged code archive is not the code revision of the run")
-        if path not in self.files:
-            raise acceptance.AcceptanceError("a frozen file of the run's revision is not in the staged code archive")
-        return self.files[path]
-
-
 def fetch_archive(access: ReportAccess, run: str, digest: str, target: Path, limit: int, deadline: float) -> None:
     """Download the staged archive into ``target`` within the limit and refuse it unless its SHA-256 is the staged ``code.sha256``."""
     key = f"lakehouse/run_stage/{run}/inputs/code.tar.gz"
@@ -251,67 +228,12 @@ def fetch_archive(access: ReportAccess, run: str, digest: str, target: Path, lim
         raise ReportError("the staged code archive does not match its code.sha256")
 
 
-class BoundedStream(io.RawIOBase):
-    """The decompressed bytes of an archive, read and skipped only up to ``limit``: a read or a seek past it raises before it decompresses anything more."""
-
-    def __init__(self, stream: Any, limit: int) -> None:
-        self.stream = stream
-        self.limit = limit
-
-    def readable(self) -> bool:
-        return True
-
-    def seekable(self) -> bool:
-        return True
-
-    def tell(self) -> int:
-        return int(self.stream.tell())
-
-    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
-        target = offset + (self.tell() if whence == os.SEEK_CUR else 0)
-        if whence == os.SEEK_END or target > self.limit:
-            raise ReportError("the staged code archive is too large to read or took too long")
-        return int(self.stream.seek(target))
-
-    def readinto(self, buffer: Any) -> int:
-        room = self.limit - self.tell()
-        if room < 0:
-            raise ReportError("the staged code archive is too large to read or took too long")
-        view = memoryview(buffer)[: room + 1]
-        count = int(self.stream.readinto(view))
-        if self.tell() > self.limit:
-            raise ReportError("the staged code archive is too large to read or took too long")
-        return count
-
-
-def contract_from_archive(archive: Path, deadline: float) -> StagedContract:
-    """The contract files of a verified archive. A wanted member must be a regular file within the member limit and appear once. No member, read or skip
-    reaches past ``UNPACKED_LIMIT`` of decompressed bytes, the last member and the end of the archive included."""
-    wanted = set(CONTRACT_FILES)
-    files: dict[str, str] = {}
+def contract_from_archive(archive: Path, deadline: float) -> acceptance.StagedContract:
+    """The contract files of a verified archive (``scripts.lakehouse.layer_acceptance.contract_from_archive``), with this module's error."""
     try:
-        with gzip.open(archive, "rb") as stream, tarfile.open(fileobj=BoundedStream(stream, UNPACKED_LIMIT), mode="r:") as tar:
-            commit = str(tar.pax_headers.get("comment", ""))
-            if not acceptance.REVISION.fullmatch(commit):
-                raise ReportError("the staged code archive carries no commit ID")
-            for member in tar:
-                if member.offset_data + member.size > UNPACKED_LIMIT or time.monotonic() > deadline:
-                    raise ReportError("the staged code archive is too large to read or took too long")
-                name = member.name.removeprefix("./")
-                if name not in wanted:
-                    continue
-                if not member.isreg() or member.size > MEMBER_LIMIT or name in files:
-                    raise ReportError("a contract file of the staged code archive is not a single regular file within the limit")
-                handle = tar.extractfile(member)
-                if handle is None:
-                    raise ReportError("a contract file of the staged code archive cannot be read")
-                try:
-                    files[name] = handle.read(MEMBER_LIMIT + 1).decode("utf-8")
-                except UnicodeDecodeError:
-                    raise ReportError("a contract file of the staged code archive is not text") from None
-    except (tarfile.TarError, EOFError, OSError, zlib.error):
-        raise ReportError("the staged code archive cannot be read") from None
-    return StagedContract(commit, files)
+        return acceptance.contract_from_archive(archive, deadline)
+    except acceptance.AcceptanceError as error:
+        raise ReportError(str(error)) from None
 
 
 def launch_files(access: ReportAccess, layer: str, run: str, target: Path) -> str:

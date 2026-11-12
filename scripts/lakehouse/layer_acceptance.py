@@ -6,23 +6,23 @@ files that were saved from AWS read calls. Nothing here calls AWS.
     python -m scripts.lakehouse.layer_acceptance task --layer silver --describe <FILE>
     python -m scripts.lakehouse.layer_acceptance report --layer silver --run <RUN_ID> --code-digest <FILE> --describe <FILE> --evidence <DIR>
         --launch-records <DIR> --before <FILE> --after <FILE> --running-tasks <FILE> --host-status <FILE>
-        [--input-evidence <DIR> --input-report <FILE>] --out <FILE>
+        [--code-archive <FILE>] [--input-evidence <DIR> --input-report <FILE>] --out <FILE>
 
 ``task`` requires one stopped task whose every container ran to a zero exit.
 
 ``report`` binds the run to the staged code digest (the ``code.sha256`` of ``lakehouse/run_stage/<run>/inputs/``) and to the launch records of the run
 (``lakehouse/launch_records/<run>/<job>/``: the claim, then the started and end records of its attempt). It checks the evidence of the run against the frozen
-publish contract of the code revision the run unpacked (read with ``git show``, so a later edit changes nothing). It repeats the acceptance rules of the
-layer driver on the uploaded files, so a driver defect cannot vouch for itself. Every table set and namespace equals the contract. The task is this run's real
-task: its definition, its overrides and the staged code digest. The launch claim binds the same digest and the input run, the started record names the
-described task and the end record is ``succeeded``. The export is this run's: the run ID, the sealed identity and the consumer result, manifest and candidate
-hashes agree. The rows and content fingerprints, the commit record that follows the backup and the reconcile and names every snapshot ID, the pinned table
-set (H3) and the input listing before and after (H2) are checked. The listing digest is computed again in the way the driver computes it and compared with
-the pin. Every object version the task added lies under a prefix the layer writer role may write. A gold report also needs the passed silver report and its
-records, and a features report the passed gold report and its records: a producer is accepted when its report passed and covers the records read here. The
-features pin must be complete and equal the commit of the gold run (H3). The input check of features cannot read the gold ``publish_runs`` row, because this
-command reads saved files, so it reads the commit record that the gold report covers. A features report also requires the two Feast records to name this
-run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
+publish contract of the code revision the run unpacked (read from the run's staged ``code.tar.gz`` after it matched ``code.sha256``, so a later edit and the
+checkout change nothing). It repeats the acceptance rules of the layer driver on the uploaded files, so a driver defect cannot vouch for itself. Every table
+set and namespace equals the contract. The task is this run's real task: its definition, its overrides and the staged code digest. The launch claim binds the
+same digest and the input run, the started record names the described task and the end record is ``succeeded``. The export is this run's: the run ID, the
+sealed identity and the consumer result, manifest and candidate hashes agree. The rows and content fingerprints, the commit record that follows the backup and
+the reconcile and names every snapshot ID, the pinned table set (H3) and the input listing before and after (H2) are checked. The listing digest is computed
+again in the way the driver computes it and compared with the pin. Every object version the task added lies under a prefix the layer writer role may write. A
+gold report also needs the passed silver report and its records, and a features report the passed gold report and its records: a producer is accepted when its
+report passed and covers the records read here. The features pin must be complete and equal the commit of the gold run (H3). The input check of features
+cannot read the gold ``publish_runs`` row, because this command reads saved files, so it reads the commit record that the gold report covers. A features
+report also requires the two Feast records to name this run's publication: the snapshot set that Feast applied and the one it loaded into the online store.
 
 The report runs on the host, so the host check holds what is true while the host runs: the group desired capacity is at most 1, no task of the job family is
 left running and the group's one instance is the only active container instance. The host stop is proven by ``host_session stop`` (``host_off_verified``).
@@ -33,12 +33,17 @@ The report names the SHA-256 of every file it read, computed from the bytes it p
 from __future__ import annotations
 
 import argparse
+import gzip
 import hashlib
+import io
 import json
 import os
 import re
 import stat
 import sys
+import tarfile
+import time
+import zlib
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -60,6 +65,7 @@ OUT_OF_SCOPE_KEYS = 100
 INPUT_PREFIX = {"silver": "lakehouse/bronze/", "gold": "lakehouse/silver/", "features": "lakehouse/gold/"}
 PRODUCER = {"gold": "silver", "features": "gold"}  # the layer whose signed run this layer reads
 # The prefixes of the layer writer role (infra/iam/job_writer.tf) beside the run's own upload prefix.
+CONTRACT_FILES = (*CONTRACT.values(), BRONZE_MAP, str(pins.SOURCES))
 WRITE_PREFIXES = {
     "silver": ("lakehouse/silver/",),
     "gold": ("lakehouse/gold/", "lakehouse/catalog_backups/", "metadata/dbt/"),
@@ -226,12 +232,13 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
     markers = [item for item in before_deleted if item[0].startswith(prefix)]
     same = held_before == held_after and markers == [item for item in after_deleted if item[0].startswith(prefix)]
     entries = sorted([("V", *item) for item in held_before] + [("D", key, version, "", 0) for key, version in markers], key=lambda entry: entry[1])
-    # The run's own uploads, and the write-once launch records that the direct ECS launch writes for the run (config/orchestration/ecs_launch.json).
+    # The run's own uploads, and the launch records and family index key that the direct ECS launch writes for it (config/orchestration/ecs_launch.json).
     allowed = (*WRITE_PREFIXES[layer], f"lakehouse/layer_runs/{layer}/{run}/", f"lakehouse/launch_records/{run}/")
+    family = f"lakehouse/launch_records/families/{layer}/{run}.json"  # the write-once family index key of the run's claim
     seen_before = {(key, version) for key, version, _, _ in before} | set(before_deleted)
     seen_after = {(key, version) for key, version, _, _ in after} | set(after_deleted)
     added = [key for key, _ in seen_after - seen_before]
-    outside = sorted({key for key in added if not key.startswith(allowed)})
+    outside = sorted({key for key in added if not (key.startswith(allowed) or key == family)})
     checks = {
         "H2: the input object versions are the same before and after the task": same,
         "H2: the pin recorded the digest and count of the listing taken before the task": recorded == version_listing.canonical_digest(prefix, entries),
@@ -242,17 +249,14 @@ def listing_checks(layer: str, run: str, records: Records, arguments: argparse.N
 
 
 Reader = Callable[[str, str], str]  # (code revision, repository path) -> the file's text at that revision
+ARCHIVE_LIMIT = 512 * 1024 * 1024
+UNPACKED_LIMIT = 8 * 1024 * 1024 * 1024
+MEMBER_LIMIT = 8 * 1024 * 1024
+CHUNK = 1 << 20
+ARCHIVE_DEADLINE_SECONDS = 720.0
 
 
-def git_text(revision: str, path: str) -> str:
-    """A file as it is at the code revision the run unpacked."""
-    result = run_command("git", ["show", f"{revision}:{path}"], cwd=ROOT, timeout=30)
-    if result.returncode != 0:
-        raise AcceptanceError("a frozen file of the run's revision is not in this checkout")
-    return result.stdout
-
-
-def git_file(revision: str, path: str, read: Reader = git_text) -> Any:
+def git_file(revision: str, path: str, read: Reader) -> Any:
     """A JSON file as it is at the code revision the run unpacked."""
     try:
         return json.loads(read(revision, path))
@@ -260,7 +264,111 @@ def git_file(revision: str, path: str, read: Reader = git_text) -> Any:
         raise AcceptanceError("a frozen file of the run's revision is not JSON") from None
 
 
-def contract(layer: str, revision: str, read: Reader = git_text) -> tuple[set[str], str]:
+class StagedContract:
+    """The files of the publish contract as the staged ``code.tar.gz`` holds them: read in one pass from regular members, never unpacked."""
+
+    def __init__(self, commit: str, files: Mapping[str, str]) -> None:
+        self.commit = commit
+        self.files = dict(files)
+
+    def read(self, revision: str, path: str) -> str:
+        """The reader that the checks take: a file of the run's revision, from the archive of that revision."""
+        if revision != self.commit:
+            raise AcceptanceError("the staged code archive is not the code revision of the run")
+        if path not in self.files:
+            raise AcceptanceError("a frozen file of the run's revision is not in the staged code archive")
+        return self.files[path]
+
+
+class BoundedStream(io.RawIOBase):
+    """The decompressed bytes of an archive, read and skipped only up to ``limit``: a read or a seek past it raises before it decompresses anything more."""
+
+    def __init__(self, stream: Any, limit: int) -> None:
+        self.stream = stream
+        self.limit = limit
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def tell(self) -> int:
+        return int(self.stream.tell())
+
+    def seek(self, offset: int, whence: int = os.SEEK_SET) -> int:
+        target = offset + (self.tell() if whence == os.SEEK_CUR else 0)
+        if whence == os.SEEK_END or target > self.limit:
+            raise AcceptanceError("the staged code archive is too large to read or took too long")
+        return int(self.stream.seek(target))
+
+    def readinto(self, buffer: Any) -> int:
+        room = self.limit - self.tell()
+        if room < 0:
+            raise AcceptanceError("the staged code archive is too large to read or took too long")
+        view = memoryview(buffer)[: room + 1]
+        count = int(self.stream.readinto(view))
+        if self.tell() > self.limit:
+            raise AcceptanceError("the staged code archive is too large to read or took too long")
+        return count
+
+
+def contract_from_archive(archive: Path, deadline: float) -> StagedContract:
+    """The contract files of a verified archive. A wanted member must be a regular file within the member limit and appear once. No member, read or skip
+    reaches past ``UNPACKED_LIMIT`` of decompressed bytes, the last member and the end of the archive included."""
+    wanted = set(CONTRACT_FILES)
+    files: dict[str, str] = {}
+    try:
+        with gzip.open(archive, "rb") as stream, tarfile.open(fileobj=BoundedStream(stream, UNPACKED_LIMIT), mode="r:") as tar:
+            commit = str(tar.pax_headers.get("comment", ""))
+            if not REVISION.fullmatch(commit):
+                raise AcceptanceError("the staged code archive carries no commit ID")
+            for member in tar:
+                if member.offset_data + member.size > UNPACKED_LIMIT or time.monotonic() > deadline:
+                    raise AcceptanceError("the staged code archive is too large to read or took too long")
+                name = member.name.removeprefix("./")
+                if name not in wanted:
+                    continue
+                if not member.isreg() or member.size > MEMBER_LIMIT or name in files:
+                    raise AcceptanceError("a contract file of the staged code archive is not a single regular file within the limit")
+                handle = tar.extractfile(member)
+                if handle is None:
+                    raise AcceptanceError("a contract file of the staged code archive cannot be read")
+                try:
+                    files[name] = handle.read(MEMBER_LIMIT + 1).decode("utf-8")
+                except UnicodeDecodeError:
+                    raise AcceptanceError("a contract file of the staged code archive is not text") from None
+    except (tarfile.TarError, EOFError, OSError, zlib.error):
+        raise AcceptanceError("the staged code archive cannot be read") from None
+    return StagedContract(commit, files)
+
+
+def staged_contract(archive: Path, staged: str, records: Records) -> StagedContract:
+    """The contract of the run's staged ``code.tar.gz``, which must exist, stay within its size limit and hash to the staged ``code.sha256``."""
+    if not SHA256.fullmatch(staged):
+        raise AcceptanceError("the staged code.sha256 is not a SHA-256")
+    try:
+        descriptor = os.open(archive, os.O_RDONLY | os.O_NOFOLLOW)
+    except FileNotFoundError:
+        raise AcceptanceError("the staged code archive is missing") from None
+    except OSError:
+        raise AcceptanceError("the staged code archive cannot be opened (a link or an unreadable file)") from None
+    hasher, total = hashlib.sha256(), 0
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise AcceptanceError("the staged code archive is not a regular file")
+        while chunk := handle.read(CHUNK):
+            total += len(chunk)
+            if total > ARCHIVE_LIMIT:
+                raise AcceptanceError("the staged code archive is larger than its limit")
+            hasher.update(chunk)
+    if hasher.hexdigest() != staged:
+        raise AcceptanceError("the staged code archive does not match its code.sha256")
+    records.sha256["code_archive"] = hasher.hexdigest()
+    return contract_from_archive(archive, time.monotonic() + ARCHIVE_DEADLINE_SECONDS)
+
+
+def contract(layer: str, revision: str, read: Reader) -> tuple[set[str], str]:
     """The tables and the real namespace of the layer's publish contract at the run's revision."""
     try:
         publish = git_file(revision, CONTRACT[layer], read)["publish"]
@@ -269,7 +377,7 @@ def contract(layer: str, revision: str, read: Reader = git_text) -> tuple[set[st
         raise AcceptanceError("the publish contract of the run's revision has an unexpected shape") from None
 
 
-def bronze_tables(revision: str, read: Reader = git_text) -> set[str]:
+def bronze_tables(revision: str, read: Reader) -> set[str]:
     """The pinned bronze tables at the run's revision, as ``pins.mapped_tables`` reads them: the mapped tables a silver source declares, and file_metadata."""
     try:
         mapped = {entry["table"] for entry in git_file(revision, BRONZE_MAP, read)["tables"]}
@@ -298,7 +406,7 @@ def report_passed(document: Mapping[str, Any]) -> bool:
 
 
 def producer_checks(
-    records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None, read: Reader = git_text
+    records: Records, layer: str, run: str, revision: str, pinned: Mapping[str, Any], folder: Path | None, report_path: Path | None, read: Reader
 ) -> dict[str, bool]:
     """The pin is complete and names the run of the layer below, and that run passed: its report passed and covers its record."""
     below = PRODUCER[layer]
@@ -372,7 +480,7 @@ def evidence_checks(
     revision = str(identity.get("git_revision"))
     if not REVISION.fullmatch(revision):
         raise AcceptanceError("the run records no code revision")
-    read: Reader = getattr(arguments, "frozen", git_text)
+    read: Reader = arguments.frozen
     tables, namespace = contract(layer, revision, read)
     candidates, reconcile, backup, commit, manifest, consumer = (records.load_in(folder, name) for name in EVIDENCE_FILES[1:])
     pinned = records.load_in(folder, PIN_FILE[layer])
@@ -521,6 +629,9 @@ def report(arguments: argparse.Namespace) -> dict[str, Any]:
     layer, run = arguments.layer, arguments.run
     records = Records()
     staged = staged_digest(records, arguments.code_digest)
+    if getattr(arguments, "frozen", None) is None:
+        archive = getattr(arguments, "code_archive", None) or arguments.code_digest.parent / "code.tar.gz"
+        arguments = argparse.Namespace(**{**vars(arguments), "frozen": staged_contract(archive, staged, records).read})
     described = records.load(arguments.describe, "describe")
     evidence, summary, found = evidence_checks(records, layer, run, arguments.evidence, staged, arguments)
     tasks = described.get("tasks")
@@ -565,6 +676,7 @@ def parser() -> argparse.ArgumentParser:
     steps.choices["task"].add_argument("--describe", required=True, type=Path)
     for flag in ("code-digest", "describe", "evidence", "launch-records", "before", "after", "running-tasks", "host-status", "out"):
         steps.choices["report"].add_argument(f"--{flag}", required=True, type=Path)
+    steps.choices["report"].add_argument("--code-archive", type=Path, help="the staged code.tar.gz of the run; default: code.tar.gz beside --code-digest")
     steps.choices["report"].add_argument("--input-evidence", type=Path)
     steps.choices["report"].add_argument("--input-report", type=Path)
     return cli

@@ -21,9 +21,10 @@ import os
 import re
 import shutil
 import sys
+import tarfile
 import tempfile
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -80,6 +81,27 @@ def frozen(path: str) -> Any:
     return json.loads(frozen_text(path))
 
 
+ARCHIVE_PATHS = (*acceptance.CONTRACT.values(), acceptance.BRONZE_MAP, str(pins.SOURCES))
+
+
+@functools.cache
+def archive_for(tag: str, commit: str, edited: str = "") -> bytes:
+    """The staged ``code.tar.gz`` of a run as ``scripts.lakehouse.code_archive`` writes it for the contract files: the commit ID is the global pax comment and
+    a member named for the tag makes the digest differ between runs. ``edited`` names a contract file whose text the archive changes."""
+    stream = io.BytesIO()
+    with tarfile.open(fileobj=stream, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": commit}) as tar:
+        for path in (*ARCHIVE_PATHS, f"run_tag/{tag}"):
+            body = (frozen_text(path) if path in ARCHIVE_PATHS else tag).encode()
+            if path == edited:
+                document = json.loads(body)
+                document["publish"]["tables"] = dict(list(document["publish"]["tables"].items())[:-1])
+                body = json.dumps(document).encode()
+            info = tarfile.TarInfo(path)
+            info.size = len(body)
+            tar.addfile(info, io.BytesIO(body))
+    return stream.getvalue()
+
+
 CONTRACT_TABLES = {
     "silver": sorted(frozen("data_contracts/lakehouse/silver_publish.json")["publish"]["tables"]),
     "gold": sorted(frozen("data_contracts/lakehouse/gold_contract.json")["publish"]["tables"]),
@@ -99,10 +121,16 @@ class Spec:
     tag: str
     tables: tuple[str, ...]
     code: str = ""
+    revision: str = REVISION
+    edited: str = ""
+
+    @property
+    def archive(self) -> bytes:
+        return archive_for(self.tag, self.revision, self.edited)
 
     @property
     def code_sha256(self) -> str:
-        return self.code or h(self.tag, "code")
+        return self.code or hashlib.sha256(self.archive).hexdigest()
 
     @property
     def sealed(self) -> str:
@@ -196,7 +224,7 @@ def build_records(env: Env) -> None:
             "mode": "real",
             "code_run": run,
             "code_sha256": item.code_sha256,
-            "git_revision": REVISION,
+            "git_revision": item.revision,
             "source_sha256": h(item.tag, "source"),
             "input_objects": {"code.tar.gz": {"version_id": "v1", "etag": '"e"', "bytes": 10}},
             "input_listing": listing,
@@ -327,6 +355,8 @@ def build_records(env: Env) -> None:
     write_describe(env, {"containerOverrides": [{"name": "init"}, *overrides["containerOverrides"], {"name": "guard"}]})
     write_launch_records(env, task_arn(env))
     (root / "code.sha256").write_text(item.code_sha256 + "\n")
+    if hashlib.sha256(item.archive).hexdigest() == item.code_sha256:
+        (root / "code.tar.gz").write_bytes(item.archive)
     write(root / "running.json", {"taskArns": []})
     write(root / "host.json", {"desired_capacity": 1, "group_instances": [HOST], "container_instances": [HOST]})  # the host runs while the evidence step does
 
@@ -895,6 +925,7 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
         ("a host twin definition", definition("_host")),
         ("the launch records of the run", written(*records)),
         ("a host twin run with its launch records", both(definition("_host"), written(*records))),
+        ("the family index key of the run and job", written("lakehouse/launch_records/families/{layer}/{run}.json")),
     )
     planted = (
         ("a definition with another suffix", definition("_hosted"), NAMES["task"]),
@@ -902,6 +933,9 @@ def host_twin_cases(work: Path) -> dict[str, bool]:
         ("a definition of another family suffix", definition("_fargate"), NAMES["task"]),
         ("the launch records of another run", written("lakehouse/launch_records/{other}/{layer}/claim.json"), NAMES["scope"]),
         ("a file at the top of the launch records", written("lakehouse/launch_records/claim.json"), NAMES["scope"]),
+        ("the family index key of another run", written("lakehouse/launch_records/families/{layer}/{other}.json"), NAMES["scope"]),
+        ("the family index key of another job", written("lakehouse/launch_records/families/ingestion/{run}.json"), NAMES["scope"]),
+        ("a file beside the family index key of the run", written("lakehouse/launch_records/families/{layer}/{run}.json.x"), NAMES["scope"]),
         ("a prefix that only starts like the launch records", written("lakehouse/launch_records_x/{run}/{layer}/claim.json"), NAMES["scope"]),
     )
     checks: dict[str, bool] = {}
@@ -1103,6 +1137,37 @@ def command_cases(work: Path) -> dict[str, bool]:
     return checks
 
 
+def archive_cases(work: Path) -> dict[str, bool]:
+    """The publish contract is read from the run's staged ``code.tar.gz`` beside ``code.sha256``, never from the checkout."""
+    checks: dict[str, bool] = {}
+    other = "ab" * 20  # a revision that this checkout does not hold
+    env = make(work, "archive_other_revision", replace(spec("silver", SILVER_RUN, "a"), revision=other), checked=False)
+    code, failed, printed = accept(env)
+    checks["a run whose revision is not this checkout's passes from its staged archive"] = code == 0 and not failed
+    written = env.root / "qualification.json"
+    checks["the report hashes the staged archive"] = written.is_file() and "code_archive" in json.loads(written.read_text()).get("file_sha256", {})
+    env = make(work, "archive_tampered", spec("silver", SILVER_RUN, "a"), checked=False)
+    env.root.joinpath("code.tar.gz").write_bytes(archive_for("other", REVISION))
+    code, failed, printed = accept(env)
+    checks["an archive that does not match code.sha256 is refused and no report is written"] = (
+        code == 1 and "does not match its code.sha256" in printed and not env.root.joinpath("qualification.json").exists()
+    )
+    env = make(work, "archive_missing", spec("silver", SILVER_RUN, "a"), checked=False)
+    env.root.joinpath("code.tar.gz").unlink()
+    code, failed, printed = accept(env)
+    checks["a missing staged archive is refused and nothing falls back to this checkout"] = (
+        code == 1 and "staged code archive is missing" in printed and not env.root.joinpath("qualification.json").exists()
+    )
+    env = make(work, "archive_commit", replace(spec("silver", SILVER_RUN, "a"), revision=other), checked=False)
+    edit(env.evidence / "layer_run.json", lambda d: d.update(git_revision=REVISION))
+    code, failed, printed = accept(env)
+    checks["an archive of another commit than the run's revision is refused"] = code == 1 and "revision of the run" in printed
+    env = make(work, "archive_edited", replace(spec("silver", SILVER_RUN, "a"), edited=acceptance.CONTRACT["silver"]), checked=False)
+    code, failed, _ = accept(env)
+    checks["the tables of the archive's contract are the reference, not the checkout's"] = code == 1 and NAMES["sets"] in failed
+    return checks
+
+
 def static_cases() -> dict[str, bool]:
     """The command's constants equal the files they restate."""
     writer = (ROOT / "infra/iam/job_writer.tf").read_text()
@@ -1150,6 +1215,7 @@ def main() -> int:
             results["inputs"] = group("inputs", input_cases, work)
             results["guard"] = group("guard", guard_cases, work)
             results["host twin"] = group("host twin", host_twin_cases, work)
+            results["archive"] = group("archive", archive_cases, work)
             results["commands"] = command_cases(work)
     finally:
         shutil.rmtree(work, ignore_errors=True)

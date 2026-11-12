@@ -510,7 +510,7 @@ def archive_cases(work: Path) -> dict[str, bool]:
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w:gz", format=tarfile.PAX_FORMAT, pax_headers={"comment": fixtures.REVISION}) as tar:
             for name in ARCHIVE_PATHS:
-                body = fixtures.frozen_text(name).encode() + (b" " * (layer_report.MEMBER_LIMIT + 1) if name == acceptance.CONTRACT["silver"] else b"")
+                body = fixtures.frozen_text(name).encode() + (b" " * (acceptance.MEMBER_LIMIT + 1) if name == acceptance.CONTRACT["silver"] else b"")
                 info = tarfile.TarInfo(name)
                 info.size = len(body)
                 tar.addfile(info, io.BytesIO(body))
@@ -533,10 +533,10 @@ def archive_cases(work: Path) -> dict[str, bool]:
     with tarfile.open(fileobj=io.BytesIO(tail_archive), mode="r:gz") as tar:
         starts = [member.offset_data for member in tar if member.name == "unrelated/tail.bin"]
     bound = starts[0] + 1000  # the last member starts below the bound and ends far above it
-    with mock.patch.object(layer_report, "UNPACKED_LIMIT", bound):
+    with mock.patch.object(acceptance, "UNPACKED_LIMIT", bound):
         crossing = run_with(tail_archive, "tail", bound=True)
     checks["an archive whose last member ends above the unpacked limit is refused"] = crossing[0] == "error" and "too large" in str(crossing[1])
-    with mock.patch.object(layer_report, "UNPACKED_LIMIT", starts[0] + 600_000 + 2048):
+    with mock.patch.object(acceptance, "UNPACKED_LIMIT", starts[0] + 600_000 + 2048):
         inside = run_with(tail_archive, "tail_inside", bound=True)
     checks["an archive whose last member ends inside the unpacked limit is read"] = inside[0] == "ok"
     box = sandbox(work, "archive_nothing_written")
