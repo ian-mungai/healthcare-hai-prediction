@@ -824,6 +824,130 @@ SURVIVING_PACKAGE = {
 }
 
 
+# A deleted module's top-level names count only where the module is referenced. The module name is assembled so the scripts copied into the scratch
+# repository never name it, and a pending file is searched as text, so it shows what the check reads.
+DEAD_STEM = "ledger" + "_totals"
+DEAD_FILE = f"app/{DEAD_STEM}.py"
+DEAD_PATH = f"app.{DEAD_STEM}"
+DEAD_MODULE = {DEAD_FILE: UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE}
+UNRELATED_PARAMETER = f"def report({OLD_FUNCTION}: int) -> int:\n    return {OLD_FUNCTION} + 1\n"
+UNRELATED_KEYWORD = f"RESULT = run({OLD_CLASS}=True)\n"
+DELETED_MODULE_CASES = [
+    Case(
+        "deleted module, its function name is an unrelated local variable",
+        "removed-names",
+        True,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": UNRELATED_PARAMETER},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, its class name is an unrelated word in another test",
+        "removed-names",
+        True,
+        committed={DEAD_FILE: f"class {OLD_CLASS}:\n    pass\n", PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": UNRELATED_KEYWORD},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, its function name is a YAML column",
+        "removed-names",
+        True,
+        committed={DEAD_FILE: UTIL_FUNCTION, "dbt/models/schema.yml": f"models:\n  - name: totals\n    columns:\n      - name: {OLD_FUNCTION}\n"},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, from-import remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"from {DEAD_PATH} import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, package import of it remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"from app import {DEAD_STEM}\n\nVALUE: int = 1\n"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, relative import of it remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "app/__init__.py": "", "app/main.py": f"from . import {DEAD_STEM}\n\nVALUE: int = 1\n"},
+        delete=[DEAD_FILE],
+        reason=f"app/main.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, attribute through it remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "dags/pending_dag.py": f"from app import (\n    {DEAD_STEM},\n)\n\nVALUE: int = {DEAD_STEM}.{OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+        reason=f"dags/pending_dag.py:5: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, dynamic import of its path remains",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "app/loader.py": f'import importlib\n\nMODULE = importlib.import_module("{DEAD_PATH}")\n'},
+        delete=[DEAD_FILE],
+        reason=f"app/loader.py:3: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, its path stays in a config file",
+        "removed-names",
+        False,
+        committed={DEAD_FILE: UTIL_FUNCTION, "config/jobs.yaml": f"job:\n  module: {DEAD_PATH}\n"},
+        delete=[DEAD_FILE],
+        reason=f"config/jobs.yaml:2: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, its file path stays in a document",
+        "removed-names",
+        False,
+        committed={DEAD_FILE: UTIL_FUNCTION, "README.md": f"Call `{DEAD_FILE}`.\n"},
+        delete=[DEAD_FILE],
+        reason=f"README.md:1: {DEAD_STEM}.py {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, longer file and module names that contain its own are no reference",
+        "removed-names",
+        True,
+        committed={
+            DEAD_FILE: UTIL_FUNCTION,
+            "README.md": f"Run `tools/dbt_{DEAD_STEM}.py`, `tools/my-{DEAD_STEM}.py` and `tools/{DEAD_STEM}.pyi`.\n",
+            "config/jobs.yaml": f"job:\n  module: other.{DEAD_STEM}\n  also: app.{DEAD_STEM}_v2\n  and: app.dbt_{DEAD_STEM}\n",
+        },
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, its file name stays in a shell command",
+        "removed-names",
+        False,
+        committed={DEAD_FILE: UTIL_FUNCTION, "tools/run.sh": f"python {DEAD_STEM}.py --now\n"},
+        delete=[DEAD_FILE],
+        reason=f"tools/run.sh:1: {DEAD_STEM}.py {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, its file name stays in a quoted path",
+        "removed-names",
+        False,
+        committed={DEAD_FILE: UTIL_FUNCTION, "app/paths.py": f'PATH = "{DEAD_STEM}.py"\n'},
+        delete=[DEAD_FILE],
+        reason=f"app/paths.py:1: {DEAD_STEM}.py {LEFTOVER}",
+    ),
+    Case(
+        "function removed from a file that stays, an unrelated word elsewhere still counts",
+        "removed-names",
+        False,
+        committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": UNRELATED_PARAMETER},
+        files={"app/util.py": "X = 1\n"},
+        reason=f"dags/pending_dag.py:1: {OLD_FUNCTION} {LEFTOVER}",
+    ),
+]
+
+
 MYPY_SRC = '[tool.mypy]\npython_version = "3.12"\nexplicit_package_bases = true\nmypy_path = ["src"]\n'
 SRC_PACKAGE = {
     "src/acme/__init__.py": "",
@@ -1292,6 +1416,7 @@ CASES = [
         files={"app/util.py": "X = 1\n"},
     ),
     *INPUT_CASES,
+    *DELETED_MODULE_CASES,
     Case(
         "function removed with its callers",
         IMPORTERS_HOOK,

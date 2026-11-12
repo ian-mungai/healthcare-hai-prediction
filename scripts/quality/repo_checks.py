@@ -781,8 +781,28 @@ def bound_names(files: dict[str, list[str]]) -> set[str]:
     return names
 
 
+def module_reference(path: str, names: list[str]) -> re.Pattern[str]:
+    """Return the pattern for a line that refers to the deleted Python module at ``path``, whatever name the line uses from it.
+
+    A reference is its dotted path (the last package and the module name, so a source root prefix does not matter: ``import``, ``from``, a string, a
+    config value or ``-m``), an import of it by package, by relative path or by its bare name, or an attribute through its name that is one of its
+    top-level ``names``. A plain word the module also defined is not a reference.
+    """
+    *parents, stem = (re.escape(part) for part in Path(path).with_suffix("").parts)
+    forms = [rf"^\s*from\s+\.*{stem}\s+import\b", rf"^\s*import\s+(?:\w+\s*,\s*)*{stem}\b", rf"^\s*from\s+\.+\s+import\b[^#\n]*\b{stem}\b"]
+    if parents:
+        forms += [rf"(?<!\w){parents[-1]}\.{stem}(?!\w)", rf"\bfrom\s+(?:[\w.]*\.)?{parents[-1]}\s+import\b[^#\n]*\b{stem}\b"]
+    if names:
+        forms.append(rf"(?<![\w.]){stem}\.(?:{'|'.join(map(re.escape, names))})\b")
+    return re.compile("|".join(forms))
+
+
 def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]]) -> dict[str, dict[str, re.Pattern[str]]]:
-    """Find the names the change removed, by kind, each with the pattern that marks a remaining reference."""
+    """Find the names the change removed, by kind, each with the pattern that marks a remaining reference.
+
+    A deleted Python module is one reference of its own, by its dotted path (see ``module_reference``), and its top-level names are not searched as plain
+    words: a word it shared with unrelated code (a local variable, a YAML column) is no leftover. A name removed from a file that stays still is one.
+    """
 
     def gone(found: set[str], still: set[str]) -> set[str]:
         return {name for name in found - still if len(name) >= 3 and not (name.startswith("__") and name.endswith("__"))}
@@ -793,7 +813,12 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     kinds: dict[str, dict[str, re.Pattern[str]]] = {kind: {} for kind in REMOVED_KINDS}
     for path in deleted:
         if Path(path).suffix in SCRIPT_SUFFIXES:
-            kinds["script"][Path(path).name] = re.compile(re.escape(Path(path).name))
+            # A whole file name: a longer name that ends the same way (a prefixed one) is no reference.
+            kinds["script"][Path(path).name] = re.compile(rf"(?<![\w.-]){re.escape(Path(path).name)}(?![\w-])")
+        if path.endswith(".py") and not Path(path).stem.startswith("__"):
+            kinds["script"][Path(path).with_suffix("").as_posix().replace("/", ".")] = module_reference(
+                path, PY_TOP_LEVEL.findall("\n".join(removed.get(path, [])))
+            )
         if path.endswith(".sql") and re.search(r"(^|/)(models|snapshots)/", path):
             stem = re.escape(Path(path).stem)
             kinds["dbt"][Path(path).stem] = re.compile(rf"""ref\(\s*["']{stem}["']\s*\)|name:\s*{stem}\b|(?<![\w.]){stem}(?![\w.])""")
@@ -804,7 +829,8 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     for name in gone(set(ENV_READ.findall(code_removed)), env_now):
         kinds["env"][name] = re.compile(rf"\b{name}\b")
     python_now = set(PY_DEFINITION.findall(code_now)) | set(PY_ASSIGNED.findall(code_now))
-    for name in gone(set(PY_TOP_LEVEL.findall(code_removed)), python_now):
+    edited = {path: lines for path, lines in removed.items() if path not in deleted}
+    for name in gone(set(PY_TOP_LEVEL.findall(joined(edited, {".py"}))), python_now):
         kinds["python"][name] = re.compile(rf"(?<![\w./-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
     removed_tasks = set(TASK_ID.findall(code_removed)) - set(TASK_ID.findall(code_now))
     # The same word still bound in module scope (function, class, import alias or assignment) is a live name of its own, not a task reference.
@@ -813,7 +839,6 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))}
     # Keys of a deleted or untracked config file are often data fields the code still writes; only edited files count.
     # Single-word keys (run, env, path) are schema vocabulary, not project settings.
-    edited = {path: lines for path, lines in removed.items() if path not in deleted}
     config_removed = {key for line in joined(edited, CONFIG_SUFFIXES).splitlines() if (key := config_key(line)) and re.search(r"[_-]|[a-z][A-Z]", key)}
     for name in gone(config_removed, config_now):
         kinds["config"][name] = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
@@ -1178,7 +1203,8 @@ def removed_names() -> list[Finding]:
     class, import alias or assignment, also inside a module-level if, loop, try, with or match block, never inside a function or
     class body) is a live name, not a leftover. Python functions, classes and modules
     are not read as text: MyPy checks every file that imports a changed module (scripts/quality/typecheck_importers.py).
-    Only the Python files MyPy does not cover keep a text check for them, until they join MyPy.
+    Only the Python files MyPy does not cover keep a text check for them, until they join MyPy. The names of a deleted
+    module are not part of it: only a reference to the module counts (see ``module_reference``), in any file.
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
