@@ -19,6 +19,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import socket
 import sys
 import threading
@@ -36,6 +37,10 @@ CONNECT_SECONDS = 3.0
 # ECS gives these to every container of a task, on Fargate and on the host.
 ECS_MARKERS = ("ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# The only environment values that a diagnostic may repeat. Any other value stays out of every log line and error, because an address or a setting may hold a
+# credential, a token or an account number.
+EXECUTION_VALUE = re.compile(r"AWS_ECS_[A-Z0-9_]{1,24}")
+REGION_NAME = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]")
 # The host jobs of config/orchestration/host_jobs.json, the phase at which each checks and the host services that phase needs. A phase that is not listed
 # checks nothing. The first code step of a job is its first listed phase; the layer jobs check their build separately (``check_build``).
 JOB_PHASES: dict[str, dict[str, tuple[str, ...]]] = {
@@ -79,8 +84,9 @@ def check_task_environment() -> Finding:
     if ecs_engine.in_task():
         return Finding("task_environment", True, value)
     expected = " or ".join(sorted(ecs_engine.TASK_ENVIRONMENTS))
+    shown = "unset" if not value else f"'{value}'" if EXECUTION_VALUE.fullmatch(value) else "a value that this log does not repeat"
     return Finding(
-        "task_environment_unrecognised", False, f"AWS_EXECUTION_ENV is '{value}' in an ECS task, so the job would not use task settings; expected {expected}"
+        "task_environment_unrecognised", False, f"AWS_EXECUTION_ENV is {shown} in an ECS task, so the job would not use task settings; expected {expected}"
     )
 
 
@@ -92,17 +98,31 @@ def check_credentials(catalog: bool) -> Finding:
     return Finding("credentials", True, "native task provider")
 
 
-def service_target(name: str, variable: str) -> tuple[str, str, int] | Finding:
-    """The host and port of a service address in the environment, or the finding that says why it has none."""
-    text = os.environ.get(variable, "")
+def address_fault(text: str) -> str | None:
+    """Why a service address has no usable host and port, as a fixed phrase, or ``None`` when it has both. The phrase never repeats any part of the address."""
+    if not text:
+        return "is not set"
     try:
         address = urlsplit(text)
-        host, port = address.hostname, address.port or DEFAULT_PORTS.get(address.scheme)
     except ValueError:
-        host, port = None, None
-    if not host or not port:
-        return Finding(f"{name}_address_unusable", False, f"{variable} is '{text}'")
-    return name, host, port
+        return "is not a valid address"
+    try:
+        port = address.port
+    except ValueError:
+        return "has an invalid port"
+    if not address.hostname:
+        return "names no host"
+    return None if port or address.scheme in DEFAULT_PORTS else "names no port"
+
+
+def service_target(name: str, variable: str) -> tuple[str, str, int] | Finding:
+    """The host and port of a service address in the environment, or the finding that says why it has none. Only the host and port are ever logged."""
+    text = os.environ.get(variable, "")
+    fault = address_fault(text)
+    if fault:
+        return Finding(f"{name}_address_unusable", False, f"{variable} {fault}")
+    address = urlsplit(text)
+    return name, str(address.hostname), address.port or DEFAULT_PORTS[address.scheme]
 
 
 def probe(targets: list[tuple[str, str, int]]) -> list[Finding]:
@@ -140,6 +160,8 @@ def endpoint_targets() -> list[tuple[str, str, int]] | Finding:
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "")
     if not region:
         return Finding("region_unset", False, "neither AWS_REGION nor AWS_DEFAULT_REGION is set")
+    if not REGION_NAME.fullmatch(region):
+        return Finding("region_invalid", False, "the region in AWS_REGION or AWS_DEFAULT_REGION is not a region name")
     return [("s3", f"s3.{region}.amazonaws.com", 443), ("ecr", f"api.ecr.{region}.amazonaws.com", 443), ("ecr", f"dkr.ecr.{region}.amazonaws.com", 443)]
 
 
@@ -214,8 +236,9 @@ def check_target(target: str, profiles: Path) -> Finding:
     """A target that lists DuckDB extensions must name an extension directory that holds them, because a job has no egress to download one."""
     try:
         output = profile_output(profiles, target)
-    except (OSError, ValueError, AttributeError) as error:
-        return Finding("dbt_profile_unreadable", False, f"{profiles}: {error}")
+    except (OSError, ValueError, AttributeError, importlib.import_module("yaml").YAMLError) as error:
+        reason = error.strerror if isinstance(error, OSError) and error.strerror else type(error).__name__
+        return Finding("dbt_profile_unreadable", False, f"{profiles}: {reason}")
     if output is None:
         return Finding("dbt_target_unknown", False, f"{target} is not an output of {profiles}")
     extensions = list(output.get("extensions") or [])
