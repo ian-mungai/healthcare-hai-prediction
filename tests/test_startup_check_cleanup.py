@@ -6,6 +6,9 @@ removal share one budget, as they do in production with the long one.
 
 from __future__ import annotations
 
+import os
+import signal
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -13,12 +16,15 @@ from typing import Any
 
 import pytest
 
+from scripts import process
 from scripts.infrastructure import startup_check
-from scripts.process import SESSION_VARIABLE
+from scripts.process import SESSION_VARIABLE, run_command
 from tests.startup_check_support import host_environment
 from tests.support import check
 
+ROOT = Path(__file__).resolve().parents[1]
 FAULT_CHILD = "tests.startup_check_child_faults"
+SLOW_FLAG = "HAI_RUN_SLOW_TESTS"
 MARKER = "SYNTHETIC_PRIVATE_QUEUE"
 
 
@@ -99,3 +105,47 @@ def test_a_nested_child_that_ignores_term_is_stopped_and_its_folder_removed_with
     """The same budget split as production, scaled: the stop grace, the confirmation and the deletion all fit inside the one deadline."""
     elapsed = stop_a_child_that_ignores_term(monkeypatch, private_root, 6.0)
     check(elapsed < 6.0, f"the fixed error comes within the deadline: {elapsed:.2f} s")
+
+
+def delay_confirmation(monkeypatch: pytest.MonkeyPatch, seconds: float) -> None:
+    """Make the launcher's confirmation that a group is gone take ``seconds`` after the KILL: the group reads as alive until then."""
+    killed: list[float] = []
+    real_killpg, real_alive = os.killpg, process.group_alive
+
+    def killpg(group: int, number: int) -> None:
+        real_killpg(group, number)
+        if number == signal.SIGKILL:
+            killed.append(time.monotonic())
+
+    def alive(group: int) -> bool:
+        return real_alive(group) or bool(killed) and time.monotonic() - killed[0] < seconds
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    monkeypatch.setattr("scripts.process.group_alive", alive)
+
+
+def test_a_stop_that_takes_nearly_the_whole_confirmation_bound_still_leaves_time_to_remove_the_folder(
+    monkeypatch: pytest.MonkeyPatch, private_root: Path
+) -> None:
+    """The launcher waits up to ``CONFIRM_SECONDS`` after KILL. Here that is 2 s and the confirmation takes 1.9 s: the child must stop early enough that the
+    removal still has time inside the one deadline."""
+    monkeypatch.setattr("scripts.process.CONFIRM_SECONDS", 2.0)
+    delay_confirmation(monkeypatch, 1.9)
+    elapsed = stop_a_child_that_ignores_term(monkeypatch, private_root, 8.0)
+    check(elapsed < 8.0, f"the fixed error comes within the deadline: {elapsed:.2f} s")
+
+
+def test_the_production_bound_cases_run_only_when_asked_for(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A plain pytest run of the slow file skips its cases at once; the flag turns them on."""
+    environment = {name: value for name, value in os.environ.items() if name != SLOW_FLAG}
+    try:
+        done = run_command(
+            sys.executable,
+            ["-m", "pytest", "-p", "no:cacheprovider", "-q", "--no-header", "tests/test_startup_check_cleanup_slow.py"],
+            cwd=ROOT,
+            env=environment,
+            timeout=40,
+        )
+    except process.TimeoutExpired:
+        pytest.fail("the slow file ran its cases without the flag")
+    check("skipped" in done.stdout and "passed" not in done.stdout and "failed" not in done.stdout, f"the slow cases are skipped: {done.stdout[-400:]}")

@@ -54,6 +54,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from scripts import process
 from scripts.lakehouse import ecs_engine
 from scripts.process import run_command
 
@@ -61,10 +62,10 @@ from scripts.process import run_command
 CONNECT_SECONDS = 3.0
 # The bound of the child process: its imports, its connects and its file reads.
 CHILD_SECONDS = 60.0
-# The part of that bound that is kept after the child and the read of its result stop: the stop of the child, its confirmation and then the deletion of the
-# private folder. A short bound keeps a quarter. The child is disposable, so its TERM grace is short (0.5 s of the 5 s); about 1.5 s follow for the
-# confirmation that it is gone, and the other 3 s are the deletion budget, which stays nonzero.
-CLEANUP_SECONDS = 5.0
+# The part of that bound that is kept after the child and the read of its result stop. It holds three budgets in order: the TERM grace of the child (short,
+# because it is disposable), the launcher's whole bound for confirming that the child is gone after KILL (``scripts.process.CONFIRM_SECONDS``, read when it is
+# used), and ``DELETE_SECONDS`` to delete the private folder, which is the nonzero budget that confirmation cannot take. A short bound keeps half of it.
+DELETE_SECONDS = 3.0
 CHILD_STOP_GRACE_SECONDS = 0.5
 # Run the checks in a child process. The tests of the checks themselves run them in this process, with socket stand-ins.
 ISOLATED = True
@@ -754,13 +755,13 @@ def run_child(request: dict[str, Any]) -> list[str]:
     """Run the request in the isolated child and return the lines it wrote to its result file. The child's streams are captured and dropped.
 
     One deadline covers the child, its stop, the read of its result and the removal of its folder, and nothing resets it. The child and the read stop at a
-    cutoff that leaves the reserve (``CLEANUP_SECONDS``, a quarter of a short bound) before the deadline. The reserve holds three budgets in order: the TERM
-    grace of the child (short, because it is disposable), the time to confirm that it is gone, and the deletion. The folder is used through one descriptor, so
-    renaming it or replacing a file in it changes nothing that this function opens."""
+    cutoff that leaves the whole reserve before the deadline: the TERM grace, the launcher's full bound to confirm that the child is gone (the stop is refused
+    when that cannot be confirmed) and the deletion budget. A confirmation that takes nearly all of its bound therefore still leaves the deletion its time. The
+    folder is used through one descriptor, so renaming it or replacing a file in it changes nothing that this function opens."""
     deadline = time.monotonic() + CHILD_SECONDS
-    reserve = min(CLEANUP_SECONDS, CHILD_SECONDS / 4)
+    reserve = min(CHILD_STOP_GRACE_SECONDS + process.CONFIRM_SECONDS + DELETE_SECONDS, CHILD_SECONDS / 2)
     cutoff = deadline - reserve
-    grace = CHILD_STOP_GRACE_SECONDS * reserve / CLEANUP_SECONDS
+    grace = min(CHILD_STOP_GRACE_SECONDS, reserve / 10)
     name = tempfile.mkdtemp(prefix="startup_check_")
     try:
         directory = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
