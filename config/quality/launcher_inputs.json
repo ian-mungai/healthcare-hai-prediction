@@ -84,7 +84,7 @@
     {
       "module": "orchestration/airflow_steps.py",
       "pattern": null,
-      "why": "reviewed: folder_bytes walks only the family scratch folders under HAI_LAUNCH_SCRATCH_PATH, the host scratch volume mounted read-only into the Airflow container, to count their allocated bytes; it lists no repository folder and reads no file contents"
+      "why": "reviewed: folder_bytes walks (os.walk at orchestration/airflow_steps.py:158) only the family scratch folders under HAI_LAUNCH_SCRATCH_PATH, the host scratch volume mounted read-only into the Airflow container, to count their allocated bytes; it lists no repository folder and reads no file contents"
     },
     {
       "module": "orchestration/code_digest.py",
