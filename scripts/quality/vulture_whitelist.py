@@ -13,8 +13,12 @@ from scripts.acquisition import shards, wonder_export_contract
 from scripts.acquisition.discover_history import Links
 from scripts.acquisition.hcai_util_contract import _Markup
 from scripts.acquisition.tests.conftest import synthetic_collection_routes
-from scripts.acquisition.transport import Download
+from scripts.acquisition.tests.test_person_lane import raw_route
+from scripts.acquisition.tests.test_reviewed_opener import Publisher
+from scripts.acquisition.tests.test_task_keys import no_hosts_file_between_cases
+from scripts.acquisition.transport import Download, PublicHTTPSHandler
 from scripts.infrastructure.secret_store_stand_in import StandInHandler
+from tests.test_pin_tables import fake_pyspark
 
 
 def uses(download: Download, member: tarfile.TarInfo) -> tuple[object, ...]:
@@ -26,6 +30,11 @@ def uses(download: Download, member: tarfile.TarInfo) -> tuple[object, ...]:
         _Markup.handle_data,  # HTMLParser calls it for workbook XML text.
         _Markup.handle_startendtag,  # HTMLParser calls it for self-closing workbook XML tags.
         synthetic_collection_routes,  # pytest runs autouse fixtures without a reference.
+        no_hosts_file_between_cases,  # pytest runs autouse fixtures without a reference (test_task_keys, test_task_owners, test_task_state).
+        fake_pyspark,  # pytest runs autouse fixtures without a reference.
+        raw_route,  # pytest runs it by name: autouse in test_task_ledgers and test_verify_publisher_run, usefixtures in test_person_lane.
+        PublicHTTPSHandler.https_open,  # urllib's OpenerDirector calls <protocol>_open by name, here and in the test handlers.
+        Publisher.handler_order,  # urllib's OpenerDirector reads it to sort the handlers.
         shards.pytest_addoption,  # pytest calls the plugin hooks of scripts/acquisition/shards.py by name.
         shards.pytest_configure,  # pytest calls the plugin hooks of scripts/acquisition/shards.py by name.
         shards.ShardPlugin.pytest_collection_modifyitems,  # pytest calls the registered plugin's hooks by name.
