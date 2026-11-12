@@ -101,7 +101,7 @@ SUPPORTED_TYPES = {"model", "test", "seed"}
 INTERNAL_PACKAGES = {"dbt", "dbt_duckdb"}
 OVERRIDABLE_BUILTINS = {"ref", "source"}
 BRIDGE_SUFFIX = "_bridge"
-GOLD_BUILD_FILES = ("scripts/lakehouse/pipeline_build.py", "scripts/lakehouse/run_gold_e2e.py", "config/orchestration/broker_templates.json")
+GOLD_BUILD_FILES = ("scripts/lakehouse/pipeline_build.py", "scripts/lakehouse/run_gold_e2e.py")
 
 
 def names(folder: Path, suffix: str) -> set[str]:

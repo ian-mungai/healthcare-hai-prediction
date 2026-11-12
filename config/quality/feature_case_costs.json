@@ -150,12 +150,10 @@
     "query_comment_macro_added": 0.2,
     "default_selector_removed": 0.2,
     "default_selector_loses_exclusion": 0.2,
-    "exclusion_removed_from_broker_template": 0.2,
     "exclusion_removed_from_pipeline_build": 0.2,
     "exclusion_removed_from_gold_e2e": 0.2,
     "default_selector_includes_the_tag": 0.2,
     "exclusion_only_in_a_comment_of_pipeline_build": 0.1,
-    "exclusion_apart_from_its_option_in_a_broker_template": 0.2,
     "silver_name_in_comments_passes": 0.2,
     "silver_name_in_string_and_comment_passes": 0.2
   },

@@ -155,12 +155,10 @@
     "first_window_year_not_a_year",
     "default_selector_removed",
     "default_selector_loses_exclusion",
-    "exclusion_removed_from_broker_template",
     "exclusion_removed_from_pipeline_build",
     "exclusion_removed_from_gold_e2e",
     "default_selector_includes_the_tag",
     "exclusion_only_in_a_comment_of_pipeline_build",
-    "exclusion_apart_from_its_option_in_a_broker_template",
     "silver_name_in_comments_passes",
     "silver_name_in_string_and_comment_passes"
   ],

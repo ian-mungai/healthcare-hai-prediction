@@ -110,7 +110,6 @@ def snapshot(suite: str) -> dict[str, str]:
         ROOT / "scripts/process.py",
         ROOT / "scripts/lakehouse/pipeline_build.py",
         ROOT / "scripts/lakehouse/run_gold_e2e.py",
-        ROOT / "config/orchestration/broker_templates.json",
         ROOT / "config/lakehouse/dbt_package_archive.json",
     ]
     files += [

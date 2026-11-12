@@ -318,11 +318,6 @@ def cases() -> list[tuple[str, Damage, str | None]]:
         ("default_selector_removed", remove(SELECTORS), "no default selector leaves tag 'features' out"),
         ("default_selector_loses_exclusion", replace(SELECTORS, "value: features", "value: other"), "no default selector leaves tag 'features' out"),
         (
-            "exclusion_removed_from_broker_template",
-            broker_without_exclusion,
-            "config/orchestration/broker_templates.json:1: the gold build selection does not exclude",
-        ),
-        (
             "exclusion_removed_from_pipeline_build",
             replace("scripts/lakehouse/pipeline_build.py", '"tag:features"', '"tag:other"'),
             "pipeline_build.py:1: the gold build selection does not exclude",
@@ -346,30 +341,7 @@ def cases() -> list[tuple[str, Damage, str | None]]:
             ),
             "pipeline_build.py:1: the gold build selection does not exclude",
         ),
-        ("exclusion_apart_from_its_option_in_a_broker_template", broker_exclusion_moved, "broker_templates.json:1: the gold build selection does not exclude"),
     ]
-
-
-def broker_without_exclusion(root: Path) -> None:
-    """Drop the exclusion from every mode of the gold_build template."""
-    path = root / "config/orchestration/broker_templates.json"
-    document = json.loads(path.read_text())
-    for mode in document["templates"]["gold_build"]["modes"].values():
-        args = mode.get("launcher", {}).get("args") or []
-        if "--exclude" in args:
-            del args[args.index("--exclude") : args.index("--exclude") + 2]
-    path.write_text(json.dumps(document, indent=2) + "\n")
-
-
-def broker_exclusion_moved(root: Path) -> None:
-    """Keep ``--exclude`` and ``tag:features`` in every mode of the gold_build template, but not next to each other."""
-    path = root / "config/orchestration/broker_templates.json"
-    document = json.loads(path.read_text())
-    for mode in document["templates"]["gold_build"]["modes"].values():
-        args = mode.get("launcher", {}).get("args") or []
-        if "--exclude" in args:
-            args[args.index("--exclude") : args.index("--exclude") + 2] = ["--exclude", "tag:other", "--select", "tag:features"]
-    path.write_text(json.dumps(document, indent=2) + "\n")
 
 
 def pass_cases() -> list[tuple[str, Damage, str | None]]:

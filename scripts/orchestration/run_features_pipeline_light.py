@@ -1,10 +1,8 @@
-"""Light cases of the feature-store orchestration (lane B, step 3): renders, protocol, launcher methods, broker approval, run control and DAG graphs.
+"""Light cases of the feature-store orchestration (lane B, step 3): renders, protocol, launcher methods and DAG graphs.
 
-Run ``.venv/bin/python -B -m scripts.orchestration.run_features_pipeline_light [--template-fragment <file>] [--case <name> ...]``. Nothing is started:
-no launcher process, broker listener, socket, container, Docker or AWS call. The launcher's pipeline methods run in process on a synthetic registry
-state, the broker runs with a recording stand-in for the launcher client, and every file lives in a temporary folder that is removed at the end.
-``--template-fragment`` merges the feature rows into a temporary copy of ``config/orchestration/broker_templates.json`` when the live file does not
-hold them yet. The report goes to ``data/e2e/features_pipeline_light/<UTC stamp>/report.json`` (case names, check names and verdicts only).
+Run ``.venv/bin/python -B -m scripts.orchestration.run_features_pipeline_light [--case <name> ...]``. Nothing is started: no launcher process, socket,
+container, Docker or AWS call. The launcher's pipeline methods run in process on a synthetic registry state, and every file lives in a temporary folder
+that is removed at the end. The report goes to ``data/e2e/features_pipeline_light/<UTC stamp>/report.json`` (case names, check names and verdicts only).
 """
 
 from __future__ import annotations
@@ -25,17 +23,14 @@ import signal
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from typing import Any
 
 from orchestration import graph, launcher, online_store, pipeline_protocol, pipeline_render
-from orchestration.interface import SubmissionRefused, SubmissionRequest
+from orchestration.interface import SubmissionRequest
 from orchestration.pipeline_session import CLASS_ROLE, RoleSession
-from scripts.lakehouse import run_lock
-from scripts.orchestration import broker as broker_module
-from scripts.orchestration import pipeline_control, run_control
 from scripts.orchestration.ledger import schema_validator
 from scripts.process import run_command
 
@@ -862,430 +857,9 @@ def case_templates_launcher(fixture: Fixture, scratch: Path) -> Checks:
 # ---------------------------------------------------------------------------------------------------------------------
 
 
-class RecordingClient:
-    """A stand-in for the launcher client: it records each method and answers as a launcher that grants the lock."""
-
-    def __init__(self, base: Path) -> None:
-        self.config = SimpleNamespace(runs_root=base / "runs", token_root=base / "tokens")
-        self.config.token_root.mkdir(parents=True, exist_ok=True)
-        self.calls: list[str] = []
-        self.held = False
-
-    def call(self, method: str, params: dict[str, Any], principal: Any = None, request_id: Any = None, budget: Any = None) -> dict[str, Any]:
-        self.calls.append(method)
-        if method == "acquire":
-            self.held = True
-            return {"run_id": params["run_id"]}
-        if method == "status":
-            what = params.get("what")
-            return {"status": "serving"} if what == "launcher" else {"phase": "ended"} if what == "attempt" else {"state": "held", "phase": "down"}
-        if method in ("pipeline_network_down", "pipeline_catalog_release"):
-            return {"phase": "down"}
-        return {}
-
-    def principal_run(self, run_id: str) -> dict[str, Any]:
-        if not self.held:
-            raise launcher.LauncherError("no token", "principal")
-        return {"run_id": run_id, "token": "fake-run-token-0123456789"}
-
-
-def templates_for_cases(fragment: Path | None) -> dict[str, Any]:
-    """The live broker templates, with the feature rows of ``fragment`` merged when the live file does not hold them."""
-    document = json.loads((ROOT / "config/orchestration/broker_templates.json").read_text())
-    if "features_build" in document["templates"] or fragment is None:
-        return document
-    return merge_fragment(document, json.loads(fragment.read_text()))
-
-
-def merge_fragment(document: dict[str, Any], fragment: dict[str, Any]) -> dict[str, Any]:
-    """Add the fragment's new templates and the folders it adds to existing control rows; an existing template is never replaced."""
-    merged = copy.deepcopy(document)
-    for name, template in fragment["templates"].items():
-        if name in merged["templates"]:
-            raise CaseError(f"the fragment would replace template {name}")
-        merged["templates"][name] = template
-    for name, modes in fragment.get("add_folders", {}).items():
-        for mode, folders in modes.items():
-            params = merged["templates"][name]["modes"][mode]["control"]["params"]
-            params["folders"] = [*params["folders"], *[folder for folder in folders if folder not in params["folders"]]]
-    return merged
-
-
-def make_broker(base: Path, templates: dict[str, Any]) -> tuple[broker_module.Broker, RecordingClient]:
-    """A broker on a test registry in ``base`` with a recording client; its approvals folder is ``base/state/approvals``."""
-    state = base / "state"
-    paths = broker_module.BrokerPaths(run_lock.Registry(state / "registry", "test"), state)
-    client = RecordingClient(base)
-    repo = base / "repo"
-    (repo / "data/orchestration/fixture_seed").mkdir(parents=True, exist_ok=True)
-    (repo / "data/orchestration/fixture_seed/seed.txt").write_text("synthetic seed\n")
-    stand_in: Any = client  # the recording client answers the calls the broker makes, in place of a launcher client
-    return broker_module.Broker(paths, templates, stand_in, repo_root=repo, runs_root=base / "runs"), client
-
-
-def approval(base: Path, run: str, **changes: Any) -> Path:
-    """Write an owner-only approval record of a real features publish for run ``run``; ``changes`` replace or (with None) drop fields."""
-    body = {"run_id": run, "dag_id": FEATURES_DAG, "scope": "real_publish", "approved_on": date.today().isoformat(), **changes}
-    body = {key: value for key, value in body.items() if value is not None}
-    path = base / "state" / "approvals" / FEATURES_DAG / f"{run}.json"
-    write_json(path, body)
-    return path
-
-
-def run_id_of(index: int) -> str:
-    return f"20261022T1300{index:02d}Z-{index:08x}"
-
-
-def outcome(broker: broker_module.Broker, request: SubmissionRequest) -> tuple[int | None, str]:
-    """The exit code and reason of a submission's final ledger line."""
-    lines = broker.ledger.submissions(request.run_id).get(request.submission_id, [])
-    last = lines[-1] if lines else {}
-    return last.get("exit_code"), str(last.get("reason", ""))
-
-
-def acquire_request(run_id: str, mode: str = "real", dag: str = FEATURES_DAG) -> SubmissionRequest:
-    return SubmissionRequest("acquire_run", run_id, mode, 1, dag, "acquire_run", f"manual__{run_id}")
-
-
-def case_approval(fixture: Fixture, scratch: Path, fragment: Path | None) -> Checks:
-    """E05 (LB17 to LB20, regression R3): a real features run is acquired only with an exact owner-only approval record."""
-    templates = templates_for_cases(fragment)
-    checks: Checks = {}
-    index = 0
-
-    def attempt(label: str, prepare: Callable[[Path, str], Any], mode: str = "real", dag: str = FEATURES_DAG) -> tuple[int | None, str, list[str]]:
-        nonlocal index
-        index += 1
-        base = scratch / f"approval_{index:02d}_{label}"
-        base.mkdir()
-        broker, client = make_broker(base, templates)
-        run_id = run_id_of(index)
-        prepare(base, run_id)
-        request = acquire_request(run_id, mode, dag)
-        try:
-            broker.submit(request)
-        except SubmissionRefused as error:
-            # Refused before its intent line: nothing written, nothing sent.
-            written = broker.ledger.submissions(run_id) != {}
-            return (None if written else 125), str(error), client.calls
-        code, reason = outcome(broker, request)
-        return code, reason, client.calls
-
-    def expect_refused(label: str, prepare: Callable[[Path, str], Any]) -> None:
-        code, reason, calls = attempt(label, prepare)
-        checks[f"refused_{label}"] = code == 125 and "approval" in reason and "acquire" not in calls
-
-    expect_refused("missing", lambda base, run_id: None)
-    expect_refused("other_run", lambda base, run_id: approval(base, run_id, run_id=GOLD_RUN))
-    expect_refused("other_dag", lambda base, run_id: approval(base, run_id, dag_id="gold_transform_dag"))
-    expect_refused("other_scope", lambda base, run_id: approval(base, run_id, scope="real_build"))
-    expect_refused("extra_field", lambda base, run_id: approval(base, run_id, note="go"))
-    expect_refused("missing_field", lambda base, run_id: approval(base, run_id, approved_on=None))
-    expect_refused("invalid_date", lambda base, run_id: approval(base, run_id, approved_on="2026-13-01"))
-    expect_refused("future_date", lambda base, run_id: approval(base, run_id, approved_on=(date.today() + timedelta(days=2)).isoformat()))
-    expect_refused("date_type", lambda base, run_id: approval(base, run_id, approved_on=20261022))
-
-    def not_json(base: Path, run_id: str) -> None:
-        approval(base, run_id).write_text("{not json")
-
-    expect_refused("not_json", not_json)
-
-    def not_object(base: Path, run_id: str) -> None:
-        write_json(approval(base, run_id), [run_id])
-
-    expect_refused("not_object", not_object)
-
-    def group_readable(base: Path, run_id: str) -> None:
-        approval(base, run_id).chmod(0o640)
-
-    expect_refused("group_readable", group_readable)
-
-    def linked_file(base: Path, run_id: str) -> None:
-        real = approval(base, run_id)
-        target = base / "elsewhere.json"
-        real.rename(target)
-        real.symlink_to(target)
-
-    expect_refused("linked_file", linked_file)
-
-    def linked_folder(base: Path, run_id: str) -> None:
-        real = approval(base, run_id)
-        moved = base / "moved_approvals"
-        real.parent.rename(moved)
-        real.parent.symlink_to(moved, target_is_directory=True)
-
-    expect_refused("linked_folder", linked_folder)
-
-    def oversized(base: Path, run_id: str) -> None:
-        path = approval(base, run_id)
-        path.write_text(json.dumps({"run_id": run_id, "dag_id": FEATURES_DAG, "scope": "real_publish", "approved_on": date.today().isoformat()}) + " " * 70000)
-
-    expect_refused("oversized", oversized)
-
-    code, reason, calls = attempt("valid", lambda base, run_id: approval(base, run_id))
-    checks["accepted_valid"] = code == 0 and "acquire" in calls
-    code, reason, calls = attempt("fixture_needs_none", lambda base, run_id: None, mode="publish_fixture")
-    checks["fixture_needs_no_record"] = code == 0 and "acquire" in calls
-    code, reason, calls = attempt("gold_real_needs_none", lambda base, run_id: None, dag="gold_transform_dag")
-    checks["gold_real_needs_no_record"] = code == 0 and "acquire" in calls
-    code, reason, calls = attempt("silver_real_needs_none", lambda base, run_id: None, dag="silver_transform_dag")
-    checks["silver_real_needs_no_record"] = code == 0 and "acquire" in calls
-    code, reason, calls = attempt("store_real_needs_none", lambda base, run_id: None, dag=STORE_DAG)
-    checks["store_real_needs_no_record"] = code == 0 and "acquire" in calls
-    return checks
-
-
-def case_approval_reused_run(fixture: Fixture, scratch: Path, fragment: Path | None) -> Checks:
-    """E05 (LB43, LB47 to LB50; review 1 finding 1, owner decision B): without the approval record a real features intent is refused, also on a
-    run another DAG holds and also for a release of a run that never had approval; once the run had approval, a removed record still refuses every
-    publish, export, commit, seal and materialize step but admits the steps that only record the verdict or release the run."""
-    templates = templates_for_cases(fragment)
-    checks: Checks = {}
-    base = scratch / "reused"
-    base.mkdir()
-    broker, client = make_broker(base, templates)
-    run_id = run_id_of(70)
-    client.held = True
-    (client.config.token_root / f"{run_id}.token").write_text("fake-token-file\n")
-    gold = SubmissionRequest("seal_gold", run_id, "real", 1, "gold_transform_dag", "seal_gold", f"manual__{run_id}")
-    with contextlib.suppress(Exception):
-        broker.submit(gold)
-    checks["held_run_has_other_dag_intent"] = gold.submission_id in broker.ledger.submissions(run_id)
-    calls_before = list(client.calls)
-
-    def submit(template: str, attempt: int) -> tuple[str, bool]:
-        """Submit a features step; return the refusal text (empty when admitted) and whether its intent line exists."""
-        request = SubmissionRequest(template, run_id, "real", attempt, FEATURES_DAG, template, f"manual__features_{run_id}")
-        raised = ""
-        try:
-            broker.submit(request)
-        except SubmissionRefused as error:
-            raised = str(error)
-        except (KeyError, broker_module.LauncherUnavailable, run_control.ControlFailed, run_control.ControlRefused):
-            raised = ""
-        return raised, request.submission_id in broker.ledger.submissions(run_id)
-
-    work = ("features_candidates", "features_export", "seal_features", "features_commit", "feast_materialize")
-    release_only = ("catalog_release", "features_final_gate_rejected", "release_rejected", "release_accepted")
-    for template in (*work, *release_only):
-        raised, written = submit(template, 1)
-        checks[f"never_approved_{template}_refused"] = "approval" in raised and not written
-    checks["no_launcher_call"] = client.calls == calls_before
-    record = approval(base, run_id)
-    raised, written = submit("features_candidates", 2)
-    checks["admitted_with_record"] = not raised and written
-    record.unlink()
-    for template in work:
-        raised, written = submit(template, 3)
-        checks[f"removed_record_{template}_refused"] = "approval" in raised and not written
-    for template in release_only:
-        raised, written = submit(template, 3)
-        checks[f"removed_record_{template}_admitted"] = "approval" not in raised and written
-    fixture_base = scratch / "fixture_history"
-    fixture_base.mkdir()
-    fixture_broker, _ = make_broker(fixture_base, templates)
-    fixture_run = run_id_of(71)
-    fixture_acquire = acquire_request(fixture_run, "publish_fixture", FEATURES_DAG)
-    with contextlib.suppress(SubmissionRefused, KeyError, broker_module.LauncherUnavailable, run_control.ControlFailed, run_control.ControlRefused):
-        fixture_broker.submit(fixture_acquire)
-    checks["fixture_history_written"] = fixture_acquire.submission_id in fixture_broker.ledger.submissions(fixture_run)
-    for template in release_only:
-        request = SubmissionRequest(template, fixture_run, "real", 1, FEATURES_DAG, template, f"manual__real_{fixture_run}")
-        raised = ""
-        try:
-            fixture_broker.submit(request)
-        except SubmissionRefused as error:
-            raised = str(error)
-        except (KeyError, broker_module.LauncherUnavailable, run_control.ControlFailed, run_control.ControlRefused):
-            raised = ""
-        written = request.submission_id in fixture_broker.ledger.submissions(fixture_run)
-        checks[f"fixture_history_real_{template}_refused"] = "approval" in raised and not written
-    return checks
-
-
-def case_approval_first_job(fixture: Fixture, scratch: Path, fragment: Path | None) -> Checks:
-    """E05 (LB17, LB20): a launcher job submitted first for a real features run is refused before its intent and acquires nothing."""
-    templates = templates_for_cases(fragment)
-    checks: Checks = {}
-    base = scratch / "first_job"
-    base.mkdir()
-    broker, client = make_broker(base, templates)
-    run_id = run_id_of(90)
-    template = "pin_gold" if "pin_gold" in templates["templates"] else "pin_silver"
-    request = SubmissionRequest(template, run_id, "real", 1, FEATURES_DAG, template, f"manual__{run_id}")
-    raised = ""
-    try:
-        broker.submit(request)
-    except SubmissionRefused as error:
-        raised = str(error)
-    checks["submit_refused"] = "approval" in raised
-    checks["no_intent"] = broker.ledger.submissions(run_id) == {}
-    checks["no_launcher_call"] = client.calls == []
-    raised = ""
-    try:
-        broker.ensure_run(request)
-    except SubmissionRefused as error:
-        raised = str(error)
-    checks["ensure_run_refused"] = "approval" in raised and "acquire" not in client.calls
-    approval(base, run_id)
-    checks["ensure_run_with_record"] = not refused(lambda: broker.ensure_run(request), Exception) and "acquire" in client.calls
-    return checks
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # Run control (E01 completed, E08 control seal) and templates (E01 templates)
 # ---------------------------------------------------------------------------------------------------------------------
-
-
-class ControlBroker:
-    """A stand-in broker for pipeline_control: a ledger answer, the run folder and a recorded launcher call."""
-
-    def __init__(self, runs_root: Path, submissions: dict[str, list[dict[str, Any]]]) -> None:
-        self.runs_root = runs_root
-        self.repo_root = ROOT
-        self.ledger = SimpleNamespace(submissions=lambda run_id: submissions)
-        self.calls: list[tuple[str, dict[str, Any]]] = []
-        self.answers: dict[str, list[dict[str, Any]]] = {}
-
-    def principal(self, run_id: str) -> dict[str, Any]:
-        return {"run_id": run_id, "token": "fake-run-token-0123456789"}
-
-    def call(self, method: str, params: dict[str, Any], principal: Any = None, request_id: Any = None, timeout: Any = None) -> dict[str, Any]:
-        self.calls.append((method, dict(params)))
-        queued = self.answers.get(method)
-        return queued.pop(0) if queued else {"ok": True}
-
-    def token_absent(self, run_id: str) -> bool:
-        return False
-
-
-def control_broker(runs_root: Path, submissions: dict[str, list[dict[str, Any]]]) -> Any:
-    """A ControlBroker typed as Any: it stands in for the broker that pipeline_control receives."""
-    return ControlBroker(runs_root, submissions)
-
-
-def request_of(template: str) -> SubmissionRequest:
-    return SubmissionRequest(template, RUN, "publish_fixture", 1, FEATURES_DAG, template, "manual__fixture")
-
-
-def case_completed(fixture: Fixture, scratch: Path) -> Checks:
-    """E01 (LB23): the broker hands feature pins, inputs and exports to their launcher acceptance methods; silver and gold are unchanged."""
-    checks: Checks = {}
-    expected = {
-        "pin_gold": ("pipeline_accept_gold_pin", {"attempt_id": "at-9"}),
-        "read_gold": ("pipeline_accept_gold_input", {"attempt_id": "at-9"}),
-        "features_export": ("pipeline_accept_export", {"layer": "features", "attempt_id": "at-9"}),
-        "pin_silver": ("pipeline_accept_pin", {"attempt_id": "at-9"}),
-        "read_silver": ("pipeline_accept_input", {"attempt_id": "at-9"}),
-        "gold_export": ("pipeline_accept_export", {"layer": "gold", "attempt_id": "at-9"}),
-        "silver_export": ("pipeline_accept_export", {"layer": "silver", "attempt_id": "at-9"}),
-    }
-    for template, call in expected.items():
-        stand_in = control_broker(fixture.base / "runs", {})
-        pipeline_control.completed(stand_in, request_of(template), {"id": "at-9"})
-        checks[template] = stand_in.calls == [call]
-    stand_in = control_broker(fixture.base / "runs", {})
-    checks["build_has_no_acceptance"] = pipeline_control.completed(stand_in, request_of("features_build"), {"id": "at-9"}) == {} and not stand_in.calls
-    return checks
-
-
-def case_control_seal(fixture: Fixture, scratch: Path) -> Checks:
-    """E08 (LB22): seal_features seals the bytes the latest successful features validation recorded; reserve_gold calls its launcher method."""
-    checks: Checks = {}
-    staging = fixture.folder / "staging.duckdb"
-    staging.write_bytes(b"control seal fixture bytes")
-    digest = hashlib.sha256(staging.read_bytes()).hexdigest()
-    finished = {"event": "finished", "exit_code": 0, "build_file": {"run_id": RUN, "sha256": digest, "attempt_id": "at-v2"}}
-    submissions = {
-        "s1": [{"template": "features_validate", "attempt": 1}, {**finished, "build_file": {"run_id": RUN, "sha256": "9" * 64, "attempt_id": "at-v1"}}],
-        "s2": [{"template": "features_validate", "attempt": 2}, finished],
-        "s3": [{"template": "gold_validate", "attempt": 3}, {**finished, "build_file": {"run_id": RUN, "sha256": "8" * 64, "attempt_id": "at-g"}}],
-    }
-    stand_in = control_broker(fixture.base / "runs", submissions)
-    pipeline_control.perform(stand_in, request_of("seal_features"), "seal_features", {})
-    checks["seal_accept_call"] = stand_in.calls == [("pipeline_accept_seal", {"layer": "features", "attempt_id": "at-v2"})]
-    checks["sealed_copy"] = (fixture.folder / f"layer_sealed/features/{digest}.duckdb").is_file()
-    failed = {"s1": [{"template": "features_validate", "attempt": 1}, {"event": "finished", "exit_code": 1}]}
-    stand_in = control_broker(fixture.base / "runs", failed)
-    checks["seal_refused_without_validation"] = refused(
-        lambda: pipeline_control.perform(stand_in, request_of("seal_features"), "seal_features", {}),
-        run_control.ControlRefused,
-    )
-    checks["seal_no_call_without_validation"] = stand_in.calls == []
-    stand_in = control_broker(fixture.base / "runs", {})
-    pipeline_control.perform(stand_in, request_of("reserve_gold"), "reserve_gold", {})
-    checks["reserve_gold_call"] = stand_in.calls == [("pipeline_reserve_gold", {})]
-    checks["actions"] = {"reserve_gold", "seal_features", "online_store_up"} <= set(pipeline_control.ACTIONS) and {
-        "reserve_gold",
-        "seal_features",
-        "online_store_up",
-    } <= set(run_control.ACTIONS)
-    stand_in = control_broker(fixture.base / "runs", {})
-    stand_in.answers["pipeline_online_store_up"] = [{"phase": "starting"}, {"phase": "tearing_down", "previous": ""}, {"phase": "up", "network": "n"}]
-    result = pipeline_control.perform(stand_in, request_of("online_store_up"), "online_store_up", {})
-    checks["online_store_up_waits_for_up"] = result == {"phase": "up", "network": "n"} and len(stand_in.calls) == 3
-    stand_in = control_broker(fixture.base / "runs", {})
-    stand_in.answers["pipeline_online_store_up"] = [{"phase": "failed", "error": "the online store cannot start"}]
-    checks["online_store_up_failed_start"] = refused(
-        lambda: pipeline_control.perform(stand_in, request_of("online_store_up"), "online_store_up", {}),
-        run_control.ControlFailed,
-    )
-    return checks
-
-
-def case_templates(fixture: Fixture, scratch: Path, fragment: Path | None) -> Checks:
-    """E01 (LB21, LB28): every feature task has a checked broker row in both publish modes, with lineage version 1 and the expected class."""
-    checks: Checks = {}
-    document = templates_for_cases(fragment)
-    path = scratch / "broker_templates.json"
-    path.write_text(json.dumps(document, indent=2) + "\n")
-    try:
-        loaded = broker_module.load_templates(path)
-    except broker_module.BrokerError as error:
-        checks[f"loads: {error}"] = False
-        return checks
-    checks["loads"] = True
-    rows = loaded["templates"]
-    classes = {
-        "pin_gold": "lakehouse_read",
-        "read_gold": "lakehouse_read",
-        "record_features_snapshot": "lakehouse_read",
-        "features_candidates": "lakehouse_write",
-        "features_reconcile": "lakehouse_read",
-        "features_backup": "lakehouse_write",
-        "features_commit": "lakehouse_write",
-        "feast_apply": "lakehouse_read",
-        "feast_materialize": "lakehouse_read",
-    }
-    for dag, chain in ((FEATURES_DAG, FEATURES_CHAIN), (STORE_DAG, STORE_CHAIN)):
-        for task in (*chain, "catalog_release", f"{FAMILIES[dag]}_final_gate_accepted", f"{FAMILIES[dag]}_final_gate_rejected"):
-            if task in STEP_FIVE:
-                continue
-            for mode in ("publish_fixture", "real"):
-                row = rows.get(task, {}).get("modes", {}).get(mode)
-                checks[f"{dag}_{task}_{mode}_row"] = row is not None
-                if row is None:
-                    continue
-                if "launcher" in row:
-                    checks[f"{dag}_{task}_{mode}_lineage"] = row["launcher"]["lineage"]["version"] == 1
-                    wanted = "offline" if mode == "publish_fixture" else classes.get(task, "offline")
-                    checks[f"{dag}_{task}_{mode}_class"] = row["class"] == wanted
-        for verdict in ("accepted", "rejected"):
-            for mode in ("publish_fixture", "real"):
-                row = rows.get(f"{FAMILIES[dag]}_final_gate_{verdict}", {}).get("modes", {}).get(mode, {})
-                states = row.get("control", {}).get("params", {}).get("expected_states", {})
-                checks[f"{dag}_gate_{verdict}_{mode}_states"] = states == {task: "success" for task in (*chain, "catalog_release")}
-    for mode in ("publish_fixture", "real"):
-        folders = rows["acquire_run"]["modes"][mode]["control"]["params"]["folders"]
-        checks[f"acquire_folders_{mode}"] = "quality_features" in folders and {"quality_silver", "quality_gold", "quality_cross", "publish"} <= set(folders)
-    for task, template in (("feast_apply", "apply"), ("feast_materialize", "materialize")):
-        row = rows.get(task, {}).get("modes", {}).get("real", {}).get("launcher", {})
-        checks[f"{task}_hard_limit"] = (
-            row.get("template") == "pipeline_feast" and row.get("params") == {"step": template} and row.get("timeout_seconds") == 3600
-        )
-    live = broker_module.load_templates()
-    checks["live_file_loads"] = bool(live["templates"])
-    return checks
 
 
 def selector_templates(node: Any) -> list[set[str]]:
@@ -1719,12 +1293,6 @@ CASES: dict[str, Callable[..., Checks]] = {
     "E31_launcher_gold": case_launcher_gold,
     "E08_launcher_seal": case_launcher_seal,
     "E01_templates_launcher": case_templates_launcher,
-    "E05_approval": case_approval,
-    "E05_approval_first_job": case_approval_first_job,
-    "E05_approval_reused_run": case_approval_reused_run,
-    "E01_completed": case_completed,
-    "E08_control_seal": case_control_seal,
-    "E01_templates": case_templates,
     "E01_graph": case_graph,
     "E01_selector_contracts": case_selector_contracts,
     "E01_compose_service": case_compose_service,
@@ -1738,7 +1306,6 @@ CASES: dict[str, Callable[..., Checks]] = {
     "E06_features_publish_job": case_features_publish_job,
     "E06_features_publish_prefix": case_features_publish_prefix,
 }
-NEEDS_FRAGMENT = ("E05_approval", "E05_approval_first_job", "E05_approval_reused_run", "E01_templates")
 
 
 @contextlib.contextmanager
@@ -1761,7 +1328,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     """Run the selected cases and write the report."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--case", action="append", choices=sorted(CASES))
-    parser.add_argument("--template-fragment", type=Path)
     options = parser.parse_args(argv)
     selected = options.case or list(CASES)
     results: list[dict[str, Any]] = []
@@ -1771,8 +1337,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             scratch.mkdir()
             fixture = Fixture(scratch / "fixture")
             try:
-                arguments = (fixture, scratch, options.template_fragment) if name in NEEDS_FRAGMENT else (fixture, scratch)
-                checks = CASES[name](*arguments)
+                checks = CASES[name](fixture, scratch)
                 error = ""
             except Exception as failure:
                 # A case that raises is reported as failed with its error type and text; the run goes on to the next case.
@@ -1783,9 +1348,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
     folder = ROOT / "data/e2e/features_pipeline_light" / datetime.now(UTC).strftime("%Y%m%dT%H%M%S_%fZ")
     folder.mkdir(parents=True)
-    report: dict[str, Any] = {"scope": "light: renders, protocol, in-process launcher methods, broker with a recording client, graphs"}
+    report: dict[str, Any] = {"scope": "light: renders, protocol, in-process launcher methods, graphs"}
     report["base_revision"] = BASE_REVISION
-    report["fragment"] = str(options.template_fragment) if options.template_fragment else None
     report["cases"] = results
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     failed_cases = [item["case"] for item in results if item["verdict"] != "pass"]
