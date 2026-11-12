@@ -37,7 +37,7 @@ HEREDOC_CLOSE = "BLOCK"
 STRICT_OPTIONS = "set -euo pipefail"
 # The trap holds no value: its body has only the exit status variable and one fixed status line of the helper's vocabulary.
 TRAP_LINE = re.compile(r"trap '(?P<body>[^']*)' ERR")
-TRAP_STATUS = re.compile(r"""code=\$\?; case "\$code" in 1\|3\) ;; \*\) echo "(?P<text>[a-z ]+: [a-z ]+)" ;; esac""")
+TRAP_STATUS = re.compile(r'echo "(?P<text>[a-z ]+: [a-z ]+)"')
 # What a retained log must never hold: the address, a topic name or ARN, an account number or a subscription identifier.
 LOG_VALUES = re.compile(r"@|example_project|arn:aws|\d{6,}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}")
 VOCABULARY = re.compile(
@@ -87,6 +87,11 @@ def leaks(output: str) -> list[str]:
     return [line for line in output.splitlines() if not VOCABULARY.fullmatch(line)]
 
 
+TRAP_OUTPUT = "step: stopped\n"
+# Every failed block run, as (exit status, whether its output ended with the fixed ERR trap line); cases() reads and clears it.
+FAILED_RUNS: list[tuple[int, bool, str]] = []
+
+
 class Scratch:
     """A scratch repository root with the stand-in tools and a world that a case sets up. Every run adds its terminal output to ``sink``."""
 
@@ -94,6 +99,7 @@ class Scratch:
         self.root = root
         self.sink = sink
         self.helper = helper
+        self.raw = ""
         for name, body in SHIMS.items():
             path = root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -157,8 +163,15 @@ class Scratch:
         if admin:
             environment["ADMIN_PROFILE"] = "example_admin"
         result = run_command("bash", ["-c", 'bash "$BLOCK_FILE"'], cwd=self.root, env=environment, timeout=timeout, own_session=True, errors="replace")
-        output = result.stdout + result.stderr
-        self.sink.append(output)
+        raw = result.stdout + result.stderr
+        self.sink.append(raw)
+        self.raw = raw
+        output = raw
+        if result.returncode != 0:
+            # Only a block with the delivered trap counts. Bash ends a set -u stop without the ERR trap but prints its own message, so that stop is visible too.
+            if TRAP_LINE.search(block) and "unbound variable" not in raw:
+                FAILED_RUNS.append((result.returncode, raw.endswith(TRAP_OUTPUT), (raw.splitlines() or [""])[-1][:40]))
+            output = raw.removesuffix(TRAP_OUTPUT)
         return result.returncode, output, self.read()["calls"][before:]
 
     def log(self) -> str:
@@ -485,12 +498,22 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
             sink.pop()
             case(f"`{name}` still prints the usage and exits 0", code == 0 and output.startswith("usage:") and not called)
 
-    # The fixed ERR trap: any status but the helper's own 1 and 3 ends with one fixed line; the status of the failed command is kept.
+    # The fixed ERR trap: every failed command ends with one fixed line, even one that stops before the helper prints; its status is kept.
     with tempfile.TemporaryDirectory(prefix="alert_run_") as folder:
         scratch = scratch_for(folder)
-        for status, expected in ((0, ""), (1, ""), (3, ""), (2, "step: stopped\n"), (5, "step: stopped\n"), (127, "step: stopped\n")):
+        for status, expected in (
+            (0, ""),
+            (1, "step: stopped\n"),
+            (3, "step: stopped\n"),
+            (2, "step: stopped\n"),
+            (5, "step: stopped\n"),
+            (127, "step: stopped\n"),
+        ):
             code, output, called = scratch.run(topics.replace(f"{HELPER_CALL} topics", f'sh -c "exit {status}"'))
-            case(f"a block whose command ends with {status} exits {status} and prints {expected.strip() or 'nothing'}", code == status and output == expected)
+            case(
+                f"a block whose command ends with {status} exits {status} and prints {expected.strip() or 'nothing'}",
+                code == status and scratch.raw == expected,
+            )
         code, output, called = scratch.run(topics.replace(f"{HELPER_CALL} topics", 'echo "$UNSET_NAME"; echo reached'))
         sink.pop()
         case("a block runs under set -u: an unset variable stops it before the next command", code != 0 and "reached" not in output)
@@ -605,6 +628,7 @@ def cases(text: str, helper: str = HELPER_CALL) -> tuple[dict[str, bool], list[s
     results: dict[str, bool] = {}
     calls: list[str] = []
     sink: list[str] = []
+    FAILED_RUNS.clear()
     for name, function, section in (("bootstrap", bootstrap_cases, bootstrap), ("teardown", teardown_cases, teardown)):
         try:
             found, called = function(section, sink, helper)
@@ -616,6 +640,10 @@ def cases(text: str, helper: str = HELPER_CALL) -> tuple[dict[str, bool], list[s
     offenders = sorted({line[:40] for output in sink for line in leaks(output)})
     results[f"alert block run: every run of every block ({len(sink)} runs) printed only <subject>: <status> lines of the closed vocabulary ({offenders})"] = (
         len(sink) >= 60 and not offenders
+    )
+    unmarked = sorted({(status, last) for status, marked, last in FAILED_RUNS if not marked})
+    results[f"alert block run: every failed block run ({len(FAILED_RUNS)} runs) ends with the fixed ERR trap line (statuses without it: {unmarked})"] = (
+        len(FAILED_RUNS) >= 20 and not unmarked
     )
     return checks | results, calls
 
