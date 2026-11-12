@@ -38,18 +38,15 @@ from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, Task
 from orchestration.ecs_preflight import (
     BRONZE_VARIABLES,
     CHAIN_LAYERS,
-    CLOSED,
     DEADLINE_VARIABLE,
     GATE,
     JOB_MODE,
-    RUN_ID,
     SERVING_VARIABLES,
     TABLE_MAP_FILE,
     bronze_request_reader,
     derived_run_id,
     s3_digest_reader,
     serving_request_reader,
-    ssm_signed_reader,
 )
 from orchestration.interface import Handle, State, Status, SubmissionRefused, SubmissionRequest
 from orchestration.training_contract import JOB_LANES, parameters_for, training_run_id
@@ -138,7 +135,6 @@ class EcsBroker:
         adapter: EcsAdapter,
         settings: BrokerSettings,
         code_digest: Callable[[str], str],
-        signed_reader: Callable[[], str | None],
         clock: Callable[[], float],
         bronze_request: Callable[[str], dict[str, str]] | None = None,
         serving_request: Callable[[str], dict[str, str]] | None = None,
@@ -150,7 +146,6 @@ class EcsBroker:
         self.adapter = adapter
         self.settings = settings
         self.code_digest = code_digest
-        self.signed_reader = signed_reader
         self.clock = clock
         self.bronze_request = bronze_request
         self.serving_request = serving_request
@@ -167,7 +162,6 @@ class EcsBroker:
             raise SubmissionRefused(f"{request.template} has no ECS job")
         job = self.steps[request.template]
         if job == GATE:
-            self.require_signed()
             return None
         if job is None:
             return None
@@ -175,8 +169,6 @@ class EcsBroker:
             raise SubmissionRefused(f"{request.template} runs on AWS in real mode only")
         if job not in self.adapter.settings.families:
             raise SubmissionRefused(f"the {job} job is not enabled")
-        if self.jobs[job].get("chain"):
-            self.require_signed()
         after = self.jobs[job].get("after")
         if after:
             self.require_passed(job, after, self.input_of(request, job))
@@ -229,22 +221,6 @@ class EcsBroker:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(self.jobs[job]["deadline_seconds"]))
         return values
 
-    def require_signed(self) -> None:
-        """Refuse a chain step until the record of the first signed silver and gold publishes names both runs."""
-        try:
-            raw = self.signed_reader()
-        except TaskUnavailable as error:
-            raise Unavailable(str(error)) from None
-        try:
-            record = json.loads(raw) if raw else None
-        except ValueError:
-            record = None
-        if (
-            not isinstance(record, dict)
-            or set(record) != {"silver", "gold"}
-            or not all(isinstance(run, str) and RUN_ID.fullmatch(run) for run in record.values())
-        ):
-            raise SubmissionRefused(CLOSED)
 
     def input_of(self, request: SubmissionRequest, job: str) -> str | None:
         """The run a job publishes from: the one named in the request, or the one the job's first step was given."""
@@ -742,7 +718,6 @@ def main(environment: Mapping[str, str] | None = None) -> int:
     session = boto3.session.Session(region_name=region)
     adapter = EcsAdapter.from_session(session, settings)
     digest = s3_digest_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
-    signed = ssm_signed_reader(session.client("ssm", config=config), required(env, "BROKER_SIGNED_PARAMETER"))
     collections = {entry["table"]: entry["collection"] for entry in json.loads((root / TABLE_MAP_FILE).read_text())["tables"]}
     bronze_request = bronze_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"), collections)
     serving_request = serving_request_reader(session.client("s3", config=config), required(env, "BROKER_BUCKET"))
@@ -752,7 +727,6 @@ def main(environment: Mapping[str, str] | None = None) -> int:
         adapter,
         BrokerSettings(required(env, "BROKER_POLARIS_URI"), required(env, "BROKER_MLFLOW_URI")),
         digest,
-        signed,
         lambda: datetime.now(UTC).timestamp(),
         bronze_request,
         serving_request,

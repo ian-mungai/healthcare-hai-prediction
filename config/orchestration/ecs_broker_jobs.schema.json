@@ -82,7 +82,7 @@
           },
           "chain": {
             "const": true,
-            "description": "The job belongs to the bronze-triggered chain and runs only after the first silver and gold publishes are signed"
+            "description": "The job belongs to the bronze-triggered chain"
           },
           "after": {
             "type": "string",

@@ -169,6 +169,17 @@ run "broker_role_is_narrow" {
   }
 }
 
+run "broker_role_reads_no_signed_record" {
+  command = plan
+
+  assert {
+    condition = (
+      !anytrue([for statement in jsondecode(aws_iam_role_policy.broker_jobs[0].policy).Statement : anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])])
+    )
+    error_message = "Signing the first publishes is a manual step, not a code gate: the broker job policy holds no Parameter Store grant."
+  }
+}
+
 run "default_family_is_train_only" {
   command = plan
 

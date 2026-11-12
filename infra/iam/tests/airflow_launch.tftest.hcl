@@ -424,12 +424,8 @@ run "run_records_and_log_reads_are_exact_objects" {
   }
 }
 
-run "no_grant_reads_the_signed_record" {
+run "no_grant_reads_a_parameter_beside_the_host_cap_hold_and_lock" {
   command = plan
-
-  variables {
-    broker_signed_parameter_name = "/example_project/signed_record"
-  }
 
   assert {
     condition = !anytrue(flatten([
@@ -437,7 +433,7 @@ run "no_grant_reads_the_signed_record" {
         for statement in jsondecode(policy).Statement : statement.Sid != "ReadLaunchHoldAndApplyLock" && anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
       ]
     ]))
-    error_message = "Signing the first publishes is a manual step: the launch role reads no Parameter Store value but the launch hold and the apply lock, whatever the broker's signed parameter name is."
+    error_message = "The launch role reads no Parameter Store value but the launch hold and the apply lock."
   }
 }
 

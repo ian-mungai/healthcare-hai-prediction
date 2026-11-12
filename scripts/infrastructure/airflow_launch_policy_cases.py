@@ -35,10 +35,10 @@ from scripts.infrastructure.broker_policy_cases import (
     CLUSTER,
     CLUSTER_ARN,
     LOG_GROUP,
+    OTHER,
     OTHER_CLUSTER_ARN,
     PROJECT,
     REGION,
-    SIGNED,
     Case,
     as_list,
     role,
@@ -299,14 +299,14 @@ def job_cases() -> list[Case]:
     add("read a job log stream", "logs:GetLogEvents", stream, True)
     add("read a stream of another group", "logs:GetLogEvents", stream.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), False)
     add("write a job log stream", "logs:PutLogEvents", stream, False)
-    signed = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
-    add("read the signed record (a manual step, not a code gate)", "ssm:GetParameter", signed, False)
-    add("read the signed record by the plural call", "ssm:GetParameters", signed, False)
-    add("write the signed record", "ssm:PutParameter", signed, False)
-    add("delete the signed record", "ssm:DeleteParameter", signed, False)
-    add("read a sibling of the signed record", "ssm:GetParameter", f"{signed}_extra", False)
+    other = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}"
+    add("read a parameter that no grant names", "ssm:GetParameter", other, False)
+    add("read that parameter by the plural call", "ssm:GetParameters", other, False)
+    add("write that parameter", "ssm:PutParameter", other, False)
+    add("delete that parameter", "ssm:DeleteParameter", other, False)
+    add("read a sibling of that parameter", "ssm:GetParameter", f"{other}_extra", False)
     add(
-        "read a parameter beside the signed record",
+        "read a parameter beside that parameter",
         "ssm:GetParameter",
         f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter",
         False,
@@ -539,7 +539,7 @@ PERMISSIVE: Context = {
 KMS_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/00000000-1111-2222-3333-444444444444"
 KMS_OTHER_KEY = f"arn:aws:kms:{REGION}:{ACCOUNT}:key/99999999-8888-7777-6666-555555555555"
 STREAM = f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:train/train/0123456789abcdef"
-SIGNED_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}"
+OTHER_ARN = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}"
 LAKEHOUSE_FILE = f"arn:aws:s3:::{BUCKET}/lakehouse/gold/table/data/part-0.parquet"
 RECORD = f"{RECORDS}20261030T100000Z-abcdef01/train/0/intent.json"
 DECISION = f"{RECORDS}20261030T100000Z-abcdef01/train/decision.json"
@@ -580,7 +580,7 @@ RESOURCES = (
     Resource("auto scaling group of the host", AUTOSCALING_GROUP, NONE, NONE),
     Resource("job log stream", STREAM, frozenset({"logs:GetLogEvents"}), frozenset({"logs:GetLogEvents"})),
     Resource("log stream of another group", STREAM.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), NONE, NONE),
-    Resource("signed publish record", SIGNED_ARN, NONE, NONE),
+    Resource("a parameter that no grant names", OTHER_ARN, NONE, NONE),
     Resource("retired host job cap parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{RETIRED_CAP}", NONE, NONE),
     Resource("launch hold", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("apply lock", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{APPLY_LOCK}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
@@ -788,8 +788,8 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "PassNamedJobRoles_the_scheduler_role_itself", replaced(jobs, "PassNamedJobRoles", Resource=[*pass_roles, role("airflow_launch_task")])),
         (
             "jobs",
-            "regression_the_signed_record_read",
-            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}{SIGNED}"}),
+            "regression_a_named_parameter_read",
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}{OTHER}"}),
         ),
         ("jobs", "regression_a_parameter_prefix", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}/*"})),
         ("jobs", "ReadLaunchHoldAndApplyLock_a_parameter_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}/healthcare_hai_prediction/*")),
@@ -900,7 +900,7 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         (
             "jobs",
             "regression_ssm_DeleteParameters",
-            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:DeleteParameters", "Resource": f"{ssm}{SIGNED}"}),
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:DeleteParameters", "Resource": f"{ssm}{OTHER}"}),
         ),
         ("jobs", "regression_kms_CreateGrant", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "kms:CreateGrant", "Resource": KMS_KEY})),
         ("jobs", "regression_s3_PutObjectVersionAcl", replaced(jobs, "ReadStagedRunRecords", Action=["s3:GetObject", "s3:PutObjectVersionAcl"])),
@@ -916,10 +916,10 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         (
             "jobs",
             "regression_ssm_PutParameter",
-            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:PutParameter", "Resource": f"{ssm}{SIGNED}"}),
+            appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:PutParameter", "Resource": f"{ssm}{OTHER}"}),
         ),
         ("jobs", "regression_NotAction_statement", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "NotAction": "iam:*", "Resource": "*"})),
-        ("jobs", "regression_action_wildcard", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:Delete*", "Resource": f"{ssm}{SIGNED}"})),
+        ("jobs", "regression_action_wildcard", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:Delete*", "Resource": f"{ssm}{OTHER}"})),
         ("requests", "ReadStagedRequests_every_input", replaced(requests, "ReadStagedRequests", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("requests", "ReadStagedRequests_any_object", replaced(requests, "ReadStagedRequests", Resource=[*request_resource, f"{bucket}/*"])),
         (

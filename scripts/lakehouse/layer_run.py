@@ -371,7 +371,7 @@ def check_pin_tables(job: Job) -> None:
     """Silver: the pin names exactly the configured bronze tables. Gold and features: the pin step has already read the publish_runs row of the input run and
     pinned its snapshot set, so this compares the pin's table list with the tables of the input layer's publish contract. The publish container holds the
     writer pair, which has no grant on the input namespace, so it cannot read the row again. scripts.lakehouse.layer_acceptance compares the pin with the
-    signed records of the input run."""
+    saved records of the input run."""
     if job.layer == "silver":
         pinned = set(json.loads((job.folder / PIN_FILE["silver"]).read_text()))
         wanted, source = set(pins.mapped_tables(BRONZE_TABLES)), BRONZE_TABLES.name

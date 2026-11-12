@@ -1,5 +1,5 @@
 variable "broker_prepared" {
-  description = "Prepare the role of the lean job broker. It may run, stop and describe the named job families only, pass their roles and read the code digest, the job logs and the record of the signed first publishes."
+  description = "Prepare the role of the lean job broker. It may run, stop and describe the named job families only, pass their roles and read the code digest and the job logs."
   type        = bool
   default     = false
   nullable    = false
@@ -34,18 +34,6 @@ variable "broker_token_name" {
   }
 }
 
-variable "broker_signed_parameter_name" {
-  description = "Parameter Store name of the record of the first signed silver and gold publishes. The broker role may read it. The owner sets the value after signing both reports."
-  type        = string
-  default     = "/healthcare_hai_prediction/first_publishes_signed"
-  nullable    = false
-
-  validation {
-    condition     = length(var.broker_signed_parameter_name) <= 512 && can(regex("^/(?:[A-Za-z0-9_]+/){0,14}[A-Za-z0-9_]+$", var.broker_signed_parameter_name)) && !can(regex("^/(?i:aws|ssm)", var.broker_signed_parameter_name))
-    error_message = "Use a parameter path of at most 512 characters that starts with a slash and has up to 15 parts of letters, digits and underscores. Dashes, wildcards, spaces and the prefixes aws and ssm are not allowed."
-  }
-}
-
 locals {
   # The task role each family runs with. The drift role does not exist yet: it follows the drift task, so naming drift before then fails at apply.
   broker_family_roles = {
@@ -61,15 +49,14 @@ locals {
   }
   broker_families = sort(var.broker_job_families)
   broker_policy_values = merge(local.owner_policy_values, {
-    PROJECT_TAG           = local.platform_project_tag
-    CLUSTER_ARN           = "${local.ecs_arn}:cluster/${local.cluster_name}"
-    TASK_ARN_PATTERN      = "${local.ecs_arn}:task/${local.cluster_name}/*"
-    LOG_GROUP_NAME        = format(local.platform_name, "jobs")
-    DATA_BUCKET_NAME      = var.data_bucket_name
-    SIGNED_PARAMETER_NAME = var.broker_signed_parameter_name
-    BROKER_TOKEN_NAME     = var.broker_token_name
-    FAMILIES              = jsonencode(local.broker_families)
-    TASK_DEFINITION_ARNS  = jsonencode([for family in local.broker_families : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}:*"])
+    PROJECT_TAG          = local.platform_project_tag
+    CLUSTER_ARN          = "${local.ecs_arn}:cluster/${local.cluster_name}"
+    TASK_ARN_PATTERN     = "${local.ecs_arn}:task/${local.cluster_name}/*"
+    LOG_GROUP_NAME       = format(local.platform_name, "jobs")
+    DATA_BUCKET_NAME     = var.data_bucket_name
+    BROKER_TOKEN_NAME    = var.broker_token_name
+    FAMILIES             = jsonencode(local.broker_families)
+    TASK_DEFINITION_ARNS = jsonencode([for family in local.broker_families : "${local.ecs_arn}:task-definition/${var.project_name}_${var.environment}_job_${family}:*"])
     ROLE_ARNS = jsonencode(sort(distinct(concat(
       ["arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_execution")}"],
       [for family in local.broker_families : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, local.broker_family_roles[family])}"]
@@ -81,7 +68,7 @@ resource "aws_iam_role" "broker_task" {
   count = var.broker_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "broker_task")
-  description          = "Lean job broker: runs, stops and describes the named job families only, passes their roles and reads the code digest, the job logs and the signed publish record."
+  description          = "Lean job broker: runs, stops and describes the named job families only, passes their roles and reads the code digest and the job logs."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

@@ -115,7 +115,6 @@ def infra_names(infra: Path = INFRA) -> dict[str, str]:
     of the bronze map and of the silver publish contract."""
     names = {key: value for key, value in terraform_names(infra / "variables.tf").items() if isinstance(value, str)}
     names["BROKER_TOKEN_NAME"] = terraform_default(infra, "broker.tf", "broker_token_name")
-    names["BROKER_SIGNED_PARAMETER_NAME"] = terraform_default(infra, "broker.tf", "broker_signed_parameter_name")
     names["AIRFLOW_LAUNCH_RECORD_PREFIX"] = terraform_default(infra, "airflow_launch.tf", "airflow_launch_record_prefix")
     names["HOST_LAUNCH_HOLD_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "host_launch_hold_parameter_name")
     names["SERVICES_APPLY_LOCK_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "services_apply_lock_parameter_name")
@@ -241,7 +240,6 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "TASK_ARN_PATTERN": f"arn:aws:ecs:{region}:{account}:task/{cluster}/*",
             "LOG_GROUP_NAME": f"{project}_jobs_{environment}",
             "PROJECT_TAG": project,
-            "SIGNED_PARAMETER_NAME": names["BROKER_SIGNED_PARAMETER_NAME"],
             "FAMILIES": json.dumps(sorted(families)),
             "TASK_DEFINITION_ARNS": json.dumps([f"arn:aws:ecs:{region}:{account}:task-definition/{project}_{environment}_job_{f}:*" for f in sorted(families)]),
             "ROLE_ARNS": json.dumps([f"arn:aws:iam::{account}:role/{project}_job_{kind}_{environment}" for kind in ("execution", "train_task")]),

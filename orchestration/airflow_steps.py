@@ -3,8 +3,8 @@
 ``orchestration/dag_runtime.py`` calls ``launch_step`` for a step of a shipped DAG. A job step passes the preflight (``orchestration/ecs_preflight.py``), then
 the launch operator runs the job: the first step of a job launches its one ECS task and waits, and every later step finds the recorded outcome of that
 launch. A failed job fails each step, and trying again needs a new run. A control step (one with no job: acquire, seal, release, the gates) and the chain
-gate launch nothing: the gate binds the code runs of the chain. Signing the first publishes is the owner's manual step, not a gate here. A staged input
-that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
+gate launch nothing: the gate binds the code runs of the chain.
+A staged input that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
 the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found.
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``

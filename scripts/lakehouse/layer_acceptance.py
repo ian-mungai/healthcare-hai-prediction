@@ -63,7 +63,7 @@ CONTRACT = {
 BRONZE_MAP = "config/lakehouse/bronze_tables.json"
 OUT_OF_SCOPE_KEYS = 100
 INPUT_PREFIX = {"silver": "lakehouse/bronze/", "gold": "lakehouse/silver/", "features": "lakehouse/gold/"}
-PRODUCER = {"gold": "silver", "features": "gold"}  # the layer whose signed run this layer reads
+PRODUCER = {"gold": "silver", "features": "gold"}  # the layer whose passed run this layer reads
 # The prefixes of the layer writer role (infra/iam/job_writer.tf) beside the run's own upload prefix.
 CONTRACT_FILES = (*CONTRACT.values(), BRONZE_MAP, str(pins.SOURCES))
 WRITE_PREFIXES = {
@@ -387,7 +387,7 @@ def bronze_tables(revision: str, read: Reader) -> set[str]:
 
 
 def producer_records(records: Records, layer: str, folder: Path, source: Any, namespace: str, snapshots: Mapping[str, Any]) -> tuple[bool, list[str]]:
-    """Whether the signed producer's records name the pinned run and snapshot set, and the records whose digests its report must cover. Silver writes a snapshot
+    """Whether the passed producer's records name the pinned run and snapshot set, and the records whose digests its report must cover. Silver writes a snapshot
     record. Gold writes none: its set is the commit record, and its candidates record names the mode and namespace of that commit."""
     if layer == "gold":
         producer = records.load_in(folder, "silver_snapshot.json", "input/")
@@ -578,7 +578,7 @@ def host_problems(status: Any) -> list[str]:
 
 
 def ignored(path: Path) -> bool:
-    """Whether Git ignores the path: signed reports stay out of Git."""
+    """Whether Git ignores the path: reports stay out of Git."""
     return run_command("git", ["check-ignore", "-q", str(path.resolve())], cwd=ROOT, timeout=30).returncode == 0
 
 

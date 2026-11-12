@@ -5,8 +5,6 @@ broker's gates: real mode, the previous job's success (``after``), the training 
 bronze and serving requests, the staged code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the
 code digest, the request hash and the input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
 The readers at the top are the broker's own: ``scripts/orchestration/ecs_broker.py`` imports them from here, so one reading of the staged inputs serves both.
-Signing the first silver and gold publishes is the owner's manual step, not a gate of this path: ``ssm_signed_reader`` and ``CLOSED`` stay only for the
-broker, which still checks the signed record.
 The host table (``config/orchestration/host_jobs.json``) may give a job its own containers and log container, where its host task definition differs from the
 Fargate one the broker starts (the metadata job).
 Host launch capacity binding (owner A, Nov 10 2026): the gates refuse while the usable-memory inputs are not set. After the staged-input reads, the
@@ -58,7 +56,6 @@ DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
 GATE = "@gate"
 CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features", "drift")
-CLOSED = "the chain is closed until the first silver and gold publishes are signed"  # the broker's refusal; the direct path has no signed gate
 JOB_MODE = "real"
 # The feature set a DAG's features job builds (the FEATURE_SET of its containers). A DAG that names none cannot launch the features job.
 FEATURE_SETS = {"features_base_dag": "base", **FEATURE_DAGS}
@@ -257,22 +254,6 @@ def serving_request_reader(s3: S3Reader, bucket: str) -> Callable[[str], dict[st
         except ValueError as error:
             raise TaskRefused(f"serving_request_refused: {error}") from None
         return {"SERVING_REQUEST": json.dumps(checked, sort_keys=True, separators=(",", ":")), "SERVING_REQUEST_SHA256": hashlib.sha256(body).hexdigest()}
-
-    return read
-
-
-def ssm_signed_reader(ssm: Any, name: str) -> Callable[[], str | None]:
-    """Read the record of the signed first publishes from a Parameter Store value, or None while the parameter does not exist."""
-
-    def read() -> str | None:
-        try:
-            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
-                return None
-            raise TaskUnavailable("signed_record_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("signed_record_unreadable") from None
 
     return read
 

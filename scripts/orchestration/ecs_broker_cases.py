@@ -43,7 +43,6 @@ FEATURES_RUN = "20261030T100000Z-feed5eed"
 BRONZE_RUN = "20261030T090000Z-b0b0b0b0"
 PROMOTE_RUN = "20261030T110000Z-9a9a9a9a"
 DRIFT_RUN = "20261030T120000Z-d71f70a1"
-SIGNED = json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN})
 DIGEST = "ab" * 32
 PARAMETERS = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "local", "model": "m2"}
 JOB_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote"})
@@ -71,9 +70,8 @@ def table_pair() -> tuple[list[str], str]:
 class Rig:
     """One broker with its listener, a client and the fakes behind it."""
 
-    def __init__(self, folder: Path, families: frozenset[str] = JOB_FAMILIES, signed: str | None = SIGNED) -> None:
+    def __init__(self, folder: Path, families: frozenset[str] = JOB_FAMILIES) -> None:
         self.folder = folder
-        self.signed = signed
         self.ecs, self.logs, self.s3 = FakeEcs(), FakeLogs(), FakeS3()
         self.s3.objects[f"lakehouse/run_stage/{RUN}/inputs/code.sha256"] = DIGEST.encode() + b"\n"
         for bronze_run in (BRONZE_RUN, BRONZE_RUN_2):
@@ -97,7 +95,6 @@ class Rig:
             EcsAdapter(self.ecs, self.logs, settings),
             settings_broker,
             digest,
-            lambda: self.signed,
             lambda: self.clock[0],
             bronze_request=bronze_request_reader(self.s3, "example-bucket", collections_of_table_map()),
             serving_request=serving_request_reader(self.s3, "example-bucket"),
@@ -108,9 +105,9 @@ class Rig:
 
 
 @contextmanager
-def rig(families: frozenset[str] = JOB_FAMILIES, signed: str | None = SIGNED) -> Iterator[Rig]:
+def rig(families: frozenset[str] = JOB_FAMILIES) -> Iterator[Rig]:
     with tempfile.TemporaryDirectory(prefix="ecs_broker_") as folder:
-        current = Rig(Path(folder), families, signed)
+        current = Rig(Path(folder), families)
         try:
             yield current
         finally:
@@ -252,24 +249,12 @@ def gold_job_gets_its_input_run() -> None:
         require(sent["taskDefinition"] == "example_dev_job_gold" and values["pin"]["INPUT_RUN_ID"] == SILVER_RUN, "the gold job did not receive its silver run")
 
 
-def chain_is_closed_until_the_first_publishes_are_signed() -> None:
-    with rig(signed=None) as current:
+def chain_runs_without_a_signed_record() -> None:
+    """The chain gate and the chain jobs run with no record of a signed publish anywhere."""
+    with rig() as current:
         gate = request("chain_gate", run=SILVER_RUN, dag="bronze_chain_dag")
-        for closed in (gate, silver_request(), gold_request(), request("pin_gold", run=FEATURES_RUN, dag="features_base_dag", input_run=GOLD_RUN)):
-            raises(SubmissionRefused, partial(current.client.submit, closed))
-        require(not current.ecs.calls, "a chain job reached the cloud before the first publishes were signed")
-        require(wait_for(current, current.client.submit(request("guard"))).state == State.SUCCEEDED, "training must not wait for the chain record")
-        for raw in (
-            "not json",
-            json.dumps({"silver": SILVER_RUN}),
-            json.dumps({"silver": SILVER_RUN, "gold": "latest"}),
-            json.dumps({"silver": SILVER_RUN, "gold": GOLD_RUN, "x": 1}),
-        ):
-            current.signed = raw
-            raises(SubmissionRefused, lambda: current.client.submit(gate))
-        current.signed = SIGNED
-        require(wait_for(current, current.client.submit(gate)).state == State.SUCCEEDED, "a signed record did not open the chain gate")
-        require(wait_for(current, current.client.submit(silver_request())).state == State.SUCCEEDED, "a signed record did not open the silver job")
+        require(wait_for(current, current.client.submit(gate)).state == State.SUCCEEDED, "the chain gate did not run without a signed record")
+        require(wait_for(current, current.client.submit(silver_request())).state == State.SUCCEEDED, "the silver job did not run without a signed record")
 
 
 def acceptance_check_failure_stops_the_chain() -> None:
@@ -600,11 +585,11 @@ def bronze_variables(current: Rig) -> dict[str, dict[str, str]]:
 
 def bronze_job_gets_its_checked_dispatch_values() -> None:
     pair, _ = table_pair()
-    with rig(BRONZE_FAMILIES, signed=None) as current:
+    with rig(BRONZE_FAMILIES) as current:
         stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
         require(
             wait_for(current, current.client.submit(bronze_request())).state == State.SUCCEEDED,
-            "the bronze job did not pass before the first publishes were signed",
+            "the bronze job did not pass",
         )
         sent = next(arguments for name, arguments in current.ecs.calls if name == "run_task")
         values = bronze_variables(current)
@@ -696,15 +681,6 @@ def bronze_retry_starts_no_second_task() -> None:
         current.ecs.tokens.clear()
         again = wait_for(current, current.client.submit(bronze_request()))
         require(again.state == State.SUCCEEDED and current.ecs.count("run_task") == 1, "a finished bronze run started again")
-
-
-def chain_stays_closed_while_bronze_runs() -> None:
-    pair, _ = table_pair()
-    with rig(BRONZE_FAMILIES, signed=None) as current:
-        stage_bronze_request(current, {"tables": pair, "target": "real", "dry_run": False, "inventory_sha256": INVENTORY})
-        wait_for(current, current.client.submit(bronze_request()))
-        raises(SubmissionRefused, partial(current.client.submit, silver_request()))
-        require(current.ecs.count("run_task") == 1, "silver started on a bronze run without the signed record")
 
 
 def bronze_request_is_read_once_and_bound_to_the_task() -> None:
@@ -974,7 +950,7 @@ CASES: dict[str, Callable[[], None]] = {
     "denied_start_closes_the_submission": denied_start_closes_the_submission,
     "missing_code_digest_is_retryable": missing_code_digest_is_retryable,
     "gold_job_gets_its_input_run": gold_job_gets_its_input_run,
-    "chain_is_closed_until_the_first_publishes_are_signed": chain_is_closed_until_the_first_publishes_are_signed,
+    "chain_runs_without_a_signed_record": chain_runs_without_a_signed_record,
     "acceptance_check_failure_stops_the_chain": acceptance_check_failure_stops_the_chain,
     "missing_acceptance_check_fails_the_job": missing_acceptance_check_fails_the_job,
     "each_chain_step_needs_the_one_before_to_have_passed": each_chain_step_needs_the_one_before_to_have_passed,
@@ -1003,7 +979,6 @@ CASES: dict[str, Callable[[], None]] = {
     "bronze_without_a_staged_request_is_retryable": bronze_without_a_staged_request_is_retryable,
     "bronze_failure_fails_the_job": bronze_failure_fails_the_job,
     "bronze_retry_starts_no_second_task": bronze_retry_starts_no_second_task,
-    "chain_stays_closed_while_bronze_runs": chain_stays_closed_while_bronze_runs,
     "bronze_request_is_read_once_and_bound_to_the_task": bronze_request_is_read_once_and_bound_to_the_task,
     "bronze_retry_after_a_throttled_start_keeps_the_checked_request": bronze_retry_after_a_throttled_start_keeps_the_checked_request,
     "bronze_containers_share_one_absolute_deadline": bronze_containers_share_one_absolute_deadline,

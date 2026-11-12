@@ -1873,7 +1873,6 @@ run "broker_service_shape" {
           "BROKER_PORT=18790",
           "BROKER_POLARIS_URI=http://10.0.1.20:8181/api/catalog",
           "BROKER_MLFLOW_URI=http://10.0.1.20:5100",
-          "BROKER_SIGNED_PARAMETER=/healthcare_hai_prediction/first_publishes_signed",
           "BROKER_SUBNETS=subnet-0example1",
           "BROKER_NETWORKS={\"lakehouse\":\"sg-0example1\",\"training\":\"sg-0example2\"}",
         ] : contains([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : "${item.name}=${item.value}"], expected)
@@ -1882,6 +1881,11 @@ run "broker_service_shape" {
       && jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].readonlyRootFilesystem == true
     )
     error_message = "The broker names its cluster, job definition prefix, families, subnet, security group and host addresses, and runs the broker module with a read-only root file system."
+  }
+
+  assert {
+    condition     = !anytrue([for item in jsondecode(aws_ecs_task_definition.service["broker"].container_definitions)[0].environment : startswith(item.name, "BROKER_SIGNED")])
+    error_message = "The broker names no signed record: signing the first publishes is a manual step, not a code gate."
   }
 
   assert {

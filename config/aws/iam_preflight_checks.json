@@ -580,11 +580,6 @@
       "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:example"
     },
     {
-      "role": "broker",
-      "action": "ssm:GetParameter",
-      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_SIGNED_PARAMETER_NAME}"
-    },
-    {
       "role": "project_user",
       "action": "iam:PassRole",
       "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_airflow_launch_task_${ENVIRONMENT}",

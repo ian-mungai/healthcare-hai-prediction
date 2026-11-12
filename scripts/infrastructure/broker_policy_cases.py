@@ -1,7 +1,7 @@
 """Exercise the grants of the lean job broker role without AWS calls.
 
 The role may start, stop and describe the named job families only, pass the roles of those families and the job execution role, read the staged code
-digest, the job logs and the record of the signed first publishes, and nothing else. Each grant is checked against requests written here, apart from the
+digest and the job logs, and nothing else. Each grant is checked against requests written here, apart from the
 rendered policy, and every scope mutation of the policy must fail at least one request. Run from the repository root:
 ``.venv/bin/python -m scripts.infrastructure.broker_policy_cases --output <NEW_DIRECTORY>``.
 """
@@ -31,7 +31,7 @@ FAMILIES = ["gold", "promote", "silver", "train"]
 CLUSTER = f"{PROJECT}_cluster_{ENVIRONMENT}"
 CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/{CLUSTER}"
 OTHER_CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/another_cluster"
-SIGNED = "/healthcare_hai_prediction/first_publishes_signed"
+OTHER = "/healthcare_hai_prediction/other_record"  # a parameter that no grant names
 BROKER_PARAMETER = "/healthcare_hai_prediction/broker_token"
 LOG_GROUP = f"{PROJECT}_jobs_{ENVIRONMENT}"
 Case = tuple[str, str, str, bool, dict[str, tuple[str, ...]]]
@@ -68,7 +68,6 @@ def values(families: list[str]) -> dict[str, str]:
         "TASK_ARN_PATTERN": f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{CLUSTER}/*",
         "LOG_GROUP_NAME": LOG_GROUP,
         "DATA_BUCKET_NAME": BUCKET,
-        "SIGNED_PARAMETER_NAME": SIGNED,
         "BROKER_TOKEN_NAME": BROKER_PARAMETER,
         "FAMILIES": json.dumps(sorted(families)),
         "TASK_DEFINITION_ARNS": json.dumps(
@@ -188,9 +187,9 @@ def cases() -> list[Case]:
     add("read a job log stream", "logs:GetLogEvents", stream, True)
     add("read a stream of another group", "logs:GetLogEvents", stream.replace(LOG_GROUP, f"{PROJECT}_mlflow_{ENVIRONMENT}"), False)
     add("write a job log stream", "logs:PutLogEvents", stream, False)
-    add("read the signed record", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}", True)
-    add("write the signed record", "ssm:PutParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}", False)
-    add("delete the signed record", "ssm:DeleteParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{SIGNED}", False)
+    add("read a parameter that no grant names", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}", False)
+    add("write a parameter that no grant names", "ssm:PutParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}", False)
+    add("delete a parameter that no grant names", "ssm:DeleteParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{OTHER}", False)
     add("read the broker token", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{BROKER_PARAMETER}", False)
     add("read the MLflow password", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/mlflow_admin_password", False)
     for action in ("ecs:UpdateService", "ecs:DeleteService", "ecs:CreateService", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"):
@@ -231,7 +230,7 @@ def token_cases() -> list[Case]:
     arn = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter"
     return [
         ("inject the broker token", "ssm:GetParameters", f"{arn}{BROKER_PARAMETER}", True, {}),
-        ("inject the signed record", "ssm:GetParameters", f"{arn}{SIGNED}", False, {}),
+        ("inject a parameter that no grant names", "ssm:GetParameters", f"{arn}{OTHER}", False, {}),
         ("inject the MLflow password", "ssm:GetParameters", f"{arn}/healthcare_hai_prediction/mlflow_admin_password", False, {}),
         ("put the broker token", "ssm:PutParameter", f"{arn}{BROKER_PARAMETER}", False, {}),
     ]
