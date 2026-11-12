@@ -6,7 +6,7 @@ launch. A failed job fails each step, and trying again needs a new run. A contro
 gate launch nothing: the gate binds the code runs of the chain. Signing the first publishes is the owner's manual step, not a gate here. A staged input
 that is not there yet (``InputNotReady``) is retried for ``UNAVAILABLE_SECONDS``, then the step fails with the cause.
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
-the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``).
+the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found.
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
 (the launch's end record says the job passed).
 """
