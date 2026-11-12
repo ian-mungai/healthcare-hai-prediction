@@ -1,5 +1,5 @@
 variable "promote_enabled" {
-  description = "Register the promotion task that the lean broker starts for model_promotion_dag. It reuses the training image, the execution role, the training task role and the MLflow administrator password, and it needs the jobs log group."
+  description = "Register the promotion task that the direct launch starts for model_promotion_dag. It reuses the training image, the execution role, the training task role and the MLflow administrator password, and it needs the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -155,7 +155,7 @@ output "promote_secret_flow" {
 }
 
 output "promote_run_task" {
-  description = "What a run-task call for the promotion task needs, or null while promote_enabled is false. The broker supplies the variables. Registration starts nothing."
+  description = "What a run-task call for the promotion task needs, or null while promote_enabled is false. The launch supplies the variables. Registration starts nothing."
   value = var.promote_enabled ? {
     task_definition       = aws_ecs_task_definition.promote[0].family
     assign_public_ip      = "DISABLED"

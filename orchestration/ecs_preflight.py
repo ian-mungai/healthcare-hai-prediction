@@ -1,12 +1,11 @@
-"""The gates of the job broker, as a library for the Airflow launch mode, and the staged-input readers both share.
+"""The gates of the direct ECS launch, as a library for the Airflow launch mode, and the staged-input readers.
 
-``Preflight.prepare`` turns the request of one DAG step into the ``JobSpec`` of the direct ECS launch library (``orchestration/ecs_launch.py``). It ports the
-broker's gates: real mode, the previous job's success (``after``), the training parameters, the staged
-bronze and serving requests, the staged code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the
-code digest, the request hash and the input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
-The readers at the top are the broker's own: ``scripts/orchestration/ecs_broker.py`` imports them from here, so one reading of the staged inputs serves both.
+``Preflight.prepare`` turns the request of one DAG step into the ``JobSpec`` of the direct ECS launch library (``orchestration/ecs_launch.py``). Its gates
+are real mode, the previous job's success (``after``), the training parameters, the staged bronze and serving requests, the staged
+code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the code digest, the request hash and the
+input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
 The host table (``config/orchestration/host_jobs.json``) may give a job its own containers and log container, where its host task definition differs from the
-Fargate one the broker starts (the metadata job).
+Fargate one (the metadata job).
 Host launch capacity binding (owner A, Nov 10 2026): the gates refuse while the usable-memory inputs are not set. After the staged-input reads, the
 preflight describes the latest active revision of the job's host definition once and refuses it unless its capacity label is bound to the current
 inputs (``checked_revision``). The spec names that exact revision and the launch library runs it, so a revision registered later never runs in its place.
@@ -33,10 +32,10 @@ from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, La
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import FEATURE_DAGS, LAUNCH_LANES, MODELS, model_features_run_id, parameters_for, training_run_id
 
-JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
-JOBS_SCHEMA = Path("config/orchestration/ecs_broker_jobs.schema.json")
+JOBS_FILE = Path("config/orchestration/job_catalog.json")
+JOBS_SCHEMA = Path("config/orchestration/job_catalog.schema.json")
 HOST_FILE = Path("config/orchestration/host_jobs.json")
-# Jobs only the direct launch runs, in the same schema: the job broker also reads JOBS_FILE, and the Run 3 publisher has no broker family.
+# Jobs only the direct launch runs, in the same schema: the Run 3 publisher is one of them.
 DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 BRONZE_REQUEST_BYTES = 4096
@@ -375,7 +374,7 @@ class S3CodeRuns:
     """The binding of a run to its code run as a write-once object ``lakehouse/run_stage/<run>/inputs/code_run.json``.
 
     A missing object is the run's own code. Any other failure to read it is never read as missing. The write sends ``IfNoneMatch="*"``, so the first binding
-    stands: this is the broker's ``chains/<run>.json`` file without a state folder.
+    stands.
     """
 
     def __init__(self, client: Any, bucket: str) -> None:
@@ -433,7 +432,7 @@ class PreflightSettings:
 
 
 def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
-    """The closed job table (the broker's table and the direct launch's own jobs, each checked against the schema) and the host table: what each job
+    """The closed job table (the shared jobs and the direct launch's own jobs, each checked against the schema) and the host table: what each job
     needs of the host and the family of each DAG."""
     validator = Draft202012Validator(json.loads((root / JOBS_SCHEMA).read_text()))
     document: dict[str, Any] = json.loads((root / JOBS_FILE).read_text())
@@ -470,7 +469,7 @@ def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
 
 
 class Preflight:
-    """The gates the job broker applied before it started a job, and the launch request they produce.
+    """The gates applied before a job starts, and the launch request they produce.
 
     ``prepare`` takes the request of one DAG step and returns the job to launch, or None for a control step. A request that fails a gate raises
     ``LaunchRefused`` before any record is written or any ECS call is made. A staged input that is not there yet, or a service that throttles, raises

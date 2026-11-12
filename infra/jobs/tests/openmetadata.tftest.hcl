@@ -121,7 +121,7 @@ run "enabled_plan_registers_one_bounded_private_task" {
     error_message = "Only the bootstrap step reads the admin password. The lakehouse step reads the Glue mirror with the task role and needs no Polaris client pair."
   }
 
-  # OpenMetadata 2.0.7 has no Iceberg connector: the step keeps its broker-table name ingest_polaris but runs the Glue source (owner decision of Nov 7 2026).
+  # OpenMetadata 2.0.7 has no Iceberg connector: the step keeps its job-catalog name ingest_polaris but runs the Glue source (owner decision of Nov 7 2026).
   # The server and migration commands are those of the 2.0.7 server image (ENTRYPOINT /bin/bash, CMD /openmetadata-start.sh, WORKDIR /opt/openmetadata).
   assert {
     condition = (
@@ -178,15 +178,15 @@ run "enabled_plan_registers_one_bounded_private_task" {
       output.openmetadata_run_task.capacity_providers == ["FARGATE"] &&
       output.openmetadata_run_task.ui_port == 8585 &&
       output.openmetadata_run_task.lifetime_seconds == 7200 &&
-      output.openmetadata_run_task.broker_deadline_seconds == 8100 &&
+      output.openmetadata_run_task.deadline_seconds == 8100 &&
       output.openmetadata_run_task.hourly_usd_range.x86 == 0.27 &&
       output.openmetadata_run_task.hourly_usd_range.arm == 0.21
     )
-    error_message = "The run settings give the private UI port, the lifetime, the broker deadline of lifetime plus 900 seconds and the hourly cost."
+    error_message = "The run settings give the private UI port, the lifetime, the job deadline of lifetime plus 900 seconds and the hourly cost."
   }
 }
 
-run "containers_follow_the_broker_table" {
+run "containers_follow_the_job_catalog" {
   command = plan
 
   variables {
@@ -206,14 +206,14 @@ run "containers_follow_the_broker_table" {
   assert {
     condition = (
       toset([for container in jsondecode(output.openmetadata_container_definitions) : container.name if length([for variable in container.environment : variable.name if variable.value == ""]) > 0]) ==
-      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers)) &&
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers)) &&
       alltrue([for container in jsondecode(output.openmetadata_container_definitions) : (
         length([for variable in container.environment : variable.name if variable.value == ""]) == 0 ||
-        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers[container.name])
+        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.log_container)
+      contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.log_container)
     )
-    error_message = "Every container with an empty variable is named in the broker table with exactly those variables, so no container of the catalog task starts with an empty run ID."
+    error_message = "Every container with an empty variable is named in the job catalog with exactly those variables, so no container of the catalog task starts with an empty run ID."
   }
 }
 
@@ -237,10 +237,10 @@ run "marquez_step_needs_its_own_table_entry" {
 
   assert {
     condition = (
-      !contains(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers), "ingest_marquez") &&
+      !contains(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers), "ingest_marquez") &&
       [for variable in one([for container in jsondecode(output.openmetadata_container_definitions) : container if container.name == "ingest_marquez"]).environment : variable.name if variable.value == ""] == ["RUN_ID"]
     )
-    error_message = "With a Marquez address the Marquez step needs RUN_ID, and the broker table does not name it yet. Add it to the metadata job in the same change that turns the address on."
+    error_message = "With a Marquez address the Marquez step needs RUN_ID, and the job catalog does not name it yet. Add it to the metadata job in the same change that turns the address on."
   }
 }
 
@@ -275,8 +275,8 @@ run "arm_and_marquez_are_opt_in" {
   }
 
   assert {
-    condition     = output.openmetadata_run_task.broker_deadline_seconds == 4500
-    error_message = "The broker deadline follows the lifetime."
+    condition     = output.openmetadata_run_task.deadline_seconds == 4500
+    error_message = "The job deadline follows the lifetime."
   }
 }
 
@@ -340,7 +340,7 @@ run "refuses_enabling_without_images" {
   expect_failures = [var.openmetadata_images, var.openmetadata_roles]
 }
 
-# With openmetadata_server_url set, the catalog task keeps its container names, so the broker table still binds it, but runs only the two ingestion steps against the
+# With openmetadata_server_url set, the catalog task keeps its container names, so the job catalog still binds it, but runs only the two ingestion steps against the
 # persistent catalog on the host: no database, search, migration, server or bootstrap, and no Marquez step. The ingestion bot token comes from Parameter Store.
 run "persistent_server_makes_an_ingestion_only_task" {
   command = plan
@@ -394,9 +394,9 @@ run "persistent_server_makes_an_ingestion_only_task" {
   assert {
     condition = (
       toset([for c in jsondecode(output.openmetadata_container_definitions) : c.name if length([for variable in c.environment : variable.name if variable.value == ""]) > 0]) ==
-      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers))
+      toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.metadata.containers))
     )
-    error_message = "The persistent mode keeps the containers and the empty variables that the broker table names."
+    error_message = "The persistent mode keeps the containers and the empty variables that the job catalog names."
   }
 
   assert {

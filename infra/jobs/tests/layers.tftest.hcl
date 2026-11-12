@@ -75,7 +75,7 @@ run "each_layer_is_one_fargate_task_with_its_own_writer_role" {
   }
 }
 
-run "containers_follow_the_broker_table_in_order" {
+run "containers_follow_the_job_catalog_in_order" {
   command = plan
 
   variables {
@@ -93,12 +93,12 @@ run "containers_follow_the_broker_table_in_order" {
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      toset([for container in jsondecode(output.layer_phase_containers[layer]) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].containers)) &&
+      toset([for container in jsondecode(output.layer_phase_containers[layer]) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs[layer].containers)) &&
       alltrue([for container in jsondecode(output.layer_phase_containers[layer]) : (
-        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].containers[container.name])
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs[layer].containers[container.name])
       )])
     )])
-    error_message = "The container names and the empty variables of every container equal the broker job table, so the broker's overrides fit."
+    error_message = "The container names and the empty variables of every container equal the job catalog, so the launch's overrides fit."
   }
 
   assert {

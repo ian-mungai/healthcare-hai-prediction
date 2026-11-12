@@ -34,7 +34,6 @@ OPTIONAL_PREPARATION_FLAGS = (
     "publisher_keys_enabled",
     "athena_mirror_prepared",
     "monitoring_enabled",
-    "broker_prepared",
     "drift_prepared",
     "job_writer_layers_prepared",
     "job_layer_runs_prepared",
@@ -49,11 +48,11 @@ OPTIONAL_PREPARATION_FLAGS = (
 )
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
 OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix")
-# Lists that may be left out: the job families the broker role and the Airflow launch role may start.
-OPTIONAL_PREPARATION_LISTS = ("broker_job_families", "airflow_launch_families")
-BROKER_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
-# The families the Airflow launch role may start: the host job families and the Run 3 publisher (infra/iam/airflow_launch.tf). The broker has no publisher.
-LAUNCH_FAMILIES = (*BROKER_FAMILIES, "publisher")
+# Lists that may be left out: the job families the Airflow launch role may start.
+OPTIONAL_PREPARATION_LISTS = ("airflow_launch_families",)
+HOST_JOB_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
+# The families the Airflow launch role may start: the host job families and the Run 3 publisher (infra/iam/airflow_launch.tf).
+LAUNCH_FAMILIES = (*HOST_JOB_FAMILIES, "publisher")
 # The exact ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value.
 PUBLISHER_SECRET_NAMES = frozenset({"census_api_key", "bls_api_key", "hud_api_key"})
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS, "publisher_secret_arns"})
@@ -158,9 +157,6 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
         value = document.get(name, "")
         if not isinstance(value, str) or (value and (not pattern.fullmatch(value) or value.startswith("lakehouse/serving"))):
             raise ConfigurationError(f"Set {name} to empty or one object key without a leading or trailing slash in the IAM preparation file.")
-    families = document.get("broker_job_families", [])
-    if not isinstance(families, list) or len(set(map(str, families))) != len(families) or not all(item in BROKER_FAMILIES for item in families):
-        raise ConfigurationError("Set broker_job_families to distinct job families in the IAM preparation file.")
     launch_families = document.get("airflow_launch_families", ["train"])
     if (
         not isinstance(launch_families, list)

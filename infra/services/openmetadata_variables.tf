@@ -18,9 +18,9 @@ variable "openmetadata_task_role_arn" {
   validation {
     condition = !var.openmetadata_persistent_enabled || (
       var.openmetadata_task_role_arn != var.control_plane_task_role_arn && var.openmetadata_task_role_arn != var.polaris_task_role_arn &&
-      var.openmetadata_task_role_arn != var.mlflow_task_role_arn && var.openmetadata_task_role_arn != var.broker_task_role_arn
+      var.openmetadata_task_role_arn != var.mlflow_task_role_arn
     )
-    error_message = "The OpenMetadata bootstrap must have its own task role, so the control plane, Polaris, MLflow and the broker hold no permission to write the bot tokens."
+    error_message = "The OpenMetadata bootstrap must have its own task role, so the control plane, Polaris and MLflow hold no permission to write the bot tokens."
   }
 }
 

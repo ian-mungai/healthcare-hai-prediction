@@ -81,7 +81,12 @@ from orchestration.ecs_preflight import InputNotReady
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import training_run_id
 from scripts.orchestration.ecs_adapter_cases import require
-from scripts.orchestration.ecs_broker_cases import (
+from scripts.orchestration.ecs_chain_cases import Dag, Operator
+from scripts.orchestration.ecs_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
+from scripts.orchestration.ecs_launch_cases import refuses
+from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
+from scripts.orchestration.ecs_launch_operator_cases import StandInLaunchOperator
+from scripts.orchestration.ecs_run_fixtures import (
     BRONZE_RUN,
     DIGEST,
     DRIFT_RUN,
@@ -91,19 +96,12 @@ from scripts.orchestration.ecs_broker_cases import (
     SERVE_RUN,
     SERVING_REQUEST,
     SILVER_RUN,
+    TRAIN_PARAMS,
     collections_of_table_map,
     table_pair,
 )
-from scripts.orchestration.ecs_broker_cases import TRAIN_PARAMS as BROKER_TRAIN_PARAMS
-from scripts.orchestration.ecs_broker_fake import CLUSTER, FakeEcs, FakeLogs, FakeS3, client_error
-from scripts.orchestration.ecs_chain_cases import Dag, Operator
-from scripts.orchestration.ecs_launch_cases import refuses
-from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
-from scripts.orchestration.ecs_launch_operator_cases import StandInLaunchOperator
 
 ROOT = Path(__file__).resolve().parents[2]
-# Every DAG step launches on AWS, so the training parameters name the aws MLflow lane (lead decision, Nov 7 2026); the broker cases keep their own.
-TRAIN_PARAMS = {**BROKER_TRAIN_PARAMS, "mlflow": "aws"}
 TRAIN_LAUNCH = {key: TRAIN_PARAMS[key] for key in ("features_run", "population", "hai_types", "trigger", "mlflow")}
 BUCKET = "example-private-bucket"
 PREFIX = launch_record_prefix()
@@ -1900,8 +1898,8 @@ def launch_modules_are_in_the_mount_list() -> None:
     unmounted = sorted(path for path in wanted if f"/opt/hai/{path}" not in text and path not in text)
     require(not unmounted, f"the scripts {unmounted} that the launch modules import are not in the Airflow mount list")
     for path in (
-        "config/orchestration/ecs_broker_jobs.json",
-        "config/orchestration/ecs_broker_jobs.schema.json",
+        "config/orchestration/job_catalog.json",
+        "config/orchestration/job_catalog.schema.json",
         "config/orchestration/host_jobs.json",
         "config/orchestration/direct_jobs.json",
         "config/orchestration/ecs_launch.json",
@@ -2068,14 +2066,14 @@ def metadata_uses_the_host_containers() -> None:
     request = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", None)
     spec = rig.preflight.prepare(request)
     require(spec is not None and spec.log_container == "ingest", f"the metadata log is not read from the host container: {spec}")
-    table = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]["metadata"]
+    table = json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())["jobs"]["metadata"]
     require(
         set(table["containers"]) == {"ingest_polaris", "ingest_dbt"} and table["log_container"] == "ingest_polaris",
         "the job table's metadata containers changed",
     )
 
 
-RUNTIME_MODULES = ("orchestration.client", "scripts.orchestration.broker", "scripts.orchestration.ecs_broker")
+RUNTIME_MODULES = ("orchestration.client", "scripts.orchestration.broker")
 RUNTIME_NAMES = ("BrokerClient", "submit_and_wait", "from_session", "hai_job_launch_mode")
 
 

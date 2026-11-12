@@ -15,7 +15,7 @@ variable "code_fetch_task_role_arn" {
 
   validation {
     condition = var.code_fetch_task_role_arn == null || !contains(
-      [var.control_plane_task_role_arn, var.polaris_task_role_arn, var.mlflow_task_role_arn, var.broker_task_role_arn, var.openmetadata_task_role_arn], var.code_fetch_task_role_arn
+      [var.control_plane_task_role_arn, var.polaris_task_role_arn, var.mlflow_task_role_arn, var.openmetadata_task_role_arn], var.code_fetch_task_role_arn
     )
     error_message = "The code one-shot must have its own task role, so no service holds its read of the code archives and it holds none of theirs."
   }

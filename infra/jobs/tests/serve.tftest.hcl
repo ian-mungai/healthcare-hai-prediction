@@ -87,7 +87,7 @@ run "serve_steps_images_and_users" {
       jsondecode(aws_ecs_task_definition.serve[0].container_definitions)[1].command[0] == "python -I /opt/hai/fetch_code.py" &&
       jsondecode(aws_ecs_task_definition.serve[0].container_definitions)[2].command[0] == "cd /workspace/code && timeout 600 python -m scripts.serving.deploy_job --run \"$RUN_ID\""
     )
-    error_message = "The last step runs the deploy tool under a time limit that is shorter than the broker deadline. The tool reads the checked request from its environment."
+    error_message = "The last step runs the deploy tool under a time limit that is shorter than the job deadline. The tool reads the checked request from its environment."
   }
 }
 
@@ -116,7 +116,7 @@ run "serve_variables_secret_and_reader_environment" {
       [for item in jsondecode(aws_ecs_task_definition.serve[0].container_definitions)[1].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] &&
       !anytrue([for item in jsondecode(aws_ecs_task_definition.serve[0].container_definitions) : anytrue([for entry in item.environment : strcontains(entry.name, "POLARIS")])])
     )
-    error_message = "The broker fills exactly the variables the table names for each container, and the task needs no catalog address."
+    error_message = "The launch fills exactly the variables the table names for each container, and the task needs no catalog address."
   }
 
   assert {
@@ -201,7 +201,7 @@ run "serve_invalid_shape_is_refused" {
   expect_failures = [var.serve_resources]
 }
 
-run "serve_containers_follow_the_broker_table" {
+run "serve_containers_follow_the_job_catalog" {
   command = plan
 
   variables {
@@ -211,12 +211,12 @@ run "serve_containers_follow_the_broker_table" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.serve_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.serve.containers)) &&
+      toset([for container in jsondecode(output.serve_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.serve.containers)) &&
       alltrue([for container in jsondecode(output.serve_container_definitions) : (
-        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.serve.containers[container.name])
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.serve.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.serve_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.serve.log_container)
+      contains([for container in jsondecode(output.serve_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.serve.log_container)
     )
-    error_message = "The container names, their empty variables and the log container equal the broker job table, so every override the broker sends names a container of the task and fills what it needs."
+    error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
 }

@@ -177,7 +177,7 @@ class Case:
         self.key: tuple[str, str, bool] | None = None
 
     def stage(self, tables: str, target: str, dry: bool) -> tuple[str, str]:
-        """What the owner stages and the broker checks: the inventory of the manifest versions and the request that names its digest."""
+        """What the owner stages and the launch preflight checks: the inventory of the manifest versions and the request that names its digest."""
         self.key = (tables, target, dry)
         names = [name for name in tables.split(",") if name]
         config = bronze.load_table_map(self.root / "src/config/lakehouse/bronze_tables.json")
@@ -481,15 +481,15 @@ def case_an_inventory_object_missing_from_the_bucket_is_refused(case: Case) -> N
     require(writes() == [] and LOADS == [], "nothing is written")
 
 
-def case_a_request_replaced_after_the_broker_checked_it_is_refused(case: Case) -> None:
+def case_a_request_replaced_after_the_preflight_checked_it_is_refused(case: Case) -> None:
     case.shas = case.stage("alpha_data,beta_data", "qualify", True)
     live = {"tables": ["alpha_data", "beta_data"], "target": "real", "dry_run": False, "inventory_sha256": case.shas[1]}
     STAGED["bronze_request.json"] = json.dumps(live).encode()
-    require(case.phase("pin", target="qualify", extra=["--dry-run"], staged=True) != 0 and "broker checked" in case.err, case.err)
+    require(case.phase("pin", target="qualify", extra=["--dry-run"], staged=True) != 0 and "preflight checked" in case.err, case.err)
     case.err = ""
     case.shas = case.stage("alpha_data,beta_data", "qualify", True)
     STAGED["bronze_request.json"] = json.dumps(live).encode()
-    require(case.phase("pin", target="real", staged=True) != 0 and "broker checked" in case.err, case.err)
+    require(case.phase("pin", target="real", staged=True) != 0 and "preflight checked" in case.err, case.err)
     require(writes() == [] and LOADS == [], "nothing runs")
 
 
@@ -659,7 +659,7 @@ CASES: dict[str, Callable[[Case], None]] = {
     "a dry run replays the pinned inventory": case_a_dry_run_replays_the_pinned_inventory,
     "a tampered inventory is refused at the pin": case_a_tampered_inventory_is_refused,
     "an inventory object missing from the bucket is refused": case_an_inventory_object_missing_from_the_bucket_is_refused,
-    "a request replaced after the broker checked it is refused": case_a_request_replaced_after_the_broker_checked_it_is_refused,
+    "a request replaced after the preflight checked it is refused": case_a_request_replaced_after_the_preflight_checked_it_is_refused,
     "a dry request cannot run live": case_a_dry_request_cannot_run_live,
     "qualification metadata is scoped to the selected tables": case_qualification_metadata_is_scoped_to_the_selected_tables,
     "the owner stages an inventory that the pin accepts": case_the_owner_stages_an_inventory_the_pin_accepts,

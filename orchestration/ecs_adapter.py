@@ -1,4 +1,4 @@
-"""Start, poll, stop and report one ECS task per job for the lean broker target.
+"""Start, poll, stop and report one ECS task per job for the direct ECS launch.
 
 The adapter holds no state. A job key names one task: the key gives both the ``clientToken`` and the ``startedBy`` tag of ``RunTask``, so a repeated
 start returns the task that already runs (``list_tasks`` finds it by tag) or the one the first call created. Only the named job families start. Every call
@@ -151,7 +151,7 @@ def classify(error: Exception) -> Exception:
 
 
 class EcsAdapter:
-    """One ECS cluster's task calls for the broker and the launcher. ``sender`` is the client RunTask goes through, ``ecs`` when not given. It must make one
+    """One ECS cluster's task calls for the launcher. ``sender`` is the client RunTask goes through, ``ecs`` when not given. It must make one
     attempt per call, else the adapter refuses to be built."""
 
     def __init__(self, ecs: EcsClient, logs: LogsClient, settings: EcsSettings, sender: EcsClient | None = None) -> None:

@@ -760,7 +760,13 @@ def mutants() -> dict[str, Mutant]:
         Mutant(
             "api_published_on_all_interfaces",
             "the API server publishes its port on every interface",
-            (Edit(LAUNCHER, "ports.append((host_ip, int(host_port), int(container_port)))", 'ports.append(("0.0.0.0", int(host_port), int(container_port)))'),),
+            (
+                Edit(
+                    LAUNCHER,
+                    "ports.append((bind_address, int(host_port), int(container_port)))",
+                    'ports.append(("0.0.0.0", int(host_port), int(container_port)))',
+                ),
+            ),
         ),
         Mutant(
             "capabilities_kept",

@@ -1,5 +1,5 @@
 variable "bronze_job_enabled" {
-  description = "Register the permanent bronze task definition that the lean job broker starts. It needs the spark image digest, the execution role, the bronze writer role and its pair, and the jobs log group. The tables, the target and the dry run flag arrive at dispatch."
+  description = "Register the permanent bronze task definition that the direct launch starts. It needs the spark image digest, the execution role, the bronze writer role and its pair, and the jobs log group. The tables, the target and the dry run flag arrive at dispatch."
   type        = bool
   default     = false
   nullable    = false
@@ -40,7 +40,7 @@ variable "bronze_resources" {
 locals {
   bronze_job_enabled = var.bronze_job_enabled ? toset(["bronze"]) : toset([])
   bronze_role        = "write_bronze_task"
-  # The container names and their empty variables equal config/orchestration/ecs_broker_jobs.json; a Terraform test compares them with the file.
+  # The container names and their empty variables equal config/orchestration/job_catalog.json; a Terraform test compares them with the file.
   bronze_run_variables = {
     fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
     pin   = ["RUN_ID", "POLARIS_URI", "CODE_SHA256", "BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256", "HAI_DEADLINE_UTC"]
@@ -64,7 +64,7 @@ locals {
       readonlyRootFilesystem = true
       user                   = step.name == "init" ? "0:0" : "10001:10001"
       workingDirectory       = "/workspace"
-      # Every phase starts through the in-image deadline runner, which stops the process group at the one absolute deadline the broker sets in HAI_DEADLINE_UTC.
+      # Every phase starts through the in-image deadline runner, which stops the process group at the one absolute deadline the launch sets in HAI_DEADLINE_UTC.
       entryPoint      = step.name == "init" ? ["sh", "-c"] : ["/opt/hai/deadline_run", "sh", "-c"]
       command         = [step.script]
       stopTimeout     = 90
@@ -172,7 +172,7 @@ output "bronze_secret_flow" {
 }
 
 output "bronze_run_task" {
-  description = "What the broker's run-task call needs for the bronze task. Registration starts nothing. The tables, the target and the dry run flag come from the staged request; the dry run variable is the one override that makes a hand-started run a dry run."
+  description = "What the run-task call needs for the bronze task. Registration starts nothing. The tables, the target and the dry run flag come from the staged request; the dry run variable is the one override that makes a hand-started run a dry run."
   value = merge([
     for task in aws_ecs_task_definition.bronze : {
       task_definition       = task.family

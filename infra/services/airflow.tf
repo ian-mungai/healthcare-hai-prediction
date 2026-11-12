@@ -10,8 +10,8 @@ locals {
     code_ecs_launch_provider = "orchestration/ecs_launch_provider.py"
     code_serving_contract    = "orchestration/serving_contract.py"
     code_training_approvals  = "orchestration/training_approvals.py"
-    code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
-    code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"
+    code_jobs_table          = "config/orchestration/job_catalog.json"
+    code_jobs_schema         = "config/orchestration/job_catalog.schema.json"
     code_host_jobs           = "config/orchestration/host_jobs.json"
     code_direct_jobs         = "config/orchestration/direct_jobs.json"
     code_launch_config       = "config/orchestration/ecs_launch.json"
@@ -35,7 +35,7 @@ locals {
   # What orchestration/airflow_steps.py reads to launch a job (its SETTINGS), all from existing variables. None is a secret: the step signs with the task
   # role and reads the record prefix from config/orchestration/ecs_launch.json. A value with no source yet is empty, and the step refuses by the setting's
   # name. The bucket is airflow_launch_bucket_name and the host address host_private_ip, both required once the
-  # scheduler runs as the launch role; broker_jobs feeds nothing here.
+  # scheduler runs as the launch role.
   airflow_launch_environment = {
     AWS_REGION         = var.aws_region
     HAI_LAUNCH_POOL    = local.airflow_launch_pool
@@ -191,7 +191,7 @@ locals {
       name              = "airflow_scheduler"
       memory            = local.memory_profile.airflow_scheduler.limit
       memoryReservation = local.memory_profile.airflow_scheduler.reservation
-      command           = ["bash", "-ec", "${var.broker_enabled ? local.broker_session_script : ""}${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
+      command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]
       mountPoints       = concat(local.airflow_code_mounts, [local.airflow_lineage_provider_mount])
       portMappings      = [{ containerPort = 8974, hostPort = 8974, protocol = "tcp" }]
       healthCheck = {
@@ -203,16 +203,6 @@ locals {
       }
       restartPolicy    = local.restart_policy
       logConfiguration = local.log_configuration["airflow_scheduler"]
-      },
-      # With the broker on, the scheduler also holds the broker token and a memory-backed folder for the client files the unchanged DAG client reads.
-      {
-        for key, value in {
-          secrets = concat(local.airflow_secrets, [{ name = "BROKER_TOKEN", valueFrom = local.secret_arn["broker_token"] }])
-          linuxParameters = {
-            capabilities = { add = [], drop = ["ALL"] }
-            tmpfs        = [{ containerPath = local.broker_session_path, size = 1, mountOptions = ["nosuid"] }]
-          }
-        } : key => value if var.broker_enabled
     }),
   ]
 

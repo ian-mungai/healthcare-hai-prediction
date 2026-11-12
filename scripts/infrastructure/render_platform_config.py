@@ -116,7 +116,7 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
 
 
 def services_preparation(path: Path | None, sha256: str | None) -> dict[str, Any]:
-    """The reviewed services inputs (the switches and addresses of the MLflow, broker, model API, page and monitoring services)."""
+    """The reviewed services inputs (the switches and addresses of the MLflow, model API, page and monitoring services)."""
     return stack_preparation(path, sha256, "services")
 
 

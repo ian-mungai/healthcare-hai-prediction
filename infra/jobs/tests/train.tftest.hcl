@@ -335,7 +335,7 @@ run "missing_log_group_is_refused" {
   expect_failures = [var.train_enabled]
 }
 
-run "train_containers_follow_the_broker_table" {
+run "train_containers_follow_the_job_catalog" {
   command = plan
 
   variables {
@@ -344,13 +344,13 @@ run "train_containers_follow_the_broker_table" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.train_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.containers)) &&
+      toset([for container in jsondecode(output.train_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.train.containers)) &&
       alltrue([for container in jsondecode(output.train_container_definitions) : (
-        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.containers[container.name])
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.train.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.train_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.log_container)
+      contains([for container in jsondecode(output.train_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.train.log_container)
     )
-    error_message = "The container names, their empty variables and the log container equal the broker job table, so every override the broker sends names a container of the task and fills what it needs."
+    error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
 }
 

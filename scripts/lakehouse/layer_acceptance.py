@@ -54,7 +54,7 @@ from scripts.lakehouse import pins, version_listing
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
-JOBS_FILE = ROOT / "config/orchestration/ecs_broker_jobs.json"
+JOBS_FILE = ROOT / "config/orchestration/job_catalog.json"
 LAYERS = ("silver", "gold", "features")
 CONTRACT = {
     "silver": "data_contracts/lakehouse/silver_publish.json",
@@ -157,7 +157,7 @@ def count(value: Any) -> bool:
 
 
 def expected_containers(layer: str) -> list[str]:
-    """The init container and every container of the layer's broker table: each must exit 0."""
+    """The init container and every container of the layer's job catalog entry: each must exit 0."""
     return ["init", *read_json(JOBS_FILE)["jobs"][layer]["containers"]]
 
 

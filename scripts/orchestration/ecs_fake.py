@@ -1,4 +1,4 @@
-"""Stand-ins for the ECS, CloudWatch Logs and S3 client calls of the lean broker target, for offline end-to-end cases.
+"""Stand-ins for the ECS, CloudWatch Logs and S3 client calls of the direct ECS launch, for offline end-to-end cases.
 
 ``FakeEcs`` has the call surface of the boto3 ECS client that ``orchestration.ecs_adapter`` uses: ``run_task``, ``describe_tasks``, ``stop_task`` and
 ``list_tasks``. It enforces the request rules the service documents: one task per call, a client token of at most 64 printable characters (a repeat of

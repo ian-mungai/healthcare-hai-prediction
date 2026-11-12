@@ -42,12 +42,10 @@
     "task_execution": {
       "name": "${PROJECT_NAME}_task_execution_${ENVIRONMENT}",
       "terraform": [
-        "roles.tf",
-        "broker.tf"
+        "roles.tf"
       ],
       "policies": [
-        "owner_policies/task_execution.json",
-        "owner_policies/broker_parameter.json"
+        "owner_policies/task_execution.json"
       ]
     },
     "job_read": {
@@ -144,15 +142,6 @@
           "resource": "job_writer_features_activation",
           "flag": "job_features_image_prepared"
         }
-      ]
-    },
-    "broker": {
-      "name": "${PROJECT_NAME}_broker_task_${ENVIRONMENT}",
-      "terraform": [
-        "broker.tf"
-      ],
-      "policies": [
-        "owner_policies/broker_jobs.json"
       ]
     },
     "airflow_launch": {
@@ -406,11 +395,6 @@
     },
     {
       "role": "task_execution",
-      "action": "ssm:GetParameters",
-      "resource": "arn:aws:ssm:${AWS_REGION}:${AWS_ACCOUNT_ID}:parameter${BROKER_TOKEN_NAME}"
-    },
-    {
-      "role": "task_execution",
       "action": "ecr:BatchGetImage",
       "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}"
     },
@@ -522,62 +506,6 @@
       "role": "write_features",
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
-    },
-    {
-      "role": "broker",
-      "action": "ecs:RunTask",
-      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train:1",
-      "context": {
-        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}",
-        "aws:RequestTag/Project": "${PROJECT_NAME}",
-        "aws:RequestTag/HaiJob": "train",
-        "aws:TagKeys": [
-          "Project",
-          "HaiJob"
-        ]
-      }
-    },
-    {
-      "role": "broker",
-      "action": "ecs:StopTask",
-      "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/example",
-      "context": {
-        "aws:ResourceTag/HaiJob": "train"
-      }
-    },
-    {
-      "role": "broker",
-      "action": "ecs:ListTasks",
-      "resource": "*",
-      "context": {
-        "ecs:cluster": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
-      }
-    },
-    {
-      "role": "broker",
-      "action": "iam:PassRole",
-      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_train_task_${ENVIRONMENT}",
-      "context": {
-        "iam:PassedToService": "ecs-tasks.amazonaws.com"
-      }
-    },
-    {
-      "role": "broker",
-      "action": "iam:PassRole",
-      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_execution_${ENVIRONMENT}",
-      "context": {
-        "iam:PassedToService": "ecs-tasks.amazonaws.com"
-      }
-    },
-    {
-      "role": "broker",
-      "action": "s3:GetObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.sha256"
-    },
-    {
-      "role": "broker",
-      "action": "logs:GetLogEvents",
-      "resource": "arn:aws:logs:${AWS_REGION}:${AWS_ACCOUNT_ID}:log-group:${PROJECT_NAME}_jobs_${ENVIRONMENT}:log-stream:example"
     },
     {
       "role": "project_user",

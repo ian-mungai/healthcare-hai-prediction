@@ -1,5 +1,5 @@
 variable "openmetadata_enabled" {
-  description = "Register the on-demand OpenMetadata catalog task that the broker starts for metadata_ingest_dag. Off by default. It needs the four catalog image digests, the execution and catalog task roles and the jobs log group."
+  description = "Register the on-demand OpenMetadata catalog task that the direct launch starts for metadata_ingest_dag. Off by default. It needs the four catalog image digests, the execution and catalog task roles and the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -225,8 +225,8 @@ locals {
   ]
   om_init_step = { name = "init", image = local.om_persistent ? "ingestion" : "database", user = "0:0", essential = false, writable = false, after = [], environment = [{ name = "OM_LIFETIME_SECONDS", value = tostring(var.openmetadata_lifetime_seconds) }], secrets = [], entry = ["sh", "-c", local.om_init_script], workdir = "/workspace" }
 
-  # The persistent mode keeps the broker table's containers (ingest_polaris with RUN_ID and POLARIS_URI, ingest_dbt with RUN_ID) and runs them against the host catalog.
-  # OpenMetadata 2.0.7 has no Iceberg connector, so ingest_polaris keeps its broker-table name and variables but runs the Glue source over the read-only Glue
+  # The persistent mode keeps the job catalog's containers (ingest_polaris with RUN_ID and POLARIS_URI, ingest_dbt with RUN_ID) and runs them against the host catalog.
+  # OpenMetadata 2.0.7 has no Iceberg connector, so ingest_polaris keeps its job-catalog name and variables but runs the Glue source over the read-only Glue
   # mirror of the gold and features tables with the task role (owner decision of Nov 7 2026). It needs no Polaris client pair.
   om_steps_persistent = [
     local.om_init_step,
@@ -407,15 +407,15 @@ output "openmetadata_secret_flow" {
 output "openmetadata_run_task" {
   description = "What a run-task call for the catalog task needs, or null while openmetadata_enabled is false. Registration starts nothing."
   value = var.openmetadata_enabled ? {
-    task_definition         = aws_ecs_task_definition.openmetadata[0].family
-    assign_public_ip        = "DISABLED"
-    capacity_providers      = ["FARGATE"]
-    propagate_tags          = "TASK_DEFINITION"
-    network_source          = "lakehouse group of the job_network output of the IAM stack"
-    ui_port                 = 8585
-    lifetime_seconds        = var.openmetadata_lifetime_seconds
-    broker_deadline_seconds = var.openmetadata_lifetime_seconds + 900
-    hourly_usd_range        = local.om_hourly
-    container_environment   = { ingest_polaris = ["RUN_ID", "POLARIS_URI"], ingest_dbt = ["RUN_ID"] }
+    task_definition       = aws_ecs_task_definition.openmetadata[0].family
+    assign_public_ip      = "DISABLED"
+    capacity_providers    = ["FARGATE"]
+    propagate_tags        = "TASK_DEFINITION"
+    network_source        = "lakehouse group of the job_network output of the IAM stack"
+    ui_port               = 8585
+    lifetime_seconds      = var.openmetadata_lifetime_seconds
+    deadline_seconds      = var.openmetadata_lifetime_seconds + 900
+    hourly_usd_range      = local.om_hourly
+    container_environment = { ingest_polaris = ["RUN_ID", "POLARIS_URI"], ingest_dbt = ["RUN_ID"] }
   } : null
 }

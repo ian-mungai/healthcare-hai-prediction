@@ -1,11 +1,11 @@
-"""Write the container overrides for a hand-started job task from the broker job table, so a runbook never carries its own list of variables.
+"""Write the container overrides for a hand-started job task from the job catalog, so a runbook never carries its own list of variables.
 
     .venv/bin/python -m scripts.orchestration.job_overrides --job silver --run <RUN_ID> --code-run <RUN_ID> \\
         --code-sha256 <SHA256> --polaris-uri <URI> [--dry-run]
 
-``config/orchestration/ecs_broker_jobs.json`` names the containers of each job and the empty variables that each one needs. This tool fills every one of them
-from an argument and refuses by name when a needed value is missing, so a task never starts with a variable empty. The broker uses the same table. Terraform
-tests compare the table with the registered task definitions, so the output also equals what the task definition leaves empty.
+``config/orchestration/job_catalog.json`` names the containers of each job and the empty variables that each one needs. This tool fills every one of them
+from an argument and refuses by name when a needed value is missing, so a task never starts with a variable empty. The preflight reads the same catalog.
+Terraform tests compare the table with the registered task definitions, so the output also equals what the task definition leaves empty.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ from typing import Any
 from scripts.features import feature_sets
 
 ROOT = Path(__file__).resolve().parents[2]
-TABLE = ROOT / "config/orchestration/ecs_broker_jobs.json"
+TABLE = ROOT / "config/orchestration/job_catalog.json"
 DRY_RUN_VARIABLE = "LAYER_DRY_RUN"
 LAYERS = ("silver", "gold", "features")
 
@@ -32,7 +32,7 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
     """The ``containerOverrides`` document for one job; ``values`` maps variable names to values."""
     jobs = json.loads(table.read_text())["jobs"]
     if job not in jobs:
-        raise OverrideError(f"{job} is not a job of the broker table: {sorted(jobs)}")
+        raise OverrideError(f"{job} is not a job of the job catalog: {sorted(jobs)}")
     if dry_run and job not in LAYERS:
         raise OverrideError("only the silver, gold and features jobs have a dry run")
     values = {**values, feature_sets.VARIABLE: values.get(feature_sets.VARIABLE) or feature_sets.SINGLE_PATH}  # no set given is the single path

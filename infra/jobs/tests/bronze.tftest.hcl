@@ -56,7 +56,7 @@ run "the_bronze_job_is_one_fargate_task_with_the_bronze_writer_role" {
   }
 }
 
-run "containers_follow_the_broker_table_in_order" {
+run "containers_follow_the_job_catalog_in_order" {
   command = plan
 
   variables {
@@ -66,16 +66,16 @@ run "containers_follow_the_broker_table_in_order" {
   assert {
     condition = (
       [for container in jsondecode(output.bronze_container_definitions) : container.name] == ["init", "fetch", "pin", "load", "check"] &&
-      toset([for container in jsondecode(output.bronze_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers))
+      toset([for container in jsondecode(output.bronze_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers))
     )
-    error_message = "The containers run in phase order after the volume ownership step and are the ones the broker table names."
+    error_message = "The containers run in phase order after the volume ownership step and are the ones the job catalog names."
   }
 
   assert {
     condition = alltrue([for container in jsondecode(output.bronze_container_definitions) : (
-      container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers[container.name])
+      container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers[container.name])
     )])
-    error_message = "The empty variables of every container equal the broker table, so no table list, target or dry run flag is fixed in the definition."
+    error_message = "The empty variables of every container equal the job catalog, so no table list, target or dry run flag is fixed in the definition."
   }
 
   assert {
@@ -132,7 +132,7 @@ run "every_phase_runs_under_the_deadline_runner" {
     condition = alltrue([for container in slice(jsondecode(output.bronze_container_definitions), 1, 5) :
       container.entryPoint == ["/opt/hai/deadline_run", "sh", "-c"] && contains([for variable in container.environment : variable.name if variable.value == ""], "HAI_DEADLINE_UTC")
     ])
-    error_message = "Fetch, pin, load and check start through the in-image deadline runner and take one absolute deadline from the broker, so no phase outlives the task deadline."
+    error_message = "Fetch, pin, load and check start through the in-image deadline runner and take one absolute deadline from the launch, so no phase outlives the task deadline."
   }
 
   assert {
@@ -216,9 +216,9 @@ run "the_run_task_output_names_the_dispatch_variables" {
       output.bronze_run_task.task_definition == "example_project_dev_job_bronze" && output.bronze_run_task.task_role_key == "write_bronze_task" &&
       output.bronze_run_task.assign_public_ip == "DISABLED" && output.bronze_run_task.propagate_tags == "TASK_DEFINITION" &&
       output.bronze_run_task.dry_run_variable == "BRONZE_DRY_RUN" && output.bronze_run_task.dry_run_value == "1" &&
-      output.bronze_run_task.container_environment.load == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.bronze.containers.load
+      output.bronze_run_task.container_environment.load == jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.bronze.containers.load
     )
-    error_message = "The run task output lists what the broker passes to each container and the one override that makes a dry run."
+    error_message = "The run task output lists what the launch passes to each container and the one override that makes a dry run."
   }
 }
 

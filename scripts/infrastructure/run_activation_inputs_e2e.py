@@ -58,7 +58,6 @@ OUTPUTS = {
 IMAGE = f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_%s_dev@sha256:" + "a" * 64
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/example_project_%s_dev"
 RESOURCES = {"cpu": 1024, "memory": 4096, "ephemeral_storage_gib": 21}
-FAMILIES = ["serve", "train"]
 # The launch role may also start the Run 3 publisher host task (infra/iam/airflow_launch.tf lists publisher among the families).
 LAUNCH_FAMILIES = ["publisher", "serve", "train"]
 # The platform defaults of infra/platform/variables.tf, which a case below compares with the file, and the additions the owner steps make to them.
@@ -115,7 +114,6 @@ ROWS: list[Row] = [
         "iam",
         "airflow_launch_prepared",
         "athena_mirror_prepared",
-        "broker_prepared",
         "drift_prepared",
         "job_endpoints_enabled",
         "job_features_image_prepared",
@@ -143,7 +141,6 @@ ROWS: list[Row] = [
     Row("iam", "athena_owner_user", "example_owner", 5),
     Row("iam", "model_api_registry_key", "lakehouse/feast/registry.pb", "/rooted/registry.pb"),
     Row("iam", "model_api_manifest_prefix", "serving/deployments", "serving/deployments/"),
-    Row("iam", "broker_job_families", FAMILIES, "serve"),
     Row(
         "iam",
         "airflow_launch_families",
@@ -197,7 +194,6 @@ ROWS: list[Row] = [
         "streamlit_enabled",
         "marquez_enabled",
         "mlflow_enabled",
-        "broker_enabled",
         "monitoring_enabled",
         "openmetadata_persistent_enabled",
     ),
@@ -207,7 +203,6 @@ ROWS: list[Row] = [
     Row("services", "model_api_task_role_arn", ROLE % "model_api_task", "arn:aws:iam::1:role/x"),
     Row("services", "streamlit_task_role_arn", ROLE % "streamlit_task", "arn:aws:iam::1:role/x"),
     Row("services", "serving_execution_role_arn", ROLE % "serving_execution", "arn:aws:iam::1:role/x"),
-    Row("services", "broker_task_role_arn", ROLE % "broker_task", "arn:aws:iam::1:role/x"),
     Row("services", "airflow_launch_task_role_arn", ROLE % "airflow_launch_task", "arn:aws:iam::1:role/x"),
     Row("services", "airflow_launch_bucket_name", "example-project-data-dev", "s3://example-project-data-dev"),
     Row("services", "model_api_hai_types", "HAI_1,HAI_2", "HAI_9"),
@@ -225,19 +220,6 @@ ROWS: list[Row] = [
         "monitoring_memory_mib",
         {name: {"limit": 512, "reservation": 256} for name in ("prometheus", "grafana", "statsd_exporter")},
         [],
-    ),
-    Row(
-        "services",
-        "broker_jobs",
-        {
-            "subnet_id": "subnet-0example1",
-            "security_group_ids": {"lakehouse": "sg-0example1", "training": "sg-0example2"},
-            "log_group_name": "example_project_jobs_dev",
-            "bucket_name": "example-project-data-dev",
-            "host_ip": "10.0.1.20",
-            "families": FAMILIES,
-        },
-        {"families": "serve"},
     ),
     *flags(
         "jobs",

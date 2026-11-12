@@ -316,7 +316,7 @@ jobs:
             timeout: 10  # wall time 5.5 min, estimate: 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, and about 1.5 min of setup
           - part: core_orchestration_engine
             title: Core Orchestration Engine Tests
-            timeout: 30  # wall time 18 min, estimate: broker 502 s, stack 159 s, lean broker 58 s and about 120 s for the supervisor and transform broker
+            timeout: 30  # wall time 18 min, estimate: broker 502 s, stack 159 s, job catalog 58 s and about 120 s for the supervisor and transform broker
           - part: core_orchestration_offline
             title: Core Orchestration Offline Checks
             timeout: 30  # wall time 18 min, estimate: 483 s measured, the SDK runtime cases alone 197 s, and about 350 s for the offline checks that were cut short

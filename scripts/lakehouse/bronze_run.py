@@ -1,11 +1,11 @@
-"""Phase driver of the bronze ECS job that the job broker starts.
+"""Phase driver of the bronze ECS job that the direct launch starts.
 
     python -m scripts.lakehouse.bronze_run <phase> --run <run ID> [--tables a,b] [--target real|qualify] [--work /workspace] [--dry-run]
 
-Each ECS container of the job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
+Each ECS container of the job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/job_catalog.json``):
 ``pin``, ``load`` and ``check``. The first container of the task (``fetch``) has already downloaded and unpacked ``code.tar.gz``.
 
-Two values change from run to run and arrive at dispatch: the tables (``BRONZE_TABLES``) and the target (``BRONZE_TARGET``). The broker checks them before it
+Two values change from run to run and arrive at dispatch: the tables (``BRONZE_TABLES``) and the target (``BRONZE_TARGET``). The preflight checks them before it
 starts the task. ``pin`` checks them again against the table map of the unpacked code, and ``load`` and ``check`` refuse values that differ from the pin.
 The target ``real`` writes the namespaces ``bronze`` and ``bronze_dictionary``. The target ``qualify`` writes ``bronze_e2e`` and ``bronze_dictionary_e2e``
 and takes the tables of one collection. No other namespace can be named.
@@ -145,11 +145,11 @@ def recorded(job: Job) -> dict[str, Any]:
 
 
 def pin(job: Job, archive: Path, code_sha256: str) -> None:
-    """Bind the code, the request the broker checked and the source inventory of the run."""
+    """Bind the code, the request the launch preflight checked and the source inventory of the run."""
     revision = archive_revision(archive, code_sha256)
     request_raw = read_staged(job.run, job.bucket, REQUEST_FILE)
     if not SHA256.fullmatch(job.request_sha256) or hashlib.sha256(request_raw).hexdigest() != job.request_sha256:
-        raise StepError("the staged request differs from the one the broker checked")
+        raise StepError("the staged request differs from the one the preflight checked")
     request = json.loads(request_raw)
     if not isinstance(request, dict) or set(request) != REQUEST_KEYS or type(request["dry_run"]) is not bool:
         raise StepError("the staged request needs exactly tables, target, dry_run and inventory_sha256")
@@ -296,7 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--out", type=Path, help="inventory: the folder that receives bronze_request.json and bronze_inventory.json")
     parser.add_argument("--code-sha256", default=os.environ.get("CODE_SHA256", ""))
     parser.add_argument("--bucket", default=os.environ.get("DATA_BUCKET_NAME", ""))
-    parser.add_argument("--request-sha256", default=os.environ.get("BRONZE_REQUEST_SHA256", ""), help="digest of the request the broker checked")
+    parser.add_argument("--request-sha256", default=os.environ.get("BRONZE_REQUEST_SHA256", ""), help="digest of the request the preflight checked")
     parser.add_argument("--inventory-sha256", default=os.environ.get("BRONZE_INVENTORY_SHA256", ""), help="digest of the staged source inventory")
     parser.add_argument("--dry-run", action="store_true", help="load: print and save the checked plan and write nothing (also set by BRONZE_DRY_RUN=1)")
     args = parser.parse_args(argv)

@@ -1,16 +1,17 @@
 """Walk a real request from dispatch to publish with nothing but the real variable lists.
 
 The layer suite runs each phase with the arguments it chooses, so a variable that a container list drops can stay hidden. These cases start a silver task
-through the real broker, hand each container of the task exactly the variables the broker sent it, run the fetch command that ``infra/jobs/layers.tf`` gives
-the container and then each driver phase as that file says. A direct run and a chain child are walked. Only boto3 and the work of the image modules are
-stood in for. Before a module that opens a Spark session does its stand-in work, the real task settings check its environment, so a container without the
-catalog endpoint fails.
+through the direct launch library, hand each container of the task exactly the variables the launch sent it, run the fetch command that
+``infra/jobs/layers.tf`` gives the container and then each driver phase as that file says. A direct run and a chain child are walked. Only boto3 and the
+work of the image modules are stood in for. Before a module that opens a Spark session does its stand-in work, the real task settings check its
+environment, so a container without the catalog endpoint fails.
 """
 
 from __future__ import annotations
 
 import contextlib
 import copy
+import importlib
 import io
 import json
 import os
@@ -22,10 +23,12 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from orchestration.ecs_preflight import derived_run_id
 from scripts.lakehouse import layer_run, session
 from scripts.lakehouse import run_layer_run_e2e as layer_e2e
 from scripts.lakehouse.run_layer_run_e2e import require
-from scripts.orchestration import ecs_broker_cases as brokers
+from scripts.orchestration import airflow_mode_cases as launches
+from scripts.orchestration.ecs_run_fixtures import BRONZE_RUN, SILVER_RUN
 from scripts.process import run_command
 
 FETCH_STUB = """
@@ -102,7 +105,7 @@ def run_fetch_container(case: layer_e2e.Case, work: Path, environment: dict[str,
 
 
 def walk_task(case: layer_e2e.Case, environments: dict[str, dict[str, str]], layer: str, code_run: str, label: str) -> None:
-    """Run the containers of one broker-started task in order. Each container gets exactly the variables the broker sent it, plus the bucket that the task
+    """Run the containers of one launched task in order. Each container gets exactly the variables the launch sent it, plus the bucket that the task
     definition sets for all of them. The driver containers run ``layer_run <phase> --layer <layer> --run $RUN_ID`` as ``layers.tf`` says."""
     work = case.root / f"walk_{label}"
     work.mkdir()
@@ -124,48 +127,47 @@ def walk_task(case: layer_e2e.Case, environments: dict[str, dict[str, str]], lay
         require(code == 0, f"container {name} of the {label} task failed with the variables {sorted(variables)}: {err.getvalue().strip()[-400:]}")
 
 
-def task_environments(current: Any, family: str) -> dict[str, dict[str, str]]:
-    """The environment per container of the last task the real broker started for ``family``, in container order."""
-    sent = [arguments for name, arguments in current.ecs.calls if name == "run_task" and arguments["taskDefinition"].endswith(f"_job_{family}")][-1]
-    return {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in sent["overrides"]["containerOverrides"]}
-
-
 def real_variables_reach_every_phase_of_a_direct_and_a_chain_run() -> None:
-    """Dispatch to publish with nothing but the real variable lists: a request goes through the real broker, the variables it sends reach the fetch command
-    of the task definition and each driver phase, and a variable that one list drops fails the run. A direct silver run and a silver chain child."""
+    """Dispatch to publish with nothing but the real variable lists: a request goes through the direct launch library, the variables it sends reach the
+    fetch command of the task definition and each driver phase, and a variable that one list drops fails the run. A direct silver run and a silver chain
+    child."""
     with tempfile.TemporaryDirectory(prefix="layer_walk_") as folder, layer_e2e.patched(Path(folder)) as case:
         walk(case)
 
 
 def walk(case: layer_e2e.Case) -> None:
-    with brokers.rig() as current:
-        direct = brokers.SILVER_RUN
-        current.s3.objects[f"lakehouse/run_stage/{direct}/inputs/code.sha256"] = case.digest.encode() + b"\n"
-        brokers.wait_for(current, current.client.submit(brokers.silver_request(direct)))
-        walk_task(case, task_environments(current, "silver"), "silver", direct, "direct")
+    rig = launches.Rig()
+    direct = SILVER_RUN
+    rig.stage.objects[f"lakehouse/run_stage/{direct}/inputs/code.sha256"] = case.digest.encode() + b"\n"
+    with launches.world(rig, "silver_transform_dag", {"run_id": direct, "mode": "real"}) as current:
+        require(current.step("pin_bronze") == "succeeded", "the direct silver job did not pass")
+    walk_task(case, rig.environment(-1), "silver", direct, "direct")
     require(
         len(layer_e2e.STATE) == 1 and any(key.endswith(f"layer_runs/silver/{direct}/state/pinned.json") for key in layer_e2e.STATE),
         "the direct run did not claim its run ID",
     )
-    with brokers.rig() as current:
-        bronze, child = brokers.BRONZE_RUN, brokers.derived_run_id(brokers.BRONZE_RUN, "silver")
-        current.s3.objects[f"lakehouse/run_stage/{bronze}/inputs/code.sha256"] = case.digest.encode() + b"\n"
-        brokers.wait_for(current, current.client.submit(brokers.request("chain_gate", run=bronze, dag="bronze_chain_dag")))
-        brokers.wait_for(current, current.client.submit(brokers.request("pin_bronze", run=child, dag="silver_transform_dag")))
-        walk_task(case, task_environments(current, "silver"), "silver", bronze, "chain")
+    rig = launches.Rig()
+    bronze, child = BRONZE_RUN, derived_run_id(BRONZE_RUN, "silver")
+    rig.stage.objects[f"lakehouse/run_stage/{bronze}/inputs/code.sha256"] = case.digest.encode() + b"\n"
+    with launches.world(rig, "bronze_chain_dag", {"run_id": bronze, "mode": "real"}) as current:
+        require(current.step("chain_gate") == "succeeded", "the chain gate did not pass")
+    with launches.world(rig, "silver_transform_dag", {"run_id": child, "mode": "real"}) as current:
+        require(current.step("pin_bronze") == "succeeded", "the chain child silver job did not pass")
+    walk_task(case, rig.environment(-1), "silver", bronze, "chain")
     require(any(key.endswith(f"layer_runs/silver/{child}/state/pinned.json") for key in layer_e2e.STATE), "the chain child did not claim its run ID")
 
 
 def walk_without_publish_variable(variable: str) -> str:
     """Walk with ``variable`` removed from the silver publish container of the job table; the error of the walk, or an empty string when it stayed green."""
-    original = brokers.load_jobs
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    original = preflight.load_tables
 
     def changed(root: Path) -> Any:
-        document = copy.deepcopy(original(root))
+        document, host = copy.deepcopy(original(root))
         document["jobs"]["silver"]["containers"]["publish"].remove(variable)
-        return document
+        return document, host
 
-    with mock.patch.object(brokers, "load_jobs", changed):
+    with mock.patch.object(preflight, "load_tables", changed):
         try:
             real_variables_reach_every_phase_of_a_direct_and_a_chain_run()
         except AssertionError as error:

@@ -107,7 +107,7 @@ run "promote_secret_and_variables" {
       [for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions)[1].environment : item.name if item.value == ""] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"] &&
       !anytrue([for item in jsondecode(aws_ecs_task_definition.promote[0].container_definitions) : anytrue([for entry in item.environment : strcontains(entry.name, "POLARIS")])])
     )
-    error_message = "The broker fills exactly the variables the table names for each container, and the task needs no catalog address."
+    error_message = "The launch fills exactly the variables the table names for each container, and the task needs no catalog address."
   }
 }
 
@@ -158,7 +158,7 @@ run "promote_invalid_shape_is_refused" {
   expect_failures = [var.promote_resources]
 }
 
-run "promote_containers_follow_the_broker_table" {
+run "promote_containers_follow_the_job_catalog" {
   command = plan
 
   variables {
@@ -168,12 +168,12 @@ run "promote_containers_follow_the_broker_table" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.promote_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers)) &&
+      toset([for container in jsondecode(output.promote_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.containers)) &&
       alltrue([for container in jsondecode(output.promote_container_definitions) : (
-        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.containers[container.name])
+        container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.promote_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.promote.log_container)
+      contains([for container in jsondecode(output.promote_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/job_catalog.json")).jobs.promote.log_container)
     )
-    error_message = "The container names, their empty variables and the log container equal the broker job table, so every override the broker sends names a container of the task and fills what it needs."
+    error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
 }

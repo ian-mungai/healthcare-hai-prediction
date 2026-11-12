@@ -32,7 +32,7 @@ SOURCES = (
     "scripts/orchestration/ecs_launch_publisher_cases.py",
     "scripts/orchestration/ecs_launch_fake.py",
     "scripts/orchestration/ecs_launch_standin.py",
-    "scripts/orchestration/ecs_broker_fake.py",
+    "scripts/orchestration/ecs_fake.py",
     "config/orchestration/ecs_launch.json",
     "scripts/orchestration/run_ecs_launch_e2e.py",
 )

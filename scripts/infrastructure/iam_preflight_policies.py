@@ -111,10 +111,9 @@ def terraform_list(infra: Path, file: str, variable: str) -> list[str]:
 
 
 def infra_names(infra: Path = INFRA) -> dict[str, str]:
-    """The single names a table row or policy may use: the Terraform variable defaults, the broker and features parameters and one real table each
+    """The single names a table row or policy may use: the Terraform variable defaults, the features parameters and one real table each
     of the bronze map and of the silver publish contract."""
     names = {key: value for key, value in terraform_names(infra / "variables.tf").items() if isinstance(value, str)}
-    names["BROKER_TOKEN_NAME"] = terraform_default(infra, "broker.tf", "broker_token_name")
     names["AIRFLOW_LAUNCH_RECORD_PREFIX"] = terraform_default(infra, "airflow_launch.tf", "airflow_launch_record_prefix")
     names["HOST_LAUNCH_HOLD_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "host_launch_hold_parameter_name")
     names["SERVICES_APPLY_LOCK_PARAMETER_NAME"] = terraform_default(infra, "airflow_launch.tf", "services_apply_lock_parameter_name")
@@ -197,7 +196,6 @@ def layer_registry_key(infra: Path) -> str:
 def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Mapping[str, str], names: Mapping[str, str]) -> dict[str, str]:
     """The Terraform-computed placeholders of one owner policy, built the way the IAM stack builds them."""
     bucket, account, region = values["DATA_BUCKET_NAME"], values["AWS_ACCOUNT_ID"], values["AWS_REGION"]
-    project, environment = values["PROJECT_NAME"], values["ENVIRONMENT"]
     if policy.endswith("job_stage_read.json"):
         return {"TASK_USER_ID": "${aws:userid}"}
     if policy.endswith("job_writer_layer_storage.json"):
@@ -232,18 +230,6 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
     if policy.endswith("job_writer_execution.json"):
         pairs = [names[f"AWS_POLARIS_{layer}_CLIENT_{part}_NAME"] for layer in ("SILVER", "GOLD", "FEATURES") for part in ("ID", "SECRET")]
         return {"WRITER_PARAMETER_ARNS": json.dumps([f"arn:aws:ssm:{region}:{account}:parameter{name}" for name in pairs])}
-    if policy.endswith("broker_jobs.json"):
-        families = terraform_list(infra, "broker.tf", "broker_job_families")
-        cluster = f"{project}_cluster_{environment}"
-        return {
-            "CLUSTER_ARN": f"arn:aws:ecs:{region}:{account}:cluster/{cluster}",
-            "TASK_ARN_PATTERN": f"arn:aws:ecs:{region}:{account}:task/{cluster}/*",
-            "LOG_GROUP_NAME": f"{project}_jobs_{environment}",
-            "PROJECT_TAG": project,
-            "FAMILIES": json.dumps(sorted(families)),
-            "TASK_DEFINITION_ARNS": json.dumps([f"arn:aws:ecs:{region}:{account}:task-definition/{project}_{environment}_job_{f}:*" for f in sorted(families)]),
-            "ROLE_ARNS": json.dumps([f"arn:aws:iam::{account}:role/{project}_job_{kind}_{environment}" for kind in ("execution", "train_task")]),
-        }
     if Path(policy).name.startswith("airflow_launch_"):
         return airflow_launch_inputs(infra, values, names)
     if policy.endswith(("job_writer_glue_mirror.json", "openmetadata_glue_read.json")):

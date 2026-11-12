@@ -1,7 +1,7 @@
-"""Run the lean broker target offline: the ECS adapter cases, then a DAG task through the HTTP broker to the fake ECS client.
+"""Run the ECS job cases offline: the ECS adapter cases, the chain DAG, the Airflow mounts, the override documents and the layer walk.
 
-No AWS call, no Docker and no credential is used. The artifact goes to ``data/e2e/ecs_broker/<timestamp>.json`` (ignored by Git).
-Run from the repository root: ``.venv/bin/python -m scripts.orchestration.run_ecs_broker_e2e [--only adapter|broker|chain] [--case NAME]``.
+No AWS call, no Docker and no credential is used. The artifact goes to ``data/e2e/job_catalog/<timestamp>.json`` (ignored by Git).
+Run from the repository root: ``.venv/bin/python -m scripts.orchestration.run_job_catalog_e2e [--only adapter|chain] [--case NAME]``.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import airflow_mount_cases, ecs_adapter_cases, ecs_broker_cases, ecs_chain_cases, layer_walk_cases, override_docs_cases
+from scripts.orchestration import airflow_mount_cases, ecs_adapter_cases, ecs_chain_cases, layer_walk_cases, override_docs_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -23,13 +23,10 @@ SOURCES = (
     "orchestration/ecs_adapter.py",
     "dags/bronze_chain_dag.py",
     "scripts/orchestration/ecs_chain_cases.py",
-    "scripts/orchestration/ecs_broker.py",
-    "scripts/orchestration/ecs_broker_cases.py",
     "scripts/lakehouse/bronze_dispatch.py",
-    "config/orchestration/ecs_broker_jobs.json",
-    "config/orchestration/ecs_broker_jobs.schema.json",
-    "data_contracts/orchestration/ecs_ledger_line.schema.json",
-    "scripts/orchestration/ecs_broker_fake.py",
+    "config/orchestration/job_catalog.json",
+    "config/orchestration/job_catalog.schema.json",
+    "scripts/orchestration/ecs_fake.py",
     "scripts/orchestration/ecs_adapter_cases.py",
     "scripts/orchestration/airflow_mount_cases.py",
     "scripts/orchestration/override_docs_cases.py",
@@ -37,7 +34,7 @@ SOURCES = (
     "scripts/orchestration/job_overrides.py",
     "scripts/orchestration/airflow_import_probe.py",
     "infra/services/airflow.tf",
-    "scripts/orchestration/run_ecs_broker_e2e.py",
+    "scripts/orchestration/run_job_catalog_e2e.py",
 )
 
 
@@ -45,7 +42,6 @@ def suites() -> dict[str, dict[str, Callable[[], None]]]:
     """Every suite, imported without a guard: a suite that cannot be imported stops the run with its error."""
     return {
         "adapter": ecs_adapter_cases.CASES,
-        "broker": ecs_broker_cases.CASES,
         "chain": ecs_chain_cases.CASES,
         "airflow": airflow_mount_cases.CASES,
         "overrides": override_docs_cases.CASES,
@@ -59,7 +55,7 @@ def revision() -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--only", choices=("adapter", "broker", "chain", "airflow", "overrides", "walk"))
+    parser.add_argument("--only", choices=("adapter", "chain", "airflow", "overrides", "walk"))
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []
@@ -78,7 +74,7 @@ def main() -> int:
     failed = [item for item in results if item["outcome"] == "fail"]
     started = datetime.now(UTC)
     artifact = {
-        "feature": "lean broker ECS target",
+        "feature": "ECS job cases",
         "at": started.isoformat(),
         "revision": revision(),
         "mode": "full" if not (args.only or args.case) else "iteration",
@@ -86,7 +82,7 @@ def main() -> int:
         "sources": {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in SOURCES if (ROOT / name).exists()},
         "results": results,
     }
-    folder = ROOT / "data" / "e2e" / "ecs_broker"
+    folder = ROOT / "data" / "e2e" / "job_catalog"
     folder.mkdir(parents=True, exist_ok=True)
     (folder / f"{started.strftime('%Y%m%dT%H%M%SZ')}.json").write_text(json.dumps(artifact, indent=2, sort_keys=True) + "\n")
     for item in failed:

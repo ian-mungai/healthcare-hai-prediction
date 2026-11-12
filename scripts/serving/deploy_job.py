@@ -1,7 +1,7 @@
 """The ``serve_deploy`` job: read the owner's staged request, deploy and print the result. It runs in the training image, which holds the MLflow client
 and boto3.
 
-The request holds the HAI type, the mode, the candidate version and the percent. The AWS task gets it checked in SERVING_REQUEST, which the broker read once
+The request holds the HAI type, the mode, the candidate version and the percent. The AWS task gets it checked in SERVING_REQUEST, which the preflight read once
 from the staged record. A hand run may name a file with ``--request``. The run id is the deployment id. The job reads the production alias and never moves it.
 A refusal exits with code 2 and a message that names the reason.
 """

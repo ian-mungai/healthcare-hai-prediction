@@ -1,4 +1,4 @@
-"""The two values of a bronze run that change at dispatch, and the one check that both the broker and the job driver apply to them."""
+"""The two values of a bronze run that change at dispatch, and the one check that both the launch preflight and the job driver apply to them."""
 
 from __future__ import annotations
 

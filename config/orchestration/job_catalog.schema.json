@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://healthcare-hai-prediction.invalid/orchestration/ecs_broker_jobs.schema.json",
+  "$id": "https://healthcare-hai-prediction.invalid/orchestration/job_catalog.schema.json",
   "title": "ECS broker jobs",
   "description": "The closed table of the lean ECS broker. A step names its job, or null when the broker answers it without a task. A job names its deadline, the container whose log the logs route shows and the variables each container receives.",
   "type": "object",

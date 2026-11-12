@@ -26,7 +26,7 @@ from unittest import mock
 from orchestration import code_digest
 from scripts.features import publication_reads, training_extract
 from scripts.infrastructure.installer_gates import GATE_SECONDS, Worker, after_first_member, joined, reached
-from scripts.orchestration.ecs_broker_fake import client_error
+from scripts.orchestration.ecs_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.process import run_command
 from scripts.training import guards, mlflow_alias_stand_in, promote_receipt, promotion_check

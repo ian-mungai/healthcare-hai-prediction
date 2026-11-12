@@ -1,5 +1,5 @@
 variable "serve_enabled" {
-  description = "Register the serve task that the lean broker starts for serving_deploy_dag. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
+  description = "Register the serve task that the direct launch starts for serving_deploy_dag. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -63,7 +63,7 @@ variable "serve_resources" {
 
 locals {
   # Two steps after the volume hand-over: fetch the run's code, then deploy. The deploy step logs in to MLflow as the train step does. The checked request arrives in
-  # SERVING_REQUEST, which the broker read once from the staged record, and the tool reads it from there. The time limit is shorter than the broker deadline, so the
+  # SERVING_REQUEST, which the launch preflight read once from the staged record, and the tool reads it from there. The time limit is shorter than the job deadline, so the
   # task ends itself first, and every MLflow request has its own short limit.
   serve_phase = "cd /workspace/code && timeout 600 python -m scripts.serving.deploy_job --run \"$RUN_ID\""
   serve_steps = [
@@ -192,7 +192,7 @@ output "serve_secret_flow" {
 }
 
 output "serve_run_task" {
-  description = "What a run-task call for the serve task needs, or null while serve_enabled is false. The broker supplies the variables. Registration starts nothing."
+  description = "What a run-task call for the serve task needs, or null while serve_enabled is false. The launch supplies the variables. Registration starts nothing."
   value = var.serve_enabled ? {
     task_definition       = aws_ecs_task_definition.serve[0].family
     assign_public_ip      = "DISABLED"

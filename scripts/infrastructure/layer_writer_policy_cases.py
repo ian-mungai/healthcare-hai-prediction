@@ -101,7 +101,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             other_version("v2"),
             other_version("v10"),
             KEY_PARAMETER.replace("pseudonym_key_v1", "pseudonym_key_"),
-            KEY_PARAMETER.replace("pseudonym_key_v1", "broker_token"),
+            KEY_PARAMETER.replace("pseudonym_key_v1", "mlflow_admin_password"),
             KEY_PARAMETER.replace("111111111111", "222222222222"),
             KEY_PARAMETER.replace("us-west-2", "eu-west-1"),
             KEY_PARAMETER.replace("healthcare_hai_prediction", "other_project"),

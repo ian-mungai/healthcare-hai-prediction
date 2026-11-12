@@ -1,7 +1,7 @@
 """Check that every real DAG imports in the Airflow container as the services stack deploys it.
 
 The scheduler and the DAG processor see only what ``infra/services/airflow.tf`` mounts: the dags folder and a list of single files of the ``orchestration``
-package under ``/opt/hai/orchestration``. A module that a DAG needs and the list lacks makes the DAG fail to import, and no broker call is ever made. This
+package under ``/opt/hai/orchestration``. A module that a DAG needs and the list lacks makes the DAG fail to import, and no launch is ever made. This
 suite copies exactly the mounted files into a scratch package, replaces only the Airflow SDK by a permissive stand-in and imports every file of ``dags/``
 in a fresh interpreter (``airflow_import_probe``).
 """

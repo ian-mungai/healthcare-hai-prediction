@@ -17,7 +17,7 @@ from botocore.exceptions import EndpointConnectionError
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, JobSpec, Launcher, LaunchRefused, LaunchUnavailable, Resources, S3LaunchStore, launch_record_prefix
 from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec, request_key
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeLogs, client_error
+from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs, client_error
 from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket, RevisionEcs
 
 RUN = "20261110T100000Z-abcdef01"

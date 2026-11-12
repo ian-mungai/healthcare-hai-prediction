@@ -253,7 +253,7 @@ run "every_family_passes_its_own_role_and_no_other" {
   }
 }
 
-run "the_launch_role_never_passes_itself_or_the_broker_role" {
+run "the_launch_role_never_passes_itself_or_a_control_role" {
   command = plan
 
   variables {
@@ -263,9 +263,9 @@ run "the_launch_role_never_passes_itself_or_the_broker_role" {
   assert {
     condition = !anytrue([
       for arn in [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] :
-      strcontains(arn, "airflow_launch") || strcontains(arn, "broker") || strcontains(arn, "task_execution") || strcontains(arn, "control_plane")
+      strcontains(arn, "airflow_launch") || strcontains(arn, "task_execution") || strcontains(arn, "control_plane")
     ])
-    error_message = "The pass grant never names the launch role, the broker role, the host execution role or the control plane role."
+    error_message = "The pass grant never names the launch role, the host execution role or the control plane role."
   }
 }
 
@@ -593,7 +593,7 @@ run "the_publisher_family_starts_its_host_task_and_reads_its_staged_request" {
       contains([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0], "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev") &&
       jsondecode(aws_iam_role_policy.airflow_launch_requests[0].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/publisher_request.json"]
     )
-    error_message = "The publisher family runs only the publisher host definition, passes the publisher task role and reads the staged publisher_request.json, which orchestration/publisher_launch.py checks before the launch. No broker grant is involved."
+    error_message = "The publisher family runs only the publisher host definition, passes the publisher task role and reads the staged publisher_request.json, which orchestration/publisher_launch.py checks before the launch."
   }
 }
 

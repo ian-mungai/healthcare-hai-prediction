@@ -1,8 +1,8 @@
-"""Phase driver of the silver, gold and features ECS jobs that the job broker starts.
+"""Phase driver of the silver, gold and features ECS jobs that the direct launch starts.
 
     python -m scripts.lakehouse.layer_run <phase> --layer silver|gold|features --run <run ID> [--input-run <run ID>] [--work /workspace] [--dry-run]
 
-Each ECS container of a job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/ecs_broker_jobs.json``):
+Each ECS container of a job runs one phase on the shared ``/workspace`` (the container names of ``config/orchestration/job_catalog.json``):
 
 - silver: ``pin``, ``build``, ``validate``, ``verify``, ``export``, ``publish``, ``upload``
 - gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``maintain``
@@ -35,8 +35,8 @@ same run ID fails with a named error before it writes anything shared. An interr
 checked the abandoned catalog branch. A dry run takes no run ID and leaves no state, so it never blocks the real run. A later phase may be repeated in
 the workspace of the same task.
 
-The whole task has a deadline, the one the broker table gives the job, counted from the start time the init container writes to
-``<work>/task_started``. A hand-started task has no broker to stop it, so every phase runs under what is left of that deadline and fails by name when
+The whole task has a deadline, the one the job catalog gives the job, counted from the start time the init container writes to
+``<work>/task_started``. A hand-started task has no launch library to stop it, so every phase runs under what is left of that deadline and fails by name when
 it passes. The driver then stops the phase module and every process that module started, so nothing goes on writing while the task shuts down.
 
 With ``--dry-run`` or ``LAYER_DRY_RUN=1`` the phases up to ``export`` run as usual, because they write only the task's own working folder. ``publish``
@@ -80,7 +80,7 @@ STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
 UPLOAD_PREFIX = "lakehouse/layer_runs"
-JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"  # the deadline of each job, as the broker enforces it
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/job_catalog.json"  # the deadline of each job
 STARTED_FILE = "task_started"  # in the work folder: the init container writes the start time of the whole task
 PHASE_DEADLINE = "HAI_PHASE_DEADLINE_EPOCH"  # read by scripts.features.features_build: the time by which the phase must end
 FINGERPRINT = re.compile(r"-?[0-9]{1,38}")  # what the publisher emits: the decimal string of a sum cast to DECIMAL(38, 0)
@@ -254,8 +254,8 @@ def phase_deadline_environment(job: Job) -> dict[str, str]:
 
 
 def task_seconds_left(job: Job) -> float:
-    """Seconds left of the whole task: the job's deadline in the broker table, counted from the start time that the init container wrote. A hand-started
-    task has no broker to stop it, so the driver enforces the deadline itself."""
+    """Seconds left of the whole task: the job's deadline in the job catalog, counted from the start time that the init container wrote. A hand-started
+    task has no launch library to stop it, so the driver enforces the deadline itself."""
     limit = float(json.loads(JOBS_FILE.read_text())["jobs"][job.layer]["deadline_seconds"])
     started = job.code.parent / STARTED_FILE
     if not started.is_file():

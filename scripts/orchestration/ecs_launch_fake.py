@@ -22,7 +22,7 @@ from typing import Any
 from botocore.exceptions import ReadTimeoutError
 
 from orchestration.ecs_launch import Clock
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, REGION, TASK_DEFINITION, FakeEcs, client_error
+from scripts.orchestration.ecs_fake import ACCOUNT, REGION, TASK_DEFINITION, FakeEcs, client_error
 
 START_TIME = 1_800_000_000.0
 

@@ -977,11 +977,11 @@ class ComposeModel:
         return {key: value for key, value in values.items() if value}
 
     def ports(self, name: str) -> list[tuple[str, int, int]]:
-        """Published ports as ``(host_ip, host_port, container_port)``."""
+        """Published ports as ``(bind_address, host_port, container_port)``."""
         result = []
         for entry in self.service(name).get("ports") or []:
-            host_ip, host_port, container_port = str(entry).split(":")
-            result.append((host_ip, int(host_port), int(container_port)))
+            bind_address, host_port, container_port = str(entry).split(":")
+            result.append((bind_address, int(host_port), int(container_port)))
         return result
 
 
@@ -2858,8 +2858,8 @@ class Renderer:
                 Path(mount.source).mkdir(mode=0o700, parents=True, exist_ok=True)
         ports = []
         for entry in raw.get("ports") or []:
-            host_ip, host_port, container_port = interpolate(str(entry), values).split(":")
-            ports.append((host_ip, int(host_port), int(container_port)))
+            bind_address, host_port, container_port = interpolate(str(entry), values).split(":")
+            ports.append((bind_address, int(host_port), int(container_port)))
         finite = service in ORCHESTRATION_FINITE
         entrypoint = list(raw.get("entrypoint") or (inp.image_entrypoint if finite else []))
         return self.assemble(

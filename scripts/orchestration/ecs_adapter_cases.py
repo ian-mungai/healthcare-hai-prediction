@@ -1,7 +1,7 @@
-"""Direct cases for the ECS adapter: the failures a real broker run cannot readily produce (lost replies, throttling, container exit codes).
+"""Direct cases for the ECS adapter: the failures a real launch cannot readily produce (lost replies, throttling, container exit codes).
 
-Isolation is justified because the fake cluster has to be told when a reply is lost or a container exits non-zero. The broker E2E reaches the same
-adapter through the HTTP route. Every case runs offline against ``FakeEcs``.
+Isolation is justified because the fake cluster has to be told when a reply is lost or a container exits non-zero. The launch E2E reaches the same
+adapter through the launch library. Every case runs offline against ``FakeEcs``.
 """
 
 from __future__ import annotations
@@ -18,9 +18,9 @@ from botocore.exceptions import ClientError, ReadTimeoutError
 
 from orchestration import ecs_adapter
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, TaskRefused, TaskUnavailable
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
+from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeEcs, FakeLogs, SdkStub, client_error
 
-JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_broker_jobs.json"
+JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/job_catalog.json"
 SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",
@@ -142,7 +142,7 @@ def stopped_without_exit_codes_fails() -> None:
 
 
 def layer_task(layer: str, codes: dict[str, int | None], stop_code: str = "EssentialContainerExited") -> tuple[EcsAdapter, str]:
-    """A stopped task of a layer job as ECS reports it: init, the containers of the broker table in order and the guard, each with the exit code given."""
+    """A stopped task of a layer job as ECS reports it: init, the containers of the job catalog in order and the guard, each with the exit code given."""
     adapter, ecs, _ = build()
     arn = adapter.start("train", KEY, ENVIRONMENT, "training")
     table = json.loads(JOBS_FILE.read_text())["jobs"][layer]["containers"]

@@ -29,23 +29,6 @@ import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
-from scripts.infrastructure.broker_policy_cases import (
-    ACCOUNT,
-    BUCKET,
-    CLUSTER,
-    CLUSTER_ARN,
-    LOG_GROUP,
-    OTHER,
-    OTHER_CLUSTER_ARN,
-    PROJECT,
-    REGION,
-    Case,
-    as_list,
-    role,
-    run_context,
-    tagged,
-    task,
-)
 from scripts.infrastructure.policy_evaluator import Request, UnsupportedPolicyElement, decide
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -57,6 +40,17 @@ CODE_RUNS_TEMPLATE = ROOT / "infra/iam/owner_policies/airflow_launch_code_runs.j
 # The drift DAG reads the records the drift task publishes. The launch role holds the same document as the drift read of the drift_prepared stack.
 DRIFT_RECORDS_TEMPLATE = ROOT / "infra/iam/owner_policies/drift_records_read.json"
 ENVIRONMENT = "dev"
+ACCOUNT = "111111111111"
+REGION = "eu-west-1"
+PROJECT = "example_project"
+BUCKET = "example-project-ci-bucket"
+CLUSTER = f"{PROJECT}_cluster_{ENVIRONMENT}"
+CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/{CLUSTER}"
+OTHER_CLUSTER_ARN = f"arn:aws:ecs:{REGION}:{ACCOUNT}:cluster/another_cluster"
+LOG_GROUP = f"{PROJECT}_jobs_{ENVIRONMENT}"
+# A parameter that no launch grant names, tried as a read, write and delete target.
+OTHER = "/healthcare_hai_prediction/other_record"
+Case = tuple[str, str, str, bool, dict[str, tuple[str, ...]]]
 FAMILIES = ["bronze", "gold", "promote", "serve", "silver", "train"]
 DRIFT_FAMILIES = sorted([*FAMILIES, "drift"])
 RECORD_PREFIX = "lakehouse/launch_records/"
@@ -91,6 +85,33 @@ LAYER_RUN_RECORD = f"{LAYER_RUNS}/silver/20261030T100000Z-abcdef01/layer_run.jso
 AUTOSCALING_GROUP = (
     f"arn:aws:autoscaling:{REGION}:{ACCOUNT}:autoScalingGroup:00000000-0000-0000-0000-000000000000:autoScalingGroupName/{PROJECT}_host_{ENVIRONMENT}"
 )
+
+
+def role(name: str) -> str:
+    return f"arn:aws:iam::{ACCOUNT}:role/{PROJECT}_{name}_{ENVIRONMENT}"
+
+
+def task(cluster: str = CLUSTER, identifier: str = "0123456789abcdef") -> str:
+    return f"arn:aws:ecs:{REGION}:{ACCOUNT}:task/{cluster}/{identifier}"
+
+
+def run_context(family: str, **overrides: tuple[str, ...]) -> dict[str, tuple[str, ...]]:
+    context = {
+        "ecs:cluster": (CLUSTER_ARN,),
+        "aws:RequestTag/Project": (PROJECT,),
+        "aws:RequestTag/HaiJob": (family,),
+        "aws:TagKeys": ("Project", "HaiJob"),
+    }
+    context.update(overrides)
+    return context
+
+
+def tagged(job: str | None) -> dict[str, tuple[str, ...]]:
+    return {} if job is None else {"aws:ResourceTag/HaiJob": (job,)}
+
+
+def as_list(value: Any) -> list[Any]:
+    return [value] if isinstance(value, str) else list(value)
 
 
 def definition(family: str, revision: str = "7") -> str:
@@ -228,7 +249,6 @@ def job_cases() -> list[Case]:
         "job_read_task",
         "job_try_writer",
         "task_execution",
-        "broker_task",
         "airflow_launch_task",
         "control_plane_task",
         "mlflow_task",
@@ -327,7 +347,6 @@ def job_cases() -> list[Case]:
     add("create the apply lock", "ssm:PutParameter", apply_lock, False)
     add("delete the apply lock", "ssm:DeleteParameter", apply_lock, False)
     add("read a sibling of the apply lock", "ssm:GetParameter", f"{apply_lock}_extra", False)
-    add("read the broker token", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/broker_token", False)
     add("read the MLflow password", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/mlflow_admin_password", False)
     for action in ("ecs:UpdateService", "ecs:DeleteService", "ecs:CreateService", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"):
         add(f"no {action}", action, f"arn:aws:ecs:{REGION}:{ACCOUNT}:service/{CLUSTER}/{PROJECT}_{ENVIRONMENT}_polaris", False)

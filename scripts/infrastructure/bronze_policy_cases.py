@@ -120,7 +120,7 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     for action in ("ssm:PutParameter", "ssm:GetParameter", "ssm:GetParametersByPath", "ssm:DeleteParameter"):
         check(action, KEY_PARAMETER, False)
     check("ssm:GetParameters", other_version("v2"), False)
-    check("ssm:GetParameters", KEY_PARAMETER.replace("pseudonym_key_v1", "broker_token"), False)
+    check("ssm:GetParameters", KEY_PARAMETER.replace("pseudonym_key_v1", "mlflow_admin_password"), False)
     return sorted(failures)
 
 

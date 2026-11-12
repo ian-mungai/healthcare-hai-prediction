@@ -1,6 +1,6 @@
 """Check the override generator against the variables that the real tasks need.
 
-A hand-started task leaves its variables empty until the run-task call fills them. These cases build the overrides of every job of the broker job table with
+A hand-started task leaves its variables empty until the run-task call fills them. These cases build the overrides of every job of the job catalog with
 sample values and require that they fill exactly the variables that the table gives each container, and that the generator refuses a missing value by name.
 """
 
@@ -37,7 +37,7 @@ VALUES = {
 
 
 def job_table() -> dict:
-    return json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]
+    return json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())["jobs"]
 
 
 def the_generator_fills_every_variable_of_every_job() -> None:

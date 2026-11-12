@@ -37,7 +37,7 @@ from orchestration.ecs_launch import (
     iso,
     launch_record_prefix,
 )
-from scripts.orchestration.ecs_broker_fake import ACCOUNT, CLUSTER, FakeLogs, SdkStub, client_error
+from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs, SdkStub, client_error
 from scripts.orchestration.ecs_launch_fake import START_TIME, FakeClock, FakeLaunchBucket, RevisionEcs
 
 ROOT = Path(__file__).resolve().parents[2]

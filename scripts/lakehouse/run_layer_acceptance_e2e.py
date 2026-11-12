@@ -1285,15 +1285,15 @@ def static_cases() -> dict[str, bool]:
         layer: {f"lakehouse/{name}/" for name in re.findall(r'"([a-z_]+)"', body)}
         for layer, body in re.findall(r"(silver|gold|features) = \{\s*prefixes\s*=\s*\[([^\]]*)\]", writer)
     }
-    broker = json.loads(acceptance.JOBS_FILE.read_text())["jobs"]
+    catalog = json.loads(acceptance.JOBS_FILE.read_text())["jobs"]
     return {
         "the write prefixes equal the layer writer roles": all(
             set(acceptance.WRITE_PREFIXES[layer]) - {"metadata/dbt/", "lakehouse/feast/registry.pb"} == prefixes[layer] for layer in acceptance.LAYERS
         ),
         "the features role may also write the Feast registry": 'job_layer_run_registry_key   = "lakehouse/feast/registry.pb"' in writer,
         "the gold role may also write the dbt metadata": '"${local.bronze_bucket_arn}/metadata/dbt/*"' in writer,
-        "the expected containers are init and the broker table's containers": all(
-            acceptance.expected_containers(layer) == ["init", *broker[layer]["containers"]] for layer in acceptance.LAYERS
+        "the expected containers are init and the job catalog's containers": all(
+            acceptance.expected_containers(layer) == ["init", *catalog[layer]["containers"]] for layer in acceptance.LAYERS
         ),
         "the contract tables are read from the frozen revision": all(len(CONTRACT_TABLES[layer]) > 1 for layer in acceptance.LAYERS),
     }

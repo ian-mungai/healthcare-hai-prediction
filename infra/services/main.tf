@@ -44,7 +44,7 @@ locals {
     "streamlit"                             = "airflow"
     "host_prepare"                          = "airflow"
     "polaris_bootstrap"                     = "polaris"
-    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "marquez" } : {}, var.broker_enabled ? { "broker" = "airflow" } : {}, {
+    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "marquez" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter"] : name => "monitoring" if var.monitoring_enabled
   })
 
@@ -85,7 +85,6 @@ locals {
     polaris_root_secret    = var.polaris_root_secret_name
     mlflow_db_password     = var.mlflow_db_password_name
     mlflow_admin_password  = var.mlflow_admin_password_name
-    broker_token           = var.broker_token_name
     grafana_admin_password = var.grafana_admin_password_name
     # These two names are used only by the OpenMetadata containers, so they appear in the task definitions and in the grant only while the flag is on.
     openmetadata_admin_password = var.openmetadata_admin_password_name
@@ -161,15 +160,6 @@ locals {
           volumes       = {}
         }
       } : key => service if var.mlflow_enabled
-    },
-    {
-      for key, service in {
-        broker = {
-          task_role_arn = var.broker_task_role_arn
-          containers    = local.broker_containers
-          volumes       = { code_repo = local.code_path, broker_state = local.broker_state_path }
-        }
-      } : key => service if var.broker_enabled
     },
     {
       for key, service in {

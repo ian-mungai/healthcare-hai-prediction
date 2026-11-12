@@ -6,7 +6,7 @@
 ``git archive`` alone cannot pass the first layer pin: the dbt packages are installed, not tracked, and the task has no network to install them. The builder
 exports the revision, installs the packages of that revision's lock from the pinned local archive (``dbt_package_archive``, no network) and writes both
 into one tar under ``dbt_packages/``. Names, order, owners, times and the gzip header are fixed, so the same revision and the same pinned packages always give
-the same bytes. The digest file holds the SHA-256 of the tarball, which is the value the broker passes to the task as the code digest.
+the same bytes. The digest file holds the SHA-256 of the tarball, which is the value the launch passes to the task as the code digest.
 ``check`` applies the layout that the layer driver's pin phase needs, before anything is staged or claimed.
 """
 

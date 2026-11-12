@@ -304,7 +304,7 @@ def ecs_plan(
 
 
 def public_execution(attempt: Mapping[str, Any]) -> dict[str, Any]:
-    """Return the schema-validated execution record for the broker's ledger."""
+    """Return the schema-validated execution record for the run ledger."""
     validate_execution(attempt["execution"])
     return json.loads(json.dumps(attempt["execution"]))
 

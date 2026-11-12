@@ -72,7 +72,7 @@
       "job": "Core Orchestration Engine Tests",
       "measured_minutes": 18,
       "timeout_minutes": 30,
-      "basis": "estimate, broker 502 s, stack 159 s and lean broker 58 s from the hosted run 41521618599 plus about 120 s for the supervisor and transform broker and about 4 minutes of setup and gates; local Mac run Nov 3 2026: 532 s for the whole part"
+      "basis": "estimate, broker 502 s, stack 159 s and job catalog 58 s from the hosted run 41521618599 plus about 120 s for the supervisor and transform broker and about 4 minutes of setup and gates; local Mac run Nov 3 2026: 532 s for the whole part"
     },
     {
       "job": "Core Orchestration Offline Checks",

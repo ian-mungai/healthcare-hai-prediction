@@ -28,8 +28,8 @@ from unittest import mock
 
 import jinja2
 
+from orchestration.ecs_preflight import CHAIN_LAYERS, derived_run_id, load_tables
 from scripts.orchestration.ecs_adapter_cases import require
-from scripts.orchestration.ecs_broker import CHAIN_LAYERS, derived_run_id, load_jobs
 
 ROOT = Path(__file__).resolve().parents[2]
 BRONZE = "20261030T090000Z-b0b0b0b0"
@@ -126,14 +126,14 @@ def derived_ids_are_valid_and_stable() -> None:
     require(loaded["chain_run"]("gold", BRONZE) == loaded["derived_run_id"](ids[0], "gold"), "gold does not derive from silver")
 
 
-def broker_and_dag_derive_the_same_run_ids() -> None:
+def preflight_and_dag_derive_the_same_run_ids() -> None:
     loaded = load_dag()
-    require(tuple(layer for layer, _, _ in loaded["CHAIN"]) == CHAIN_LAYERS, "the broker and the DAG list different layers")
+    require(tuple(layer for layer, _, _ in loaded["CHAIN"]) == CHAIN_LAYERS, "the preflight and the DAG list different layers")
     for bronze in (BRONZE, OTHER_BRONZE):
         run = bronze
         for layer in CHAIN_LAYERS:
             run = derived_run_id(run, layer)
-            require(run == loaded["chain_run"](layer, bronze), f"the broker derives another {layer} run ID than the DAG")
+            require(run == loaded["chain_run"](layer, bronze), f"the preflight derives another {layer} run ID than the DAG")
 
 
 def chain_runs_in_order_after_the_gate() -> None:
@@ -348,24 +348,24 @@ def metadata_start_records_a_failed_trigger_in_the_log_and_the_result() -> None:
     require(result.startswith("catalog start failed") and bool(lines), f"an unreachable API must be recorded the same way: {result} {lines}")
 
 
-def broker_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
-    document = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
+def job_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
+    document = json.loads((ROOT / "config/orchestration/job_catalog.json").read_text())
     job = document["jobs"].get("metadata")
     if job is None:
-        raise AssertionError("the broker table has no metadata job")
+        raise AssertionError("the job table has no metadata job")
     require(document["steps"].get("metadata_run") == "metadata", "the step metadata_run does not name the metadata job")
     require(job.get("chain") is True, "the catalog job belongs to the chain")
     require(job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"], "ingest_dbt": ["RUN_ID"]}, f"wrong containers: {job['containers']}")
     terraform = (ROOT / "infra/jobs/openmetadata.tf").read_text()
     default = re.search(r'variable "openmetadata_lifetime_seconds".*?default\s*=\s*([0-9]+)', terraform, re.S)
-    require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the broker deadline is not the task lifetime plus 900 seconds")
+    require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the job deadline is not the task lifetime plus 900 seconds")
     require('run_step("metadata_run")' in (ROOT / "dags/metadata_ingest_dag.py").read_text(), "the catalog DAG does not submit metadata_run")
-    require(load_jobs(ROOT)["jobs"]["metadata"] == job, "the broker does not load the metadata job")
+    require(load_tables(ROOT)[0]["jobs"]["metadata"] == job, "the launch preflight does not load the metadata job")
 
 
 CASES: dict[str, Callable[[], None]] = {
     "derived_ids_are_valid_and_stable": derived_ids_are_valid_and_stable,
-    "broker_and_dag_derive_the_same_run_ids": broker_and_dag_derive_the_same_run_ids,
+    "preflight_and_dag_derive_the_same_run_ids": preflight_and_dag_derive_the_same_run_ids,
     "chain_runs_in_order_after_the_gate": chain_runs_in_order_after_the_gate,
     "triggers_send_derived_ids": triggers_send_derived_ids,
     "a_retried_bronze_run_names_the_same_runs": a_retried_bronze_run_names_the_same_runs,
@@ -375,5 +375,5 @@ CASES: dict[str, Callable[[], None]] = {
     "metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token": metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token,
     "metadata_start_treats_an_existing_run_as_done": metadata_start_treats_an_existing_run_as_done,
     "metadata_start_records_a_failed_trigger_in_the_log_and_the_result": metadata_start_records_a_failed_trigger_in_the_log_and_the_result,
-    "broker_table_runs_the_catalog_step_as_a_bounded_chain_job": broker_table_runs_the_catalog_step_as_a_bounded_chain_job,
+    "job_table_runs_the_catalog_step_as_a_bounded_chain_job": job_table_runs_the_catalog_step_as_a_bounded_chain_job,
 }

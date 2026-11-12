@@ -1,4 +1,4 @@
-"""Launch one batch job as one ECS task on the host and keep the guarantees the job broker gave.
+"""Launch one batch job as one ECS task on the host and keep its guarantees: one launch per run and job, a write-once record of each fact.
 
 A job attempt is named ``<run>:<job>:<attempt>``. A run and job have one launch. The launcher writes the facts as write-once records (``LaunchStore``): a
 ``claim`` (created with a conditional write) says which attempt may start the task, and the attempt's ``intent``, ``started`` (the task ARN) and ``end`` (the
