@@ -18,8 +18,15 @@ from pathlib import Path
 
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.process import run_command
+from scripts.quality.container_imports import Container, Entry, ImportGraph, locations, modules_at
+from scripts.quality.container_mounts import Declarations, inventory
 
 ROOT = Path(__file__).resolve().parents[2]
+CHECK_COMPOSE = "services/orchestration/docker-compose.orchestration.yaml"
+CHECK_SERVICE = "airflow-check"
+CHECK_CHECKOUT = "/opt/hai/repo"  # where the check container's checkout folders sit; real_image_dags puts it first on the module search path
+# The graph follows every definition of a module that the run imports. This one is an offline case of the rig that the in-image run never calls.
+NOT_RUN = frozenset({"scripts/orchestration/airflow_mode_cases.py scripts.infrastructure.services_apply"})
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
 
 
@@ -57,7 +64,21 @@ def a_missing_module_is_found() -> None:
     require(bool(failed) and all("training_contract" in message for message in failed.values()), f"the planted omission was not named: {failed}")
 
 
+def the_real_image_run_imports_only_mounted_files() -> None:
+    """The in-image DAG run (``real_image_dags``, started from ``in_image_checks``) imports first-party modules only from files that the
+    ``airflow-check`` service mounts, including the ones that its production modules import (``layer_report`` needs ``scripts.lakehouse``)."""
+    files = inventory(ROOT)
+    declarations = Declarations(ROOT, files)
+    binds = declarations.compose_binds(CHECK_COMPOSE, CHECK_SERVICE)
+    roots = ("/opt/hai", CHECK_CHECKOUT)
+    first_party = {name.split(".")[0] for name in modules_at(locations(declarations.python, binds), roots)}
+    container = Container(f"{CHECK_COMPOSE}:{CHECK_SERVICE}", binds, roots, Entry("scripts.orchestration.real_image_dags"), CHECK_COMPOSE)
+    found = sorted({f"{item.path} {item.name}" for item in ImportGraph(ROOT, declarations.python, container, first_party, {}).check()} - NOT_RUN)
+    require(not found, f"the in-image DAG run imports files that the airflow-check service does not mount: {found}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "every_dag_imports_against_the_mounted_modules": every_dag_imports_against_the_mounted_modules,
     "a_missing_module_is_found": a_missing_module_is_found,
+    "the_real_image_run_imports_only_mounted_files": the_real_image_run_imports_only_mounted_files,
 }

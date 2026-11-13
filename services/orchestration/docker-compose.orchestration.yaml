@@ -176,6 +176,12 @@ services:
       - ${HAI_ORCH_REPO}/scripts/orchestration:/opt/hai/repo/scripts/orchestration:ro
       - ${HAI_ORCH_REPO}/scripts/process.py:/opt/hai/repo/scripts/process.py:ro
       - ${HAI_ORCH_REPO}/scripts/quality/lock_env.py:/opt/hai/repo/scripts/quality/lock_env.py:ro
+      # The lakehouse modules that the launch library imports (orchestration/layer_report.py, orchestration/ecs_preflight.py): the files that infra/services/airflow.tf mounts.
+      - ${HAI_ORCH_REPO}/scripts/lakehouse/__init__.py:/opt/hai/repo/scripts/lakehouse/__init__.py:ro
+      - ${HAI_ORCH_REPO}/scripts/lakehouse/bronze_dispatch.py:/opt/hai/repo/scripts/lakehouse/bronze_dispatch.py:ro
+      - ${HAI_ORCH_REPO}/scripts/lakehouse/layer_acceptance.py:/opt/hai/repo/scripts/lakehouse/layer_acceptance.py:ro
+      - ${HAI_ORCH_REPO}/scripts/lakehouse/pins.py:/opt/hai/repo/scripts/lakehouse/pins.py:ro
+      - ${HAI_ORCH_REPO}/scripts/lakehouse/version_listing.py:/opt/hai/repo/scripts/lakehouse/version_listing.py:ro
       - ${HAI_ORCH_REPO}/config/orchestration:/opt/hai/repo/config/orchestration:ro
       - ${HAI_ORCH_REPO}/config/lakehouse/bronze_tables.json:/opt/hai/repo/config/lakehouse/bronze_tables.json:ro
       - ${HAI_ORCH_REPO}/infra/jobs/tests:/opt/hai/repo/infra/jobs/tests:ro
