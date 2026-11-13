@@ -54,6 +54,8 @@ mlruns/
 !dbt/seeds/features/*.csv
 # The approved identity classification list (codes, classes, statuses and public citations only) is committed.
 !config/lakehouse/identity_classification.csv
+# The bootstrap seed folder (declared in scripts/quality/repo_checks.py) holds public publisher captures, stored through Git LFS (.gitattributes).
+!config/acquisition/bootstrap_seed/**/*.csv
 *.jsonl
 
 # Data collection code, configuration and tests are tracked so CI can run the acquisition checks;
