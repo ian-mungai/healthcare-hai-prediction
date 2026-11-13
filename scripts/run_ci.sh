@@ -22,6 +22,12 @@ set -euo pipefail
 # started through scripts/process.py, confirms that no member is left and fails the run with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker
 # session the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
+# The workers run through an admission queue (run_items). The budget is core_budget cores in config/quality/ci_groups.json (10), the CPU count (nproc) on hosted CI (GITHUB_ACTIONS=true) or
+# CI_CORE_BUDGET (a whole number above 0, replacing both). Each kind of worker declares its cores in worker_limits ("cores"); a kind without cores stops the run before any worker starts. The queue
+# admits the waiting worker with the most saved minutes first (the measured_minutes of its hosted job in config/quality/job_durations.json; equal minutes keep the plan order) as soon as the cores
+# in use plus its own fit the budget. A worker with more cores than the budget is admitted only when no other worker runs, and nothing starts beside it. A worker that is waiting for the
+# workers it must follow (queue_after_<item>) is passed over until they have passed; when one of them fails it is reported as not started. The deadline of a worker counts from its admission, not
+# from the start of the run. A failed worker does not stop the queue: the other workers run on and the run fails at the end with every name.
 # The check groups' functions are not in this file: scripts/ci/groups/<group>.sh holds the functions of one group of config/quality/ci_groups.json. Each group
 # runs in its own shell process (run_group) that loads only scripts/quality/timing.sh and that one file, so the shell state of a group (functions, variables, options,
 # working directory) cannot reach another group or this file. Files and signals are shared (scripts/quality/ci_group_files.py). A missing file fails the run with its name (require_group_file). Only this file, the selector and the shared workflow parts select every group; a
@@ -130,6 +136,20 @@ worker_grace="${CI_WORKER_GRACE_SECONDS:-5}"
 worker_override="${CI_WORKER_LIMIT_SECONDS:-}"
 if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$worker_override" =~ ^[1-9][0-9]*$ ]]; then
   printf 'CI_WORKER_GRACE_SECONDS and CI_WORKER_LIMIT_SECONDS must be whole numbers above 0, not %s and %s\n' "$worker_grace" "${worker_override:-unset}" >&2
+  exit 2
+fi
+# The core budget of the admission queue: CI_CORE_BUDGET, else the CPU count on hosted CI, else core_budget of config/quality/ci_groups.json.
+core_budget_source="core_budget in config/quality/ci_groups.json"
+core_budget="$("$python_bin" -c 'import json; print(json.load(open("config/quality/ci_groups.json"))["core_budget"])')"
+if [[ -n "${CI_CORE_BUDGET:-}" ]]; then
+  core_budget="$CI_CORE_BUDGET"
+  core_budget_source="CI_CORE_BUDGET"
+elif [[ "${GITHUB_ACTIONS:-false}" == "true" ]]; then
+  core_budget="$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN)"
+  core_budget_source="nproc on hosted CI"
+fi
+if [[ ! "$core_budget" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'CI_CORE_BUDGET must be a whole number above 0 (the budget comes from %s), not %s\n' "$core_budget_source" "$core_budget" >&2
   exit 2
 fi
 # stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (every member is frozen with SIGSTOP, then
@@ -426,10 +446,19 @@ acquisition_combine() {
 
 feature_counts="$("$python_bin" -c 'import json; c=json.load(open("config/quality/ci_groups.json"))["feature_shards"]; print(c["sources"], c["columns"])')"
 read -r feature_sources_shards feature_columns_shards <<<"$feature_counts"
-# worker_limit_seconds_<kind>: the deadline in seconds of each kind of worker (worker_limits in config/quality/ci_groups.json, in minutes).
-worker_limits="$("$python_bin" -c 'import json; [print(kind, round(60 * entry["minutes"])) for kind, entry in json.load(open("config/quality/ci_groups.json"))["worker_limits"].items()]')"
-while read -r kind seconds; do
+# worker_limit_seconds_<kind>, worker_cores_<kind> and worker_weight_seconds_<kind>: the deadline in seconds, the cores and the saved seconds of each kind of worker (worker_limits in
+# config/quality/ci_groups.json, in minutes; the saved minutes are those of the kind's hosted job in config/quality/job_durations.json, 0 when it has none). A kind without "cores" prints "-".
+worker_limits="$("$python_bin" -c 'import json, sys
+saved = {entry["job"]: entry["measured_minutes"] for entry in json.load(open("config/quality/job_durations.json"))["jobs"]}
+for kind, entry in json.load(open("config/quality/ci_groups.json"))["worker_limits"].items():
+    cores = entry.get("cores", "-")
+    if cores != "-" and (type(cores) is not int or cores < 1):
+        sys.exit("worker_limits " + kind + ": cores must be a whole number above 0, not " + repr(cores))
+    print(kind, round(60 * entry["minutes"]), cores, round(60 * saved.get(entry["job"], 0)))')"
+while read -r kind seconds cores weight; do
   printf -v "worker_limit_seconds_$kind" '%s' "$seconds"
+  if [[ "$cores" != "-" ]]; then printf -v "worker_cores_$kind" '%s' "$cores"; fi
+  printf -v "worker_weight_seconds_$kind" '%s' "$weight"
 done <<<"$worker_limits"
 feature_shard="${FEATURE_SHARD:-}"
 if [[ -n "$feature_shard" ]]; then
@@ -469,8 +498,6 @@ combine_feature_columns() { run_group lakehouse_features lakehouse_features_comb
 # The work items: one per group, and for the gold layer one per selected unit. An alone item runs by itself, before the others.
 alone_items=" lakehouse_gold_writer_setup "
 alone=()
-exclusive=()
-exclusive_after=()
 shared=()
 for group in ${run_groups[@]+"${run_groups[@]}"}; do
   if [[ "$group" == "launcher" || "$group" == "acquisition" || "$group" == "repository_hooks" ]]; then
@@ -533,11 +560,15 @@ fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
   shared+=(hook_privacy hook_documentation hook_code)
+  hook_shard_items=()
   for ((hook_index = 1; hook_index <= hook_sample_shards; hook_index++)); do
-    exclusive+=("hook_samples_$hook_index")
+    shared+=("hook_samples_$hook_index")
+    hook_shard_items+=("hook_samples_$hook_index")
   done
-  exclusive+=(hook_lock)
-  exclusive_after+=(hook_samples_combine)
+  shared+=(hook_lock hook_samples_combine)
+  # The combining step runs only after every shard has passed.
+  combine_item=hook_samples_combine
+  printf -v "queue_after_$combine_item" '%s' "${hook_shard_items[*]}"
 fi
 
 run_timed_item() {
@@ -548,7 +579,8 @@ run_timed_item() {
   printf '%s\n' $((SECONDS - item_started)) >"$scratch/$item.seconds"
 }
 
-# set_worker_limit <item>: set worker_limit to the deadline in seconds of the item. A kind without a limit stops the run before anything of it starts.
+# set_worker_limit <item>: set worker_limit to the deadline in seconds of the item, worker_cores to its cores and worker_weight to its saved seconds (the queue admits the largest first).
+# A kind without a limit or without cores stops the run before anything of it starts.
 set_worker_limit() {
   local kind="${1%_[0-9]*}" variable
   variable="worker_limit_seconds_$kind"
@@ -557,6 +589,14 @@ set_worker_limit() {
     exit 1
   fi
   worker_limit="${worker_override:-${!variable}}"
+  variable="worker_cores_$kind"
+  if [[ -z "${!variable:-}" ]]; then
+    printf 'The worker %s has no cores: add "cores" to "%s" in worker_limits in config/quality/ci_groups.json.\n' "$1" "$kind" >&2
+    exit 1
+  fi
+  worker_cores="${!variable}"
+  variable="worker_weight_seconds_$kind"
+  worker_weight="${!variable:-0}"
 }
 # worker_group <item>: the check group of an item, or the item itself when it is not a group's.
 worker_group() {
@@ -578,26 +618,39 @@ write_worker_state() {
     } >"$worker_state"
   )
 }
-# run_items <item>...: stream a single item, buffer parallel items in order, and retain each log and duration. Each item is a worker in its own session with a deadline.
+# run_items <item>...: the admission queue. It starts the workers (each in its own session, with a deadline counted from its admission) within the core budget, the waiting worker with the most
+# saved seconds first, and stays until every worker has ended. It streams a single item, buffers the output of several in the given order, and retains each log and duration.
+# A worker is admitted when no worker runs or when the cores in use plus its own fit the budget; the first waiting worker that cannot be admitted holds back every worker behind it, so no large
+# worker starves. A worker that must follow others (queue_after_<item>, only those in this call) is passed over while they run, and is not started when one of them did not pass.
 run_items() {
-  local item index pid status pids=() starts=() limits=() items=("$@") worker_limit pending mode=buffer stop_unconfirmed=0
-  if ((${#items[@]} == 1)); then mode=stream; fi
+  local item index slot candidate dependency after_variable settled pid status items=("$@") count=$# mode=buffer stop_unconfirmed=0 running_cores=0 finished=0 best waiting
+  local pids=() starts=() limits=() cores=() weights=() states=() order=() taken=() worker_limit worker_cores worker_weight
+  # states: 0 waiting, 1 running, 2 passed, 3 failed, 4 not started
+  if ((count == 1)); then mode=stream; fi
   write_worker_state
-  for item in "$@"; do
-    set_worker_limit "$item"
+  for ((index = 0; index < count; index++)); do
+    set_worker_limit "${items[$index]}"
     limits+=("$worker_limit")
-    starts+=("$SECONDS")
-    if [[ "$mode" == stream ]]; then printf '\n== %s ==\n' "$item"; fi
-    "$python_bin" -I -c "$worker_session_step" "$repo_root" "$worker_grace" "$BASH" --noprofile --norc -c "$worker_body" ci_worker "$worker_state" "$item" "$mode" </dev/null &
-    pids+=("$!")
-    worker_pids+=("$!")
-    timing_files+=("$scratch/$item.timing")
+    cores+=("$worker_cores")
+    weights+=("$worker_weight")
+    states+=(0)
+    pids+=("")
+    starts+=(0)
+    taken+=(0)
   done
-  pending=${#pids[@]}
-  while ((pending > 0)); do
-    for index in ${pids[@]+"${!pids[@]}"}; do
+  for ((slot = 0; slot < count; slot++)); do
+    best=-1
+    for ((index = 0; index < count; index++)); do
+      if ((taken[index])); then continue; fi
+      if ((best < 0)) || ((weights[index] > weights[best])); then best=$index; fi
+    done
+    taken[best]=1
+    order+=("$best")
+  done
+  while ((finished < count)); do
+    for ((index = 0; index < count; index++)); do
+      if ((states[index] != 1)); then continue; fi
       pid="${pids[$index]}"
-      if [[ -z "$pid" ]]; then continue; fi
       if ! kill -0 "$pid" 2>/dev/null; then
         status=0
         wait "$pid" || status=$?
@@ -610,12 +663,15 @@ run_items() {
         fi
         # A worker whose leader (or a launch inside the worker) reports an unconfirmed stop exits with this status.
         if ((status == unconfirmed_status)); then ci_unconfirmed=1; fi
+        states[index]=2
         if ((status != 0)); then
           failed+=("${items[$index]}")
+          states[index]=3
         fi
       elif worker_overdue "${starts[$index]}" "${limits[$index]}"; then
         printf 'Local CI worker %s (check group %s) ran past its deadline of %s s: stopping its session %s.\n' \
           "${items[$index]}" "$(worker_group "${items[$index]}")" "${limits[$index]}" "$pid" >&2
+        states[index]=3
         if stop_sessions "$worker_grace" "$pid"; then
           printf 'Stopped: no process of the session %s is left.\n' "$pid" >&2
           wait "$pid" 2>/dev/null || true
@@ -632,13 +688,80 @@ run_items() {
       fi
       if ((stop_unconfirmed == 0)); then forget_worker "$pid"; fi
       stop_unconfirmed=0
-      pids[index]=""
-      pending=$((pending - 1))
+      running_cores=$((running_cores - cores[index]))
+      finished=$((finished + 1))
+      printf 'Local CI: %s ended (%s of %s cores in use).\n' "${items[$index]}" "$running_cores" "$core_budget"
     done
-    if ((pending > 0)); then sleep 0.5; fi
+    # A worker that follows a worker that did not pass is not started. A chain of them settles here, before the next admission.
+    settled=0
+    while ((settled == 0)); do
+      settled=1
+      for ((index = 0; index < count; index++)); do
+        if ((states[index] != 0)); then continue; fi
+        after_variable="queue_after_${items[$index]}"
+        for dependency in ${!after_variable:-}; do
+          for ((best = 0; best < count; best++)); do
+            if [[ "${items[$best]}" == "$dependency" ]] && ((states[best] == 3 || states[best] == 4)); then
+              printf 'Local CI: not started: %s (it follows %s, which did not pass).\n' "${items[$index]}" "$dependency" >&2
+              states[index]=4
+              finished=$((finished + 1))
+              settled=0
+              break 2
+            fi
+          done
+        done
+      done
+    done
+    # Admit workers in the order of the queue while the next one fits.
+    while true; do
+      candidate=-1
+      for ((slot = 0; slot < count; slot++)); do
+        index="${order[$slot]}"
+        if ((states[index] != 0)); then continue; fi
+        after_variable="queue_after_${items[$index]}"
+        waiting=0
+        for dependency in ${!after_variable:-}; do
+          for ((best = 0; best < count; best++)); do
+            if [[ "${items[$best]}" == "$dependency" ]] && ((states[best] != 2)); then waiting=1; fi
+          done
+        done
+        if ((waiting == 0)); then
+          candidate=$index
+          break
+        fi
+      done
+      if ((candidate < 0)); then break; fi
+      if ((running_cores > 0 && running_cores + cores[candidate] > core_budget)); then break; fi
+      item="${items[$candidate]}"
+      starts[candidate]="$SECONDS"
+      states[candidate]=1
+      running_cores=$((running_cores + cores[candidate]))
+      printf 'Local CI: admitted %s (%s cores; %s of %s cores in use).\n' "$item" "${cores[$candidate]}" "$running_cores" "$core_budget"
+      if [[ "$mode" == stream ]]; then printf '\n== %s ==\n' "$item"; fi
+      "$python_bin" -I -c "$worker_session_step" "$repo_root" "$worker_grace" "$BASH" --noprofile --norc -c "$worker_body" ci_worker "$worker_state" "$item" "$mode" </dev/null &
+      pids[candidate]="$!"
+      worker_pids+=("$!")
+      timing_files+=("$scratch/$item.timing")
+    done
+    # No worker runs and none could be admitted: the rest wait for each other, which a plan never asks for. Fail them by name instead of waiting without a bound.
+    if ((finished < count && running_cores == 0)); then
+      for ((index = 0; index < count; index++)); do
+        if ((states[index] != 0)); then continue; fi
+        printf 'Local CI: %s can never start: the workers it follows wait for it or for each other.\n' "${items[$index]}" >&2
+        failed+=("${items[$index]} (never started)")
+        states[index]=4
+        finished=$((finished + 1))
+      done
+    fi
+    if ((finished < count)); then sleep 0.5; fi
   done
-  for item in "$@"; do
-    if ((${#items[@]} != 1)); then
+  for ((index = 0; index < count; index++)); do
+    item="${items[$index]}"
+    if ((states[index] == 4)); then
+      record "$item" "not started"
+      continue
+    fi
+    if ((count != 1)); then
       printf '\n== %s ==\n' "$item"
       cat "$scratch/$item.log"
     fi
@@ -646,7 +769,7 @@ run_items() {
   done
 }
 # A kind of worker without a limit stops the run before the first worker starts.
-for item in ${alone[@]+"${alone[@]}"} ${exclusive[@]+"${exclusive[@]}"} ${exclusive_after[@]+"${exclusive_after[@]}"} ${shared[@]+"${shared[@]}"}; do
+for item in ${alone[@]+"${alone[@]}"} ${shared[@]+"${shared[@]}"}; do
   set_worker_limit "$item"
 done
 if is_selected lakehouse_features; then
@@ -658,31 +781,17 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
 fi
 # CI_ADMISSION_ONLY=1 stops here, once every kind of worker of the run has a limit, and prints the workers: the CI groups E2E uses it to check the limits without running a worker.
 if [[ "${CI_ADMISSION_ONLY:-0}" == "1" ]]; then
-  printf 'admitted workers: %s %s %s\n' "${alone[*]-}" "${exclusive[*]-}" "${shared[*]-}"
+  printf 'admitted workers: %s %s\n' "${alone[*]-}" "${shared[*]-}"
   ci_finished=1
   exit 0
 fi
+printf 'Local CI core budget: %s cores (%s).\n' "$core_budget" "$core_budget_source"
 if ((${#alone[@]})); then
   run_items "${alone[@]}"
 fi
 if ((${#failed[@]})); then
   printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
   exit 1
-fi
-# The exclusive items (the test-checks shards and the lock group) run at once, with no other work beside them, and then their combining steps run.
-if ((${#exclusive[@]})); then
-  run_items "${exclusive[@]}"
-  if ((${#failed[@]})); then
-    printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
-    exit 1
-  fi
-  if ((${#exclusive_after[@]})); then
-    run_items "${exclusive_after[@]}"
-    if ((${#failed[@]})); then
-      printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
-      exit 1
-    fi
-  fi
 fi
 if ((${#shared[@]})); then
   run_items "${shared[@]}"

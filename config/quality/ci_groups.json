@@ -240,6 +240,7 @@
   ],
   "launcher_shards": 2,
   "launcher_shard_seconds": 1500,
+  "core_budget": 10,
   "feature_shards": {
     "sources": 16,
     "columns": 4
@@ -344,119 +345,148 @@
   "worker_limits": {
     "python_lint": {
       "job": "Core Static Checks",
-      "minutes": 12
+      "minutes": 12,
+      "cores": 1
     },
     "orchestration_checks": {
       "job": "Core Orchestration Offline Checks",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 2
     },
     "repository_code_checks": {
       "job": "Core Code Rules",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 1
     },
     "configuration_checks": {
       "job": "Core Configuration Checks",
-      "minutes": 50
+      "minutes": 50,
+      "cores": 2
     },
     "sql_style": {
       "job": "Core SQL and Terraform Checks",
-      "minutes": 40
+      "minutes": 40,
+      "cores": 2
     },
     "terraform_checks": {
       "job": "Core SQL and Terraform Checks",
-      "minutes": 40
+      "minutes": 40,
+      "cores": 2
     },
     "reuse_gate_checks": {
       "job": "CI Reuse and Gate E2E",
-      "minutes": 12
+      "minutes": 12,
+      "cores": 1
     },
     "lakehouse_bronze": {
       "job": "Lakehouse Bronze Checks",
-      "minutes": 20
+      "minutes": 20,
+      "cores": 2
     },
     "lakehouse_silver": {
       "job": "Lakehouse Silver Checks",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 2
     },
     "lakehouse_gold_checks": {
       "job": "Lakehouse Gold Checks",
-      "minutes": 25
+      "minutes": 25,
+      "cores": 2
     },
     "lakehouse_gold_writer_setup": {
       "job": "Lakehouse Gold Checks",
-      "minutes": 25
+      "minutes": 25,
+      "cores": 10
     },
     "lakehouse_gold_model_metadata_e2e": {
       "job": "Lakehouse Gold Model Metadata E2E",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 4
     },
     "lakehouse_features_store": {
       "job": "Lakehouse Features Checks",
-      "minutes": 15
+      "minutes": 15,
+      "cores": 1
     },
     "lakehouse_features_sources": {
       "job": "Feature Sources (Shard 1 of 16)",
-      "minutes": 20
+      "minutes": 20,
+      "cores": 2
     },
     "lakehouse_features_columns": {
       "job": "Feature Columns (Shard 1 of 4)",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 2
     },
     "lakehouse_features_sources_check": {
       "job": "Feature Sources (Shard 1 of 16)",
-      "minutes": 20
+      "minutes": 20,
+      "cores": 1
     },
     "lakehouse_features_columns_check": {
       "job": "Feature Columns (Shard 1 of 4)",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 1
     },
     "combine_feature_sources": {
       "job": "Feature Combined Evidence",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 1
     },
     "combine_feature_columns": {
       "job": "Feature Combined Evidence",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 1
     },
     "hook_privacy": {
       "job": "Repository Hooks (privacy)",
-      "minutes": 12
+      "minutes": 12,
+      "cores": 1
     },
     "hook_documentation": {
       "job": "Repository Hooks (documentation)",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 1
     },
     "hook_code": {
       "job": "Repository Hooks (code)",
-      "minutes": 40
+      "minutes": 40,
+      "cores": 2
     },
     "hook_lock": {
       "job": "Repository Hooks (lock)",
-      "minutes": 12
+      "minutes": 12,
+      "cores": 1
     },
     "hook_samples": {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 2
     },
     "hook_samples_combine": {
       "job": "Repository Hooks (samples)",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 1
     },
     "acquisition_shard": {
       "job": "Acquisition Checks (Shard 1 of 4)",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 2
     },
     "acquisition_combine": {
       "job": "Acquisition Checks",
-      "minutes": 10
+      "minutes": 10,
+      "cores": 1
     },
     "ci_tooling_checks": {
       "job": "Core CI Tooling Checks",
-      "minutes": 45
+      "minutes": 45,
+      "cores": 2
     },
     "orchestration_engine_e2e": {
       "job": "Core Orchestration Engine Tests",
-      "minutes": 30
+      "minutes": 30,
+      "cores": 2
     }
   },
   "parts": {

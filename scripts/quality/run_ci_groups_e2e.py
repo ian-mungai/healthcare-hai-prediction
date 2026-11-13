@@ -2327,6 +2327,13 @@ def worker_limit_cases(timeouts: dict[str, int]) -> list[dict[str, Any]]:
     groups = [group for group in config["groups"] if group not in ("launcher", "lakehouse_gold", "lakehouse_features")]
     expected = {*groups, *WORKER_KINDS}
     different = {kind: (entry["minutes"], timeouts.get(entry["job"])) for kind, entry in limits.items() if timeouts.get(entry["job"]) != entry["minutes"]}
+    budget = config.get("core_budget")
+    # Each kind declares its cores as a whole number above 0. Only the kind that runs alone (the timing assertions of writer_setup) may exceed the budget.
+    bad_cores = sorted(
+        kind
+        for kind, entry in limits.items()
+        if type(entry.get("cores")) is not int or entry["cores"] < 1 or (entry["cores"] > (budget or 0) and kind != "lakehouse_gold_writer_setup")
+    )
     return [
         {
             "case": "worker_limits_match_the_hosted_jobs",
@@ -2334,7 +2341,13 @@ def worker_limit_cases(timeouts: dict[str, int]) -> list[dict[str, Any]]:
             "missing_kind": sorted(expected - set(limits)),
             "unknown_kind": sorted(set(limits) - expected),
             "different_from_the_job_timeout": different,
-        }
+        },
+        {
+            "case": "worker_cores_fit_the_core_budget",
+            "passed": not bad_cores and type(budget) is int and budget > 0,
+            "kind_without_whole_cores": bad_cores,
+            "core_budget": budget,
+        },
     ]
 
 
@@ -2539,6 +2552,8 @@ def dispatcher_output_cases(base: Path, scratch: Path) -> list[dict[str, Any]]:
             "CI_UNITS": "checks",
             "FEATURE_SHARD": shard,
             "GITHUB_ACTIONS": "true",
+            # The case checks the buffered output of items that run together: the budget admits them all at once, as on any machine.
+            "CI_CORE_BUDGET": "64",
             "GITHUB_STEP_SUMMARY": str(summary),
             "PYTHON_BIN": str(PYTHON),
             "QUALITY_ARTIFACT_DIR": str(quality),
@@ -3384,6 +3399,7 @@ def parallel_plan_cases(scratch: Path) -> list[dict[str, Any]]:
         "scripts/process.py",
         "scripts/quality/ci_groups.py",
         "config/quality/ci_groups.json",
+        "config/quality/job_durations.json",
         "config/quality/launcher_inputs.json",
         "config/lakehouse/bronze_tables.json",
         "config/lakehouse/aws_bronze_grants.json",

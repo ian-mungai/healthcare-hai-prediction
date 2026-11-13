@@ -1,4 +1,5 @@
-"""E2E for the deadline on the workers of scripts/run_ci.sh (WV3-032): a worker that never ends is stopped with its session and fails by name.
+"""E2E for the deadline and the admission queue of the workers of scripts/run_ci.sh (WV3-032): a worker that never ends is stopped with its session
+and fails by name.
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.run_worker_deadline_e2e``. Each case copies the real dispatcher,
 scripts/quality/timing.sh, scripts/process.py (the session stop) and config/quality/ci_groups.json into a scratch folder (a new Git repository, no
@@ -23,6 +24,13 @@ listed, and the dispatcher keeps that status through its exit trap.
 Planted defects run the cases against a changed copy of the dispatcher (no deadline, which is the plain wait; a stop of the direct process only; the
 old whole-second comparison; a stop of the worker's process group without the rest of its session). Each counts as caught only when the named
 check of its case is false and the case raised nothing.
+The admission queue of ``run_items`` (the core budget): the queue cases use stand-in groups queue_a to queue_h, whose items record their start and end
+in events.log of the stub folder (queue_item.py), and a stand-in ``ci_hooks`` for the hook items. They check that at most the budget of cores is in use at
+once, that the worker with the most saved minutes starts first, that a worker with more cores than the budget runs alone and holds back those behind it,
+that the deadline counts from admission, that a failed worker does not stall the queue, that the hosted budget is the CPU count (CI_CORE_BUDGET replaces it
+and a bad value is refused), that a kind without cores stops the run, that hook_samples_combine starts only after every shard passed (and is reported as not
+started after a failed one) and that a worker which follows itself fails by name.
+Planted defects of the queue: no core budget, the shortest worker first, a deadline from the start of the run and a combining step that does not wait.
 The report goes to data/e2e/worker_deadline/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
 """
 
@@ -92,6 +100,7 @@ if [ "$1" = -m ]; then
     fi
     for group in $STUB_GROUPS; do echo "run $group"; done
   fi
+  if [ "$2" = scripts.quality.ci_hooks ]; then exec {PYTHON} -B "$STUB_DIR/hook_item.py" "${{@:3}}"; fi
   exit 0
 fi
 exec {PYTHON} "$@"
@@ -112,6 +121,43 @@ QUICK = """#!/bin/bash
 sleep 1
 echo done >"$STUB_DIR/$1.done"
 """
+# A queue item (queue_item.py <item>): it records "<item> start <time>" and "<item> end <time>" in events.log of the stub folder and reads its settings from
+# files named for the item (seconds_<item>: how long it runs, default 1; exit_<item>: its exit status; never_ends_<item>: it never ends and records a
+# beat_<item> file every 0.05 s, so the last beat shows how long the dispatcher let it live).
+QUEUE_ITEM = """import os, sys, time
+folder, name = os.environ["STUB_DIR"], sys.argv[1]
+def setting(kind, default):
+    path = f"{folder}/{kind}_{name}"
+    return open(path).read().strip() if os.path.exists(path) else default
+def stamp(word):
+    with open(f"{folder}/events.log", "a") as log:
+        log.write(f"{name} {word} {time.time()!r}\\n")
+stamp("start")
+if setting("never_ends", "0") == "1":
+    while True:
+        with open(f"{folder}/beat_{name}.new", "w") as beat:
+            beat.write(repr(time.time()))
+        os.replace(f"{folder}/beat_{name}.new", f"{folder}/beat_{name}")
+        time.sleep(0.05)
+time.sleep(float(setting("seconds", "1")))
+stamp("end")
+sys.exit(int(setting("exit", "0")))
+"""
+# The stand-in of ``python -m scripts.quality.ci_hooks``: it takes the name of the dispatcher's item (hook_samples_2, hook_samples_combine, hook_lock) and
+# runs like a queue item.
+HOOK_ITEM = """import os, sys
+args = sys.argv[1:]
+group = args[args.index("--group") + 1]
+name = "hook_" + group
+if "--shard" in args:
+    name += "_" + args[args.index("--shard") + 1].split("/")[0]
+elif "--combine" in args:
+    name += "_combine"
+sys.argv = ["queue_item.py", name]
+exec(open(os.environ["STUB_DIR"] + "/queue_item.py").read())
+"""
+# The synthetic check groups of the queue cases: each is one item that runs queue_item.py under its own name.
+QUEUE_GROUPS = tuple(f"queue_{letter}" for letter in "abcdefgh")
 # A worker that ends 0.25 s before the limit of LIMIT_SECONDS.
 NEAR = f"""#!/bin/bash
 sleep {LIMIT_SECONDS - 0.25}
@@ -202,6 +248,7 @@ WATCHDOG_BOUND_SECONDS = 0.5 + GRACE_SECONDS + 5 + 3
 TRAP_BOUND_SECONDS = 5 + 5 + 4
 # The body files of the stand-in groups; STUB_PYTHON_LINT picks the script the first group runs.
 GROUP_BODIES = {
+    **{name: f'{name}() {{ timed "stub: {name}" {PYTHON} -B "$STUB_DIR/queue_item.py" {name}; }}\n' for name in QUEUE_GROUPS},
     "python_lint": 'python_lint() { timed "stub: python_lint" bash "$STUB_DIR/$STUB_PYTHON_LINT.sh" python_lint; }\n',
     "orchestration_checks": (
         'orchestration_checks() { timed "stub: orchestration_checks" bash "$STUB_DIR/${STUB_ORCHESTRATION:-quick}.sh" orchestration_checks; }\n'
@@ -229,7 +276,7 @@ class Sandbox:
     # A planted defect sets this to a changed copy of the dispatcher; every sandbox then holds that copy instead of the real file.
     dispatcher_override: str | None = None
 
-    def __init__(self, base: Path, name: str, config: dict[str, Any] | None = None) -> None:
+    def __init__(self, base: Path, name: str, config: dict[str, Any] | None = None, durations: dict[str, float] | None = None) -> None:
         dispatcher = Sandbox.dispatcher_override
         self.root = base / name
         self.stub = self.root / "stub"
@@ -254,6 +301,9 @@ class Sandbox:
             (self.root / f"scripts/ci/groups/{group}.sh").write_text(body, encoding="utf-8")
         document = config if config is not None else json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
         (self.root / "config/quality/ci_groups.json").write_text(json.dumps(document), encoding="utf-8")
+        saved = json.loads((ROOT / "config/quality/job_durations.json").read_text(encoding="utf-8"))
+        saved["jobs"] += [{"job": job, "measured_minutes": minutes, "timeout_minutes": 5, "basis": "stand-in"} for job, minutes in (durations or {}).items()]
+        (self.root / "config/quality/job_durations.json").write_text(json.dumps(saved), encoding="utf-8")
         (self.root / "config/data_paths.json").write_text('{"moved": []}\n', encoding="utf-8")
         for path, text in (
             ("bin_python", STUB_PYTHON),
@@ -261,6 +311,8 @@ class Sandbox:
             ("stub/never_ends.sh", NEVER_ENDS),
             ("stub/ignore_term.sh", IGNORE_TERM),
             ("stub/quick.sh", QUICK),
+            ("stub/queue_item.py", QUEUE_ITEM),
+            ("stub/hook_item.py", HOOK_ITEM),
             ("stub/near.sh", NEAR),
             ("stub/launcher.sh", LAUNCHER),
             ("stub/hiding_launcher.sh", HIDING_LAUNCHER),
@@ -320,11 +372,17 @@ class Sandbox:
                     os.kill(pid, signal.SIGKILL)
 
 
-def case(name: str, base: Path, body: Callable[[Sandbox], dict[str, bool | str | float]], config: dict[str, Any] | None = None) -> dict[str, Any]:
+def case(
+    name: str,
+    base: Path,
+    body: Callable[[Sandbox], dict[str, bool | str | float]],
+    config: dict[str, Any] | None = None,
+    durations: dict[str, float] | None = None,
+) -> dict[str, Any]:
     started = time.monotonic()
     holder: list[Sandbox] = []
     try:
-        sandbox = Sandbox(base, name, config)
+        sandbox = Sandbox(base, name, config, durations)
         holder.append(sandbox)
         checks = body(sandbox)
     except (OSError, ValueError, KeyError, TypeError, AttributeError, SubprocessError) as error:
@@ -846,6 +904,251 @@ def not_before_the_limit(base: Path) -> dict[str, Any]:
     return {"case": "worker_is_not_stopped_before_its_limit", "passed": passed, "seconds": round(sum(a["seconds"] for a in attempts), 1), "checks": checks}
 
 
+def queue_document(budget: int, kinds: dict[str, tuple[int, float]]) -> tuple[dict[str, Any], dict[str, float]]:
+    """The recorded config with ``core_budget`` and one stand-in worker kind per queue group: name -> (cores, saved minutes of its hosted job)."""
+    document = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    document["core_budget"] = budget
+    for name, (cores, _) in kinds.items():
+        document["worker_limits"][name] = {"job": f"Stand-in {name}", "minutes": 5, "cores": cores}
+    return document, {f"Stand-in {name}": minutes for name, (_, minutes) in kinds.items()}
+
+
+def queue_settings(sandbox: Sandbox, **settings: dict[str, float | int | bool]) -> None:
+    """Write the item settings of queue_item.py: ``seconds={"queue_a": 2}`` becomes the file stub/seconds_queue_a."""
+    for kind, items in settings.items():
+        for name, value in items.items():
+            (sandbox.stub / f"{kind}_{name}").write_text(str(int(value) if isinstance(value, bool) else value), encoding="utf-8")
+
+
+def queue_spans(sandbox: Sandbox) -> dict[str, tuple[float, float]]:
+    """Start and end times of every item that ran; an item that never ended ends at its last beat."""
+    starts: dict[str, float] = {}
+    ends: dict[str, float] = {}
+    log = sandbox.stub / "events.log"
+    for line in log.read_text(encoding="utf-8").splitlines() if log.exists() else []:
+        name, word, stamp = line.split()
+        (starts if word == "start" else ends)[name] = float(stamp)
+    for name in starts:
+        beat = sandbox.stub / f"beat_{name}"
+        if name not in ends and beat.exists():
+            ends[name] = float(beat.read_text(encoding="utf-8"))
+    return {name: (starts[name], ends.get(name, float("inf"))) for name in starts}
+
+
+def peak_cores(spans: dict[str, tuple[float, float]], cores: dict[str, int]) -> int:
+    """The most cores that the items held at one moment, sampled at every start."""
+    return max((sum(cores[other] for other, (start, end) in spans.items() if start <= moment < end) for _, (moment, _) in spans.items()), default=0)
+
+
+def overlaps(spans: dict[str, tuple[float, float]], one: str, other: str) -> bool:
+    return spans[one][0] < spans[other][1] and spans[other][0] < spans[one][1]
+
+
+def queue_core_budget_is_the_cap(base: Path) -> dict[str, Any]:
+    names = QUEUE_GROUPS[:6]
+    document, durations = queue_document(6, {name: (2, 4.0) for name in names})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        queue_settings(sandbox, seconds={name: 1.5 for name in names})
+        run = sandbox.run(groups=" ".join(names))
+        spans = queue_spans(sandbox)
+        peak = peak_cores(spans, {name: 2 for name in names})
+        return {
+            "exit_zero": run["exit"] == 0,
+            "every_item_ran": sorted(spans) == sorted(names),
+            "never_more_than_the_budget": peak <= 6,
+            "the_budget_is_used": peak == 6,
+            "budget_line_printed": "core budget: 6" in run["text"],
+            "peak_cores": peak,
+            "seconds": run["seconds"],
+        }
+
+    return case("queue_admits_at_most_the_budget_of_cores", base, body, config=document, durations=durations)
+
+
+def queue_longest_first(base: Path) -> dict[str, Any]:
+    names = QUEUE_GROUPS[:4]
+    minutes = dict(zip(names, (1.0, 4.0, 2.0, 3.0), strict=True))
+    document, durations = queue_document(4, {name: (4, minutes[name]) for name in names})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        queue_settings(sandbox, seconds={name: 0.5 for name in names})
+        run = sandbox.run(groups=" ".join(names))
+        spans = queue_spans(sandbox)
+        order = sorted(spans, key=lambda name: spans[name][0])
+        return {
+            "exit_zero": run["exit"] == 0,
+            "started_in_order_of_saved_minutes": order == ["queue_b", "queue_d", "queue_c", "queue_a"],
+            "order": " ".join(order),
+        }
+
+    return case("queue_admits_the_longest_item_first", base, body, config=document, durations=durations)
+
+
+def queue_oversized_item_runs_alone(base: Path) -> dict[str, Any]:
+    names = QUEUE_GROUPS[:4]
+    # queue_a and queue_b fill the budget of 4; queue_c needs 6 (more than the budget) and runs alone; queue_d (the shortest) starts after queue_c ends.
+    kinds = {"queue_a": (2, 5.0), "queue_b": (2, 4.0), "queue_c": (6, 3.0), "queue_d": (2, 1.0)}
+    document, durations = queue_document(4, kinds)
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        queue_settings(sandbox, seconds={name: 1.2 for name in names})
+        run = sandbox.run(groups=" ".join(names))
+        spans = queue_spans(sandbox)
+        ran = sorted(spans) == sorted(names)
+        return {
+            "exit_zero": run["exit"] == 0,
+            "every_item_ran": ran,
+            "oversized_item_ran_alone": ran and not any(overlaps(spans, "queue_c", other) for other in names if other != "queue_c"),
+            "items_before_it_shared_the_budget": ran and overlaps(spans, "queue_a", "queue_b"),
+            "order_kept_behind_the_oversized_item": ran and spans["queue_d"][0] >= spans["queue_c"][1] >= spans["queue_b"][1],
+        }
+
+    return case("queue_runs_an_item_larger_than_the_budget_alone", base, body, config=document, durations=durations)
+
+
+def queue_deadline_counts_from_admission(base: Path) -> dict[str, Any]:
+    names = QUEUE_GROUPS[:3]
+    document, durations = queue_document(4, {"queue_a": (4, 3.0), "queue_b": (4, 2.0), "queue_c": (4, 1.0)})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The limit is 3 s. queue_c waits about 3 s in the queue and then runs 1.5 s: it passes only when its deadline starts at its admission.
+        # queue_b never ends: it has to live the whole limit after its own admission, which is later than the start of the run.
+        queue_settings(sandbox, seconds={"queue_a": 1.5, "queue_c": 1.5}, never_ends={"queue_b": True})
+        run = sandbox.run(groups=" ".join(names), CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
+        spans = queue_spans(sandbox)
+        lived = spans["queue_b"][1] - spans["queue_b"][0] if "queue_b" in spans else 0.0
+        waited = spans["queue_c"][0] - spans["queue_a"][0] if {"queue_a", "queue_c"} <= set(spans) else 0.0
+        return {
+            "run_did_not_hang": not run["timed_out"],
+            "only_the_item_that_never_ends_failed": f"Local CI failed in: queue_b (deadline {LIMIT_SECONDS} s)" in run["text"]
+            and "queue_c (deadline" not in run["text"],
+            "item_after_the_wait_passed": (sandbox.stub / "events.log").read_text(encoding="utf-8").count("queue_c end") == 1,
+            "queue_b_started_after_queue_a_ended": spans["queue_b"][0] >= spans["queue_a"][1],
+            "queue_b_lived_its_whole_limit_after_admission": lived >= LIMIT_SECONDS - 0.5,
+            "queue_c_started_more_than_the_limit_after_the_run": waited > LIMIT_SECONDS,
+            "lived": round(lived, 2),
+            "waited": round(waited, 2),
+        }
+
+    return case("queue_counts_the_deadline_from_admission", base, body, config=document, durations=durations)
+
+
+def queue_failure_does_not_stall(base: Path) -> dict[str, Any]:
+    names = QUEUE_GROUPS[:3]
+    document, durations = queue_document(4, {"queue_a": (4, 3.0), "queue_b": (4, 2.0), "queue_c": (4, 1.0)})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        queue_settings(sandbox, seconds={name: 0.5 for name in names}, exit={"queue_a": 3})
+        run = sandbox.run(groups=" ".join(names))
+        spans = queue_spans(sandbox)
+        order = sorted(spans, key=lambda name: spans[name][0])
+        return {
+            "run_did_not_hang": not run["timed_out"],
+            "exit_nonzero": run["exit"] not in (None, 0),
+            "failed_item_named": "Local CI failed in: queue_a" in run["text"],
+            "only_the_failed_item_named": re.search(r"^Local CI failed in: queue_a$", run["text"], re.MULTILINE) is not None,
+            "later_items_still_ran": order == ["queue_a", "queue_b", "queue_c"],
+            "later_item_waited_for_the_cores": "queue_b" in spans and "queue_a" in spans and spans["queue_b"][0] >= spans["queue_a"][1],
+            "no_pass_line": "All local CI checks passed" not in run["text"],
+        }
+
+    return case("queue_goes_on_after_a_failing_item", base, body, config=document, durations=durations)
+
+
+def hosted_budget_is_nproc(base: Path) -> dict[str, Any]:
+    cpus = int(run_command("/bin/bash", ["-c", "nproc 2>/dev/null || getconf _NPROCESSORS_ONLN"], check=True).stdout.strip())
+    document, durations = queue_document(cpus + 7, {"queue_a": (1, 1.0)})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        refused = sandbox.run(groups="queue_a", CI_CORE_BUDGET="0")
+        no_worker_started = not (sandbox.stub / "events.log").exists()
+        local = sandbox.run(groups="queue_a")
+        hosted = sandbox.run(groups="queue_a", GITHUB_ACTIONS="true")
+        chosen = sandbox.run(groups="queue_a", GITHUB_ACTIONS="true", CI_CORE_BUDGET="3")
+        return {
+            "invalid_budget_is_refused": refused["exit"] == 2 and "CI_CORE_BUDGET must be a whole number above 0" in refused["text"],
+            "refused_before_any_worker": no_worker_started,
+            "local_budget_is_the_configured_one": f"core budget: {cpus + 7} " in local["text"],
+            "hosted_budget_is_nproc": f"core budget: {cpus} " in hosted["text"] and hosted["exit"] == 0,
+            "environment_replaces_the_budget": "core budget: 3 " in chosen["text"],
+            "cpus": cpus,
+        }
+
+    return case("hosted_budget_defaults_to_nproc", base, body, config=document, durations=durations)
+
+
+def queue_kind_without_cores(base: Path) -> dict[str, Any]:
+    document, durations = queue_document(4, {"queue_a": (1, 1.0), "queue_b": (1, 1.0)})
+    del document["worker_limits"]["queue_b"]["cores"]
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        run = sandbox.run(groups="queue_a queue_b")
+        return {
+            "run_did_not_hang": not run["timed_out"],
+            "exit_nonzero": run["exit"] not in (None, 0),
+            "names_the_worker": "The worker queue_b has no cores" in run["text"],
+            "no_worker_started": not (sandbox.stub / "events.log").exists(),
+        }
+
+    return case("worker_without_cores_stops_the_run_before_any_worker", base, body, config=document, durations=durations)
+
+
+def run_hook_items(sandbox: Sandbox, fail_shard: bool) -> tuple[dict[str, Any], dict[str, tuple[float, float]]]:
+    """The hook items of part all (the shards, the lock group, the combining step) with the real config; each stand-in item runs 1 s."""
+    queue_settings(sandbox, seconds={f"hook_samples_{index}": 1.0 for index in range(1, 5)}, exit={"hook_samples_2": 3} if fail_shard else {})
+    run = sandbox.run(groups="repository_hooks", CI_PART="all", HAI_CI_REUSE="off", CI_WORKER_LIMIT_SECONDS="60")
+    return run, queue_spans(sandbox)
+
+
+def hook_combine_waits_for_its_shards(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        run, spans = run_hook_items(sandbox, fail_shard=False)
+        shards = [f"hook_samples_{index}" for index in range(1, 5)]
+        return {
+            "exit_zero": run["exit"] == 0,
+            "every_shard_and_the_combining_step_ran": all(name in spans for name in (*shards, "hook_samples_combine", "hook_lock")),
+            "combine_started_after_every_shard_ended": "hook_samples_combine" in spans
+            and all(spans["hook_samples_combine"][0] >= spans[name][1] for name in shards),
+        }
+
+    return case("hook_samples_combine_runs_after_its_shards", base, body)
+
+
+def hook_combine_skipped_after_a_failed_shard(base: Path) -> dict[str, Any]:
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        run, spans = run_hook_items(sandbox, fail_shard=True)
+        return {
+            "exit_nonzero": run["exit"] not in (None, 0),
+            "failed_shard_named": "Local CI failed in: hook_samples_2" in run["text"],
+            "combine_did_not_run": "hook_samples_combine" not in spans,
+            "combine_reported_as_not_started": "not started: hook_samples_combine" in run["text"],
+            "other_items_still_ran": all(name in spans for name in ("hook_samples_1", "hook_samples_3", "hook_samples_4", "hook_lock", "hook_code")),
+        }
+
+    return case("hook_samples_combine_does_not_run_after_a_failed_shard", base, body)
+
+
+def queue_that_waits_for_itself(base: Path) -> dict[str, Any]:
+    """A worker that follows itself can never start: the queue names it and fails instead of waiting without a bound."""
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        path = sandbox.root / "scripts/run_ci.sh"
+        text = path.read_text(encoding="utf-8")
+        old = "'%s' \"${hook_shard_items[*]}\""
+        path.write_text(text.replace(old, "'%s' \"$combine_item\""), encoding="utf-8")
+        run = sandbox.run(groups="repository_hooks", CI_PART="all", HAI_CI_REUSE="off", CI_WORKER_LIMIT_SECONDS="60", timeout=30)
+        return {
+            "plan_was_changed": old in text and old not in path.read_text(encoding="utf-8"),
+            "run_did_not_hang": not run["timed_out"],
+            "exit_nonzero": run["exit"] not in (None, 0),
+            "item_named_as_never_started": "Local CI failed in: hook_samples_combine (never started)" in run["text"],
+            "other_items_ran": "hook_samples_1 end" in (sandbox.stub / "events.log").read_text(encoding="utf-8"),
+        }
+
+    return case("worker_that_follows_itself_fails_by_name_instead_of_waiting", base, body)
+
+
 CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "worker_that_never_ends_fails_with_the_group_name": never_ends_two_workers,
     "worker_that_ignores_term_is_killed_after_the_grace_period": term_ignoring_worker,
@@ -867,6 +1170,16 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "deadline_stop_that_cannot_be_confirmed_is_named": unconfirmed_deadline_stop,
     "stop_helper_keeps_status_70": stop_helper_status,
     "leader_with_a_missing_lister_reports_status_70": leader_status,
+    "queue_admits_at_most_the_budget_of_cores": queue_core_budget_is_the_cap,
+    "queue_admits_the_longest_item_first": queue_longest_first,
+    "queue_runs_an_item_larger_than_the_budget_alone": queue_oversized_item_runs_alone,
+    "queue_counts_the_deadline_from_admission": queue_deadline_counts_from_admission,
+    "queue_goes_on_after_a_failing_item": queue_failure_does_not_stall,
+    "hosted_budget_defaults_to_nproc": hosted_budget_is_nproc,
+    "worker_without_cores_stops_the_run_before_any_worker": queue_kind_without_cores,
+    "hook_samples_combine_runs_after_its_shards": hook_combine_waits_for_its_shards,
+    "hook_samples_combine_does_not_run_after_a_failed_shard": hook_combine_skipped_after_a_failed_shard,
+    "worker_that_follows_itself_fails_by_name_instead_of_waiting": queue_that_waits_for_itself,
 }
 
 # plant name -> (pairs of text replaced in the dispatcher, {case that must fail: the check that must be false in it}). The first plant is the plain wait
@@ -923,6 +1236,24 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
     "trap_exits_1": (
         (('exit "$unconfirmed_status"; fi; }', "exit 1; fi; }"),),
         {"deadline_stop_that_cannot_be_confirmed_is_named": "exit_status_is_70"},
+    ),
+    # The queue: no core budget (every worker is admitted at once), the shortest worker first, a deadline that counts from the start of the run, and a combining
+    # step that does not wait for its shards.
+    "no_core_budget": (
+        (("if ((running_cores > 0 && running_cores + cores[candidate] > core_budget)); then break; fi", ""),),
+        {"queue_admits_at_most_the_budget_of_cores": "never_more_than_the_budget"},
+    ),
+    "shortest_first": (
+        (("((weights[index] > weights[best]))", "((weights[index] < weights[best]))"),),
+        {"queue_admits_the_longest_item_first": "started_in_order_of_saved_minutes"},
+    ),
+    "deadline_from_the_start_of_the_run": (
+        (('starts[candidate]="$SECONDS"', "starts[candidate]=0"),),
+        {"queue_counts_the_deadline_from_admission": "item_after_the_wait_passed"},
+    ),
+    "combine_without_its_shards": (
+        (("'%s' \"${hook_shard_items[*]}\"", "'%s' \"\""),),
+        {"hook_samples_combine_runs_after_its_shards": "combine_started_after_every_shard_ended"},
     ),
     "worker_group_only": (
         (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null || true'),),

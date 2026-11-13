@@ -562,7 +562,7 @@ def snapshot(deadline: float) -> dict[str, str]:
             files[name] = (ROOT / path).read_text(encoding="utf-8")
     files[".pre-commit-config.yaml"] = (ROOT / ".pre-commit-config.yaml").read_text(encoding="utf-8")
     # The CI group selector reads the launcher input list; the terraform_checks body copies the other files into every stack it checks.
-    for name in ("config/quality/ci_groups.json", "config/quality/launcher_inputs.json", *group_stack_files()):
+    for name in ("config/quality/ci_groups.json", "config/quality/job_durations.json", "config/quality/launcher_inputs.json", *group_stack_files()):
         files[name] = (ROOT / name).read_text(encoding="utf-8")
     files[".gitignore"] = ".venv/\n.cache/\n"
     return files
