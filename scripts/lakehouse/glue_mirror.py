@@ -4,20 +4,22 @@ After a publish commits, ``gold_publish.mirror_after_commit`` calls ``mirror``; 
 (``gold_publish.commit_publish``), so they call it too.
 For every table that the publish contract names, all Public research data, the mirror makes one Glue table. Its ``metadata_location`` is the metadata
 file of the table's committed snapshot, taken from the newest ``publish_runs`` row. A repeat with the same file, snapshot and run writes nothing. Only mode
-``real`` and the silver, gold and features layers of ``config/lakehouse/athena_mirror.json`` are mirrored, so bronze, test namespaces and the runs
+``real`` and the layers of ``config/lakehouse/athena_mirror.json`` are mirrored, so test namespaces and the runs
 table never reach Glue (``violations``). The Glue registrations are also what the OpenMetadata Glue connector reads (owner decision of Nov 7 2026), because
 OpenMetadata 2.0.7 has no Iceberg connector. The mirror never raises and stops at ``mirror_seconds``: a failure comes back in the report.
 
 ``python -m scripts.lakehouse.glue_mirror check --layer silver|gold|features`` compares each registration with Polaris and exits 1 on any difference.
 It writes nothing.
 
-``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|all [--dry-run] [--bucket NAME]`` registers the tables that are
-already published, without Spark and without Polaris. It reads each table's metadata files in S3 and registers the snapshot that the main branch of the
-newest metadata file points to, never a staged or audit branch snapshot. A table whose metadata cannot be resolved without doubt is refused and named: no
-file, two files with one version number, a file name that is not numbered, a location that is not the table folder, a main that is missing or not a branch,
-or a type the mirror cannot map. The registration records the run ``registered_from_s3``. A later publish replaces it, and a registration that a publish
-wrote is kept. A rerun with unchanged metadata writes nothing. ``--dry-run`` plans and writes nothing. The caller needs Glue write access (the
-administrator profile; the project user has none) and read access to the bucket.
+``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|bronze|all [--dry-run] [--bucket NAME]`` registers the tables
+that are already published, without Spark and without Polaris. The bronze layer has no publish step, so it has no publish-time registration and no
+``check``: ``register`` is its only route, for the tables that ``config/lakehouse/bronze_tables.json`` lists (not ``column_map`` and not the
+``bronze_dictionary`` namespace). It reads each table's metadata files in S3 and registers the snapshot that the main branch of the newest metadata file
+points to, never a staged or audit branch snapshot. A table whose metadata cannot be resolved without doubt is refused and named: no file, two files
+with one version number, a file name that is not numbered, a location that is not the table folder, a main that is missing or not a branch, or a type
+the mirror cannot map. The registration records the run ``registered_from_s3``. A later publish replaces it, and a registration that a publish wrote is
+kept. A rerun with unchanged metadata writes nothing. ``--dry-run`` plans and writes nothing. The caller needs Glue write access (the administrator
+profile; the project user has none) and read access to the bucket.
 """
 
 from __future__ import annotations
@@ -36,7 +38,11 @@ from typing import Any, Protocol
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
-MIRRORED_LAYERS = ("silver", "gold", "features")
+# The layers with a publish contract and a publish_runs table: their publishes register tables and ``check`` compares them with Polaris.
+PUBLISHED_LAYERS = ("silver", "gold", "features")
+# Bronze has no publish step, so no hook and no check. Its tables are the ones that ``config/lakehouse/bronze_tables.json`` lists, registered by ``register``.
+MIRRORED_LAYERS = (*PUBLISHED_LAYERS, "bronze")
+BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 # The publish contract of each mirrored layer: the features publish is the gold engine with its own contract (scripts/features/features_publish.py).
 LAYER_CONTRACTS = {
     "silver": REPO_ROOT / "data_contracts/lakehouse/silver_publish.json",
@@ -305,7 +311,7 @@ def load_config(path: Path = CONFIG) -> MirrorConfig:
 
 
 def violations(config: MirrorConfig) -> list[str]:
-    """Why the config may not be used: a layer other than gold, or a namespace other than the layer's own (a test namespace, for example)."""
+    """Why the config may not be used: a layer other than silver, gold, features or bronze, or a namespace other than the layer's own (a test one)."""
     found: list[str] = []
     for layer, spec in config.layers.items():
         if layer not in MIRRORED_LAYERS:
@@ -502,6 +508,13 @@ def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3
     return {"status": "failed" if failed else "ok" if changed else "unchanged", "tables": outcomes}
 
 
+def layer_tables(layer: str) -> list[str]:
+    """The tables a layer mirrors: the tables of its publish contract, and for bronze the tables of the bronze table list."""
+    if layer == "bronze":
+        return sorted(str(item["table"]) for item in json.loads(BRONZE_TABLES.read_text())["tables"])
+    return list(layer_plan(layer).tables)
+
+
 def layer_plan(layer: str) -> Any:
     """The publish plan of a mirrored layer, read from its own contract."""
     from scripts.lakehouse import gold_publish
@@ -530,7 +543,7 @@ def register_main(args: argparse.Namespace, parser: argparse.ArgumentParser, glu
     glue = glue or glue_client()
     failed = False
     for layer in layers:
-        report = register_from_s3(config, layer, tables if tables is not None else list(layer_plan(layer).tables), s3, bucket, glue, dry_run=args.dry_run)
+        report = register_from_s3(config, layer, tables if tables is not None else layer_tables(layer), s3, bucket, glue, dry_run=args.dry_run)
         if report["status"] == "skipped":
             sys.stdout.write(f"{layer}: skipped: {report['reason']}\n")
         for table, outcome in report["tables"].items():
@@ -565,8 +578,8 @@ def main(
         if args.source is None:
             parser.error("register needs --source s3")
         return register_main(args, parser, glue, s3, config, tables)
-    if args.layer == "all" or args.source or args.dry_run or args.bucket:
-        parser.error("check takes one --layer and no --source, --bucket or --dry-run")
+    if args.layer not in PUBLISHED_LAYERS or args.source or args.dry_run or args.bucket:
+        parser.error("check takes one layer with a publish_runs table (silver, gold or features) and no --source, --bucket or --dry-run")
     spark = None
     try:
         if source is None or snapshots is None or run_id is None:

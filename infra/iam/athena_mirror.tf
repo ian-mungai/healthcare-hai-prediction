@@ -1,6 +1,7 @@
 locals {
   athena_mirror_config = jsondecode(file("${path.module}/../../config/lakehouse/athena_mirror.json"))
-  # The mirror covers the silver, gold and features layers: every table their publishes write, and no bronze, test namespace or runs table. The OpenMetadata Glue
+  # The mirror covers the silver, gold and features layers (every table their publishes write) and the bronze layer (every table of config/lakehouse/bronze_tables.json),
+  # and no test namespace, bronze dictionary namespace or runs table. The OpenMetadata Glue
   # connector catalogs the same registrations (owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector).
   athena_layers        = local.athena_mirror_config.layers
   athena_account_arn   = "arn:aws:glue:${var.aws_region}:${var.expected_account_id}"
@@ -17,10 +18,15 @@ locals {
     gold     = "${path.module}/../../data_contracts/lakehouse/gold_contract.json"
     features = "${path.module}/../../data_contracts/lakehouse/features_publish.json"
   }
+  # Bronze has no publish contract and no publish_runs table; it gets the same deny for uniformity.
+  athena_runs_tables   = { for layer, path in local.athena_contracts : layer => jsondecode(file(path)).publish.runs_table }
   athena_layer_folders = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/*"]
-  athena_runs_folders  = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/${jsondecode(file(local.athena_contracts[layer])).publish.runs_table}/*"]
-  athena_mirror_arns   = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
-  athena_glue_endpoint = var.athena_mirror_prepared && var.job_endpoints_enabled
+  athena_runs_folders  = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/${lookup(local.athena_runs_tables, layer, "publish_runs")}/*"]
+  # Only the layers that a publish writes have a writer role; bronze is registered by the owner's register command, and reaches no writer.
+  athena_published_layers   = { for layer, spec in local.athena_layers : layer => spec if contains(keys(local.athena_contracts), layer) }
+  athena_writer_mirror_arns = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_published_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
+  athena_mirror_arns        = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
+  athena_glue_endpoint      = var.athena_mirror_prepared && var.job_endpoints_enabled
   athena_reader_policy = templatefile("${path.module}/owner_policies/athena_reader.json", {
     WORKGROUP_ARN      = local.athena_workgroup_arn
     GLUE_ARNS          = jsonencode(local.athena_mirror_arns)
@@ -30,7 +36,7 @@ locals {
     BUCKET_ARN         = local.bronze_bucket_arn
     RESULTS_OBJECT_ARN = "${local.bronze_bucket_arn}/${local.athena_results_path}"
   })
-  athena_writer_arns = [for layer in keys(local.athena_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
+  athena_writer_arns = [for layer in keys(local.athena_published_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
   # The catalog task role of the OpenMetadata ingestion (Fargate catalog task or metadata host task) reads the registrations and writes nothing.
   athena_catalog_reader     = var.athena_mirror_prepared && var.openmetadata_prepared
   athena_catalog_reader_arn = "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_openmetadata_task")}"
@@ -174,7 +180,7 @@ resource "aws_vpc_endpoint" "athena_glue" {
         Effect    = "Allow"
         Principal = { AWS = "*" }
         Action    = ["glue:GetDatabase", "glue:GetTable", "glue:CreateTable", "glue:UpdateTable"]
-        Resource  = local.athena_mirror_arns
+        Resource  = local.athena_writer_mirror_arns
         Condition = { ArnEquals = { "aws:PrincipalArn" = local.athena_writer_arns } }
       }],
       [for reader in [local.athena_catalog_reader_arn] : {

@@ -20,7 +20,8 @@
           "includes": [
             "^hai_mirror_silver$",
             "^hai_mirror_gold$",
-            "^hai_mirror_features$"
+            "^hai_mirror_features$",
+            "^hai_mirror_bronze$"
           ]
         }
       }

@@ -41,7 +41,11 @@ Check = dict[str, bool]
 class FakeGlue:
     """The Glue calls the mirror may use. ``fail`` names calls that raise a service error; every call is logged."""
 
-    def __init__(self, databases: Sequence[str] = ("hai_mirror_gold", "hai_mirror_features", "hai_mirror_silver"), fail: dict[str, str] | None = None) -> None:
+    def __init__(
+        self,
+        databases: Sequence[str] = ("hai_mirror_gold", "hai_mirror_features", "hai_mirror_silver", "hai_mirror_bronze"),
+        fail: dict[str, str] | None = None,
+    ) -> None:
         self.databases = set(databases)
         self.tables: dict[tuple[str, str], dict[str, Any]] = {}
         self.calls: list[tuple[str, str, str]] = []
@@ -479,15 +483,15 @@ def case_test_namespace_touches_nothing() -> Check:
     return {"no_call": glue.calls == [], "skipped": report.get("status") == "skipped" and hooked.get("status") == "skipped"}
 
 
-def case_bronze_and_other_layers_touch_nothing() -> Check:
+def case_bronze_dictionary_and_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
-    direct = glue_mirror.mirror(enabled(), "bronze", "real", ids(["any_table"]), FakeSource({"any_table": FIRST}), glue)
+    direct = glue_mirror.mirror(enabled(), "bronze_dictionary", "real", ids(["any_table"]), FakeSource({"any_table": FIRST}), glue)
     with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
-        hooked = hook(context(Path(directory), namespace="bronze"), FakeSource({PILOT: FIRST}), glue)
+        hooked = hook(context(Path(directory), namespace="bronze_dictionary"), FakeSource({PILOT: FIRST}), glue)
         runs = hook(context(Path(directory)), FakeSource({"publish_runs": FIRST}), glue)
     return {
         "no_call": glue.calls == [],
-        "bronze_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
+        "bronze_dictionary_skipped": direct.get("status") == "skipped" and hooked.get("status") == "skipped",
         "runs_table_never_listed": "publish_runs" not in json.dumps(runs) and ("create_table", "hai_mirror_gold", "publish_runs") not in glue.calls,
     }
 
@@ -507,12 +511,12 @@ def case_other_layers_touch_nothing() -> Check:
     glue = FakeGlue()
     reports = {
         layer: glue_mirror.mirror(enabled(), layer, "real", ids(["int_acs_county_values"]), FakeSource({"int_acs_county_values": FIRST}), glue)
-        for layer in ("bronze", "bronze_dictionary", "silver_e2e", "features_e2e", "gold_e2e")
+        for layer in ("bronze_dictionary", "bronze_e2e", "silver_e2e", "features_e2e", "gold_e2e")
     }
     return {
         "no_call": glue.calls == [],
         "every_layer_skipped": all(report.get("status") == "skipped" for report in reports.values()),
-        "no_bronze_database_in_config": not any(layer.startswith("bronze") for layer in glue_mirror.load_config().layers),
+        "no_bronze_dictionary_or_test_database_in_config": not any(layer.startswith("bronze_") for layer in glue_mirror.load_config().layers),
     }
 
 
@@ -633,15 +637,23 @@ def case_config_scope_is_silver_gold_and_features_only() -> Check:
     config = glue_mirror.load_config()
     gold = config.layers["gold"]
     return {
-        "only_silver_gold_and_features_are_configured": list(config.layers) == ["silver", "gold", "features"]
-        and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features")),
+        "only_the_four_layers_are_configured": list(config.layers) == ["silver", "gold", "features", "bronze"]
+        and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features", "bronze"))
+        and config.layers["bronze"].database == "hai_mirror_bronze",
         "real_config_has_no_violation": glue_mirror.violations(config) == [],
         "silver_is_allowed": glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver")})) == [],
         "silver_test_namespace_is_flagged": any(
             "silver_e2e" in line for line in glue_mirror.violations(replace(config, layers={"silver": replace(gold, namespace="silver_e2e")}))
         ),
         "features_is_allowed": glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features")})) == [],
-        "bronze_is_flagged": any("bronze" in line for line in glue_mirror.violations(replace(config, layers={"bronze": replace(gold, namespace="bronze")}))),
+        "bronze_is_allowed": glue_mirror.violations(replace(config, layers={"bronze": replace(gold, namespace="bronze")})) == [],
+        "bronze_test_namespace_is_flagged": any(
+            "bronze_e2e" in line for line in glue_mirror.violations(replace(config, layers={"bronze": replace(gold, namespace="bronze_e2e")}))
+        ),
+        "bronze_dictionary_is_flagged": any(
+            "bronze_dictionary" in line
+            for line in glue_mirror.violations(replace(config, layers={"bronze_dictionary": replace(gold, namespace="bronze_dictionary")}))
+        ),
         "features_test_namespace_is_flagged": any(
             "features_e2e" in line for line in glue_mirror.violations(replace(config, layers={"features": replace(gold, namespace="features_e2e")}))
         ),
@@ -923,11 +935,11 @@ def case_s3_register_obeys_the_switch_and_the_layer_scope() -> Check:
     glue, s3 = FakeGlue(), s3_with([PILOT])
     off = register(s3, glue, [PILOT], config=replace(glue_mirror.load_config(), enabled=False))
     quiet = glue.calls == [] and s3.calls == []
-    bronze = register(s3, glue, [PILOT], layer="bronze")
-    plans = {layer: glue_mirror.layer_plan(layer) for layer in glue_mirror.MIRRORED_LAYERS}
+    bronze = register(s3, glue, [PILOT], layer="bronze_dictionary")
+    plans = {layer: glue_mirror.layer_plan(layer) for layer in glue_mirror.PUBLISHED_LAYERS}
     return {
         "off_touches_nothing": off["status"] == "skipped" and quiet,
-        "bronze_touches_nothing": bronze["status"] == "skipped" and glue.calls == [] and s3.calls == [],
+        "bronze_dictionary_touches_nothing": bronze["status"] == "skipped" and glue.calls == [] and s3.calls == [],
         "runs_table_is_not_in_any_layer_contract": all("publish_runs" not in plan.tables for plan in plans.values()),
     }
 
@@ -1020,6 +1032,64 @@ def case_s3_register_maps_iceberg_types_to_glue_types() -> Check:
     }
 
 
+def bronze_names() -> list[str]:
+    return sorted(item["table"] for item in json.loads((REPO_ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"])
+
+
+def case_bronze_tables_are_the_listed_bronze_tables() -> Check:
+    names = glue_mirror.layer_tables("bronze")
+    return {
+        "every_listed_table": names == bronze_names() and len(names) == len(set(names)) and len(names) > 300,
+        "no_column_map_table": "column_map" not in names,
+        "every_name_is_plain": all(glue_mirror.TABLE_NAME.fullmatch(name) for name in names),
+        "other_layers_still_follow_their_contract": glue_mirror.layer_tables("gold") == list(glue_mirror.layer_plan("gold").tables),
+    }
+
+
+def case_s3_register_registers_bronze_in_its_own_database() -> Check:
+    first, second = bronze_names()[:2]
+    s3 = FakeS3()
+    s3.put(metadata_key(first, 1, layer="bronze"), metadata_document(first, 10, layer="bronze"))
+    s3.put(metadata_key(second, 1, layer="bronze"), metadata_document(second, 20, {"audit": 21}, layer="bronze"))
+    s3.put(metadata_key(second, 2, layer="bronze"), metadata_document(second, 20, {"audit": 22}, layer="bronze"))
+    glue = FakeGlue()
+    report = register(s3, glue, [first, second], layer="bronze")
+    held = glue.tables[("hai_mirror_bronze", second)]["Parameters"]
+    again = register(s3, glue, [first, second], layer="bronze")
+    return {
+        "both_created_in_the_bronze_database": report["tables"] == {first: "created", second: "created"}
+        and {db for db, _ in glue.tables} == {"hai_mirror_bronze"},
+        "main_snapshot_and_newest_file_with_it": held["hai_snapshot_id"] == "20" and held["metadata_location"].endswith(metadata_name(2)),
+        "location_is_the_bronze_folder": glue.tables[("hai_mirror_bronze", first)]["StorageDescriptor"]["Location"]
+        == f"s3://{BUCKET}/lakehouse/bronze/{first}",
+        "only_the_bronze_folders_are_listed": {prefix for call, prefix in s3.calls if call == "list_objects_v2"}
+        == {f"lakehouse/bronze/{first}/metadata/", f"lakehouse/bronze/{second}/metadata/"},
+        "rerun_changes_nothing": again["status"] == "unchanged" and len(glue.writes()) == 2,
+    }
+
+
+def case_register_command_covers_bronze_and_check_refuses_it() -> Check:
+    first = bronze_names()[0]
+    s3 = FakeS3()
+    s3.put(metadata_key(first, 1, layer="bronze"), metadata_document(first, 10, layer="bronze"))
+    glue = FakeGlue()
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        try:
+            code = glue_mirror.main(["register", "--source", "s3", "--layer", "bronze", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled(), tables=[first])
+        except SystemExit as error:
+            code = int(error.code or 0)
+        try:
+            refused = glue_mirror.main(["check", "--layer", "bronze"], source=FakeSource({}), glue=glue, config=enabled(), snapshots={}, run_id=RUN_ID)
+        except SystemExit as error:
+            refused = int(error.code or 0)
+    return {
+        "bronze_registered_by_the_command": code == 0 and f"bronze.{first}: created" in out.getvalue(),
+        "check_has_no_bronze_head_and_exits_two": refused == 2 and "publish_runs" in err.getvalue(),
+        "no_publish_hook_for_bronze": glue_mirror.PUBLISHED_LAYERS == ("silver", "gold", "features"),
+    }
+
+
 CASES: dict[str, Callable[[], Check]] = {
     "first_publish_registers": case_first_publish_registers,
     "repeat_is_a_no_op": case_repeat_is_a_no_op,
@@ -1031,7 +1101,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "disabled_touches_nothing": case_disabled_touches_nothing,
     "tracked_config_turns_the_mirror_on": case_tracked_config_turns_the_mirror_on,
     "test_namespace_touches_nothing": case_test_namespace_touches_nothing,
-    "bronze_and_other_layers_touch_nothing": case_bronze_and_other_layers_touch_nothing,
+    "bronze_dictionary_and_other_layers_touch_nothing": case_bronze_dictionary_and_other_layers_touch_nothing,
     "second_gold_table_is_mirrored": case_second_gold_table_is_mirrored,
     "other_layers_touch_nothing": case_other_layers_touch_nothing,
     "silver_layer_is_mirrored": case_silver_layer_is_mirrored,
@@ -1069,6 +1139,9 @@ CASES: dict[str, Callable[[], Check]] = {
     "s3_register_obeys_one_deadline": case_s3_register_obeys_one_deadline,
     "s3_register_command_reports_and_exits": case_s3_register_command_reports_and_exits,
     "s3_register_maps_iceberg_types_to_glue_types": case_s3_register_maps_iceberg_types_to_glue_types,
+    "bronze_tables_are_the_listed_bronze_tables": case_bronze_tables_are_the_listed_bronze_tables,
+    "s3_register_registers_bronze_in_its_own_database": case_s3_register_registers_bronze_in_its_own_database,
+    "register_command_covers_bronze_and_check_refuses_it": case_register_command_covers_bronze_and_check_refuses_it,
 }
 
 

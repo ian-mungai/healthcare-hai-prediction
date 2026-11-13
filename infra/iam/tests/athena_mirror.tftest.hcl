@@ -93,13 +93,14 @@ run "prepared_mirror_has_silver_gold_and_features_databases_and_a_limited_workgr
 
   assert {
     condition = (
-      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features"]) &&
+      toset(keys(aws_glue_catalog_database.athena_mirror)) == toset(["silver", "gold", "features", "bronze"]) &&
       aws_glue_catalog_database.athena_mirror["silver"].name == "hai_mirror_silver" &&
       aws_glue_catalog_database.athena_mirror["gold"].name == "hai_mirror_gold" &&
       aws_glue_catalog_database.athena_mirror["features"].name == "hai_mirror_features" &&
+      aws_glue_catalog_database.athena_mirror["bronze"].name == "hai_mirror_bronze" &&
       alltrue([for database in aws_glue_catalog_database.athena_mirror : database.tags.DataClassification == "Public"])
     )
-    error_message = "One Glue database each for the silver, gold and features layers and none for bronze, named by the tracked config and tagged Public like the collected research data they list."
+    error_message = "One Glue database each for the bronze, silver, gold and features layers, named by the tracked config and tagged Public like the collected research data they list."
   }
 
   assert {
@@ -217,9 +218,11 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
       ])
     )
-    error_message = "Glue reads reach the silver, gold and features mirror databases and their tables, and no other database."
+    error_message = "Glue reads reach the silver, gold, features and bronze mirror databases and their tables, and no other database."
   }
 
   assert {
@@ -228,11 +231,12 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
       ]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the three published layer folders and writes reach only the results prefix. Nothing deletes."
+    error_message = "Data reads reach only the four layer folders and writes reach only the results prefix. Nothing deletes."
   }
 
   assert {
@@ -243,6 +247,7 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/publish_runs/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
         "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/publish_runs/*",
       ])
     )
     error_message = "One explicit deny keeps the publish_runs bookkeeping table of each layer unreadable, even though its folder sits inside the layer folder."
@@ -273,16 +278,20 @@ run "reader_policy_names_no_principal_and_no_wider_resource" {
       "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
       "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
       "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
+      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
       "arn:aws:s3:::example-project-ci-bucket",
       "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/publish_runs/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
       "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/publish_runs/*",
     ])
-    error_message = "The reader policy reaches exactly the mirror workgroup, the three mirror databases, the results prefix, the bucket and the three layer folders with their publish_runs denials."
+    error_message = "The reader policy reaches exactly the mirror workgroup, the four mirror databases, the results prefix, the bucket and the four layer folders with their publish_runs denials."
   }
 }
 
@@ -366,7 +375,8 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
         "lakehouse/gold_e2e/dim_state/data/a.parquet",
         "lakehouse/silver_e2e/hospital/data/a.parquet",
         "lakehouse/features_e2e/feature_matrix_hospital/data/a.parquet",
-        "lakehouse/bronze/hospital/data/a.parquet",
+        "lakehouse/bronze_dictionary/cms_hospitals_dictionaries/data/a.parquet",
+        "lakehouse/bronzer/hospital/data/a.parquet",
         "lakehouse/goldfish/dim_state/data/a.parquet",
         "bronze_objects/sha256/a",
         ] : !anytrue([
@@ -375,17 +385,17 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
           ]) if s.Effect == "Allow" && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")
       ])
     ])
-    error_message = "Test namespaces, bronze, a folder that only starts with a layer name and the rest of the bucket are not readable. Each layer grant ends at the directory boundary."
+    error_message = "Test namespaces, the bronze dictionary namespace, a folder that only starts with a layer name and the rest of the bucket are not readable. Each layer grant ends at the directory boundary."
   }
 
   assert {
     condition = alltrue([
       for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
       !contains(s.Action, "s3:ListBucket") || alltrue([
-        for p in s.Condition.StringLike["s3:prefix"] : contains(["athena/results/*", "lakehouse/silver/*", "lakehouse/gold/*", "lakehouse/features/*"], p)
+        for p in s.Condition.StringLike["s3:prefix"] : contains(["athena/results/*", "lakehouse/silver/*", "lakehouse/gold/*", "lakehouse/features/*", "lakehouse/bronze/*"], p)
       ])
     ])
-    error_message = "Listing the bucket needs a prefix limited to the results folder and the three layer folders."
+    error_message = "Listing the bucket needs a prefix limited to the results folder and the four layer folders."
   }
 
   assert {
@@ -514,10 +524,12 @@ run "catalog_reads_the_mirror_through_the_endpoint" {
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_bronze",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_bronze/*",
       ]) &&
       alltrue([for s in jsondecode(aws_iam_role_policy.openmetadata_glue_read[0].policy).Statement : s.Effect == "Allow"])
     )
-    error_message = "The catalog task role reads the three mirror databases and their tables and has no Glue write and no other database."
+    error_message = "The catalog task role reads the four mirror databases and their tables and has no Glue write and no other database."
   }
 
   assert {

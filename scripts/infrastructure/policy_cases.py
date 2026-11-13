@@ -1118,6 +1118,14 @@ def pass_role_cases() -> Iterator[Case]:
         service = action.split(":")[0]
         if service != "s3":
             yield Case(f"the project user has no direct {action}", request(action, target), False)
+    bronze_database, bronze_table = arn("glue", "database/hai_mirror_bronze"), arn("glue", "table/hai_mirror_bronze/acs_api_detailed")
+    for action, target in (
+        ("glue:GetDatabase", bronze_database),
+        ("glue:GetTable", bronze_table),
+        ("glue:GetTables", bronze_table),
+        ("glue:CreateTable", bronze_table),
+    ):
+        yield Case(f"the project user has no direct {action} on the bronze mirror", request(action, target), False)
     for action in ("AssumeRoleWithWebIdentity", "AssumeRoleWithSAML", "GetFederationToken", "GetSessionToken"):
         yield Case(f"sts: no {action}", request(f"sts:{action}", READER, region=None), False)
 
@@ -2845,6 +2853,16 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             {"Sid": "PlantedDirectAthena", "Effect": "Allow", "Action": ["athena:StartQueryExecution", "glue:GetTable"], "Resource": "*"}
         )
 
+    def athena_direct_bronze_glue(documents: dict[str, dict[str, Any]]) -> None:
+        documents["healthcare_hai_prediction_sts_policy"]["Statement"].append(
+            {
+                "Sid": "PlantedDirectBronzeGlue",
+                "Effect": "Allow",
+                "Action": ["glue:GetDatabase", "glue:GetTable", "glue:GetTables"],
+                "Resource": [arn("glue", "database/hai_mirror_bronze"), arn("glue", "table/hai_mirror_bronze/*")],
+            }
+        )
+
     def promote_create_unconditional(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "s3", "CreatePromotionRecords")["Condition"]
 
@@ -4021,6 +4039,10 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         "the Athena statement reaches every Athena role": ("AssumeRole another athena role", athena_role_prefix),
         "the Athena statement reaches the reader of every environment": ("AssumeRole athena_reader of another environment", athena_any_environment),
         "the Athena statement carries direct Athena and Glue actions": ("the project user has no direct athena:StartQueryExecution", athena_direct_access),
+        "the Athena statement carries direct Glue read on the bronze mirror": (
+            "the project user has no direct glue:GetTable on the bronze mirror",
+            athena_direct_bronze_glue,
+        ),
         "the promotion create loses its header condition": ("promote records: overwrite", promote_create_unconditional),
         "the promotion read reaches the whole bucket": ("promote records: GetObject outside promote/", promote_read_whole_bucket),
         "the promotion records may be deleted": ("promote records: DeleteObject", promote_records_deleted),
