@@ -1288,7 +1288,6 @@ def both_hooks(name: str, expect_pass: bool, **extra: Any) -> tuple[Case, Case]:
     return Case(f"{name} (removed names)", "removed-names", expect_pass, **extra), Case(f"{name} (importer types)", IMPORTERS_HOOK, expect_pass, **extra)
 
 
-
 def account_arn(account: str) -> str:
     """An IAM role ARN in ``account``."""
     return f"arn:aws:iam::{account}:role/deploy"

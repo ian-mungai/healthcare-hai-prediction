@@ -83,6 +83,11 @@
   ],
   "inventory_reads": [
     {
+      "module": "infra/services/scripts/code_fetch.py",
+      "pattern": null,
+      "why": "reviewed: install lists only host folders at run time, never a repository folder: iterdir at infra/services/scripts/code_fetch.py:73 checks that the repo path, when it is a plain folder, holds no content, and iterdir at :79 lists the release folders under the host's repo_releases to find the complete release that matches the digest; it reads no file contents there"
+    },
+    {
       "module": "orchestration/airflow_steps.py",
       "pattern": null,
       "why": "reviewed: folder_bytes walks (os.walk at orchestration/airflow_steps.py:158) only the family scratch folders under HAI_LAUNCH_SCRATCH_PATH, the host scratch volume mounted read-only into the Airflow container, to count their allocated bytes; it lists no repository folder and reads no file contents"
@@ -393,6 +398,7 @@
     "scripts/orchestration/in_image_checks.py": 1
   },
   "inventory_sites": {
+    "infra/services/scripts/code_fetch.py": 2,
     "orchestration/airflow_steps.py": 1,
     "orchestration/code_digest.py": 3,
     "orchestration/launcher.py": 9,
@@ -578,7 +584,6 @@
     "dags/features_m6_dag.py",
     "dags/gold_transform_dag.py",
     "dags/ingestion_dag.py",
-    "dags/launch_settle_dag.py",
     "dags/metadata_ingest_dag.py",
     "dags/model_promotion_dag.py",
     "dags/serving_deploy_dag.py",
