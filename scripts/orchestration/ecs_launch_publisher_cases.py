@@ -1,23 +1,21 @@
-"""The Run 3 publisher job on the direct ECS launch: the request staged by the owner becomes a host launch, against the fake ECS API and in-memory buckets.
+"""The Run 3 publisher job on the direct ECS launch: the run kind and capture root of a launch become a host launch, against the fake ECS API.
 
-Every case drives the real ``orchestration.publisher_launch`` reader and the real ``Launcher`` and ``S3LaunchStore``. The staged request lives in its own
-in-memory bucket that answers ``NoSuchKey`` like S3. Each case builds its own rig, so cases run in any order.
+Every case drives the real ``orchestration.publisher_launch`` checks and the real ``Launcher`` and ``S3LaunchStore``. Nothing is staged for the run
+but its code, so no bucket holds a request. Each case builds its own rig, so cases run in any order.
 """
 
 from __future__ import annotations
 
-import hashlib
 import json
 from collections.abc import Callable
 from dataclasses import replace
+from functools import partial
 from typing import Any
 
-from botocore.exceptions import EndpointConnectionError
-
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
-from orchestration.ecs_launch import EcsFitProbe, JobSpec, Launcher, LaunchRefused, LaunchUnavailable, Resources, S3LaunchStore, launch_record_prefix
-from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec, request_key
-from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs, client_error
+from orchestration.ecs_launch import EcsFitProbe, JobSpec, Launcher, LaunchRefused, Resources, S3LaunchStore, launch_record_prefix
+from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec
+from scripts.orchestration.ecs_fake import ACCOUNT, CLUSTER, FakeLogs
 from scripts.orchestration.ecs_launch_fake import FakeClock, FakeLaunchBucket, RevisionEcs
 
 RUN = "20261110T100000Z-abcdef01"
@@ -38,37 +36,8 @@ SETTINGS = EcsSettings(
 # The revision of the publisher host definition that the preflight checked (registered as revision 1 by every rig).
 REVISION = f"arn:aws:ecs:stand-in-region:{ACCOUNT}:task-definition/example_dev_job_publisher_host:1"
 NEED = Resources(cpu_units=2048, memory_mib=8192, scratch_bytes=20 * 2**30)
-REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api", "hud_api"], "prior_state": None}
-TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
-PRIOR = {"key": "raw/run3_state/" + "b" * 64 + "/state.json", "version_id": "v1", "sha256": "d" * 64}
-
-
-class StageBucket:
-    """The run stage prefix of the data bucket: ``get_object`` returns the staged body or raises ``NoSuchKey``; ``fault`` makes the next read fail."""
-
-    def __init__(self) -> None:
-        self.objects: dict[str, bytes] = {}
-        self.fault: Exception | None = None
-        self.reads = 0
-
-    def stage(self, body: bytes) -> str:
-        self.objects[request_key(RUN)] = body
-        return hashlib.sha256(body).hexdigest()
-
-    def get_object(self, **arguments: Any) -> dict[str, Any]:
-        self.reads += 1
-        if self.fault is not None:
-            fault, self.fault = self.fault, None
-            raise fault
-        if arguments.get("Bucket") != BUCKET or arguments.get("Key") not in self.objects:
-            raise client_error("NoSuchKey", "GetObject")
-        body = self.objects[arguments["Key"]]
-
-        class Body:
-            def read(self, limit: int = -1) -> bytes:
-                return body if limit < 0 else body[:limit]
-
-        return {"Body": Body()}
+REQUEST = {"kind": "bootstrap", "capture_root": "raw/"}
+TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
 
 
 class Rig:
@@ -78,7 +47,6 @@ class Rig:
         self.ecs, self.logs = RevisionEcs(), FakeLogs()
         self.ecs.register("example_dev_job_publisher_host", NEED.memory_mib, None)
         self.records = FakeLaunchBucket(BUCKET, f"{PREFIX}/")
-        self.stage = StageBucket()
         self.time = FakeClock()
         self.ecs.clock = lambda: self.time.now
         self.adapter = EcsAdapter(self.ecs, self.logs, SETTINGS)
@@ -87,8 +55,8 @@ class Rig:
         probe = EcsFitProbe(self.ecs, CLUSTER, lambda: 2 * NEED.scratch_bytes)
         return Launcher(self.adapter, S3LaunchStore(self.records, BUCKET, PREFIX), probe, self.time.clock())
 
-    def spec(self, attempt: int = 1) -> JobSpec:
-        return replace(publisher_spec(self.stage, BUCKET, RUN, attempt, CODE, NEED, self.time.now), task_definition=REVISION)
+    def spec(self, attempt: int = 1, request: object = REQUEST) -> JobSpec:
+        return replace(publisher_spec(request, RUN, attempt, CODE, NEED, self.time.now), task_definition=REVISION)
 
     def record(self, attempt: int, event: str) -> dict[str, Any]:
         return dict(json.loads(self.records.objects[f"{PREFIX}/{RUN}/publisher/{attempt:02d}/{event}.json"]))
@@ -107,27 +75,26 @@ def refuses(error: type[BaseException], action: Callable[[], Any]) -> BaseExcept
     raise AssertionError(f"expected {error.__name__}")
 
 
-def encoded(document: object) -> bytes:
-    return json.dumps(document, sort_keys=True).encode()
-
-
 def publisher_runs_on_the_host_bound_to_its_request() -> None:
     rig = Rig()
-    digest = rig.stage.stage(encoded(REQUEST))
     job = rig.spec()
     require(job.job == "publisher" and job.deadline_seconds == DEADLINE_SECONDS == 86_400, f"the publisher job with its one-day deadline: {job}")
-    require(job.bound == {"code_digest": CODE["sha256"], "request_hash": digest, "input_run": RUN}, f"bound to the code and the request file: {job.bound}")
+    require(
+        job.bound["code_digest"] == CODE["sha256"] and job.bound["input_run"] == RUN and len(job.bound["request_hash"]) == 64,
+        f"bound to the code and the digest of the request: {job.bound}",
+    )
     require(job.acceptance == ("run",) and job.log_container == "run", "acceptance and logs come from the run container")
     run = job.environment["run"]
     require(
-        run["PUBLISHER_INPUTS_SHA256"] == "a" * 64
-        and run["PUBLISHER_QUEUE_SHA256"] == "b" * 64
-        and run["PUBLISHER_RESUME_SOURCES"] == "bls_api,hud_api"
-        and run["PUBLISHER_PRIOR_STATE"] == ""
-        and run["PUBLISHER_REQUEST_SHA256"] == digest
-        and run["HAI_CAPTURE_ROOT"] == "raw/"
-        and run["RUN_ID"] == RUN,
-        f"the run container gets the checked request values: {run}",
+        run
+        == {
+            "RUN_ID": RUN,
+            "CODE_SHA256": CODE["sha256"],
+            "PUBLISHER_RUN_KIND": "bootstrap",
+            "HAI_CAPTURE_ROOT": "raw/",
+            "HAI_DEADLINE_UTC": run["HAI_DEADLINE_UTC"],
+        },
+        f"the run container gets its code digest, the run kind and the capture root and nothing else: {run}",
     )
     fetch = job.environment["fetch"]
     require(fetch["CODE_RUN_ID"] == CODE["run_id"] and fetch["CODE_SHA256"] == CODE["sha256"], f"the fetch container gets the code archive: {fetch}")
@@ -142,30 +109,30 @@ def publisher_runs_on_the_host_bound_to_its_request() -> None:
         f"host placement with no Fargate network: {sent[0]}",
     )
     intent = rig.record(1, "intent")
-    require(intent["deadline_seconds"] == 86_400 and intent["bound"]["request_hash"] == digest, f"the intent records the deadline and request: {intent}")
+    require(
+        intent["deadline_seconds"] == 86_400 and intent["bound"]["request_hash"] == job.bound["request_hash"],
+        f"the intent records the deadline and request: {intent}",
+    )
 
 
-def publisher_prior_state_reaches_the_task() -> None:
+def publisher_launch_names_each_run_kind_and_capture_root() -> None:
     rig = Rig()
-    rig.stage.stage(encoded(REQUEST | {"prior_state": PRIOR}))
-    run = rig.spec().environment["run"]
-    require(json.loads(run["PUBLISHER_PRIOR_STATE"]) == PRIOR, f"the approved prior state is passed as one JSON value: {run['PUBLISHER_PRIOR_STATE']}")
+    for kind in ("bootstrap", "monthly"):
+        for root in ("raw/", TEST_ROOT):
+            run = rig.spec(request={"kind": kind, "capture_root": root}).environment["run"]
+            require(run["PUBLISHER_RUN_KIND"] == kind and run["HAI_CAPTURE_ROOT"] == root, f"{kind} under {root} reached the task as {run}")
+    first = rig.spec(request=REQUEST).bound["request_hash"]
+    require(first == rig.spec(request=dict(reversed(REQUEST.items()))).bound["request_hash"], "the digest of the request does not depend on key order")
+    require(first != rig.spec(request=REQUEST | {"kind": "monthly"}).bound["request_hash"], "another kind has another digest")
+    require(first != rig.spec(request=REQUEST | {"capture_root": TEST_ROOT}).bound["request_hash"], "another root has another digest")
 
 
 def publisher_capture_root_is_validated_and_reaches_the_task() -> None:
-    """The request may name the capture root. No root means raw/; only raw/ or one run-ID test folder is accepted; a prior state sits under that root."""
-    prior = {**PRIOR, "key": f"{TEST_ROOT}run3_state/{'b' * 64}/state.json"}
-    for given, expected in ((None, "raw/"), ("raw/", "raw/"), (TEST_ROOT, TEST_ROOT)):
-        rig = Rig()
-        digest = rig.stage.stage(encoded(REQUEST if given is None else REQUEST | {"capture_root": given}))
-        run = rig.spec().environment["run"]
-        require(
-            run["HAI_CAPTURE_ROOT"] == expected and run["PUBLISHER_REQUEST_SHA256"] == digest,
-            f"root {given!r} reaches the run container as {expected!r}: {run}",
-        )
-    rig = Rig()
-    rig.stage.stage(encoded(REQUEST | {"capture_root": TEST_ROOT, "prior_state": prior}))
-    require(json.loads(rig.spec().environment["run"]["PUBLISHER_PRIOR_STATE"]) == prior, "a prior state under the test folder is accepted")
+    """The request names the capture root. Only raw/ or one run-ID test folder is accepted, and it reaches the run container as the capture root variable. Every
+    other form is refused by name before anything is recorded or launched. (No root is refused too: the DAG form supplies raw/ as its default.)"""
+    for given in ("raw/", TEST_ROOT):
+        run = Rig().spec(request=REQUEST | {"capture_root": given}).environment["run"]
+        require(run["HAI_CAPTURE_ROOT"] == given, f"root {given!r} reaches the run container as {run['HAI_CAPTURE_ROOT']!r}")
     bad_roots = (
         "",
         "ingestion_test/",
@@ -181,83 +148,80 @@ def publisher_capture_root_is_validated_and_reaches_the_task() -> None:
     )
     for root in bad_roots:
         rig = Rig()
-        rig.stage.stage(encoded(REQUEST | {"capture_root": root}))
-        error = refuses(LaunchRefused, rig.spec)
+        error = refuses(LaunchRefused, partial(rig.spec, request=REQUEST | {"capture_root": root}))
         require(str(error) == "publisher_request_has_wrong_capture_root", f"root {root!r} is refused: {error}")
         require(rig.ecs.count("run_task") == 0 and not rig.records.objects, f"root {root!r}: nothing is recorded or launched")
-    for label, body in (
-        ("a raw prior state under a test folder", REQUEST | {"capture_root": TEST_ROOT, "prior_state": PRIOR}),
-        ("a test folder prior state under raw/", REQUEST | {"prior_state": prior}),
-    ):
-        rig = Rig()
-        rig.stage.stage(encoded(body))
-        error = refuses(LaunchRefused, rig.spec)
-        require(str(error) == "publisher_request_has_wrong_prior_state", f"{label} is refused: {error}")
-
-
-def publisher_request_not_staged_is_retryable() -> None:
-    rig = Rig()
-    error = refuses(LaunchUnavailable, rig.spec)
-    require(str(error) == "publisher_request_not_staged", f"a request not staged yet is retryable: {error}")
-    rig.stage.fault = EndpointConnectionError(endpoint_url="https://s3.invalid")
-    rig.stage.stage(encoded(REQUEST))
-    error = refuses(LaunchUnavailable, rig.spec)
-    require(str(error) == "publisher_request_unreadable", f"a read that fails in transit is retryable: {error}")
-    rig.stage.fault = client_error("AccessDenied", "GetObject")
-    error = refuses(LaunchUnavailable, rig.spec)
-    require(str(error) == "publisher_request_unreadable", f"a refused read is reported: {error}")
-    require(rig.ecs.count("run_task") == 0 and not rig.records.objects, "nothing is recorded or launched")
 
 
 def publisher_request_refusals() -> None:
-    bad: dict[str, tuple[bytes, str]] = {
-        "too large": (encoded(REQUEST | {"resume_sources": ["a" * 60] * 80}), "publisher_request_too_large"),
-        "not JSON": (b"{not json", "publisher_request_malformed"),
-        "a list": (b"[]", "publisher_request_needs_exactly_inputs_queue_resume_sources_and_prior_state"),
-        "a missing key": (
-            encoded({k: v for k, v in REQUEST.items() if k != "prior_state"}),
-            "publisher_request_needs_exactly_inputs_queue_resume_sources_and_prior_state",
-        ),
-        "an extra key": (encoded(REQUEST | {"hosts": "all"}), "publisher_request_needs_exactly_inputs_queue_resume_sources_and_prior_state"),
-        "a short digest": (encoded(REQUEST | {"inputs_sha256": "a" * 63}), "publisher_request_has_wrong_values"),
-        "an upper-case digest": (encoded(REQUEST | {"queue_sha256": "B" * 64}), "publisher_request_has_wrong_values"),
-        "a source with a slash": (encoded(REQUEST | {"resume_sources": ["../bls"]}), "publisher_request_has_wrong_values"),
-        "sources as text": (encoded(REQUEST | {"resume_sources": "bls_api"}), "publisher_request_has_wrong_values"),
-        "a prior state outside the state prefix": (
-            encoded(REQUEST | {"prior_state": PRIOR | {"key": "raw/other/state.json"}}),
-            "publisher_request_has_wrong_prior_state",
-        ),
-        "a prior state with a bad digest": (encoded(REQUEST | {"prior_state": PRIOR | {"sha256": "x"}}), "publisher_request_has_wrong_prior_state"),
-        "a prior state with an extra key": (encoded(REQUEST | {"prior_state": PRIOR | {"etag": "e"}}), "publisher_request_has_wrong_prior_state"),
+    inputs_or_state = "publisher_request_takes_no_inputs_or_prior_state"
+    exact = "publisher_request_needs_exactly_kind_and_capture_root"
+    bad: dict[str, tuple[object, str]] = {
+        "no request": (None, exact),
+        "a list": ([], exact),
+        "text": ("bootstrap", exact),
+        "a missing root": ({"kind": "bootstrap"}, exact),
+        "a missing kind": ({"capture_root": "raw/"}, exact),
+        "an extra key": (REQUEST | {"hosts": "all"}, exact),
+        "an inputs archive": (REQUEST | {"inputs_sha256": "a" * 64}, inputs_or_state),
+        "a queue digest": (REQUEST | {"queue_sha256": "b" * 64}, inputs_or_state),
+        "a prior state": (REQUEST | {"prior_state": None}, inputs_or_state),
+        "resumed sources": (REQUEST | {"resume_sources": ["bls_api"]}, inputs_or_state),
+        "an inputs archive and a prior state with no kind": ({"inputs_sha256": "a" * 64, "prior_state": None, "capture_root": "raw/"}, inputs_or_state),
+        "an unknown kind": (REQUEST | {"kind": "retry"}, "publisher_request_has_wrong_kind"),
+        "a kind in upper case": (REQUEST | {"kind": "Monthly"}, "publisher_request_has_wrong_kind"),
+        "a kind that is not text": (REQUEST | {"kind": ["monthly"]}, "publisher_request_has_wrong_kind"),
+        "no slash at the end of the root": (REQUEST | {"capture_root": "raw"}, "publisher_request_has_wrong_capture_root"),
+        "the empty root": (REQUEST | {"capture_root": ""}, "publisher_request_has_wrong_capture_root"),
+        "another folder": (REQUEST | {"capture_root": "lakehouse/"}, "publisher_request_has_wrong_capture_root"),
+        "a test folder without a run id": (REQUEST | {"capture_root": "ingestion_test/t1/"}, "publisher_request_has_wrong_capture_root"),
+        "a test folder inside a folder": (REQUEST | {"capture_root": f"raw/{TEST_ROOT}"}, "publisher_request_has_wrong_capture_root"),
+        "a test folder with a longer path": (REQUEST | {"capture_root": f"{TEST_ROOT}more/"}, "publisher_request_has_wrong_capture_root"),
+        "a root that leaves its folder": (REQUEST | {"capture_root": "ingestion_test/../raw/"}, "publisher_request_has_wrong_capture_root"),
+        "a root with a line break": (REQUEST | {"capture_root": "raw/\n"}, "publisher_request_has_wrong_capture_root"),
+        "a root that is not text": (REQUEST | {"capture_root": None}, "publisher_request_has_wrong_capture_root"),
     }
-    for label, (body, reason) in bad.items():
+    for label, (request, reason) in bad.items():
         rig = Rig()
-        rig.stage.stage(body)
-        error = refuses(LaunchRefused, rig.spec)
+        error = refuses(LaunchRefused, partial(rig.spec, request=request))
         require(str(error) == reason, f"{label}: expected {reason}, got {error}")
         require(rig.ecs.count("run_task") == 0 and not rig.records.objects, f"{label}: nothing is recorded or launched")
-    rig = Rig()
-    rig.stage.stage(encoded(REQUEST))
-    error = refuses(LaunchRefused, lambda: publisher_spec(rig.stage, BUCKET, RUN, 1, {"run_id": "latest", "sha256": "c" * 64}, NEED, 0.0))
+    error = refuses(LaunchRefused, lambda: publisher_spec(REQUEST, RUN, 1, {"run_id": "latest", "sha256": "c" * 64}, NEED, 0.0))
     require(str(error) == "publisher_code_has_wrong_values", f"a code archive without a run and digest is refused: {error}")
 
 
 def publisher_request_changed_after_launch_is_refused() -> None:
     rig = Rig()
-    rig.stage.stage(encoded(REQUEST))
     require(rig.launcher().run(rig.spec()).ok, "the first attempt succeeds")
     records = dict(rig.records.objects)
-    rig.stage.stage(encoded(REQUEST | {"resume_sources": ["bls_api"]}))
-    error = refuses(LaunchRefused, lambda: rig.launcher().run(rig.spec(2)))
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(rig.spec(2, REQUEST | {"kind": "monthly"})))
     require("request_hash" in str(error), f"a request changed after the first launch needs a new run: {error}")
+    error = refuses(LaunchRefused, lambda: rig.launcher().run(rig.spec(2, REQUEST | {"capture_root": TEST_ROOT})))
+    require("request_hash" in str(error), f"another root after the first launch needs a new run: {error}")
     require(rig.ecs.count("run_task") == 1 and rig.records.objects == records, "the changed request records and launches nothing")
+
+
+def publisher_task_lists_the_kinds_and_roots_the_launch_lists() -> None:
+    """The host job checks the run kind and the capture root again on its own, and its two lists equal those of the launch."""
+    from orchestration import ecs_preflight
+    from scripts.acquisition import publisher_run, raw_root
+
+    require(publisher_run.KINDS == ecs_preflight.KINDS, f"the kinds differ: {publisher_run.KINDS}, {ecs_preflight.KINDS}")
+    for root in ("raw/", TEST_ROOT, "", "raw", "ingestion_test/x/", TEST_ROOT + "raw/", TEST_ROOT.upper(), "lakehouse/"):
+        launch = ecs_preflight.CAPTURE_ROOT.fullmatch(root) is not None
+        try:
+            publisher_run.state_root({"HAI_CAPTURE_ROOT": root})
+            task = True
+        except publisher_run.PublisherError:
+            task = False
+        require(launch == task == (root == "raw/" or raw_root.is_test_root(root)), f"root {root!r}: the launch says {launch} and the task says {task}")
 
 
 CASES: dict[str, Callable[[], None]] = {
     "publisher_runs_on_the_host_bound_to_its_request": publisher_runs_on_the_host_bound_to_its_request,
-    "publisher_prior_state_reaches_the_task": publisher_prior_state_reaches_the_task,
+    "publisher_launch_names_each_run_kind_and_capture_root": publisher_launch_names_each_run_kind_and_capture_root,
     "publisher_capture_root_is_validated_and_reaches_the_task": publisher_capture_root_is_validated_and_reaches_the_task,
-    "publisher_request_not_staged_is_retryable": publisher_request_not_staged_is_retryable,
     "publisher_request_refusals": publisher_request_refusals,
     "publisher_request_changed_after_launch_is_refused": publisher_request_changed_after_launch_is_refused,
+    "publisher_task_lists_the_kinds_and_roots_the_launch_lists": publisher_task_lists_the_kinds_and_roots_the_launch_lists,
 }

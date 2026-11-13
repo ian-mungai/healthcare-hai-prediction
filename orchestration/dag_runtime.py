@@ -33,6 +33,8 @@ ASSETS = {"features_commit": "features"}
 PREFLIGHT_TIMEOUT = timedelta(minutes=30)
 CHECK_TIMEOUT = timedelta(minutes=15)
 CHAIN_TASKS = ("preflight", "job", "evidence")
+# The step of the Run 3 publisher: its DAG form names the run kind and the capture root, and the launch checks them.
+PUBLISHER_TEMPLATE = "publisher_run"
 # The module that launches a step, and the environment setting that names the pool of host jobs.
 LAUNCH_MODULE = "orchestration.airflow_steps"
 POOL_SETTING = "HAI_LAUNCH_POOL"
@@ -74,6 +76,7 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
             raw["promotion_mode"] = mode
             mode = "real"
         training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
+    publisher = {"kind": params["run_kind"], "capture_root": params["capture_root"]} if template == PUBLISHER_TEMPLATE else None
     return SubmissionRequest(
         template,
         str(params["run_id"]),
@@ -84,6 +87,7 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
         instance.run_id,
         None if selected == "latest" else str(selected),
         training=training,
+        publisher=publisher,
     )
 
 

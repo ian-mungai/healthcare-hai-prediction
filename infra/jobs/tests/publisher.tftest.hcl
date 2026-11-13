@@ -182,15 +182,11 @@ run "publisher_containers_fetch_the_code_then_run_the_publisher" {
     condition = alltrue([
       for item in [
         { name = "HAI_CAPTURE_ROOT", value = "raw/" },
-        { name = "HAI_APPROVED_HOSTS", value = "/workspace/inputs/publisher_hosts.json" },
-        { name = "HAI_APPROVED_HOSTS_APPROVAL", value = "/workspace/inputs/hosts_approval.json" },
-        { name = "HAI_STORED_MIRROR", value = "/workspace/inputs/mirror" },
-        { name = "HAI_STORED_INDEX", value = "/workspace/inputs/stored_index.json" },
         { name = "EXPECTED_ACCOUNT_ID", value = "111111111111" },
         { name = "TASK_ROLE_NAME", value = "example_project_job_publisher_task_dev" },
       ] : contains(jsondecode(output.publisher_host_container_definitions)[2].environment, item)
     ])
-    error_message = "The run container captures under raw/ and enforces the staged approved hosts files itself."
+    error_message = "The run container captures under raw/ unless the launch names a test folder, and runs as the publisher task role."
   }
 }
 
@@ -225,7 +221,7 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
       propagate_tags    = "TASK_DEFINITION"
       container_environment = {
         fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-        run   = ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
+        run   = ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
       }
       scratch = { workspace = "/data/job_scratch/publisher/work", tmp = "/data/job_scratch/publisher/tmp" }
     }
@@ -237,7 +233,15 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
         for name in lookup(output.publisher_host_run_task.container_environment, container.name, []) : contains(container.environment, { name = name, value = name == "HAI_CAPTURE_ROOT" ? "raw/" : "" })
       ])
     ])
-    error_message = "Each run variable exists in its container, empty except the capture root, which defaults to raw/, so the launch only overrides it."
+    error_message = "Each run variable exists empty in its container, except the capture root, which defaults to raw/, so the launch only overrides it."
+  }
+  assert {
+    condition = alltrue([
+      for container in jsondecode(output.publisher_host_container_definitions) : alltrue([
+        for variable in container.environment : !contains(["PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256", "HAI_STORED_MIRROR", "HAI_STORED_INDEX", "HAI_APPROVED_HOSTS", "HAI_APPROVED_HOSTS_APPROVAL"], variable.name)
+      ])
+    ])
+    error_message = "No container carries a variable of the staged inputs flow: the run takes its inputs from the code archive and names its approved hosts file itself."
   }
 }
 

@@ -68,6 +68,27 @@
         "docker"
       ]
     },
+    "publisher": {
+      "type": "object",
+      "description": "The launch request of a Run 3 publisher step: the run kind and the capture root, nothing else. The launch checks the whole record and refuses an inputs archive or a prior state.",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "capture_root"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "bootstrap",
+            "monthly"
+          ]
+        },
+        "capture_root": {
+          "type": "string",
+          "pattern": "^(raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/)$(?![\\s\\S])"
+        }
+      }
+    },
     "training": {
       "type": "object",
       "additionalProperties": false,

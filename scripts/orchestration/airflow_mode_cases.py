@@ -54,7 +54,6 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 from __future__ import annotations
 
 import ast
-import hashlib
 import importlib
 import inspect
 import json
@@ -117,7 +116,8 @@ HOST_DEFINITIONS = ROOT / "infra/jobs/tests/host_definitions.json"
 # A Terraform test (tests/publisher.tftest.hcl) keeps this file equal to that plan.
 PUBLISHER_HOST_DEFINITION = ROOT / "infra/jobs/tests/publisher_host_definition.json"
 PUBLISHER_RUN = "20261110T120000Z-ab12cd34"
-PUBLISHER_REQUEST = {"inputs_sha256": "a" * 64, "queue_sha256": "b" * 64, "resume_sources": ["bls_api"], "prior_state": None}
+PUBLISHER_TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+PUBLISHER_PARAMS = {"run_id": PUBLISHER_RUN, "mode": "real", "run_kind": "bootstrap", "capture_root": "raw/"}
 LAYER_JOBS = frozenset({"silver", "gold", "features"})
 POLARIS = "http://10.0.0.5:8181/api/catalog"
 MLFLOW = "http://10.0.0.5:5100"
@@ -221,7 +221,6 @@ class Rig:
             host_capacity=capacity,
             task_definition=self.adapter.task_definition,
             host_job_cap=self.read_host_cap,
-            publisher_request=preflight.publisher_request_reader(self.stage, BUCKET),
         )
         self.preflight.host_launch_hold = lambda: "clear"  # no services apply is running; held_rig puts the production hold reader here
         self.services = steps.LaunchServices(
@@ -2125,70 +2124,106 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
     )
 
 
-def publisher_body(document: object) -> bytes:
-    return json.dumps(document, sort_keys=True).encode()
-
-
 def ingestion_dag_runs_the_publisher_on_the_host() -> None:
-    """ingestion_dag is one chain of four tasks: the Run 3 publisher job launches once on its host definition, bound to its staged request."""
-    rig = Rig()
-    body = publisher_body(PUBLISHER_REQUEST)
-    rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", body)
-    with world(rig, "ingestion_dag", {"run_id": PUBLISHER_RUN, "mode": "real"}) as current:
-        states = current.run_dag("ingestion_dag.py")
-    require(states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}, f"the ingestion chain did not pass: {states}")
-    sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
-    require(len(sent) == 1 and sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the publisher did not run once on the host: {sent}")
-    run = rig.environment()["run"]
+    """ingestion_dag is one chain of four tasks: the Run 3 publisher job launches once on its host definition, with the run kind and the capture root of the
+    DAG run and nothing staged for it but its code. A trigger that names neither gets the bootstrap kind under raw/."""
+    for trigger, kind, root in (
+        ({"run_id": PUBLISHER_RUN, "mode": "real"}, "bootstrap", "raw/"),
+        ({"run_id": PUBLISHER_RUN, "mode": "real", "run_kind": "monthly", "capture_root": PUBLISHER_TEST_ROOT}, "monthly", PUBLISHER_TEST_ROOT),
+    ):
+        rig = Rig()
+        with world(rig, "ingestion_dag", dict(trigger)) as current:
+            states = current.run_dag("ingestion_dag.py")
+        require(states == {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}, f"the ingestion chain did not pass: {states}")
+        sent = [arguments for name, arguments in rig.ecs.calls if name == "run_task"]
+        require(len(sent) == 1 and sent[0]["taskDefinition"] == "example_dev_job_publisher_host", f"the publisher did not run once on the host: {sent}")
+        run = rig.environment()["run"]
+        require(
+            run
+            == {
+                "RUN_ID": PUBLISHER_RUN,
+                "CODE_SHA256": DIGEST,
+                "PUBLISHER_RUN_KIND": kind,
+                "HAI_CAPTURE_ROOT": root,
+                "HAI_DEADLINE_UTC": run["HAI_DEADLINE_UTC"],
+            },
+            f"the run container did not get its code digest, the run kind and the capture root alone: {run}",
+        )
+        require(rig.environment()["fetch"]["CODE_SHA256"] == DIGEST, "the fetch container did not get the staged code digest")
+        end = rig.end(PUBLISHER_RUN, "publisher")
+        require(end is not None and end["outcome"] == "succeeded", f"the launch record does not say the publisher passed: {end}")
+        require(
+            not any("publisher_request" in entry or "inputs/publisher" in entry for entry in rig.stage.log),
+            f"the launch read a staged publisher file: {rig.stage.log}",
+        )
+
+
+def ingestion_dag_form_refuses_a_capture_root_it_does_not_list() -> None:
+    """Airflow refuses the trigger at the form, before any task, when the root is not raw/ or one test folder, and the form holds only the run, the mode, the
+    kind and the root. The stand-in checks types and patterns; the kinds are an enum, which the real image check (real_image_dags.form_check) and the launch
+    refuse."""
+    base = {"run_id": PUBLISHER_RUN, "mode": "real"}
+    for label, trigger in (
+        ("a root without its slash", base | {"capture_root": "raw"}),
+        ("another folder", base | {"capture_root": "lakehouse/"}),
+        ("a test folder without a run id", base | {"capture_root": "ingestion_test/t1/"}),
+        ("a test folder inside raw", base | {"capture_root": f"raw/{PUBLISHER_TEST_ROOT}"}),
+        ("a root with a line break", base | {"capture_root": "raw/\n"}),
+    ):
+        rig = Rig()
+        with world(rig, "ingestion_dag", dict(trigger)) as current:
+            error = refuses(FormRefused, partial(current.run_dag, "ingestion_dag.py"))
+            require(not current.states, f"{label}: a task ran after the refused form")
+        require(not rig.ecs.calls and not rig.records.objects, f"{label}: the refused form reached the cloud or the launch records: {error}")
+    declared = ingestion_form()
     require(
-        run["PUBLISHER_INPUTS_SHA256"] == "a" * 64
-        and run["PUBLISHER_RESUME_SOURCES"] == "bls_api"
-        and run["PUBLISHER_PRIOR_STATE"] == ""
-        and run["HAI_CAPTURE_ROOT"] == "raw/"
-        and run["PUBLISHER_REQUEST_SHA256"] == hashlib.sha256(body).hexdigest(),
-        f"the run container did not get the checked request: {run}",
+        set(declared) == {"run_id", "mode", "run_kind", "capture_root"},
+        f"the form holds other fields than the run, the mode, the kind and the root: {declared}",
     )
-    require(rig.environment()["fetch"]["CODE_SHA256"] == DIGEST, "the fetch container did not get the staged code digest")
-    end = rig.end(PUBLISHER_RUN, "publisher")
-    require(end is not None and end["outcome"] == "succeeded", f"the launch record does not say the publisher passed: {end}")
 
 
-def ingestion_dag_without_a_request_launches_nothing() -> None:
+def ingestion_form() -> dict[str, Any]:
+    """The parameters of the shipped ingestion_dag form, as the stand-in reads them."""
     rig = Rig()
-    with world(rig, "ingestion_dag", {"run_id": PUBLISHER_RUN, "mode": "real"}) as current:
-        states = current.run_dag("ingestion_dag.py")
-    require(states["preflight"] == "failed" and states["job"] == "upstream_failed" and states["gate"] == "failed", f"a missing request did not stop: {states}")
-    require(rig.tasks_started() == 0 and not rig.records.objects, "a run without its staged request launched or recorded something")
+    with world(rig, "ingestion_dag", dict(PUBLISHER_PARAMS)) as current:
+        current.run_dag("ingestion_dag.py")
+    return dict(current.dag_settings["params"])
 
 
 def publisher_request_is_checked_and_bound() -> None:
-    params = {"run_id": PUBLISHER_RUN, "mode": "real"}
+    """The launch step refuses a kind or root it does not list before any record or cloud call, runs a good one once and refuses another kind or root for
+    a run that launched."""
     rig = Rig()
-    with world(rig, "ingestion_dag", params) as current:
-        raised = refuses(LaunchUnavailable, lambda: current.step("publisher_run"))
-        require("not_staged" in str(raised) and rig.time.now - 1_800_000_000.0 <= 700, f"a missing request was not retried within a bound: {raised}")
-        prior = {"key": "raw/run3_state/" + "b" * 64 + "/state.json", "version_id": "v1", "sha256": "d" * 64}
-        for bad in (
-            b"not json",
-            b"x" * 5000,
-            {**PUBLISHER_REQUEST, "hosts": "all"},
-            {**PUBLISHER_REQUEST, "inputs_sha256": "A" * 64},
-            {**PUBLISHER_REQUEST, "resume_sources": ["../bls"]},
-            {**PUBLISHER_REQUEST, "prior_state": {**prior, "key": "raw/other/state.json"}},
+    with world(rig, "ingestion_dag", dict(PUBLISHER_PARAMS)) as current:
+        for label, changes in (
+            ("a retry kind", {"run_kind": "retry"}),
+            ("no kind", {"run_kind": ""}),
+            ("a root without its slash", {"capture_root": "raw"}),
+            ("a test folder without a run id", {"capture_root": "ingestion_test/t1/"}),
+            ("a root that leaves its folder", {"capture_root": "ingestion_test/../raw/"}),
         ):
-            rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", bad)
-            refuses(LaunchRefused, lambda: current.step("publisher_run"))
+            current.params.update(PUBLISHER_PARAMS | changes)
+            refuses(LaunchRefused, partial(current.step, "publisher_run"))
+            require(not rig.ecs.calls and not rig.records.objects, f"{label}: a refused request reached the cloud or the launch records")
         for root in ("", "ingestion_test/", "ingestion_test/x/", "raw", "lakehouse/"):
-            rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body({**PUBLISHER_REQUEST, "capture_root": root}))
-            error = refuses(LaunchRefused, lambda: current.step("publisher_run"))
+            current.params.update(PUBLISHER_PARAMS | {"capture_root": root})
+            error = refuses(LaunchRefused, partial(current.step, "publisher_run"))
             require("wrong_capture_root" in str(error), f"capture root {root!r} was not refused by name: {error}")
         require(not rig.ecs.calls, "a bad publisher request reached the cloud")
-        rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body({**PUBLISHER_REQUEST, "prior_state": prior}))
+        current.params.update(PUBLISHER_PARAMS)
         require(current.step("publisher_run") == "succeeded", "a good publisher request did not run")
-        require(json.loads(rig.environment()["run"]["PUBLISHER_PRIOR_STATE"]) == prior, "the approved prior state did not reach the task")
-        rig.stage.stage(PUBLISHER_RUN, "publisher_request.json", publisher_body(PUBLISHER_REQUEST))
+        values = rig.environment()["run"]
+        require(values["PUBLISHER_RUN_KIND"] == "bootstrap" and values["HAI_CAPTURE_ROOT"] == "raw/", f"the checked request did not reach the task: {values}")
+        require(
+            not any(name.startswith("PUBLISHER_") and name != "PUBLISHER_RUN_KIND" for name in values),
+            f"the run container got a variable of the earlier flow: {values}",
+        )
+        current.params.update(PUBLISHER_PARAMS | {"run_kind": "monthly"})
         error = refuses(LaunchRefused, lambda: current.step("publisher_run", 2))
-        require("bound" in str(error) and rig.tasks_started() == 1, f"a changed request on a retry was not refused: {error}")
+        require("bound" in str(error) and rig.tasks_started() == 1, f"another kind on a retry was not refused: {error}")
+        current.params.update(PUBLISHER_PARAMS | {"capture_root": PUBLISHER_TEST_ROOT})
+        error = refuses(LaunchRefused, lambda: current.step("publisher_run", 2))
+        require("bound" in str(error) and rig.tasks_started() == 1, f"another root on a retry was not refused: {error}")
 
 
 def publisher_host_definition_matches_the_job_table() -> None:
@@ -2201,6 +2236,11 @@ def publisher_host_definition_matches_the_job_table() -> None:
     )
     require(job["log_container"] == "run" and job["acceptance"] == ["run"] and job["deadline_seconds"] == 86_400, f"the publisher job row is wrong: {job}")
     require(table["steps"]["publisher_run"] == "publisher" and "publisher" in host["jobs"], "the publisher step or its host row is missing")
+    require(
+        job["containers"]["run"] == ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
+        and job.get("needs_publisher_run_request") is True,
+        f"the publisher run container does not take its code digest, the run kind and the capture root alone: {job}",
+    )
 
 
 def publisher_host_definition_passes_the_launch_preflight() -> None:
@@ -2238,7 +2278,7 @@ CASES: dict[str, Callable[[], None]] = {
     "training_form_requires_a_model": training_form_requires_a_model,
     "bronze_request_is_checked_and_bound": bronze_request_is_checked_and_bound,
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
-    "ingestion_dag_without_a_request_launches_nothing": ingestion_dag_without_a_request_launches_nothing,
+    "ingestion_dag_form_refuses_a_capture_root_it_does_not_list": ingestion_dag_form_refuses_a_capture_root_it_does_not_list,
     "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,
     "publisher_host_definition_matches_the_job_table": publisher_host_definition_matches_the_job_table,
     "publisher_host_definition_passes_the_launch_preflight": publisher_host_definition_passes_the_launch_preflight,

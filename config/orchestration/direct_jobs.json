@@ -5,7 +5,7 @@
       "deadline_seconds": 86400,
       "network": "publisher",
       "log_container": "run",
-      "needs_publisher_request": true,
+      "needs_publisher_run_request": true,
       "containers": {
         "fetch": [
           "RUN_ID",
@@ -15,11 +15,8 @@
         ],
         "run": [
           "RUN_ID",
-          "PUBLISHER_INPUTS_SHA256",
-          "PUBLISHER_QUEUE_SHA256",
-          "PUBLISHER_RESUME_SOURCES",
-          "PUBLISHER_PRIOR_STATE",
-          "PUBLISHER_REQUEST_SHA256",
+          "CODE_SHA256",
+          "PUBLISHER_RUN_KIND",
           "HAI_CAPTURE_ROOT",
           "HAI_DEADLINE_UTC"
         ]

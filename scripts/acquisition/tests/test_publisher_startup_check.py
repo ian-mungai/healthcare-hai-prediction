@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from scripts.acquisition import collect_mmd_api, mmd_api_contract, publisher_run
-from scripts.acquisition import redownload as harness
+from scripts.acquisition import collect_mmd_api, host_inputs, mmd_api_contract, publisher_run
 from scripts.acquisition.source_registry import canonical_hash, load_registry
-from scripts.acquisition.tests.test_publisher_run import Cloud, environment, staged
+from scripts.acquisition.tests.test_task_keys import ACCOUNT, ROLE
 from scripts.infrastructure import startup_check
 from tests.startup_check_support import POLARIS_HOST, SERVICE_HOSTS, Network, host_environment, install_network
 from tests.support import check
@@ -22,7 +20,33 @@ PLAN_FOLDER = "data/datasets/historical_acquisition/mmd_api_history"
 
 
 class Reached(Exception):
-    """The harness started, so the startup check passed."""
+    """The job went on to its storage and its capture run, so the startup check passed."""
+
+
+class Cloud:
+    """An identity and bucket stand-in that records the calls the job makes. Real AWS is never reached."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.puts: list[str] = []
+
+    def factory(self, service: str, _region: str) -> Any:
+        self.calls.append(service)
+        return self
+
+
+def environment(workspace: Path) -> dict[str, str]:
+    return {
+        "RUN_ID": "20261113T100000Z-0a1b2c3d",
+        "CODE_SHA256": "c" * 64,
+        "PUBLISHER_RUN_KIND": "bootstrap",
+        "HAI_CAPTURE_ROOT": "raw/",
+        "AWS_REGION": "us-west-2",
+        "EXPECTED_ACCOUNT_ID": ACCOUNT,
+        "TASK_ROLE_NAME": ROLE,
+        "DATA_BUCKET_NAME": "example-project-data-dev",
+        "PUBLISHER_WORKSPACE": str(workspace),
+    }
 
 
 def mmd_tree(monkeypatch: pytest.MonkeyPatch, root: Path, leave_out: str = "") -> dict[str, Path]:
@@ -64,25 +88,20 @@ def mmd_tree(monkeypatch: pytest.MonkeyPatch, root: Path, leave_out: str = "") -
     return paths
 
 
-def run_job(monkeypatch: pytest.MonkeyPatch, workspace: Path) -> Cloud:
-    stage, digest = staged(
-        {
-            "mirror/data/q/queue.json": QUEUE,
-            "mirror/plan_inputs.json": json.dumps({"data/x": hashlib.sha256(b"x").hexdigest()}).encode(),
-            "mirror/data/x": b"x",
-            "publisher_hosts.json": b"{}",
-            "publisher_manifest.json": b'{"queue": "mirror/data/q/queue.json"}',
-        }
-    )
-    cloud = Cloud(stage)
+def run_job(monkeypatch: pytest.MonkeyPatch, workspace: Path, cloud: Cloud | None = None) -> Cloud:
+    """The job's entry point over a code root whose bundle holds only the queue: the inputs check is replaced, and the first storage call stops the job."""
+    bundle = workspace / "code/config/acquisition/baseline_run"
+    bundle.mkdir(parents=True)
+    (bundle / "queue.json").write_bytes(QUEUE)
+    monkeypatch.chdir(workspace / "code")
+    monkeypatch.setattr(host_inputs, "prepare", lambda _code_root: bundle)
+    cloud = cloud or Cloud()
 
     def started(*_arguments: Any) -> None:
         raise Reached
 
-    monkeypatch.setattr(harness, "run_from", started)
-    monkeypatch.setattr(harness, "REPO_ROOT", workspace / "code_root")
-    environ = environment(workspace, digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(QUEUE).hexdigest()}
-    publisher_run.main(environ, cloud.factory)
+    monkeypatch.setattr(publisher_run.task_role, "storage_from_environment", started)
+    publisher_run.main(environment(workspace), cloud.factory)
     return cloud
 
 
@@ -111,11 +130,10 @@ def test_the_environment_is_checked_before_any_aws_call(monkeypatch: pytest.Monk
     host_environment(monkeypatch)
     install_network(monkeypatch, Network(refuse={SERVICE_HOSTS[2]: TimeoutError("timed out")}))
     mmd_tree(monkeypatch, tmp_path / "code")
-    stage, digest = staged()
-    cloud = Cloud(stage)
+    cloud = Cloud()
     with pytest.raises(startup_check.StartupCheckError, match=rf"ecr_unreachable {SERVICE_HOSTS[2]}:443"):
-        publisher_run.main(environment(tmp_path, digest), cloud.factory)
-    check(cloud.puts == [] and not (tmp_path / "inputs").exists(), "no read and no write happened")
+        run_job(monkeypatch, tmp_path / "workspace", cloud)
+    check(cloud.calls == [] and cloud.puts == [], "no client was made and nothing was written")
 
 
 @pytest.mark.parametrize("execution", ["AWS_ECS_EC2", "AWS_ECS_FARGATE"])
@@ -129,6 +147,14 @@ def test_a_publisher_with_its_files_and_endpoints_starts(
         run_job(monkeypatch, tmp_path / "workspace")
     check({host for host, _ in network.seen} == set(SERVICE_HOSTS), f"the publisher needs no Polaris: {network.seen}")
     check(POLARIS_HOST not in capsys.readouterr().err, "Polaris is not probed")
+
+
+def test_a_queue_without_a_mirror_names_no_plan_listing_and_the_default_still_does() -> None:
+    """The host job keeps no mirror, so its startup check asks for the plan files of the code root and no listing of a mirror."""
+    document = {"queue": [{"disposition": "api", "mode": "mmd_api", "flags": ["browser_export_moved_to_api"]}]}
+    check(any(need.kind == "listing" for need in startup_check.queue_files(document)), "a queue with a plan mode names the listing by default")
+    without = startup_check.queue_files(document, listing=False)
+    check(without and not any(need.kind == "listing" for need in without), "without a mirror the plan files stay and the listing goes")
 
 
 def test_a_queue_without_mmd_units_names_no_mmd_file() -> None:

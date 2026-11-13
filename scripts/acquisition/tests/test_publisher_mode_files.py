@@ -251,32 +251,6 @@ def run_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, listing: dict[str
     return cloud
 
 
-def test_the_entry_point_stops_on_an_empty_plan_listing_before_it_restores_state(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    with pytest.raises(startup_check.StartupCheckError, match="plan_inputs_empty"):
-        run_entry(monkeypatch, tmp_path, {})
-
-
-def test_the_entry_point_starts_with_a_listing_and_both_roots(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    with pytest.raises(Reached):
-        run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64})
-
-
-@pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
-def test_the_entry_point_names_a_controlled_plan_missing_from_the_mirror_for_census_and_hcai(
-    on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str
-) -> None:
-    plan = f"config/acquisition/{PLAN_FILES[mode][0]}.json"
-    with pytest.raises(startup_check.StartupCheckError, match="input_file_missing") as caught:
-        run_entry(monkeypatch, tmp_path, {"data/example.json": "0" * 64}, mode, controlled=plan)
-    check(f"{mode} mirror root: config_input" in str(caught.value), f"the controlled plan's mode, root and kind are named: {caught.value}")
-
-
-@pytest.mark.parametrize("mode", ["census_acs_api", "census_acs_detailed", "hcai_util_workbook"])
-def test_the_entry_point_stops_on_an_empty_plan_listing_for_census_and_hcai(on_host: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, mode: str) -> None:
-    with pytest.raises(startup_check.StartupCheckError, match="plan_inputs_empty"):
-        run_entry(monkeypatch, tmp_path, {}, mode)
-
-
 def test_every_runnable_plan_mode_has_a_file_enumerator() -> None:
     """The runtime lists the runnable plan modes (``PLANNED`` and ``PLAN_MODES`` without the manual modes). The check covers every one."""
     runnable = (set(harness.PLANNED) | set(stored_mirror.PLAN_MODES)) - harness.MANUAL_MODES

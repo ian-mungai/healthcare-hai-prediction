@@ -409,7 +409,8 @@ def execute(scenario: Scenario, bag: Any, scratch: str) -> dict[str, Any]:
 def form_check(_rig: Any) -> None:
     """The trigger form of every shipped DAG, validated by Airflow's own ``Param`` code as the trigger does (the DAG's params updated with the trigger's
     values, then validated). Each DAG accepts a trigger with only its required values and fills the defaults. It refuses a missing run ID, a run ID that
-    breaks its pattern, ``latest`` where a producer run is required and a value of another JSON type."""
+    breaks its pattern, ``latest`` where a producer run is required and a value of another JSON type. The ingestion DAG also refuses a run kind it does not
+    list and a capture root that is not ``raw/`` or one test folder, and it fills the bootstrap kind under ``raw/``."""
     import copy
 
     c = rig_modules().cases
@@ -458,6 +459,19 @@ def form_check(_rig: Any) -> None:
     ):
         if not refused(dag_id, {**required[dag_id], name: "latest"}):
             problems.append(f"{dag_id} accepted latest for {name}")
+    filled = validated("ingestion_dag", required["ingestion_dag"])
+    if (filled.get("run_kind"), filled.get("capture_root")) != ("bootstrap", "raw/"):
+        problems.append(f"ingestion_dag fills {filled.get('run_kind')!r} and {filled.get('capture_root')!r} instead of the bootstrap kind under raw/")
+    for bad in (
+        {"run_kind": "retry"},
+        {"run_kind": ""},
+        {"capture_root": "raw"},
+        {"capture_root": "lakehouse/"},
+        {"capture_root": "ingestion_test/t1/"},
+        {"capture_root": "raw/\n"},
+    ):
+        if not refused("ingestion_dag", {**required["ingestion_dag"], **bad}):
+            problems.append(f"ingestion_dag accepted {bad}")
     missing = sorted(set(BAG["bag"].dag_ids) - set(required))
     require(not missing, f"DAGs without a form case: {missing}")
     require(not problems, "; ".join(problems))
@@ -632,9 +646,6 @@ def cases_catalog() -> dict[str, Scenario]:
         rig.stage.stage(c.PROMOTE_RUN, "promotion_approval.json", approval)
         rig.stage.stage(c.SERVE_RUN, "serving_request.json", c.SERVING_REQUEST)
 
-    def stage_publisher(rig: Any, run: str = c.PUBLISHER_RUN) -> None:
-        rig.stage.stage(run, "publisher_request.json", c.publisher_body(c.PUBLISHER_REQUEST))
-
     def stage_other(rig: Any) -> None:
         rig.stage_runs(c.OTHER_RUN)
 
@@ -668,7 +679,7 @@ def cases_catalog() -> dict[str, Scenario]:
             Step("training_dag", {**c.TRAIN_PARAMS, "run_id": train}, 1, family("train")),
             Step("model_promotion_dag", dict(c.PROMOTE_PARAMS), 1, family("promote"), job_states(), prepare=stage_promotion),
             Step("serving_deploy_dag", {"run_id": c.SERVE_RUN, "mode": "real"}, 1, family("serve"), job_states()),
-            Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 1, family("publisher"), job_states(), prepare=stage_publisher),
+            Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 1, family("publisher"), job_states()),
             Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real"}, 1, family("metadata"), prepare=stage_other),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 0, family("gold"), job_states()),  # joins the launch
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), job_states()),
@@ -677,7 +688,7 @@ def cases_catalog() -> dict[str, Scenario]:
     )
 
     def ingestion(name: str, rig: Callable[[], Any], **changes: Any) -> Scenario:
-        step = Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), prepare=stage_publisher, **changes)
+        step = Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), **changes)
         return Scenario(name, (step,), rig, after=no_launch)
 
     def no_launch(rig: Any) -> None:
@@ -710,12 +721,6 @@ def cases_catalog() -> dict[str, Scenario]:
         ingestion("unbound_revision_refuses_before_any_launch", unbound, reason="carries no host capacity binding", **refused),
         ingestion("missing_code_binding_refuses_before_any_launch", no_digest, reason="code_digest_not_staged", **refused),
         Scenario(
-            "missing_request_refuses_before_any_launch",
-            (Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), reason="publisher_request", **refused),),
-            make_rig,
-            after=no_launch,
-        ),
-        Scenario(
             "a_task_that_exits_nonzero_fails_the_run",
             (
                 Step(
@@ -728,7 +733,6 @@ def cases_catalog() -> dict[str, Scenario]:
                     reason="ended failed",
                     end="failed",
                     plan={"run": 1},
-                    prepare=stage_publisher,
                 ),
             ),
             make_rig,
@@ -751,7 +755,6 @@ def cases_catalog() -> dict[str, Scenario]:
             family("publisher"),
             states,
             run_state="failed",
-            prepare=stage_publisher,
             plant=plant,
             check=check,
             reason=reason,

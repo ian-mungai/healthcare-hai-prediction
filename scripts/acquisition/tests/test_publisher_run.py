@@ -13,7 +13,6 @@ import pytest
 from botocore.exceptions import ClientError
 
 from scripts.acquisition import publisher_run, stage_publisher, stored_mirror
-from scripts.acquisition import redownload as harness
 from scripts.acquisition.tests.test_task_keys import ACCOUNT, PLANTED, ROLE, TASK_IDENTITY
 from tests.support import check
 
@@ -150,82 +149,6 @@ def test_a_second_save_never_replaces_the_first(tmp_path: Path) -> None:
     check(first != second and first in cloud.objects and second in cloud.objects, "each save creates its own object")
 
 
-def test_the_state_is_saved_even_when_the_harness_stops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    stage, digest = staged()
-    cloud = Cloud(stage)
-    bound = hashlib.sha256(b"{}").hexdigest()
-
-    def stops(*_args: Any, **_kwargs: Any) -> dict:
-        raise ValueError("stopped")
-
-    def saved_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
-        fill_state(args.state_root, ["x"])
-        return harness.Run(args.queue, args.state_root)
-
-    monkeypatch.setattr(harness, "run_from", saved_run)
-    monkeypatch.setattr(harness, "execute", stops)
-    with pytest.raises(ValueError, match="stopped"):
-        publisher_run.main(environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound}, cloud.factory)
-    check(any(key.startswith("raw/run3_state/") for key in cloud.puts), "the records of a stopped run are kept for the next task")
-    check(f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json" in cloud.objects, "a stopped run still names its final state")
-
-
-def finished_task(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Cloud, dict[str, str], str]:
-    stage, digest = staged()
-    cloud = Cloud(stage)
-    bound = hashlib.sha256(b"{}").hexdigest()
-
-    def saved_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
-        fill_state(args.state_root, ["x"])
-        return harness.Run(args.queue, args.state_root)
-
-    monkeypatch.setattr(harness, "run_from", saved_run)
-    monkeypatch.setattr(harness, "execute", lambda *_args, **_kwargs: {"attempted": 0})
-    environ = environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound}
-    publisher_run.main(environ, cloud.factory)
-    return cloud, environ, bound
-
-
-def test_the_task_tells_the_harness_which_prior_state_it_restored(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    stage, digest = staged()
-    cloud = Cloud(stage)
-    bound = hashlib.sha256(b"{}").hexdigest()
-    earlier = tmp_path / "earlier"
-    fill_state(earlier, ["x"])
-    key = publisher_run.save_state(cloud, earlier, environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": bound})["key"]
-    seen: list[str | None] = []
-
-    def named_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
-        seen.append(args.restored_from)
-        return harness.Run(args.queue, args.state_root)
-
-    monkeypatch.setattr(harness, "run_from", named_run)
-    monkeypatch.setattr(harness, "execute", lambda *_args, **_kwargs: {"attempted": 0})
-    publisher_run.main(
-        environment(tmp_path / "next", digest) | {"PUBLISHER_QUEUE_SHA256": bound, "PUBLISHER_PRIOR_STATE": saved_reference(cloud, key)}, cloud.factory
-    )
-    check(seen == [key], f"the harness is told the restored state: {seen}")
-    fresh = Cloud(staged()[0])
-    publisher_run.main(environment(tmp_path / "first", digest) | {"PUBLISHER_QUEUE_SHA256": bound}, fresh.factory)
-    check(seen == [key, None], f"a first task names no prior state: {seen}")
-
-
-def test_a_finished_task_names_its_final_state_at_a_key_fixed_by_the_queue_and_the_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    cloud, _, bound = finished_task(monkeypatch, tmp_path)
-    states = [key for key in cloud.puts if key.startswith(f"raw/run3_state/{bound}/")]
-    record = json.loads(cloud.objects[f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json"])
-    check(set(record) == {"run_id", "queue_sha256", "state"} and record["run_id"] == RUN_ID and record["queue_sha256"] == bound, str(record))
-    check(record["state"]["key"] == states[-1], "the record names the last state the task saved")
-    check(record["state"]["version_id"] == "v1" and record["state"]["sha256"] == hashlib.sha256(cloud.objects[states[-1]]).hexdigest(), str(record))
-    check(cloud.puts[-1] == f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json", "the run record is written after the final state")
-
-
-def test_the_run_record_leaves_the_latest_state_check_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    cloud, environ, bound = finished_task(monkeypatch, tmp_path)
-    final = json.loads(cloud.objects[f"raw/run3_runs/{bound}/publisher/{RUN_ID}.json"])["state"]
-    publisher_run.require_latest(cloud, final, environ)
-
-
 def test_a_run_record_is_written_once(tmp_path: Path) -> None:
     cloud = Cloud({})
     environ = environment(tmp_path, "0" * 64)
@@ -236,17 +159,6 @@ def test_a_run_record_is_written_once(tmp_path: Path) -> None:
     with pytest.raises(publisher_run.PublisherError, match="run record"):
         publisher_run.save_run_record(cloud, state | {"sha256": "c" * 64}, environ)
     check(json.loads(cloud.objects[key])["state"]["sha256"] == "b" * 64, "the first record is never replaced")
-
-
-@pytest.mark.parametrize("missing", ["RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256"])
-def test_a_missing_variable_stops_the_job_before_any_read(tmp_path: Path, missing: str) -> None:
-    stage, digest = staged()
-    cloud = Cloud(stage)
-    environ = environment(tmp_path, digest)
-    del environ[missing]
-    with pytest.raises(publisher_run.PublisherError, match=missing):
-        publisher_run.main(environ, cloud.factory)
-    check(cloud.puts == [], "nothing was written")
 
 
 def stage_files(tmp_path: Path) -> dict[str, Path]:
@@ -451,48 +363,3 @@ def test_the_stage_names_the_approved_prior_state(tmp_path: Path) -> None:
         reference,
     )
     check(json.loads((folder / "publisher_request.json").read_text())["prior_state"] == reference, "the request names it")
-
-
-def test_the_job_saves_its_state_as_it_goes_so_a_kill_loses_little(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    stage, digest = staged()
-    cloud = Cloud(stage)
-    environ = environment(tmp_path, digest) | {"PUBLISHER_QUEUE_SHA256": hashlib.sha256(b"{}").hexdigest()}
-
-    def saved_run(args: Any, _environment: Any, _factory: Any) -> harness.Run:
-        fill_state(args.state_root, ["x"])
-        return harness.Run(args.queue, args.state_root)
-
-    def execute(_run: Any, allow_network: bool, log: Any) -> dict:
-        for _ in range(publisher_run.SAVE_EVERY * 2):
-            log({"snapshot_id": "u", "source_id": "s", "outcome": "exact_match"})
-        raise KeyboardInterrupt
-
-    monkeypatch.setattr(harness, "run_from", saved_run)
-    monkeypatch.setattr(harness, "execute", execute)
-    with pytest.raises(KeyboardInterrupt):
-        publisher_run.main(environ, cloud.factory)
-    check(len(cloud.puts) >= 3, f"two saves ran during the work and one at the end: {cloud.puts}")
-
-
-def test_the_publisher_entry_point_runs_through_the_resource_peaks_recorder() -> None:
-    """Like every job entry point, the publisher's ``__main__`` runs ``main`` through ``resource_peaks.recorded``, so its first host run logs its peaks."""
-    import ast
-
-    tree = ast.parse(Path(publisher_run.__file__).read_text(encoding="utf-8"))
-    guards = [node for node in tree.body if isinstance(node, ast.If) and ast.unparse(node.test) == "__name__ == '__main__'"]
-    check(len(guards) == 1, "one __main__ block")
-    check([ast.unparse(statement) for statement in guards[0].body] == ["resource_peaks.recorded(main)"], "the __main__ block runs main through the recorder")
-
-
-def test_a_failed_publisher_start_still_logs_one_resource_peaks_line(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    from scripts import resource_peaks
-
-    for name in publisher_run.REQUIRED:
-        monkeypatch.delenv(name, raising=False)
-    with pytest.raises(publisher_run.PublisherError):
-        resource_peaks.recorded(publisher_run.main, scratch=(tmp_path,), interval=0.02)
-    lines = [line for line in capsys.readouterr().err.splitlines() if line.startswith("event=resource_peaks ")]
-    check(len(lines) == 1, f"one resource_peaks line: {lines}")
-    check(json.loads(lines[0].removeprefix("event=resource_peaks "))["exit_code"] == 1, "the failed start is recorded with exit code 1")

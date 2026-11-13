@@ -942,10 +942,11 @@ def runnable_plan_modes() -> frozenset[str]:
     return frozenset((set(redownload.PLANNED) | set(stored_mirror.PLAN_MODES)) - redownload.MANUAL_MODES)
 
 
-def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool = False) -> list[Need]:
+def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool = False, listing: bool = True) -> list[Need]:
     """Every file that the modes this task attempts read, by the lane and handler rule of the harness, and the plan listing that the plan modes need.
 
-    A keyed mode counts only when the task has keys. ``controls`` is the controls file beside the queue."""
+    A keyed mode counts only when the task has keys. ``controls`` is the controls file beside the queue. ``listing`` is false for a task that keeps no mirror,
+    whose plan inputs are real files in the code root."""
     redownload = importlib.import_module("scripts.acquisition.redownload")
     stored_mirror = importlib.import_module("scripts.acquisition.stored_mirror")
     units = [
@@ -967,7 +968,7 @@ def queue_files(document: Mapping, *, controls: Path | None = None, keys: bool =
         if mode in controlled and controls is not None:
             needs.extend(mirror_config_needs(mode, controls))
     planned = [mode for mode in modes if mode in runnable]
-    if planned:
+    if planned and listing:
         needs.append(Need("+".join(planned), "mirror", stored_mirror.PLAN_INPUTS_NAME, nonempty=True, kind="listing"))
     return list(dict.fromkeys(needs))
 
@@ -1231,7 +1232,7 @@ def execute(request: Mapping[str, Any]) -> list[dict[str, Any]]:
     if kind == "queue":
         document = json.loads(Path(request["queue"]).read_text(encoding="utf-8"))
         controls = Path(request["controls"]) if request["controls"] else None
-        needs = queue_files(document, controls=controls, keys=request["keys"])
+        needs = queue_files(document, controls=controls, keys=request["keys"], listing=request.get("listing", True))
     else:
         needs = [Need(**item) for item in request["needs"]]
     return records_of(file_findings(needs, roots, code))
@@ -1271,7 +1272,7 @@ def run_files(job: str, files: Iterable[Need], roots: Mapping[str, Path] | None 
     return run_checks({"kind": "files", "job": job, "cwd": absolute("."), "roots": given, "needs": [dataclasses.asdict(need) for need in files]})
 
 
-def run_queue(job: str, queue: Path, *, controls: Path | None, keys: bool, roots: Mapping[str, Path] | None = None) -> str | None:
+def run_queue(job: str, queue: Path, *, controls: Path | None, keys: bool, roots: Mapping[str, Path] | None = None, listing: bool = True) -> str | None:
     if not in_ecs_job():
         return None
     given = {name: absolute(path) for name, path in (roots or {}).items()}
@@ -1283,6 +1284,7 @@ def run_queue(job: str, queue: Path, *, controls: Path | None, keys: bool, roots
         "queue": absolute(queue),
         "controls": absolute(controls) if controls else "",
         "keys": keys,
+        "listing": listing,
     }
     return run_checks(request)
 

@@ -41,6 +41,34 @@
       "task_id": "silver_build",
       "dag_run_id": "manual__fixture",
       "target": "docker"
+    },
+    {
+      "template": "publisher_run",
+      "run_id": "20261113T100000Z-0a1b2c3d",
+      "mode": "real",
+      "attempt": 1,
+      "request_version": 2,
+      "dag_id": "ingestion_dag",
+      "task_id": "job",
+      "dag_run_id": "manual__ingestion",
+      "publisher": {
+        "kind": "bootstrap",
+        "capture_root": "raw/"
+      }
+    },
+    {
+      "template": "publisher_run",
+      "run_id": "20261113T100000Z-0a1b2c3d",
+      "mode": "real",
+      "attempt": 1,
+      "request_version": 2,
+      "dag_id": "ingestion_dag",
+      "task_id": "job",
+      "dag_run_id": "manual__ingestion",
+      "publisher": {
+        "kind": "monthly",
+        "capture_root": "ingestion_test/20261113T100000Z-0a1b2c3d/"
+      }
     }
   ],
   "refused": [
@@ -233,6 +261,109 @@
         "task_id": "silver_build",
         "dag_run_id": "manual__fixture",
         "target": "unapproved"
+      }
+    },
+    {
+      "case": "publisher request that names an inputs archive",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "bootstrap",
+          "capture_root": "raw/",
+          "inputs_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      }
+    },
+    {
+      "case": "publisher request that names a prior state",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "bootstrap",
+          "capture_root": "raw/",
+          "prior_state": null
+        }
+      }
+    },
+    {
+      "case": "publisher request with an unknown kind",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "retry",
+          "capture_root": "raw/"
+        }
+      }
+    },
+    {
+      "case": "publisher request without a capture root",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "bootstrap"
+        }
+      }
+    },
+    {
+      "case": "publisher capture root outside raw and the test folders",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "bootstrap",
+          "capture_root": "lakehouse/"
+        }
+      }
+    },
+    {
+      "case": "publisher test root without a run id",
+      "request": {
+        "template": "publisher_run",
+        "run_id": "20261113T100000Z-0a1b2c3d",
+        "mode": "real",
+        "attempt": 1,
+        "request_version": 2,
+        "dag_id": "ingestion_dag",
+        "task_id": "job",
+        "dag_run_id": "manual__ingestion",
+        "publisher": {
+          "kind": "bootstrap",
+          "capture_root": "ingestion_test/t1/"
+        }
       }
     }
   ]

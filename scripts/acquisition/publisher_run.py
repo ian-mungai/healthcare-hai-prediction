@@ -1,16 +1,17 @@
-"""The run 3 publisher job: fetch the staged inputs by digest, restore the last state, run the harness and save the new state under ``raw/``.
+"""The publisher job of the host: build the run's workspace from the tracked inputs in the code archive, check them and run capture mode.
 
-The inputs are one archive staged beside the code archive. The launch (orchestration.publisher_launch) reads its digest from the run's request and hands it to
-the job, so a changed archive stops the job before anything runs. A task's workspace ends with the task, so the outcomes and the BLS request ledger travel
-between tasks in a saved state. It holds those records only: no fresh file, no diagnostic and no original can enter it. BLS needs more than one day, so run 3
-takes more than one task.
-At the end each task writes one run record that names its final state, at a key fixed by the queue digest and the run ID, so a check finds it without
-listing. The run records sit beside the states, never among them, because the next task takes the largest key under the state prefix as the latest state.
+Nothing is staged for the run but its code archive. The job takes its inputs from ``config/acquisition/baseline_run/`` (checked against ``inputs.lock.json``)
+and from the bootstrap seed folder (checked against its manifest). ``host_inputs.prepare`` stops the run before any request when a file is missing, is an
+unresolved Git LFS pointer or differs. The launch names the run kind and the capture root only, and a launch that names an inputs archive or a prior state is
+refused. Capture mode decides each unit by its completion record, so a retry of a run skips what was captured and no state travels between tasks. At the end
+the job runs capture mode's evidence step over the run and fails when it finds a problem, which includes a unit that failed, was refused or was not attempted.
+
+The helpers below ``main`` that save, restore and verify a state, and the one that installs plan inputs from a mirror, belong to the earlier flow, which a later
+lane removes with the mirror build.
 """
 
 from __future__ import annotations
 
-import argparse
 import hashlib
 import io
 import json
@@ -20,19 +21,24 @@ import sys
 import tarfile
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
+from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
 
 from botocore.exceptions import ClientError
 
 from scripts import resource_peaks
-from scripts.acquisition import redownload as harness
-from scripts.acquisition import stored_mirror
+from scripts.acquisition import capture_mode, host_inputs, stored_mirror, task_role
 from scripts.acquisition.collection_layout import run_state_root
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure import startup_check
 
-REQUIRED = ("RUN_ID", "PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
+REQUIRED = ("RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "AWS_REGION", "EXPECTED_ACCOUNT_ID", "TASK_ROLE_NAME", "DATA_BUCKET_NAME")
+# What the launch may not name any more: the staged inputs archive, the queue whose state a task restores, the resumed sources and the prior state.
+RETIRED = ("PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256")
+# The run kinds the launch lists (orchestration/ecs_preflight.py; a test keeps both lists equal). The capture root is checked by ``state_root``, which accepts
+# raw/ and one ingestion_test/<run ID>/ folder as the launch does.
+KINDS = frozenset({"bootstrap", "monthly"})
 # The attempt and byte ledgers travel too, settlements and unsettled charges alike, so a new task cannot spend a limit again.
 SAVED = re.compile(
     r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json"
@@ -223,61 +229,52 @@ def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
         raise PublisherError("The staged queue differs from the digest the launch bound.")
 
 
-def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client) -> None:
-    """Run one publisher task. The harness writes one line per unit and no line holds a key or a name."""
+def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client, opener: Any = None) -> None:
+    """Run one publisher task. The job writes one line per unit and no line holds a key, a digest or a name."""
     env = os.environ if environment is None else environment
     missing = [name for name in REQUIRED if not env.get(name)]
     if missing:
         raise PublisherError(f"The publisher job needs {', '.join(missing)}.")
+    if any(env.get(name) for name in RETIRED):
+        raise PublisherError("The launch names an inputs archive or a prior state, which the host job never takes.")
+    if env["PUBLISHER_RUN_KIND"] not in KINDS:
+        raise PublisherError("The run kind is not one the launch lists.")
+    root = state_root(env)
+    try:
+        bundle = host_inputs.prepare(Path.cwd())
+    except host_inputs.InputsError as error:
+        raise PublisherError(str(error)) from None
     startup_check.check_environment("publisher")
-    region = env["AWS_REGION"]
-    stored_mirror.require_task_identity(factory("sts", region), env["EXPECTED_ACCOUNT_ID"], env["TASK_ROLE_NAME"])
-    s3 = factory("s3", region)
-    inputs = fetch_inputs(s3, env)
-    queue = queue_of(inputs)
-    require_bound_queue(queue, env)
-    install_plan_inputs(inputs / "mirror", harness.REPO_ROOT)
-    mirror = Path(env.get("HAI_STORED_MIRROR") or inputs / "mirror")
-    startup_check.check_queue_files(
-        "publisher", queue, controls=queue.with_name("controls.json"), keys=bool(env.get("HAI_TASK_KEYS")), roots={"code": Path.cwd(), "mirror": mirror}
-    )
-    state_parent = workspace_of(env) / "state"
-    state_root = state_parent / "run"
-    restored_from = restore_state(s3, state_root, env)
-    arguments = argparse.Namespace(
-        queue=queue,
-        restored_from=restored_from,
-        state_root=state_root,
-        state_parent=state_parent,
-        manual_folder=None,
-        removal_plan=inputs / "removal_plan.json",
-        removal_confirmation=inputs / "removal_confirmation.json",
-        hosts=inputs / "publisher_hosts.json",
-        hosts_approval=inputs / "hosts_approval.json",
-    )
-    run = harness.run_from(arguments, env, factory)
+    switched = env.get(task_role.KEYS_VARIABLE) == "1"
+    startup_check.check_queue_files("publisher", bundle / "queue.json", controls=None, keys=switched, roots={"code": Path.cwd()}, listing=False)
+    storage = task_role.storage_from_environment(env, factory)
+    before = capture_mode.list_versions(storage, capture_mode.evidence_prefixes(root))
 
     def emit(item: dict) -> None:
         sys.stdout.write(json.dumps(item, sort_keys=True) + "\n")
         sys.stdout.flush()
 
-    finished = [0]
-
-    def progress(item: dict) -> None:
-        emit(item)
-        finished[0] += 1
-        if finished[0] % SAVE_EVERY == 0:
-            emit({"state": save_state(s3, state_root, env)})
-
-    try:
-        for source in filter(None, env.get("PUBLISHER_RESUME_SOURCES", "").split(",")):
-            harness.load_queue(run)
-            harness.resume_source(run, source, "resumed by the staged publisher request")
-        emit(harness.execute(run, allow_network=True, log=progress))
-    finally:
-        final = save_state(s3, state_root, env)
-        emit({"state": final})
-        emit({"run_record": save_run_record(s3, final, env)})
+    run = capture_mode.CaptureRun(
+        queue_path=bundle / "queue.json",
+        specs_path=bundle / "capture_specs.json",
+        root=root,
+        run_id=env["RUN_ID"],
+        storage=storage,
+        scratch=workspace_of(env) / "scratch",
+        code_sha256=env["CODE_SHA256"],
+        bundle_sha256=json.loads((bundle / "inputs.lock.json").read_text(encoding="utf-8"))["bundle_sha256"],
+        hosts=bundle / "publisher_hosts_scope.json",
+        hosts_approval=bundle / "hosts_approval.json",
+        opener=opener,
+        task_keys=partial(task_role.TaskKeys, environment=env) if switched else None,
+        recheck=env["PUBLISHER_RUN_KIND"] == "monthly",
+        log=emit,
+    )
+    record = capture_mode.execute(run)
+    problems = capture_mode.check_run(storage, record, before)
+    emit({"counters": record["counters"], "evidence_problems": len(problems)})
+    if problems:
+        raise PublisherError(f"The evidence check found {len(problems)} problem{'s' if len(problems) != 1 else ''} in the run.")
 
 
 if __name__ == "__main__":

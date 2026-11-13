@@ -37,7 +37,6 @@ from orchestration.ecs_preflight import (
     bronze_request_reader,
     host_cap_reader,
     load_tables,
-    publisher_request_reader,
     s3_digest_reader,
     serving_request_reader,
     ssm_launch_hold_reader,
@@ -154,7 +153,6 @@ def services() -> LaunchServices:
         task_definition=adapter.task_definition,
         host_job_cap=cap,
         host_launch_hold=hold,
-        publisher_request=publisher_request_reader(s3, bucket),
     )
     return LaunchServices(
         preflight, launcher, BrokerlessEcsRunTaskOperator, values["HAI_LAUNCH_CLUSTER"], lambda job: adapter.definition(job, HOST), clock, report

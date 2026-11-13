@@ -1599,13 +1599,13 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 93,
+      "line": 97,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "f8dd449243c845200501d6e7fea7ac868a0f20a6273f7d88193dfad6aee694aa",
+      "file_sha256": "169bb6612fcd9df3f1ee41a22b978ad653de65e1efe64cd0e264c462d54e94e8",
       "dependencies": {
-        "orchestration/interface.py": "sha256:a9016a92def1590400ae67524574cf5836177a0ec5b787cc04f39bc3f0876f3d",
+        "orchestration/interface.py": "sha256:5c5c67a829b1a8504da4821b1b50ee302b40f9d2537e21d5b23bd0307704d8c5",
         "orchestration/training_contract.py": "sha256:e83d355a4a783b867ed234ab05d8c1c95b903e1b7021700a27b4878b66fb1f6f"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",
@@ -1621,7 +1621,7 @@
       "occurrences": 1,
       "file_sha256": "1eda59c4f13752e0676328a48025ac8cec5f6a5c720a6aeccb5694fda1910f24",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:7342f6eb57e5f3a815ce1270251f48ce854500c52c387c4a328570ccfd07df75",
+        "orchestration/ecs_preflight.py": "sha256:2b88680c045535ee2b938b0b9bf228611bfc2ec7605c6008a1bd9a9318c5e2a9",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/host_session.py": "sha256:77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7cd421d7f38f9908ff346ef58032f9c3d85918ba5f2bb640ec7505d32a0cbd0f",
