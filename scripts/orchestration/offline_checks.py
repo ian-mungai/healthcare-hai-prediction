@@ -31,6 +31,7 @@ import argparse
 import ast
 import copy
 import hashlib
+import importlib
 import json
 import re
 import runpy
@@ -47,7 +48,6 @@ from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_gra
 from scripts.orchestration import real_image_dags
 from scripts.process import run_command
 from scripts.quality import lock_env
-from scripts.quality.repo_checks import load_yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = ROOT / "config" / "orchestration" / "platform.json"
@@ -66,6 +66,16 @@ A1_FILES = (
     "orchestration/client.py",
     "orchestration/graph.py",
 )
+
+
+def load_yaml(text: str) -> object:
+    """Parse YAML with PyYAML's safe loader; PyYAML ships no type hints, so it is imported by name. The same parse as the repository checks, kept here so the
+    launcher suite does not follow the whole check module."""
+    yaml = importlib.import_module("yaml")
+    try:
+        return yaml.safe_load(text)
+    except yaml.YAMLError as error:
+        raise ValueError(str(error).splitlines()[0]) from error
 
 
 def compose_problems(text: str, platform: dict[str, Any]) -> list[str]:
