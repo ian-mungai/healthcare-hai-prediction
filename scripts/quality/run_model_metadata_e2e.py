@@ -6,7 +6,7 @@ runs the ``model-metadata`` hook through ``pre-commit``, so a hook that is not w
 because pre-commit reports every failed hook as exit 1 and the checker's own exit code (0, 1 or 2) is part of the contract. A blocking
 case passes only when both outputs cite its rule and its cause. ``--checker`` and ``--hook-config`` run the cases against another copy of
 the checker or of the hook configuration, for example a mutant, and ``--case`` runs only the named cases. The worker crash cases send SIGKILL, because
-macOS writes a crash report for a SIGSEGV; the real SIGSEGV case has a platform and runs only on Linux. The report goes to
+macOS writes a crash report for a SIGSEGV; the real SIGSEGV case runs only on hosted Linux (GITHUB_ACTIONS=true). The report goes to
 data/e2e/model_metadata/<UTC>_<pid>/report.json with the revision, the SHA-256 of the checker and the hook configuration and the tool versions.
 """
 
@@ -22,7 +22,7 @@ import shutil
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Collection
+from collections.abc import Callable, Collection, Mapping
 from concurrent.futures import wait
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -208,22 +208,37 @@ class Case:
     located: str = ""
     worker_fault: str = ""
     platform: str = ""
+    hosted_only: bool = False
 
 
-def cases_for(cases: list[Case], platform: str) -> list[Case]:
-    """The cases that run on ``platform`` (a ``sys.platform`` value): a case with a platform prefix runs only there."""
-    return [case for case in cases if not case.platform or platform.startswith(case.platform)]
+def cases_for(cases: list[Case], platform: str, hosted: bool) -> list[Case]:
+    """The cases that run on ``platform`` (a ``sys.platform`` value): a case with a platform prefix runs only there, a hosted-only case only on hosted CI."""
+    return [case for case in cases if (not case.platform or platform.startswith(case.platform)) and (hosted or not case.hosted_only)]
+
+
+def hosted_ci(environ: Mapping[str, str] = os.environ) -> bool:
+    """Whether this run is on a hosted CI runner, which GitHub marks with GITHUB_ACTIONS=true."""
+    return environ.get("GITHUB_ACTIONS") == "true"
 
 
 def crash_signal_cases() -> list[tuple[str, bool]]:
     """No case that runs on macOS sends a core-dump signal (ReportCrash writes a report); the worker message names signals 6, 9 and 11 with no process."""
     cases = make_cases()
-    on_mac = [case for case in cases_for(cases, "darwin") if case.worker_fault]
-    on_linux = [case.name for case in cases_for(cases, "linux")]
+    on_mac = [case for case in cases_for(cases, "darwin", hosted=False) if case.worker_fault]
     segfault = [case for case in cases if case.worker_fault and "SIGSEGV" in WORKER_FAULTS[case.worker_fault]]
+    selected = {
+        (platform, hosted): [case.name for case in cases_for(cases, platform, hosted=hosted)] for platform in ("darwin", "linux") for hosted in (False, True)
+    }
+    only_hosted_linux = len(segfault) == 1 and [key for key, names in selected.items() if segfault[0].name in names] == [("linux", True)]
     return [
         ("crash_faults_on_macos_send_no_core_dump_signal", not any(name in WORKER_FAULTS[case.worker_fault] for case in on_mac for name in CORE_DUMP_SIGNALS)),
-        ("crash_segfault_case_runs_only_on_linux", len(segfault) == 1 and segfault[0].platform == "linux" and segfault[0].name in on_linux),
+        ("crash_segfault_case_runs_only_on_hosted_linux", only_hosted_linux),
+        ("crash_segfault_case_skipped_on_local_linux", bool(segfault) and segfault[0].name not in selected[("linux", False)]),
+        ("crash_segfault_case_selected_on_hosted_linux", bool(segfault) and segfault[0].name in selected[("linux", True)]),
+        (
+            "crash_hosted_marker_is_github_actions_true",
+            hosted_ci({"GITHUB_ACTIONS": "true"}) and not hosted_ci({"GITHUB_ACTIONS": "false"}) and not hosted_ci({}),
+        ),
         *[
             (f"crash_worker_message_names_signal_{number}", f"was stopped by signal {number};" in model_metadata.worker_failure(-number, ""))
             for number in (6, 9, 11)
@@ -947,7 +962,15 @@ def make_cases() -> list[Case]:
         Case("control", code=0),
         Case("worker_exit_skips_finalization", code=0, worker_fault="exit_skips_finalization"),
         Case("worker_killed_names_its_signal", "cannot run", "stopped by signal 9", code=2, worker_fault="killed_at_start"),
-        Case("worker_segfault_names_its_signal", "cannot run", "stopped by signal 11", code=2, worker_fault="segfault_at_start", platform="linux"),
+        Case(
+            "worker_segfault_names_its_signal",
+            "cannot run",
+            "stopped by signal 11",
+            code=2,
+            worker_fault="segfault_at_start",
+            platform="linux",
+            hosted_only=True,
+        ),
         Case(
             "worker_exit_names_code_and_stderr",
             "cannot run",
@@ -2054,10 +2077,11 @@ def main() -> int:
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
-    cases = cases_for(selected, sys.platform)
+    cases = cases_for(selected, sys.platform, hosted_ci())
     for case in selected:
         if case not in cases:
-            sys.stdout.write(f"skipped {case.name}: it runs only on {case.platform}, because a real SIGSEGV makes macOS write a crash report\n")
+            where = f"hosted {case.platform}" if case.hosted_only else case.platform
+            sys.stdout.write(f"skipped {case.name}: it runs only on {where}, because a real SIGSEGV can write a crash report\n")
     if not cases:
         sys.stderr.write("no case to run on this platform\n")
         return 1
