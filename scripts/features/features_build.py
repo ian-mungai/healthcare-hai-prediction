@@ -48,6 +48,8 @@ CONTRACT = "data_contracts/lakehouse/features_publish.json"
 GOLD_PLAN = "data_contracts/lakehouse/gold_contract.json"
 IMPORT_SQL = 'create or replace table main."{table}" as select * from read_parquet(?)'
 ATTACH_SQL = "attach '{path}' as {catalog} (read_only)"
+NAIVE_COLUMNS_SQL = "select column_name from information_schema.columns where table_schema = 'main' and table_name = ? and data_type = 'TIMESTAMP'"
+ZONE_SQL = 'alter table main."{table}" alter column "{column}" set data type timestamp with time zone using "{column}" at time zone \'UTC\''
 MATERIALIZE_SQL = 'create table main."{table}" as select * from {catalog}.main."{table}"'
 # The steps of the build in order, each with the weight of its share of the time left. The weights are the proportions of the fixed limits that the steps had
 # (600, 900, 1800, 1800 and 3300 seconds), so a step that needs more than its share finds the time the earlier steps did not use.
@@ -181,6 +183,15 @@ def import_gold(folder: Path, expected: str, pin_sha: str, run_id: str, connecti
                 raise PipelineError(f"{table}: no snapshot file is present")
             connection.execute(IMPORT_SQL.format(table=table), [members])
     return sorted(copied)
+
+
+def restore_utc_timestamps(connection: Any, tables: list[str]) -> None:
+    """Give the time columns of the imported base matrices the type the base build gave them. The Spark extract of a published base writes a timestamp as
+    INT96, which DuckDB reads as a timestamp without a time zone; the base build (Spark session time zone UTC) and the contracts hold UTC instants as
+    ``timestamp with time zone``, so each such column is read again as the same UTC instant."""
+    for table in tables:
+        for (column,) in connection.execute(NAIVE_COLUMNS_SQL, [table]).fetchall():
+            connection.execute(ZONE_SQL.format(table=table, column=column))
 
 
 def write_profile(folder: Path, database: Path, locked: bool) -> Path:
@@ -334,6 +345,7 @@ def build_set(args: argparse.Namespace) -> dict[str, Any]:
         if os.environ.get("JOB_THREADS"):
             connection.execute("SET threads = ?", [int(os.environ["JOB_THREADS"])])
         imported = import_gold(folder, args.extract_sha256, args.input_sha256, args.run, connection, budget.seconds("copy"), BASE_INPUT_NAME)
+        restore_utc_timestamps(connection, imported)
     finally:
         connection.close()
     if sorted(imported) != domain:

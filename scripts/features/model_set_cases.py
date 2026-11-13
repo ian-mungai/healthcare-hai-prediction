@@ -26,6 +26,10 @@ BASE_RUN = "20261109T010000Z-0000b001"
 RUNS = {"m1": "20261109T020000Z-0000a001", "m3": "20261109T030000Z-0000a003"}
 PLANTED = "20261109T040000Z-0000a099"
 COPY_SQL = "copy (select * from main.\"{table}\") to '{path}' (format parquet)"
+# Spark writes a timestamp as INT96, which DuckDB reads as a timestamp without a time zone. This copy writes the same read-side type: each time-zone column
+# becomes a plain timestamp of the same UTC instant.
+SPARK_COPY_SQL = "copy (select {columns} from main.\"{table}\") to '{path}' (format parquet)"
+ZONED_COLUMNS = "select column_name, lower(data_type) from information_schema.columns where table_name = ? and table_schema = 'main' order by ordinal_position"
 SPINE_COUNT = 'select count(*) from main."int_hospital_spine"'
 TABLE_ROWS = 'select count(*) from main."{table}"'
 CHANGE_VALUE = 'update main."{table}" set "{column}" = coalesce("{column}", 0) + 1 where rowid = 0'
@@ -50,8 +54,18 @@ def write_json(path: Path, document: dict[str, Any]) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-def base_input(first: Path, folder: Path, run: str, tables: dict[str, int] | None = None) -> tuple[str, str]:
-    """The base pin and the extract of the domain matrices of the fixture build, as the pin and read steps leave them. Returns the two digests."""
+def spark_select(connection: Any, table: str) -> str:
+    """The select list that writes every time-zone column of ``table`` as a plain UTC timestamp, the way the Spark extract leaves it for DuckDB."""
+    items = []
+    for name, kind in connection.execute(ZONED_COLUMNS, [table]).fetchall():
+        items.append(f"cast(\"{name}\" at time zone 'UTC' as timestamp)" if kind == "timestamp with time zone" else f'"{name}"')
+        items[-1] += f' as "{name}"'
+    return ", ".join(items)
+
+
+def base_input(first: Path, folder: Path, run: str, tables: dict[str, int] | None = None, spark_timestamps: bool = False) -> tuple[str, str]:
+    """The base pin and the extract of the domain matrices of the fixture build, as the pin and read steps leave them. Returns the two digests.
+    With ``spark_timestamps`` the time-zone columns are written as the Spark extract of a published base writes them (read by DuckDB without a time zone)."""
     duckdb: Any = importlib.import_module("duckdb")
     domain = features_input.base_tables()
     snapshot_set = tables if tables is not None else {name: 1000 + index for index, name in enumerate(domain)}
@@ -63,7 +77,10 @@ def base_input(first: Path, folder: Path, run: str, tables: dict[str, int] | Non
         for name in domain:
             target = folder / features_input.BASE_INPUT_NAME / name
             target.mkdir(parents=True)
-            connection.execute(COPY_SQL.format(table=name, path=target / "part-0.parquet"))
+            if spark_timestamps:
+                connection.execute(SPARK_COPY_SQL.format(columns=spark_select(connection, name), table=name, path=target / "part-0.parquet"))
+            else:
+                connection.execute(COPY_SQL.format(table=name, path=target / "part-0.parquet"))
             files[f"{name}/part-0.parquet"] = sha256(target / "part-0.parquet")
     finally:
         connection.close()
@@ -269,4 +286,27 @@ def model_set_build_cases(report: Any, first: Path, base: Path) -> None:
         "a set outside base and m1 to m6 is refused before any build",
         unknown.returncode != 0 and "m7" in unknown.stderr,
         error=unknown.stderr[-200:],
+    )
+    published = base / "set_published_base"
+    published.mkdir()
+    pin_sha, extract_sha = base_input(first, published, RUNS["m1"], spark_timestamps=True)
+    done = build_set(published, RUNS["m1"], "m1", pin_sha, extract_sha)
+    built_file = published / "staging.duckdb"
+    types = []
+    if done.returncode == 0 and built_file.is_file():
+        connection = duckdb.connect(str(built_file), read_only=True)
+        try:
+            types = connection.execute(ZONED_COLUMNS, [schema["model_sets"]["m1"]["table"]]).fetchall()
+        finally:
+            connection.close()
+    code, record = validate_set(built_file, published / "quality.json", "m1") if built_file.is_file() else (1, {})
+    report.case(
+        "S14",
+        "FS1",
+        "set m1 builds and validates from a base extract whose time-zone columns Spark wrote without a time zone, with the schema's types",
+        done.returncode == 0
+        and [(name, kind) for name, kind in types] == [(column["name"], column["type"]) for column in schema["model_sets"]["m1"]["columns"]]
+        and code == 0
+        and record.get("counts", {}).get("fail") == 0,
+        error=(done.stdout + done.stderr)[-1200:] if done.returncode else "",
     )
