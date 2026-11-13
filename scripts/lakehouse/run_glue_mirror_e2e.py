@@ -754,12 +754,33 @@ def metadata_key(table: str, version: int, tag: str = "0", layer: str = "gold") 
     return f"lakehouse/{layer}/{table}/metadata/{metadata_name(version, tag)}"
 
 
+def snapshot_entries(chain: Sequence[int], branches: Sequence[int], main: int | None) -> list[dict[str, Any]]:
+    """The snapshot list of a metadata file: the main chain oldest first, each with its sequence number, time and parent, then branch snapshots off main."""
+    entries: list[dict[str, Any]] = []
+    for index, snapshot in enumerate(chain):
+        entry: dict[str, Any] = {"snapshot-id": snapshot, "sequence-number": index + 1, "timestamp-ms": 1000 * (index + 1)}
+        if index:
+            entry["parent-snapshot-id"] = chain[index - 1]
+        entries.append(entry)
+    for offset, snapshot in enumerate(branch for branch in branches if branch not in chain):
+        number = len(chain) + offset + 1
+        entries.append(
+            {"snapshot-id": snapshot, "sequence-number": number, "timestamp-ms": 1000 * number, **({"parent-snapshot-id": main} if main is not None else {})}
+        )
+    return entries
+
+
 def metadata_document(
-    table: str, main: int | None, branches: dict[str, int] | None = None, layer: str = "gold", changes: dict[str, Any] | None = None
+    table: str,
+    main: int | None,
+    branches: dict[str, int] | None = None,
+    layer: str = "gold",
+    changes: dict[str, Any] | None = None,
+    history: Sequence[int] = (),
 ) -> dict[str, Any]:
-    """An Iceberg v2 metadata file: ``main`` is the snapshot of the main branch, ``branches`` the other refs."""
+    """An Iceberg v2 metadata file: ``main`` is the snapshot of the main branch, ``history`` the earlier snapshots of its chain, ``branches`` the other refs."""
     refs: dict[str, Any] = {name: {"snapshot-id": snapshot, "type": "branch"} for name, snapshot in (branches or {}).items()}
-    snapshots = sorted({snapshot for snapshot in [main, *(branches or {}).values()] if snapshot is not None})
+    chain = [*history, *([main] if main is not None else [])]
     if main is not None:
         refs["main"] = {"snapshot-id": main, "type": "branch"}
     document: dict[str, Any] = {
@@ -768,7 +789,7 @@ def metadata_document(
         "location": f"s3://{BUCKET}/lakehouse/{layer}/{table}",
         "current-snapshot-id": -1 if main is None else main,
         "refs": refs,
-        "snapshots": [{"snapshot-id": snapshot} for snapshot in snapshots],
+        "snapshots": snapshot_entries(chain, list((branches or {}).values()), main),
         "current-schema-id": 1,
         "schemas": [{"schema-id": 0, "type": "struct", "fields": []}, {"schema-id": 1, "type": "struct", "fields": S3_FIELDS}],
     }
@@ -891,7 +912,7 @@ def case_s3_register_is_idempotent_and_follows_a_new_commit() -> Check:
     register(s3, glue, [PILOT, SECOND_TABLE])
     writes_after_first = list(glue.writes())
     again = register(s3, glue, [PILOT, SECOND_TABLE])
-    s3.put(metadata_key(PILOT, 2), metadata_document(PILOT, 20))
+    s3.put(metadata_key(PILOT, 2), metadata_document(PILOT, 20, history=[10]))
     moved = register(s3, glue, [PILOT, SECOND_TABLE])
     parameters = table_of(glue)["Parameters"]
     return {
@@ -1145,6 +1166,130 @@ def case_silver_sources_that_the_list_cannot_name_are_refused() -> Check:
     }
 
 
+class PublishDuringRead(FakeS3):
+    """Complete a real publish mirror between the registration's first Glue read and its write: the first metadata read arms it."""
+
+    def __init__(self, glue: FakeGlue) -> None:
+        super().__init__()
+        self.glue = glue
+        self.armed = False
+        self.writes_after_publish = 0
+        self.publish_parameters: dict[str, str] = {}
+
+    def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        response = super().get_object(Bucket, Key)
+        if self.armed:
+            self.armed = False
+            self.put(metadata_key(PILOT, 2), metadata_document(PILOT, 20, history=[10]))
+            second = f"s3://{BUCKET}/{metadata_key(PILOT, 2)}"
+            glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT], 20), FakeSource({PILOT: second}), self.glue, RUN_ID)
+            self.publish_parameters = dict(table_of(self.glue)["Parameters"])
+            self.writes_after_publish = len(self.glue.writes())
+        return response
+
+
+def held_registration(glue: FakeGlue, table: str, snapshot: str, run: str = glue_mirror.S3_RUN_ID, layer_database: str = "hai_mirror_gold") -> None:
+    pointer = f"s3://{BUCKET}/{metadata_key(table, 1)}"
+    parameters = {"table_type": "ICEBERG", "metadata_location": pointer, "hai_mirror": "true", "hai_snapshot_id": snapshot, "hai_run_id": run}
+    glue.tables[(layer_database, table)] = {"Name": table, "Parameters": parameters, "VersionId": "1"}
+
+
+def case_s3_register_never_replaces_a_publish_that_lands_during_its_reads() -> Check:
+    checks: Check = {}
+    for label, earlier_s3_registration in (("no_row", False), ("s3_row", True)):
+        glue = FakeGlue()
+        s3 = PublishDuringRead(glue)
+        s3.put(metadata_key(PILOT, 1), metadata_document(PILOT, 10))
+        if earlier_s3_registration:
+            register(s3, glue, [PILOT])
+        s3.armed = True
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = glue_mirror.main(["register", "--source", "s3", "--layer", "gold", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled(), tables=[PILOT])
+        after = table_of(glue)["Parameters"]
+        checks[f"{label}_publish_pointer_survives"] = (
+            after["hai_run_id"] == RUN_ID and after["hai_snapshot_id"] == "20" and after["metadata_location"] == s3.publish_parameters["metadata_location"]
+        )
+        checks[f"{label}_register_wrote_nothing_after_the_publish"] = len(glue.writes()) == s3.writes_after_publish
+        checks[f"{label}_kept_by_name_and_exit_zero"] = code == 0 and f"gold.{PILOT}: kept: registered by publish run {RUN_ID}" in out.getvalue()
+    return checks
+
+
+def case_s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing() -> Check:
+    s3 = FakeS3()
+    # older: the registration holds 20, the metadata read now ends at 10 and does not know 20
+    s3.put(metadata_key("older", 1), metadata_document("older", 10))
+    # newer: the metadata knows snapshot 30 (sequence 3) while main is at 10 (sequence 1)
+    s3.put(
+        metadata_key("newer", 1),
+        metadata_document(
+            "newer",
+            10,
+            changes={
+                "snapshots": [
+                    {"snapshot-id": 10, "sequence-number": 1, "timestamp-ms": 1000},
+                    {"snapshot-id": 30, "sequence-number": 3, "timestamp-ms": 3000, "parent-snapshot-id": 10},
+                ]
+            },
+        ),
+    )
+    # divergent: the registration holds 15, a sibling of the new main 20 (both children of 10)
+    s3.put(
+        metadata_key("divergent", 1),
+        metadata_document(
+            "divergent",
+            20,
+            changes={
+                "snapshots": [
+                    {"snapshot-id": 10, "sequence-number": 1, "timestamp-ms": 1000},
+                    {"snapshot-id": 15, "sequence-number": 2, "timestamp-ms": 2000, "parent-snapshot-id": 10},
+                    {"snapshot-id": 20, "sequence-number": 3, "timestamp-ms": 3000, "parent-snapshot-id": 10},
+                ]
+            },
+        ),
+    )
+    s3.put(metadata_key("unreadable", 1), metadata_document("unreadable", 10))
+    s3.put(metadata_key("good", 1), metadata_document("good", 10))
+    glue = FakeGlue()
+    for table, snapshot in (("older", "20"), ("newer", "30"), ("divergent", "15"), ("unreadable", "abc")):
+        held_registration(glue, table, snapshot)
+    before = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in ("older", "newer", "divergent", "unreadable")}
+    report = register(s3, glue, ["older", "newer", "divergent", "unreadable", "good"])
+    outcomes = report["tables"]
+    after = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in before}
+    return {
+        "nothing_changed_for_the_four": before == after and not [w for w in glue.writes() if w[2] != "good"],
+        "older_is_refused_as_not_an_ancestor": outcomes["older"].startswith("failed")
+        and "not an ancestor" in outcomes["older"]
+        and "nothing was changed" in outcomes["older"],
+        "newer_is_refused_as_newer": outcomes["newer"].startswith("failed") and "newer" in outcomes["newer"] and "nothing was changed" in outcomes["newer"],
+        "divergent_is_refused_as_not_an_ancestor": outcomes["divergent"].startswith("failed") and "not an ancestor" in outcomes["divergent"],
+        "an_unreadable_snapshot_id_is_refused": outcomes["unreadable"].startswith("failed") and "nothing was changed" in outcomes["unreadable"],
+        "the_other_table_is_still_registered": outcomes["good"] == "created",
+        "the_report_is_failed": report["status"] == "failed",
+    }
+
+
+def case_s3_register_identical_writes_nothing_and_an_ancestor_moves_up() -> Check:
+    glue, s3 = FakeGlue(), FakeS3()
+    s3.put(metadata_key("same", 1), metadata_document("same", 10))
+    s3.put(metadata_key("same", 2), metadata_document("same", 10, {"staged": 11}))
+    s3.put(metadata_key("published", 1), metadata_document("published", 10))
+    s3.put(metadata_key("climb", 1), metadata_document("climb", 20, history=[10]))
+    held_registration(glue, "same", "10")
+    held_registration(glue, "published", "10", run=RUN_ID)
+    held_registration(glue, "climb", "10")
+    report = register(s3, glue, ["same", "published", "climb"])
+    held = glue.tables[("hai_mirror_gold", "climb")]["Parameters"]
+    return {
+        "identical_snapshot_writes_nothing": report["tables"]["same"] == "unchanged" and ("update_table", "hai_mirror_gold", "same") not in glue.calls,
+        "identical_snapshot_of_a_publish_is_kept": report["tables"]["published"].startswith("kept")
+        and ("update_table", "hai_mirror_gold", "published") not in glue.calls,
+        "an_ancestor_registration_moves_up": report["tables"]["climb"] == "updated" and held["hai_snapshot_id"] == "20",
+        "the_run_stays_a_registration_run": held["hai_run_id"] == glue_mirror.S3_RUN_ID,
+    }
+
+
 CASES: dict[str, Callable[[], Check]] = {
     "first_publish_registers": case_first_publish_registers,
     "repeat_is_a_no_op": case_repeat_is_a_no_op,
@@ -1197,6 +1342,9 @@ CASES: dict[str, Callable[[], Check]] = {
     "bronze_tables_are_the_listed_bronze_tables": case_bronze_tables_are_the_listed_bronze_tables,
     "every_silver_bronze_source_is_registered": case_every_silver_bronze_source_is_registered,
     "silver_sources_that_the_list_cannot_name_are_refused": case_silver_sources_that_the_list_cannot_name_are_refused,
+    "s3_register_never_replaces_a_publish_that_lands_during_its_reads": case_s3_register_never_replaces_a_publish_that_lands_during_its_reads,
+    "s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing": case_s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing,
+    "s3_register_identical_writes_nothing_and_an_ancestor_moves_up": case_s3_register_identical_writes_nothing_and_an_ancestor_moves_up,
     "s3_register_registers_bronze_in_its_own_database": case_s3_register_registers_bronze_in_its_own_database,
     "register_command_covers_bronze_and_check_refuses_it": case_register_command_covers_bronze_and_check_refuses_it,
 }

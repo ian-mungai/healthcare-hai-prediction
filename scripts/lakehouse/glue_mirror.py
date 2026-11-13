@@ -276,6 +276,27 @@ class S3Source:
             raise MirrorError(f"{table}: the snapshot of main is not in the snapshot list")
         return snapshot
 
+    def relation(self, table: str, held: int, wanted: int) -> str:
+        """How the snapshot ``held`` stands to ``wanted`` in the newest metadata file: same, ancestor, newer or unrelated.
+
+        An ancestor is on the parent chain of ``wanted``. Newer is a snapshot that the file lists with a higher sequence number than ``wanted``. Any other
+        snapshot, including one that the file does not list, is unrelated: it cannot be shown to be older.
+        """
+        if held == wanted:
+            return "same"
+        entries = {item.get("snapshot-id"): item for item in self.document(self.files(table)[0][1]).get("snapshots") or [] if isinstance(item, dict)}
+        step: Any = wanted
+        seen: set[Any] = set()
+        while step is not None and step not in seen:
+            seen.add(step)
+            step = entries.get(step, {}).get("parent-snapshot-id")
+            if step == held:
+                return "ancestor"
+        theirs, ours = entries.get(held, {}), entries.get(wanted, {})
+        if theirs and ours and theirs.get("sequence-number", 0) > ours.get("sequence-number", 0):
+            return "newer"
+        return "unrelated"
+
     def pointer(self, table: str, snapshot_id: int) -> str | None:
         for _, key in self.files(table):
             if self.main_snapshot(self.document(key)) == snapshot_id:
@@ -376,8 +397,17 @@ def s3_client() -> Any:
     return boto3.Session(region_name=os.environ["AWS_REGION"]).client("s3", config=client_config())
 
 
-def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, run_id: str, source: Source, glue: Any, budget: Budget) -> str:
-    """Create or move one registration to the committed snapshot's metadata file; returns created, updated or unchanged."""
+# Decides, on the registration just read and before any write, whether to leave it: an outcome string keeps it, None goes on and a MirrorError refuses.
+Guard = Callable[[str, Mapping[str, Any], int], str | None]
+
+
+def register(
+    config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, run_id: str, source: Source, glue: Any, budget: Budget, guard: Guard | None = None
+) -> str:
+    """Create or move one registration to the committed snapshot's metadata file; returns created, updated or unchanged.
+
+    ``guard`` sees the registration that this call just read, the one it would replace, so a registration that lands after an earlier check is still seen.
+    """
     if not TABLE_NAME.fullmatch(table):
         raise MirrorError("the table name is not a plain lower-case name")
     pointer = budget.run(f"reading the metadata file of {table}", source.pointer, table, snapshot_id)
@@ -390,6 +420,9 @@ def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, ru
         held = existing.get("Parameters", {})
         if held.get(config.marker) != "true":
             raise MirrorError(f"Glue already holds {spec.database}.{table} and it is not a mirror: nothing was changed")
+        kept = guard(table, existing, snapshot_id) if guard is not None else None
+        if kept is not None:
+            return kept
         if held.get("metadata_location") == pointer and held.get("hai_snapshot_id") == str(snapshot_id) and held.get("hai_run_id") == run_id:
             return "unchanged"
     columns = [{"Name": name, "Type": kind} for name, kind in budget.run(f"reading the columns of {table}", source.columns, table)]
@@ -425,6 +458,7 @@ def mirror(
     glue: Any,
     run_id: str = "",
     budget: Budget | None = None,
+    guard: Guard | None = None,
 ) -> dict[str, Any]:
     """Mirror the newest committed snapshot set of one layer. Never raises: each table's outcome and any failure are in the report.
 
@@ -439,7 +473,7 @@ def mirror(
     outcomes: dict[str, str] = {}
     for table in wanted:
         try:
-            outcomes[table] = register(config, config.layers[layer], table, snapshots[table], run_id, source, glue, budget)
+            outcomes[table] = register(config, config.layers[layer], table, snapshots[table], run_id, source, glue, budget, guard)
         except Exception as error:
             outcomes[table] = "failed: " + (str(error) if isinstance(error, MirrorError) else explain(error))
     failed = [table for table, outcome in outcomes.items() if outcome.startswith("failed")]
@@ -483,7 +517,8 @@ def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3
     """Register the published tables of one layer from their metadata files in S3. Never raises: each table's outcome is in the report.
 
     The tables are the ones the layer's publish contract names. One absolute deadline bounds every S3 read and Glue call. A table that cannot be resolved
-    is reported failed and the others go on. A registration that a publish wrote stays as it is. With ``dry_run`` nothing is written.
+    is reported failed and the others go on. A registration that a publish wrote stays as it is, also when the publish lands while the metadata is read.
+    A registration is replaced only when its snapshot is an ancestor of the one to write. With ``dry_run`` nothing is written.
     """
     wanted, reason = tables_to_mirror(config, layer, "real", tables)
     if not wanted:
@@ -503,8 +538,28 @@ def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3
             snapshots[table] = budget.run(f"reading the metadata of {table}", source.committed, table)
         except Exception as error:
             outcomes[table] = "failed: " + (str(error) if isinstance(error, MirrorError) else explain(error))
+
+    def keep_or_refuse(table: str, existing: Mapping[str, Any], snapshot_id: int) -> str | None:
+        """Leave a publish's registration, an identical snapshot and anything that is not provably older; only an ancestor registration is replaced."""
+        held = existing.get("Parameters", {})
+        run = held.get("hai_run_id")
+        if run != S3_RUN_ID:
+            return f"kept: registered by publish run {run}"
+        theirs = str(held.get("hai_snapshot_id", ""))
+        if not theirs.isdigit():
+            raise MirrorError(
+                f"the registration holds no readable snapshot ID ({theirs!r}), and cannot be shown older than snapshot {snapshot_id}: nothing was changed"
+            )
+        relation = source.relation(table, int(theirs), snapshot_id)
+        if relation == "same":
+            return "unchanged"
+        if relation != "ancestor":
+            why = "is newer than" if relation == "newer" else "is not an ancestor of"
+            raise MirrorError(f"the registration holds snapshot {theirs}, which {why} snapshot {snapshot_id} that register would write: nothing was changed")
+        return None
+
     if snapshots:
-        report = mirror(config, layer, "real", snapshots, source, DryRunGlue(glue) if dry_run else glue, S3_RUN_ID, budget)
+        report = mirror(config, layer, "real", snapshots, source, DryRunGlue(glue) if dry_run else glue, S3_RUN_ID, budget, keep_or_refuse)
         outcomes.update(report["tables"])
     failed = any(outcome.startswith("failed") for outcome in outcomes.values())
     changed = any(outcome in ("created", "updated") for outcome in outcomes.values())
