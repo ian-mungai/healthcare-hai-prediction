@@ -44,6 +44,8 @@ SUBSTITUTIONS = (
     "the bridge checks the SigV4 credential scope and the request rules of the bundled service models, not the signature, IAM policy or quotas",
     "the free space of the scratch volume: shutil.disk_usage answers 400 GiB, because the host's scratch volume is not in the container",
     "airflow_steps.UNAVAILABLE_SECONDS is 1 second: a staged input that is not there yet is waited for one second, not ten minutes",
+    "the layer acceptance report (orchestration/layer_report.py): its listing, closing evidence and acceptance functions are replaced by the stand-ins of the "
+    "airflow_mode_cases rig, because they read the S3 object versions, the ECS hosts and the staged code archive, which the bridge does not model",
     "the fake task ends at its first status read (finish_after 1) and its exit codes are planned by the scenario",
     "USER is set when the environment has none: the check runs python without the image entrypoint that adds the passwd entry for the user id",
     "the Airflow metadata database is SQLite in a temporary folder and DAG.test() runs the tasks in process (no scheduler, no API server)",
@@ -305,6 +307,13 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
             mock.patch.dict(os.environ, environment),
             mock.patch.object(airflow_steps, "UNAVAILABLE_SECONDS", 1.0),
             mock.patch.object(shutil, "disk_usage", lambda _path: SimpleNamespace(total=SCRATCH_FREE, used=0, free=SCRATCH_FREE)),
+            mock.patch.object(airflow_steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
+            mock.patch.object(airflow_steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
+            mock.patch.object(
+                airflow_steps.layer_report,
+                "accept",
+                lambda access, layer, run: rig.reports.append(f"report {layer} {run}") or {"report": "stand_in", "passed": True},
+            ),
             observer.watching(),
             planted(step.plant),
         ):
