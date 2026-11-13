@@ -169,56 +169,143 @@ def case_a_checkout_without_lfs_objects_is_refused_before_anything_is_written(wo
     require(not (work / "out").exists(), "a refused build left its output folder")
 
 
-def check_with_registry(work: Path, environment: Mapping[str, str], content: bytes) -> str:
-    """Build the real archive, swap the registry member for ``content`` and return the digest ``code_archive.check`` accepts it with, or raise its refusal."""
+def registry_checker(work: Path, environment: Mapping[str, str]) -> Callable[[bytes], str]:
+    """Build the real archive once; the returned function swaps the registry member for its argument and returns the digest ``code_archive.check`` accepts
+    the result with, or raises its refusal."""
     origin = make_origin(work, environment)
     build(ci_checkout(origin, work / "ci", environment, lfs=True), work / "out", environment)
-    swapped = work / "swapped.tar"
-    with tarfile.open(work / "out/code.tar.gz") as source, tarfile.open(swapped, "w", format=tarfile.PAX_FORMAT, pax_headers=source.pax_headers) as target:
-        for member in source.getmembers():
-            if member.name == REGISTRY:
-                member.size = len(content)
-                target.addfile(member, io.BytesIO(content))
-            else:
-                target.addfile(member, source.extractfile(member) if member.isfile() else None)
-    digest = hashlib.sha256(swapped.read_bytes()).hexdigest()
-    return code_archive.check(swapped, expected=digest)
+
+    def check_content(content: bytes) -> str:
+        swapped = work / "swapped.tar"
+        with tarfile.open(work / "out/code.tar.gz") as source, tarfile.open(swapped, "w", format=tarfile.PAX_FORMAT, pax_headers=source.pax_headers) as target:
+            for member in source.getmembers():
+                if member.name == REGISTRY:
+                    member.size = len(content)
+                    target.addfile(member, io.BytesIO(content))
+                else:
+                    target.addfile(member, source.extractfile(member) if member.isfile() else None)
+        return code_archive.check(swapped, expected=hashlib.sha256(swapped.read_bytes()).hexdigest())
+
+    return check_content
 
 
-def case_the_check_refuses_an_archive_that_holds_a_pointer_file(work: Path, environment: Mapping[str, str]) -> None:
-    try:
-        check_with_registry(work, environment, POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize 4001\n")
-    except code_archive.ArchiveError as error:
-        require("LFS pointer" in str(error) and REGISTRY in str(error), str(error))
-    else:
-        raise AssertionError("the check accepted an archive that holds a Git LFS pointer file")
+def lfs_accepts(content: bytes, work: Path, environment: Mapping[str, str]) -> bool:
+    """What Git LFS itself says: ``git lfs pointer --check`` exits 0 for a file it takes as a pointer and 1 for anything else."""
+    sample = work / "lfs_sample"
+    sample.write_bytes(content)
+    done = run_command("git", ["lfs", "pointer", "--check", f"--file={sample}"], cwd=work, env=environment, timeout=GIT_TIMEOUT)
+    require(done.returncode in (0, 1), f"git lfs pointer --check exited {done.returncode}: {done.stderr.strip()[-200:]}")
+    return done.returncode == 0
 
 
-def case_the_check_accepts_ordinary_text_that_only_resembles_a_pointer(work: Path, environment: Mapping[str, str]) -> None:
-    text = POINTER_HEAD + b"oid sha256: documents the object identifier\nThis is an ordinary text example, not a Git LFS pointer.\n"
-    require(code_archive.SHA256.fullmatch(check_with_registry(work, environment, text)) is not None, "the check refused ordinary text")
+VERSION, OID, SIZE = POINTER_HEAD, b"oid sha256:" + b"0" * 64 + b"\n", b"size 4001\n"
+CANONICAL = VERSION + OID + SIZE
 
 
-def case_the_check_accepts_files_that_miss_part_of_the_pointer_form_or_add_content(work: Path, environment: Mapping[str, str]) -> None:
-    form = POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize 4001\n"
-    for content in (
-        form + b"This file documents the pointer format and is not a pointer.\n",
-        POINTER_HEAD + b"oid sha256:" + b"0" * 63 + b"\nsize 4001\n",
-        POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\n",
-        POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize four\n",
-    ):
-        with tempfile.TemporaryDirectory(prefix="code_archive_variant_", dir=work) as scratch:
-            variant = Path(scratch).resolve()
-            require(code_archive.SHA256.fullmatch(check_with_registry(variant, environment, content)) is not None, f"the check refused {content!r}")
+def extension(index: int, name: str) -> bytes:
+    return f"ext-{index}-{name} sha256:".encode() + b"1" * 64 + b"\n"
+
+
+# every form that ``git lfs pointer --check`` takes as a pointer, which a checkout without the LFS objects can leave in the tree
+POINTER_FORMS: dict[str, bytes] = {
+    "canonical": CANONICAL,
+    "one blank line after": CANONICAL + b"\n",
+    "two blank lines after": CANONICAL + b"\n\n",
+    "no final newline": CANONICAL.rstrip(b"\n"),
+    "CRLF line ends": CANONICAL.replace(b"\n", b"\r\n"),
+    "blank line between the lines": VERSION + b"\n" + OID + SIZE,
+    "blank lines before": b"\n\n" + CANONICAL,
+    "spaces and tabs around": b" \t\n" + CANONICAL + b"  \n\t\n",
+    "no-break space before": "\u00a0".encode() + CANONICAL,
+    "Hawser version alias": b"version https://hawser.github.com/spec/v1\n" + OID + SIZE,
+    "git-media version alias": b"version http://git-media.io/v/2\n" + OID + SIZE,
+    "size zero": VERSION + OID + b"size 0\n",
+    "signed size": VERSION + OID + b"size +4001\n",
+    "zero-padded size": VERSION + OID + b"size 0004001\n",
+    "largest size": VERSION + OID + b"size 9223372036854775807\n",
+    "extension before the oid": VERSION + extension(0, "a") + OID + SIZE,
+    "extension between the oid and the size": VERSION + OID + extension(1, "b_c") + SIZE,
+    "extensions out of order": VERSION + extension(1, "b") + extension(0, "a") + OID + SIZE,
+    "extension before the version": extension(0, "a") + VERSION + OID + SIZE,
+    "padded past one kilobyte": CANONICAL.ljust(1024, b" ") + b"text that Git LFS does not read\n",
+}
+
+# forms that only resemble a pointer: ``git lfs pointer --check`` refuses each, so each is ordinary text that the archive may carry
+NOT_POINTERS: dict[str, bytes] = {
+    "prose after the lines": CANONICAL + b"This file documents the pointer format and is not a pointer.\n",
+    "prose in place of the oid": VERSION + b"oid sha256: documents the object identifier\nThis is an ordinary text example, not a Git LFS pointer.\n",
+    "oid of 63 digits": VERSION + b"oid sha256:" + b"0" * 63 + b"\n" + SIZE,
+    "oid of 65 digits": VERSION + b"oid sha256:" + b"0" * 65 + b"\n" + SIZE,
+    "uppercase oid digits": VERSION + b"oid sha256:" + b"A" * 64 + b"\n" + SIZE,
+    "oid of another algorithm": VERSION + b"oid sha1:" + b"0" * 40 + b"\n" + SIZE,
+    "no size line": VERSION + OID,
+    "size that is not a number": VERSION + OID + b"size four\n",
+    "negative size": VERSION + OID + b"size -1\n",
+    "size too large for 64 bits": VERSION + OID + b"size 9223372036854775808\n",
+    "size with an underscore": VERSION + OID + b"size 4_001\n",
+    "unknown version": b"version https://git-lfs.github.com/spec/v2\n" + OID + SIZE,
+    "version line with a trailing space": VERSION.rstrip(b"\n") + b" \n" + OID + SIZE,
+    "lines out of order": VERSION + SIZE + OID,
+    "repeated oid line": VERSION + OID + OID + SIZE,
+    "unknown key after the size": CANONICAL + b"note text\n",
+    "extension after the size": CANONICAL + extension(0, "a"),
+    "two names at one extension index": VERSION + extension(0, "a") + extension(0, "b") + OID + SIZE,
+    "extension index of two digits": VERSION + extension(10, "a") + OID + SIZE,
+    "blank line of spaces between the lines": VERSION + b" \n" + OID + SIZE,
+    "byte order mark before": b"\xef\xbb\xbf" + CANONICAL,
+    "lone carriage returns as line ends": CANONICAL.replace(b"\n", b"\r"),
+    "null byte after": CANONICAL + b"\x00",
+    "only the version line": VERSION,
+    "only whitespace": b" \n\n",
+}
+
+
+def case_the_check_refuses_every_form_that_git_lfs_takes_as_a_pointer(work: Path, environment: Mapping[str, str]) -> None:
+    check_content = registry_checker(work, environment)
+    wrong_table, accepted = [], []
+    for name, content in POINTER_FORMS.items():
+        if not lfs_accepts(content, work, environment):
+            wrong_table.append(name)
+            continue
+        try:
+            check_content(content)
+        except code_archive.ArchiveError as error:
+            require("LFS pointer" in str(error) and REGISTRY in str(error), f"{name}: {error}")
+        else:
+            accepted.append(name)
+    require(not wrong_table, f"git lfs pointer --check refuses these forms of the table: {wrong_table}")
+    require(not accepted, f"the check accepted an archive that holds a Git LFS pointer file in these forms: {accepted}")
+
+
+def case_the_check_accepts_every_near_miss_that_git_lfs_refuses(work: Path, environment: Mapping[str, str]) -> None:
+    check_content = registry_checker(work, environment)
+    wrong_table, refused = [], []
+    for name, content in NOT_POINTERS.items():
+        if lfs_accepts(content, work, environment):
+            wrong_table.append(name)
+            continue
+        try:
+            require(code_archive.SHA256.fullmatch(check_content(content)) is not None, name)
+        except code_archive.ArchiveError:
+            refused.append(name)
+    require(not wrong_table, f"git lfs pointer --check takes these forms of the table as pointers: {wrong_table}")
+    require(not refused, f"the check refused ordinary text in these forms: {refused}")
+
+
+def case_the_check_accepts_an_empty_file(work: Path, environment: Mapping[str, str]) -> None:
+    require(lfs_accepts(b"", work, environment), "git lfs pointer --check no longer exits 0 for an empty file: review this case")
+    require(
+        code_archive.SHA256.fullmatch(registry_checker(work, environment)(b"")) is not None, "the check refused an empty file, which holds no object to resolve"
+    )
 
 
 CASES: dict[str, Callable[[Path, Mapping[str, str]], None]] = {
     "a clean CI checkout builds the bytes of the local build": case_a_clean_ci_checkout_builds_the_bytes_of_the_local_build,
     "the archive carries the baseline run folder with the real registry": case_the_archive_carries_the_baseline_run_folder_with_the_real_registry,
     "a checkout without LFS objects is refused before anything is written": case_a_checkout_without_lfs_objects_is_refused_before_anything_is_written,
-    "the check refuses an archive that holds a pointer file": case_the_check_refuses_an_archive_that_holds_a_pointer_file,
-    "the check accepts ordinary text that only resembles a pointer": case_the_check_accepts_ordinary_text_that_only_resembles_a_pointer,
-    "the check accepts files that miss part of the pointer form or add content": case_the_check_accepts_files_that_miss_part_of_the_pointer_form_or_add_content,
+    "the check refuses every form that Git LFS takes as a pointer": case_the_check_refuses_every_form_that_git_lfs_takes_as_a_pointer,
+    "the check accepts every near miss that Git LFS refuses": case_the_check_accepts_every_near_miss_that_git_lfs_refuses,
+    "the check accepts an empty file": case_the_check_accepts_an_empty_file,
 }
 
 

@@ -35,8 +35,13 @@ LOCK = "dbt/package-lock.yml"
 RECORD = "config/lakehouse/dbt_package_archive.json"
 ARCHIVE_FOLDER = "data/analytics/dbt/package_archive"
 LIMIT = 512 * 1024 * 1024
-POINTER = re.compile(rb"version https://git-lfs\.github\.com/spec/v1\noid sha256:[0-9a-f]{64}\nsize [0-9]+\n")
 POINTER_LIMIT = 1024
+POINTER_KEYS = ("version", "oid", "size")
+POINTER_VERSIONS = frozenset({"https://git-lfs.github.com/spec/v1", "https://hawser.github.com/spec/v1", "http://git-media.io/v/2"})
+POINTER_OID = re.compile(r"sha256:[0-9a-f]{64}")
+POINTER_SIZE = re.compile(r"[+-]?[0-9]+")
+POINTER_EXTENSION = re.compile(r"ext-([0-9])-([A-Za-z0-9_]\S*)")
+POINTER_SPACE = "\t\n\v\f\r \x85\xa0\u1680\u2028\u2029\u202f\u205f\u3000" + "".join(chr(code) for code in range(0x2000, 0x200B))
 
 
 class ArchiveError(ValueError):
@@ -50,12 +55,43 @@ def git(arguments: list[str], root: Path) -> str:
     return done.stdout.strip()
 
 
+def pointer_value_is_valid(key: str, value: str) -> bool:
+    if key == "version":
+        return value in POINTER_VERSIONS
+    if key == "oid":
+        return POINTER_OID.fullmatch(value) is not None
+    return POINTER_SIZE.fullmatch(value) is not None and 0 <= int(value) < 2**63
+
+
+def is_pointer(head: bytes) -> bool:
+    """Whether Git LFS takes a file that starts with ``head`` (its first ``POINTER_LIMIT`` bytes) as a pointer, as ``git lfs pointer --check`` decides it.
+    The rule is Git LFS's own, so a form that is not canonical still counts: surrounding whitespace, blank lines, CRLF, a missing final newline, the older
+    version URLs, a signed size and extension lines before the size. A file with no pointer lines, an empty one included, is not a pointer."""
+    seen = 0
+    extensions: dict[str, str] = {}
+    for line in head.decode("utf-8", "surrogateescape").strip(POINTER_SPACE).split("\n"):
+        line = line.removesuffix("\r")
+        if not line:
+            continue
+        key, space, value = line.partition(" ")
+        extension = POINTER_EXTENSION.fullmatch(key)
+        if not space or seen == len(POINTER_KEYS):
+            return False
+        if key == POINTER_KEYS[seen]:
+            if not pointer_value_is_valid(key, value):
+                return False
+            seen += 1
+        elif extension is None or POINTER_OID.fullmatch(value) is None or extensions.setdefault(extension[1], extension[2]) != extension[2]:
+            return False
+    return seen == len(POINTER_KEYS)
+
+
 def refuse_pointers(tar: tarfile.TarFile, members: list[tarfile.TarInfo]) -> None:
     """Refuse a member that is a Git LFS pointer file: a checkout without its LFS objects makes ``git archive`` export the pointer in place of the file."""
     for member in members:
-        if member.isfile() and member.size <= POINTER_LIMIT:
+        if member.isfile():
             data = tar.extractfile(member)
-            if data is not None and POINTER.fullmatch(data.read()):
+            if data is not None and is_pointer(data.read(POINTER_LIMIT)):
                 raise ArchiveError(f"{member.name} is a Git LFS pointer file, not the file: check out with the Git LFS objects (actions/checkout lfs: true)")
 
 
