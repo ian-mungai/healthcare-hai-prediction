@@ -1,7 +1,8 @@
 """One-time development step: move the reference download plan to version 2, which holds no file.
 
-The five documents of version 1 left the bootstrap (owner, Nov 12 2026). The version 1 plan is archived under ARCHIVE and listed as the predecessor of
-version 2, so captures that recorded it keep verifying. The step writes under ROOT only, so a staging copy of the config folder takes the archive.
+The five documents of version 1 left the bootstrap (owner, Nov 12 2026). Version 2 binds the registry the repository ships, so a clean checkout loads it
+without the ignored legacy archive. The version 1 plan is archived under ARCHIVE and listed as the predecessor of version 2, so captures that recorded it
+keep verifying. The step writes under ROOT only, so a staging copy of the config folder takes the archive.
 """
 
 from __future__ import annotations
@@ -19,11 +20,20 @@ PLAN = "reference_downloads_plan.json"
 ARCHIVE = "data/acquisition_planning/acquisition_legacy_20261009/pre_seed_plan_versions_20261112"
 
 
-def successor(plan: dict) -> dict:
-    """The version 2 plan of a version 1 plan: the same registry and hold, no file."""
+def shipped_registry(root: Path) -> str:
+    """The canonical hash of the registry that the locked version catalog names as the repository's own."""
+    path = root / CONFIG / "registry_versions.json"
+    catalog = json.loads(path.read_text(encoding="utf-8"))
+    if json.loads(path.with_suffix(".lock.json").read_text(encoding="utf-8")).get("catalog_sha256") != canonical_hash(catalog):
+        raise ValueError("The registry version catalog differs from its lock")
+    return str(catalog["current_registry_sha256"])
+
+
+def successor(plan: dict, registry_sha256: str) -> dict:
+    """The version 2 plan of a version 1 plan: the shipped registry and the same hold, no file."""
     if plan.get("version") != 1:
         raise ValueError("Only a version 1 plan has a version 2 successor")
-    return {"version": 2, "model_eligible": plan["model_eligible"], "registry_sha256": plan["registry_sha256"], "files": []}
+    return {"version": 2, "model_eligible": plan["model_eligible"], "registry_sha256": registry_sha256, "files": []}
 
 
 def apply(root: Path, archive: str = ARCHIVE) -> str:
@@ -34,7 +44,7 @@ def apply(root: Path, archive: str = ARCHIVE) -> str:
     plan = json.loads(before)
     if json.loads(lock_path.read_text(encoding="utf-8")).get("plan_sha256") != canonical_hash(plan):
         raise ValueError("The plan differs from its lock")
-    new = successor(plan)
+    new = successor(plan, shipped_registry(root))
     fresh = canonical_hash(new)
     path.write_bytes(encoded_json(new))
     lock_path.write_bytes(encoded_json({"plan_sha256": fresh}))

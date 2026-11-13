@@ -164,7 +164,7 @@
         "canonical_sha256": "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f"
       }
     ],
-    "84cd57cf2ca0f4aa9df9c379a87a705c69e6ba9f8b3e5ef4e4bd05b8213bd596": [
+    "4173be2f8879637869b0289a10b03c6d343189499545009814bfa284fcfc7633": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_seed_plan_versions_20261112/reference_downloads_plan.json",
         "sha256": "0fd7af8a45922119a6d85034389e23fc31e103e1507358f14704ce8daa6642d7",
