@@ -18,17 +18,29 @@ import os
 import re
 import shutil
 import tempfile
+import time
 import urllib.request
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Iterable, Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition import (
+    bls_api_transport,
+    census_acs_api_transport,
+    collect_mmd_api,
+    hud_api_transport,
+    redownload,
+    redownload_controls,
+    redownload_route,
+    task_role,
+    transport,
+)
 from scripts.acquisition import completion_record as records
 from scripts.acquisition import ingestion_intent as intents
-from scripts.acquisition import redownload, redownload_route, task_role, transport
 from scripts.acquisition.capture import capture, receipt_validator
 from scripts.acquisition.collection_layout import capture_root, load_routes
 from scripts.acquisition.mapped_archives import expand_tree
@@ -43,6 +55,19 @@ UNIT_FOLDER = re.compile(r"[a-f0-9]{64}")
 MANUAL_MODES = redownload.MANUAL_MODES
 COLLECTOR_MODES = frozenset(redownload.PLANNED) | {"mmd_api"}
 SKIPPED_ROLES = frozenset({"capture_receipt", "transport_audit", "archive_inventory"})
+API_TRANSPORTS: tuple[Any, ...] = (bls_api_transport, census_acs_api_transport, hud_api_transport, collect_mmd_api)
+LINEAGE_ID = {
+    "bls_api_v2": "batch_id",
+    "census_acs_api": "batch_id",
+    "census_acs_detailed": "batch_id",
+    "hud_api": "batch_id",
+    "cms_owners_org": "release_id",
+    "onc_mu_hospital": "file_id",
+    "hcai_util_workbook": "year_id",
+}
+URL_BOUND = frozenset({"file", "cms_owners_org", "onc_mu_hospital", "hcai_util_workbook"})
+CONFLICT_READS = 3
+CONFLICT_WAIT = 1.0
 COUNTERS = (
     "http_requests",
     "bytes_downloaded",
@@ -73,25 +98,137 @@ class IntentRefused(Exception):
         self.reason = reason
 
 
+class Observer:
+    """The run's one request and byte observer. A request counts when it is sent and a response counts when its body is read, so a failed or rejected
+    response counts too. The byte cap is enforced against the same count. The observer holds no URL, header or credential."""
+
+    def __init__(self, byte_cap: int) -> None:
+        self.byte_cap, self.requests, self.bytes = byte_cap, 0, 0
+
+    def sent(self) -> None:
+        self.requests += 1
+
+    def received(self, body: bytes) -> bytes:
+        self.bytes += len(body)
+        if self.bytes > self.byte_cap:
+            raise ContractFailure("byte_cap_exceeded")
+        return body
+
+
 def count_request(handler: Any, request: Any) -> Any:
     """The preprocessor urllib calls for each HTTPS request an opener sends, a redirect's next request included."""
-    handler.count += 1
+    handler.observer.sent()
     return request
 
 
-def request_counter() -> Any:
-    """A handler that counts the opener's requests. urllib finds its ``https_request`` by name, so the class is built with that name."""
+def request_counter(observer: Observer) -> Any:
+    """A handler that reports the opener's requests. urllib finds its ``https_request`` by name, so the class is built with that name."""
     handler = type("RequestCounter", (urllib.request.BaseHandler,), {"https_request": count_request})()
-    handler.count = 0
+    handler.observer = observer
     return handler
 
 
 class CountingTransport(transport.ReviewedTransport):
-    """The reviewed transport with the run's one shared request counter below the redirect policy."""
+    """The reviewed transport with the run's observer below the redirect policy."""
 
-    def __init__(self, base: transport.ReviewedTransport) -> None:
-        self.counter = request_counter()
-        super().__init__(*base.handlers, self.counter)
+    def __init__(self, base: transport.ReviewedTransport, observer: Observer) -> None:
+        super().__init__(*base.handlers, request_counter(observer))
+
+
+def observed_connection(observer: Observer, original: Callable[..., Any]) -> Callable[..., Any]:
+    """A connection factory whose connections report each request they send."""
+
+    def connect(netloc: str, timeout: float) -> Any:
+        connection = original(netloc, timeout)
+        send = connection.request
+
+        def request(*arguments: Any, **options: Any) -> Any:
+            observer.sent()
+            return send(*arguments, **options)
+
+        connection.request = request
+        return connection
+
+    return connect
+
+
+@contextmanager
+def observing(observer: Observer) -> Iterator[None]:
+    """Route every direct API connection and every response read of the process through the observer, then restore them.
+
+    The API transports import ``https_connection`` by name and read bodies through ``redownload_controls.read``, so these are the two places every send
+    and every read pass. A run owns the process while it executes.
+    """
+    saved: list[tuple[Any, Any]] = []
+    for module in API_TRANSPORTS:
+        saved.append((module, module.https_connection))
+        module.https_connection = observed_connection(observer, module.https_connection)
+    read = redownload_controls.read
+    redownload_controls.read = lambda response, size: observer.received(read(response, size))
+    try:
+        yield
+    finally:
+        redownload_controls.read = read
+        for module, original in saved:
+            module.https_connection = original
+
+
+def observed_request(observer: Observer, request: Callable | None) -> Callable | None:
+    """An injected API request function, counted as one send and its returned body as received bytes."""
+    if request is None:
+        return None
+
+    def call(*arguments: Any) -> bytes:
+        observer.sent()
+        return observer.received(request(*arguments))
+
+    return call
+
+
+class Journal:
+    """The keys this run created, noted at the storage boundary when a create succeeds, so a failed upload keeps the creates before its failure."""
+
+    def __init__(self) -> None:
+        self.keys: list[str] = []
+
+
+class JournalStorage:
+    """The run's storage client. Every successful put-object it makes is noted in the journal; every other attribute is the wrapped client's."""
+
+    def __init__(self, inner: Any, journal: Journal) -> None:
+        self.inner, self.journal = inner, journal
+
+    def call(self, service: str, operation: str, arguments: list[str] | None = None) -> dict:
+        reply = self.inner.call(service, operation, arguments)
+        self.note(operation, arguments)
+        return reply
+
+    def call_bounded(self, service: str, operation: str, arguments: list[str] | None = None, *, timeout: float) -> dict:
+        reply = self.inner.call_bounded(service, operation, arguments, timeout=timeout)
+        self.note(operation, arguments)
+        return reply
+
+    def note(self, operation: str, arguments: list[str] | None) -> None:
+        if operation == "put-object" and arguments:
+            self.journal.keys.append(arguments[arguments.index("--key") + 1])
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+
+class JournalS3:
+    """A keyed collector's S3 client, noting each ledger entry it creates."""
+
+    def __init__(self, inner: Any, journal: Journal) -> None:
+        self.inner, self.journal = inner, journal
+
+    def put_object(self, **arguments: Any) -> Any:
+        reply = self.inner.put_object(**arguments)
+        self.journal.keys.append(arguments["Key"])
+        return reply
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
 
 
 def utc_now() -> datetime:
@@ -122,6 +259,7 @@ class CaptureRun:
     clock: Callable[[], datetime] = utc_now
     log: Callable[[dict], None] | None = None
     cache: dict[str, Any] = field(default_factory=dict)
+    journal: Journal | None = None
 
 
 def registry_of(run: CaptureRun, unit: dict) -> dict:
@@ -143,6 +281,10 @@ def client_for(run: CaptureRun, handler: str) -> Any:
         raise ContractFailure("keys_not_enabled")
     reader = run.task_keys(handler)
     reader.storage = run.storage
+    factory = getattr(reader, "factory", None)
+    if factory is not None and run.journal is not None:
+        journal = run.journal
+        reader.factory = lambda service, region: JournalS3(factory(service, region), journal) if service == "s3" else factory(service, region)
     return reader
 
 
@@ -296,6 +438,27 @@ def unit_key_of(unit: dict, spec: Mapping[str, Any]) -> str:
     return records.unit_key(unit_identity(unit, spec))
 
 
+def expectation(run: CaptureRun, unit: dict, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """What a stored record and its receipt must say for this unit, taken from the trusted queue, specification and routes and never from the record."""
+    if "routes" not in run.cache:
+        run.cache["registry"] = run.cache.get("registry") or load_registry()
+        run.cache["routes"] = load_routes(run.cache["registry"])
+    route = run.cache["routes"].get(unit["source_id"])
+    if route is None:
+        raise SpecError("The unit's source has no collection route")
+    handler = redownload.handler_mode(unit)
+    mmd = spec.get("mmd") if handler == "mmd_api" else None
+    return {
+        "source_id": unit["source_id"],
+        "mode": handler,
+        "collection": f"{route['publisher']}/{route['collection']}",
+        "url": canonical_url(unit["url"]),
+        "method": "POST" if handler == "bls_api_v2" else "GET",
+        "plan_item": spec.get("plan_item"),
+        "mmd": {"measure_id": mmd["measure_id"], "year": mmd["year"]} if mmd else None,
+    }
+
+
 def named(storage: Any) -> dict[str, str]:
     return {"Bucket": storage.configuration["data_bucket_name"], "ExpectedBucketOwner": storage.configuration["expected_account_id"]}
 
@@ -370,13 +533,17 @@ def verify_object(storage: Any, item: Mapping[str, Any]) -> str | None:
     return None
 
 
-def read_stored(storage: Any, key: str) -> bytes:
-    """The bytes of one stored object at its current version."""
-    reply = storage.call("s3api", "head-object", ["--key", key])
+def read_version(storage: Any, key: str, version_id: str) -> bytes:
+    """The bytes of one stored object at an exact version."""
     with tempfile.TemporaryDirectory(prefix="record_read_") as folder:
         local = Path(folder) / "record.json"
-        storage.call("s3api", "get-object", ["--key", key, "--version-id", str(reply["VersionId"]), str(local)])
+        storage.call("s3api", "get-object", ["--key", key, "--version-id", version_id, str(local)])
         return local.read_bytes()
+
+
+def read_stored(storage: Any, key: str) -> bytes:
+    """The bytes of one stored object at its current version."""
+    return read_version(storage, key, str(storage.call("s3api", "head-object", ["--key", key])["VersionId"]))
 
 
 def read_record(storage: Any, key: str, root: str) -> dict[str, Any]:
@@ -410,23 +577,76 @@ def create_new(storage: Any, key: str, body: bytes) -> bool:
     return True
 
 
-def claim_intent(run: CaptureRun, unit: dict, key: str, generation: int, snapshot_id: str, counters: Counter) -> str:
+def claim_intent(run: CaptureRun, unit: dict, key: str, generation: int, snapshot_id: str) -> str:
     """The snapshot ID this attempt stores under: its own when it wrote the intent, else the one an earlier attempt's intent already names."""
     target = intents.intent_key(run.root, key, generation)
     body = intents.encode(intents.build(unit_key=key, generation=generation, snapshot_id=snapshot_id, run_id=run.run_id))
     if create_new(run.storage, target, body):
-        counters["intents_created"] += 1
         return snapshot_id
     return read_intent(run.storage, target, run.root, unit["source_id"])["snapshot_id"]
 
 
-def verify_record(storage: Any, key: str, root: str) -> list[str]:
-    """Problems with one stored record: unreadable, malformed, copied under another key, or naming an object that does not match."""
+def read_json_object(storage: Any, item: Mapping[str, Any]) -> Any:
+    """The JSON an object a record names holds, read at the exact version the record names."""
+    return json.loads(read_version(storage, item["key"], item["version_id"]))
+
+
+def manifest_problems(storage: Any, record: Mapping[str, Any]) -> list[str]:
+    """Problems with the object set: every object the record names must be listed, at its exact version and digest, by the manifests the record names."""
+    listed: set[tuple[str, str, str]] = set()
+    for manifest in record["manifests"]:
+        try:
+            for item in read_json_object(storage, manifest)["objects"]:
+                listed.add((item["object"]["key"], str(item["object"]["version_id"]), item["object"]["sha256"]))
+        except (StorageError, ValueError, KeyError, TypeError):
+            return [f"{manifest['key']}: the manifest cannot be read as a list of objects"]
+    named = [record["receipt"], *record["data_objects"], *record["other_objects"]]
+    return [f"{item['key']} is not listed by the record's manifests" for item in named if (item["key"], item["version_id"], item["sha256"]) not in listed]
+
+
+def receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
+    """Problems with the receipt a record names against the request the trusted specification describes."""
+    try:
+        lineage = json.loads(receipt["lineage"]["extraction_or_query"])
+        acquisition, found_source = receipt["acquisition"], receipt["source"]["source_record_id"]
+    except (KeyError, TypeError, ValueError):
+        return ["the receipt has no readable source, acquisition or lineage"]
+    problems = []
+    if found_source != expected["source_id"]:
+        problems.append("the receipt belongs to another source")
+    if expected["mode"] in URL_BOUND and (
+        canonical_url(acquisition.get("requested_url") or "") != expected["url"] or acquisition.get("request_method") != expected["method"]
+    ):
+        problems.append("the receipt answers another request")
+    name = LINEAGE_ID.get(expected["mode"])
+    if name is not None and lineage.get(name) != expected["plan_item"]:
+        problems.append("the receipt names another planned item")
+    if expected["mmd"] is not None and (lineage.get("measure_id"), lineage.get("year")) != (expected["mmd"]["measure_id"], expected["mmd"]["year"]):
+        problems.append("the receipt names another measure or year")
+    return problems
+
+
+def binding_problems(storage: Any, record: Mapping[str, Any], expected: Mapping[str, Any] | None) -> list[str]:
+    """Problems with the binding of a record: its objects agree with its manifests and, when the requested unit is known, with that unit's request."""
+    problems = manifest_problems(storage, record)
+    if expected is None:
+        return problems
+    problems.extend(f"the record names another {name}" for name in ("source_id", "mode", "collection") if record[name] != expected[name])
+    try:
+        problems.extend(receipt_problems(read_json_object(storage, record["receipt"]), expected))
+    except (StorageError, ValueError):
+        problems.append("the receipt cannot be read")
+    return problems
+
+
+def verify_record(storage: Any, key: str, root: str, expected: Mapping[str, Any] | None = None) -> list[str]:
+    """Problems with one stored record: unreadable, malformed, copied under another key, naming an object that does not match, or not the requested unit's."""
     try:
         record = read_record(storage, key, root)
     except (records.RecordError, StorageError) as error:
         return [f"{key}: {error}"]
-    return [problem for item in records.objects_named(record) if (problem := verify_object(storage, item))]
+    found = [problem for item in records.objects_named(record) if (problem := verify_object(storage, item))]
+    return found or [f"{key}: {problem}" for problem in binding_problems(storage, record, expected)]
 
 
 def verify_records(storage: Any, root: str) -> list[str]:
@@ -458,35 +678,79 @@ def intent_problems(storage: Any, root: str, run_record: Mapping[str, Any], new_
     return problems
 
 
-def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
-    """The host evidence step: verify the records by version and diff the version listings before and after the run.
+def tally_writes(root: str, keys: Iterable[str]) -> dict[str, int]:
+    """What a run's recorded writes were: intents, shared ledger entries, run objects and, for every other key, stored objects and completion records."""
+    counts = {"intents_created": 0, "bls_ledger_entries_added": 0, "run_objects": 0, "objects_created": 0}
+    for key in keys:
+        if key.startswith(f"{root}{intents.INTENTS_FOLDER}"):
+            counts["intents_created"] += 1
+        elif key.startswith(task_role.BLS_LEDGER_PREFIX):
+            counts["bls_ledger_entries_added"] += 1
+        elif key.startswith(f"{root}{records.RUNS_FOLDER}"):
+            counts["run_objects"] += 1
+        else:
+            counts["objects_created"] += 1
+    return counts
 
-    The run may add exactly its run record (and its state object when it attempted units) beside the objects and intents its own counters name, and
-    nothing may be removed, replaced or marked deleted. Each unit the run stored has its intent.
+
+def outcome_problems(units: Mapping[str, Any]) -> list[str]:
+    """A bootstrap run is complete only when every unit it was given ended with a completion record or a recent stale record."""
+    problems = [f"unit {item['unit_key'] or item['snapshot_id']} did not complete: {item['reason']}" for item in [*units["failed"], *units["refused"]]]
+    problems.extend(f"unit {snapshot_id} was not attempted ({name})" for name in ("paused_not_attempted", "keyed_not_attempted") for snapshot_id in units[name])
+    return problems
+
+
+def skip_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> list[str]:
+    """Problems with the units the run skipped: each has its verified completion record or a stale record younger than the retry interval."""
+    units, counters, problems = run_record["units"], run_record["counters"], []
+    if counters["skipped_complete"] != len(units["skipped_complete"]) or counters["skipped_recent_stale"] != len(units["skipped_recent_stale"]):
+        problems.append("the skip counters differ from the units the run record lists")
+    problems.extend(
+        f"unit {key} was skipped as complete but has no completion record"
+        for key in units["skipped_complete"]
+        if not list_objects(storage, records.unit_prefix(root, key))
+    )
+    started, retry = datetime.fromisoformat(run_record["started_at_utc"]), timedelta(seconds=run_record["stale_retry_seconds"])
+    for key in units["skipped_recent_stale"]:
+        found = list_objects(storage, records.stale_prefix(root, key))
+        if not found or started - newest(found)["LastModified"] >= retry:
+            problems.append(f"unit {key} was skipped as recently stale but has no stale record from the retry interval")
+    return problems
+
+
+def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
+    """The host evidence step: reconcile every unit, verify the records by version and diff the version listings before and after the run.
+
+    The only new versions allowed are the writes the run recorded at its storage boundary and its run record. A recorded write must be new in the
+    listing, nothing may be removed, replaced or marked deleted, and a run that attempted nothing allows no new shared ledger entry. Every unit ends
+    with a verified record, or the run fails.
     """
-    root, run_id, counters = run_record["root"], run_record["run_id"], run_record["counters"]
+    root, run_id, counters, units = run_record["root"], run_record["run_id"], run_record["counters"], run_record["units"]
     after = list_versions(storage, evidence_prefixes(root))
     known = {(item["key"], item["version_id"], item["kind"]) for item in before}
-    new = [item for item in after if (item["key"], item["version_id"], item["kind"]) not in known and item["kind"] == "version"]
-    own = f"{root}{records.RUNS_FOLDER}{run_id}/"
-    own_keys = {item["key"] for item in new if item["key"].startswith(own)}
-    allowed = {records.run_record_key(root, run_id), f"{records.run_state_prefix(root, run_id)}000001.json"}
-    problems = diff_versions(before, after, {item["key"] for item in new})
-    problems.extend(f"unexpected run object {key}" for key in sorted(own_keys - allowed))
-    if records.run_record_key(root, run_id) not in own_keys:
+    new_keys = [item["key"] for item in after if (item["key"], item["version_id"], item["kind"]) not in known and item["kind"] == "version"]
+    run_key, writes = records.run_record_key(root, run_id), set(run_record["writes"])
+    proof = counters["units_attempted"] == 0
+    foreign = {key for key in new_keys if key.startswith(task_role.BLS_LEDGER_PREFIX) and key not in writes}
+    problems = diff_versions(before, after, writes | {run_key} | (set() if proof else foreign))
+    if proof and foreign:
+        problems.append("the shared BLS ledger changed during a run that attempted nothing")
+    problems.extend(f"recorded write {key} is not a new version in the listing" for key in sorted(writes - set(new_keys)))
+    if run_key not in new_keys:
         problems.append("the run record is not new")
-    ledger = sum(item["key"].startswith(task_role.BLS_LEDGER_PREFIX) for item in new)
-    new_intents = sorted(item["key"] for item in new if item["key"].startswith(f"{root}{intents.INTENTS_FOLDER}"))
-    created = len(new) - len(own_keys) - ledger - len(new_intents)
-    if created != counters["objects_created"] or ledger != counters["bls_ledger_entries_added"]:
-        said = (counters["objects_created"], counters["bls_ledger_entries_added"])
-        problems.append(f"the listing holds {created} new objects and {ledger} ledger entries; the counters say {said[0]} and {said[1]}")
+    tally = tally_writes(root, writes)
+    said = {name: counters[name] for name in ("objects_created", "intents_created", "bls_ledger_entries_added")}
+    if said != {name: tally[name] for name in said}:
+        problems.append(f"the recorded writes hold { ({name: tally[name] for name in said}) }; the counters say {said}")
+    new_intents = sorted(key for key in new_keys if key.startswith(f"{root}{intents.INTENTS_FOLDER}"))
     if len(new_intents) != counters["intents_created"]:
         problems.append(f"the listing holds {len(new_intents)} new intents; the counters say {counters['intents_created']}")
+    problems.extend(outcome_problems(units))
+    problems.extend(skip_problems(storage, root, run_record))
     problems.extend(intent_problems(storage, root, run_record, new_intents))
     problems.extend(verify_records(storage, root))
     if not run_record["recheck"]:
-        for item in run_record["units"]["completed"]:
+        for item in units["completed"]:
             found = list_objects(storage, records.unit_prefix(root, item["unit_key"]))
             if len(found) != 1:
                 problems.append(f"unit {item['unit_key']} has {len(found)} completion records")
@@ -495,10 +759,6 @@ def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -
 
 def newest(found: list[dict]) -> dict:
     return max(found, key=lambda item: (item["LastModified"], item["Key"]))
-
-
-def ledger_entries(storage: Any) -> int:
-    return len(list_objects(storage, task_role.BLS_LEDGER_PREFIX))
 
 
 def clear_scratch(scratch: Path) -> None:
@@ -617,7 +877,29 @@ class Result:
     reason: str | None = None
 
 
-def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, counters: Counter, opener: Any, state: dict) -> Result:
+def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, expected: Mapping[str, Any]) -> Result:
+    """Create the unit's completion record once. When another run created it first, the unit is complete if that record verifies as this unit's.
+
+    A conflict whose winner cannot be read yet is read again a bounded number of times. The loser claims no creation: only its own successful puts count.
+    """
+    ended = "changed" if run.recheck else "completed"
+    if create_new(run.storage, target, body):
+        return Result(key, unit, ended)
+    for read in range(CONFLICT_READS):
+        try:
+            read_record(run.storage, target, run.root)
+        except StorageError:
+            if read + 1 < CONFLICT_READS:
+                time.sleep(CONFLICT_WAIT * 2**read)
+            continue
+        except records.RecordError as error:
+            return Result(key, unit, "refused", str(error))
+        problems = verify_record(run.storage, target, run.root, expected)
+        return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, ended)
+    raise ContractFailure("completion_conflict_unreadable")
+
+
+def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, state: dict, expected: Mapping[str, Any]) -> Result:
     """Capture, store and close one unit. Its working folder is always removed."""
     folder = run.scratch / key
     folder.mkdir(parents=True)
@@ -635,23 +917,20 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, counters: Counter
         receipt = read_json(receipt_path)
         if receipt["snapshot_status"] != "acquired_unvalidated":
             raise ContractFailure((receipt["quality_profile"]["checks_failed"] or ["capture_failed"])[0])
-        counters["bytes_downloaded"] += sum(item["byte_count"] for item in receipt["artifacts"] if item["role"] in {"data", "api_page"})
-        state["bytes_downloaded"] += unit["bytes"]
         mapping = archive_mapping(unit, spec, receipt_path, registry) if spec.get("archive_members") else None
         payload = records.payload_sha256(local_payload(receipt, mapping))
         target = records.record_key(run.root, key, payload)
         if run.recheck and (found := list_objects(run.storage, target)):
-            problems = verify_record(run.storage, found[0]["Key"], run.root)
+            problems = verify_record(run.storage, found[0]["Key"], run.root, expected)
             return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, "unchanged")
         generation = len(list_objects(run.storage, records.unit_prefix(run.root, key))) + 1
         try:
-            snapshot_id = claim_intent(run, unit, key, generation, receipt["snapshot_id"], counters)
+            snapshot_id = claim_intent(run, unit, key, generation, receipt["snapshot_id"])
         except IntentRefused as refusal:
             return Result(key, unit, "refused", refusal.reason)
         if snapshot_id != receipt["snapshot_id"]:
             receipt_path.write_bytes(encoded_json(receipt | {"snapshot_id": snapshot_id}))
         stored = upload_snapshot(receipt_path, [], run.storage, {}, registry, validator_of(run), archive_mapping=mapping)
-        counters["objects_created"] += stored["objects_created"]
         receipt_object, manifests, data, other = stored_objects(read_json(Path(stored["reconciliation_path"])))
         route = load_routes(registry)[unit["source_id"]]
         body = records.build(
@@ -670,11 +949,7 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, counters: Counter
         )
         if body["payload_sha256"] != payload:
             raise ContractFailure("payload_differs_after_storage")
-        local = folder / "record.json"
-        local.write_bytes(records.encode(body))
-        redownload.create_once(run.storage, target, local)
-        counters["objects_created"] += 1
-        return Result(key, unit, "changed" if run.recheck else "completed")
+        return close_unit(run, unit, key, target, records.encode(body), expected)
     finally:
         shutil.rmtree(folder)
 
@@ -688,12 +963,12 @@ def failure_reason(error: Exception) -> str:
     return redownload.error_category(error)
 
 
-def decide_skip(run: CaptureRun, key: str, now: datetime) -> tuple[str, str | None]:
+def decide_skip(run: CaptureRun, key: str, now: datetime, expected: Mapping[str, Any]) -> tuple[str, str | None]:
     """Before any request: ``complete`` (a verified record), ``refused`` (a record that does not verify), ``stale`` (retry interval not over) or ``go``."""
     if not run.recheck:
         found = list_objects(run.storage, records.unit_prefix(run.root, key))
         if found:
-            problems = verify_record(run.storage, newest(found)["Key"], run.root)
+            problems = verify_record(run.storage, newest(found)["Key"], run.root, expected)
             return ("refused", problems[0]) if problems else ("complete", None)
     stale = list_objects(run.storage, records.stale_prefix(run.root, key))
     if stale and now - newest(stale)["LastModified"] < run.stale_retry:
@@ -733,67 +1008,96 @@ def execute(run: CaptureRun) -> dict[str, Any]:
 def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sha256: str) -> dict[str, Any]:
     base = run.opener if run.opener is not None else transport.ReviewedTransport(transport.PublicHTTPSHandler())
     require(isinstance(base, transport.ReviewedTransport), "The opener must be a reviewed transport, so its redirects are reviewed")
-    opener = CountingTransport(base)
+    observer, journal = Observer(run.byte_cap), Journal()
+    opener = CountingTransport(base, observer)
+    run = replace(run, storage=JournalStorage(run.storage, journal), journal=journal, api_request=observed_request(observer, run.api_request))
     clear_scratch(run.scratch)
     started = run.clock()
     counters: Counter = Counter()
     state: dict[str, Any] = {"attempts": {}, "bytes_downloaded": 0, "paused_sources": []}
-    ledger_before = ledger_entries(run.storage)
-    done: dict[str, list[dict]] = {"completed": [], "unchanged": [], "changed": [], "failed": [], "refused": []}
+    done: dict[str, list] = {"completed": [], "unchanged": [], "changed": [], "failed": [], "refused": [], "skipped_complete": [], "skipped_recent_stale": []}
+    outside: dict[str, list[str]] = {"manual_not_attempted": [], "keyed_not_attempted": [], "paused_not_attempted": []}
     paused: set[str] = set()
     tried: set[str] = set()
-    manual: list[str] = []
-    keys_off: list[str] = []
-    held: list[str] = []
-    for unit in units:
-        if unit["disposition"] not in redownload.ACTIVE:
-            continue
-        if unit["disposition"] == "approved_manual" or redownload.handler_mode(unit) in MANUAL_MODES:
-            manual.append(unit["snapshot_id"])
-            continue
-        source = unit["source_id"]
-        if source in paused:
-            held.append(unit["snapshot_id"])
-            continue
-        handler = redownload.handler_mode(unit)
-        if handler in redownload.SECRET_MODES and run.task_keys is None and handler not in run.adapters:
-            keys_off.append(unit["snapshot_id"])
-            continue
-        spec = specs.get(unit["snapshot_id"])
-        try:
-            if spec is None:
-                raise SpecError("The unit has no specification")
-            key = unit_key_of(unit, spec)
-        except SpecError:
-            done["failed"].append({"unit_key": None, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete"})
-            continue
-        verdict, why = decide_skip(run, key, run.clock())
-        if verdict != "go":
-            if verdict == "complete":
-                counters["skipped_complete"] += 1
-            elif verdict == "stale":
-                counters["skipped_recent_stale"] += 1
-            else:
-                done["refused"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why})
-            continue
-        first = source not in tried
-        tried.add(source)
-        counters["units_attempted"] += 1
-        state["attempts"][key] = state["attempts"].get(key, 0) + 1
-        try:
-            result = attempt(run, unit, spec, key, counters, opener, state)
-        except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
-            result = Result(key, unit, "failed", failure_reason(error))
-        if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
-            paused.add(source)
-        if result.status in {"unchanged", "changed"}:
-            counters[result.status] += 1
-        done[result.status].append(entry(result))
-        if run.log is not None:
-            run.log({"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status})
-    counters["http_requests"] = opener.counter.count
-    counters["bls_ledger_entries_added"] = max(0, ledger_entries(run.storage) - ledger_before)
+    with observing(observer):
+        for unit in units:
+            if unit["disposition"] not in redownload.ACTIVE:
+                continue
+            if unit["disposition"] == "approved_manual" or redownload.handler_mode(unit) in MANUAL_MODES:
+                outside["manual_not_attempted"].append(unit["snapshot_id"])
+                continue
+            source = unit["source_id"]
+            if source in paused:
+                outside["paused_not_attempted"].append(unit["snapshot_id"])
+                continue
+            handler = redownload.handler_mode(unit)
+            if handler in redownload.SECRET_MODES and run.task_keys is None and handler not in run.adapters:
+                outside["keyed_not_attempted"].append(unit["snapshot_id"])
+                continue
+            first = source not in tried
+            spec = specs.get(unit["snapshot_id"])
+            try:
+                if spec is None:
+                    raise SpecError("The unit has no specification")
+                key, expected = unit_key_of(unit, spec), expectation(run, unit, spec)
+            except SpecError:
+                tried.add(source)
+                done["failed"].append({"unit_key": None, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": "spec_incomplete"})
+                if first:
+                    paused.add(source)
+                continue
+            verdict, why = decide_skip(run, key, run.clock(), expected)
+            if verdict != "go":
+                if verdict == "complete":
+                    done["skipped_complete"].append(key)
+                elif verdict == "stale":
+                    done["skipped_recent_stale"].append(key)
+                else:
+                    done["refused"].append({"unit_key": key, "source_id": source, "snapshot_id": unit["snapshot_id"], "reason": why})
+                continue
+            tried.add(source)
+            counters["units_attempted"] += 1
+            state["attempts"][key] = state["attempts"].get(key, 0) + 1
+            try:
+                result = attempt(run, unit, spec, key, opener, state, expected)
+            except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
+                result = Result(key, unit, "failed", failure_reason(error))
+            state["bytes_downloaded"] = observer.bytes
+            if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
+                paused.add(source)
+            if result.status in {"unchanged", "changed"}:
+                counters[result.status] += 1
+            done[result.status].append(entry(result))
+            if run.log is not None:
+                run.log({"snapshot_id": unit["snapshot_id"], "source_id": source, "status": result.status})
+    return finish(run, started, observer, journal, state, done, outside, paused, counters, queue_sha256)
+
+
+def finish(
+    run: CaptureRun,
+    started: datetime,
+    observer: Observer,
+    journal: Journal,
+    state: dict[str, Any],
+    done: dict[str, list],
+    outside: dict[str, list[str]],
+    paused: set[str],
+    counters: Counter,
+    queue_sha256: str,
+) -> dict[str, Any]:
+    """Save the run state, derive the counters from the observer and the journal, and store the run record last."""
     state["paused_sources"] = sorted(paused)
+    save_state(run, state)
+    done["skipped_complete"].sort()
+    done["skipped_recent_stale"].sort()
+    writes = sorted(set(journal.keys))
+    counters.update({name: count for name, count in tally_writes(run.root, writes).items() if name != "run_objects"})
+    counters["http_requests"], counters["bytes_downloaded"], counters["skipped_complete"], counters["skipped_recent_stale"] = (
+        observer.requests,
+        observer.bytes,
+        len(done["skipped_complete"]),
+        len(done["skipped_recent_stale"]),
+    )
     run_record = {
         "kind": "ingestion_run",
         "run_id": run.run_id,
@@ -802,12 +1106,13 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
         "code_sha256": run.code_sha256,
         "bundle_sha256": run.bundle_sha256,
         "recheck": run.recheck,
+        "stale_retry_seconds": int(run.stale_retry.total_seconds()),
         "started_at_utc": started.isoformat(),
         "finished_at_utc": run.clock().isoformat(),
         "counters": {name: counters[name] for name in COUNTERS},
-        "units": {**done, "paused_sources": sorted(paused), "manual_not_attempted": manual, "keyed_not_attempted": keys_off, "paused_not_attempted": held},
+        "writes": writes,
+        "units": {**done, "paused_sources": sorted(paused), **outside},
     }
-    save_state(run, state)
     save_run_record(run, run_record)
     return run_record
 

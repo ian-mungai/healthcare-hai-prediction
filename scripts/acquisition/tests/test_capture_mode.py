@@ -589,6 +589,8 @@ def api_adapter(page: dict[str, bytes]) -> Any:
     def adapt(unit: dict, spec: dict, folder: Path, run: mode.CaptureRun, opener: Any) -> Path:
         path = mode.capture_file(unit, spec, folder, run, opener)
         receipt = read_json(path)
+        lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | {"batch_id": spec["plan_item"]}
+        receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
         target = path.parent / "raw" / "page_0001.json"
         target.write_bytes(page["body"])
         digest = hashlib.sha256(page["body"]).hexdigest()
@@ -883,6 +885,451 @@ def test_a_real_grouped_plan_item_resolves_and_its_collector_runs_through_captur
     check(mode.verify_records(storage(world.bucket), ROOT) == [], "the record verifies by version")
 
 
+def deny_puts(world: World, monkeypatch: pytest.MonkeyPatch, prefix: str, nth: int = 1) -> None:
+    """Refuse the nth put whose key starts with the prefix and let every other put through."""
+    original, seen = world.bucket.put_object, []
+
+    def put(**arguments: Any) -> dict:
+        if arguments["Key"].startswith(prefix):
+            seen.append(arguments["Key"])
+            if len(seen) == nth:
+                raise world.bucket.missing("PutObject", "AccessDenied")
+        return original(**arguments)
+
+    monkeypatch.setattr(world.bucket, "put_object", put)
+
+
+def listed(world: World) -> list[dict]:
+    return mode.list_versions(storage(world.bucket), mode.evidence_prefixes(ROOT))
+
+
+def sibling(world: World, name: str, names: list[str]) -> World:
+    """A second world with its own folder and publisher that shares the first one's bucket."""
+    folder = world.folder / name
+    folder.mkdir()
+    other = World(folder, names)
+    other.bucket = world.bucket
+    return other
+
+
+def forged_record_world(world: World, change: Callable[[dict], dict]) -> World:
+    """A world whose queue holds only b.csv and whose store holds a.csv's valid record relabelled as b.csv's, at b.csv's record path."""
+    (_, body), *_ = world.records().items()
+    unit = unit_of("b.csv")
+    spec = spec_of("b.csv")
+    world.units = [unit]
+    world.bodies[unit["url"]] = csv_body(99)
+    world.write_inputs({unit["snapshot_id"]: spec})
+    forged = change(copy.deepcopy(body) | {"unit_key": mode.unit_key_of(unit, spec)})
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    return world
+
+
+RELABELS: dict[str, Callable[[dict], dict]] = {
+    "request_of_another_unit": lambda body: body,
+    "another_source": lambda body: body | {"source_id": "CMS_OTHER"},
+    "another_mode": lambda body: body | {"mode": "onc_mu_hospital"},
+    "another_collection": lambda body: body | {"collection": "cms/other_collection"},
+}
+
+
+@pytest.mark.parametrize("relabel", sorted(RELABELS))
+def test_a_record_relabelled_for_another_unit_is_refused_and_not_skipped(tmp_path: Path, relabel: str) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    forged_record_world(world, RELABELS[relabel])
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0, f"a relabelled record is not a skip: {result['counters']}")
+    check(world.site.requests == asked, "a refused unit gets no request")
+    check(len(result["units"]["refused"]) == 1 and result["units"]["refused"][0]["reason"], f"the unit is refused with its reason: {result['units']}")
+
+
+def test_a_record_whose_data_object_comes_from_another_unit_is_refused(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    world.run()
+    first, second = world.records().values()
+    forged = record.build(
+        key=first["unit_key"],
+        source_id=first["source_id"],
+        collection=first["collection"],
+        mode=first["mode"],
+        run_id="forger",
+        code_sha256=CODE,
+        bundle_sha256=BUNDLE,
+        retrieved_at_utc=first["retrieved_at_utc"],
+        receipt=first["receipt"],
+        manifests=first["manifests"],
+        data_objects=second["data_objects"],
+    )
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 1, f"only the untouched unit is a skip: {result['counters']}")
+    check([item["unit_key"] for item in result["units"]["refused"]] == [first["unit_key"]], f"the forged unit is refused: {result['units']['refused']}")
+
+
+def test_the_evidence_step_fails_a_unit_whose_completion_record_was_never_stored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path, ["a.csv"])
+    before = listed(world)
+    deny_puts(world, monkeypatch, f"{ROOT}ingestion_units/")
+    result = world.run()
+    check(len(result["units"]["failed"]) == 1 and world.records() == {}, f"the unit failed and has no record: {result['units']}")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any(world.unit_key() in problem and "did not complete" in problem for problem in problems), f"the failed unit fails the evidence step: {problems}")
+
+
+def held_world(tmp_path: Path) -> tuple[World, dict]:
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    world.bodies[world.units[0]["url"]] = b"<html><body>Please sign in</body></html>"
+    return world, world.run()
+
+
+def refused_world(tmp_path: Path) -> tuple[World, dict]:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    key, body = next(iter(world.records().items()))
+    body["data_objects"][0]["sha256"] = "f" * 64
+    version, _, fields = world.bucket.objects[key]
+    world.bucket.objects[key] = (version, encoded_json(body), fields)
+    return world, world.run()
+
+
+def keyed_world(tmp_path: Path) -> tuple[World, dict]:
+    world = World(tmp_path, ["a.csv"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    world.units[0]["mode"] = "bls_api_v2"
+    for spec in specs.values():
+        spec |= {"mode": "bls_api_v2", "plan_item": "b1"}
+    world.write_inputs(specs)
+    return world, world.run()
+
+
+def unspecified_world(tmp_path: Path) -> tuple[World, dict]:
+    world = World(tmp_path, ["a.csv"])
+    world.write_inputs({})
+    return world, world.run()
+
+
+INCOMPLETE = {
+    "failed_and_held": (held_world, "did not complete"),
+    "refused": (refused_world, "did not complete"),
+    "keys_off": (keyed_world, "was not attempted"),
+    "spec_incomplete": (unspecified_world, "did not complete"),
+}
+
+
+@pytest.mark.parametrize("outcome", sorted(INCOMPLETE))
+def test_the_evidence_step_fails_every_incomplete_unit_outcome(tmp_path: Path, outcome: str) -> None:
+    build, expected = INCOMPLETE[outcome]
+    world, result = build(tmp_path)
+    problems = mode.check_run(storage(world.bucket), result, [])
+    check(any(expected in problem for problem in problems), f"an incomplete outcome fails the bootstrap check with '{expected}': {problems}")
+
+
+def test_the_evidence_step_names_a_held_unit(tmp_path: Path) -> None:
+    world, result = held_world(tmp_path)
+    problems = mode.check_run(storage(world.bucket), result, [])
+    check(any("was not attempted" in problem and world.units[1]["snapshot_id"] in problem for problem in problems), f"the held unit is named: {problems}")
+
+
+def test_the_evidence_step_rejects_an_object_this_run_did_not_record_writing(three: World) -> None:
+    before = listed(three)
+    result = three.run()
+    plant(three.bucket, f"{DATASETS}stray/object.csv", b"id,value\n")
+    problems = mode.check_run(storage(three.bucket), result, before)
+    check(any("stray/object.csv" in problem and "unexpected" in problem for problem in problems), f"an object the run never recorded writing fails: {problems}")
+
+
+def test_the_run_record_lists_the_units_it_skipped_and_the_evidence_step_reconciles_them(three: World) -> None:
+    three.run()
+    before = listed(three)
+    result = three.run()
+    keys = sorted(three.unit_key(index) for index in range(3))
+    check(result["units"]["skipped_complete"] == keys, f"the run record names the units it skipped: {result['units']}")
+    check(mode.check_run(storage(three.bucket), result, before) == [], "run two reconciles")
+    missing = copy.deepcopy(result)
+    missing["units"]["skipped_complete"].append("e" * 64)
+    check(
+        any("e" * 64 in problem for problem in mode.check_run(storage(three.bucket), missing, before)),
+        "a unit the run claims it skipped, with no record, fails",
+    )
+    stale = copy.deepcopy(result)
+    stale["units"]["skipped_recent_stale"] = ["e" * 64]
+    check(
+        any("e" * 64 in problem and "stale" in problem for problem in mode.check_run(storage(three.bucket), stale, before)),
+        "a stale skip without a stale record fails",
+    )
+
+
+def race_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict: str) -> tuple[World, dict, list[str]]:
+    """Two units. While the first unit's record is written, a rival run completes that unit, and the write then reports the conflict."""
+    outer = World(tmp_path, ["a.csv", "b.csv"])
+    rival = sibling(outer, "rival", ["a.csv"])
+    rival.runs = 1
+    original, own = outer.bucket.put_object, []
+    state: dict[str, Any] = {"racing": False, "lost": False}
+
+    def racing_put(**arguments: Any) -> dict:
+        if state["racing"]:
+            return original(**arguments)
+        if arguments["Key"].startswith(f"{ROOT}ingestion_units/") and not state["lost"]:
+            state["racing"] = True
+            rival_result = rival.run()
+            state["racing"], state["lost"] = False, True
+            state["rival"] = rival_result
+            raise outer.bucket.missing("PutObject", conflict)
+        answer = original(**arguments)
+        own.append(arguments["Key"])
+        return answer
+
+    monkeypatch.setattr(outer.bucket, "put_object", racing_put)
+    result = outer.run()
+    return outer, result | {"rival": state["rival"]}, own
+
+
+@pytest.mark.parametrize("conflict", ["PreconditionFailed", "ConditionalRequestConflict"])
+def test_a_run_that_loses_the_completion_race_to_an_equivalent_record_completes_and_claims_no_creation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict: str
+) -> None:
+    outer, result, own = race_world(tmp_path, monkeypatch, conflict)
+    check(len(result["rival"]["units"]["completed"]) == 1, "the rival run completed the first unit")
+    check(result["units"]["failed"] == [] and result["units"]["refused"] == [], f"the loser is not failed: {result['units']}")
+    check(result["units"]["paused_sources"] == [] and result["units"]["paused_not_attempted"] == [], "the loser's source is not paused")
+    check(len(result["units"]["completed"]) == 2 and len(outer.records()) == 2, f"both units are complete with one record each: {result['units']}")
+    created = [key for key in own if not key.startswith((f"{ROOT}ingestion_intents/", f"{ROOT}ingestion_runs/"))]
+    check(result["counters"]["objects_created"] == len(created), f"the loser claims only what it created: {result['counters']} {len(created)}")
+    check(
+        not any(key.startswith(f"{ROOT}ingestion_units/") and key.endswith(outer.unit_key() + "/") for key in own),
+        "the loser created no record of the first unit",
+    )
+
+
+def test_a_lost_completion_race_whose_winner_cannot_be_read_retries_a_bounded_number_of_times_then_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    slept: list[float] = []
+    monkeypatch.setattr("time.sleep", lambda seconds: slept.append(seconds))
+    original = world.bucket.put_object
+
+    def conflict(**arguments: Any) -> dict:
+        if arguments["Key"].startswith(f"{ROOT}ingestion_units/"):
+            raise world.bucket.missing("PutObject", "ConditionalRequestConflict")
+        return original(**arguments)
+
+    monkeypatch.setattr(world.bucket, "put_object", conflict)
+    result = world.run()
+    reasons = [item["reason"] for item in result["units"]["failed"]]
+    check(reasons == ["completion_conflict_unreadable"], f"a winner that never reads is a visible failure: {result['units']}")
+    check(0 < len(slept) <= 6 and sum(slept) <= 60, f"the retries and their waits are bounded: {slept}")
+
+
+def test_a_lost_completion_race_to_a_record_that_does_not_verify_is_refused(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    payload = record.payload_sha256([("a.csv", hashlib.sha256(csv_body(1)).hexdigest())])
+    target = record.record_key(ROOT, world.unit_key(), payload)
+    world.bucket.before_put[f"{ROOT}ingestion_units/"] = lambda: plant(world.bucket, target, b"{}")
+    result = world.run()
+    check(len(result["units"]["refused"]) == 1 and result["units"]["completed"] == [], f"a winner that does not verify is refused: {result['units']}")
+
+
+def test_the_proof_run_fails_the_evidence_step_when_a_state_object_appears_beside_its_run_record(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    before = listed(world)
+    result = world.run()
+    plant(world.bucket, f"{ROOT}ingestion_runs/run02/state/000001.json", b"{}")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any("state/000001.json" in problem for problem in problems), f"a state version the run did not write fails: {problems}")
+
+
+def test_the_counters_keep_a_successful_create_through_a_failed_upload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path, ["a.csv"])
+    deny_puts(world, monkeypatch, f"{ROOT}cms/", nth=2)
+    result = world.run()
+    stored = {key for key in world.bucket.names() if kind_of(key) in {"data", "audit", "receipt", "manifest", "other"}}
+    check(len(result["units"]["failed"]) == 1 and len(stored) >= 1, f"an object was stored before the failure: {sorted(stored)} {result['units']}")
+    check(result["counters"]["objects_created"] == len(stored), f"the counter keeps the creates of a failed upload: {result['counters']} {sorted(stored)}")
+
+
+def test_bytes_downloaded_are_the_response_bytes_read_whether_or_not_the_unit_succeeds(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    page = b"<html><body>Please sign in</body></html>"
+    world.bodies[world.units[0]["url"]] = page
+    failed = world.run()
+    check(failed["counters"]["bytes_downloaded"] == len(page), f"a rejected response counts the bytes received: {failed['counters']}")
+    folder = tmp_path / "fresh"
+    folder.mkdir()
+    fresh = World(folder, ["a.csv", "b.csv", "c.csv"])
+    done = fresh.run()
+    expected = sum(len(csv_body(number)) for number in (1, 2, 3))
+    check(done["counters"]["bytes_downloaded"] == expected, f"a completed unit counts its response bytes only: {done['counters']} {expected}")
+
+
+def test_the_byte_cap_stops_a_unit_whose_response_is_larger_than_its_estimate(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    body = b"id,value\n" + b"1,2\n" * 100
+    world.bodies[world.units[0]["url"]] = body
+    result = world.run(byte_cap=101)
+    check(result["units"]["completed"] == [] and world.records() == {}, f"the unit does not complete past the cap: {result['units']}")
+    check([item["reason"] for item in result["units"]["failed"]] == ["byte_cap_exceeded"], f"the failure is the cap: {result['units']['failed']}")
+    check(result["counters"]["bytes_downloaded"] == len(body), f"the bytes received are counted: {result['counters']}")
+
+
+def test_a_source_pauses_when_its_first_unit_has_no_specification(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    del specs[world.units[0]["snapshot_id"]]
+    world.write_inputs(specs)
+    result = world.run()
+    check([item["reason"] for item in result["units"]["failed"]] == ["spec_incomplete"], str(result["units"]))
+    check(result["units"]["paused_sources"] == [SOURCE], f"the first unit's specification failure pauses its source: {result['units']}")
+    check(
+        result["units"]["paused_not_attempted"] == [world.units[1]["snapshot_id"]] and world.site.requests == 0,
+        "the next unit is held and nothing is requested",
+    )
+
+
+def foreign_ledger_entry(world: World, monkeypatch: pytest.MonkeyPatch, number: int) -> None:
+    """Another writer reserves one BLS request while this run reads a record."""
+    original = world.bucket.head_object
+    injected: list[bool] = []
+
+    def another_writer(**arguments: Any) -> dict:
+        if arguments["Key"].startswith(f"{ROOT}ingestion_") and not injected:
+            injected.append(True)
+            plant(world.bucket, f"{mode.task_role.BLS_LEDGER_PREFIX}{number:010d}.json", b"{}")
+        return original(**arguments)
+
+    monkeypatch.setattr(world.bucket, "head_object", another_writer)
+
+
+def test_another_writers_ledger_entry_is_not_this_runs_and_fails_the_proof_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    before = listed(world)
+    foreign_ledger_entry(world, monkeypatch, 1)
+    result = world.run()
+    check(result["counters"]["units_attempted"] == 0 and result["counters"]["bls_ledger_entries_added"] == 0, f"the run reserved nothing: {result['counters']}")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any("ledger" in problem for problem in problems), f"the proof run fails when the shared ledger changed: {problems}")
+
+
+def test_another_writers_ledger_entry_does_not_fail_a_run_that_attempted_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path, ["a.csv"])
+    before = listed(world)
+    foreign_ledger_entry(world, monkeypatch, 1)
+    original = world.bucket.get_object
+
+    def late_reader(**arguments: Any) -> dict:
+        if arguments["Key"].startswith(f"{ROOT}ingestion_intents/"):
+            plant(world.bucket, f"{mode.task_role.BLS_LEDGER_PREFIX}{2:010d}.json", b"{}")
+        return original(**arguments)
+
+    monkeypatch.setattr(world.bucket, "get_object", late_reader)
+    result = world.run()
+    check(
+        result["counters"]["units_attempted"] == 1 and result["counters"]["bls_ledger_entries_added"] == 0,
+        f"foreign entries are not this run's: {result['counters']}",
+    )
+    check(mode.check_run(storage(world.bucket), result, before) == [], "a run that attempted units tolerates a foreign reservation")
+
+
+def bls_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[World, bytes, list[dict], dict]:
+    """One BLS unit with the real BLS collector, contract, transport and storage path. Only the connection and the cloud clients are stand-ins."""
+    import base64
+    from types import SimpleNamespace
+
+    from scripts.acquisition import bls_api_contract as contract
+    from scripts.acquisition import bls_api_transport as bls
+    from scripts.acquisition import task_role
+    from scripts.acquisition.run_bls_api_e2e import fixture
+    from scripts.acquisition.source_registry import canonical_hash, load_registry
+    from scripts.acquisition.tests.test_task_keys import ENVIRONMENT, Cloud, Reply, connection_class
+
+    batch: dict = {"series_ids": ["LAUCN010010000000003"], "start_year": 2000, "end_year": 2000}
+    batch["id"] = contract.batch_id(batch)
+    plan = {
+        "source_id": "BLS",
+        "vintage": "2000-01-01",
+        "endpoint": "https://api.bls.gov/publicAPI/v2/timeseries/data/",
+        "credential_reference": "bls_api_key",
+        "request_limit_24h": 450,
+        "request_spacing_seconds": 0,
+        "registry_sha256": canonical_hash(load_registry()),
+        "references": [],
+        "batches": [batch],
+        "model_eligible": False,
+    }
+    plan_path, versions = tmp_path / "bls_plan.json", tmp_path / "bls_versions.json"
+    plan_path.write_bytes(encoded_json(plan))
+    plan_path.with_suffix(".lock.json").write_bytes(encoded_json({"plan_sha256": canonical_hash(plan)}))
+    versions.write_bytes(encoded_json({"versions": [{"code_sha256": contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(contract, "VERSIONS_PATH", versions)
+    folder = tmp_path / "world"
+    folder.mkdir()
+    world = World(folder, ["a.csv"])
+    unit = world.units[0] | {"mode": "bls_api_v2", "source_id": "BLS", "url": plan["endpoint"], "bytes": 1}
+    world.units = [unit]
+    world.write_inputs({unit["snapshot_id"]: {"mode": "bls_api_v2", "plan_item": batch["id"]}})
+    payload = fixture(batch)
+    sent: list[dict] = []
+    monkeypatch.setattr(bls, "https_connection", connection_class(Reply(200, payload), sent))
+    cloud = Cloud()
+
+    def ledger_put(**arguments: Any) -> dict:
+        body = arguments["Body"]
+        arguments["Body"] = io.BytesIO(body)
+        arguments["ChecksumSHA256"] = base64.b64encode(hashlib.sha256(body).digest()).decode()
+        return world.bucket.put_object(**arguments)
+
+    def factory(service: str, region: str) -> Any:
+        if service == "s3":
+            return SimpleNamespace(list_objects_v2=world.bucket.list_objects_v2, put_object=ledger_put)
+        return cloud.factory(service, region)
+
+    environment = ENVIRONMENT | {"DATA_BUCKET_NAME": BUCKET}
+
+    def keys(handler: str) -> Any:
+        return task_role.TaskKeys(handler, environment, factory, clock=lambda: BASE_TIME + datetime.timedelta(minutes=1))
+
+    return world, payload, sent, {"task_keys": keys, "cache": {"plans:bls_api_v2": [plan]}}
+
+
+def test_a_real_bls_unit_counts_its_direct_https_request_its_response_bytes_and_its_own_ledger_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world, payload, sent, fields = bls_world(tmp_path, monkeypatch)
+    before = listed(world)
+    result = world.run(**fields)
+    check(len(result["units"]["completed"]) == 1, f"the real collector completed: {result['units']}")
+    counters = result["counters"]
+    check(len(sent) == 1 and counters["http_requests"] == 1, f"the direct request is counted: {len(sent)} {counters}")
+    check(counters["bytes_downloaded"] == len(payload), f"the bytes are the response body, not the derived CSV: {counters} {len(payload)}")
+    check(counters["bls_ledger_entries_added"] == 1, f"this run's own reservation is counted: {counters}")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(problems == [], f"the evidence step passes: {problems}")
+
+
+@pytest.mark.parametrize("module", mode.API_TRANSPORTS, ids=lambda module: module.__name__.rsplit(".", 1)[-1])
+def test_every_direct_https_boundary_counts_one_request_per_send_and_is_restored_afterwards(module: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[str] = []
+
+    class Connection:
+        def request(self, method: str, path: str, **options: Any) -> None:
+            sent.append(path)
+
+    def stand_in(netloc: str, timeout: float) -> Connection:
+        return Connection()
+
+    monkeypatch.setattr(module, "https_connection", stand_in)
+    observer = mode.Observer(byte_cap=10**9)
+    with mode.observing(observer):
+        module.https_connection("example.test", 5).request("GET", "/one")
+        module.https_connection("example.test", 5).request("POST", "/two", body=b"x")
+    check(observer.requests == 2 and sent == ["/one", "/two"], f"each send is counted once: {observer.requests} {sent}")
+    check(module.https_connection is stand_in, "the module's own connection function is restored")
+
+
 def hcai_world(tmp_path: Path, binding: str | None, source: str = "HCAI_UTIL") -> World:
     """A one-unit world whose unit is a reference document of the given source, as the held-source specifications are."""
     world = World(tmp_path, ["doc.pdf"])
@@ -914,3 +1361,161 @@ def test_a_spec_with_an_unusable_release_binding_is_refused_before_any_request(t
     world = hcai_world(tmp_path, "no_such_binding") if case == "unknown_binding" else hcai_world(tmp_path, "access_release", source=SOURCE)
     result = world.run()
     check([item["reason"] for item in result["units"]["failed"]] == ["spec_incomplete"] and world.site.requests == 0, f"{result['units']}")
+
+
+def test_the_run_restores_the_shared_read_boundary_after_it_ends_and_after_a_crash(tmp_path: Path) -> None:
+    from scripts.acquisition import redownload_controls
+
+    shared = redownload_controls.read
+    World(tmp_path, ["a.csv"]).run()
+    check(redownload_controls.read is shared, "the read function is restored after a run")
+    folder = tmp_path / "crash"
+    folder.mkdir()
+    crashing = World(folder, ["a.csv"])
+    crashing.bucket.crash_on_prefix = f"{ROOT}ingestion_units/"
+    with pytest.raises(Crash):
+        crashing.run()
+    check(redownload_controls.read is shared, "the read function is restored after a process death")
+
+
+def test_a_later_unit_without_a_specification_fails_alone_and_does_not_pause_its_source(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "b.csv", "c.csv"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    del specs[world.units[1]["snapshot_id"]]
+    world.write_inputs(specs)
+    result = world.run()
+    check([item["reason"] for item in result["units"]["failed"]] == ["spec_incomplete"], str(result["units"]))
+    check(
+        len(result["units"]["completed"]) == 2 and result["units"]["paused_sources"] == [], f"only the unit without a specification failed: {result['units']}"
+    )
+
+
+def test_the_evidence_step_fails_a_stale_skip_older_than_the_retry_interval(tmp_path: Path) -> None:
+    world, stale = stale_world(tmp_path)
+    marked = next(item["LastModified"] for item in world.bucket.versions if item["Key"] == stale)
+    before = listed(world)
+    result = world.run(clock=lambda: marked + datetime.timedelta(hours=19))
+    check(mode.check_run(storage(world.bucket), result, before) == [], "a stale record younger than the interval reconciles")
+    late = result | {"started_at_utc": (marked + datetime.timedelta(hours=21)).isoformat()}
+    check(any("stale" in problem for problem in mode.check_run(storage(world.bucket), late, before)), "a stale record older than the interval fails")
+
+
+def test_a_put_through_the_bounded_call_is_journaled_like_any_other_create(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    journal = mode.Journal()
+    journaled = mode.JournalStorage(storage(world.bucket), journal)
+    path = tmp_path / "object.json"
+    path.write_bytes(b"{}")
+    arguments = [
+        "--key",
+        f"{ROOT}ingestion_runs/x/run.json",
+        "--body",
+        str(path),
+        "--if-none-match",
+        "*",
+        "--checksum-sha256",
+        "e30=",
+        "--server-side-encryption",
+        "AES256",
+    ]
+    journaled.call_bounded("s3api", "put-object", [*arguments, "--checksum-algorithm", "SHA256", "--metadata", "{}"], timeout=5)
+    journaled.call("s3api", "head-object", ["--key", f"{ROOT}ingestion_runs/x/run.json"])
+    check(journal.keys == [f"{ROOT}ingestion_runs/x/run.json"], f"only the successful put is noted: {journal.keys}")
+
+
+def test_a_record_of_one_planned_item_is_refused_for_another_item_of_the_same_request(tmp_path: Path) -> None:
+    world, page = api_world(tmp_path)
+    adapters = {"hud_api": api_adapter(page)}
+    world.run(adapters=adapters)
+    (_, body), *_ = world.records().items()
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    for spec in specs.values():
+        spec["plan_item"] = "batch_0002"
+    world.write_inputs(specs)
+    forged = body | {"unit_key": world.unit_key()}
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    asked = world.site.requests
+    result = world.run(adapters=adapters)
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other item's record is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1, f"the unit is refused: {result['units']}")
+
+
+def rewrite_record(world: World, key: str, body: dict) -> None:
+    """Replace a stored record's bytes in place, as a store edit would."""
+    version, _, fields = world.bucket.objects[key]
+    world.bucket.objects[key] = (version, record.encode(body), fields)
+
+
+@pytest.mark.parametrize(("name", "value"), [("source_id", "CMS_OTHER"), ("mode", "onc_mu_hospital"), ("collection", "cms/other_collection")])
+def test_a_record_that_names_another_source_mode_or_collection_than_its_unit_is_refused(tmp_path: Path, name: str, value: str) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    (key, body), *_ = world.records().items()
+    rewrite_record(world, key, body | {name: value})
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"an edited record is not a skip: {result['counters']}")
+    check(
+        len(result["units"]["refused"]) == 1 and name.split("_")[0] in result["units"]["refused"][0]["reason"],
+        f"the refusal names the field: {result['units']}",
+    )
+
+
+def test_a_record_whose_manifest_lists_its_data_object_at_another_version_is_refused(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    (key, body), *_ = world.records().items()
+    manifest = json.loads(world.bucket.objects[body["manifests"][0]["key"]][1])
+    for item in manifest["objects"]:
+        if item["object"]["key"] == body["data_objects"][0]["key"]:
+            item["object"]["version_id"] = "version_that_lists_another_copy"
+    raw = encoded_json(manifest)
+    digest = hashlib.sha256(raw).hexdigest()
+    forged_key = f"{DATASETS}forged/manifest.json"
+    answer = world.bucket.put_object(
+        Bucket=BUCKET,
+        ExpectedBucketOwner=ACCOUNT,
+        Key=forged_key,
+        Body=io.BytesIO(raw),
+        IfNoneMatch="*",
+        ChecksumSHA256=mode.base_text(digest),
+        ServerSideEncryption="AES256",
+    )
+    forged = {"key": forged_key, "version_id": answer["VersionId"], "sha256": digest, "byte_count": len(raw)}
+    rewrite_record(world, key, body | {"manifests": [forged]})
+    result = world.run()
+    check(
+        len(result["units"]["refused"]) == 1 and "not listed" in result["units"]["refused"][0]["reason"],
+        f"the manifest and the record disagree: {result['units']}",
+    )
+
+
+def mmd_adapter(unit: dict, spec: dict, folder: Path, run: mode.CaptureRun, opener: Any) -> Path:
+    """A collector stand-in that keeps the measure and year in the receipt lineage, as the real MMD collector does."""
+    path = mode.capture_file(unit, spec, folder, run, opener)
+    receipt = read_json(path)
+    lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | spec["mmd"]
+    receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
+    path.write_bytes(encoded_json(receipt))
+    return path
+
+
+def test_a_record_of_one_mmd_year_is_refused_for_another_year(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.units[0]["mode"] = "mmd_api"
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    (spec,) = specs.values()
+    spec |= {"mode": "mmd_api", "mmd": {"measure_id": "C258.07", "year": 2012}}
+    world.write_inputs(specs)
+    adapters = {"mmd_api": mmd_adapter}
+    first = world.run(adapters=adapters)
+    check(len(first["units"]["completed"]) == 1, f"the stand-in captured the unit: {first['units']}")
+    (_, body), *_ = world.records().items()
+    spec["mmd"]["year"] = 2013
+    world.write_inputs(specs)
+    forged = body | {"unit_key": world.unit_key()}
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    asked = world.site.requests
+    result = world.run(adapters=adapters)
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other year's record is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1, f"the unit is refused: {result['units']}")
