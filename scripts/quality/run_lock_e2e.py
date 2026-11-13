@@ -258,7 +258,6 @@ def hashed_install() -> Problems:
             if code == 0:
                 problems.append(f"{label}: the install did not fail")
             elif diagnostic not in error or target.group(0) not in error:
-                # A failure for another reason (a malformed line, an unknown option, a package that cannot be fetched) proves nothing about hashes.
                 problems.append(f"{label}: pip failed, but not with its hash diagnostic {diagnostic!r} for {target.group(0)}: {error.strip()[-300:]}")
         run_command(sys.executable, ["-m", "venv", str(top / "good")], timeout=300, check=True)
         (top / "good.txt").write_text(text, encoding="utf-8")
