@@ -48,7 +48,7 @@ def failed_phase(task: object) -> str:
 
 
 def read_task(seconds: float) -> object:
-    """The task metadata of the version 4 endpoint that Fargate sets in the environment of every container."""
+    """The task metadata of the version 4 endpoint that ECS sets in the environment of every container."""
     address = urllib.parse.urlsplit(os.environ["ECS_CONTAINER_METADATA_URI_V4"])
     connection = http.client.HTTPConnection(address.hostname or "", address.port or 80, timeout=seconds)
     try:

@@ -678,7 +678,7 @@ def jobs_registration_reads_the_project_host_families() -> None:
         described = [arguments[1] for operation, arguments in asked if operation == "ecs describe-task-definition"]
         require(
             described == ["example_dev_job_gold_host", "example_dev_job_silver_host"],
-            f"not every selected host family was described, or an unselected or Fargate one was: {described}",
+            f"not every selected host family was described, or an unselected or a non-host one was: {described}",
         )
         problem = module.jobs_registration_problem(Cli(["example_dev_job_silver_host", "example_dev_job_silver"]), settings, frozen)
         require(problem is not None and "gold_host" in problem, f"a selected family that ECS does not list is not named: {problem}")

@@ -2527,7 +2527,7 @@ def services_build_the_session_adapter() -> None:
 
 def metadata_uses_the_host_containers() -> None:
     """The host metadata definition has one client container, ``ingest``. The launch sends overrides for it alone and reads its log, and the fake ECS
-    refuses an override for a container the definition lacks, as ECS does. The job table's Fargate containers are unchanged."""
+    refuses an override for a container the definition lacks, as ECS does. The job table's containers are unchanged."""
     probe = FakeEcs()
     probe.definitions = {"example_dev_job_metadata_host": frozenset({"ingest"})}
     error = refuses(

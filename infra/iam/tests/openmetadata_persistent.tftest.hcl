@@ -216,7 +216,7 @@ run "job_execution_role_injects_only_the_ingestion_token" {
       && jsondecode(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy).Statement[0].Action == "ssm:GetParameters"
       && jsondecode(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_ingestion"]
     )
-    error_message = "The job execution role may inject exactly the ingestion bot token for the Fargate ingestion steps, and neither the lineage nor the comparison token."
+    error_message = "The job execution role may inject exactly the ingestion bot token for the ingestion steps, and neither the lineage nor the comparison token."
   }
 }
 

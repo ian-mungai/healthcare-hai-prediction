@@ -32,7 +32,7 @@ def job_memory() -> str:
 
 
 def task_settings(warehouse: Path | None = None) -> dict[str, str]:
-    """Require native task credentials and explicit scratch storage inside Fargate."""
+    """Require native task credentials and explicit scratch storage inside an ECS task."""
     if warehouse is not None and any(os.environ.get(name) for name in ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN")):
         raise RuntimeError("fixture_role_session_refused")
     if not validate_task_credentials(require_catalog=warehouse is None):
@@ -54,7 +54,7 @@ def task_settings(warehouse: Path | None = None) -> dict[str, str]:
 def spark_session(app_name: str, warehouse: Path | None = None, memory: str | None = None) -> SparkSession:
     """Return a local Spark session whose default catalog is ``hai_lakehouse``.
 
-    Without ``warehouse`` the catalog uses ``POLARIS_URI``. Fargate uses the native container credential provider.
+    Without ``warehouse`` the catalog uses ``POLARIS_URI``. A task uses the native container credential provider.
     Local jobs retain their existing AWS role-session or profile provider. Catalog credentials stay in engine
     configuration. With ``warehouse`` the catalog is a throwaway file-based Iceberg catalog in that folder,
     used by the synthetic end-to-end tests and refusing AWS role-session values. ``memory`` sets the

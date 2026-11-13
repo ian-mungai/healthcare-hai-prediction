@@ -90,7 +90,7 @@ resource "aws_iam_role_policy" "task_execution_openmetadata" {
   })
 }
 
-# The Fargate ingestion steps get the ingestion bot token through the shared job execution role. The base job policies stay as they were.
+# The ingestion steps get the ingestion bot token through the shared job execution role. The base job policies stay as they were.
 resource "aws_iam_role_policy" "job_execution_openmetadata_ingestion_token" {
   count = var.openmetadata_persistent_prepared ? 1 : 0
 
@@ -107,7 +107,7 @@ resource "aws_iam_role_policy" "job_execution_openmetadata_ingestion_token" {
   })
 }
 
-# The Fargate ingestion jobs (lakehouse group) call the catalog API on the host. No CIDR rule opens it.
+# The lakehouse job group may call the catalog API on the host. No CIDR rule opens it.
 resource "aws_vpc_security_group_egress_rule" "job_to_openmetadata_api" {
   count = var.openmetadata_persistent_prepared ? 1 : 0
 

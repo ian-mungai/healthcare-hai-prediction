@@ -104,7 +104,7 @@ def publisher_runs_on_the_host_bound_to_its_request() -> None:
     require(rig.ecs.sent == [REVISION], f"RunTask named the checked host revision: {rig.ecs.sent}")
     require(
         sent[0]["capacityProviderStrategy"] == [{"capacityProvider": HOST_PROVIDER, "weight": 1}] and "networkConfiguration" not in sent[0],
-        f"host placement with no Fargate network: {sent[0]}",
+        f"host placement with no awsvpc network: {sent[0]}",
     )
     intent = rig.record(1, "intent")
     require(

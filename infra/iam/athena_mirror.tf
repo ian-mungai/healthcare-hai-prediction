@@ -37,7 +37,7 @@ locals {
     RESULTS_OBJECT_ARN = "${local.bronze_bucket_arn}/${local.athena_results_path}"
   })
   athena_writer_arns = [for layer in keys(local.athena_published_layers) : "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_write_${layer}_task")}"]
-  # The catalog task role of the OpenMetadata ingestion (Fargate catalog task or metadata host task) reads the registrations and writes nothing.
+  # The catalog task role of the OpenMetadata ingestion (the metadata host task) reads the registrations and writes nothing.
   athena_catalog_reader     = var.athena_mirror_prepared && var.openmetadata_prepared
   athena_catalog_reader_arn = "arn:aws:iam::${var.expected_account_id}:role/${format(local.platform_name, "job_openmetadata_task")}"
   athena_glue_read_actions  = ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"]

@@ -47,7 +47,7 @@ variable "openmetadata_db_password_name" {
 }
 
 variable "openmetadata_bot_token_names" {
-  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery), ingestion (the Fargate Polaris and dbt ingestion jobs) and comparison (the Marquez retirement comparison). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
+  description = "Parameter Store SecureString name of the bot token of each caller: lineage (the host delivery), ingestion (the Polaris and dbt ingestion jobs) and comparison (the Marquez retirement comparison). The bootstrap task issues each token and writes it straight to its parameter; Terraform never sees a value. A caller reads only its own parameter."
   type        = map(string)
   default = {
     lineage    = "/healthcare_hai_prediction/openmetadata_bot_lineage"

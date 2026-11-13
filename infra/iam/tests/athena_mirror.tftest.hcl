@@ -499,7 +499,7 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
 }
 
 # Owner decision of Nov 7 2026: OpenMetadata 2.0.7 has no Iceberg connector, so its Glue connector catalogs the two mirror databases. The catalog task role
-# reads the registrations and nothing else of Glue, through the endpoint, from the lakehouse job group (Fargate) or from the host (the metadata host task).
+# reads the registrations and nothing else of Glue, through the endpoint, from the lakehouse job group or from the host (the metadata host task).
 run "catalog_reads_the_mirror_through_the_endpoint" {
   command = plan
   variables {
