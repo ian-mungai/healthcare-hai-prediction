@@ -144,6 +144,26 @@ def test_the_host_run_captures_from_the_tracked_bundle_and_a_second_run_sends_no
     check(len(host.world.site.asked) == asked, "a second bootstrap run skips every unit with a completion record and sends no request")
 
 
+def test_a_run_under_a_test_folder_writes_only_there_and_a_second_run_sends_nothing(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", root)
+    host.run(monkeypatch, HAI_CAPTURE_ROOT=root)
+    keys = host.world.bucket.names()
+    check(keys and all(key.startswith(root) for key in keys), f"every object sits under the test folder: {sorted(keys)[:5]}")
+    first = json.loads(host.world.bucket.objects[record.run_record_key(root, RUN_ID)][1])
+    check(first["root"] == root and len(first["units"]["completed"]) == 2, f"the run record sits under the test folder and names its root: {first['root']}")
+    asked = len(host.world.site.asked)
+    host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="20261113T110000Z-0a1b2c3e")
+    check(len(host.world.site.asked) == asked, "a second run under the same test folder skips every unit")
+
+
+def test_a_launch_root_that_differs_from_the_storage_path_root_is_refused_before_any_request(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    with pytest.raises(Exception, match="differs from the capture root"):
+        host.run(monkeypatch, HAI_CAPTURE_ROOT=root)
+    check(not host.world.site.asked and not host.world.bucket.versions, "no request and no write happened")
+
+
 def test_a_monthly_run_compares_every_unit_again(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.run(monkeypatch)
     asked = len(host.world.site.asked)
