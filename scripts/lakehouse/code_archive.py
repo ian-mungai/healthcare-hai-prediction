@@ -40,7 +40,7 @@ POINTER_KEYS = ("version", "oid", "size")
 POINTER_VERSIONS = frozenset({"https://git-lfs.github.com/spec/v1", "https://hawser.github.com/spec/v1", "http://git-media.io/v/2"})
 POINTER_OID = re.compile(r"sha256:[0-9a-f]{64}")
 POINTER_SIZE = re.compile(r"[+-]?[0-9]+")
-POINTER_EXTENSION = re.compile(r"ext-([0-9])-([A-Za-z0-9_]\S*)")
+POINTER_EXTENSION = re.compile(r"ext-([0-9])-([A-Za-z0-9_][^\n ]*)")
 POINTER_SPACE = "\t\n\v\f\r \x85\xa0\u1680\u2028\u2029\u202f\u205f\u3000" + "".join(chr(code) for code in range(0x2000, 0x200B))
 
 
@@ -66,7 +66,8 @@ def pointer_value_is_valid(key: str, value: str) -> bool:
 def is_pointer(head: bytes) -> bool:
     """Whether Git LFS takes a file that starts with ``head`` (its first ``POINTER_LIMIT`` bytes) as a pointer, as ``git lfs pointer --check`` decides it.
     The rule is Git LFS's own, so a form that is not canonical still counts: surrounding whitespace, blank lines, CRLF, a missing final newline, the older
-    version URLs, a signed size and extension lines before the size. A file with no pointer lines, an empty one included, is not a pointer."""
+    version URLs, a signed size and extension lines before the size, whose names start with a letter, digit or underscore and then hold any character but a
+    space, tabs and Unicode spaces included. A file with no pointer lines, an empty one included, is not a pointer."""
     seen = 0
     extensions: dict[str, str] = {}
     for line in head.decode("utf-8", "surrogateescape").strip(POINTER_SPACE).split("\n"):
