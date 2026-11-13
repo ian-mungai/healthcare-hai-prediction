@@ -19,6 +19,7 @@ import tempfile
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -3338,12 +3339,29 @@ PLANTED_REGRESSIONS = [
 ]
 
 
-def run_planted_regression_case() -> tuple[bool, str]:
+PLANTED_UNIT_CASES = 10  # A unit of the sharded run: at most this many samples of one rule (about 9 s each), so no unit is a large part of a shard.
+
+
+def planted_regression_units() -> list[tuple[str, int, int, int]]:
+    """The (label, rule index, first sample, end sample) of each unit of the planted regression run, in rule order."""
+    units = []
+    for index, (rule, cases, *_rest) in enumerate(PLANTED_REGRESSIONS):
+        for first in range(0, len(cases), PLANTED_UNIT_CASES):
+            stop = min(first + PLANTED_UNIT_CASES, len(cases))
+            units.append((f"planted regressions of {rule}: samples {first + 1} to {stop}", index, first, stop))
+    return units
+
+
+def run_planted_regression_case(rule_index: int, first: int, stop: int) -> tuple[bool, str]:
     """Every sample passes or blocks as the real check says and flips once the rule it shows is reverted in the scratch copy of the check."""
     python = str(ROOT / ".venv/bin/python")
     lines, ok = [], True
+    position = -1
     for rule, cases, command, source, marker, replacement, planted_exit in PLANTED_REGRESSIONS:
-        for case in cases:
+        position += 1
+        if position != rule_index:
+            continue
+        for case in cases[first:stop]:
             with tempfile.TemporaryDirectory(prefix="hai_planted_regression_") as scratch:
                 repo = scratch_repo(Path(scratch), case)
                 write(repo, case.files)
@@ -4669,7 +4687,7 @@ RUNNERS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
     ("writing samples", run_writing_case),
     ("writing kinds", run_writing_kinds_case),
     ("allowlist expiry", run_allowlist_expiry_case),
-    ("planted regressions of the removed-name and importer checks", run_planted_regression_case),
+    *((label, partial(run_planted_regression_case, index, first, stop)) for label, index, first, stop in planted_regression_units()),
     ("importer check on a pushed range", run_importer_range_case),
     ("typecheck import closure", run_typecheck_import_case),
     ("typecheck pending manifest", run_typecheck_manifest_case),
