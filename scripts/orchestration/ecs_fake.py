@@ -51,7 +51,7 @@ def client_error(code: str, operation: str, message: str = "stand-in refusal") -
 STARTED_BY = re.compile(r"[A-Za-z0-9/_-]{0,128}")
 TASK_DEFINITION = re.compile(r"[A-Za-z0-9_-]{1,255}(:[0-9]+)?|arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task-definition/[A-Za-z0-9_-]{1,255}:[0-9]+")
 LAUNCH_TYPES = frozenset({"EC2", "FARGATE", "EXTERNAL", "MANAGED_INSTANCES"})
-PROPAGATE_TAGS = frozenset({"TASK_DEFINITION", "SERVICE", "NONE"})
+PROPAGATE_TAGS = frozenset({"TASK_DEFINITION", "NONE"})  # RunTask refuses SERVICE, which only a service may set
 OVERRIDES_LIMIT = 8192  # characters of the overrides JSON, the formatting included (the bundled RunTask model)
 
 
@@ -61,9 +61,10 @@ def refuse_run_task(message: str) -> ClientError:
 
 def check_run_task(arguments: Mapping[str, Any]) -> None:
     """Refuse a RunTask request as ECS refuses it, for the fields the launch library sends (the rules are those of the bundled ECS service model): a launch
-    type and a capacity provider strategy exclude each other, a strategy has at most six providers with weights 0 to 1000 and bases 0 to 100000, the overrides
-    hold at most 8192 characters of JSON and name each container once, ``startedBy`` holds only letters, digits, hyphens, slashes and underscores, there are
-    at most 50 tags with unique keys, and the task definition is a family with an optional revision or an ARN. Raises the error ECS answers."""
+    type and a capacity provider strategy exclude each other, a strategy has at most six providers with weights 0 to 1000 (one above 0) and bases 0 to
+    100000, ``propagateTags`` is TASK_DEFINITION or NONE, the overrides hold at most 8192 characters of JSON and name each container once, ``startedBy``
+    holds only letters, digits, hyphens, slashes and underscores, there are at most 50 tags with unique keys, and the task definition is a family with an
+    optional revision or an ARN. Raises the error ECS answers."""
     if "launchType" in arguments and arguments.get("capacityProviderStrategy"):
         raise refuse_run_task("Specifying both a launch type and capacity provider strategy is not supported. Remove one and try again.")
     if "launchType" in arguments and arguments["launchType"] not in LAUNCH_TYPES:
@@ -73,6 +74,8 @@ def check_run_task(arguments: Mapping[str, Any]) -> None:
         not item.get("capacityProvider") or not 0 <= item.get("weight", 0) <= 1000 or not 0 <= item.get("base", 0) <= 100000 for item in strategy
     ):
         raise refuse_run_task("The capacity provider strategy is not valid.")
+    if strategy and not any(item.get("weight", 0) > 0 for item in strategy):
+        raise refuse_run_task("At least one capacity provider in a strategy must have a weight greater than zero.")
     if not TASK_DEFINITION.fullmatch(str(arguments.get("taskDefinition", ""))):
         raise refuse_run_task("The task definition is not a family name with an optional revision, or an ARN.")
     if not STARTED_BY.fullmatch(str(arguments.get("startedBy", ""))):

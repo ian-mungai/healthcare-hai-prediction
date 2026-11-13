@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import hashlib
 import json
 import os
 import shutil
@@ -27,7 +28,7 @@ import sys
 import tempfile
 import time
 import traceback
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -52,7 +53,24 @@ LOG_GROUP = "example_jobs_dev"
 STAGE_PREFIXES = ("lakehouse/run_stage/", "drift/")  # the staged inputs the launch role reads (the run stage, the drift records)
 SCRATCH_FREE = 400 * 2**30
 DONE_STATE = "success"
+TERMINAL_STATES = frozenset({"success", "failed"})  # the states in which a DAG run is finished; every other state is evidence of nothing
 BAG: dict[str, Any] = {}
+SOURCES = (
+    "orchestration/airflow_steps.py",
+    "orchestration/dag_runtime.py",
+    "orchestration/ecs_launch.py",
+    "orchestration/ecs_launch_operator.py",
+    "orchestration/ecs_launch_provider.py",
+    "scripts/orchestration/aws_http_bridge.py",
+    "scripts/orchestration/ecs_fake.py",
+    "scripts/orchestration/ecs_launch_fake.py",
+    "scripts/orchestration/real_image_dags.py",
+    "scripts/orchestration/in_image_checks.py",
+    "scripts/orchestration/run_real_image_dags_e2e.py",
+    "services/orchestration/docker-compose.orchestration.yaml",
+)  # the sources the verdict binds to, with the DAG files; the host hashes all of them, the image only those it has mounted
+HOST_ONLY = ("services/orchestration/docker-compose.orchestration.yaml",)
+IMAGE_SOURCES = tuple(name for name in SOURCES if name not in HOST_ONLY)
 
 
 @dataclass(frozen=True)
@@ -298,6 +316,7 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
     facts: dict[str, Any] = {
         "dag_id": step.dag_id,
         "run_state": run_state,
+        "expected": step.run_state,
         "tasks": states,
         "run_task_calls": len(calls),
         "task_definitions": rig.ecs.sent[sent:],
@@ -479,6 +498,11 @@ def bridge_conformance(rig: Any) -> None:
         arn = f"arn:aws:ecs:{fake.REGION}:{fake.ACCOUNT}:task/{fake.CLUSTER}/" + "0" * 32
         refused: dict[str, tuple[Callable[[], Any], tuple[str, ...]]] = {
             "RunTask with a launch type and a capacity provider strategy": (lambda: ecs.run_task(**base, launchType="EC2"), ("InvalidParameterException",)),
+            "RunTask with a strategy whose weights are all zero": (
+                lambda: ecs.run_task(**{**base, "capacityProviderStrategy": [{"capacityProvider": "stand-in_host", "weight": 0}]}),
+                ("InvalidParameterException",),
+            ),
+            "RunTask with propagateTags SERVICE": (lambda: ecs.run_task(**base, propagateTags="SERVICE"), ("InvalidParameterException",)),
             "RunTask with a startedBy of unlisted characters": (lambda: ecs.run_task(**{**base, "startedBy": "has space"}), ("InvalidParameterException",)),
             "RunTask with overrides over 8192 characters": (
                 lambda: ecs.run_task(**base, overrides={"containerOverrides": [{"name": "run", "environment": [{"name": "A", "value": "v" * 8200}]}]}),
@@ -553,6 +577,7 @@ def bridge_conformance(rig: Any) -> None:
                 problems.append(f"{name}: answered {answer}, expected {codes[0]}")
         accepted = {
             "RunTask by capacity provider strategy alone": lambda: ecs.run_task(**base),
+            "RunTask with propagateTags TASK_DEFINITION": lambda: ecs.run_task(**base, propagateTags="TASK_DEFINITION"),
             "GetObject of a staged input": lambda: s3.get_object(Bucket=bucket, Key=c.RUN_KEY.format(run=c.SILVER_RUN, name="code.sha256")),
             "GetParameter of the launch hold": lambda: ssm.get_parameter(Name=c.HOLD_PARAMETER),
         }
@@ -754,6 +779,22 @@ def cases_catalog() -> dict[str, Scenario]:
             REFUSED_BY_ECS,
         ),
         planted_run(
+            "planted_zero_weight_strategy_fails_closed",
+            Plant("RunTask", lambda p: {**p, "capacityProviderStrategy": [{**item, "weight": 0} for item in p["capacityProviderStrategy"]]}),
+            sent_refused,
+            1,
+            no_task,
+            REFUSED_BY_ECS,
+        ),
+        planted_run(
+            "planted_service_tag_propagation_fails_closed",
+            Plant("RunTask", lambda p: {**p, "propagateTags": "SERVICE"}),
+            sent_refused,
+            1,
+            no_task,
+            REFUSED_BY_ECS,
+        ),
+        planted_run(
             "planted_wrong_bucket_for_the_code_digest_fails_closed",
             Plant("GetObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}, digest_key),
             refused["states"],
@@ -806,17 +847,102 @@ def run_all(only: str | None) -> dict[str, Any]:
     scenarios = cases_catalog()
     results = [execute(scenario, bag, scratch) for name, scenario in scenarios.items() if only in (None, name)]
     shutil.rmtree(folder, ignore_errors=True)
-    covered = sorted({step["dag_id"] for item in results for step in item["steps"] if "dag_id" in step})
-    return {
+    covered = finished_dags(results)
+    inputs = inventory(ROOT, IMAGE_SOURCES)
+    missing = f"no scenario is named {only}" if only is not None and only not in scenarios else None
+    report: dict[str, Any] = {
+        "dag_ids": sorted(bag.dag_ids),
         "at": datetime.now(UTC).isoformat(),
+        "inputs": inputs,
         "versions": versions(),
         "substitutions": list(SUBSTITUTIONS),
         "import_errors": imports,
         "dags": covered,
-        "ok": not imports and all(item["ok"] for item in results),
+        "ok": not imports and not missing and bool(results) and all(item["ok"] for item in results),
         "scenarios": results,
         "seconds": round(time.monotonic() - started, 1),
     }
+    if missing:
+        report["error"] = missing  # a section with an error is a refusal in every consumer
+    return report
+
+
+def finished_dags(scenarios: Sequence[Mapping[str, Any]]) -> list[str]:
+    """The DAG ids with a DAG run that finished in a terminal state its scenario expected, in a scenario that passed. A step that raised, a run that is
+    queued, running or skipped, and a run that ended in another state than its step expects are not counted."""
+    return sorted(
+        {
+            str(step["dag_id"])
+            for item in scenarios
+            if item.get("ok") is True
+            for step in item.get("steps", [])
+            if step.get("run_state") in TERMINAL_STATES and step.get("run_state") == step.get("expected")
+        }
+    )
+
+
+def inventory(root: Path, sources: Sequence[str] = SOURCES) -> dict[str, dict[str, str]]:
+    """The SHA-256 of each listed source that exists under ``root`` and of every ``dags/*.py`` file. A source that is not there is absent from the map, so a
+    removal or an addition shows when two inventories are compared."""
+    return {
+        "sources": {name: hashlib.sha256((root / name).read_bytes()).hexdigest() for name in sources if (root / name).is_file()},
+        "dag_files": {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted((root / "dags").glob("*.py"))},
+    }
+
+
+def step_problems(scenarios: Sequence[Mapping[str, Any]]) -> list[str]:
+    """Every recorded step that did not end in ``success`` or ``failed``, or in another state than its scenario expected, whatever other step covers the same
+    DAG. A scenario with no DAG step has no problem. DAG coverage is a separate check (``finished_dags``)."""
+    problems = []
+    for item in scenarios:
+        steps = item.get("steps", [])
+        if not isinstance(steps, list):
+            problems.append(f"{item.get('name')}: the steps are not a list")
+            continue
+        for step in steps:
+            if not isinstance(step, Mapping):
+                problems.append(f"{item.get('name')}: a step is not a mapping")
+            elif step.get("run_state") not in TERMINAL_STATES or step.get("run_state") != step.get("expected"):
+                problems.append(f"{item.get('name')}: {step.get('dag_id')} ended {step.get('run_state')!r}, expected {step.get('expected')!r}")
+    return problems
+
+
+def moment(value: object) -> datetime | None:
+    """The time zone aware time that ``value`` writes, or None."""
+    try:
+        parsed = datetime.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return None
+    return parsed if parsed is not None and parsed.tzinfo is not None else None
+
+
+def binding_problems(section: Mapping[str, Any], run: object) -> list[str]:
+    """Why ``section`` is not the result of the attempt that ``run`` describes, or an empty list. ``run`` is what the host knows of its own attempt: the
+    attempt id, the times it began and ended and the inventory of the inputs before and after it. The section must carry a run time from ``began`` to
+    ``ended`` inclusive, with no allowance for a clock that differs, and the same inventory. The host's inventory must not have changed while the attempt
+    ran."""
+    if not isinstance(run, Mapping) or not isinstance(run.get("attempt_id"), str) or not run["attempt_id"]:
+        return ["the result has no attempt identity: it is not bound to this execution"]
+    began, ended = moment(run.get("started")), moment(run.get("ended"))
+    if began is None or ended is None or ended < began:
+        return ["the window of this attempt is missing or invalid"]
+    problems = []
+    at = moment(section.get("at"))
+    if at is None:
+        problems.append("the image run has no usable time zone aware run time")
+    elif not began <= at <= ended:
+        problems.append(f"the image run time {at.isoformat()} lies outside this attempt ({began.isoformat()} to {ended.isoformat()})")
+    before, after = run.get("inputs"), run.get("inputs_after")
+    if not isinstance(before, Mapping) or before != after:
+        problems.append("the inputs changed while the attempt ran")
+    elif section.get("inputs") != before:
+        problems.append("the image ran other inputs than this checkout holds")
+    return problems
+
+
+def exit_code(report: Mapping[str, Any]) -> int:
+    """0 only when the run passed and ran at least one scenario: a failed scenario, an unknown ``--case`` or an empty run exits 1."""
+    return 0 if report.get("ok") is True and report.get("scenarios") and not report.get("error") else 1
 
 
 def main() -> int:
@@ -826,7 +952,7 @@ def main() -> int:
     report = run_all(arguments.case)
     sys.stdout.write(REPORT_PREFIX + json.dumps(report, default=str) + "\n")
     sys.stdout.flush()
-    return 0
+    return exit_code(report)
 
 
 if __name__ == "__main__":

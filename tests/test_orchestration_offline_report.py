@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import json
 import sys
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -49,10 +52,14 @@ TRANSFORM_CHECK = "transform_dag passes the graph validator (Airflow object)"
 REAL_RAN = "real-image DAG runs ran"
 REAL_COVERAGE = "real-image DAG runs cover every DAG file in the image"
 REAL_SCENARIO = "real-image DAG run: synthetic scenario"
+REAL_VERDICT = "real-image DAG runs report a pass"
 VIOLATION = {"rule": "upstream", "task": "final_gate", "detail": "synthetic missing upstream edge"}
 ALLOCATION = "synthetic-offline-report-allocation"
 TRANSPORT_ERROR = "synthetic image job transport failure"
 CLEANUP_ERROR = "synthetic allocation cleanup refusal"
+DAG_FILE_TEXT = "# synthetic DAG file\n"
+IN_IMAGE_SOURCE = "scripts/orchestration/in_image_checks.py"
+RUN_TIME = "stamped when the synthetic image job runs"
 
 
 def _platform() -> dict[str, Any]:
@@ -65,12 +72,22 @@ def _platform() -> dict[str, Any]:
     }
 
 
+def _inputs() -> dict[str, Any]:
+    """The inventory of the disposable checkout that the ``boundary`` fixture builds: the one linked source it holds and its one DAG file."""
+    return {
+        "sources": {IN_IMAGE_SOURCE: hashlib.sha256((SOURCE_ROOT / IN_IMAGE_SOURCE).read_bytes()).hexdigest()},
+        "dag_files": {"synthetic_dag.py": hashlib.sha256(DAG_FILE_TEXT.encode()).hexdigest()},
+    }
+
+
 def _document(transform_present: bool = False) -> dict[str, Any]:
     dag_ids = ["transform_dag"] if transform_present else list(PIPELINE_DAGS)
     return {
         "dags": {"files": ["synthetic_dag.py"], "dag_ids": dag_ids, "import_errors": {}},
         "real_dags": {
             "ok": True,
+            "at": RUN_TIME,
+            "inputs": _inputs(),
             "dags": list(dag_ids),
             "import_errors": {},
             "scenarios": [{"name": "synthetic scenario", "ok": True, "detail": None, "seconds": 0.1, "steps": []}],
@@ -107,6 +124,7 @@ class ImageJobTransport:
         self.events: list[str] = []
         self.refuse_attempt = False
         self.refuse_cleanup = False
+        self.during: Callable[[], None] | None = None
 
     def call(self, operation: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
         """Return only the image description requested by the real consumer."""
@@ -142,7 +160,10 @@ class ImageJobTransport:
         )
         if self.refuse_attempt:
             raise offline.launcher.ClientError(TRANSPORT_ERROR, "unavailable")
-        return self.attempt
+        if self.during is not None:
+            self.during()
+        stdout = self.attempt.stdout.replace(json.dumps(RUN_TIME), json.dumps(datetime.now(UTC).isoformat()))  # the image reports a time inside the attempt
+        return replace(self.attempt, stdout=stdout)
 
     def release_allocation(self, allocation: str) -> offline.launcher.ReleaseOutcome:
         """Record cleanup and preserve a refused release as an exception."""
@@ -175,6 +196,8 @@ def boundary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ImageBoundary:
         source = tmp_path / relative
         source.parent.mkdir(parents=True, exist_ok=True)
         source.symlink_to(SOURCE_ROOT / relative)
+    (tmp_path / "dags").mkdir()
+    (tmp_path / "dags/synthetic_dag.py").write_text(DAG_FILE_TEXT, encoding="utf-8")
     transport = ImageJobTransport(tmp_path, platform)
     monkeypatch.setattr(offline, "ROOT", tmp_path)
     monkeypatch.setattr(offline, "PLATFORM_FILE", platform_path)
@@ -208,7 +231,7 @@ def _failures(code: int, report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _complete(code: int, report: dict[str, Any], transform_present: bool = False) -> None:
-    required = {IMAGE_CHECK, DAG_CHECK, PINS_CHECK, REAL_COVERAGE, REAL_SCENARIO, *(f"graph (Airflow objects): {name}" for name in GRAPH_CASES)}
+    required = {IMAGE_CHECK, DAG_CHECK, PINS_CHECK, REAL_COVERAGE, REAL_VERDICT, REAL_SCENARIO, *(f"graph (Airflow objects): {name}" for name in GRAPH_CASES)}
     required |= {TRANSFORM_CHECK} if transform_present else {f"{name} passes the graph validator (Airflow object)" for name in PIPELINE_DAGS}
     check(code == 0 and report["status"] == "pass", "complete consistent image evidence passes the real outer CLI")
     check(required <= report["results"].keys(), "all independently pinned required checks survive result projection")
@@ -484,6 +507,106 @@ def test_a_failed_real_image_scenario_cannot_be_overwritten_by_incoming_ok(bound
     check(set(failures) == {REAL_SCENARIO}, "the failed scenario is the intended and only failure")
     check("synthetic DAG run refusal" in json.dumps(failures), "the scenario's own detail survives projection")
     _released(boundary)
+
+
+@pytest.mark.parametrize("verdict", [False, None, "true"])
+def test_a_real_image_run_that_does_not_declare_a_pass_is_refused(boundary: ImageBoundary, verdict: object) -> None:
+    document = _document()
+    document["real_dags"]["ok"] = verdict
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(set(failures) == {REAL_VERDICT}, "the undeclared verdict is the intended and only failure")
+    _released(boundary)
+
+
+def _refused_verdict(boundary: ImageBoundary, document: dict[str, Any]) -> dict[str, Any]:
+    boundary.transport.attempt.stdout = _stdout(document)
+    failures = _failures(*_run_cli(boundary))
+    check(set(failures) == {REAL_VERDICT}, f"the unbound or unfinished run is the intended and only failure: {sorted(failures)}")
+    _released(boundary)
+    row: dict[str, Any] = failures[REAL_VERDICT]
+    return row
+
+
+def test_a_passing_row_names_the_attempt_and_the_inputs_it_is_bound_to(boundary: ImageBoundary) -> None:
+    boundary.transport.attempt.stdout = _stdout(_document())
+    code, report = _run_cli(boundary)
+    _complete(code, report)
+    row = report["results"][REAL_VERDICT]
+    check(row["attempt_id"] == "synthetic-image-attempt" and row["inputs"] == _inputs(), f"the pass row carries its binding: {row}")
+
+
+def test_an_old_real_image_result_is_refused(boundary: ImageBoundary) -> None:
+    document = _document()
+    document["real_dags"]["at"] = "2000-01-01T00:00:00+00:00"
+    _refused_verdict(boundary, document)
+
+
+@pytest.mark.parametrize("at", [None, 7, "not a time", "2026-11-11T10:00:00", "2099-01-01T00:00:00+00:00"], ids=["none", "number", "text", "naive", "future"])
+def test_a_real_image_result_without_a_usable_run_time_is_refused(boundary: ImageBoundary, at: object) -> None:
+    document = _document()
+    document["real_dags"]["at"] = at
+    _refused_verdict(boundary, document)
+
+
+@pytest.mark.parametrize("seconds", [-20, 20, -2, 2], ids=["20s_before", "20s_after", "2s_before", "2s_after"])
+def test_a_real_image_result_outside_the_attempt_window_is_refused_without_any_clock_allowance(boundary: ImageBoundary, seconds: int) -> None:
+    document = _document()
+    document["real_dags"]["at"] = (datetime.now(UTC) + timedelta(seconds=seconds)).isoformat()
+    row = _refused_verdict(boundary, document)
+    check(any("outside this attempt" in item for item in row["problems"]), f"the window is named: {row}")
+
+
+def test_a_real_image_result_without_a_run_time_key_is_refused(boundary: ImageBoundary) -> None:
+    document = _document()
+    del document["real_dags"]["at"]
+    _refused_verdict(boundary, document)
+
+
+def test_a_foreign_real_image_result_is_refused(boundary: ImageBoundary) -> None:
+    document = _document()
+    document["real_dags"]["inputs"] = {"sources": {IN_IMAGE_SOURCE: "0" * 64}, "dag_files": {"synthetic_dag.py": "0" * 64}}
+    _refused_verdict(boundary, document)
+
+
+@pytest.mark.parametrize("damage", ["missing", "not_a_mapping", "extra_dag", "no_dags", "extra_source"])
+def test_a_real_image_result_without_the_matching_input_inventory_is_refused(boundary: ImageBoundary, damage: str) -> None:
+    document = _document()
+    section = document["real_dags"]
+    if damage == "missing":
+        del section["inputs"]
+    elif damage == "not_a_mapping":
+        section["inputs"] = "same"
+    elif damage == "extra_dag":
+        section["inputs"]["dag_files"]["other_dag.py"] = "1" * 64
+    elif damage == "no_dags":
+        section["inputs"]["dag_files"] = {}
+    else:
+        section["inputs"]["sources"]["orchestration/ecs_launch.py"] = "1" * 64
+    _refused_verdict(boundary, document)
+
+
+def test_inputs_that_change_while_the_attempt_runs_are_refused(boundary: ImageBoundary) -> None:
+    boundary.transport.during = lambda: (boundary.root / "dags/synthetic_dag.py").write_text(DAG_FILE_TEXT + "# changed\n", encoding="utf-8")
+    _refused_verdict(boundary, _document())
+
+
+def test_a_real_image_step_that_is_not_a_finished_expected_run_is_refused_beside_a_covering_step(boundary: ImageBoundary) -> None:
+    document = _document()
+    steps = [
+        {"dag_id": "training_dag", "run_state": "success", "expected": "success"},
+        {"dag_id": "training_dag", "run_state": "running", "expected": "running"},
+    ]
+    document["real_dags"]["scenarios"][0]["steps"] = steps
+    _refused_verdict(boundary, document)
+
+
+def test_a_saved_record_is_not_certification(boundary: ImageBoundary) -> None:
+    saved = _document()
+    image = {"real_dags": saved["real_dags"], "dags": saved["dags"]}
+    rows = offline.real_dags_results(image)
+    check(rows[REAL_VERDICT]["ok"] is False, "a result with no run binding of this execution does not pass the row")
+    check(rows[REAL_SCENARIO]["ok"] is True, "the scenario rows still show what the record says")
 
 
 def test_a_dag_without_a_real_image_run_is_refused(boundary: ImageBoundary) -> None:

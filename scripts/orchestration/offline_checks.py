@@ -13,6 +13,11 @@ checks make no Docker call: the image checks are launcher requests (``image``, `
 4. The Docker-call check over every orchestration source file.
 5. With the built image, through the launcher: the image's labels, user and last layers; every DAG file imports in the image with no error or
    cycle; the graph validator on real Airflow DAG objects; every installed distribution equals the constraints file.
+   The same image run executes every DAG that launches a host job with Airflow's own test runner and the real Amazon provider operator against the
+   offline rig's fake cloud (``real_image_dags.py``): one check per scenario, one that the run declares a pass and one that every DAG file of the image has a
+   finished DAG run. The pass row is judged only from this execution: every recorded step ended in success or failed as expected, the image's run time lies
+   inside this attempt, and the inputs it ran equal the inventory taken before the attempt and unchanged after it. A result without that binding fails the
+   row. ``run_real_image_dags_e2e`` starts the image itself and records that result; it reads no saved report.
 6. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
    Files needing Airflow or PostgreSQL types are listed as pending in the report and in ``config/quality/mypy_runtimes.json``.
    Check them in their runtime environment with ``scripts.quality.typecheck --runtime orchestration_image`` and both strict flags.
@@ -39,6 +44,7 @@ from unittest import mock
 
 from orchestration import launcher
 from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
+from scripts.orchestration import real_image_dags
 from scripts.process import run_command
 from scripts.quality import lock_env
 from scripts.quality.repo_checks import load_yaml
@@ -397,6 +403,14 @@ def real_dags_results(image: dict[str, Any]) -> dict[str, Any]:
         return {"real-image DAG runs ran": {"ok": False, "error": section["error"]}}
     results: dict[str, Any] = {f"real-image DAG run: {row['name']}": {**row, "ok": row["ok"] is True} for row in section["scenarios"]}
     uncovered = sorted(set(image["dags"]["dag_ids"]) - set(section["dags"]))
+    run = image.get("real_dags_run")
+    problems = [*real_image_dags.step_problems(section["scenarios"]), *real_image_dags.binding_problems(section, run)]
+    verdict: dict[str, Any] = {"ok": section.get("ok") is True and not problems, "seconds": section.get("seconds")}
+    if problems:
+        verdict["problems"] = problems
+    else:
+        verdict.update(attempt_id=run["attempt_id"], inputs=section["inputs"])  # a pass names the attempt and the inputs it is bound to
+    results["real-image DAG runs report a pass"] = verdict
     results["real-image DAG runs cover every DAG file in the image"] = {"ok": not uncovered, "uncovered": uncovered, "versions": section.get("versions", {})}
     return results
 
@@ -447,6 +461,7 @@ def in_image(platform: dict[str, Any], test_registry: str | None) -> dict[str, A
     except launcher.ClientError as error:
         return {"error": f"the Airflow image is not available: {error}"}
     allocation = client.allocate()
+    began, before = datetime.now(UTC), real_image_dags.inventory(ROOT, real_image_dags.IMAGE_SOURCES)
     try:
         principal = client.principal_alloc(allocation)
         result = client.run_attempt(principal, "orchestration_check", "offline-checks", [], {}, checkout=ROOT, seconds=600)
@@ -467,6 +482,13 @@ def in_image(platform: dict[str, Any], test_registry: str | None) -> dict[str, A
     if problem:
         return {"error": problem, "image": description}
     loaded["image"] = description
+    loaded["real_dags_run"] = {
+        "attempt_id": result.attempt_id,
+        "started": began.isoformat(),
+        "ended": datetime.now(UTC).isoformat(),
+        "inputs": before,
+        "inputs_after": real_image_dags.inventory(ROOT, real_image_dags.IMAGE_SOURCES),
+    }  # made here, after the attempt: whatever the image printed under this name is replaced
     return loaded
 
 
