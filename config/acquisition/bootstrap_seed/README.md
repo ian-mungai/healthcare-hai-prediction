@@ -9,7 +9,7 @@ stores them (`.gitattributes`), and `scripts/quality/repo_checks.py` declares th
 | Folder | Files | Digest source |
 | --- | --- | --- |
 | `mmd_browser_history/` | the 12 MMD browser-history CSV captures (plan inputs) | the comparison report in the bundle |
-| `mmd_references/` | `codebook_crosswalk.csv`, `countynames.tsv`, `urban.tsv`. Held: pending owner decision, because the MMD collector reads them | the MMD plan |
+| `mmd_references/` | `codebook_crosswalk.csv`, `countynames.tsv`, `urban.tsv`, which the MMD collector reads to build its requests and derived CSV files | the MMD plan |
 | `structure_history/` | `county_adjacency2010.txt`. Held until the removed-names hook reads Latin-1 files | none yet |
 | `manual_units/<snapshot ID>/` | the stored data files of the 66 manual units (44 HUD, 16 ACS, 6 WONDER) | the HUD plan for the 44 workbooks, none for the other files |
 

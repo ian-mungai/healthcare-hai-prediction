@@ -641,19 +641,16 @@
    "sha256": "506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b"
   },
   {
-   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
    "path": "mmd_references/codebook_crosswalk.csv",
    "plan_input": "data/e2e/mmd_api_comparison/20260925/references/codebook_crosswalk.csv",
    "sha256": "99afeeabc6b1f09111ac0f3c9494606b9d0e32e890bc969dbc3a63112eddb92d"
   },
   {
-   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
    "path": "mmd_references/countynames.tsv",
    "plan_input": "data/e2e/mmd_api_comparison/20260925/references/countynames.tsv",
    "sha256": "e716a01b7d137bb1f1c040d5bc5ac995e26c8f49fbb3a5673d197e5eefe8f15f"
   },
   {
-   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
    "path": "mmd_references/urban.tsv",
    "plan_input": "data/e2e/mmd_api_comparison/20260925/references/urban.tsv",
    "sha256": "53a45dbdb034e033bc5e88716efebbdd41d8ae90449582e68e10dbd48cb5e830"

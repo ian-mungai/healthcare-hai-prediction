@@ -18,13 +18,7 @@ from typing import Any
 from scripts.acquisition.check_baseline_run import EXPECTED_NAME, ROOT, SEED_KIND, SEED_MANIFEST, SEED_ROOT, file_entries
 
 FOLDERS = (("/mmd_browser_history/", "mmd_browser_history"), ("/mmd_api_comparison/", "mmd_references"), ("/structure_history/", "structure_history"))
-OWNER_DECISION = "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files"
-HOLDS = {
-    "codebook_crosswalk.csv": OWNER_DECISION,
-    "countynames.tsv": OWNER_DECISION,
-    "urban.tsv": OWNER_DECISION,
-    "county_adjacency2010.txt": "pending: a Latin-1 file waits on the removed-names hook fix",
-}
+HOLDS = {"county_adjacency2010.txt": "pending: a Latin-1 file waits on the removed-names hook fix"}
 REPORT = "plan_inputs/data/e2e/mmd_api_comparison/20260925/report.json"
 MMD_PLAN = "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json"
 HUD_PLAN = Path("config/acquisition/hud_xlsx_plan_2010q1_2020q4.json")

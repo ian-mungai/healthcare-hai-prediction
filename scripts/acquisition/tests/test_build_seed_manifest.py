@@ -54,7 +54,7 @@ def test_plan_inputs_get_a_folder_by_kind_a_digest_from_the_source_and_their_hol
     csv = files["mmd_browser_history/mmd_data.csv"]
     check(csv == {"path": "mmd_browser_history/mmd_data.csv", "sha256": "a" * 64, "plan_input": INPUTS[0]}, f"csv: {csv}")
     reference = files["mmd_references/urban.tsv"]
-    check(reference["sha256"] == "b" * 64 and reference["hold"].startswith("pending owner decision"), f"reference: {reference}")
+    check(reference == {"path": "mmd_references/urban.tsv", "sha256": "b" * 64, "plan_input": INPUTS[1]}, f"reference: {reference}")
     adjacency = files["structure_history/county_adjacency2010.txt"]
     check(adjacency["sha256"] is None and adjacency["hold"].startswith("pending"), f"adjacency: {adjacency}")
 
