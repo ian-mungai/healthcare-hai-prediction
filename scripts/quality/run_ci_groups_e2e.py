@@ -3027,13 +3027,13 @@ def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool, number: i
     for pid in survivors:
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
-    expected_status: dict[int, int | None] = {signal.SIGTERM: 143, signal.SIGHUP: 129}
+    expected_status: dict[int, int] = {signal.SIGINT: -signal.SIGINT, signal.SIGTERM: 143, signal.SIGHUP: 129}
     checks = {
         "every_workload_started": len(list(records.glob("pid_*.json"))) == 3 * count,
         "interrupt_sent": "cli" in seen,
         "cli_ended_inside_the_bound": not timed_out and elapsed <= HOOK_INTERRUPT_BOUND_SECONDS,
         "cli_failed": exit_code is not None and exit_code != 0,
-        "exit_status": exit_code == expected_status.get(number, exit_code),
+        "exit_status": exit_code == expected_status[number],
         "no_process_survives": not survivors,
     }
     return {
@@ -3042,6 +3042,116 @@ def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool, number: i
         "checks": checks,
         "survivors": survivors,
         "seconds": round(elapsed, 1),
+    }
+
+
+# Runs the real CLI entry point in this process with a barrier before each shard's stop, so that a second signal can arrive while the cleanup is running. It
+# records the exit status, how many stops had finished and which workloads were alive at the moment the CLI returned.
+HOOK_MIXED_DRIVER = """
+import json
+import sys
+import time
+from pathlib import Path
+
+from scripts import process
+from scripts.quality import ci_hooks
+
+work = Path(sys.argv[1])
+original_stop = process.stop_launch
+
+def delayed_stop(*args, **kwargs):
+    (work / "cleanup_entered").touch()
+    deadline = time.monotonic() + 8
+    while not (work / "release_cleanup").exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    result = original_stop(*args, **kwargs)
+    (work / f"cleanup_done_{args[0]}").touch()
+    return result
+
+process.stop_launch = delayed_stop
+sys.argv = ["ci_hooks", "--root", str(work), "--group", "samples", "--output-directory", str(work / "output")]
+observed = {}
+try:
+    observed["exit"] = ci_hooks.main()
+except KeyboardInterrupt:
+    observed["exit"] = 130
+workloads = {json.loads(path.read_text())["pid"] for path in (work / "records").glob("pid_*.json")}
+observed["alive_at_return"] = sorted(row.pid for row in process.list_processes() if row.pid in workloads and "Z" not in row.state)
+observed["stops_done"] = len(list(work.glob("cleanup_done_*")))
+(work / "observed.json").write_text(json.dumps(observed))
+raise SystemExit(observed["exit"])
+"""
+
+
+def hook_shard_mixed_signal_case(scratch: Path, count: int, nested: bool, first: int, second: int) -> dict[str, Any]:
+    """A second signal of any kind during the cleanup is held: the first signal's status comes only after every stop has finished."""
+    first_name, second_name = (signal.Signals(number).name.lower() for number in (first, second))
+    root = scratch / f"hook_shard_mixed_{'nested' if nested else 'terminal'}_{first_name}_{second_name}"
+    records = root / "records"
+    records.mkdir(parents=True)
+    for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, root / name)
+    binary = root / ".venv/bin/pre-commit"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(HOOK_INTERRUPT_STUB.replace("@PYTHON@", str(PYTHON)).replace("@RECORDS@", str(records)))
+    binary.chmod(0o755)
+    seen: dict[str, Any] = {}
+
+    def send_both() -> None:
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            rows = []
+            for path in records.glob("pid_*.json"):
+                with contextlib.suppress(json.JSONDecodeError):
+                    rows.append(json.loads(path.read_text()))
+            if len(rows) == 3 * count:
+                seen["cli"] = rows[0]["cli"]
+                os.kill(seen["cli"], first)
+                while not (root / "cleanup_entered").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                os.kill(seen["cli"], second)
+                time.sleep(0.4)
+                break
+            time.sleep(0.02)
+        (root / "release_cleanup").touch()
+
+    sender = threading.Thread(target=send_both, name="hook_shard_mixed_sender")
+    sender.start()
+    environment = {key: value for key, value in os.environ.items() if key != "JOB_STARTED"}
+    exit_code: int | None = None
+    try:
+        if nested:
+            exit_code = run_command(str(PYTHON), ["-c", HOOK_MIXED_DRIVER, str(root)], cwd=ROOT, env=environment, timeout=30).returncode
+        else:
+            terminal = ["-u", "PROCESS_LAUNCH_SESSION", str(PYTHON), "-c", HOOK_MIXED_DRIVER, str(root)]
+            exit_code = run_command("/usr/bin/env", terminal, cwd=ROOT, env=environment, timeout=30).returncode
+    except TimeoutExpired:
+        pass
+    finally:
+        sender.join(timeout=15)
+    observed_path = root / "observed.json"
+    observed = json.loads(observed_path.read_text()) if observed_path.exists() else {}
+    tracked = {json.loads(path.read_text())["pid"] for path in records.glob("pid_*.json")}
+    survivors = live_pids(tracked)
+    for pid in survivors:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    statuses: dict[int, int] = {signal.SIGINT: 130, signal.SIGTERM: 143, signal.SIGHUP: 129}
+    wanted = statuses[first]
+    checks = {
+        "both_signals_sent_during_the_cleanup": "cli" in seen and (root / "cleanup_entered").exists(),
+        "status_of_the_first_signal": observed.get("exit") == wanted,
+        "every_stop_finished_before_the_return": observed.get("stops_done") == count,
+        "no_workload_alive_at_the_return": observed.get("alive_at_return") == [],
+        "no_process_survives": not survivors,
+    }
+    return {
+        "case": f"hook_samples_{'nested' if nested else 'terminal'}_{first_name}_then_{second_name}_during_the_cleanup",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "observed": observed,
+        "exit": exit_code,
     }
 
 
@@ -3159,6 +3269,8 @@ def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
         results += [
             hook_shard_interrupt_case(scratch, count, nested, number) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP) for nested in (True, False)
         ]
+        pairs = ((signal.SIGTERM, signal.SIGINT), (signal.SIGINT, signal.SIGTERM), (signal.SIGHUP, signal.SIGINT), (signal.SIGTERM, signal.SIGTERM))
+        results += [hook_shard_mixed_signal_case(scratch, count, nested, first, second) for first, second in pairs for nested in (True, False)]
     return results
 
 
