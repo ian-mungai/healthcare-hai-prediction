@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -113,10 +114,10 @@ def full_receipt(**changes: object) -> dict:
     return receipt | changes
 
 
-def collector_units(root: Path) -> list[dict]:
+def collector_units(root: Path) -> list[dict[str, Any]]:
     """Two BLS units that share one URL, an MMD API unit, a flagged browser export, a file unit with a job plan, one without, and manual units."""
     url = "https://api.example.invalid/timeseries"
-    units = [
+    units: list[dict[str, Any]] = [
         {"snapshot_id": "B1", "mode": "bls_api_v2", "receipt": stored(root, "B1", collector_receipt(batch_id="b1")), "url": url},
         {"snapshot_id": "B2", "mode": "bls_api_v2", "receipt": stored(root, "B2", collector_receipt(batch_id="b2")), "url": url},
         {"snapshot_id": "M1", "mode": "mmd_api", "receipt": stored(root, "M1", collector_receipt(measure_id="AMI", year=2020))},
@@ -147,7 +148,7 @@ def collector_units(root: Path) -> list[dict]:
         {"snapshot_id": "F2", "mode": "file", "receipt": stored(root, "F2", full_receipt())},
         {"snapshot_id": "O1", "mode": "cms_owners_org", "receipt": stored(root, "O1", collector_receipt(release_id="r1"))},
     ]
-    objects = [
+    objects: list[dict[str, Any]] = [
         {
             "role": "data",
             "storage_path": "raw/h.xlsx",
