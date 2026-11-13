@@ -830,9 +830,16 @@ ARCHIVE_LINE = f'P.{ADD_ARGUMENT}("{ARCHIVE_FLAG}", {UMLAUT_HELP})\n'
 SIGN_OFF_CALLER = f"python tools/digest.py \\\n    {SIGN_OFF} /work/signoff.json\n"
 PAD_LINES = "PAD = 1\n" * 1200  # Git reads only the first 8000 bytes to decide whether a file is binary.
 BINARY_NOTICE = ": skipped: binary data (NUL bytes), not checked for removed names"
+CAFE_FLAG = "--caf\u00c3\u00aa"  # The two bytes of UTF-8 \u00ea, read as Latin-1 text.
+MIXED_PRIOR = (f'# Pr\u00fcfung\nimport argparse\n\nP = argparse.ArgumentParser()\nP.{ADD_ARGUMENT}("--caf').encode("latin-1") + b'\xc3\xaa")\n'
+MIXED_NOW = "# Pr\u00fcfung\nimport argparse\n\nP = argparse.ArgumentParser()\n".encode("latin-1")
+LATE_NUL_FILE = UTF8_HEAD + PAD_LINES + "BLOB = '\0'\n"
 LATIN1_NAMES = {
     "binary": "Latin-1 case: a changed binary file is skipped with a notice",
     "late_nul": "Latin-1 case: a text file with a NUL byte after the first 8000 bytes is skipped with a notice",
+    "gains_nul": "Latin-1 case: a text file that gains a NUL byte after the first 8000 bytes while it loses a flag is skipped with a notice",
+    "new_nul": "Latin-1 case: a new text file with a NUL byte after the first 8000 bytes is skipped with a notice",
+    "unchanged_nul": "Latin-1 case: an unchanged tracked binary file is skipped with a notice",
 }
 LATIN1_CASES = [
     Case(
@@ -887,6 +894,35 @@ LATIN1_CASES = [
         },
         files={"tools/digest.py": UTF8_HEAD},
         reason=f"tools/run_report.sh:3: {SIGN_OFF} {LEFTOVER}",
+    ),
+    Case(
+        "Latin-1 file with one valid UTF-8 byte pair on a removed line, the same bytes in a caller",
+        "removed-names",
+        False,
+        committed={"tools/digest.py": MIXED_PRIOR, "tools/run_report.sh": b"# Pr\xfcfung\npython tools/digest.py " + CAFE_FLAG.encode("latin-1") + b"\n"},
+        files={"tools/digest.py": MIXED_NOW},
+        reason=f"tools/run_report.sh:2: {CAFE_FLAG} {LEFTOVER}",
+    ),
+    Case(
+        LATIN1_NAMES["gains_nul"],
+        "removed-names",
+        True,
+        committed={"tools/digest.py": UTF8_HEAD + PAD_LINES + SIGN_OFF_LINE, "tools/run_report.sh": SIGN_OFF_CALLER},
+        files={"tools/digest.py": LATE_NUL_FILE},
+    ),
+    Case(
+        LATIN1_NAMES["new_nul"],
+        "removed-names",
+        True,
+        committed={"tools/run_report.sh": "python tools/digest.py\n"},
+        files={"tools/blob.py": LATE_NUL_FILE},
+    ),
+    Case(
+        LATIN1_NAMES["unchanged_nul"],
+        "removed-names",
+        True,
+        committed={"data/blob.bin": b"\x00\x01\x02 first", "tools/run_report.sh": "python tools/digest.py\n"},
+        files={"tools/run_report.sh": "python tools/digest.py --verbose\n"},
     ),
     Case(
         LATIN1_NAMES["binary"],
@@ -2856,6 +2892,9 @@ BLOCK_REASONS.update({case.name: case.reason for case in HOME_AND_EMAIL_CASES if
 WARNING_HEADERS = {
     LATIN1_NAMES["binary"]: (f"data/blob.bin{BINARY_NOTICE}",),
     LATIN1_NAMES["late_nul"]: (f"tools/digest.py{BINARY_NOTICE}",),
+    LATIN1_NAMES["gains_nul"]: (f"tools/digest.py{BINARY_NOTICE}",),
+    LATIN1_NAMES["new_nul"]: (f"tools/blob.py{BINARY_NOTICE}",),
+    LATIN1_NAMES["unchanged_nul"]: (f"data/blob.bin{BINARY_NOTICE}",),
     "history, no longer and wrapped line warn through the hook": (
         "WARN notes.md:1: history note in a current document",
         "WARN notes.md:3: possible history note: 'no longer' describes a change",

@@ -601,75 +601,87 @@ def input_line_numbers(path: str, text: str) -> set[int]:
     return names - others
 
 
-def decode_text(data: bytes) -> str | None:
-    """Return the text of ``data``: UTF-8 when it is valid, otherwise Latin-1, which reads every byte. None when it holds a NUL byte: that is binary data."""
+def text_codec(data: bytes) -> str | None:
+    """Return the codec for one file version: None for binary data (NUL byte), UTF-8 when the whole file decodes, otherwise Latin-1, which reads every byte."""
     if b"\0" in data:
         return None
     try:
-        return data.decode("utf-8")
+        data.decode("utf-8")
     except UnicodeDecodeError:
-        return data.decode("latin-1")
+        return "latin-1"
+    return "utf-8"
 
 
 def git_text(*args: str) -> str:
-    """Run Git and return its output, keeping bytes that are not UTF-8 as lone surrogates for ``repaired`` instead of raising."""
+    """Run Git and return its output, keeping bytes that are not UTF-8 as lone surrogates so a caller can read them with ``text_codec`` instead of raising."""
     return run_command("git", args, check=True, errors="surrogateescape").stdout
 
 
-def repaired(text: str) -> str:
-    """Return ``text`` from ``git_text`` with its non-UTF-8 bytes read as Latin-1; text that was valid UTF-8 is returned as it is."""
-    try:
-        text.encode("utf-8")
-    except UnicodeEncodeError:
-        return decode_text(text.encode("utf-8", "surrogateescape")) or text
-    return text
+def git_blob(spec: str) -> bytes:
+    """Return the bytes of the Git object ``spec`` (``<ref>:<path>``, or ``:<path>`` for the staged file)."""
+    return git_text("show", spec).encode("utf-8", "surrogateescape")
 
 
 def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
     """Return removed lines by file and deleted paths, from the staged diff or, in CI, the pushed range.
 
     A removed line that only named an input of a workflow or action (see ``input_line_numbers``) is left out: the input is gone, the name stays free.
-    A file that is not UTF-8 is read as Latin-1. A file that holds NUL bytes is binary: it is skipped and named in ``SKIPPED``, which the command prints.
+    Each file version is read with one codec (see ``text_codec``), also for its removed lines. A changed file whose old or new version holds NUL bytes is
+    binary: it is skipped and named in ``SKIPPED``, which the command prints.
     """
     SKIPPED.clear()
     refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
-    old_ref = refs[0] if len(refs) == 2 else "HEAD"
+    old_ref, new_ref = (refs[0], refs[1]) if len(refs) == 2 else ("HEAD", "")
     deleted = git("diff", *refs, "--name-only", "--diff-filter=D").splitlines()
     removed: dict[str, list[str]] = {}
     inputs: dict[str, set[int]] = {}
-    current, in_header, old_number = "", False, 0
+    codecs: dict[str, str] = {}
+    current, new_path, in_header, old_number = "", "", False, 0
     for line in git_text("diff", *refs, "-U0", "--inter-hunk-context=0", "--no-color").splitlines():
         binary = BINARY_DIFF.fullmatch(line) if in_header else None
         if line.startswith("diff --git "):
-            current, in_header = "", True
+            current, new_path, in_header = "", "", True
         elif binary:
             skip_binary(binary.group("new") or binary.group("old") or "")
         elif in_header and line.startswith("--- "):
             current = line[6:] if line.startswith("--- a/") else ""
+        elif in_header and line.startswith("+++ "):
+            new_path = line[6:] if line.startswith("+++ b/") else ""
         elif line.startswith("@@"):
             in_header = False
             old_number = int(line.split()[1].lstrip("-").split(",")[0])
         elif not in_header and line.startswith("-") and current:
             if current not in inputs:
-                before = decode_text(git_text("show", f"{old_ref}:{current}").encode("utf-8", "surrogateescape"))
-                inputs[current] = set() if before is None else input_line_numbers(current, before)
-                if before is None:
+                before = git_blob(f"{old_ref}:{current}")
+                now = git_blob(f"{new_ref}:{new_path}") if new_path else b""
+                codec = text_codec(before)
+                if codec is None or text_codec(now) is None:
                     skip_binary(current)
-            if current not in SKIPPED and old_number not in inputs[current]:
-                removed.setdefault(current, []).append(repaired(line[1:]))
+                    inputs[current] = set()
+                else:
+                    codecs[current] = codec
+                    inputs[current] = input_line_numbers(current, before.decode(codec))
+            if current in codecs and old_number not in inputs[current]:
+                removed.setdefault(current, []).append(line[1:].encode("utf-8", "surrogateescape").decode(codecs[current]))
             old_number += 1
     return removed, deleted
 
 
-def reference_files() -> dict[str, list[str]]:
-    """Return the lines of every tracked text file that describes current behavior; history and the allowlist are exempt."""
+def reference_files(record_skips: bool = False) -> dict[str, list[str]]:
+    """Return the lines of every tracked text file that describes current behavior; history and the allowlist are exempt.
+
+    Each file is read with one codec (see ``text_codec``). A file with NUL bytes is binary and left out; ``record_skips`` names it in ``SKIPPED``.
+    """
     files: dict[str, list[str]] = {}
     for path in git("ls-files").splitlines():
         if path == "CHANGELOG.md" or path.startswith("e2e/") or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
             continue
-        text = decode_text(Path(path).read_bytes())
-        if text is not None:
-            files[path] = text.splitlines()
+        data = Path(path).read_bytes()
+        codec = text_codec(data)
+        if codec is not None:
+            files[path] = data.decode(codec).splitlines()
+        elif record_skips:
+            skip_binary(path)
     return files
 
 
@@ -1447,7 +1459,7 @@ def removed_names() -> list[Finding]:
     """
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
-    files = reference_files()
+    files = reference_files(record_skips=True)
     kinds = removed_definitions(removed, deleted, files)
     unchecked = mypy_uncovered_files() if kinds["python"] else set()
     findings += deleted_modules_left(removed, deleted, files, allowed)
