@@ -1956,8 +1956,8 @@ def single_path_value_cases(report: Report, layer_run: Any) -> None:
         with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(refused):
             code = job_overrides.main(text.split())
         containers = json.loads(printed.getvalue())["containerOverrides"] if code == 0 else []
-        given = {entry["name"]: [item["value"] for item in entry["environment"] if item["name"] == "FEATURE_SET"] for entry in containers}
-        outcomes.append(code == 0 and given == FEATURES_CONTAINER_SETS and len(containers) == 8 and "<" not in text)
+        emitted = {entry["name"]: [item["value"] for item in entry["environment"] if item["name"] == "FEATURE_SET"] for entry in containers}
+        outcomes.append(code == 0 and emitted == FEATURES_CONTAINER_SETS and len(containers) == 8 and "<" not in text)
     report.case(
         "F14",
         "FS2",
