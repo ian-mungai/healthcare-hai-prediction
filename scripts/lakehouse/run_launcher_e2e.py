@@ -7659,34 +7659,6 @@ def pins_record(env: Env) -> dict[str, bool]:
     }
 
 
-@case("pin_read_reads_a_record_of_the_old_name")
-def pin_read_reads_a_record_of_the_old_name(env: Env) -> dict[str, bool]:
-    """The read-only pin template was called spark_read before its rename. An open launch record that still says spark_read, left by an older launcher, is
-    read as pin_read after a restart, and its attempt ends like any other pin attempt."""
-    catalog_script(env)
-    pins_script(env)
-    env.start()
-    client = env.client()
-    catalog_up(env)
-    run = env.acquire_run(PINS_RUN, "transform")
-    gate = env.daemon.add_gate("create", "after", match=lambda c: c["labels"].get("hai.template") == "pin_read")
-    body = {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}
-    attempt_id = client.call("submit", body, run)["attempt_id"]
-    gate.wait_reached()
-    env.kill_launcher()
-    gate.release()
-    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
-        state["attempts"][attempt_id]["template"] = "spark_read"
-    env.start()
-    listed = client.call("status", {"what": "launcher"}, run)
-    ended = env.wait_ended(attempt_id, 40)
-    return {
-        "the open record of the old name is listed under the new name": "pin_read" in listed["open_templates"] and "spark_read" not in listed["open_templates"],
-        "the attempt of the old record ended like any other pin attempt": ended["reason"] == "exited" and ended["exit_code"] == 0,
-        "the record carries the new name once the launcher has read it": ended["template"] == "pin_read",
-    }
-
-
 @case("pins_replaced_before_record")
 def pins_replaced_before_record(env: Env) -> dict[str, bool]:
     """914: a pins file replaced between the writer and the launcher's read is not recorded."""
@@ -11132,7 +11104,6 @@ ALL_CASES = (
     interactive_sessions,
     package_folder_guard,
     pins_record,
-    pin_read_reads_a_record_of_the_old_name,
     pins_replaced_before_record,
     snapshot_copy,
     snapshot_copy_failures,

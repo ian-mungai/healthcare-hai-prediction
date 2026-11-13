@@ -1322,16 +1322,6 @@ TEMPLATES: dict[str, Template] = {
 # Catalog services that run to their end: they run under the in-image deadline entrypoint like every finite job (a static binary in the
 # polaris-admin-tool image, which has no Python) and the launcher enforces the same deadline as well.
 FINITE_SERVICES = frozenset({"polaris-bootstrap"})
-# Launch records of an older launcher name the read-only pin template spark_read, its name before the rename. The launcher reads that name only here.
-LEGACY_TEMPLATES = {"spark_read": "pin_read"}
-
-
-def rename_legacy_templates(state: dict[str, Any]) -> None:
-    """Give every launch record that carries an old template name its current name, so the rest of the launcher knows only the current names."""
-    for attempt in state.get("attempts", {}).values():
-        attempt["template"] = LEGACY_TEMPLATES.get(attempt["template"], attempt["template"])
-
-
 # Spark jobs by template: module, whether it writes, the folders it writes under the checkout and the closed argument grammar.
 SPARK_JOBS: dict[str, dict[str, Any]] = {
     "pins": {
@@ -3726,15 +3716,10 @@ class Launcher:
         if schema == run_lock.LAUNCHER_SCHEMA:
             with self.tx(write=False) as state:
                 self.registry_id = str(state["registry_id"])
-                has_old_name = any(attempt["template"] in LEGACY_TEMPLATES for attempt in state["attempts"].values())
-            if has_old_name:
-                with self.tx() as state:
-                    rename_legacy_templates(state)
             return
         legacy = self.docker.containers(label=LABEL_RUN) if self.docker_reachable() else None
         with self.tx() as state:
             self.registry_id = str(state["registry_id"])
-            rename_legacy_templates(state)
             if state["schema_version"] == run_lock.LAUNCHER_SCHEMA:
                 return
             blockers = self.migration_blockers(state, legacy)
