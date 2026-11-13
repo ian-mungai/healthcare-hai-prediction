@@ -43,7 +43,6 @@ from orchestration.training_contract import (
     record_key,
     serving_parameters_for,
     trained_run_id,
-    training_run_id,
 )
 
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
@@ -569,13 +568,14 @@ class Preflight:
                 raise LaunchRefused(str(error)) from None
         if request.dag_id == DRIFT_DAG:
             drift_model(request)
-        spec = self.spec(request, job)
-        revision, job_memory = self.checked_revision(job, cap)
-        if request.template == "drift_run":  # the only write of a job step, after every refusal
-            self.code_runs.bind(training_run_id(request.run_id), self.code_runs.resolve(request.run_id))
+        research_code = None
         if request.template == "research" and request.dag_id == "research_dag":
             # Research compares the models' runs, so it runs the code the first of them trained with.
-            self.code_runs.bind(request.run_id, self.code_runs.resolve(trained_run_id(str((request.training or {})["base_run"]), PROMOTION_MODELS[0])))
+            research_code = self.code_runs.resolve(trained_run_id(str((request.training or {})["base_run"]), PROMOTION_MODELS[0]))
+        spec = self.spec(request, job, research_code)
+        revision, job_memory = self.checked_revision(job, cap)
+        if research_code is not None:  # the only write of a job step, after every refusal
+            self.code_runs.bind(request.run_id, research_code)
         # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
         # probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=max(spec.need.memory_mib, job_memory))
@@ -727,11 +727,11 @@ class Preflight:
                 "Render and apply the jobs stack so it registers a revision sized from the current services, then run again"
             )
 
-    def spec(self, request: SubmissionRequest, job: str) -> JobSpec:
+    def spec(self, request: SubmissionRequest, job: str, code_run: str | None = None) -> JobSpec:
         """The launch request of a job: the variables of each container, the bound inputs, the deadline, what the host must have free and the
         acceptance. ``prepare`` adds the checked revision of the job's host definition."""
         row = self.jobs[job]
-        code_run = self.code_runs.resolve(request.run_id)
+        code_run = code_run or self.code_runs.resolve(request.run_id)
         fixed = self.fixed_values(request, job)
         cache: dict[str, str] = {}
 

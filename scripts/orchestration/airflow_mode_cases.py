@@ -873,13 +873,17 @@ def unbound_revision_is_refused() -> None:
         require("000000000000" not in str(error) and "arn:" not in str(error), f"the refusal shows an ARN or an account: {error}")
         require(rig.tasks_started() == 0 and not rig.records.calls, "an unbound revision launched or wrote a record")
     rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
     rig.ecs.register("example_dev_job_drift_host", 25600, None)
-    with world(rig, "drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}) as current:
+    started = rig.tasks_started()
+    writes = len([call for call in rig.aws_calls() if call.startswith("s3:Put")])
+    params = {"run_id": drift_run_of(run), "mode": "real", "mlflow": "aws", "model": "m2", "features_run": run}
+    with world(rig, "drift_monitoring_dag", params) as current:
         error = refuses(LaunchRefused, lambda: current.step("drift_run"))
     require("carries no host capacity binding" in str(error), f"the unbound drift revision is not named: {error}")
-    writes = [call for call in rig.aws_calls() if call.startswith("s3:Put")]
-    require(not writes, f"a drift job refused for its unbound revision wrote before the refusal: {writes}")
-    require(rig.tasks_started() == 0, "an unbound drift revision launched")
+    after = [call for call in rig.aws_calls() if call.startswith("s3:Put")]
+    require(len(after) == writes, f"a drift job refused for its unbound revision wrote before the refusal: {after[writes:]}")
+    require(rig.tasks_started() == started, "an unbound drift revision launched")
 
 
 def revision_bound_to_another_capacity_is_refused() -> None:
@@ -918,7 +922,7 @@ def malformed_capacity_refuses() -> None:
     for dag_id, params, template in (
         ("silver_transform_dag", SILVER, "pin_bronze"),
         ("gold_transform_dag", GOLD, "pin_silver"),
-        ("drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws"}, "drift_run"),
+        ("drift_monitoring_dag", {"run_id": DRIFT_RUN, "mode": "real", "mlflow": "aws", "model": "m1", "features_run": FEATURES_RUN}, "drift_run"),
     ):
         rig = Rig(capacity="")
         with world(rig, dag_id, params) as current:

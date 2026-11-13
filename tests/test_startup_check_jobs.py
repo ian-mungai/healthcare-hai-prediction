@@ -75,7 +75,10 @@ def run_drift(phase: str) -> Callable[[pytest.MonkeyPatch, Path], int]:
 def run_serve(monkeypatch: pytest.MonkeyPatch, work: Path) -> int:
     reach(deploy_job.importlib, "import_module", monkeypatch)
     monkeypatch.setattr(sys, "argv", ["deploy_job", "--run", RUN])
-    monkeypatch.setenv("SERVING_REQUEST", json.dumps({"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0}))
+    monkeypatch.setenv(
+        "SERVING_REQUEST",
+        json.dumps({"hai_type": "HAI_1", "deploy_mode": "stable", "candidate_version": None, "percent": 0, "canary_ttl_hours": None, "research_run": None}),
+    )
     monkeypatch.setenv("MODEL_API_MANIFEST_URI", "s3://example-bucket/manifests")
     return deploy_job.main()
 
