@@ -3004,12 +3004,19 @@ def scratch_repo(root: Path, case: Case) -> Path:
         git(repo, "config", key, value)
     # Copy only files Git tracks or would track, so ignored local code never enters the scratch repository. The launcher reads a
     # variable .env.example documents (DOCKER_HOST), so the env-example cases need it too, and the Airflow launch library that
-    # reads the HAI_LAUNCH_* ones. Other hooks must not see that library: its imports and unused helpers would fail their samples.
+    # reads the HAI_LAUNCH_* ones. Other hooks must not see that library: its imports and unused helpers would fail their samples. The startup check
+    # tests read the variables that .env.example documents for them (STARTUP_CHECK_TEST_FAULT, STARTUP_CHECK_TEST_PROBE, PLANT).
     listed = run_command(
         "git", ["ls-files", "--cached", "--others", "--exclude-standard", "scripts", "orchestration/launcher.py"], cwd=ROOT, check=True
     ).stdout.splitlines()
     if case.hook == "env-example":
-        listed += ["infra/jobs/identity_probe/probe.py", "orchestration/airflow_steps.py"]
+        listed += [
+            "infra/jobs/identity_probe/probe.py",
+            "orchestration/airflow_steps.py",
+            "tests/startup_check_child_faults.py",
+            "tests/startup_check_faults.py",
+            "tests/test_startup_check_planted.py",
+        ]
     for relative in [*COPIED, *listed]:
         if (ROOT / relative).is_file():
             (repo / relative).parent.mkdir(parents=True, exist_ok=True)
