@@ -473,6 +473,83 @@ def test_a_wonder_export_that_passes_the_contract_is_captured_and_a_form_page_is
     check(len(world.sink.captured) == 1 and sorted(world.sink.captured[0][1]) == sorted([name, "county_year.csv"]), "the export was captured")
 
 
+WONDER_NAME = "wonder_D158_2024_2024.txt"
+
+
+def seeded_wonder(world: World, *, recorded: str | None = "derived", original: bytes | None = None, present: bool = True) -> tuple[dict, Path]:
+    """A WONDER unit whose last capture records the digest of its derived file, and a seed folder holding the unit's original.
+
+    ``recorded``: "derived" records the digest of the file the plan's export rebuilds to, a digest string records that one, None records no derived file.
+    """
+    export = wonder_export_text("D158", 2024, 2024)
+    plan = world.plans.plan("wonder_export")
+    derived = wonder_export_contract.validate_export(export, plan["batches"][0], plan)[0]
+    unit = world.add(make_unit("WONDER", "wonder_export", WONDER_URL, "WONDER__0"), {})
+    stored = {WONDER_NAME: export} | ({"county_year.csv": derived} if recorded is not None else {})
+    artifacts = []
+    for name, body in stored.items():
+        pointer = world.bucket.seed(f"raw/example_publisher/example_collection/datasets/d/{unit['snapshot_id']}/{name}", body)
+        artifacts.append({"role": "data", **pointer, "retrieved_at_utc": "2026-09-28T23:17:26Z"})
+    if recorded not in (None, "derived"):
+        artifacts[-1]["sha256"] = str(recorded)
+    world.specs[unit["snapshot_id"]] = {
+        "mode": "wonder_export",
+        "stored_data_files": sorted([WONDER_NAME, "county_year.csv"]),
+        "last_capture": {"read_root": "raw/", "artifacts": artifacts},
+    }
+    seed = world.scratch.parent / "seed"
+    if present:
+        folder = seed / "manual_units" / unit["snapshot_id"]
+        folder.mkdir(parents=True)
+        (folder / WONDER_NAME).write_bytes(export if original is None else original)
+    return unit, seed
+
+
+def test_a_seeded_wonder_original_is_rebuilt_into_its_recorded_derived_file_and_captured_with_no_request(world: World) -> None:
+    unit, seed = seeded_wonder(world)
+    report = world.run([unit], seed=seed)
+    captured = world.sink.captured
+    check(len(captured) == 1 and sorted(captured[0][1]) == sorted([WONDER_NAME, "county_year.csv"]), "the original and its rebuilt file were captured")
+    recorded = {Path(a["key"]).name: a["sha256"] for a in world.specs[unit["snapshot_id"]]["last_capture"]["artifacts"]}
+    check({name: hashlib.sha256(body).hexdigest() for name, body in captured[0][1].items()} == recorded, "every captured file has the recorded SHA-256")
+    check(world.site.seen == [] and report.http_requests == 0 and world.counter == [], "the seed replaces the download: not even robots.txt is requested")
+    check(read_all(world) == [] and report.counts["captured"] == 1, f"no stale record: {report.counts}")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"recorded": "0" * 64}, {"original": b"not an export\n"}],
+    ids=["rebuilt_file_differs_from_the_recorded_digest", "original_differs_from_the_plan"],
+)
+def test_a_seeded_wonder_unit_whose_rebuilt_file_or_original_differs_is_refused_before_anything_is_written(world: World, changes: dict) -> None:
+    unit, seed = seeded_wonder(world, **changes)
+    world.run([unit], seed=seed)
+    check(only_stale(world, unit)["reason"] == "contract_failed", "the mismatch makes the unit stale")
+    check(world.sink.captured == [] and data_objects(world) == [], "nothing was handed to the capture path or stored")
+    check(world.site.seen == [], "no request: the unit does not fall back to a download")
+
+
+@pytest.mark.parametrize(
+    ("changes", "refusal"),
+    [({"present": False}, "seed lacks the original"), ({"recorded": None}, "records no digest of its derived file")],
+    ids=["seed_without_the_original", "specification_without_the_derived_digest"],
+)
+def test_a_seeded_run_stops_before_any_request_for_a_wonder_unit_with_no_seeded_original_or_no_recorded_derived_digest(
+    world: World, changes: dict, refusal: str
+) -> None:
+    unit, seed = seeded_wonder(world, **changes)
+    with pytest.raises(manual_units.ManualUnitError, match=refusal):
+        world.run([unit], seed=seed)
+    check(world.site.seen == [] and world.bucket.writes() == [] and world.sink.captured == [], "nothing was requested, stored or captured")
+
+
+def test_the_seed_leaves_a_hud_unit_to_its_download(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    serve_workbook(world)
+    world.run([unit], seed=world.scratch.parent / "seed")
+    check(len(world.sink.captured) == 1 and HUD_URL in world.site.urls(), "the workbook was downloaded as without a seed")
+
+
 def acs_zip(members: list[tuple[str, bytes]]) -> bytes:
     buffer = io.BytesIO()
     with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w") as archive:

@@ -3,7 +3,8 @@
 It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums), the capture specification, the hosts file with
 its approval and the required secrets list against the secrets the collector plans and the key reader name. It also checks that every expected plan input has
 exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches its manifest: the files the queue's manual HUD and
-WONDER units store, the digests, the Git LFS rule. It makes no request and reads only the bundle, the seed folder and the collector plans.
+WONDER units store (a WONDER unit's seed holds only its original), the digests, the Git LFS rule, and that each seeded WONDER original rebuilds the derived
+file its unit's last capture records. It makes no request and reads only the bundle, the seed folder and the collector plans.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from pathlib import Path
 
 from scripts.acquisition.api_keys import SHARED_KEYS
 from scripts.acquisition.history_routes import RELEASE_BINDINGS, lineage_bindings
+from scripts.acquisition.manual_content import MODES, REBUILT_MODES, ContentRefusal, Scopes, rebuild, recorded_derived
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
 from scripts.acquisition.s3_store import access_released, encoded_json
 from scripts.process import run_command
@@ -172,7 +174,10 @@ def home_problems(root: Path, manifest: dict) -> list[str]:
 
 
 def expected_seed_files(root: Path) -> dict[str, str]:
-    """The seed path of every stored data file of a manual HUD or WONDER unit, to its unit: ``manual_units/<unit>/<file name>``."""
+    """The seed path of every stored data file of a manual HUD or WONDER unit, to its unit: ``manual_units/<unit>/<file name>``.
+
+    A unit whose derived file is rebuilt from its original (a WONDER export) is seeded with the original only.
+    """
     queue = json.loads((root / "queue.json").read_bytes())["queue"]
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
     return {
@@ -180,6 +185,7 @@ def expected_seed_files(root: Path) -> dict[str, str]:
         for unit in queue
         if unit["disposition"] == "approved_manual" and unit["mode"] in SEED_MODES
         for name in specs[unit["snapshot_id"]]["stored_data_files"]
+        if not (unit["mode"] in REBUILT_MODES and name == MODES[unit["mode"]][1])
     }
 
 
@@ -220,6 +226,36 @@ def seed_problems(root: Path, seed_root: Path, manifest: dict, *, require_files:
     on_disk = {item.relative_to(seed_root).as_posix() for item in seed_root.rglob("*") if item.is_file()} - SEED_DOCUMENTS
     problems += [f"{path} is not in the manifest" for path in sorted(on_disk - listed.keys())]
     return problems
+
+
+def derivation_problems(root: Path, seed_root: Path, scopes: Scopes | None = None) -> list[str]:
+    """Return why a WONDER unit's derived file cannot be proven from its seeded original.
+
+    Each unit must record the SHA-256 of its derived file in its last capture. A seeded original, bound to the plan by its digest, must rebuild a file
+    equal to that digest and size. An absent original is pending, like any other absent seed file.
+    """
+    queue = json.loads((root / "queue.json").read_bytes())["queue"]
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    scopes = Scopes() if scopes is None else scopes
+    found = []
+    for unit in queue:
+        if unit["disposition"] != "approved_manual" or unit["mode"] not in REBUILT_MODES:
+            continue
+        spec, derived = specs[unit["snapshot_id"]], MODES[unit["mode"]][1]
+        if recorded_derived(unit["mode"], spec) is None:
+            found.append(f"unit {unit['snapshot_id']} records no digest of its derived {derived}")
+            continue
+        originals = [name for name in spec["stored_data_files"] if name != derived]
+        if len(originals) != 1:
+            found.append(f"unit {unit['snapshot_id']} needs exactly one original besides its derived {derived}")
+            continue
+        path = seed_root / f"manual_units/{unit['snapshot_id']}/{originals[0]}"
+        if path.is_file():
+            try:
+                rebuild(unit["mode"], path, originals[0], spec, scopes)
+            except ContentRefusal:
+                found.append(f"manual_units/{unit['snapshot_id']}/{originals[0]} does not rebuild the recorded {derived} of unit {unit['snapshot_id']}")
+    return found
 
 
 def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
@@ -272,6 +308,7 @@ def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: b
         found += specs_problems(root)
         found += home_problems(root, manifest)
         found += seed_problems(root, seed_root, manifest, require_files=require_files)
+        found += derivation_problems(root, seed_root)
         found += secret_problems(root, secrets_read_by_code())
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:

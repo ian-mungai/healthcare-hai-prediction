@@ -9,6 +9,9 @@ generic agent header of the reviewed transport.
 * Every request to a manual host is at least 5 s after the last one, retries and redirects included, one at a time. A redirect destination is checked
   against robots.txt before it is requested. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
 * A unit with a stale record younger than 20 hours is skipped, so a repeat run on the same day sends nothing.
+* A unit whose derived file is rebuilt (a WONDER export) takes its original from the seed folder when the run has one, and sends no request: the run
+  stops before any request when the seed lacks the original or the specification records no digest of the derived file. The derived file is rebuilt
+  by the contract and must equal the recorded SHA-256 and size; a mismatch makes the unit stale and hands nothing to the capture path.
 * A stale record names, as the last capture, the data and other objects of the unit's newest completion record, and the specification's pointer only
   when the unit has no completion record. A completion record that is unreadable or refused stops the unit.
 """
@@ -235,6 +238,7 @@ class Context:
     clock: Clock = field(default_factory=SystemClock)
     handlers: tuple[urllib.request.BaseHandler, ...] = field(default_factory=lambda: (transport.PublicHTTPSHandler(),))
     scopes: Scopes = field(default_factory=Scopes)
+    seed: Path | None = None
     on_request: Callable[[], None] | None = None
     limits: transport.Limits = field(default_factory=transport.Limits)
     requests: int = 0
@@ -500,6 +504,15 @@ def fresh(path: Path) -> Path:
     return path
 
 
+def staged(original: Path, derived: dict[str, bytes], spec: dict) -> dict[str, Path] | None:
+    """The original and its derived files side by side in the unit's working folder, or None when they are not the specification's stored files."""
+    files = {original.name: original}
+    for derived_name, body in derived.items():
+        files[derived_name] = original.parent / derived_name
+        files[derived_name].write_bytes(body)
+    return files if sorted(files) == sorted(spec["stored_data_files"]) else None
+
+
 def download_unit(unit: dict, spec: dict, mode: str, name: str, context: Context) -> tuple[dict[str, Path] | None, str | None, int | None]:
     """Download and check one unit. Returns the files to capture, or no files with the stale reason and status."""
     host = host_of(unit["url"])
@@ -516,13 +529,40 @@ def download_unit(unit: dict, spec: dict, mode: str, name: str, context: Context
         derived = manual_content.accept(mode, result.path, name, context.scopes)
     except ContentRefusal as refusal:
         return None, refusal.reason, result.http_status
-    files = {name: result.path}
-    for derived_name, body in derived.items():
-        files[derived_name] = result.path.parent / derived_name
-        files[derived_name].write_bytes(body)
-    if sorted(files) != sorted(spec["stored_data_files"]):
-        return None, "contract_failed", result.http_status
-    return files, None, result.http_status
+    files = staged(result.path, derived, spec)
+    return (files, None, result.http_status) if files is not None else (None, "contract_failed", result.http_status)
+
+
+def is_seeded(mode: str, context: Context) -> bool:
+    """True when this unit takes its original from the seed folder: the run has one and the unit's derived file is rebuilt from its original."""
+    return context.seed is not None and mode in manual_content.REBUILT_MODES
+
+
+def seed_original(unit: dict, name: str, context: Context) -> Path:
+    return (context.seed or Path()) / "manual_units" / unit["snapshot_id"] / name
+
+
+def require_seed(unit: dict, spec: dict, mode: str, name: str, context: Context) -> None:
+    """Refuse a seeded unit whose original is not a plain file in the seed or whose specification records no digest of its derived file."""
+    original = seed_original(unit, name, context)
+    if not original.is_file() or original.is_symlink():
+        raise ManualUnitError(f"The seed lacks the original {name} of unit {unit['snapshot_id']}")
+    if manual_content.recorded_derived(mode, spec) is None:
+        raise ManualUnitError(f"Unit {unit['snapshot_id']} records no digest of its derived file {manual_content.MODES[mode][1]}")
+
+
+def seed_unit(unit: dict, spec: dict, mode: str, name: str, context: Context) -> tuple[dict[str, Path] | None, str | None]:
+    """Rebuild the unit's derived file from its seeded original. Returns the files to capture, or no files with the stale reason. Sends no request."""
+    require_seed(unit, spec, mode, name, context)
+    folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
+    original = folder / name
+    shutil.copyfile(seed_original(unit, name, context), original)
+    try:
+        derived = manual_content.rebuild(mode, original, name, spec, context.scopes)
+    except ContentRefusal as refusal:
+        return None, refusal.reason
+    files = staged(original, derived, spec)
+    return (files, None) if files is not None else (None, "contract_failed")
 
 
 def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
@@ -533,9 +573,10 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
         newest = newest_stale(unit, context)
         if newest is not None and context.clock.now() - datetime.strptime(newest["attempted_at_utc"], TIME_FORMAT).replace(tzinfo=UTC) < RETRY_INTERVAL:
             return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"], newest)
-        reason = context.gate.admit(unit["url"])
         files, status = None, None
-        if reason is None:
+        if is_seeded(mode, context):
+            files, reason = seed_unit(unit, spec, mode, name, context)
+        elif (reason := context.gate.admit(unit["url"])) is None:
             files, reason, status = download_unit(unit, spec, mode, name, context)
         if files is not None:
             context.capture(unit, spec, files)
@@ -594,8 +635,10 @@ def run(units: list[dict], specs: Mapping[str, dict], context: Context) -> Repor
     if any(unit.get("disposition") != "approved_manual" for unit in units):
         raise ManualUnitError("The manual unit handler takes approved_manual units only")
     for unit in units:
-        manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
+        mode, name = manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
         pointers(specs[unit["snapshot_id"]])
+        if is_seeded(mode, context):
+            require_seed(unit, specs[unit["snapshot_id"]], mode, name, context)
     outcomes = [attempt(unit, specs[unit["snapshot_id"]], context) for unit in units]
     shutil.rmtree(context.scratch / "robots", ignore_errors=True)
     standing = [outcome.record for outcome in outcomes if outcome.record is not None]

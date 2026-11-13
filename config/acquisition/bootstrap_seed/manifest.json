@@ -441,63 +441,33 @@
    "unit": "HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794"
   },
   {
-   "path": "manual_units/WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60"
-  },
-  {
    "path": "manual_units/WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60/wonder_D158_2024_2024.txt",
-   "sha256": null,
+   "sha256": "81659dd9c9c4643aa5a5c2f781ec266e0f9525921be0f88370832fe965c8ae4e",
    "unit": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60"
-  },
-  {
-   "path": "manual_units/WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b"
   },
   {
    "path": "manual_units/WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b/wonder_D76_2020_2020.txt",
-   "sha256": null,
+   "sha256": "1a0b08fb0ce3d1dd250116e5515bdccb8f8badf819d22e4169f17525f020bb31",
    "unit": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b"
   },
   {
-   "path": "manual_units/WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0"
-  },
-  {
    "path": "manual_units/WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0/wonder_D158_2018_2024.txt",
-   "sha256": null,
+   "sha256": "7856b0253045170f86e03d02fcc19f7f4c4acb22de82995cca4b7a76e3b56470",
    "unit": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0"
-  },
-  {
-   "path": "manual_units/WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719"
   },
   {
    "path": "manual_units/WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719/wonder_D76_2013_2019.txt",
-   "sha256": null,
+   "sha256": "075e9bbe432cb30371bdea5305c3fa3d8f80f6bac9c471b4d2bfbf7d23cdfba1",
    "unit": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719"
   },
   {
-   "path": "manual_units/WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151"
-  },
-  {
    "path": "manual_units/WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151/wonder_D76_2006_2012.txt",
-   "sha256": null,
+   "sha256": "f4ad911643dc47b403252214e72bd30c605007a2ec93247662db3f15acf2b17e",
    "unit": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151"
-  },
-  {
-   "path": "manual_units/WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b/county_year.csv",
-   "sha256": null,
-   "unit": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b"
   },
   {
    "path": "manual_units/WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b/wonder_D76_1999_2005.txt",
-   "sha256": null,
+   "sha256": "c07d7d209789544b06ed02bd8cfe1212f660084aabe7823761debbb4022888ae",
    "unit": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b"
   },
   {

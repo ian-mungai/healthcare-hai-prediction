@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import zipfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,6 +18,8 @@ from scripts.acquisition.source_registry import canonical_hash, read_json
 
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
 MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv")}
+# The modes whose derived file is rebuilt from the original: the bootstrap seed holds the original only (owner, Nov 13 2026).
+REBUILT_MODES = ("wonder_export",)
 CONTRACT_ERRORS = (ValueError, KeyError, TypeError, zipfile.BadZipFile)
 
 
@@ -85,6 +88,28 @@ def accept(mode: str, original: Path, name: str, scopes: Scopes) -> dict[str, by
         return hud(original, name, scopes.plan(mode)) if mode == "hud_xlsx" else wonder(original, name, scopes.plan(mode))
     except CONTRACT_ERRORS:
         raise ContentRefusal("contract_failed") from None
+
+
+def recorded_derived(mode: str, spec: Mapping) -> tuple[str, int] | None:
+    """The SHA-256 and size the unit's last capture records for its derived file, or None when it records none."""
+    for item in (spec.get("last_capture") or {}).get("artifacts", []):
+        if item.get("role") == "data" and (item.get("stored_file_name") or str(item["key"]).rsplit("/", 1)[-1]) == MODES[mode][1]:
+            return item["sha256"], item["byte_count"]
+    return None
+
+
+def rebuild(mode: str, original: Path, name: str, spec: Mapping, scopes: Scopes) -> dict[str, bytes]:
+    """The derived file of a seeded original, rebuilt by the contract and equal to the recorded file's SHA-256 and size. Raises ContentRefusal otherwise.
+
+    The plan binds the original to its recorded digest first. Nothing is written here: the caller captures only what this returns.
+    """
+    recorded = recorded_derived(mode, spec)
+    if recorded is None:
+        raise ManualUnitError(f"The specification of a {mode} unit records no digest of its derived file {MODES[mode][1]}")
+    derived = accept(mode, original, name, scopes)
+    if any((hashlib.sha256(body).hexdigest(), len(body)) != recorded for body in derived.values()):
+        raise ContentRefusal("contract_failed")
+    return derived
 
 
 def bound(body: bytes, batch: dict | None) -> dict:

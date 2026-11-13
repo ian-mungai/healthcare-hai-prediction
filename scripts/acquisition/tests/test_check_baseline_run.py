@@ -12,8 +12,11 @@ import pytest
 
 from scripts.acquisition import build_bootstrap_queue as build
 from scripts.acquisition import check_baseline_run as check_run
-from scripts.acquisition import legacy_versions, s3_store
+from scripts.acquisition import hud_api_contract as hud_api
+from scripts.acquisition import legacy_versions, manual_content, s3_store, wonder_export_contract
 from scripts.acquisition.history_routes import lineage_bindings
+from scripts.acquisition.run_wonder_export_e2e import FLOOR
+from scripts.acquisition.run_wonder_export_e2e import export_text as wonder_export_text
 from scripts.acquisition.tests.test_build_bootstrap_queue import HOSTS, source_bytes
 from scripts.acquisition.transport import hosts_digest
 from scripts.process import run_command
@@ -268,6 +271,107 @@ def test_the_seed_holds_exactly_the_stored_files_of_the_manual_units(tmp_path: P
     write_seed(root, document | {"files": [*document["files"], *unit, extra]})
     found = " ".join(seed_problems(root))
     check("manual_units/zz/z.xlsx names a stored file the queue does not expect" in found and "lacks" not in found, found)
+
+
+WONDER_NAME = "wonder_D158_2024_2024.txt"
+
+
+def wonder_bundle(
+    tmp_path: Path, *, recorded: str | None = "derived", original: bytes | None = None, present: bool = True, names: list[str] | None = None
+) -> tuple[Path, manual_content.Scopes]:
+    """A bundle whose third unit is a manual WONDER export, its seed holding the original, and the plan that binds the original to its recorded digest.
+
+    ``recorded``: "derived" records the right digest of the rebuilt county_year.csv in the last capture, a digest string that one, None none.
+    """
+
+    def manual(queue: dict) -> None:
+        queue["queue"][2]["route"] = "manual_browser_download"
+        queue["queue"][2]["mode"] = "wonder_export"
+        queue["budgets"]["units_by_route"] = {"publisher_url": 2, "manual_browser_download": 1}
+
+    root = bundle(tmp_path / "b", mutate=manual)
+    export = wonder_export_text("D158", 2024, 2024)
+    batch = {"database": "D158", "years": [2024, 2024], "sha256": hashlib.sha256(export).hexdigest(), "bytes": len(export)}
+    plan = {
+        "header": wonder_export_contract.HEADER,
+        "fixed_parameters": wonder_export_contract.FIXED_PARAMETERS,
+        "min_counties_per_year": FLOOR,
+        "required_state_fips": hud_api.STATE_FIPS,
+        "batches": [batch],
+    }
+    derived = wonder_export_contract.validate_export(export, batch, plan)[0]
+    artifacts = [{"role": "data", "key": f"raw/x/{WONDER_NAME}", "sha256": batch["sha256"], "byte_count": batch["bytes"]}]
+    if recorded is not None:
+        digest = hashlib.sha256(derived).hexdigest() if recorded == "derived" else recorded
+        artifacts.append({"role": "data", "key": "raw/x/county_year.csv", "sha256": digest, "byte_count": len(derived)})
+    specs = json.loads((root / "capture_specs.json").read_text())
+    specs["specs"]["c"] = {
+        "mode": "wonder_export",
+        "stored_data_files": names or sorted([WONDER_NAME, "county_year.csv"]),
+        "last_capture": {"read_root": "raw/", "artifacts": artifacts},
+    }
+    (root / "capture_specs.json").write_text(json.dumps(specs))
+    relock(root)
+    if present:
+        folder = seed_of(root) / "manual_units" / "c"
+        folder.mkdir(parents=True)
+        (folder / WONDER_NAME).write_bytes(export if original is None else original)
+    return root, manual_content.Scopes(wonder=plan)
+
+
+def test_the_seed_holds_only_the_original_of_a_wonder_unit_and_refuses_the_file_rebuilt_from_it(tmp_path: Path) -> None:
+    root, _ = wonder_bundle(tmp_path, present=False)
+    queue_sha = json.loads((seed_of(root) / "manifest.json").read_text())["queue_sha256"]
+    original = {"path": f"manual_units/c/{WONDER_NAME}", "sha256": None, "unit": "c", "hold": "x"}
+    derived = {"path": "manual_units/c/county_year.csv", "sha256": None, "unit": "c", "hold": "x"}
+    base = seed_document(queue_sha256=queue_sha)
+    write_seed(root, base | {"files": [*base["files"], original]})
+    check(seed_problems(root) == [], f"the original alone is the whole seed of a WONDER unit: {seed_problems(root)}")
+    write_seed(root, base | {"files": [*base["files"], original, derived]})
+    found = " ".join(seed_problems(root))
+    check("manual_units/c/county_year.csv names a stored file the queue does not expect" in found, found)
+    write_seed(root, base)
+    found = " ".join(seed_problems(root))
+    check(f"the seed manifest lacks the stored file {WONDER_NAME} of unit c" in found and "county_year.csv" not in found, found)
+
+
+def test_the_derived_file_of_each_seeded_wonder_original_is_rebuilt_and_equals_its_recorded_digest(tmp_path: Path) -> None:
+    root, scopes = wonder_bundle(tmp_path)
+    check(check_run.derivation_problems(root, seed_of(root), scopes) == [], f"{check_run.derivation_problems(root, seed_of(root), scopes)}")
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({"recorded": "0" * 64}, "does not rebuild the recorded county_year.csv of unit c"),
+        ({"original": b"not an export\n"}, "does not rebuild the recorded county_year.csv of unit c"),
+        ({"recorded": None}, "unit c records no digest of its derived county_year.csv"),
+        ({"names": ["county_year.csv", "other.txt", WONDER_NAME]}, "unit c needs exactly one original besides its derived county_year.csv"),
+    ],
+    ids=["another_recorded_digest", "an_original_the_plan_does_not_bind", "no_recorded_digest", "a_second_original"],
+)
+def test_a_wonder_original_that_does_not_rebuild_its_recorded_file_or_a_unit_with_no_recorded_digest_is_refused(
+    tmp_path: Path, changes: dict, expected: str
+) -> None:
+    root, scopes = wonder_bundle(tmp_path, **changes)
+    found = check_run.derivation_problems(root, seed_of(root), scopes)
+    check(len(found) == 1 and expected in found[0], f"{found}")
+
+
+def test_an_absent_wonder_original_is_pending_but_a_unit_with_no_recorded_digest_is_refused_even_then(tmp_path: Path) -> None:
+    root, scopes = wonder_bundle(tmp_path / "a", present=False)
+    check(check_run.derivation_problems(root, seed_of(root), scopes) == [], "an absent original is pending")
+    root, scopes = wonder_bundle(tmp_path / "c", recorded=None, present=False)
+    found = check_run.derivation_problems(root, seed_of(root), scopes)
+    check(found == ["unit c records no digest of its derived county_year.csv"], f"{found}")
+
+
+def test_the_committed_seed_lists_the_six_wonder_originals_by_their_plan_digests_and_no_derived_file() -> None:
+    manifest = json.loads((check_run.SEED_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    plan = manual_content.Scopes().plan("wonder_export")
+    wanted = {wonder_export_contract.stored_name(batch): batch["sha256"] for batch in plan["batches"]}
+    listed = {Path(item["path"]).name: item["sha256"] for item in manifest["files"] if "WONDER_EXPORT" in item["path"]}
+    check(listed == wanted and len(listed) == 6, f"listed {sorted(listed)}")
 
 
 def test_a_seed_path_outside_the_folder_or_listed_twice_is_refused(tmp_path: Path) -> None:
