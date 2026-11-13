@@ -111,6 +111,11 @@ OLD_CLASS = "Legacy" + "Loader"
 OLD_KEY = "retention" + "_days"
 OLD_VARIABLE = "bucket" + "_label"
 OLD_MODEL = "stg" + "_orders"
+SHARED_ARGUMENT = "zone" + "_slots"
+SHARED_FIELD = "window" + "_stamp"
+DATA_FILE_WORD = "epoch" + "_marker"
+SCHEMA_STEM = "ledger" + "_row"
+SCHEMA_ID = "urn:hai:" + "ledger-row"
 # Not pinned by any dependency group that the scratch repository copies.
 OLD_PACKAGE = "hum" + "anize"
 OLD_MODULE = OLD_PACKAGE
@@ -1732,6 +1737,159 @@ def code_version_record(fingerprint_file: str, reason: str = "First reviewed ver
     return json.dumps({"versions": [{"version": 1, "code_sha256": [entry], "reason": reason}]}, indent=2) + "\n"
 
 
+def schema_file(*properties: str, schema_id: str = "") -> str:
+    """A JSON schema that defines each of ``properties`` and, with ``schema_id``, an ``$id``."""
+    document = {"type": "object", "properties": {name: {"type": "integer"} for name in properties}}
+    return json.dumps(({"$id": schema_id} if schema_id else {}) | document, indent=2) + "\n"
+
+
+def argument_file(name: str) -> str:
+    return f'resource "aws_db_subnet_group" "main" {{\n  {name} = ["a"]\n}}\n'
+
+
+# A name counts as removed only when no remaining file defines or uses it as its own; a mention that refers to the deleted thing still blocks.
+FIRST_SCHEMA = "config/fir" + "st_row.schema.json"
+SECOND_SCHEMA = "config/second_row.schema.json"
+SCHEMA_FILE = f"config/{SCHEMA_STEM}.schema.json"
+IN_USE_CASES = [
+    Case(
+        "schema property removed and Terraform file deleted, the same word is a Terraform argument elsewhere",
+        "removed-names",
+        True,
+        committed={
+            "config/jobs.schema.json": schema_file(SHARED_ARGUMENT, "region"),
+            "infra/probe/variables.tf": f'variable "network" {{\n  type = object({{\n    {SHARED_ARGUMENT} = list(string)\n  }})\n}}\n',
+            "infra/iam/network.tf": argument_file(SHARED_ARGUMENT),
+        },
+        files={"config/jobs.schema.json": schema_file("region")},
+        delete=["infra/probe/variables.tf"],
+    ),
+    Case(
+        "Terraform variable file deleted, the same word is a Terraform argument elsewhere",
+        "removed-names",
+        True,
+        committed={"infra/variables.tf": f'variable "{SHARED_ARGUMENT}" {{}}\n', "infra/network.tf": argument_file(SHARED_ARGUMENT)},
+        delete=["infra/variables.tf"],
+    ),
+    Case(
+        "schema property removed, the same word is a Terraform block label elsewhere",
+        "removed-names",
+        True,
+        committed={
+            "config/jobs.schema.json": schema_file(SHARED_ARGUMENT, "region"),
+            "infra/network.tf": f'resource "aws_db_subnet_group" "main" {{\n  {SHARED_ARGUMENT} {{\n    size = 1\n  }}\n}}\n',
+        },
+        files={"config/jobs.schema.json": schema_file("region")},
+    ),
+    Case(
+        "schema deleted, another schema still defines its property",
+        "removed-names",
+        True,
+        committed={FIRST_SCHEMA: schema_file(SHARED_FIELD), SECOND_SCHEMA: schema_file(SHARED_FIELD)},
+        delete=[FIRST_SCHEMA],
+    ),
+    Case(
+        "schema property removed, another schema still defines it",
+        "removed-names",
+        True,
+        committed={FIRST_SCHEMA: schema_file(SHARED_FIELD, "region"), SECOND_SCHEMA: schema_file(SHARED_FIELD)},
+        files={FIRST_SCHEMA: schema_file("region")},
+    ),
+    Case(
+        "schema property removed, a Python field of the same name is still declared",
+        "removed-names",
+        True,
+        committed={
+            FIRST_SCHEMA: schema_file(SHARED_FIELD, "region"),
+            "app/row.py": f"from dataclasses import dataclass\n\n\n@dataclass\nclass Row:\n    {SHARED_FIELD}: int\n",
+        },
+        files={FIRST_SCHEMA: schema_file("region")},
+    ),
+    Case(
+        "schema property removed, a Python parameter of the same name is still declared",
+        "removed-names",
+        True,
+        committed={FIRST_SCHEMA: schema_file(SHARED_FIELD, "region"), "app/start.py": f"def start(role: str, {SHARED_FIELD}: int) -> str:\n    return role\n"},
+        files={FIRST_SCHEMA: schema_file("region")},
+    ),
+    Case(
+        "schema property removed, the same word only names a data file",
+        "removed-names",
+        True,
+        committed={FIRST_SCHEMA: schema_file(DATA_FILE_WORD, "region"), "app/paths.py": f'STORE = "authority/{DATA_FILE_WORD}.json"\n'},
+        files={FIRST_SCHEMA: schema_file("region")},
+    ),
+    Case(
+        "schema property removed, code still reads it as a string key",
+        "removed-names",
+        False,
+        committed={FIRST_SCHEMA: schema_file(SHARED_FIELD, "region"), "app/job.py": f'ROW = {{}}\nDEADLINE = ROW["{SHARED_FIELD}"]\n'},
+        files={FIRST_SCHEMA: schema_file("region")},
+        reason=f"app/job.py:2: {SHARED_FIELD} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, its function name is still defined in another module",
+        "removed-names",
+        True,
+        committed={**DEAD_MODULE, "app/other.py": UTIL_FUNCTION},
+        delete=[DEAD_FILE],
+    ),
+    Case(
+        "deleted module, an import of it remains and its function name is also defined elsewhere",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "app/other.py": UTIL_FUNCTION, "app/use.py": f"from {DEAD_PATH} import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n"},
+        delete=[DEAD_FILE],
+        reason=f"app/use.py:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, a document line names its path",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "docs/guide.md": f"The totals live in `{DEAD_FILE}`.\n"},
+        delete=[DEAD_FILE],
+        reason=f"docs/guide.md:1: {DEAD_STEM}.py {LEFTOVER}",
+    ),
+    Case(
+        "deleted module, a document line names its dotted path",
+        "removed-names",
+        False,
+        committed={**DEAD_MODULE, "docs/guide.md": f"Run `python -m {DEAD_PATH}` for the totals.\n"},
+        delete=[DEAD_FILE],
+        reason=f"docs/guide.md:1: {DEAD_PATH} {LEFTOVER}",
+    ),
+    Case(
+        "schema deleted, nothing names its file or its id",
+        "removed-names",
+        True,
+        committed={SCHEMA_FILE: schema_file("region", schema_id=SCHEMA_ID)},
+        delete=[SCHEMA_FILE],
+    ),
+    Case(
+        "schema deleted, a path to its file remains",
+        "removed-names",
+        False,
+        committed={SCHEMA_FILE: schema_file("region", schema_id=SCHEMA_ID), "app/load.py": f'SCHEMA = "{SCHEMA_FILE}"\n'},
+        delete=[SCHEMA_FILE],
+        reason=f"app/load.py:1: {SCHEMA_STEM}.schema.json {LEFTOVER}",
+    ),
+    Case(
+        "schema deleted, a reference to its id remains",
+        "removed-names",
+        False,
+        committed={SCHEMA_FILE: schema_file("region", schema_id=SCHEMA_ID), SECOND_SCHEMA: json.dumps({"$ref": SCHEMA_ID}, indent=2) + "\n"},
+        delete=[SCHEMA_FILE],
+        reason=f"{SECOND_SCHEMA}:2: {SCHEMA_ID} {LEFTOVER}",
+    ),
+    Case(
+        "schema deleted, a document line names its file",
+        "removed-names",
+        False,
+        committed={SCHEMA_FILE: schema_file("region", schema_id=SCHEMA_ID), "docs/guide.md": f"The record shape is `{SCHEMA_STEM}.schema.json`.\n"},
+        delete=[SCHEMA_FILE],
+        reason=f"docs/guide.md:1: {SCHEMA_STEM}.schema.json {LEFTOVER}",
+    ),
+]
 CODE_VERSION_BODY = code_version_record(f"scripts/{OLD_SCRIPT}")
 CODE_VERSION_CASES = [
     Case(
@@ -2281,6 +2439,7 @@ CASES = [
     *INPUT_CASES,
     *LATIN1_CASES,
     *DELETED_MODULE_CASES,
+    *IN_USE_CASES,
     *CODE_VERSION_CASES,
     Case(
         "function removed with its callers",
@@ -3261,6 +3420,51 @@ PLANTED_REGRESSIONS = [
         "names |= global_bindings(tree)",
         "names |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)} "
         "| {node.arg for node in ast.walk(tree) if isinstance(node, ast.arg)}",
+        0,
+    ),
+    (
+        "Terraform names stay live",
+        [case for case in IN_USE_CASES if case.expect_pass and "schema property removed" in case.name and "Terraform" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        " | terraform_names(files)\n",
+        "\n",
+        1,
+    ),
+    (
+        "Python declarations stay live",
+        [case for case in IN_USE_CASES if case.expect_pass and "schema property removed" in case.name and "Python" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "declared_python_names(files, config_left)",
+        "set()",
+        1,
+    ),
+    (
+        "a file name is not a config key",
+        [case for case in IN_USE_CASES if case.expect_pass and "names a data file" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "(?<![\\w/-]){re.escape(name)}(?![\\w/-]|\\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\\b)",
+        "(?<![\\w-]){re.escape(name)}(?![\\w-])",
+        1,
+    ),
+    (
+        "a deleted schema keeps its file name and id checked",
+        [case for case in IN_USE_CASES if not case.expect_pass and case.name.startswith("schema deleted")],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        '        if path.endswith(".schema.json"):\n',
+        "        if False:\n",
+        0,
+    ),
+    (
+        "a deleted schema keeps its id checked",
+        [case for case in IN_USE_CASES if not case.expect_pass and case.name == "schema deleted, a reference to its id remains"],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        'SCHEMA_ID.findall("\\n".join(removed.get(path, [])))',
+        "[]",
         0,
     ),
     (

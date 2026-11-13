@@ -81,12 +81,15 @@ UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unuse
 CODE_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts", ".sql", ".tf", ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".j2", ".jinja"}
 CODE_NAMES = {"Dockerfile", "Makefile", ".env.example"}
 CONFIG_SUFFIXES = {".yaml", ".yml", ".toml", ".json", ".ini", ".cfg"}
+TERRAFORM_SUFFIXES = {".tf", ".hcl", ".tfvars"}
 PY_DEFINITION = re.compile(r"^[ \t]*(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
 PY_TOP_LEVEL = re.compile(r"^(?:async[ \t]+def|def|class)[ \t]+([A-Za-z_]\w*)", re.MULTILINE)
 PY_ASSIGNED = re.compile(r"^[ \t]*([A-Za-z_]\w*)[ \t]*(?::[^=\n]*)?=(?!=)", re.MULTILINE)
 # Environment variables a shell script, workflow or rendered template still uses: $NAME, ${NAME}, vars.NAME, secrets.NAME, env.NAME.
 ENV_USE = re.compile(r"\$\{?([A-Z][A-Z0-9_]*)\b|\b(?:vars|secrets|env)\.([A-Z][A-Z0-9_]*)\b")
 CONFIG_KEY = re.compile(r"""^\s*(?:-\s+)?["']?([A-Za-z_][\w-]*)["']?\s*[:=](?!:)""")
+TF_NESTED_BLOCK = re.compile(r"^\s*([A-Za-z_][\w-]*)\s*\{")
+SCHEMA_ID = re.compile(r'"\$id"\s*:\s*"([^"]+)"')
 TF_BLOCK = re.compile(r'^\s*(variable|output|module|resource|data)\s+"([\w-]+)"(?:\s+"([\w-]+)")?', re.MULTILINE)
 TASK_ID = re.compile(r"""task_id\s*=\s*["']([\w.-]+)["']""")
 REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9][A-Za-z0-9._-]*)\s*(?:\[[^\]]*\])?\s*(?:[=<>!~;@]|$)")
@@ -1056,11 +1059,62 @@ def deleted_module_findings(dead: dict[str, set[str]], files: dict[str, list[str
     return findings
 
 
+def terraform_names(files: dict[str, list[str]]) -> set[str]:
+    """Return the names the Terraform files define as their own: an argument or attribute, a nested block and the labels of a declared block."""
+    names: set[str] = set()
+    for path, lines in files.items():
+        if Path(path).suffix not in TERRAFORM_SUFFIXES:
+            continue
+        for line in lines:
+            block = TF_NESTED_BLOCK.match(line)
+            if key := config_key(line) or (block.group(1) if block else None):
+                names.add(key)
+        names |= {label for match in TF_BLOCK.findall("\n".join(lines)) for label in match[1:] if label}
+    return names
+
+
+def declared_python_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
+    """Return the ``names`` that remaining Python code declares as its own: a function, class, parameter, assignment or annotated target, or attribute store.
+
+    Reading a name (an attribute access, a string key, a call keyword or an import) declares nothing. A file that does not parse is read by line for
+    definitions and assignments. Only a file that contains a name is parsed.
+    """
+    found: set[str] = set()
+    for path, lines in files.items():
+        source = "\n".join(lines)
+        pending = names - found
+        if not path.endswith(".py") or not any(name in source for name in pending):
+            continue
+        try:
+            tree = ast.parse(source, filename=path)
+        except SyntaxError:
+            found |= set(PY_DEFINITION.findall(source)) | set(PY_ASSIGNED.findall(source))
+            continue
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                found.add(node.name)
+            elif isinstance(node, ast.arg):
+                found.add(node.arg)
+            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+                found.add(node.id)
+            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+                found.add(node.attr)
+    return found & names
+
+
+def file_name_pattern(name: str) -> re.Pattern[str]:
+    """Return the pattern for a whole file name or id: a longer name that begins or ends the same way, or carries a dotted suffix, is another one."""
+    return re.compile(rf"(?<![\w.-]){re.escape(name)}(?![\w-]|\.\w)")
+
+
 def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]]) -> dict[str, dict[str, re.Pattern[str]]]:
     """Find the names the change removed, by kind, each with the pattern that marks a remaining reference.
 
-    The top-level names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local variable, a YAML
-    column) is no leftover. The module is checked by ``deleted_module_findings``. A name removed from a file that stays still is a plain word.
+    A name counts as removed only when no remaining tracked file defines or uses it as its own: another config key or schema property, a Terraform
+    argument or block, or a Python function, class, parameter, assignment or field (see ``terraform_names`` and ``declared_python_names``). The top-level
+    names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local variable, a YAML column) is no
+    leftover. The module is checked by ``deleted_module_findings``. A deleted schema is checked by its file name and each ``$id`` it held, not by its
+    property names. A name removed from a file that stays is a plain word unless a remaining file uses it as its own.
     """
 
     def gone(found: set[str], still: set[str]) -> set[str]:
@@ -1072,8 +1126,11 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     kinds: dict[str, dict[str, re.Pattern[str]]] = {kind: {} for kind in REMOVED_KINDS}
     for path in deleted:
         if Path(path).suffix in SCRIPT_SUFFIXES:
-            # A whole file name: a longer name that begins or ends the same way, or carries a dotted suffix, is another file.
-            kinds["script"][Path(path).name] = re.compile(rf"(?<![\w.-]){re.escape(Path(path).name)}(?![\w-]|\.\w)")
+            kinds["script"][Path(path).name] = file_name_pattern(Path(path).name)
+        if path.endswith(".schema.json"):
+            kinds["script"][Path(path).name] = file_name_pattern(Path(path).name)
+            for schema_id in SCHEMA_ID.findall("\n".join(removed.get(path, []))):
+                kinds["script"][schema_id] = file_name_pattern(schema_id)
         if path.endswith(".sql") and re.search(r"(^|/)(models|snapshots)/", path):
             stem = re.escape(Path(path).stem)
             kinds["dbt"][Path(path).stem] = re.compile(rf"""ref\(\s*["']{stem}["']\s*\)|name:\s*{stem}\b|(?<![\w.]){stem}(?![\w.])""")
@@ -1091,12 +1148,14 @@ def removed_definitions(removed: dict[str, list[str]], deleted: list[str], files
     # The same word still bound in module scope (function, class, import alias or assignment) is a live name of its own, not a task reference.
     for name in gone(removed_tasks, bound_names(files) if removed_tasks else set()):
         kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
-    config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))}
+    config_now = {key for line in joined(files, CONFIG_SUFFIXES).splitlines() if (key := config_key(line))} | terraform_names(files)
     # Keys of a deleted or untracked config file are often data fields the code still writes; only edited files count.
     # Single-word keys (run, env, path) are schema vocabulary, not project settings.
     config_removed = {key for line in joined(edited, CONFIG_SUFFIXES).splitlines() if (key := config_key(line)) and re.search(r"[_-]|[a-z][A-Z]", key)}
-    for name in gone(config_removed, config_now):
-        kinds["config"][name] = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+    config_left = gone(config_removed, config_now)
+    for name in gone(config_left, declared_python_names(files, config_left)):
+        # The word inside a file name or a path (catalog.json, lakehouse/catalog) names a file, not the key.
+        kinds["config"][name] = re.compile(rf"(?<![\w/-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
     for kind, first, second in set(TF_BLOCK.findall(joined(removed, {".tf"}))) - set(TF_BLOCK.findall(joined(files, {".tf"}))):
         one, two = re.escape(first), re.escape(second)
         reference = {
