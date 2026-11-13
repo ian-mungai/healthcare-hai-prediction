@@ -1621,7 +1621,7 @@
       "occurrences": 1,
       "file_sha256": "fea900e7b3a84a3a9734a62773b9b2ccbb089549c36c3a3b3d30995c931e912b",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:3eccda4aaa2697df6685c3fe91d0bfc2aece529269eeaa299c242a45dfd362ca",
+        "orchestration/ecs_preflight.py": "sha256:a77b1ea8519a2901b4560b95b3b533e571edaf6775036abc7b5dc5c6d35c383c",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/host_session.py": "sha256:77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
         "scripts/infrastructure/render_jobs_config.py": "sha256:7cd421d7f38f9908ff346ef58032f9c3d85918ba5f2bb640ec7505d32a0cbd0f",
