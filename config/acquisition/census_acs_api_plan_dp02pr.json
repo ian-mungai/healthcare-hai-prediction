@@ -1317,12 +1317,12 @@
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP02PR.json"
     }
   ],
-  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e",
   "request_spacing_seconds": 1,
   "review_status": "All definition, geography, precision and modeling holds retained",
   "scope": "All published DP02PR variables; all 78 2009 Puerto Rico municipios",
   "source_id": "ACS",
-  "supplements_plan_sha256": "ac4951f94a5f236bc0776a781cc434924477cabb120a0af46ee84a5414cfff3e",
+  "supplements_plan_sha256": "1f7d493dc5041eafb90deb210e9f4daa8f3cc97f4b60c764a0a8d1b62a691f2d",
   "version": 2,
   "vintage": "20260926",
   "window": [

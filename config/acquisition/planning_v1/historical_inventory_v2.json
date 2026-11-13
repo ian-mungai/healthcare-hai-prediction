@@ -26947,7 +26947,7 @@
   ],
   "plan_register_sha256": "7d5498a4f94bfdb15adf92a82329672b07042efe2bdc49befe2bcdeabcf3f930",
   "previous_inventory_sha256": "ee98fb1c5523fab608860adfdbd231fb22317819dd257bcadef9b4523e718df8",
-  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e",
   "shared_download_groups": [
     {
       "route_ids": [

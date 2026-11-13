@@ -7799,7 +7799,7 @@
       "url": "https://api.census.gov/data/2009/acs/acs5/profile/groups/DP05.json"
     }
   ],
-  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+  "registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e",
   "request_spacing_seconds": 1,
   "review_status": "All definition, geography, precision and modeling holds retained",
   "scope": "All published DP02-DP05 variables; all 2009 counties in the United States and Puerto Rico",

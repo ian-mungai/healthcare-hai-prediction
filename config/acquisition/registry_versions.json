@@ -3,17 +3,17 @@
   "current_registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
   "legacy_versions": [
     {
-      "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+      "registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e",
       "registry_path": "data/acquisition_planning/registry_legacy_20260929/source_registry.json",
       "lock_path": "data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
       "files": {
         "registry": {
           "path": "data/acquisition_planning/registry_legacy_20260929/source_registry.json",
-          "sha256": "51558c3bafc12f50de471e70be152f99b685eb6d5a939e6c4d3238b7c53df7fc"
+          "sha256": "7644cdef45cba6223ad5eb43e47d74acf7342c6632e8442874bbf4238f34cc1c"
         },
         "lock": {
           "path": "data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
-          "sha256": "aebefec50ef7dfb133a038dcba3662abb59eef8a513cece414662d7bc77a93cc"
+          "sha256": "e42b4042495a2fb9460945200f9bda041ab0bb06a4bbe48bab7345755e7f59dc"
         },
         "additions": {
           "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions.json",
@@ -21,7 +21,7 @@
         },
         "additions_lock": {
           "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
-          "sha256": "878a8022255494cfd988370bce16945db8938c8bac6ea2dd8d05c6e9970c2686"
+          "sha256": "4dedf75b265fccc4c1e42c8dd3323a6d4a180b60c3276a1d5304dd017b346066"
         }
       }
     },
@@ -45,6 +45,29 @@
         "additions_lock": {
           "path": "data/acquisition_planning/acquisition_legacy_20261009/registry_rev2/registry_additions_lock.json",
           "sha256": "eb739787d59c5c599e3971e051a24ec89bad98c424c7d712c877288bab360966"
+        }
+      }
+    },
+    {
+      "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c",
+      "registry_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/source_registry.json",
+      "lock_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/source_registry_lock.json",
+      "files": {
+        "registry": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/source_registry.json",
+          "sha256": "51558c3bafc12f50de471e70be152f99b685eb6d5a939e6c4d3238b7c53df7fc"
+        },
+        "lock": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/source_registry_lock.json",
+          "sha256": "aebefec50ef7dfb133a038dcba3662abb59eef8a513cece414662d7bc77a93cc"
+        },
+        "additions": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/registry_additions.json",
+          "sha256": "b62976df10a5a77643086a11594c7c0a3ad62667b9a9affbdfcc9019c863d5c2"
+        },
+        "additions_lock": {
+          "path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/registry_legacy_20260929/registry_additions_lock.json",
+          "sha256": "878a8022255494cfd988370bce16945db8938c8bac6ea2dd8d05c6e9970c2686"
         }
       }
     }

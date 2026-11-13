@@ -2,7 +2,19 @@
   "catalog_version": 1,
   "archive_policy": "Exact earlier plans and records are local-only and owner-readable; captures that recorded them need them. Never publish.",
   "plans": {
-    "ac4951f94a5f236bc0776a781cc434924477cabb120a0af46ee84a5414cfff3e": [
+    "c9b48cb4109adbf5ec6629277099709a0dc27a0be33246a2bc6f3ea9bb75b707": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/bls_api_plan.json",
+        "sha256": "061f8635c6ef61e369e66a6dfd81eca1f14c60426438e0fecfc93fd89239ec6d",
+        "canonical_sha256": "d44d7af5335b83e3c05b7ee23a6eb81eb8c018fc829effbcd249b1ad9d4ad32f"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/bls_api_plan.json",
+        "sha256": "492e90b9ef7c7a290a833fb13a6e539d1fc2b876623e76ba94a7f21acef12b24",
+        "canonical_sha256": "c29dea5cd556649e102c6d7b61406585a41ada52d8e3c71e793e82b196801e00"
+      }
+    ],
+    "1f7d493dc5041eafb90deb210e9f4daa8f3cc97f4b60c764a0a8d1b62a691f2d": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/census_acs_api_plan.json",
         "sha256": "fe6b513a175fe98ce61962d1a679c95510fb44512bce9442ee5876d8ef9a4590",
@@ -12,9 +24,14 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/census_acs_api_plan.json",
         "sha256": "a15e59f1bc5518d676a6fcd4eca49c1b2fc5cd0fd28cb9461379ea450eee737f",
         "canonical_sha256": "13198e46bc60b8c1c7e1e0d0cf8de7faebc69f68b8a772a2671ffb8f660f3ff5"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/census_acs_api_plan.json",
+        "sha256": "7c85e85e6e3ace1eafe83ca3d7ade2d0058999e8411bd09e63029685d30eda85",
+        "canonical_sha256": "ac4951f94a5f236bc0776a781cc434924477cabb120a0af46ee84a5414cfff3e"
       }
     ],
-    "ea3ae6242634d3f0221815d867350d5e22b5023394689f0b33e91ad06e71fa92": [
+    "dd95edb80dac33a365ce965901eeeb2fa4227e0ea0d1d07849cd2affa513542a": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/census_acs_api_plan_dp02pr.json",
         "sha256": "14a1144bacd4bb4b914e339de47453f68fbdfb5c4645a288258d80f89527fbb8",
@@ -24,9 +41,14 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/census_acs_api_plan_dp02pr.json",
         "sha256": "6e3d963d79938dba1e212432096e9a6d78d64f97113ad51dc03c94e4bcafb5a4",
         "canonical_sha256": "b9bb7645e430e14cfa972194f4ddce3f20fa5e1c1d74288d1ef4a559718ebb72"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/census_acs_api_plan_dp02pr.json",
+        "sha256": "016c9fe88783a3764cc3addd481333dec418fc0f83105f895b01c70f73c1873a",
+        "canonical_sha256": "ea3ae6242634d3f0221815d867350d5e22b5023394689f0b33e91ad06e71fa92"
       }
     ],
-    "eac13965cbe066616b65feaa4124140a3f929ad9a438176f482e1fd595b8dbb0": [
+    "1e1975c6ae5c7037e090d2b8474e048e338f93e7f7cdc289e26d1e32da58cc00": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/census_acs_detailed_plan.json",
         "sha256": "01a78c0c99b8e057ac26b6d34199b0098c1dc42e4419d2ad4694424a497e8d9a",
@@ -36,44 +58,14 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/census_acs_detailed_plan.json",
         "sha256": "0a3fb3bd1b8b0cd739ee119e99cec20fe71669efd76fb42939de4852dbe4b770",
         "canonical_sha256": "236b5a6cdc509af9d4a79152779746a830871712b28c213e33c3ac50b35f0eb1"
-      }
-    ],
-    "aead13b4dee39d121c01c662fe7a4606aa3114b84a24d8747c27ad4468691a36": [
+      },
       {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_api_plan.json",
-        "sha256": "85db14f006da6f0f42cf881a4b23e740c6b61a5c17e56b47cfd3c62d74461598",
-        "canonical_sha256": "153522f0e59bcaa0d42eb9fd75dc7599878b26fdbd4b03001e73d0711e1c5e54"
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/census_acs_detailed_plan.json",
+        "sha256": "a4a36eec1f6c93127910fecb42f3a56412a38d859dfb4c8502bbd4004a3e0e75",
+        "canonical_sha256": "eac13965cbe066616b65feaa4124140a3f929ad9a438176f482e1fd595b8dbb0"
       }
     ],
-    "3a80c87941498fd6f2d3607764779e2a4fcf09ced6ad8f51f290b6bac5be402e": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_api_plan_2021q2_2025q4.json",
-        "sha256": "72b3dd9e03a0d727322fc7c115a614bec1b6b48bb642c1e5da17a071404a57f8",
-        "canonical_sha256": "f0c06a8d0e4c5bd3b47586e71efaa56ededc6697d35828309b5563b52bb95f4a"
-      }
-    ],
-    "d62b7e758752d4c6deda376cd5d45edc443d284e3851a2113ad67a99dd093668": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_xlsx_plan_2010q1_2020q4.json",
-        "sha256": "1374a29e048db467cfe6c950e3949b773551ed4b98d5835767bfb6c566bdcb09",
-        "canonical_sha256": "0be6a6a9947420f2bf10e9669a1dd74cbbe2e589850ce85991fdf7c3ba4317b6"
-      }
-    ],
-    "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/wonder_export_plan.json",
-        "sha256": "7ae454cdd96b7a32064461e7b63f5f6755eb3c34676307d302854a8439c8df0a",
-        "canonical_sha256": "44aeff21c7e3280ac0c72ba2f12f4adee3cfc5ef1da9c8fa13ee872423388a2b"
-      }
-    ],
-    "c29dea5cd556649e102c6d7b61406585a41ada52d8e3c71e793e82b196801e00": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/pre_move_3af1abb/bls_api_plan.json",
-        "sha256": "061f8635c6ef61e369e66a6dfd81eca1f14c60426438e0fecfc93fd89239ec6d",
-        "canonical_sha256": "d44d7af5335b83e3c05b7ee23a6eb81eb8c018fc829effbcd249b1ad9d4ad32f"
-      }
-    ],
-    "ba963fa434d0cb069b9dc111bad5409490c9ead86b29674eb03419e87f5970cd": [
+    "0cffd1875e6b3a79af60a98906badf086c7e10433645991208ba567133bf88b8": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/cms_owners_plan.json",
         "sha256": "610e2ae2c0b0d88c4f2f9a09c99c1c4321790c731b4ef09e7a81ddfd86b17e7c",
@@ -83,21 +75,14 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/cms_owners_plan.json",
         "sha256": "5a392b0df15aebc22b41a2660d68e7c05357a53d8779ca337baefb2f52cdbfdc",
         "canonical_sha256": "3b95dcb514941116f73e086eacb12f193f4938f9c8bc7b28db2f07a7c9d78be4"
-      }
-    ],
-    "e3da237639d307206cc47cf6848d2ecd61677b688e8321ac7b3265d7a680988c": [
-      {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/onc_mu_hospital_plan.json",
-        "sha256": "7030486860ec2604c6fffe2b0a8fd2e15e56c5c0db32b533f529b9c336dade23",
-        "canonical_sha256": "41de149f07afb98c1cc6c74133bf17096553116f03fa4e48c012dd60ac1aa821"
       },
       {
-        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/onc_mu_hospital_plan.json",
-        "sha256": "43537a1ce21272b04ea0571229ebe4707efe86289a6b778bbca54a8e1461c534",
-        "canonical_sha256": "bfb44953b6b67d187f20bb0c2913c224b31f4da091d314193a972b243cb33d31"
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/cms_owners_plan.json",
+        "sha256": "dfae6b6a738d98fd80b48155fe4b3828b674c33fd460901c96aca653c6fd3bdb",
+        "canonical_sha256": "ba963fa434d0cb069b9dc111bad5409490c9ead86b29674eb03419e87f5970cd"
       }
     ],
-    "bf1a7bd65a7d227753be539b388054ae1ff2bdac54af07a43966e7739c9483ba": [
+    "bc96254c49d9fee23450d0998c5b74b5bc176b0af25e3e1dc7c746c4a53e4e20": [
       {
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/hcai_util_2018_2025_plan.json",
         "sha256": "e91f49f8ef9609f6ca92769e35ac5f686baa05f2f3769543991514b0a398b45b",
@@ -107,6 +92,76 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hcai_util_2018_2025_plan.json",
         "sha256": "314e131ab8fd079403d86872d38f531734a143df23c40ad88baadb2ca1ca74eb",
         "canonical_sha256": "87f2dd1b1a1a7598f4ab00f986ec231f4e4aad2579a4c699bb49572c43199e7a"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/hcai_util_2018_2025_plan.json",
+        "sha256": "569aa395234f12e3d10052dc885040bedbe062ce2d7e858b122e8090920a655a",
+        "canonical_sha256": "bf1a7bd65a7d227753be539b388054ae1ff2bdac54af07a43966e7739c9483ba"
+      }
+    ],
+    "9119b045c439e4d49f38e667bd1d7a147c27d17495333d7964015380986b4920": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_api_plan.json",
+        "sha256": "85db14f006da6f0f42cf881a4b23e740c6b61a5c17e56b47cfd3c62d74461598",
+        "canonical_sha256": "153522f0e59bcaa0d42eb9fd75dc7599878b26fdbd4b03001e73d0711e1c5e54"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/hud_api_plan.json",
+        "sha256": "478a59ad06eeed58ee9c5d2018a82eccdd6543ad82e5d3d34b190e44b7b6c9dc",
+        "canonical_sha256": "aead13b4dee39d121c01c662fe7a4606aa3114b84a24d8747c27ad4468691a36"
+      }
+    ],
+    "548bba3ef64597d344a730b254c0304a963251b80242c6c7a47b210882410783": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_api_plan_2021q2_2025q4.json",
+        "sha256": "72b3dd9e03a0d727322fc7c115a614bec1b6b48bb642c1e5da17a071404a57f8",
+        "canonical_sha256": "f0c06a8d0e4c5bd3b47586e71efaa56ededc6697d35828309b5563b52bb95f4a"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/hud_api_plan_2021q2_2025q4.json",
+        "sha256": "94c67585b467d96b2160d16375938e9aac4bbc51cd983dc36e6c0b865a218af5",
+        "canonical_sha256": "3a80c87941498fd6f2d3607764779e2a4fcf09ced6ad8f51f290b6bac5be402e"
+      }
+    ],
+    "a130e335db41f8679fcb92053009e033346529815d24a894b3ffc0b65e8cc21e": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_xlsx_plan_2010q1_2020q4.json",
+        "sha256": "1374a29e048db467cfe6c950e3949b773551ed4b98d5835767bfb6c566bdcb09",
+        "canonical_sha256": "0be6a6a9947420f2bf10e9669a1dd74cbbe2e589850ce85991fdf7c3ba4317b6"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/hud_xlsx_plan_2010q1_2020q4.json",
+        "sha256": "209ef88bc4e06342c78ae8ac1f165cf58211026e6532c181f5399f2fbc590e38",
+        "canonical_sha256": "d62b7e758752d4c6deda376cd5d45edc443d284e3851a2113ad67a99dd093668"
+      }
+    ],
+    "60a4c334f5b6ea5c0610da1043be6f26e0ba16486fff863c33ae21847d5c37f3": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/before_raw_storage_e245edc/onc_mu_hospital_plan.json",
+        "sha256": "7030486860ec2604c6fffe2b0a8fd2e15e56c5c0db32b533f529b9c336dade23",
+        "canonical_sha256": "41de149f07afb98c1cc6c74133bf17096553116f03fa4e48c012dd60ac1aa821"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/onc_mu_hospital_plan.json",
+        "sha256": "43537a1ce21272b04ea0571229ebe4707efe86289a6b778bbca54a8e1461c534",
+        "canonical_sha256": "bfb44953b6b67d187f20bb0c2913c224b31f4da091d314193a972b243cb33d31"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/onc_mu_hospital_plan.json",
+        "sha256": "dbe3e464ccaf0ec268ad711ffe3edb5f87dad82b358d63640c8c135264713753",
+        "canonical_sha256": "e3da237639d307206cc47cf6848d2ecd61677b688e8321ac7b3265d7a680988c"
+      }
+    ],
+    "f3a9ed312e3335c388a754205b2d5d7709a144599e7ea3ef8a08de1a972424db": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/wonder_export_plan.json",
+        "sha256": "7ae454cdd96b7a32064461e7b63f5f6755eb3c34676307d302854a8439c8df0a",
+        "canonical_sha256": "44aeff21c7e3280ac0c72ba2f12f4adee3cfc5ef1da9c8fa13ee872423388a2b"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/wonder_export_plan.json",
+        "sha256": "8508eb44e73ef28de37f0b5106b580a27c43833833ec40dee9f1ddee77901a53",
+        "canonical_sha256": "8930dc82d21baf7dda930318c1b6058c2d3f57227e44e122910612da9b6d5e4f"
       }
     ]
   },
@@ -116,6 +171,11 @@
         "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/config/acquisition/hud_xlsx_exact_repeats_2014q2.json",
         "sha256": "c1be1cb27d7dde752ee4871cf892b56ff0091e81216f104bfe1f1b65c830fc3b",
         "canonical_sha256": "cea2ab0b1b417ad070d739bfc3cc56c32fdb332454ecb6f86632daeecd5dfe9b"
+      },
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/hud_xlsx_exact_repeats_2014q2.json",
+        "sha256": "cc188c6de68ee0caa89426a590717a4bd641bc08fcc702939ffd3af334076e22",
+        "canonical_sha256": "acf86f2f9129c53254b40ade7de87a958319bb461cbed78b3360841ac8d2b451"
       }
     ],
     "config/acquisition/access_releases_20260929.json": [
