@@ -165,15 +165,6 @@ def load_roles() -> dict[str, dict[str, Any]]:
         "role/job_execution/bronze_execution_delta": read(
             "bronze_execution", {"BRONZE_PARAMETER_ARNS": parameters("aws_polaris_bronze_client_id_name", "aws_polaris_bronze_client_secret_name")}
         ),
-        "role/job_offline_task/stage_read": stage,
-        "role/job_seal_task/stage_read": stage,
-        "role/job_seal_task/no_input_tree": read("job_seal_deny"),
-        "role/job_read_task/stage_read": stage,
-        "role/job_read_task/source_read": read("job_source_read"),
-        "role/job_read_task/qualification_read": read(
-            "job_reader_e2e",
-            {key: e2e[key] for key in ("BUCKET_ARN", "TEST_OBJECT_ARNS", "TEST_LIST_PREFIXES", "BRONZE_TEST_OBJECT_ARNS", "BRONZE_TEST_LIST_PREFIXES")},
-        ),  # fmt: skip
         "role/job_try_writer/try_outputs": read("job_try_writer"),
         "role/job_write_bronze_task/bronze_objects_and_versioned_sources": read("bronze_writer_storage", bronze),
         **{f"role/job_write_bronze_task/{name}": read(template, inputs) for name, (template, inputs) in bronze_sources.items()},

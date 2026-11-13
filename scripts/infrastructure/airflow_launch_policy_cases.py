@@ -246,7 +246,6 @@ def job_cases() -> list[Case]:
         "job_write_features_task",
         "job_drift_task",
         "job_openmetadata_task",
-        "job_read_task",
         "job_try_writer",
         "task_execution",
         "airflow_launch_task",

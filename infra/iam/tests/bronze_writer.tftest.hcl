@@ -220,23 +220,6 @@ run "bronze_rendered_storage_scope" {
     )
     error_message = "The attached qualification policy must contain seven twins and one source collection."
   }
-
-  assert {
-    condition = (
-      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Resource) == toset([
-        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_e2e/*",
-        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_dictionary_e2e/*",
-        "arn:aws:s3:::example-data-bucket/lakehouse/smoke_check_e2e/*",
-        "arn:aws:s3:::example-data-bucket/lakehouse/duckdb_view_check_e2e/*"
-      ]) &&
-      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset([
-        "lakehouse/bronze_e2e/*", "lakehouse/bronze_dictionary_e2e/*", "lakehouse/smoke_check_e2e/*", "lakehouse/duckdb_view_check_e2e/*"
-      ]) &&
-      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Action == ["s3:GetObjectVersion"] &&
-      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Action == ["s3:ListBucketVersions"]
-    )
-    error_message = "The attached reader policy must grant version reads and version listings on exactly four bronze twins."
-  }
 }
 
 # The IAM quotas count characters without whitespace: 10,240 for all inline policies of one role together and 6,144 for each managed policy.

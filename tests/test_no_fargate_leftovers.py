@@ -82,3 +82,16 @@ def test_the_launcher_holds_no_ecs_placement_and_no_fargate_name() -> None:
     check(not present, f"the legacy launcher ECS target is still present: {present}")
     launcher = (ROOT / "orchestration/launcher.py").read_text()
     check("ecs_target" not in launcher and "ecs_runtime" not in launcher and "dispatch_ecs" not in launcher, "the launcher still wires an ECS placement")
+
+
+def test_no_iam_role_or_binding_remains_for_the_retired_read_jobs() -> None:
+    names = ("offline_task", "seal_task", "read_task", "job_read_task", "job_offline_task", "job_seal_task")
+    holders = [
+        *files(("infra/iam",), (".tf", ".hcl", ".json")),
+        ROOT / "config/aws/iam_preflight_checks.json",
+        ROOT / "config/lakehouse/aws_bronze_templates.json",
+    ]
+    found = [str(path.relative_to(ROOT)) for path in holders if any(name in path.read_text() for name in names)]
+    check(not found, f"these files still name a retired read job role: {found}")
+    roles = (ROOT / "infra/iam/job_roles.tf").read_text()
+    check('for name in ["execution", "try_writer"]' in roles, "the job roles are not just the execution and try writer roles")

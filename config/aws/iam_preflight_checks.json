@@ -48,15 +48,6 @@
         "owner_policies/task_execution.json"
       ]
     },
-    "job_read": {
-      "name": "${PROJECT_NAME}_job_read_task_${ENVIRONMENT}",
-      "terraform": [
-        "job_roles.tf"
-      ],
-      "policies": [
-        "owner_policies/job_stage_read.json"
-      ]
-    },
     "write_silver": {
       "name": "${PROJECT_NAME}_job_write_silver_task_${ENVIRONMENT}",
       "terraform": [
@@ -397,16 +388,6 @@
       "role": "task_execution",
       "action": "ecr:BatchGetImage",
       "resource": "arn:aws:ecr:${AWS_REGION}:${AWS_ACCOUNT_ID}:repository/${PROJECT_NAME}_analytics_${ENVIRONMENT}"
-    },
-    {
-      "role": "job_read",
-      "action": "s3:GetObject",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
-    },
-    {
-      "role": "job_read",
-      "action": "s3:GetObjectVersion",
-      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/run_stage/example_run/inputs/code.tar"
     },
     {
       "role": "write_silver",

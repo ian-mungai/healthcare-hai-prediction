@@ -49,13 +49,12 @@ run "test_writer_is_unprepared_by_default" {
       length(aws_iam_role.job_write_e2e_task) == 0 &&
       length(aws_iam_role_policy.job_writer_e2e_storage) == 0 &&
       length(aws_iam_role_policy.job_writer_e2e_stage) == 0 &&
-      length(aws_iam_role_policy.job_reader_e2e) == 0 &&
       length(aws_iam_role_policy.job_writer_e2e_execution) == 0 &&
       length(aws_iam_role.bronze_writer) == 0 &&
       !output.job_writer_e2e_contract.prepared &&
       output.job_writer_e2e_contract.task_role == null &&
       output.job_writer_e2e_contract.production_activation == false &&
-      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"])
+      toset(keys(output.job_roles)) == toset(["execution", "try_writer"])
     )
     error_message = "Default preparation must create no test writer or new role grants and must preserve the five existing job roles."
   }
@@ -99,7 +98,7 @@ run "prepared_test_writer_has_exact_storage_and_bindings" {
       aws_iam_role.job_write_e2e_task[0].tags.ManagedBy == "Terraform" &&
       length(aws_iam_role.bronze_writer) == 0 &&
       output.job_writer_e2e_contract.production_activation == false &&
-      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer", "write_e2e_task"])
+      toset(keys(output.job_roles)) == toset(["execution", "try_writer", "write_e2e_task"])
     )
     error_message = "The test role needs the project's name, tags and one-hour session. No production writer is prepared."
   }
@@ -153,39 +152,10 @@ run "prepared_test_writer_has_exact_storage_and_bindings" {
       ]) &&
       aws_iam_role_policy.job_writer_e2e_storage[0].role == aws_iam_role.job_write_e2e_task[0].name &&
       aws_iam_role_policy.job_writer_e2e_stage[0].role == aws_iam_role.job_write_e2e_task[0].name &&
-      jsondecode(aws_iam_role_policy.job_writer_e2e_stage[0].policy) == jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy) &&
-      aws_iam_role_policy.job_reader_e2e[0].role == aws_iam_role.job["read_task"].name &&
+      jsondecode(aws_iam_role_policy.job_writer_e2e_stage[0].policy) == jsondecode(local.job_policy_documents.job_stage_read) &&
       aws_iam_role_policy.job_writer_e2e_execution[0].role == aws_iam_role.job["execution"].name
     )
-    error_message = "Prefix conditions and policy attachments must preserve storage, grant, read and execution identity boundaries."
-  }
-
-  assert {
-    condition = (
-      length(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement) == 4 &&
-      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[0].Action == ["s3:GetObject"] &&
-      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[0].Resource) == toset([
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/features_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/smoke_check_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/duckdb_view_check_e2e/*"
-      ]) &&
-      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Action == ["s3:GetObjectVersion"] &&
-      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[2].Resource) == toset([
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze_dictionary_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/smoke_check_e2e/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/duckdb_view_check_e2e/*"
-      ]) &&
-      jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Action == ["s3:ListBucketVersions"] &&
-      toset(jsondecode(aws_iam_role_policy.job_reader_e2e[0].policy).Statement[3].Condition.StringLike["s3:prefix"]) == toset([
-        "lakehouse/bronze_e2e/*", "lakehouse/bronze_dictionary_e2e/*", "lakehouse/smoke_check_e2e/*", "lakehouse/duckdb_view_check_e2e/*"
-      ])
-    )
-    error_message = "Reconciliation reads all seven twins, with versioned access added only for the four bronze twins."
+    error_message = "Prefix conditions and policy attachments must preserve storage, grant and execution identity boundaries."
   }
 
   assert {

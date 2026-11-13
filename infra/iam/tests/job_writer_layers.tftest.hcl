@@ -51,7 +51,7 @@ run "production_writers_and_fences_default_off" {
   }
 
   assert {
-    condition     = toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"])
+    condition     = toset(keys(output.job_roles)) == toset(["execution", "try_writer"])
     error_message = "Only the five existing roles may exist in the default plan."
   }
 
@@ -101,7 +101,7 @@ run "prepared_layers_have_exact_roles_trust_and_stage_attachments" {
       length(aws_iam_role.job_write_e2e_task) == 0 &&
       output.job_writer_layer_contract.production_activation == false &&
       toset(keys(output.job_roles)) == toset([
-        "execution", "offline_task", "seal_task", "read_task", "try_writer",
+        "execution", "try_writer",
         "write_silver_task", "write_gold_task", "write_features_task", "write_bronze_task"
       ])
     )
@@ -137,7 +137,7 @@ run "prepared_layers_have_exact_roles_trust_and_stage_attachments" {
   assert {
     condition = (
       aws_iam_role_policy.job_writer_stage["silver"].role == output.job_roles["write_silver_task"].name &&
-      jsondecode(aws_iam_role_policy.job_writer_stage["silver"].policy) == jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy) &&
+      jsondecode(aws_iam_role_policy.job_writer_stage["silver"].policy) == jsondecode(local.job_policy_documents.job_stage_read) &&
       aws_iam_role_policy.job_writer_layer_storage["silver"].role == aws_iam_role.job_write_layer_task["silver"].name
     )
     error_message = "silver must retain its own storage identity and the existing pinned-input and own-grant read policy."
@@ -146,7 +146,7 @@ run "prepared_layers_have_exact_roles_trust_and_stage_attachments" {
   assert {
     condition = (
       aws_iam_role_policy.job_writer_stage["gold"].role == output.job_roles["write_gold_task"].name &&
-      jsondecode(aws_iam_role_policy.job_writer_stage["gold"].policy) == jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy) &&
+      jsondecode(aws_iam_role_policy.job_writer_stage["gold"].policy) == jsondecode(local.job_policy_documents.job_stage_read) &&
       aws_iam_role_policy.job_writer_layer_storage["gold"].role == aws_iam_role.job_write_layer_task["gold"].name
     )
     error_message = "gold must retain its own storage identity and the existing pinned-input and own-grant read policy."
@@ -155,7 +155,7 @@ run "prepared_layers_have_exact_roles_trust_and_stage_attachments" {
   assert {
     condition = (
       aws_iam_role_policy.job_writer_stage["features"].role == output.job_roles["write_features_task"].name &&
-      jsondecode(aws_iam_role_policy.job_writer_stage["features"].policy) == jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy) &&
+      jsondecode(aws_iam_role_policy.job_writer_stage["features"].policy) == jsondecode(local.job_policy_documents.job_stage_read) &&
       aws_iam_role_policy.job_writer_layer_storage["features"].role == aws_iam_role.job_write_layer_task["features"].name
     )
     error_message = "features must retain its own storage identity and the existing pinned-input and own-grant read policy."
@@ -164,7 +164,7 @@ run "prepared_layers_have_exact_roles_trust_and_stage_attachments" {
   assert {
     condition = (
       aws_iam_role_policy.job_writer_stage["bronze"].role == output.job_roles["write_bronze_task"].name &&
-      jsondecode(aws_iam_role_policy.job_writer_stage["bronze"].policy) == jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy)
+      jsondecode(aws_iam_role_policy.job_writer_stage["bronze"].policy) == jsondecode(local.job_policy_documents.job_stage_read)
     )
     error_message = "bronze must retain its own storage identity and the existing pinned-input and own-grant read policy."
   }
@@ -289,7 +289,7 @@ run "bronze_preparation_does_not_prepare_other_layers" {
   }
   assert {
     condition = (
-      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer", "write_bronze_task"]) &&
+      toset(keys(output.job_roles)) == toset(["execution", "try_writer", "write_bronze_task"]) &&
       !can(aws_iam_role_policy.job_writer_stage["silver"].role) &&
       !can(aws_iam_role_policy.job_writer_stage["gold"].role) &&
       !can(aws_iam_role_policy.job_writer_stage["features"].role) &&
@@ -645,7 +645,7 @@ run "fence_requests_alone_prepare_no_writer" {
   assert {
     condition = (
       output.job_writer_layer_contract.fence_requests == { catalog_cutover_fenced = true, aws_writers_fenced = true } &&
-      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"]) &&
+      toset(keys(output.job_roles)) == toset(["execution", "try_writer"]) &&
       length(aws_iam_role_policy.job_writer_execution) == 0
     )
     error_message = "Fence variables are requests for later integration and must not prepare writer roles or grants in this batch."

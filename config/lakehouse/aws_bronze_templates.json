@@ -12,19 +12,12 @@
     "definition": "test_writer",
     "pair": "e2e"
   },
-  "reader_identity": {
-    "principal": "lakehouse_reader",
-    "task_role": "job_read_task",
-    "definition": "spark_read",
-    "pair": "reader"
-  },
   "templates": {
     "bronze": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"},
     "dictionary": {"module": "scripts.lakehouse.dictionary", "class": "lakehouse_write"},
     "smoke": {"module": "scripts.lakehouse.smoke", "class": "lakehouse_write"},
     "checksum_fixture": {"module": "scripts.lakehouse.checksums", "class": "lakehouse_write"},
-    "removal": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"},
-    "checksums": {"module": "scripts.lakehouse.checksums", "class": "lakehouse_read"}
+    "removal": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"}
   },
   "retry_after_start": false,
   "production_layer_default": "off",

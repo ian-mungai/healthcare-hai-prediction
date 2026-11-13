@@ -71,24 +71,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_iam_role.job["offline_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLEOFFLINETASK" }
-}
-
-override_resource {
-  target          = aws_iam_role.job["seal_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLESEALTASK" }
-}
-
-override_resource {
-  target          = aws_iam_role.job["read_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLEREADTASK" }
-}
-
-override_resource {
   target          = aws_iam_role.job["try_writer"]
   override_during = plan
   values          = { unique_id = "AROEXAMPLETRYWRITER" }
@@ -118,12 +100,12 @@ run "read_roles_without_writers" {
 
   assert {
     condition = (
-      toset(keys(aws_iam_role.job)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"]) &&
+      toset(keys(aws_iam_role.job)) == toset(["execution", "try_writer"]) &&
       alltrue([for key, role in aws_iam_role.job : role.name == "example_project_job_${key}_dev"]) &&
       aws_iam_role.job["try_writer"].max_session_duration == 43200 &&
       alltrue([for key, role in aws_iam_role.job : role.max_session_duration == 3600 if key != "try_writer"])
     )
-    error_message = "The early read slice creates exactly five roles, with no lakehouse writer role."
+    error_message = "The early read slice creates exactly the execution and try writer roles, with no lakehouse writer role."
   }
 
   assert {
@@ -135,9 +117,6 @@ run "read_roles_without_writers" {
     condition = (
       alltrue([
         lookup(coalesce(aws_iam_role.job["execution"].tags, {}), "Project", "") == "example_project",
-        lookup(coalesce(aws_iam_role.job["offline_task"].tags, {}), "Project", "") == "example_project",
-        lookup(coalesce(aws_iam_role.job["seal_task"].tags, {}), "Project", "") == "example_project",
-        lookup(coalesce(aws_iam_role.job["read_task"].tags, {}), "Project", "") == "example_project",
         lookup(coalesce(aws_iam_role.job["try_writer"].tags, {}), "Project", "") == "example_project"
       ]) &&
       alltrue([for group in aws_security_group.job : lookup(coalesce(group.tags, {}), "Project", "") == "example_project"]) &&
@@ -159,16 +138,10 @@ run "read_roles_without_writers" {
 
   assert {
     condition = (
-      toset(jsondecode(aws_iam_role_policy.job_source_read.policy).Statement[0].Action) == toset(["s3:GetObject", "s3:GetObjectVersion"]) &&
-      toset(jsondecode(aws_iam_role_policy.job_source_read.policy).Statement[0].Resource) == toset([
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/bronze/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
-        "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*"
-      ]) &&
-      jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/grants/$${aws:userid}.json" &&
-      jsondecode(aws_iam_role_policy.job_stage_read["read_task"].policy).Statement[1].Action == "s3:GetObject"
+      jsondecode(local.job_policy_documents.job_stage_read).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/grants/$${aws:userid}.json" &&
+      jsondecode(local.job_policy_documents.job_stage_read).Statement[1].Action == "s3:GetObject"
     )
-    error_message = "Read scope is versioned source reads and the session's own current grant, with no qualification or writer prefix."
+    error_message = "The stage policy that the layer writers share allows the session's own current grant and nothing wider."
   }
 
   assert {
@@ -179,8 +152,7 @@ run "read_roles_without_writers" {
       ]) &&
       jsondecode(aws_iam_role_policy.job_execution.policy).Statement[3].Action == "ssm:GetParameters" &&
       length(jsondecode(aws_iam_role_policy.job_execution.policy).Statement[1].Resource) == 3 &&
-      aws_iam_role_policy.job_execution.role == aws_iam_role.job["execution"].name &&
-      aws_iam_role_policy.job_source_read.role == aws_iam_role.job["read_task"].name
+      aws_iam_role_policy.job_execution.role == aws_iam_role.job["execution"].name
     )
     error_message = "The separate jobs execution role pulls all three job images and injects the reader pair only."
   }
@@ -189,11 +161,9 @@ run "read_roles_without_writers" {
     condition = (
       toset(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[0].Action) == toset(["s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"]) &&
       jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/tries/*" &&
-      length(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement) == 1 &&
-      jsondecode(aws_iam_role_policy.job_seal_deny.policy).Statement[0].Effect == "Deny" &&
-      jsondecode(aws_iam_role_policy.job_seal_deny.policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/lakehouse/run_stage/*/inputs/trees/*"
+      length(jsondecode(aws_iam_role_policy.job_try_writer.policy).Statement) == 1
     )
-    error_message = "The output upper bound writes under tries and grants nothing else, and seal tasks cannot read an input tree."
+    error_message = "The output upper bound writes under tries and grants nothing else."
   }
 
   assert {
@@ -245,9 +215,9 @@ run "endpoints_disabled" {
     condition = (
       length(aws_vpc_endpoint.job_s3) == 0 && length(aws_vpc_endpoint.job_interface) == 0 && length(aws_vpc_endpoint.job_ssm) == 0 &&
       length(aws_vpc_security_group_ingress_rule.job_shared_endpoints) == 0 &&
-      length(aws_vpc_security_group_ingress_rule.job_ssm) == 0 && length(aws_iam_role.job) == 5
+      length(aws_vpc_security_group_ingress_rule.job_ssm) == 0 && length(aws_iam_role.job) == 2
     )
-    error_message = "Disabling the optional endpoints removes their resources and routes while retaining the five role definitions."
+    error_message = "Disabling the optional endpoints removes their resources and routes while retaining the two role definitions."
   }
 }
 

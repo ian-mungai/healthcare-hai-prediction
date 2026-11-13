@@ -177,7 +177,7 @@ OPENMETADATA_NEIGHBORS = (
     "openmetadata_admin",
     "openmetadata_password",
 )
-JOB_TASK_ROLES = ("job_execution", "job_offline_task", "job_seal_task", "job_read_task")
+JOB_TASK_ROLES = ("job_execution",)
 
 
 # The project user's parameter names are the defaults of the Terraform root variables, whatever PROJECT_NAME is, so the oracle names them outright.
@@ -288,7 +288,7 @@ def approved_requests() -> dict[str, list[Request]]:
     add("iam", "PassRole", role("snapshots"), region=None, extra={"iam:PassedToService": "dlm.amazonaws.com"})
     for name in JOB_TASK_ROLES:
         add("iam", "PassRole", role(name), region=None, extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"})
-    for simulated in (role("job_read_task"), READER, WRITER, f"arn:aws:iam::{A}:user/{USER}"):
+    for simulated in (role("job_execution"), READER, WRITER, f"arn:aws:iam::{A}:user/{USER}"):
         add("iam", "SimulatePrincipalPolicy", simulated, region=None, extra={"aws:username": USER})
     add("logs", "CreateLogGroup", LOG_GROUP, region=None, **tagged)
     for action in (
@@ -1688,9 +1688,6 @@ ROLES = (
     "control_plane_task",
     "snapshots",
     "job_execution",
-    "job_offline_task",
-    "job_seal_task",
-    "job_read_task",
     "job_try_writer",
     "job_write_bronze_task",
     "job_write_e2e_task",

@@ -18,7 +18,7 @@ BRONZE_TWINS = ("bronze_e2e", "bronze_dictionary_e2e", "smoke_check_e2e", "duckd
 TEST_NAMESPACES = ("silver_e2e", "gold_e2e", "features_e2e", *BRONZE_TWINS)
 PRODUCTION = ("silver", "gold", "features", "bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check", "catalog_backups")
 WRITER_ACTIONS = ("s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts")
-POLICIES = ("job_writer_e2e_storage", "job_reader_e2e", "job_writer_e2e_execution")
+POLICIES = ("job_writer_e2e_storage", "job_writer_e2e_execution")
 Case = tuple[str, str, str, str, bool, dict[str, tuple[str, ...]]]
 
 
@@ -34,26 +34,19 @@ def cases() -> list[Case]:
         for action in WRITER_ACTIONS:
             add(f"test writer {namespace} {action}", "writer", action, resource, True)
         add(f"test backup {namespace}", "writer", "s3:PutObject", f"{BUCKET}/lakehouse/{namespace}/catalog_backups/head.json", True)
-        add(f"reader test {namespace}", "reader", "s3:GetObject", resource, True)
         for action in ("s3:ListBucket", "s3:ListBucketVersions"):
             context: dict[str, tuple[str, ...]] = {"s3:prefix": (f"lakehouse/{namespace}/",)}
             add(f"writer list {namespace} {action}", "writer", action, BUCKET, action == "s3:ListBucket", context)
-            add(f"reader list {namespace} {action}", "reader", action, BUCKET, action == "s3:ListBucket" or namespace in BRONZE_TWINS, context)
-        add(f"reader version {namespace}", "reader", "s3:GetObjectVersion", resource, namespace in BRONZE_TWINS)
         add(f"writer has no table version {namespace}", "writer", "s3:GetObjectVersion", resource, False)
-        for action in (*WRITER_ACTIONS[1:], "s3:DeleteObjectVersion"):
-            add(f"reader cannot mutate {namespace} {action}", "reader", action, resource, False)
         add(f"writer cannot delete version {namespace}", "writer", "s3:DeleteObjectVersion", resource, False)
-        for actor in ("writer", "reader"):
-            add(f"{actor} excludes lookalike {namespace}", actor, "s3:GetObject", f"{BUCKET}/lakehouse/{namespace}_other/table/file", False)
+        add(f"writer excludes lookalike {namespace}", "writer", "s3:GetObject", f"{BUCKET}/lakehouse/{namespace}_other/table/file", False)
     for namespace in (*PRODUCTION, "another_e2e", "catalog_journal", "catalog_migration"):
         resource = f"{BUCKET}/lakehouse/{namespace}/table/metadata/v1.metadata.json"
         for action in WRITER_ACTIONS:
             add(f"writer excludes {namespace} {action}", "writer", action, resource, False)
         for action in ("s3:ListBucket", "s3:ListBucketVersions"):
             add(f"writer excludes list {namespace} {action}", "writer", action, BUCKET, False, {"s3:prefix": (f"lakehouse/{namespace}/",)})
-        add(f"reader delta excludes {namespace}", "reader_delta", "s3:GetObject", resource, False)
-    for actor in ("writer", "reader_delta"):
+    for actor in ("writer",):
         for action in ("s3:ListBucket", "s3:ListBucketVersions"):
             for prefix in ("", "lakehouse/", "lakehouse/gold", "lakehouse/gold_e2e_other/", "cms/other/", "cms/hospitals"):
                 add(f"{actor} list boundary {action} {prefix}", actor, action, BUCKET, False, {"s3:prefix": (prefix,)})
@@ -77,8 +70,7 @@ def cases() -> list[Case]:
     for name in ("aws_reader_id", "aws_reader_secret", "aws_polaris_e2e_client_id", "aws_polaris_e2e_client_secret"):
         add(f"execution injects application {name}", "execution", "ssm:GetParameters", PARAMETER + name, True)
         add(f"execution excludes single parameter {name}", "execution", "ssm:GetParameter", PARAMETER + name, False)
-        for actor in ("writer", "reader"):
-            add(f"{actor} cannot fetch parameter {name}", actor, "ssm:GetParameters", PARAMETER + name, False)
+        add(f"writer cannot fetch parameter {name}", "writer", "ssm:GetParameters", PARAMETER + name, False)
     # The AWS catalog setup runs under the project user: it writes and reads back each configured AWS Polaris pair name, one name at a time.
     for name in ("aws_reader_id", "aws_reader_secret"):
         add(f"project reads reader {name}", "project", "ssm:GetParameter", PARAMETER + name, True)
@@ -136,8 +128,6 @@ def evaluate(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Evaluate the complete attached-policy set for each synthetic principal."""
     actors = {
         "writer": [documents["job_stage_read"], documents["job_writer_e2e_storage"]],
-        "reader": [documents["job_stage_read"], documents["job_source_read"], documents["job_reader_e2e"]],
-        "reader_delta": [documents["job_reader_e2e"]],
         "execution": [documents["job_execution"], documents["job_writer_e2e_execution"]],
         "project": [document for name, document in documents.items() if name.startswith("project_")],
     }

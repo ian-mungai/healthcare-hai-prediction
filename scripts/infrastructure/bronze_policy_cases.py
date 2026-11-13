@@ -188,43 +188,10 @@ def storage_policy_scope(subject: ModuleType, journal: ModuleType, out: Path) ->
         not decide([project], Request("iam:PassRole", role, {"iam:PassedToService": ("ec2.amazonaws.com",)})).allowed,
         "project delta can pass the bronze role outside ECS",
     )
-    reader_inputs = {
-        "BUCKET_ARN": BUCKET,
-        "TEST_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/{name}/*" for name in TEST_NAMESPACES]),
-        "TEST_LIST_PREFIXES": json.dumps([f"lakehouse/{name}/*" for name in TEST_NAMESPACES]),
-        "BRONZE_TEST_OBJECT_ARNS": json.dumps([f"{BUCKET}/lakehouse/{name}/*" for name in TWINS]),
-        "BRONZE_TEST_LIST_PREFIXES": json.dumps([f"lakehouse/{name}/*" for name in TWINS]),
-    }
-    reader = json.loads(Template((POLICIES / "job_reader_e2e.json").read_text()).substitute(reader_inputs))
-    for name in TEST_NAMESPACES:
-        resource = f"{BUCKET}/lakehouse/{name}/table/data.parquet"
-        context = {"s3:prefix": (f"lakehouse/{name}/",)}
-        require(decide([reader], Request("s3:GetObject", resource)).allowed, "reader cannot read a qualification namespace")
-        require(decide([reader], Request("s3:ListBucket", BUCKET, context)).allowed, "reader cannot list a qualification namespace")
-        for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:DeleteObjectVersion"):
-            require(not decide([reader], Request(action, resource)).allowed, "reader can mutate a qualification namespace")
-        require(
-            decide([reader], Request("s3:GetObjectVersion", resource)).allowed == (name in TWINS),
-            "reader version reads must cover only the four bronze twins",
-        )
-        require(
-            decide([reader], Request("s3:ListBucketVersions", BUCKET, context)).allowed == (name in TWINS),
-            "reader cannot find the version of a completion metadata object or can list versions outside the bronze twins",
-        )
-    for name in (*PRODUCTION, "silver", "gold", "features", "catalog_backups", "catalog_journal"):
-        resource = f"{BUCKET}/lakehouse/{name}/table/data.parquet"
-        for action in ("s3:GetObject", "s3:GetObjectVersion"):
-            require(not decide([reader], Request(action, resource)).allowed, "reader extension includes a canonical prefix")
-        for action in ("s3:ListBucket", "s3:ListBucketVersions"):
-            require(
-                not decide([reader], Request(action, BUCKET, {"s3:prefix": (f"lakehouse/{name}/",)})).allowed,
-                "reader extension can list a canonical prefix",
-            )
     out.mkdir(parents=True, exist_ok=False)
     for label, documents in (("production", production), ("qualification", qualification)):
         for name, document in documents.items():
             (out / f"{label}_{name}_policy.json").write_text(json.dumps(document, indent=2) + "\n")
-    (out / "reader_policy.json").write_text(json.dumps(reader, indent=2) + "\n")
     return {"production_prefixes": list(PRODUCTION), "qualification_prefixes": list(TWINS), "source_collections": list(collections), "evaluator": "offline IAM"}
 
 

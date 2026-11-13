@@ -51,14 +51,6 @@ resource "aws_iam_role_policy" "job_writer_e2e_stage" {
   policy = local.job_policy_documents.job_stage_read
 }
 
-resource "aws_iam_role_policy" "job_reader_e2e" {
-  count = var.job_writer_e2e_prepared ? 1 : 0
-
-  name   = "qualification_read"
-  role   = aws_iam_role.job["read_task"].name
-  policy = templatefile("${path.module}/owner_policies/job_reader_e2e.json", local.job_writer_e2e_inputs)
-}
-
 resource "aws_iam_role_policy" "job_writer_e2e_execution" {
   count = var.job_writer_e2e_prepared ? 1 : 0
 

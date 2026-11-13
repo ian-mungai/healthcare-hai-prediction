@@ -21,7 +21,6 @@ MUTATIONS = {
     "smoke": ("smoke",),
     "checksum_fixture": ("fixture",),
     "removal": ("bronze", "dictionary"),
-    "checksums": (),
 }
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]*")
 RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
@@ -141,14 +140,11 @@ def _admission(binding: Binding, job: str, definitions: dict[str, Any], authorit
     expected_namespaces = QUALIFICATION if binding.mode == "aws_qualify" else PRODUCTION
     if binding.namespaces != expected_namespaces:
         raise BindingError("namespace inputs differ from the closed run mode")
-    read_only = job == "checksums"
-    identity_key = "reader_identity" if read_only else "qualification_identity" if binding.mode == "aws_qualify" else "production_identity"
+    identity_key = "qualification_identity" if binding.mode == "aws_qualify" else "production_identity"
     expected = definitions[identity_key]
     actual = {key: getattr(binding, key) for key in ("principal", "task_role", "definition", "pair")}
     if actual != expected:
         raise BindingError("catalog pair, principal, task role and definition must match the job identity")
-    if read_only:
-        return
     if not binding.namespace_creation_approved:
         raise BindingError("namespace creation scope must be verified and approved")
     if binding.mode == "real":
@@ -179,7 +175,7 @@ def plan(binding: Binding, job: str, *, tables: list[str], table_map: dict[str, 
     mapped = {entry["table"]: entry for entry in table_map["tables"]}
     if len(tables) != len(set(tables)) or any(not IDENTIFIER.fullmatch(name) or name not in mapped for name in tables):
         raise BindingError("table inputs must be unique names from the table map")
-    table_job = job in {"bronze", "dictionary", "checksums"} or (job == "removal" and binding.mode == "aws_qualify")
+    table_job = job in {"bronze", "dictionary"} or (job == "removal" and binding.mode == "aws_qualify")
     if table_job and not tables:
         raise BindingError("the job requires explicit tables")
     if not table_job and tables:
@@ -211,7 +207,7 @@ def plan(binding: Binding, job: str, *, tables: list[str], table_map: dict[str, 
         if binding.mode == "aws_qualify":
             argv += ["--qualification-tables", ",".join(tables)]
     else:
-        argv = ["--tables", *tables, "--namespace", bronze]
+        raise BindingError("unknown bronze job")
     template = definitions["templates"][job]
     return JobPlan(binding, job, template["module"], template["class"], tuple(argv), tuple(targets[name] for name in MUTATIONS[job]), source_prefixes)
 

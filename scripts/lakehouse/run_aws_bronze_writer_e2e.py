@@ -92,7 +92,6 @@ def snapshot() -> dict[str, str]:
             "bronze_writer_source_objects",
             "bronze_writer_source_lists",
             "bronze_writer_pseudonym_key",
-            "job_reader_e2e",
             "bronze_execution",
             "bronze_project_delta",
         )

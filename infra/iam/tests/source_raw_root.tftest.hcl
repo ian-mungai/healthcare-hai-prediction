@@ -256,7 +256,7 @@ run "publisher_exports_leave_the_target_role_set_untouched" {
   assert {
     condition = (
       !contains(keys(output.job_roles), "publisher_task") &&
-      toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"]) &&
+      toset(keys(output.job_roles)) == toset(["execution", "try_writer"]) &&
       toset(keys(output.job_network)) == toset(["subnet_id", "endpoints_enabled"])
     )
     error_message = "Enabling the publisher must not add a key to job_roles or job_network, which the closed target schema reads."

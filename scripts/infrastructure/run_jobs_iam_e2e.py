@@ -31,8 +31,6 @@ IAM = "arn:aws:iam::111111111111:role/example_project_"
 PARAMETER = "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/"
 POLICIES = (
     "job_stage_read",
-    "job_source_read",
-    "job_seal_deny",
     "job_try_writer",
     "job_execution",
     "job_try_trust",
@@ -46,7 +44,7 @@ Case = tuple[str, str, str, str, bool, dict[str, tuple[str, ...]]]
 def cases() -> list[Case]:
     """Specify permitted effects and credible scope regressions independently of the templates."""
     result: list[Case] = []
-    for actor in ("offline", "seal", "read"):
+    for actor in ("stage",):
         for action in ("s3:GetObject", "s3:GetObjectVersion"):
             result.append((f"{actor} pinned stage read {action}", actor, action, f"{S3}/lakehouse/run_stage/run/inputs/pins.json", True, {}))
         for action, resource, allowed in (
@@ -60,26 +58,7 @@ def cases() -> list[Case]:
         ):
             result.append((f"{actor} {action} {resource.rsplit('/', 1)[-1]}", actor, action, resource, allowed, {"aws:userid": (ROLE,)}))
     for source in ("bronze", "silver", "gold"):
-        for action in ("s3:GetObject", "s3:GetObjectVersion"):
-            result.append((f"read {source} {action}", "read", action, f"{S3}/lakehouse/{source}/table/metadata.json", True, {}))
-        for actor in ("offline", "seal"):
-            result.append((f"{actor} cannot read {source}", actor, "s3:GetObject", f"{S3}/lakehouse/{source}/table/metadata.json", False, {}))
-    for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"):
-        result.append((f"read cannot mutate source {action}", "read", action, f"{S3}/lakehouse/silver/table/metadata.json", False, {}))
-    for prefix in ("features", "silver_e2e", "catalog_journal", "bronze_dictionary"):
-        result.append((f"read excludes {prefix}", "read", "s3:GetObject", f"{S3}/lakehouse/{prefix}/table/metadata.json", False, {}))
-    for prefix, allowed in (
-        ("lakehouse/bronze/", True),
-        ("lakehouse/silver/table/", True),
-        ("lakehouse/gold/", True),
-        ("", False),
-        ("lakehouse/", False),
-        ("lakehouse/silver_e2e/", False),
-        ("lakehouse/run_stage/", False),
-    ):
-        result.append((f"scoped source list {prefix}", "read", "s3:ListBucket", S3, allowed, {"s3:prefix": (prefix,)}))
-    for actor, allowed in (("offline", True), ("read", True), ("seal", False)):
-        result.append((f"{actor} input tree", actor, "s3:GetObjectVersion", f"{S3}/lakehouse/run_stage/run/inputs/trees/code.tar", allowed, {}))
+        result.append((f"stage cannot read {source}", "stage", "s3:GetObject", f"{S3}/lakehouse/{source}/table/metadata.json", False, {}))
     for action in ("s3:PutObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"):
         result.append((f"try writer {action}", "try_writer", action, f"{S3}/lakehouse/run_stage/run/tries/try_one/output", True, {}))
     result.append(("try writer cannot read the catalog epoch key", "try_writer", "s3:GetObject", f"{S3}/{EPOCH_KEY}", False, {}))
@@ -124,7 +103,7 @@ def cases() -> list[Case]:
     result.append(
         ("execution cannot pull unrelated image", "execution", "ecr:BatchGetImage", "arn:aws:ecr:eu-west-1:111111111111:repository/unrelated", False, {})
     )
-    for role in ("execution", "offline_task", "seal_task", "read_task"):
+    for role in ("execution",):
         for service, allowed in (("ecs-tasks.amazonaws.com", True), ("ec2.amazonaws.com", False)):
             result.append((f"pass {role} to {service}", "project", "iam:PassRole", f"{IAM}job_{role}_dev", allowed, {"iam:PassedToService": (service,)}))
     result.append(
@@ -150,9 +129,7 @@ def cases() -> list[Case]:
 def evaluate(documents: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
     """Evaluate actual rendered policies against the complete request matrix."""
     actors = {
-        "offline": [documents["job_stage_read"]],
-        "seal": [documents["job_stage_read"], documents["job_seal_deny"]],
-        "read": [documents["job_stage_read"], documents["job_source_read"]],
+        "stage": [documents["job_stage_read"]],
         "execution": [documents["job_execution"]],
         "try_writer": [documents["job_try_writer"]],
         "project": [document for name, document in documents.items() if name.startswith("project_")],
@@ -251,8 +228,6 @@ def main() -> int:
         defects = []
         mutations = {
             "other_task_grant": ("job_stage_read", "OwnGrant", "Resource", f"{S3}/lakehouse/run_stage/*/grants/*.json"),
-            "source_write": ("job_source_read", "ReadSources", "Action", ["s3:GetObject", "s3:GetObjectVersion", "s3:PutObject"]),
-            "all_source_prefixes": ("job_source_read", "ReadSources", "Resource", f"{S3}/lakehouse/*"),
             "writer_parameter": (
                 "job_execution",
                 "InjectReaderPair",
@@ -260,7 +235,6 @@ def main() -> int:
                 [PARAMETER + "aws_reader_id", PARAMETER + "aws_reader_secret", PARAMETER + "aws_writer_secret"],
             ),
             "pass_any_role": ("project_iam", "PassReadJobRoles", "Resource", "arn:aws:iam::111111111111:role/*"),
-            "seal_reads_tree": ("job_seal_deny", "NoTreeInput", "Resource", f"{S3}/unused/*"),
         }
         for label, (policy, sid, field, value) in mutations.items():
             changed = copy.deepcopy(documents)

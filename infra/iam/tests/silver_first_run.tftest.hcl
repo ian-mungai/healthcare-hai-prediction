@@ -71,24 +71,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_iam_role.job["offline_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLEOFFLINETASK" }
-}
-
-override_resource {
-  target          = aws_iam_role.job["seal_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLESEALTASK" }
-}
-
-override_resource {
-  target          = aws_iam_role.job["read_task"]
-  override_during = plan
-  values          = { unique_id = "AROEXAMPLEREADTASK" }
-}
-
-override_resource {
   target          = aws_iam_role.job["try_writer"]
   override_during = plan
   values          = { unique_id = "AROEXAMPLETRYWRITER" }

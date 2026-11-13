@@ -209,7 +209,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             parameter = PARAMETER + f"aws_polaris_{principal}_{suffix}"
             add(f"execution pair {principal} {suffix}", "execution_delta", "ssm:GetParameters", parameter, principal in LAYERS)
             add(f"execution no single read {principal} {suffix}", "execution_delta", "ssm:GetParameter", parameter, False)
-            for actor in (*LAYERS, "project", "reader"):
+            for actor in (*LAYERS, "project"):
                 for action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter"):
                     add(f"{actor} excludes pair {principal} {suffix} {action}", actor, action, parameter, False)
             for candidate in (
@@ -220,7 +220,7 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             ):
                 add(f"execution parameter boundary {candidate}", "execution_delta", "ssm:GetParameters", candidate, False)
     add("execution excludes administrator", "execution_delta", "ssm:GetParameters", PARAMETER + "polaris_root_secret", False)
-    for actor in ("project", "reader", "execution_delta"):
+    for actor in ("project", "execution_delta"):
         for action in ("ssm:GetParameter", "ssm:GetParameters"):
             add(f"{actor} excludes pseudonym key {action}", actor, action, KEY_PARAMETER, False)
 
@@ -279,7 +279,6 @@ def evaluate(documents: dict[str, dict[str, Any]], collections: tuple[str, ...],
             *(documents[f"{name}_features"] for name in EXTRAS if name != "layer_activation" and f"{name}_features" in documents),
         ],
         "execution_delta": [documents["job_writer_execution"]],
-        "reader": [documents["job_stage_read"], documents["job_source_read"]],
         "project": [document for name, document in documents.items() if name.startswith("project_")],
     }
     observations = []

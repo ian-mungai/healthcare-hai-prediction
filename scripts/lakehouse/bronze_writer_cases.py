@@ -129,7 +129,7 @@ class Catalog:
 def planned(subject: ModuleType, job: str, **changes: Any) -> Any:
     """Resolve the same synthetic collection through the submitted production planner."""
     selected = binding(subject, **changes)
-    table_job = job in {"bronze", "dictionary", "checksums"} or (job == "removal" and selected.mode == "aws_qualify")
+    table_job = job in {"bronze", "dictionary"} or (job == "removal" and selected.mode == "aws_qualify")
     return subject.plan(selected, job, tables=["sample"] if table_job else [], table_map=MAP, authority_epoch=42)
 
 
@@ -325,11 +325,9 @@ def scope_denial(subject: ModuleType, journal: ModuleType, out: Path) -> dict[st
     rejected(subject, "bronze", "source collection", source_collection="other/collection")
     rejected(subject, "bronze", "namespace creation", namespace_creation_approved=False)
     rejected(subject, "checksum_fixture", "fixture action")
-    reader = binding(subject, principal="lakehouse_reader", pair="reader", task_role="job_read_task", definition="spark_read")
-    read = subject.plan(reader, "checksums", tables=["sample"], table_map=MAP, authority_epoch=42)
-    require(not read.mutated_namespaces, "read-only checksums must have no mutation intent")
-    require(read.argv == ("--tables", "sample", "--namespace", "bronze_e2e"), "checksum reader must bind the bronze twin")
-    return {"forbidden_targets_refused": [*PRODUCTION, "silver", "gold", "features", "stray"], "read_checksums_preserved": True}
+    rejected(subject, "checksums", "unknown bronze job")
+    rejected(subject, "bronze", "identity", principal="lakehouse_reader", pair="reader", task_role="job_read_task", definition="spark_read")
+    return {"forbidden_targets_refused": [*PRODUCTION, "silver", "gold", "features", "stray"], "read_identity_refused": True}
 
 
 def admission_gates(subject: ModuleType, journal: ModuleType, out: Path) -> dict[str, Any]:
