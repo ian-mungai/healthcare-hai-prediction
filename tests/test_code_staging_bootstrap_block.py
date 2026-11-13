@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from scripts.process import run_command
+from scripts.process import CompletedProcess, run_command
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,7 +42,11 @@ def test_the_block_passes_the_script_no_option_because_it_takes_everything_from_
     check("--" not in line.split("github_code_staging_bootstrap", 1)[1].replace("2>&1", ""), f"the block passes an option the script does not take: {line}")
 
 
-def stand_in(tmp_path: Path, env_text: str) -> Path:
+TOOLS = ("git", "grep", "head", "sed", "zsh")
+
+
+def stand_in(tmp_path: Path, env_text: str, signed_in: bool = True) -> Path:
+    """A repository folder whose .venv python and ``gh`` are stand-ins, and a child environment that reaches no other ``gh``, login or token."""
     run_command("git", ["init", "-q", str(tmp_path)], check=True)
     (tmp_path / ".env").write_text(env_text)
     (tmp_path / ".venv/bin").mkdir(parents=True)
@@ -54,7 +58,30 @@ def stand_in(tmp_path: Path, env_text: str) -> Path:
     ]
     tool.write_text("\n".join([*script, "echo 'read back: every part matches'", ""]))
     tool.chmod(0o755)
+    (tmp_path / "gh_bin").mkdir()
+    gh = tmp_path / "gh_bin/gh"
+    gh.write_text(
+        "\n".join(["#!/bin/sh", f'echo "$@" >> "{tmp_path}/gh_calls.txt"', f'[ "$*" = "auth status" ] && exit {0 if signed_in else 1}', "exit 99", ""])
+    )
+    gh.chmod(0o755)
+    (tmp_path / "tool_bin").mkdir()
+    for name in TOOLS:
+        found = shutil.which(name)
+        if found is None:
+            pytest.fail(f"{name} is not installed")
+        wrapper = tmp_path / "tool_bin" / name
+        wrapper.write_text(f'#!/bin/sh\nexec "{found}" "$@"\n')
+        wrapper.chmod(0o755)
+    (tmp_path / "home").mkdir()
+    (tmp_path / "empty_gh_config").mkdir()
+    (tmp_path / "block.zsh").write_text(block())
     return tmp_path
+
+
+def run_block(folder: Path) -> CompletedProcess[str]:
+    """Run the block in zsh with only the stand-in ``gh`` on PATH, an empty GitHub configuration folder and no token."""
+    environment = {"PATH": f"{folder / 'gh_bin'}:{folder / 'tool_bin'}", "HOME": str(folder / "home"), "GH_CONFIG_DIR": str(folder / "empty_gh_config")}
+    return run_command(str(ZSH), ["block.zsh"], cwd=folder, env=environment, timeout=60)
 
 
 FULL = f'PROJECT_NAME={PROJECT}\nAWS_REGION="{REGION}"\nAWS_PROFILE={PROFILE}\nS3_BUCKET={BUCKET}\nOTHER=1\n'
@@ -63,19 +90,27 @@ FULL = f'PROJECT_NAME={PROJECT}\nAWS_REGION="{REGION}"\nAWS_PROFILE={PROFILE}\nS
 @pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
 def test_the_block_gives_the_script_the_profile_of_env_and_masks_every_env_value_in_the_output(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL)
-    (folder / "block.zsh").write_text(block())
-    done = run_command("zsh", ["block.zsh"], cwd=folder, timeout=60)
+    done = run_block(folder)
     shown = done.stdout + done.stderr
     calls = (folder / "calls.txt").read_text().splitlines()
     check(done.returncode == 0, f"the block ran: {shown}")
     check(any("github_code_staging_bootstrap" in call for call in calls), f"the script was not run: {calls}")
+    check((folder / "gh_calls.txt").read_text().splitlines() == ["auth status"], "the sign-in check reached the stand-in gh once and nothing else")
     check(all(value not in shown for value in (PROFILE, BUCKET, PROJECT, REGION)), f"the output shows a value it must mask: {shown}")
+
+
+@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
+def test_a_gh_that_is_not_signed_in_stops_the_block_before_the_script_runs_and_says_to_sign_in(tmp_path: Path) -> None:
+    folder = stand_in(tmp_path, FULL, signed_in=False)
+    done = run_block(folder)
+    check(done.returncode != 0 and "gh auth login" in done.stderr, f"it stopped and said to sign in: {done.returncode} {done.stderr}")
+    check((folder / "gh_calls.txt").read_text().splitlines() == ["auth status"], "the stand-in gh saw the sign-in check")
+    check(not (folder / "calls.txt").exists(), "the script did not run")
 
 
 @pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
 def test_a_missing_env_name_stops_the_block_before_the_script_runs_and_names_the_missing_name(tmp_path: Path) -> None:
     folder = stand_in(tmp_path, FULL.replace(f"S3_BUCKET={BUCKET}\n", ""))
-    (folder / "block.zsh").write_text(block())
-    done = run_command("zsh", ["block.zsh"], cwd=folder, timeout=60)
+    done = run_block(folder)
     check(done.returncode != 0 and "S3_BUCKET" in done.stderr, f"it stopped and named the name: {done.returncode} {done.stderr}")
     check(not (folder / "calls.txt").exists(), "the script did not run")
