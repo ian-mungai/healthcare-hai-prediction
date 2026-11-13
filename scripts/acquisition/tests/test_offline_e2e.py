@@ -44,6 +44,7 @@ SUITES = [
     "single_copy_index",
     # Off macOS, the HUD and WONDER suites substitute only the browser-download metadata reads (see run_hud_xlsx_e2e).
     "hud_xlsx",
+    "hud_xlsx_direct",
 ]
 DIRECTORY_SUITES = {"privacy", "pseudonymize", "registry_additions"}
 ARTIFACT_ONLY_SUITES = {"registry_additions"}

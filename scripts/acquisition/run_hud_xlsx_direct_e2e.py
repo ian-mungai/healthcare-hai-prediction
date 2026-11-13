@@ -9,11 +9,14 @@ import argparse
 import io
 import json
 import sys
+import tempfile
 import zipfile
+from contextlib import redirect_stderr
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+from unittest.mock import patch
 
 from scripts.acquisition import hud_api_contract as api_contract
 from scripts.acquisition import hud_xlsx_contract as manual_contract
@@ -151,14 +154,26 @@ def reader_scenarios(scenario: Any) -> None:
 
     scenario("manual_reader_refuses_the_direct_layout", manual_reader_still_refuses, "package members differ")
 
-    def same_values_as_manual_layout() -> None:
+    def same_text_as_manual_layout() -> None:
         table = rows(2020, 4)
         lowered = [[v for v in manual_contract.HEADER], *table[1:]]
-        direct, _ = contract.validate_workbook(raw, batch, plan)
-        manual, _ = manual_csv(manual_workbook(lowered))
-        require(csv_values(direct) == csv_values(manual), "Direct and manual layouts give different values")
+        direct, direct_statistics = contract.validate_workbook(raw, batch, plan)
+        manual, manual_statistics = manual_csv(manual_workbook(lowered))
+        require(direct == manual, "Direct and manual layouts give different CSV bytes: published ratio or code text changed")
+        require(direct_statistics == manual_statistics, "Direct and manual layouts give different statistics")
 
-    scenario("same_values_as_the_manual_layout", same_values_as_manual_layout)
+    scenario("same_csv_bytes_as_the_manual_layout", same_text_as_manual_layout)
+
+    def unsupported_period(year: int, quarter: int) -> Any:
+        def run() -> None:
+            other_plan, other_batch = synthetic_plan(year, quarter)
+            contract.validate_workbook(workbook(rows(year, quarter), name=contract.sheet_name(year, quarter)), other_batch, other_plan)
+
+        return run
+
+    # The batch and the workbook name agree on the period, so only the reviewed profile can refuse it.
+    for year, quarter in [(2020, 3), (2010, 1), (2021, 1), (1900, 4)]:
+        scenario(f"unsupported_period_{year}q{quarter}_named_by_batch_and_workbook", unsupported_period(year, quarter), "outside the reviewed profile")
 
     def check(**changes: Any) -> None:
         table = rows(2020, 4)
@@ -222,6 +237,33 @@ def csv_values(body: bytes) -> list[tuple]:
     return found
 
 
+NESTED: list[int] = []
+
+
+def run_cli(*flags: str) -> None:
+    """Run this command's own argument parsing with FLAGS and an output path that must stay unwritten when the command refuses them."""
+    with tempfile.TemporaryDirectory(prefix="hud_xlsx_direct_cli_") as folder:
+        output = Path(folder) / "artifact.json"
+        message = io.StringIO()
+        NESTED.append(1)
+        try:
+            with patch.object(sys, "argv", ["run_hud_xlsx_direct_e2e", "--output", str(output), *flags]), redirect_stderr(message):
+                main()
+        except SystemExit as stop:
+            require(stop.code == 2, f"The command stopped with status {stop.code}, not an argument error")
+            require(not output.exists(), "A refused command wrote an artifact")
+            raise ValueError(message.getvalue().strip()) from None
+        finally:
+            NESTED.pop()
+        raise ValueError("The command ran without refusing its arguments")
+
+
+def cli_scenarios(scenario: Any) -> None:
+    """A real-pair check is requested with both files or not at all; one file alone is an argument error, never a synthetic pass."""
+    scenario("only_pair_direct_refused", lambda: run_cli("--pair-direct", "not_read_direct.xlsx"), "must be given together")
+    scenario("only_pair_stored_refused", lambda: run_cli("--pair-stored", "not_read_stored.xlsx"), "must be given together")
+
+
 def exercise(pair: tuple[Path, Path] | None = None) -> list[dict]:
     """Run every scenario against synthetic workbooks, and against the real pair when it is given."""
     scenarios: list[dict] = []
@@ -236,6 +278,8 @@ def exercise(pair: tuple[Path, Path] | None = None) -> list[dict]:
             )
 
     reader_scenarios(scenario)
+    if not NESTED:
+        cli_scenarios(scenario)
     if pair is not None:
         summary = pair_scenarios(scenario, *pair)
         scenarios.append({"name": "real_pair_tally", "passed": bool(summary), "observed": json.dumps(summary, sort_keys=True), "expected": "tally recorded"})
@@ -271,15 +315,18 @@ def main() -> None:
     parser.add_argument("--pair-direct", type=Path, help="a real direct static file of one quarter (2020 Q4)")
     parser.add_argument("--pair-stored", type=Path, help="the stored manual-download workbook of the same quarter")
     args = parser.parse_args()
-    pair = (args.pair_direct, args.pair_stored) if args.pair_direct and args.pair_stored else None
+    if (args.pair_direct is None) != (args.pair_stored is None):
+        parser.error("--pair-direct and --pair-stored must be given together")
+    pair = (args.pair_direct, args.pair_stored) if args.pair_direct is not None else None
     scenarios = exercise(pair)
     passed = all(s["passed"] for s in scenarios)
     report = {
         "status": "passed" if passed else "failed",
-        "feature": "HUD ZIP-COUNTY direct static file reader and capture (2010 Q1 to 2020 Q4)",
+        "feature": "HUD ZIP-COUNTY direct static file reader (reviewed profile: 2020 Q4)",
         "run_at_utc": datetime.now(UTC).isoformat(),
         "python": sys.version.split()[0],
-        "reproduce": f".venv/bin/python -m scripts.acquisition.run_hud_xlsx_direct_e2e --output {args.output}",
+        "reproduce": f".venv/bin/python -m scripts.acquisition.run_hud_xlsx_direct_e2e --output {args.output}"
+        + (f" --pair-direct {args.pair_direct} --pair-stored {args.pair_stored}" if pair else ""),
         "boundary": "Synthetic workbooks built in memory, plus the real 2020 Q4 pair only when given; no network, HUD or AWS access.",
         "cleanup": "Nothing to clean up: no process, folder or file besides the artifact.",
         "scenarios": scenarios,

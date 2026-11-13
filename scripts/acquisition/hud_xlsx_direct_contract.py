@@ -19,6 +19,8 @@ from scripts.acquisition.source_registry import require
 
 HEADER = manual.HEADER
 DIRECT_HEADER = ["ZIP", "COUNTY", "RES_RATIO", "BUS_RATIO", "OTH_RATIO", "TOT_RATIO"]
+# The one period whose real file was read (Nov 13 2026); no other quarter's layout is known.
+REVIEWED_PERIOD = (2020, 4)
 # The members the 2020 Q4 file has (profile read Nov 13 2026). A member outside both sets stops the quarter.
 REQUIRED_MEMBERS = frozenset(
     {
@@ -123,8 +125,10 @@ def workbook_rows(raw: bytes, expected_sheet: str) -> list[list[str]]:
 def validate_workbook(raw: bytes, batch: dict, plan: dict) -> tuple[bytes, dict]:
     """Write a lossless CSV in the API captures' layout while refusing schema, identity or coverage defects.
 
-    BATCH names the quarter (``year``, ``quarter``) and PLAN the required states (``required_state_fips``). No exact repeated row is accepted.
+    BATCH names the quarter (``year``, ``quarter``) and PLAN the required states (``required_state_fips``). Only the reviewed profile, 2020 Q4, is read;
+    another period needs its own evidence and approval first. No exact repeated row is accepted.
     """
+    require((batch["year"], batch["quarter"]) == REVIEWED_PERIOD, "HUD workbook period is outside the reviewed profile")
     table = workbook_rows(raw, sheet_name(batch["year"], batch["quarter"]))
     require(bool(table) and table[0] == DIRECT_HEADER, "HUD workbook header differs")
     require(len(table) > 1, "HUD workbook has no data rows")
