@@ -394,6 +394,11 @@ def alert_block_checks(heading: str, body: str, folder: Path, wrapper: Any) -> d
 ALERT_MUTANTS = (
     ("a mistyped strict option in the frame", "set -euo pipefail", "set -euo pipefial"),
     ("a mistyped step of the helper call", "alert_email topics", "alert_email topicz"),
+    ("a second command after a redirect and a semicolon", "alert_email topics", "alert_email topics > /dev/stdout; printf x > marker"),
+    ("a second command after a redirect and &&", "alert_email topics", "alert_email topics > /dev/stdout && printf x > marker"),
+    ("a second command after a redirect and a pipe", "alert_email topics", "alert_email topics > /dev/stdout | cat"),
+    ("a command substitution in a redirect", "alert_email topics", "alert_email topics > $(printf x)"),
+    ("a backtick substitution in a redirect", "alert_email topics", "alert_email topics > `printf x`"),
 )
 
 

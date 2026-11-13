@@ -32,6 +32,8 @@ ADDRESS = "owner@example.org"
 # A valid SHA-256 whose hex digits hold a run of twelve decimal digits, so a mask of account numbers corrupts it.
 NUMERIC_DIGEST = hashlib.sha256(b"synthetic-policy-plan-2").hexdigest()
 PLACEHOLDER = re.compile(r"<[A-Z][A-Z0-9_]*>")
+# One helper command: plain lowercase words and options, and the one quoted variable of the administrator profile. No operator, redirect or substitution fits.
+HELPER_LINE = re.compile(rf'{re.escape(HELPER_CALL)}(?: (?:--[a-z][a-z-]*|[a-z][a-z-]*|"\$\{{ADMIN_PROFILE:-\}}"))+')
 HEREDOC_OPEN = "bash <<'BLOCK'"
 HEREDOC_CLOSE = "BLOCK"
 STRICT_OPTIONS = "set -euo pipefail"
@@ -200,8 +202,8 @@ def block_problems(block: str) -> list[str]:
     status = TRAP_STATUS.fullmatch(trap["body"]) if trap else None
     if not status or not VOCABULARY.fullmatch(status["text"]):
         problems.append("no fixed value-free ERR trap")
-    if not lines[3].startswith(f"{HELPER_CALL} ") or PLACEHOLDER.search(block):
-        problems.append("not one placeholder-free helper call")
+    if not HELPER_LINE.fullmatch(lines[3]) or PLACEHOLDER.search(block):
+        problems.append("not one placeholder-free helper command of plain words")
     return problems
 
 
