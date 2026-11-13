@@ -154,6 +154,7 @@ jobs:
 
       - &setup_deps
         name: Install shared dependencies
+        shell: bash
         run: |
           python -m venv .venv
           .venv/bin/python scripts/quality/install_tools.py
@@ -242,6 +243,7 @@ jobs:
 
       - name: Install the lint tools
         if: ${{ matrix.group == 'code' }}
+        shell: bash
         env:
           # Without a token, the GitHub API limit on a shared runner address stops the plugin download.
           GITHUB_TOKEN: ${{ github.token }}
@@ -345,6 +347,7 @@ jobs:
       # packages.ubuntu.com, published 2026-10-06) is installed with its redis-tools of the same version, and the step fails when that version is no longer in the
       # archive: then look up the new version, record it here and in .github/scripts/workflow_input_cases.sh. Local CI uses the machine's own redis-server.
       - name: Install the pinned Redis server
+        shell: bash
         env:
           REDIS_VERSION: "5:7.0.15-1ubuntu0.24.04.5"
         run: |
