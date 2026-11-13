@@ -224,7 +224,7 @@ class Case:
     hook: str
     expect_pass: bool
     files: dict[str, str | bytes] = field(default_factory=dict)
-    committed: dict[str, str] = field(default_factory=dict)
+    committed: dict[str, str | bytes] = field(default_factory=dict)
     delete: list[str] = field(default_factory=list)
     message: str | None = None
     reason: str = ""  # A blocked case must print this text, so it fails for its intended cause.
@@ -817,6 +817,90 @@ INPUT_CASES = [
         },
         files={".github/workflows/manual.yml": MANUAL_WORKFLOW.replace(f"      {INPUT_NAME}:\n        type: boolean\n", "")},
         reason=f"scripts/warm.sh:1: {INPUT_NAME} {LEFTOVER}",
+    ),
+]
+
+# Text that is not UTF-8 (Latin-1) must not crash the check, and data with NUL bytes is binary: skipped with a notice.
+ARCHIVE_FLAG = "--archive" + "-copy"
+LATIN1_HEAD = "# -*- coding: latin-1 -*-\nimport argparse\n\nP = argparse.ArgumentParser()\n"
+UMLAUT_HELP = 'help="Unterschrift f\u00fcr den Bericht"'
+UTF8_HEAD = LATIN1_HEAD.replace("latin-1", "utf-8")
+SIGN_OFF_LINE = f'P.{ADD_ARGUMENT}("{SIGN_OFF}", {UMLAUT_HELP})\n'
+ARCHIVE_LINE = f'P.{ADD_ARGUMENT}("{ARCHIVE_FLAG}", {UMLAUT_HELP})\n'
+SIGN_OFF_CALLER = f"python tools/digest.py \\\n    {SIGN_OFF} /work/signoff.json\n"
+PAD_LINES = "PAD = 1\n" * 1200  # Git reads only the first 8000 bytes to decide whether a file is binary.
+BINARY_NOTICE = ": skipped: binary data (NUL bytes), not checked for removed names"
+LATIN1_NAMES = {
+    "binary": "Latin-1 case: a changed binary file is skipped with a notice",
+    "late_nul": "Latin-1 case: a text file with a NUL byte after the first 8000 bytes is skipped with a notice",
+}
+LATIN1_CASES = [
+    Case(
+        "Latin-1 file edited, a removed flag is still used in a script",
+        "removed-names",
+        False,
+        committed={"tools/digest.py": (LATIN1_HEAD + SIGN_OFF_LINE).encode("latin-1"), "tools/run_report.sh": SIGN_OFF_CALLER},
+        files={"tools/digest.py": LATIN1_HEAD.encode("latin-1")},
+        reason=f"tools/run_report.sh:2: {SIGN_OFF} {LEFTOVER}",
+    ),
+    Case(
+        "Latin-1 file edited, the removed flag is not used anywhere",
+        "removed-names",
+        True,
+        committed={"tools/digest.py": (LATIN1_HEAD + SIGN_OFF_LINE).encode("latin-1"), "tools/run_report.sh": "python tools/digest.py\n"},
+        files={"tools/digest.py": LATIN1_HEAD.encode("latin-1")},
+    ),
+    Case(
+        "Latin-1 text file staged as new",
+        "removed-names",
+        True,
+        committed={"tools/run_report.sh": "python tools/digest.py\n"},
+        files={"data/adjacency_sample.txt": "county\tneighbor\nM\u00fcnchen\tFreising\n(redacted)\t(redacted)\n".encode("latin-1")},
+    ),
+    Case(
+        "UTF-8 file with a non-ASCII line edited, a removed flag is still used in a script",
+        "removed-names",
+        False,
+        committed={"tools/digest.py": UTF8_HEAD + SIGN_OFF_LINE, "tools/run_report.sh": SIGN_OFF_CALLER},
+        files={"tools/digest.py": UTF8_HEAD},
+        reason=f"tools/run_report.sh:2: {SIGN_OFF} {LEFTOVER}",
+    ),
+    Case(
+        "Latin-1 and UTF-8 files edited together, the UTF-8 file's removed flag is still used",
+        "removed-names",
+        False,
+        committed={
+            "tools/digest.py": (LATIN1_HEAD + SIGN_OFF_LINE).encode("latin-1"),
+            "tools/archive.py": UTF8_HEAD + ARCHIVE_LINE,
+            "tools/run_report.sh": f"python tools/archive.py {ARCHIVE_FLAG} /work/copy\n",
+        },
+        files={"tools/digest.py": LATIN1_HEAD.encode("latin-1"), "tools/archive.py": UTF8_HEAD},
+        reason=f"tools/run_report.sh:1: {ARCHIVE_FLAG} {LEFTOVER}",
+    ),
+    Case(
+        "Latin-1 script still uses a removed flag",
+        "removed-names",
+        False,
+        committed={
+            "tools/digest.py": UTF8_HEAD + SIGN_OFF_LINE,
+            "tools/run_report.sh": ("# Pr\u00fcfung des Berichts\n" + SIGN_OFF_CALLER).encode("latin-1"),
+        },
+        files={"tools/digest.py": UTF8_HEAD},
+        reason=f"tools/run_report.sh:3: {SIGN_OFF} {LEFTOVER}",
+    ),
+    Case(
+        LATIN1_NAMES["binary"],
+        "removed-names",
+        True,
+        committed={"data/blob.bin": b"\x00\x01\x02 first"},
+        files={"data/blob.bin": b"\x00\x01\x02 second"},
+    ),
+    Case(
+        LATIN1_NAMES["late_nul"],
+        "removed-names",
+        True,
+        committed={"tools/digest.py": UTF8_HEAD + PAD_LINES + "BLOB = '\0'\n" + SIGN_OFF_LINE, "tools/run_report.sh": SIGN_OFF_CALLER},
+        files={"tools/digest.py": UTF8_HEAD + PAD_LINES + "BLOB = '\0'\n"},
     ),
 ]
 
@@ -2042,6 +2126,7 @@ CASES = [
         files={"app/util.py": "X = 1\n"},
     ),
     *INPUT_CASES,
+    *LATIN1_CASES,
     *DELETED_MODULE_CASES,
     Case(
         "function removed with its callers",
@@ -2769,11 +2854,13 @@ BLOCK_REASONS = {
 BLOCK_REASONS.update({case.name: case.reason for case in HOME_AND_EMAIL_CASES if case.reason})
 # Good cases that must also print a marker, so a skipped check cannot pass silently.
 WARNING_HEADERS = {
+    LATIN1_NAMES["binary"]: (f"data/blob.bin{BINARY_NOTICE}",),
+    LATIN1_NAMES["late_nul"]: (f"tools/digest.py{BINARY_NOTICE}",),
     "history, no longer and wrapped line warn through the hook": (
         "WARN notes.md:1: history note in a current document",
         "WARN notes.md:3: possible history note: 'no longer' describes a change",
         "WARN notes.md:6: hard-wrapped prose line",
-    )
+    ),
 }
 PASS_MARKERS = {
     "unreadable file listed": "docs/diagram.png: unreviewed: cannot be read as text",

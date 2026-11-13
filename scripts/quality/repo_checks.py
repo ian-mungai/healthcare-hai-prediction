@@ -364,6 +364,16 @@ class Runtime:
     provided: dict[str, str]
 
 
+BINARY_DIFF = re.compile(r"Binary files (?:/dev/null|a/(?P<old>.+?)) and (?:/dev/null|b/(?P<new>.+)) differ")
+BINARY_NOTICE = ": skipped: binary data (NUL bytes), not checked for removed names"
+SKIPPED: dict[str, str] = {}  # Changed file -> the notice for it, for each file the removed-names check skipped as binary in this run.
+
+
+def skip_binary(path: str) -> None:
+    """Record that the removed-names check skips ``path`` as binary data, once."""
+    SKIPPED.setdefault(path, f"{path}{BINARY_NOTICE}")
+
+
 def git(*args: str) -> str:
     """Run Git in the current repository and return its output."""
     return run_command("git", args, check=True).stdout
@@ -591,20 +601,49 @@ def input_line_numbers(path: str, text: str) -> set[int]:
     return names - others
 
 
+def decode_text(data: bytes) -> str | None:
+    """Return the text of ``data``: UTF-8 when it is valid, otherwise Latin-1, which reads every byte. None when it holds a NUL byte: that is binary data."""
+    if b"\0" in data:
+        return None
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        return data.decode("latin-1")
+
+
+def git_text(*args: str) -> str:
+    """Run Git and return its output, keeping bytes that are not UTF-8 as lone surrogates for ``repaired`` instead of raising."""
+    return run_command("git", args, check=True, errors="surrogateescape").stdout
+
+
+def repaired(text: str) -> str:
+    """Return ``text`` from ``git_text`` with its non-UTF-8 bytes read as Latin-1; text that was valid UTF-8 is returned as it is."""
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        return decode_text(text.encode("utf-8", "surrogateescape")) or text
+    return text
+
+
 def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
     """Return removed lines by file and deleted paths, from the staged diff or, in CI, the pushed range.
 
     A removed line that only named an input of a workflow or action (see ``input_line_numbers``) is left out: the input is gone, the name stays free.
+    A file that is not UTF-8 is read as Latin-1. A file that holds NUL bytes is binary: it is skipped and named in ``SKIPPED``, which the command prints.
     """
+    SKIPPED.clear()
     refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
     old_ref = refs[0] if len(refs) == 2 else "HEAD"
     deleted = git("diff", *refs, "--name-only", "--diff-filter=D").splitlines()
     removed: dict[str, list[str]] = {}
     inputs: dict[str, set[int]] = {}
     current, in_header, old_number = "", False, 0
-    for line in git("diff", *refs, "-U0", "--inter-hunk-context=0", "--no-color").splitlines():
+    for line in git_text("diff", *refs, "-U0", "--inter-hunk-context=0", "--no-color").splitlines():
+        binary = BINARY_DIFF.fullmatch(line) if in_header else None
         if line.startswith("diff --git "):
             current, in_header = "", True
+        elif binary:
+            skip_binary(binary.group("new") or binary.group("old") or "")
         elif in_header and line.startswith("--- "):
             current = line[6:] if line.startswith("--- a/") else ""
         elif line.startswith("@@"):
@@ -612,9 +651,12 @@ def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
             old_number = int(line.split()[1].lstrip("-").split(",")[0])
         elif not in_header and line.startswith("-") and current:
             if current not in inputs:
-                inputs[current] = input_line_numbers(current, git("show", f"{old_ref}:{current}"))
-            if old_number not in inputs[current]:
-                removed.setdefault(current, []).append(line[1:])
+                before = decode_text(git_text("show", f"{old_ref}:{current}").encode("utf-8", "surrogateescape"))
+                inputs[current] = set() if before is None else input_line_numbers(current, before)
+                if before is None:
+                    skip_binary(current)
+            if current not in SKIPPED and old_number not in inputs[current]:
+                removed.setdefault(current, []).append(repaired(line[1:]))
             old_number += 1
     return removed, deleted
 
@@ -625,10 +667,9 @@ def reference_files() -> dict[str, list[str]]:
     for path in git("ls-files").splitlines():
         if path == "CHANGELOG.md" or path.startswith("e2e/") or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
             continue
-        try:
-            files[path] = Path(path).read_text().splitlines()
-        except UnicodeDecodeError:
-            continue
+        text = decode_text(Path(path).read_bytes())
+        if text is not None:
+            files[path] = text.splitlines()
     return files
 
 
@@ -2246,6 +2287,8 @@ def main() -> int:
         except ValueError:
             parser.error("--today must be a valid YYYY-MM-DD date")
     code = run(args)
+    for notice in SKIPPED.values():
+        sys.stderr.write(f"{notice}\n")
     sys.stdout.write(permanent_summary())
     return code
 
