@@ -45,24 +45,22 @@ def plan_path(path: object) -> PurePosixPath | None:
     return relative if not relative.is_absolute() and ".." not in relative.parts and relative.parts[0] == "data" and len(relative.parts) > 1 else None
 
 
-def install(code_root: Path, relative: PurePosixPath, body: bytes) -> None:
-    """Write a plan input as a real file. A file already there must be the same bytes."""
+def conflict(code_root: Path, relative: PurePosixPath, body: bytes) -> bool:
+    """A file already at the path that is a link or holds other bytes."""
     target = code_root / relative
-    if target.is_symlink() or (target.exists() and target.read_bytes() != body):
-        raise InputsError("A plan input already in the code root differs from the tracked one.")
-    if not target.exists():
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(body)
+    return target.is_symlink() or (target.exists() and target.read_bytes() != body)
 
 
-def install_tracked(code_root: Path) -> None:
-    """Copy the tracked plan inputs of the bundle to the paths the locked plans read."""
+def tracked_files(code_root: Path) -> dict[PurePosixPath, bytes]:
+    """The tracked plan inputs of the bundle, by the path the locked plans read them at."""
     folder = code_root / BUNDLE / PLAN_INPUTS
+    found: dict[PurePosixPath, bytes] = {}
     for path in sorted(item for item in folder.rglob("*") if item.is_file()):
         relative = plan_path(path.relative_to(folder).as_posix())
         if relative is None:
             raise InputsError("A tracked plan input is not under the data folder.")
-        install(code_root, relative, path.read_bytes())
+        found[relative] = path.read_bytes()
+    return found
 
 
 def is_pointer(body: bytes) -> bool:
@@ -105,8 +103,8 @@ def seed_entries(code_root: Path) -> list[dict[str, Any]]:
     return [item for item in files if "plan_input" in item]
 
 
-def install_seed(code_root: Path) -> None:
-    """Check every seed file that a plan reads and copy it to its plan input path. Nothing is copied while any file has a problem."""
+def seed_files(code_root: Path) -> dict[PurePosixPath, bytes]:
+    """Check every seed file that a plan reads and return its bytes by plan input path. Any problem with any file stops the run."""
     folder = code_root / SEED
     entries = seed_entries(code_root)
     problems = []
@@ -120,30 +118,39 @@ def install_seed(code_root: Path) -> None:
             problems.append(problem)
     if problems:
         raise InputsError(f"The bootstrap seed is not usable: {named(problems)}.")
-    for item in entries:
-        relative = plan_path(item["plan_input"])
-        if relative is not None:
-            install(code_root, relative, (folder / item["path"]).read_bytes())
+    return {relative: (folder / item["path"]).read_bytes() for item in entries if (relative := plan_path(item["plan_input"])) is not None}
 
 
-def require_expected(code_root: Path) -> None:
-    """Every plan input the locked plans read is a real file in the code root, so no collector finds one missing after the run has started."""
+def require_expected(code_root: Path, coming: set[PurePosixPath]) -> None:
+    """Every plan input the locked plans read is a real file in the code root or about to be copied there, so no collector finds one missing after the run
+    has started."""
     try:
         expected = json.loads((code_root / BUNDLE / check_baseline_run.EXPECTED_NAME).read_text(encoding="utf-8"))["expected_plan_inputs"]
     except (OSError, ValueError, KeyError, TypeError):
         raise InputsError("The list of expected plan inputs is not usable.") from None
-    missing = [path for path in expected if plan_path(path) is None or not (code_root / path).is_file()]
+    missing = [path for path in expected if (relative := plan_path(path)) is None or (relative not in coming and not (code_root / path).is_file())]
     if missing:
         raise InputsError(f"Plan inputs are missing: {named([f'{path} is not in the code root' for path in missing])}.")
 
 
 def prepare(code_root: Path) -> Path:
-    """Check the bundle against its lock, install the tracked plan inputs and the seed files and return the bundle folder."""
+    """Check the bundle against its lock and the seed against its manifest, then copy the tracked plan inputs and the seed files into the code root and return
+    the bundle folder. Nothing is copied unless every check passes."""
     bundle = code_root / BUNDLE
     problems = check_baseline_run.lock_problems(bundle)
     if problems:
         raise InputsError(f"The tracked inputs differ from their lock: {named(problems)}.")
-    install_tracked(code_root)
-    install_seed(code_root)
-    require_expected(code_root)
+    files = tracked_files(code_root)
+    for relative, body in seed_files(code_root).items():
+        if relative in files and files[relative] != body:
+            raise InputsError("A plan input is both tracked and in the seed, with other bytes.")
+        files[relative] = body
+    require_expected(code_root, set(files))
+    if any(conflict(code_root, relative, body) for relative, body in files.items()):
+        raise InputsError("A plan input already in the code root differs from the tracked one.")
+    for relative, body in files.items():
+        target = code_root / relative
+        if not target.exists():
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(body)
     return bundle

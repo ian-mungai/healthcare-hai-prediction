@@ -235,6 +235,19 @@ def test_a_missing_seed_file_stops_the_run_and_names_it(host: Host, monkeypatch:
     check("mmd_data.csv" not in text, f"only the missing file is named: {text}")
 
 
+def test_a_refused_run_writes_nothing_into_the_code_root(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    (host.seed / "mmd_references/countynames.tsv").unlink()
+    refused(monkeypatch, host, "countynames.tsv is missing")
+    check(not (host.code / "data").exists(), "neither a tracked plan input nor a seed file was copied before the check passed")
+    document = json.loads((host.bundle / "expected_plan_inputs.json").read_text())
+    document["expected_plan_inputs"].append("data/nowhere/missing.json")
+    (host.bundle / "expected_plan_inputs.json").write_text(json.dumps(document))
+    host.relock()
+    (host.seed / "mmd_references/countynames.tsv").write_bytes(SEED_FILES["mmd_references/countynames.tsv"][1])
+    refused(monkeypatch, host, "missing.json is not in the code root")
+    check(not (host.code / "data").exists(), "an expected input without a home also stops the run before any copy")
+
+
 def test_an_unresolved_lfs_pointer_stops_the_run_and_names_the_file(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     (host.seed / "mmd_browser_history/mmd_data.csv").write_bytes(POINTER)
     refused(monkeypatch, host, "mmd_browser_history/mmd_data.csv is an unresolved LFS pointer")
