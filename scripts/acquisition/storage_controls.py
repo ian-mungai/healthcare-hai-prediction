@@ -50,6 +50,11 @@ def verify_route(receipt: dict, source: dict, lineage: dict, root: Path, evidenc
 
         verify_census_detailed_capture(receipt, source, lineage, root, evidence_only)
         return
+    if mode == "census_acs_tables":
+        from scripts.acquisition.census_acs_tables_contract import verify_capture as verify_census_tables_capture
+
+        verify_census_tables_capture(receipt, source, lineage, root, evidence_only)
+        return
     if mode == "onc_mu_hospital":
         from scripts.acquisition.onc_mu_contract import verify_capture as verify_onc_mu_capture
 

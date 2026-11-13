@@ -1,0 +1,1395 @@
+{
+  "batches": [
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/subject",
+      "file_name": "ACSST5Y2010.S0101-Data.csv",
+      "id": "30d0d043cf85c02e4960ec0b87f5d3685ef215089f977e978a54c9559bf6c92f",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/subject",
+      "file_name": "ACSST5Y2011.S0101-Data.csv",
+      "id": "2ce5e4ea49994c7acc9737a7a4656b98b97ae8496b25cb02e21ff3816ddef376",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/subject",
+      "file_name": "ACSST5Y2012.S0101-Data.csv",
+      "id": "fa82486ca04da40e068e31a3506f3fd2cc8d39748dfad993eb2c63b64040bab5",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/subject",
+      "file_name": "ACSST5Y2013.S0101-Data.csv",
+      "id": "cafc4bf8619c0f4c6c4ff64fbfca5ed4a08b7f98e79df2bc2ad8c9148f2e1a3e",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/subject",
+      "file_name": "ACSST5Y2014.S0101-Data.csv",
+      "id": "efbd15fb9626d61357c3e157255da2a510b3103419cd01ca865f674741780c94",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/subject",
+      "file_name": "ACSST5Y2015.S0101-Data.csv",
+      "id": "03b04cd559a1d0d0c98e71d9ec92ba9db84932ed24ea899cd870e16c51746701",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/subject",
+      "file_name": "ACSST5Y2016.S0101-Data.csv",
+      "id": "2ec2fccabeae084bbe5a1949e210e30d467279d176ff9aef59eaa8e33f3958c9",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/subject",
+      "file_name": "ACSST5Y2017.S0101-Data.csv",
+      "id": "6c3782158495d4b89d94bfe852b096991cbd8a8a7df5a458e3e7cf87d423c5be",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/subject",
+      "file_name": "ACSST5Y2018.S0101-Data.csv",
+      "id": "8099b41a22c321f332d7e3a5980f1839fda86b053e218161e6384944699d19a4",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/subject",
+      "file_name": "ACSST5Y2019.S0101-Data.csv",
+      "id": "f351debc6f55c9055c21ba638af7dc5989fc62722fd90341d18d527e7cffa0cc",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/subject",
+      "file_name": "ACSST5Y2020.S0101-Data.csv",
+      "id": "f6188a9c3b073cf69f23b2a8ec8a6cd0e012d5a4162a688f099190bd96d3e5a2",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/subject",
+      "file_name": "ACSST5Y2021.S0101-Data.csv",
+      "id": "c26bf9f41ad8c63d35bca3967e1984f7bbb762bae29aed6362b18ad8b85e442d",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/subject",
+      "file_name": "ACSST5Y2022.S0101-Data.csv",
+      "id": "f9b2eb6786f98eca4e8507486f0c2b97e0f4bab4e5b0c8161b65354efb323ef6",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/subject",
+      "file_name": "ACSST5Y2023.S0101-Data.csv",
+      "id": "0207b7f393581b22e7780a56b022777b19f03d05ec88142f1deaf094b8b2480b",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
+      "file_name": "ACSST5Y2024.S0101-Data.csv",
+      "id": "c556f3d35987162027388497c190d7660c31c8cf3b8ee9d32d0a885c4569047f",
+      "product": "subject",
+      "table": "S0101",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/subject",
+      "file_name": "ACSST5Y2010.S0601-Data.csv",
+      "id": "c424ab8f68b2bda3457d5c8883bf0314b816bd9c20c563fd3ed77bd62b12a45d",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/subject",
+      "file_name": "ACSST5Y2011.S0601-Data.csv",
+      "id": "420939651110cb78bf2476a597118a5ea68b382352c68663f55cdd596a3208fe",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/subject",
+      "file_name": "ACSST5Y2012.S0601-Data.csv",
+      "id": "0a11e571261088b68e2c305b4c3af94c61071d2baa42193ff62fb6173a19ebe0",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/subject",
+      "file_name": "ACSST5Y2013.S0601-Data.csv",
+      "id": "b27d0e6e0dd270dd79dc7422207a9edddc62898fef8b9fbc096922470ab5e23d",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/subject",
+      "file_name": "ACSST5Y2014.S0601-Data.csv",
+      "id": "5bc6682602ecd3d64a0051e3e3e9ae3c3b95cc018a436b07af875a24761f18b8",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/subject",
+      "file_name": "ACSST5Y2015.S0601-Data.csv",
+      "id": "f5d991b8de93faec9a44113667b7375912c1605b47c9698d81543aab7110cf21",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/subject",
+      "file_name": "ACSST5Y2016.S0601-Data.csv",
+      "id": "844562da44311b696e2c6f85d1da97e7d8eb1d8a4679b280bcc8091dace1a0f3",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/subject",
+      "file_name": "ACSST5Y2017.S0601-Data.csv",
+      "id": "48e3cd22d141c3bc5dfc624286ae5203bfd663700778c9532de83fb99414a9dd",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/subject",
+      "file_name": "ACSST5Y2018.S0601-Data.csv",
+      "id": "97db59624b3ca6863fcbeddd748c0a1a8b0ee2c515a2dbad01d3ed9f1fccdf84",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/subject",
+      "file_name": "ACSST5Y2019.S0601-Data.csv",
+      "id": "2aa437076036af25ece9d15ec1386eda2ba2df426e6750e5decd12d36e81d378",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/subject",
+      "file_name": "ACSST5Y2020.S0601-Data.csv",
+      "id": "51303782f88d24ae78969cc476005467445633dcb804a45372b2bcc111e1a167",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/subject",
+      "file_name": "ACSST5Y2021.S0601-Data.csv",
+      "id": "b827e986795184d9b2b3ff2fd1800ae786cce33fe2049745e651783c91aa8e81",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/subject",
+      "file_name": "ACSST5Y2022.S0601-Data.csv",
+      "id": "248a9f721de7a5c2c6689c8a7899652892ee347daf7afb0cab5df6f9cee85239",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/subject",
+      "file_name": "ACSST5Y2023.S0601-Data.csv",
+      "id": "e7dab05f9c26d83c3cde98d69b09420af16d2d467744e016f66543a79c034a45",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
+      "file_name": "ACSST5Y2024.S0601-Data.csv",
+      "id": "9b97183a915fa86aaece275c43d3cf510b5be61a44a47458d372c9d02c14b881",
+      "product": "subject",
+      "table": "S0601",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/subject",
+      "file_name": "ACSST5Y2012.S1701-Data.csv",
+      "id": "897dc6c716ada176c2e09b6887814e58cbb94c427302279316b36680d2df5f10",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/subject",
+      "file_name": "ACSST5Y2013.S1701-Data.csv",
+      "id": "add30775aa6c44d25e5e22be685cb6032c862fafd2eb637b6ae2bb48a7be54ef",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/subject",
+      "file_name": "ACSST5Y2014.S1701-Data.csv",
+      "id": "45acca9160e92ef2852bb4e12c647feb820f796e7aa2ca5e527c25d2bc1a700b",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/subject",
+      "file_name": "ACSST5Y2015.S1701-Data.csv",
+      "id": "4ca5f415fbd92b990e4fac445abb9adc9c7ecda260e0c6744751574559993c38",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/subject",
+      "file_name": "ACSST5Y2016.S1701-Data.csv",
+      "id": "0df387aeee14f6a39f46f071a7cacf169fde0916f915e17bc3a7753f1f8ebe02",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/subject",
+      "file_name": "ACSST5Y2017.S1701-Data.csv",
+      "id": "fc0347ad70a45da45e2734367b03bee638ea4108e1e4d29999869ffa83617253",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/subject",
+      "file_name": "ACSST5Y2018.S1701-Data.csv",
+      "id": "6269ac00d8d72757b46587d861cab9d2ba8b00219c9b092d7ff372e7bf920859",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/subject",
+      "file_name": "ACSST5Y2019.S1701-Data.csv",
+      "id": "cf9ec407c3c2afc3d49ca047e67dc362e4ae24f468f1b28c749292493e03c8c0",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/subject",
+      "file_name": "ACSST5Y2020.S1701-Data.csv",
+      "id": "d97defa36e4bd249c9bd0f7c28440e00888756e4bebb5628a8d7fd79746fa602",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/subject",
+      "file_name": "ACSST5Y2021.S1701-Data.csv",
+      "id": "21e02082a8e2d6de43b44fb497b6e51cf0572dc3265174ef04092b3033688310",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/subject",
+      "file_name": "ACSST5Y2022.S1701-Data.csv",
+      "id": "d1e9b3cfa5806a9a22cf9762822401357f105bd7ec39bcb23201eeaecf1fcf18",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/subject",
+      "file_name": "ACSST5Y2023.S1701-Data.csv",
+      "id": "ae7e539a48585abfd466c6f187f216ec71f1398a0596960541c17043cfa12cc6",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
+      "file_name": "ACSST5Y2024.S1701-Data.csv",
+      "id": "95dbdfa956cb6a6a2147a55c6208c6b2914ef349076baab24431d3db12a95d9e",
+      "product": "subject",
+      "table": "S1701",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/subject",
+      "file_name": "ACSST5Y2010.S2503-Data.csv",
+      "id": "310284a93acecd9acfcd1c58e7135b996709695518d5288315f00fd6be1e9842",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/subject",
+      "file_name": "ACSST5Y2011.S2503-Data.csv",
+      "id": "8cc9c8cef598859ab14dfd50fb366ab698b431d024e8e38d6a87af2a59b968ff",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/subject",
+      "file_name": "ACSST5Y2012.S2503-Data.csv",
+      "id": "5b50af69e3db255662675cf93339d666ab4d506f65d32fd4857ce85a84608942",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/subject",
+      "file_name": "ACSST5Y2013.S2503-Data.csv",
+      "id": "0d7bcfa879fe64799699df4ea5ac67b7f9800d0c8f72fac798f0b2affc0a4710",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/subject",
+      "file_name": "ACSST5Y2014.S2503-Data.csv",
+      "id": "451ed71cc378f68b6d7b0386ea1c0d6e5da4211ce0d6c7933c4eb0889d2a4c64",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/subject",
+      "file_name": "ACSST5Y2015.S2503-Data.csv",
+      "id": "d52408b900c94c19f5cf334ded50ac50a6398826bd9be3f590465f63a5b1b127",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/subject",
+      "file_name": "ACSST5Y2016.S2503-Data.csv",
+      "id": "3e70b788e55ec69e5fedc485771325a36677ccba49c14142f41900621e874acd",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/subject",
+      "file_name": "ACSST5Y2017.S2503-Data.csv",
+      "id": "dd128157b5aceddd8acff472523946a85aede1a46c8f42200fbfd9bdea60555f",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/subject",
+      "file_name": "ACSST5Y2018.S2503-Data.csv",
+      "id": "0021e8b5a5a95434bee3e03fd95f9090c1ae3f902e9745de13a8db9a205a3cc0",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/subject",
+      "file_name": "ACSST5Y2019.S2503-Data.csv",
+      "id": "a82f5a67291637a4f8fd1fc023e159ee4593f9b1e54ab71e14539af209ded2ab",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/subject",
+      "file_name": "ACSST5Y2020.S2503-Data.csv",
+      "id": "2ce2f07399f526319aa9c3f8eb4a61ddd329e151750f6491e8536f5facb50ec9",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/subject",
+      "file_name": "ACSST5Y2021.S2503-Data.csv",
+      "id": "6401c9473586b5e352cff3adfc3db1a471a58cddd75d9049a9df7da8489875b9",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/subject",
+      "file_name": "ACSST5Y2022.S2503-Data.csv",
+      "id": "24b4a53d3a3220863de7a8a163e4d8f490383083edc87b175cf0d7d24d3ccf2c",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/subject",
+      "file_name": "ACSST5Y2023.S2503-Data.csv",
+      "id": "4f8bec508181b5544fd01d2c3a520e9b0d8d2011770cb3b6e879d6a7cc2cd803",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
+      "file_name": "ACSST5Y2024.S2503-Data.csv",
+      "id": "bad1d7bdcdc1767018215ef629722a1cd30d8e97c9bf66577bee7747c9da737f",
+      "product": "subject",
+      "table": "S2503",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/subject",
+      "file_name": "ACSST5Y2012.S2701-Data.csv",
+      "id": "1b69e02fcf620f02863478480666c505b9da8dc40f52c6bc232a94cb54c4a019",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/subject",
+      "file_name": "ACSST5Y2013.S2701-Data.csv",
+      "id": "216aa8e0fbd1df6a47e41358fe6e66f75b4bbd23f5a6b7a876bcba06ee4b11d5",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/subject",
+      "file_name": "ACSST5Y2014.S2701-Data.csv",
+      "id": "93020980aa45a15ffc94b74cec85c90c0cc60988fbb9986e89ff73ea715478a5",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/subject",
+      "file_name": "ACSST5Y2015.S2701-Data.csv",
+      "id": "5cae645602099f07ff44d69ac44adba5d146073c36548ad8815c4d6dc3e44ce0",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/subject",
+      "file_name": "ACSST5Y2016.S2701-Data.csv",
+      "id": "87aa82b5fc883279cc4c6ae5d8077079f4417e784345a700bc800361561b95c6",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/subject",
+      "file_name": "ACSST5Y2017.S2701-Data.csv",
+      "id": "d763e5ad119059dc7542e0fcfa94319220c10ddc71689b77b02153c3016bdd05",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/subject",
+      "file_name": "ACSST5Y2018.S2701-Data.csv",
+      "id": "d56323a821155fc1646d42d581d0a132ff5c606e66bfbb7be85fa79e9b77d029",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/subject",
+      "file_name": "ACSST5Y2019.S2701-Data.csv",
+      "id": "45aa23dcf1522c596438200b061c1ca1a94e71eee8f85091cacdfd18842a74a3",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/subject",
+      "file_name": "ACSST5Y2020.S2701-Data.csv",
+      "id": "0c3e9b09856937697cfea34930d94dd8aa9dc36bc488636cd548ec2b67328e49",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/subject",
+      "file_name": "ACSST5Y2021.S2701-Data.csv",
+      "id": "083826f4b47bb8ccf4cfb7e24872314929eaa64c3e03b0108e269742dfafc8ba",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/subject",
+      "file_name": "ACSST5Y2022.S2701-Data.csv",
+      "id": "ca7252889e3e3a8e120a3661a031f05877b7386a0ee119c8b40f09f7aaea24d8",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/subject",
+      "file_name": "ACSST5Y2023.S2701-Data.csv",
+      "id": "cd035079caf92c1e6c84702f157073251a52139fb75bf6bc267e3553eb257e15",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/subject",
+      "file_name": "ACSST5Y2024.S2701-Data.csv",
+      "id": "e73f49181dc028acbc3f15a0ab4b7585c16e0cb3b53da68f2b93f4dca7a64378",
+      "product": "subject",
+      "table": "S2701",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/profile",
+      "file_name": "ACSDP5Y2010.DP02-Data.csv",
+      "id": "9a129cfb1f7f8832a5d5da3079faed78ae5dff9be61a9899d80aa3dbdbeaa088",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/profile",
+      "file_name": "ACSDP5Y2011.DP02-Data.csv",
+      "id": "ad05e18ae6c6fe64eb1a7ec1a72fba87f6962a9de190752b38bc08e0ffa8249c",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/profile",
+      "file_name": "ACSDP5Y2012.DP02-Data.csv",
+      "id": "c5e260f22bc4450398e06c4646e08d4b1d594800dc3bd99bcfd4f066f7fb7aa7",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/profile",
+      "file_name": "ACSDP5Y2013.DP02-Data.csv",
+      "id": "90a0b0afc67e7f1c0191cd1be434d9e391b9f055f5b2abf7f41e08748dde005e",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/profile",
+      "file_name": "ACSDP5Y2014.DP02-Data.csv",
+      "id": "af4f167b07cc4d9560cd85b645c97833851408b549535c9528723b426b18615c",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/profile",
+      "file_name": "ACSDP5Y2015.DP02-Data.csv",
+      "id": "50a9228dd5f4d49fd6863455f34b26593533d94de51978c577926dbadf8be010",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/profile",
+      "file_name": "ACSDP5Y2016.DP02-Data.csv",
+      "id": "d1a4bb91b5ce73f3f189c1d1a33af997c69ed95099b4b1f122283ee16e1dcbb1",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/profile",
+      "file_name": "ACSDP5Y2017.DP02-Data.csv",
+      "id": "8238ad0fcaad3092e483a035ccedf1d0e7d1d90cba28c1e6e2004356ebc520cc",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/profile",
+      "file_name": "ACSDP5Y2018.DP02-Data.csv",
+      "id": "ab009f6fb1ee05664370127e033db12de3c9efaf2c0958e5568af6660a15141d",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/profile",
+      "file_name": "ACSDP5Y2019.DP02-Data.csv",
+      "id": "4c216827ebd519d80bf65b42a88a3e1e127023794482f4850caa74cbfe5456a4",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/profile",
+      "file_name": "ACSDP5Y2020.DP02-Data.csv",
+      "id": "11c5761a85427bd3031589c6825383f514a589c52ffce1b90153b2b316a0130e",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/profile",
+      "file_name": "ACSDP5Y2021.DP02-Data.csv",
+      "id": "97b2c44639c1edc74899b7cf7853857407e7e25d101e9af859300cbbe6bd98b1",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/profile",
+      "file_name": "ACSDP5Y2022.DP02-Data.csv",
+      "id": "0b94ef8ab0dacba29711d00e0c8e500ec4bedb6f1709aede562da49a190ae09b",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/profile",
+      "file_name": "ACSDP5Y2023.DP02-Data.csv",
+      "id": "fd9b84cc40e0358ec0951f5c83be1091e896baabb2aab55f9bfeb85b4fef6978",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/profile",
+      "file_name": "ACSDP5Y2024.DP02-Data.csv",
+      "id": "1158c846fe3fe24460074a07a121fa7793aa836003c81c47e2418b35788a7f7f",
+      "product": "profile",
+      "table": "DP02",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/profile",
+      "file_name": "ACSDP5Y2010.DP03-Data.csv",
+      "id": "a144afbf1ca45274e60595d273cb9059f44500afbac4c095ee6c81cce8552ef4",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/profile",
+      "file_name": "ACSDP5Y2011.DP03-Data.csv",
+      "id": "7197881f7a4ba5fa57a0d5df567eabad764ea67fe370da2bfe4012bcf94fe385",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/profile",
+      "file_name": "ACSDP5Y2012.DP03-Data.csv",
+      "id": "6e92656ef88b03be9d169894a0e0a49505ee3ce84a60b7dbea4bd6db7b0c8cbd",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/profile",
+      "file_name": "ACSDP5Y2013.DP03-Data.csv",
+      "id": "85ac9e2bd6c48d9b2e6c81bfda9599c0cd7b54231d83c0b47480e1b0d1b4e66b",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/profile",
+      "file_name": "ACSDP5Y2014.DP03-Data.csv",
+      "id": "2ae64358133c10e55b9e4035d5571552030af996b0880beffb3d0338a7bc80f3",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/profile",
+      "file_name": "ACSDP5Y2015.DP03-Data.csv",
+      "id": "1b0478e1ea9f88e1a544bfa7412c8486e80f70497fbde67f99212c711a53f90c",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/profile",
+      "file_name": "ACSDP5Y2016.DP03-Data.csv",
+      "id": "4fba589cd63af74db2bfb40707782bda94d7756f9aa644cb88c3aa71fcf595f2",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/profile",
+      "file_name": "ACSDP5Y2017.DP03-Data.csv",
+      "id": "5991920287c3a906871550b66db4a05e4a519f7a859d97f8bb50a5ffce1c82e9",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/profile",
+      "file_name": "ACSDP5Y2018.DP03-Data.csv",
+      "id": "7dd1529d7da9e30909c33724c9adc3b2329ba60dc5bbd2a41e5b09e3b3edcab7",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/profile",
+      "file_name": "ACSDP5Y2019.DP03-Data.csv",
+      "id": "c68b28687204e8ff35a950fdda502d17c1e7b3556164e68b009fce9e8e0af8dc",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/profile",
+      "file_name": "ACSDP5Y2020.DP03-Data.csv",
+      "id": "6955f69229797120595de4881ea883fe15c55b73f0a33e3391101930cc525989",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/profile",
+      "file_name": "ACSDP5Y2021.DP03-Data.csv",
+      "id": "2ae1e096aab4ee21473fcdd9187312b93035a8ecc73d77327db17cf5bf1bff74",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/profile",
+      "file_name": "ACSDP5Y2022.DP03-Data.csv",
+      "id": "e50e74aedd70c1efc01942f3e63ac519bd97921af0d03e4fda50959b052c0e5e",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/profile",
+      "file_name": "ACSDP5Y2023.DP03-Data.csv",
+      "id": "63a18629011bac0eaad528d53c8e64d9ad0397de54a40837d403247c8aa1fb49",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/profile",
+      "file_name": "ACSDP5Y2024.DP03-Data.csv",
+      "id": "279a7505f116457eebb962481c3fc43b5ffcf4d21af8914e66e9756d61ccd7cb",
+      "product": "profile",
+      "table": "DP03",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/profile",
+      "file_name": "ACSDP5Y2010.DP04-Data.csv",
+      "id": "a791e10152f95874562b7b81604e0d07943daf57679386ca3769d48cc7809605",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/profile",
+      "file_name": "ACSDP5Y2011.DP04-Data.csv",
+      "id": "1dd5c632818ab768b06762cc2c4d4207696805c23a9b7f38f394e413e5df4f8b",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/profile",
+      "file_name": "ACSDP5Y2012.DP04-Data.csv",
+      "id": "e8a8f75fb2df3699764803be4b6d8835fceaf148e4093a0495f3d2245d9d88fa",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/profile",
+      "file_name": "ACSDP5Y2013.DP04-Data.csv",
+      "id": "49d8f1f75a945bb4b05c6b1aede130afa0ada57a5ce8f4236c5b5546b6fde608",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/profile",
+      "file_name": "ACSDP5Y2014.DP04-Data.csv",
+      "id": "664b6cc370ef1c135dab0550ca3234ef9db4e0303beaa85d4cc61a89de3ff8f6",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/profile",
+      "file_name": "ACSDP5Y2015.DP04-Data.csv",
+      "id": "e996629b9825eda56bb088b7d07e21d3d44ae1f4df7624b188c2506b5ecfd932",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/profile",
+      "file_name": "ACSDP5Y2016.DP04-Data.csv",
+      "id": "d22f8681ec2e21a2a68c12a39a65e6cb5dd1a7a3c110e9ac2d3ba64bdcd2956e",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/profile",
+      "file_name": "ACSDP5Y2017.DP04-Data.csv",
+      "id": "f758ad057efb5e19ca967a2367cf0bfc00e8665aef177bc3f27fb09924229034",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/profile",
+      "file_name": "ACSDP5Y2018.DP04-Data.csv",
+      "id": "9809248f8fd3814f82c8db856806c1961ae565687b04a9beec985ab1405aea0a",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/profile",
+      "file_name": "ACSDP5Y2019.DP04-Data.csv",
+      "id": "7ad5de1e8efe7e267df538eb03b0c54cf283d406a2b46779cce1e1ffcc5d2a12",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/profile",
+      "file_name": "ACSDP5Y2020.DP04-Data.csv",
+      "id": "5fc5e938cc1a134b126e74e529c1eee5a9d6884f2231ed1d94143cdd09629c61",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/profile",
+      "file_name": "ACSDP5Y2021.DP04-Data.csv",
+      "id": "ef161370acf6b2fc4892d65a85a5163896964f5177fb2e88a9b0ab64da5f412c",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/profile",
+      "file_name": "ACSDP5Y2022.DP04-Data.csv",
+      "id": "10595a3b48d0fc29a46d28d84b4f111992219cf5870fed8c22ab5cfc60c4d98f",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/profile",
+      "file_name": "ACSDP5Y2023.DP04-Data.csv",
+      "id": "bb8ce078517473c9584bd9761989f857a983627bda642568e9cd02b6bc1d8900",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/profile",
+      "file_name": "ACSDP5Y2024.DP04-Data.csv",
+      "id": "4bcc847021b24b7e8a9a1cef35d044fb14d0cb960fd663d668e01504cf1ecf47",
+      "product": "profile",
+      "table": "DP04",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5/profile",
+      "file_name": "ACSDP5Y2010.DP05-Data.csv",
+      "id": "90381f7228ed81f2844ede0f95350c6cd8cc47194045e7edba3097bc8d4dcd4f",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5/profile",
+      "file_name": "ACSDP5Y2011.DP05-Data.csv",
+      "id": "32463d2e94f3e6d1a8d436a0da0c2800dc12b2ca3c3ddeee1dca290cc1542ff0",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5/profile",
+      "file_name": "ACSDP5Y2012.DP05-Data.csv",
+      "id": "e2bb5c028aa21e3e707c75b66b8c141d1d0c9ca2c5cde4a51a8cebd12a53a404",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5/profile",
+      "file_name": "ACSDP5Y2013.DP05-Data.csv",
+      "id": "7c522df9a1a3ff0be4d0cf284c8faa407df20d0e660e380cfae8e9ee5987de56",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5/profile",
+      "file_name": "ACSDP5Y2014.DP05-Data.csv",
+      "id": "46001ac9cdde49c5d18d69a141e842730e1ec192d317430f6b53247d17616588",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5/profile",
+      "file_name": "ACSDP5Y2015.DP05-Data.csv",
+      "id": "6ac81e65f6e2bfa750620f68855bc00a2abcf7ed2b05a2e08d0bd1213de6e29c",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5/profile",
+      "file_name": "ACSDP5Y2016.DP05-Data.csv",
+      "id": "9d299148088c1be060f5e866b03ede2a5e8a745376240e36457b29185e0ab390",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5/profile",
+      "file_name": "ACSDP5Y2017.DP05-Data.csv",
+      "id": "802c5e83c72eb9c4b3ebbb662dc4388baa0e79a7a2c33e5580df44be5a663ee7",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2018/acs/acs5/profile",
+      "file_name": "ACSDP5Y2018.DP05-Data.csv",
+      "id": "c90c2cfe3edf768d662bfa5e4768e75fff324d7f70fb5db193aa99acaab2e2a2",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2018
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2019/acs/acs5/profile",
+      "file_name": "ACSDP5Y2019.DP05-Data.csv",
+      "id": "3347d27d6be8aa8746cba6497efb0c1a66b2dc332f85316ff0a9b90142bcf161",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2019
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2020/acs/acs5/profile",
+      "file_name": "ACSDP5Y2020.DP05-Data.csv",
+      "id": "9d072455edc6030643ba1d58173350c48b5fd92e0212a9ac2d9bc0e5e3422bba",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2020
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2021/acs/acs5/profile",
+      "file_name": "ACSDP5Y2021.DP05-Data.csv",
+      "id": "976e4f9696725b1a5f7b2fce11aaa0022b672c7ebab4dc99a02e3186d1bea210",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2021
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2022/acs/acs5/profile",
+      "file_name": "ACSDP5Y2022.DP05-Data.csv",
+      "id": "9a5876b84bae0377d19023758522fb20c209b7011d206c2a0b69e57a3535b98f",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2022
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2023/acs/acs5/profile",
+      "file_name": "ACSDP5Y2023.DP05-Data.csv",
+      "id": "9eb74a30d1e150331db8bef752176c9fe2358242cea792ade6527445b8283b50",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2023
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2024/acs/acs5/profile",
+      "file_name": "ACSDP5Y2024.DP05-Data.csv",
+      "id": "8497e356d563a9546ee10b30bdd1e446dd7ddd74dce6fd42b67553bc59e17b60",
+      "product": "profile",
+      "table": "DP05",
+      "year": 2024
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5",
+      "file_name": "ACSDT5Y2010.B16005-Data.csv",
+      "id": "a72ff330079b7f5f0ffb7ce56c34ad10cb34f2215a889ffb9a7c96a0eaba2502",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5",
+      "file_name": "ACSDT5Y2011.B16005-Data.csv",
+      "id": "76d90ea2add2d79eeba0e58d02892ffc367c6a7e73804bf9120829b9ffa7a4b6",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5",
+      "file_name": "ACSDT5Y2012.B16005-Data.csv",
+      "id": "aaf21dace81a31b422971f16d85b17843bb743ade2921dd3b676f7f788febda0",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5",
+      "file_name": "ACSDT5Y2013.B16005-Data.csv",
+      "id": "3919b7f4de409a63d2f8ae731c1782fe21fbeca34f567bcac3ec86aade9a815d",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5",
+      "file_name": "ACSDT5Y2014.B16005-Data.csv",
+      "id": "8035d54b015d5b15956c1d1ce0d60a9103b7f3ad50b3c74fb9f43ac73f8ce2bd",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5",
+      "file_name": "ACSDT5Y2015.B16005-Data.csv",
+      "id": "a28af659d514da54192b4d98ac1e01b256ddf1c92111e4388af381bdfcab7194",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.B16005-Data.csv",
+      "id": "7a2adf1d1315f93c546cc8a6839db10c3c5e1a7e0969a7ef9a1b9df76493b9cb",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.B16005-Data.csv",
+      "id": "6fea415874fbdf8f64a78b7e6cf5a6173b79d1c0d8113708946ba2e09d79cce3",
+      "product": "detailed",
+      "table": "B16005",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5",
+      "file_name": "ACSDT5Y2010.B19013-Data.csv",
+      "id": "647b7c1f050241fac1adcd13a2a1f0e39bdf4bd0f6d4e58d285021ac46dc3af2",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5",
+      "file_name": "ACSDT5Y2011.B19013-Data.csv",
+      "id": "52dde34badb9e61f84d504f03819447134506e4c24fe479eb6f19cd176641d1b",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5",
+      "file_name": "ACSDT5Y2012.B19013-Data.csv",
+      "id": "85848a38640c4585454b4d9af42e1218e8805d035eefa3f112988cae786503fc",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5",
+      "file_name": "ACSDT5Y2013.B19013-Data.csv",
+      "id": "86305467d0ca2c5bd33b4df0e138614f60392296a99cde56a3472d1b731a5074",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5",
+      "file_name": "ACSDT5Y2014.B19013-Data.csv",
+      "id": "c7e19ce694f4671ecf3a3ca56fbd4795e5f9269dc140a09705efc3668e8e5547",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5",
+      "file_name": "ACSDT5Y2015.B19013-Data.csv",
+      "id": "b3a7df19474940fd108c8345a92272210b9fff70e198e813fb5c71fcb6b54413",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.B19013-Data.csv",
+      "id": "e25cb835ac612edbdeccb1f90e557fce787c384d808c186d8c438ef0956a54dd",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.B19013-Data.csv",
+      "id": "f81e4472c556002a3217fc1c5ee220e8c6bdfea0cd14fb3d49b6d793e12c2679",
+      "product": "detailed",
+      "table": "B19013",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5",
+      "file_name": "ACSDT5Y2010.B25070-Data.csv",
+      "id": "d8107e4685c32682c57d18fb35586d92279c486ffa03c6dab6a5673f81116b45",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5",
+      "file_name": "ACSDT5Y2011.B25070-Data.csv",
+      "id": "fed9f2c844c87ecc902415c959157451f3eabdd67c5f81ac209b0e1c0f2d3947",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5",
+      "file_name": "ACSDT5Y2012.B25070-Data.csv",
+      "id": "f66994298490dcb90b7af5c88e5160b55454514f05ed66bdf4623cebdea50fdc",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5",
+      "file_name": "ACSDT5Y2013.B25070-Data.csv",
+      "id": "d68cde614f62b5d5f243a38870fbf810debdd4865ddfaed15b09f973c5391f78",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5",
+      "file_name": "ACSDT5Y2014.B25070-Data.csv",
+      "id": "076b79fa539f41dfa405792ddc0e97519c413e88e416dc444fc537ba96f55ece",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5",
+      "file_name": "ACSDT5Y2015.B25070-Data.csv",
+      "id": "57d945c07a6f6cb2e0317b6ca8960379709986f4249f565b6a48d816b292af11",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.B25070-Data.csv",
+      "id": "efba53f886c33dfd17ed98a4445b1c546dbd181739537d360c4a14144ffda265",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.B25070-Data.csv",
+      "id": "01e30a8b7d1737e627f6df8efc6d9a000e4553c0a7178760663b7060491f4df2",
+      "product": "detailed",
+      "table": "B25070",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5",
+      "file_name": "ACSDT5Y2010.B25091-Data.csv",
+      "id": "5e53fb2abdfe6edc94445cd7f0d4e7ae8be02b5dd8cafea5cb6aca9739941794",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5",
+      "file_name": "ACSDT5Y2011.B25091-Data.csv",
+      "id": "e2749250edda26afd24c46178c041566fd5871543ca386a5d4acbcec995f0295",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5",
+      "file_name": "ACSDT5Y2012.B25091-Data.csv",
+      "id": "64f576d0cfeeabadafa624e5f2b0f68f3ff6e9bf215bd088b0ed399facb3b6b4",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5",
+      "file_name": "ACSDT5Y2013.B25091-Data.csv",
+      "id": "a5ed32360cb7f3205b5d114a1997c506a112567cc35beb78554e85c7353164b0",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5",
+      "file_name": "ACSDT5Y2014.B25091-Data.csv",
+      "id": "8ff0bf056b8b35af9d75e9846caf1e61114a59fbdcec6eafbc0694c9874bfbb1",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5",
+      "file_name": "ACSDT5Y2015.B25091-Data.csv",
+      "id": "e85b8237bf8f55eaa4915a3aaefe58e77defe21eb0788f697f84a2ea66015719",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.B25091-Data.csv",
+      "id": "edc740ef6709d2a6626d9c9a52b25653383a7ea13f03c16d8cfa95764ee544c1",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.B25091-Data.csv",
+      "id": "f817c3e4f214025261fe7dfc053fa6fff9956d8df0d4b314c43002035d93809b",
+      "product": "detailed",
+      "table": "B25091",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2010/acs/acs5",
+      "file_name": "ACSDT5Y2010.B26001-Data.csv",
+      "id": "630ec867a22af4adba60d80eb24aae91f0bdf36bc95c62a63e4ca78e1b593168",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2010
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2011/acs/acs5",
+      "file_name": "ACSDT5Y2011.B26001-Data.csv",
+      "id": "18d98cc12ed0d2f27188ed275509c74c1166494488f83c0d03728053ebaa97b1",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2011
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2012/acs/acs5",
+      "file_name": "ACSDT5Y2012.B26001-Data.csv",
+      "id": "db2e3bbb593198a01887e61d1f0a6716bf50d90f694a05664dea8c2b229d15cb",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2012
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2013/acs/acs5",
+      "file_name": "ACSDT5Y2013.B26001-Data.csv",
+      "id": "59e9cad60d6519532a6dc5f2a613a12e48534975ed5267a3b3df8091bbb52330",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2013
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2014/acs/acs5",
+      "file_name": "ACSDT5Y2014.B26001-Data.csv",
+      "id": "a7aae42b1cde82211e78052d5887afa2270bdbf5f98ad96ea6596c87a6788b23",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2014
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2015/acs/acs5",
+      "file_name": "ACSDT5Y2015.B26001-Data.csv",
+      "id": "b64f9ada152227ae65d57a3e8c2258cc80c487e2e1ff6a38fb01438bec188f81",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2015
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.B26001-Data.csv",
+      "id": "ef7ae26cc4e86c7b3660fdc664bcaa8b66a42984afe3daa79c4e8f4011f98b5a",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.B26001-Data.csv",
+      "id": "059c7fae6d52d78a865b4b104863ffddabb837d2c2c2545423ca70992db14778",
+      "product": "detailed",
+      "table": "B26001",
+      "year": 2017
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2016/acs/acs5",
+      "file_name": "ACSDT5Y2016.C16001-Data.csv",
+      "id": "16be61d377a7c4e7114b16e44ceb6b201b8f2e7208b71d3c4a8e5db234d7ab5e",
+      "product": "detailed",
+      "table": "C16001",
+      "year": 2016
+    },
+    {
+      "endpoint": "https://api.census.gov/data/2017/acs/acs5",
+      "file_name": "ACSDT5Y2017.C16001-Data.csv",
+      "id": "b5fdf6639e8422e71080303e657d65c3bf434c8f33be9bf13ad0262e7c2a5f0a",
+      "product": "detailed",
+      "table": "C16001",
+      "year": 2017
+    }
+  ],
+  "credential_reference": "census_api_key",
+  "model_eligible": false,
+  "registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
+  "request_spacing_seconds": 1,
+  "scope": "ACS 5-year county tables moved from data.census.gov exports to the Census API: one unit per table and stored vintage (owner, Nov 12 2026).",
+  "source_id": "ACS",
+  "version": 1
+}

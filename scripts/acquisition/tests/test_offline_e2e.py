@@ -24,6 +24,7 @@ SUITES = [
     "bls_api",
     "census_acs_api",
     "census_acs_detailed",
+    "census_acs_tables",
     "hud_api",
     "wonder_export",
     "reference_download",
