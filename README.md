@@ -14,7 +14,8 @@ Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS C
    python3.12 -m venv .venv
    .venv/bin/python scripts/quality/install_tools.py
    .venv/bin/python -m scripts.quality.lock_env export host --output "$TMPDIR/host_lock"
-   .venv/bin/python -m pip install --require-hashes --only-binary=:all: -r "$TMPDIR/host_lock/requirements.txt"
+   .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$TMPDIR/host_lock/requirements.txt"
+   .venv/bin/python -m pip check
    .venv/bin/python -m scripts.quality.install_markdownlint
    .venv/bin/python -m scripts.quality.install_sqlfluff
    .venv/bin/python -m scripts.quality.install_dvc
