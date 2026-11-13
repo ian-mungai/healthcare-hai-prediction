@@ -85,7 +85,7 @@
     {
       "module": "infra/services/scripts/code_fetch.py",
       "pattern": null,
-      "why": "reviewed: install lists only host folders at run time, never a repository folder: iterdir at infra/services/scripts/code_fetch.py:73 checks that the repo path, when it is a plain folder, holds no content, and iterdir at :79 lists the release folders under the host's repo_releases to find the complete release that matches the digest; it reads no file contents there"
+      "why": "reviewed: install lists only host folders at run time, never a repository folder: iterdir at infra/services/scripts/code_fetch.py:73 checks that the repo path, when it is a plain folder, holds no content, and iterdir at :79 lists the release folders under the host's repo_releases to find the complete release that matches the digest. It also reads file contents at run time, only of a release on the host: verified opens the release's code.tar.gz at :29 to hash it and read its members (:33), and opens each installed member of the release's code folder at :37 to compare it with the archive member. These are reads of one release folder and its own archive, never a file of the repository checkout that the launcher suite runs from"
     },
     {
       "module": "orchestration/airflow_steps.py",
