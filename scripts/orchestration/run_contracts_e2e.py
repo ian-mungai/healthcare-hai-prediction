@@ -119,44 +119,75 @@ def ledger() -> dict[str, bool]:
     return results
 
 
+LEGACY_GROUPS = (
+    "cloud admission before a task is accepted",
+    "FARGATE placement of a started task, target ecs",
+    "FARGATE_SPOT placement of a started task, target auto",
+)
+
+
 def ledger_history() -> dict[str, bool]:
-    """Ledger lines written while the ecs target and the Fargate providers existed still read, and no new line can carry those values."""
+    """Old ecs and Fargate ledger lines and requests still read, group and recover; only the admission of a new submission refuses ecs."""
     import tempfile
 
-    from scripts.orchestration.ledger import Ledger, LedgerError
+    from orchestration.fake import FakeSubmissions
+    from orchestration.interface import Handle, SubmissionRequest
+    from scripts.orchestration.ledger import Ledger
 
     results: dict[str, bool] = {}
-    history = load("ledger_history_lines.json")
-    for case, lines in history.items():
+    states = load("ledger_states.json")
+    for case in LEGACY_GROUPS:
+        lines = states[case]
         with tempfile.TemporaryDirectory(prefix="ledger_history_") as folder:
             store = Ledger(Path(folder))
             run = lines[0]["run_id"]
-            (Path(folder) / f"{run}.jsonl").write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in lines))
-            try:
-                read = store.read(run)
-            except LedgerError:
-                read = []
+            path = store.path(run)
+            path.write_text("".join(json.dumps(line) + "\n" for line in lines))
+            before = path.read_bytes()
+            read = store.read(run)
             results[f"old ledger history reads: {case}"] = read == lines
-            results[f"old ledger history groups by submission: {case}"] = bool(read) and sum(len(group) for group in store.submissions(run).values()) == len(
-                lines
-            )
-    with tempfile.TemporaryDirectory(prefix="ledger_write_") as folder:
-        store = Ledger(Path(folder))
-        for case, lines in history.items():
-            for line in lines:
-                refused = False
-                try:
-                    store.append({key: value for key, value in line.items() if key not in ("schema_version", "at")})
-                except LedgerError:
-                    refused = True
-                results[f"new write refused: {case} {line['event']}"] = refused if _legacy(line) else True
+            results[f"old ledger history groups by submission: {case}"] = sum(len(group) for group in store.submissions(run).values()) == len(lines)
+            results[f"old ledger history is read without a change: {case}"] = path.read_bytes() == before
+    finished = copy.deepcopy(states["finished"])
+    for line in finished:
+        line["target"] = "ecs"
+        line.update(
+            request_version=2,
+            dag_id="synthetic_dag",
+            task_id="silver_build",
+            dag_run_id="manual__synthetic",
+            lineage={"version": 1, "inputs": [], "outputs": []},
+        )
+    check = validator("ledger_line.schema.json")
+    results["old ecs request lines validate"] = all(not list(check.iter_errors(line)) for line in finished)
+    submissions = FakeSubmissions(load("job_templates.json"))
+    submissions.ledger = finished
+    handle = Handle(finished[0]["submission_id"], finished[0]["container_name"])
+    try:
+        recovered = SubmissionRequest.from_record(finished[0])
+        results["old ecs request is recovered from its ledger line"] = recovered.target == "ecs"
+    except SubmissionRefused:
+        results["old ecs request is recovered from its ledger line"] = False
+    results["old ecs submission status reads"] = submissions.status(handle).state == State.SUCCEEDED
+    results["old ecs submission record reads"] = submissions.record(handle) == finished[-1]
+    submissions.ledger = finished[:-1]
+    try:
+        submissions.cancel(handle)
+        results["old ecs submission is cancelled from its ledger line"] = True
+    except SubmissionRefused:
+        results["old ecs submission is cancelled from its ledger line"] = False
+    fresh = FakeSubmissions(load("job_templates.json"))
+    new = SubmissionRequest("silver_build", RUN, "fixture", 9, "synthetic_dag", "silver_build", "manual__new", target="ecs")
+    try:
+        fresh.submit(new)
+        refused = False
+    except SubmissionRefused:
+        refused = True
+    results["a new ecs submission is refused and writes no ledger line"] = refused and fresh.ledger == []
+    results["a new auto submission is admitted"] = fresh.submit(
+        SubmissionRequest("silver_build", RUN, "fixture", 10, "synthetic_dag", "silver_build", "manual__new")
+    ).submission_id.endswith(":10")
     return results
-
-
-def _legacy(line: dict[str, Any]) -> bool:
-    """Whether a history line names the ecs target or a Fargate provider."""
-    placements = line.get("execution", {}).get("placements", [])
-    return line.get("target") == "ecs" or "ecs_task_arn" in line or any(item["capacity_provider"] in ("FARGATE", "FARGATE_SPOT") for item in placements)
 
 
 def requests() -> dict[str, bool]:

@@ -51,8 +51,8 @@ class SubmissionRequest:
         """Recover a v2 caller request from its validated persisted fields."""
         if record.get("request_version") != 2:
             raise SubmissionRefused("request version 2 with caller identity is required")
-        if "target" in record and record["target"] not in ("auto", "docker"):
-            raise SubmissionRefused("target must be auto or docker")
+        if "target" in record and record["target"] not in ("auto", "ecs", "docker"):
+            raise SubmissionRefused("target must be auto, ecs or docker")
         try:
             return cls(
                 record["template"],

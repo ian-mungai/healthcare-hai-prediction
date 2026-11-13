@@ -15,15 +15,11 @@ from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
 STACKS = ("infra/platform", "infra/iam", "infra/services")
-# The contracts and configuration of the legacy launcher ECS target, which no Fargate or ECS placement may come back to.
+# The contracts that must name no Fargate provider. The ledger, request and execution contracts keep the ecs target and the Fargate providers as history
+# values (old lines read, group and recover); only the admission of a new submission refuses them (tests in run_contracts_e2e).
 CONTRACTS = (
-    "execution.schema.json",
-    "ledger_line.schema.json",
-    "submission_request.schema.json",
     "sdk_worker.schema.json",
     "examples/sdk_worker.json",
-    "examples/ledger_states.json",
-    "examples/submission_requests.json",
 )
 GONE = (
     "config/orchestration/ecs_jobs.json",

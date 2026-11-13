@@ -331,6 +331,7 @@
     "target": {
       "enum": [
         "auto",
+        "ecs",
         "docker"
       ]
     },
@@ -356,6 +357,7 @@
         "requested_target": {
           "enum": [
             "auto",
+            "ecs",
             "docker"
           ]
         },
@@ -407,11 +409,14 @@
               },
               "target": {
                 "enum": [
+                  "ecs",
                   "docker"
                 ]
               },
               "capacity_provider": {
                 "enum": [
+                  "FARGATE_SPOT",
+                  "FARGATE",
                   null
                 ]
               },
@@ -501,6 +506,25 @@
               }
             },
             "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "target": {
+                      "const": "ecs"
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "capacity_provider": {
+                      "enum": [
+                        "FARGATE_SPOT",
+                        "FARGATE"
+                      ]
+                    }
+                  }
+                }
+              },
               {
                 "if": {
                   "properties": {

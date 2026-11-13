@@ -77,11 +77,6 @@ def now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-# The contract that reads history. A line written while the ecs target and the Fargate providers existed stays valid there, so old runs keep reading;
-# append checks new lines with the write contract, which refuses those values.
-READ_CONTRACTS = {"ledger_line.schema.json": "ledger_line_history.schema.json"}
-
-
 class Ledger:
     """The ledger files of one state folder."""
 
@@ -89,7 +84,6 @@ class Ledger:
         """``folder`` holds one ``<run_id>.jsonl`` per run and its ``.lock`` file. ``schema`` names the contract its lines follow."""
         self.folder = folder
         self._schema = schema_validator(schema)
-        self._history = schema_validator(READ_CONTRACTS.get(schema, schema))
 
     def path(self, run_id: str) -> Path:
         """The ledger file of one run; refuses a malformed run ID before it reaches a path."""
@@ -117,7 +111,7 @@ class Ledger:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
     def read(self, run_id: str) -> list[dict[str, Any]]:
-        """Every line of the run's ledger, checked for the history contract and order; an empty list when none exists."""
+        """Every line of the run's ledger, checked for schema and order; an empty list when none exists."""
         path = self.path(run_id)
         if not path.exists():
             return []
@@ -131,7 +125,7 @@ class Ledger:
                 line = json.loads(raw)
             except ValueError:
                 raise LedgerError(f"{path.name}:{number}: not JSON") from None
-            errors = sorted(self._history.iter_errors(line), key=str)
+            errors = sorted(self._schema.iter_errors(line), key=str)
             if errors:
                 raise LedgerError(f"{path.name}:{number}: {errors[0].message}")
             if line["run_id"] != run_id:

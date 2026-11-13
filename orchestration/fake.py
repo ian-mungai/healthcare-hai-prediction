@@ -77,6 +77,8 @@ class FakeSubmissions:
             if (persisted.target or "auto") != (request.target or "auto"):
                 raise SubmissionRefused("target differs from the persisted submission target")
             return handle
+        if request.target == "ecs":
+            raise SubmissionRefused("target ecs is retired: a new submission takes auto or docker")
         handle = Handle(request.submission_id, request.container_name)
         self._handles[request.submission_id] = handle
         spec_sha256 = hashlib.sha256(json.dumps(spec, sort_keys=True).encode()).hexdigest()
