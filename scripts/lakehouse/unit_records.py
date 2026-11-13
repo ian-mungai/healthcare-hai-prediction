@@ -232,6 +232,7 @@ def take_completion(storage: Storage, bucket: str, selection: Selection, collect
     key, _, record = done
     for ref in record["manifests"]:
         selection.manifests[collection][(ref["key"], ref["version_id"])] = fetch_manifest(storage, bucket, collection, ref, key)
+    parts = completion_record.key_payload(key, RAW_ROOT, record["unit_key"])
     for item in (*record["data_objects"], *record["other_objects"]):
         guard_key(item["key"], key)
         selection.named[collection][(item["key"], item["version_id"])] = {
@@ -239,6 +240,7 @@ def take_completion(storage: Storage, bucket: str, selection: Selection, collect
             "byte_count": item["byte_count"],
             "role": item["role"],
             "record": key,
+            "reversion_run": parts[1] if parts else None,
             "label": label("current", None, None, record["retrieved_at_utc"]),
         }
 

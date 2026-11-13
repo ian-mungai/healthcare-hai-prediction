@@ -17,7 +17,8 @@ rebuilt (``scripts/lakehouse/dictionary.py``). Only S3 and the committed table m
 rebuild bronze. A table may declare how its CSV is laid out (delimiter, byte-order mark, label row, preamble, unnamed
 headers) and narrow its files by capture with a snapshot pattern. While the raw read capability is on (``HAI_READ_RAW_ROOT=true``), the completion and
 stale records of the ingestion units choose what loads (``scripts/lakehouse/unit_records.py``). Every earlier capture stays a retired observation, an object no
-record names stops its table, and an object the newest record names that an earlier generation retired stops its table. A stale record that points at anything
+record names stops its table, and an object the newest record names that an earlier generation retired loads again as a new observation bound to the
+run ID of a reversion record (any other record that names it stops its table); the old observation stays retired. A stale record that points at anything
 but the unit's newest completion record's objects stops its table. Bronze never matches an object between the bucket root and ``raw/``. Failure modes: plans/
 bronze_hai_20261002/, bronze_manifest_20261002/ and bronze_county_20261002/.
 """
@@ -33,7 +34,7 @@ import os
 import re
 import sys
 import tempfile
-from collections import Counter
+from collections import Counter, defaultdict
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
@@ -406,14 +407,72 @@ def retirement_for(older: dict[str, str] | None, identity: tuple[str, str], sha2
     return json.dumps({"key": identity[0], "version_id": identity[1], "sha256": sha256, "reason": "superseded_by_newer_record", **older}, sort_keys=True)
 
 
-def refuse_retired(selection: Any, item: dict[str, Any], named: dict[tuple[str, str], dict[str, Any]], retired_before: dict[str, str | None]) -> None:
-    """A record never makes bronze load an observation an earlier generation retired again: the metadata forbids resurrection, so the table stops by name."""
+def reversion_item(
+    selection: Any, item: dict[str, Any], named: dict[tuple[str, str], dict[str, Any]], retired_before: dict[str, str | None]
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
+    """The input for an object a record names, and the old retired observation to keep when the input is a new one.
+
+    An observation an earlier generation retired stays retired for good. Only a reversion record (its key carries the run ID) may name its object again: the
+    object then loads as a new observation whose identity includes that run ID. Any other record that names it stops the table by name.
+    """
     identity = (item["key"], item["version_id"])
-    if selection is not None and item["observation_id"] in retired_before:
+    if selection is None or item["observation_id"] not in retired_before:
+        return item, None
+    run = named[identity].get("reversion_run")
+    fresh = hashlib.sha256(json.dumps([item["observation_id"], run]).encode()).hexdigest()
+    if run is None or fresh in retired_before:
         raise BronzeError(
-            f"{item['table']}: {named[identity]['record']} names {identity[0]}, which an earlier generation retired; "
-            "a reviewed mapping is needed to load it again"
+            f"{item['table']}: {named[identity]['record']} names {identity[0]}, which an earlier generation retired; only a reversion record may load it again"
         )
+    return {**item, "observation_id": fresh}, {**item, "retired": True, "retirement_record_json": retired_before[item["observation_id"]]}
+
+
+def retire_siblings(
+    history: dict[tuple[str, ...], list[dict[str, Any]]],
+    item: dict[str, Any],
+    chosen_id: str | None,
+    older: dict[str, str] | None,
+    unselected: list[dict[str, Any]],
+    place: tuple[str, str, str | None],
+) -> None:
+    """Keep every other published observation of this manifest entry as a retired copy, so an observation a reversion rebound never disappears from the history.
+
+    An observation an earlier generation retired keeps its retirement record. One still live is retired now.
+    """
+    entry = (item["manifest_key"], item["manifest_version_id"], item["key"], item["version_id"], item["manifest_entry_json"])
+    for row in history.get(entry, []):
+        if row["observation_id"] in {item["observation_id"], chosen_id}:
+            continue
+        reason = row["retirement_record_json"] if row["retired"] else retirement_for(older or {}, (item["key"], item["version_id"]), item["sha256"], "")
+        unselected.append(
+            {
+                "collection": place[0],
+                "dataset_id": item["dataset_id"],
+                "file_name": place[1],
+                "role": place[2],
+                "retired": True,
+                "copy": {**item, "observation_id": row["observation_id"], "retired": True, "retirement_record_json": reason},
+            }
+        )
+
+
+def admit(
+    inputs: list[dict[str, Any]],
+    unselected: list[dict[str, Any]],
+    collection: str,
+    item: dict[str, Any],
+    place: tuple[str, str | None],
+    context: tuple[Any, dict[tuple[str, str], dict[str, Any]], dict[str, str | None], dict[tuple[str, ...], list[dict[str, Any]]]],
+) -> None:
+    """Take a selected object as an input. A reversion's new observation keeps the old retired one and every earlier rebound one as unselected copies."""
+    selection, named, retired_before, history = context
+    chosen, retired_copy = reversion_item(selection, item, named, retired_before)
+    inputs.append(chosen)
+    if retired_copy is not None:
+        unselected.append(
+            {"collection": collection, "dataset_id": item["dataset_id"], "file_name": place[0], "role": place[1], "retired": True, "copy": retired_copy}
+        )
+    retire_siblings(history, item, chosen["observation_id"], None, unselected, (collection, place[0], place[1]))
 
 
 def discover(
@@ -427,6 +486,7 @@ def discover(
     published_observations: set[str] | None = None,
     roots: tuple[str, ...] | None = None,
     retired_before: dict[str, str | None] | None = None,
+    previous_observations: Iterable[dict[str, Any]] = (),
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """List the chosen tables' inputs from the S3 manifests under each read root; return them with the unselected data objects.
 
@@ -444,6 +504,9 @@ def discover(
         retired = RetiredObjects()
     published_observations = published_observations or set()
     retired_before = retired_before or {}
+    history: dict[tuple[str, ...], list[dict[str, Any]]] = defaultdict(list)
+    for row in previous_observations:
+        history[(row["manifest_key"], row["manifest_version_id"], row["s3_key"], row["s3_version_id"], row["manifest_entry_json"])].append(row)
     tables = {table["table"]: table for table in config["tables"]}
     chosen = [tables[name] for name in names]
     by_collection: dict[str, list[dict[str, Any]]] = {}
@@ -543,20 +606,20 @@ def discover(
                         {"collection": collection, "dataset_id": item["dataset_id"], "file_name": file_name, "failed_attempt": True, "copy": item}
                     )
                 elif selection is None or (identity in named and (manifest_key, manifest_version) in named_manifests):
-                    refuse_retired(selection, item, named, retired_before)
-                    inputs.append(item)
+                    admit(inputs, unselected, collection, item, (file_name, role), (selection, named, retired_before, history))
                 elif retirement := retirement_for(
                     selection.superseded[collection].get(identity), identity, target["sha256"], retired_before.get(item["observation_id"], "")
                 ):
                     superseded_copies.append((item, retirement, file_name, role))
                 elif identity in named:
-                    refuse_retired(selection, item, named, retired_before)
-                    inputs.append(item)
+                    admit(inputs, unselected, collection, item, (file_name, role), (selection, named, retired_before, history))
                 else:
                     unnamed.setdefault(table["table"], []).append(identity[0])
         for item, retirement, file_name, role in superseded_copies:
             copy = {**item, "retired": True, "retirement_record_json": retirement}
             unselected.append({"collection": collection, "dataset_id": item["dataset_id"], "file_name": file_name, "role": role, "retired": True, "copy": copy})
+            older = selection.superseded[collection].get((item["key"], item["version_id"])) if selection is not None else None
+            retire_siblings(history, item, None, older, unselected, (collection, file_name, role))
         stale = sorted(identity[0] for identity in set(listed) - matched)
         if stale:
             raise BronzeError(f"{stale[0]}: the retired list entry matches no manifest object ({len(stale)} such entries)")
@@ -1332,7 +1395,16 @@ def main(argv: list[str] | None = None) -> int:
         published_observations = {row["observation_id"] for row in previous if row["kind"] == "observation"}
         retired_before = {row["observation_id"]: row["retirement_record_json"] for row in previous if row["kind"] == "observation" and row["retired"]}
         inputs, unselected = discover(
-            storage, bucket, config, names, load_retired(), canonical_keys, canonical_observations, published_observations, retired_before=retired_before
+            storage,
+            bucket,
+            config,
+            names,
+            load_retired(),
+            canonical_keys,
+            canonical_observations,
+            published_observations,
+            retired_before=retired_before,
+            previous_observations=[row for row in previous if row["kind"] == "observation"],
         )
         if inventory is not None:
             bronze_pin.verify_replay(inventory, inputs)

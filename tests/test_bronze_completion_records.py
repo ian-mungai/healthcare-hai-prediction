@@ -672,7 +672,18 @@ def publish(lake: Lake, tmp_path: Path, previous: list[dict]) -> tuple[list[dict
     observations = {(row["table_name"], row["sha256"]): row["observation_id"] for row in previous if row["kind"] == "object"}
     published = {row["observation_id"] for row in previous if row["kind"] == "observation"}
     retired = {row["observation_id"]: row["retirement_record_json"] for row in previous if row["kind"] == "observation" and row["retired"]}
-    inputs, unselected = bronze.discover(lake, BUCKET, config(tmp_path), BOTH, None, keys, observations, published, retired_before=retired)
+    inputs, unselected = bronze.discover(
+        lake,
+        BUCKET,
+        config(tmp_path),
+        BOTH,
+        None,
+        keys,
+        observations,
+        published,
+        retired_before=retired,
+        previous_observations=[row for row in previous if row["kind"] == "observation"],
+    )
     rows = bronze_metadata.build(BOTH, inputs, unselected, previous, BOTH)
     bronze_metadata.validate_successor(previous, rows)
     return inputs, unselected, rows
@@ -816,19 +827,56 @@ def test_a_reversion_record_makes_the_older_payloads_objects_the_newest_and_bron
     check(publish(lake, tmp_path, rows)[2] == rows, "a rerun with the same records publishes the same generation")
 
 
-def test_a_reversion_to_objects_an_earlier_generation_retired_stops_the_table_by_name_and_keeps_the_generation(tmp_path: Path) -> None:
+def test_a_reversion_to_objects_an_earlier_generation_retired_loads_them_as_new_observations_and_keeps_the_old_ones_retired(tmp_path: Path) -> None:
     lake = Lake()
     first, second, rows = first_then_second(lake, tmp_path)
-    reverted = write_completion(lake, first, UNIT_A, NEW, run=REVERTED)
+    old = {row["observation_id"]: row for item in first["objects"] for row in observed(rows, item["key"])}
+    write_completion(lake, first, UNIT_A, NEW, run=REVERTED)
+    inputs, _, after = publish(lake, tmp_path, rows)
+    check(loaded_keys(inputs) == {item["key"] for item in first["objects"]}, "bronze loads the objects the reversion record names")
     check(
-        refused(lambda: publish(lake, tmp_path, rows), "hospitals", reverted, first["objects"][0]["key"], "an earlier generation retired"),
-        "the refusal names the table, the reversion record and the object",
+        {item["freshness"] for item in inputs} == {"current"} and {item["last_retrieved_at_utc"] for item in inputs} == {NEW},
+        "with the reversion record's label",
     )
+    check(not {item["observation_id"] for item in inputs} & set(old), "every loaded observation is new")
+    for identity, before in old.items():
+        kept = next(row for row in after if row["kind"] == "observation" and row["observation_id"] == identity)
+        check(
+            kept["retired"] and not kept["loaded"] and kept["retirement_record_json"] == before["retirement_record_json"],
+            "the old observation stays retired, unchanged",
+        )
+    check(after[0]["generation"] != rows[0]["generation"], "the metadata generation advances to new content")
+    check(all(observed(after, item["key"])[0]["retired"] for item in second["objects"]), "the capture in between is retired")
+    check(publish(lake, tmp_path, after)[2] == after, "a rerun of the same reversion publishes the same generation")
+
+
+def test_each_reversion_run_binds_its_own_new_observations(tmp_path: Path) -> None:
+    lake = Lake()
+    first, second, rows = first_then_second(lake, tmp_path)
+    ids = []
+    for run, instant, stored in (
+        ("20261113T000000Z-aaaaaaaa", "2026-11-10T10:00:00Z", first),
+        ("20261114T000000Z-bbbbbbbb", "2026-11-11T10:00:00Z", second),
+        ("20261115T000000Z-cccccccc", "2026-11-12T10:00:00Z", first),
+    ):
+        write_completion(lake, stored, UNIT_A, instant, run=run)
+        inputs, _, rows = publish(lake, tmp_path, rows)
+        check(loaded_keys(inputs) == {item["key"] for item in stored["objects"]}, f"{run} loads its payload")
+        ids.append({item["observation_id"] for item in inputs})
+        check(publish(lake, tmp_path, rows)[2] == rows, f"{run} reruns the same generation")
+    check(ids[0].isdisjoint(ids[2]), "the same objects named by two reversion runs are two sets of observations")
+    check(sum(row["retired"] for row in rows if row["kind"] == "observation") >= 6, "every earlier observation stays retired")
+
+
+def test_a_record_that_is_not_a_reversion_and_names_objects_an_earlier_generation_retired_is_still_refused(tmp_path: Path) -> None:
+    lake = Lake()
+    first, _, rows = first_then_second(lake, tmp_path)
+    other = write_completion(lake, first, UNIT_B, NEW)
     check(
-        all(observed(rows, item["key"])[0]["retired"] for item in first["objects"])
-        and not any(row["retired"] for item in second["objects"] for row in observed(rows, item["key"])),
-        "the published generation is unchanged",
+        refused(lambda: publish(lake, tmp_path, rows), "hospitals", other, first["objects"][0]["key"], "an earlier generation retired"),
+        "a plain record cannot bring retired objects back",
     )
+    check(all(observed(rows, item["key"])[0]["retired"] for item in first["objects"]), "the published generation is unchanged")
 
 
 def test_the_newest_record_is_found_across_both_key_forms_by_retrieval_time(tmp_path: Path) -> None:
