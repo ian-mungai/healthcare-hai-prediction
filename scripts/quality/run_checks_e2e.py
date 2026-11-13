@@ -114,6 +114,10 @@ OLD_MODEL = "stg" + "_orders"
 SHARED_ARGUMENT = "zone" + "_slots"
 SHARED_FIELD = "window" + "_stamp"
 DATA_FILE_WORD = "epoch" + "_marker"
+RETIRED_KEY = "retired" + "_magic_key"
+PRIOR_ID = "urn:review:" + "prior-shape"
+RENAMED_ID = "urn:review:" + "new-shape"
+ESCAPED_PRIOR_ID = "urn:review:prior" + "\\u002d" + "shape"
 SCHEMA_STEM = "ledger" + "_row"
 SCHEMA_ID = "urn:hai:" + "ledger-row"
 # Not pinned by any dependency group that the scratch repository copies.
@@ -1429,12 +1433,11 @@ DELETED_MODULE_CASES = [
     *DELETED_MODULE_ROUND_THREE,
     *DELETED_MODULE_ROUND_FOUR,
     Case(
-        "function removed from a file that stays, an unrelated word elsewhere still counts",
+        "function removed from a file that stays, an unrelated parameter elsewhere is its own name",
         "removed-names",
-        False,
+        True,
         committed={"app/util.py": UTIL_FUNCTION, PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": UNRELATED_PARAMETER},
         files={"app/util.py": "X = 1\n"},
-        reason=f"dags/pending_dag.py:1: {OLD_FUNCTION} {LEFTOVER}",
     ),
 ]
 
@@ -1888,6 +1891,87 @@ IN_USE_CASES = [
         committed={SCHEMA_FILE: schema_file("region", schema_id=SCHEMA_ID), "docs/guide.md": f"The record shape is `{SCHEMA_STEM}.schema.json`.\n"},
         delete=[SCHEMA_FILE],
         reason=f"docs/guide.md:1: {SCHEMA_STEM}.schema.json {LEFTOVER}",
+    ),
+    *(
+        Case(
+            f"schema property removed, {label}, code still reads it",
+            "removed-names",
+            False,
+            committed={FIRST_SCHEMA: schema_file(RETIRED_KEY, "region"), "app/reader.py": reader, **extra},
+            files={FIRST_SCHEMA: schema_file("region")},
+            reason=f"app/reader.py:1: {RETIRED_KEY} {LEFTOVER}",
+        )
+        for label, reader, extra in (
+            (
+                "a Terraform heredoc only quotes the same word",
+                f'VALUE = RECORD["{RETIRED_KEY}"]\n',
+                {"infra/main.tf": f'locals {{\n  example = <<-EOT\n{RETIRED_KEY} = old_record["{RETIRED_KEY}"]\nEOT\n}}\n'},
+            ),
+            ("a Terraform block comment only quotes the same word", f'VALUE = RECORD["{RETIRED_KEY}"]\n', {"infra/main.tf": f"/*\n{RETIRED_KEY} {{\n}}\n*/\n"}),
+            (
+                "Terraform line comments only quote the same word",
+                f'VALUE = RECORD["{RETIRED_KEY}"]\n',
+                {"infra/main.tf": f"# {RETIRED_KEY} = 1\n// {RETIRED_KEY} {{\n"},
+            ),
+            ("a Python attribute read is followed by a method", f"VALUE = response.{RETIRED_KEY}.json()\n", {}),
+            (
+                "a YAML block scalar only quotes the same word",
+                f'VALUE = RECORD["{RETIRED_KEY}"]\n',
+                {"config/example.yaml": f"example: |\n  {RETIRED_KEY}: old record field\n"},
+            ),
+            (
+                "a Python docstring that does not parse only quotes the same word",
+                f'VALUE = RECORD["{RETIRED_KEY}"]\n',
+                {"app/broken.py": f'"""Example:\n{RETIRED_KEY} = 1\n"""\ndef unfinished(\n'},
+            ),
+        )
+    ),
+    *(
+        Case(
+            f"schema property removed, {label}",
+            "removed-names",
+            True,
+            committed={FIRST_SCHEMA: schema_file(RETIRED_KEY, "region"), **declaration},
+            files={FIRST_SCHEMA: schema_file("region")},
+        )
+        for label, declaration in (
+            ("a Terraform argument follows a comment", {"infra/main.tf": f'# note\nresource "aws_db_subnet_group" "main" {{\n  {RETIRED_KEY} = 1\n}}\n'}),
+            ("another schema defines it on one line", {SECOND_SCHEMA: json.dumps({"properties": {RETIRED_KEY: {"type": "integer"}}})}),
+            ("another file defines it inside an array of objects", {"config/rows.json": json.dumps({"rows": [{RETIRED_KEY: 1}]})}),
+            ("a YAML flow mapping defines it", {"config/flow.yaml": f"settings: {{{RETIRED_KEY}: 4}}\n"}),
+            ("a TOML inline table defines it", {"config/inline.toml": f"[tool]\nvalues = {{{RETIRED_KEY} = 4}}\n"}),
+        )
+    ),
+    Case(
+        "schema id renamed in a schema that stays, a reference to the old id remains",
+        "removed-names",
+        False,
+        committed={FIRST_SCHEMA: schema_file("region", schema_id=PRIOR_ID), "config/use.json": json.dumps({"$ref": PRIOR_ID}, indent=2)},
+        files={FIRST_SCHEMA: schema_file("region", schema_id=RENAMED_ID)},
+        reason=f"config/use.json:2: {PRIOR_ID} {LEFTOVER}",
+    ),
+    Case(
+        "schema id kept while another property is edited, a reference to the id remains",
+        "removed-names",
+        True,
+        committed={FIRST_SCHEMA: schema_file("region", "zone", schema_id=PRIOR_ID), "config/use.json": json.dumps({"$ref": PRIOR_ID}, indent=2)},
+        files={FIRST_SCHEMA: schema_file("region", schema_id=PRIOR_ID)},
+    ),
+    Case(
+        "deleted schema stores its id with a JSON escape, a reference to the plain id remains",
+        "removed-names",
+        False,
+        committed={FIRST_SCHEMA: f'{{"$id": "{ESCAPED_PRIOR_ID}", "type": "object"}}\n', "config/use.json": json.dumps({"$ref": PRIOR_ID}, indent=2)},
+        delete=[FIRST_SCHEMA],
+        reason=f"config/use.json:2: {PRIOR_ID} {LEFTOVER}",
+    ),
+    Case(
+        "deleted schema stores its plain id, a reference spells the id with a JSON escape",
+        "removed-names",
+        False,
+        committed={FIRST_SCHEMA: schema_file("region", schema_id=PRIOR_ID), "config/use.json": f'{{\n  "$ref": "{ESCAPED_PRIOR_ID}"\n}}\n'},
+        delete=[FIRST_SCHEMA],
+        reason=f"config/use.json:2: {PRIOR_ID} {LEFTOVER}",
     ),
 ]
 CODE_VERSION_BODY = code_version_record(f"scripts/{OLD_SCRIPT}")
@@ -3463,8 +3547,75 @@ PLANTED_REGRESSIONS = [
         [case for case in IN_USE_CASES if not case.expect_pass and case.name == "schema deleted, a reference to its id remains"],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        'SCHEMA_ID.findall("\\n".join(removed.get(path, [])))',
-        "[]",
+        "schema_ids_removed(removed, files))",
+        "set())",
+        0,
+    ),
+    (
+        "Terraform comments and heredocs declare nothing",
+        [case for case in IN_USE_CASES if not case.expect_pass and ("Terraform heredoc" in case.name or "Terraform block comment" in case.name)],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "code = hcl_code(lines)",
+        "code = lines",
+        0,
+    ),
+    (
+        "structured keys are read from the parsed document",
+        [
+            case
+            for case in IN_USE_CASES
+            if case.expect_pass and any(label in case.name for label in ("on one line", "array of objects", "flow mapping", "inline table"))
+        ],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "keys = structured_keys(path, text)",
+        "keys = None",
+        1,
+    ),
+    (
+        "a YAML block scalar declares no key",
+        [case for case in IN_USE_CASES if not case.expect_pass and "YAML block scalar" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "keys = structured_keys(path, text)",
+        "keys = None",
+        0,
+    ),
+    (
+        "a method after an attribute is no file suffix",
+        [case for case in IN_USE_CASES if not case.expect_pass and "attribute read is followed by a method" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "|sh|sql|tf)\\b(?!\\())",
+        "|sh|sql|tf)\\b)",
+        0,
+    ),
+    (
+        "a parameter keeps a removed Python name live",
+        [case for case in CASES if case.hook == "removed-names" and case.expect_pass and "unrelated parameter elsewhere is its own name" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "declared_python_names(files, python_left)",
+        "set()",
+        1,
+    ),
+    (
+        "an edited schema keeps its ids checked",
+        [case for case in IN_USE_CASES if not case.expect_pass and "schema id renamed" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "schema_ids_removed(removed, files))",
+        "set())",
+        0,
+    ),
+    (
+        "an escaped reference to a deleted id is read decoded",
+        [case for case in IN_USE_CASES if not case.expect_pass and "spells the id with a JSON escape" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "return [decoded_json_line(line) if",
+        "return lines or [decoded_json_line(line) if",
         0,
     ),
     (
