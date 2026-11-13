@@ -26,8 +26,6 @@
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[manifest_correction-2]": 0.0,
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[onc_mu-1]": 26.5,
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[onc_mu-2]": 26.4,
-    "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[privacy-1]": 4.5,
-    "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[privacy-2]": 4.5,
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[redownload-1]": 18.1,
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[redownload-2]": 17.9,
     "scripts/acquisition/tests/test_offline_e2e.py::test_offline_workflow[reference_download-1]": 32.7,

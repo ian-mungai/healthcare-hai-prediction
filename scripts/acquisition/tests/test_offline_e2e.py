@@ -32,7 +32,6 @@ SUITES = [
     "nber_hc",
     "hcai_util",
     "onc_mu",
-    "privacy",
     "pseudonymize",
     "code_versions",
     "collection_policy",
@@ -46,7 +45,7 @@ SUITES = [
     "hud_xlsx",
     "hud_xlsx_direct",
 ]
-DIRECTORY_SUITES = {"privacy", "pseudonymize", "registry_additions"}
+DIRECTORY_SUITES = {"pseudonymize", "registry_additions"}
 ARTIFACT_ONLY_SUITES = {"registry_additions"}
 MODE = os.environ.get("ACQUISITION_E2E_MODE", "full")
 SNAPSHOT_ROOTS = ("scripts/acquisition", "config/acquisition")
