@@ -6,7 +6,8 @@ generic agent header of the reviewed transport.
 
 * robots.txt is read once per host per run through the same transport (1 attempt, 10 s, 512 KiB). It is enforced for the four manual-unit hosts and only
   reported for every other host.
-* Requests to one manual host are at least 5 s apart, one at a time. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
+* Every request to a manual host is at least 5 s after the last one, retries and redirects included, one at a time. A redirect destination is checked
+  against robots.txt before it is requested. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
 * A unit with a stale record younger than 20 hours is skipped, so a repeat run on the same day sends nothing.
 """
 
@@ -20,7 +21,7 @@ import time
 import urllib.parse
 import urllib.request
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -41,6 +42,7 @@ RETRY_INTERVAL = timedelta(hours=20)
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 ABSENT_ROBOTS = frozenset({"http_404", "http_410"})
 CREATE_CONFLICTS = frozenset({"412", "PreconditionFailed", "409", "ConditionalRequestConflict"})
+RUN_IDENTITY = ("unit_key", "run_id", "collection", "source_id", "snapshot_id", "code_sha256", "bundle_sha256")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 __all__ = ["ContentRefusal", "Context", "ManualUnitError", "Outcome", "Report", "Scopes", "attempt", "is_manual_host", "notice_text", "run"]
 
@@ -70,21 +72,38 @@ def is_manual_host(host: str) -> bool:
     return any(name == suffix or name.endswith("." + suffix) for suffix in MANUAL_HOSTS)
 
 
+def host_of(url: str) -> str:
+    return (urllib.parse.urlsplit(url).hostname or "").lower()
+
+
 def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime(TIME_FORMAT)
 
 
 class Observer(urllib.request.BaseHandler):
-    """Sits below the redirect policy: counts every request the opener sends and keeps the last answer's Retry-After header."""
+    """Sits below the redirect policy and sees every request the opener sends: the first, each retry and each redirect.
+
+    A redirect destination is checked against robots.txt before it is sent. Every request waits for its host's spacing, is counted, and keeps the last
+    answer's Retry-After header. ``first_url`` is the address the unit already passed; the robots.txt fetch itself passes none.
+    """
 
     handler_order = 600
 
-    def __init__(self, context: Context) -> None:
+    def __init__(self, context: Context, first_url: str | None = None) -> None:
         self.context = context
+        self.first_url = first_url
         self.retry_after: str | None = None
+        self.blocked: str | None = None
 
     def https_request(self, request: Any) -> Any:
+        host = host_of(request.full_url)
+        if self.first_url is not None and request.full_url != self.first_url:
+            self.blocked = self.context.gate.check(request.full_url)
+            if self.blocked is not None:
+                raise transport.CaptureError("A redirect destination is not allowed by robots.txt.")
+        self.context.gate.wait_turn(host)
         self.context.count_request()
+        self.context.gate.sent(host)
         return request
 
     def https_response(self, request: Any, response: Any) -> Any:
@@ -111,9 +130,7 @@ class HostGate:
         folder = self.context.scratch / "robots" / host
         outcome, status, digest = "unreadable", None, None
         try:
-            self.wait_turn(host)
             result, _ = self.context.fetch(f"https://{host}/robots.txt", folder, "robots.txt", "txt", "reference", ROBOTS_LIMITS)
-            self.sent(host)
             status = result.http_status
             if result.complete:
                 body = result.path.read_bytes()
@@ -138,28 +155,33 @@ class HostGate:
             "refusals": 0,
         }
 
-    def admit(self, url: str) -> str | None:
-        """None when the run may request the URL, else the stale reason. A host that is only reported on never refuses."""
-        host = (urllib.parse.urlsplit(url).hostname or "").lower()
-        if host not in self.results:
-            self.read_robots(host)
-        result = self.results[host]
-        result["units"] += 1
+    def check(self, url: str) -> str | None:
+        """None when the run may request the URL, else the stale reason. A host that is only reported on never refuses; its disallowed paths are counted."""
+        host = host_of(url)
         parser = self.rules.get(host)
         disallowed = parser is not None and not parser.can_fetch(ROBOTS_AGENT, url)
-        result["would_disallow"] += int(disallowed)
-        if not result["enforced"]:
+        result = self.results.get(host)
+        if result is not None:
+            result["would_disallow"] += int(disallowed)
+        if not is_manual_host(host):
             return None
-        if result["outcome"] == "unreadable":
+        if result is None or result["outcome"] == "unreadable":
             return "robots_unreadable"
-        if disallowed:
-            return "robots_disallowed"
-        if self.refusals[host] >= REFUSAL_LIMIT:
+        return "robots_disallowed" if disallowed else None
+
+    def admit(self, url: str) -> str | None:
+        """None when the run may request the unit's URL, else the stale reason."""
+        host = host_of(url)
+        if host not in self.results:
+            self.read_robots(host)
+        self.results[host]["units"] += 1
+        reason = self.check(url)
+        if reason is None and self.results[host]["enforced"] and self.refusals[host] >= REFUSAL_LIMIT:
             return "host_refused"
-        return None
+        return reason
 
     def wait_turn(self, host: str) -> None:
-        """Hold the next request to a manual host until 5 s have passed since the last one ended."""
+        """Hold the next request to a manual host until 5 s have passed since the last one started or ended."""
         if is_manual_host(host) and host in self.last_sent:
             wait = SPACING_SECONDS - (self.context.clock.monotonic() - self.last_sent[host])
             if wait > 0:
@@ -208,16 +230,22 @@ class Context:
         if self.on_request is not None:
             self.on_request()
 
-    def fetch(self, url: str, folder: Path, name: str, expected: str, role: str, limits: transport.Limits) -> tuple[transport.Download, Observer]:
-        observer = Observer(self)
+    def fetch(
+        self, url: str, folder: Path, name: str, expected: str, role: str, limits: transport.Limits, *, unit: bool = False
+    ) -> tuple[transport.Download, Observer]:
+        observer = Observer(self, url if unit else None)
         result = transport.download(url, folder, name, expected, role, limits, opener=transport.ReviewedTransport(observer, *self.handlers))
         self.downloaded += result.byte_count
+        self.gate.sent(host_of(url))
         return result, observer
 
 
 @dataclass(frozen=True)
 class Outcome:
-    """What happened to one unit: captured, stale, or skipped because a recent stale record already stands."""
+    """What happened to one unit: captured, stale, or skipped because a recent stale record already stands.
+
+    ``record`` is the stale record that stands for the unit after the attempt: the one stored for this run, or the recent one that caused the skip.
+    """
 
     snapshot_id: str
     source_id: str
@@ -279,7 +307,7 @@ def pointers(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
-def verified(client: Any, found: list[dict[str, Any]]) -> bool:
+def verified(client: Any, found: Sequence[Mapping[str, Any]]) -> bool:
     """True when a HEAD of every named version matches its recorded checksum and length. No pointer means nothing to load, so not verified."""
     for item in found:
         try:
@@ -293,8 +321,8 @@ def verified(client: Any, found: list[dict[str, Any]]) -> bool:
     return bool(found)
 
 
-def create_once(client: Any, key: str, body: bytes, folder: Path) -> None:
-    """Create one object, or accept the one already there: a record is never replaced."""
+def create_once(client: Any, key: str, body: bytes, folder: Path) -> bytes:
+    """Create one object and return the bytes now stored there. A record is never replaced: after a create conflict the stored one is read back."""
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / "record.json"
     path.write_bytes(body)
@@ -305,10 +333,17 @@ def create_once(client: Any, key: str, body: bytes, folder: Path) -> None:
     except StorageError as conflict:
         if conflict.code not in CREATE_CONFLICTS:
             raise
+        stored = folder / "stored.json"
+        try:
+            client.call("s3api", "get-object", ["--key", key, str(stored)])
+        except StorageError as missing:
+            raise ManualUnitError("A create conflict left no stored stale record to read back") from missing
+        return stored.read_bytes()
+    return body
 
 
 def mark_stale(unit: dict, spec: dict, reason: str, http_status: int | None, context: Context) -> dict[str, Any]:
-    """Write the unit's create-once stale record for this run and return it."""
+    """Write the unit's create-once stale record for this run and return the record that is stored."""
     found = pointers(spec)
     key = context.unit_key(unit)
     record = stale_record.build(
@@ -325,8 +360,13 @@ def mark_stale(unit: dict, spec: dict, reason: str, http_status: int | None, con
         last_capture_verified=verified(context.client, found),
         last_capture=found,
     )
-    create_once(context.client, stale_record.stale_key(context.root, key, context.run_id), stale_record.encode(record), context.scratch / "records" / key[:16])
-    return record
+    stored_key = stale_record.stale_key(context.root, key, context.run_id)
+    stored = stale_record.parse(
+        create_once(context.client, stored_key, stale_record.encode(record), context.scratch / "records" / key[:16]), key=stored_key, root=context.root
+    )
+    if any(stored[name] != record[name] for name in RUN_IDENTITY):
+        raise ManualUnitError("The stored stale record differs from the unit and run it was written for")
+    return stored
 
 
 def newest_stale(unit_key: str, context: Context) -> dict[str, Any] | None:
@@ -346,6 +386,8 @@ def newest_stale(unit_key: str, context: Context) -> dict[str, Any] | None:
 def classify(result: transport.Download, observer: Observer, limits: transport.Limits) -> tuple[str, int | None]:
     """The stale reason of a failed download and the HTTP status to record with it."""
     failure, status = str(result.failure), result.http_status
+    if observer.blocked is not None:
+        return observer.blocked, status
     if failure.startswith("http_"):
         if status in RETRYABLE_STATUSES and observer.retry_after_too_long(limits.max_retry_delay):
             return "rate_limited", status
@@ -363,21 +405,18 @@ def fresh(path: Path) -> Path:
 
 def download_unit(unit: dict, spec: dict, mode: str, name: str, context: Context) -> tuple[dict[str, Path] | None, str | None, int | None]:
     """Download and check one unit. Returns the files to capture, or no files with the stale reason and status."""
-    host = (urllib.parse.urlsplit(unit["url"]).hostname or "").lower()
+    host = host_of(unit["url"])
     folder = fresh(context.scratch / context.unit_key(unit)[:16] / "download")
-    expected = str(manual_content.expected_format(mode, spec))
     try:
-        context.gate.wait_turn(host)
-        result, observer = context.fetch(unit["url"], folder, name, expected, "data", context.limits)
+        result, observer = context.fetch(unit["url"], folder, name, manual_content.expected_format(mode), "data", context.limits, unit=True)
     except transport.CaptureError:
         return None, "network", None
-    context.gate.sent(host)
     context.gate.refused(host, result.http_status)
     if not result.complete:
         reason, status = classify(result, observer, context.limits)
         return None, reason, status
     try:
-        derived = manual_content.accept(mode, spec, result.path, name, context.scopes)
+        derived = manual_content.accept(mode, result.path, name, context.scopes)
     except ContentRefusal as refusal:
         return None, refusal.reason, result.http_status
     files = {name: result.path}
@@ -396,7 +435,7 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
     try:
         newest = newest_stale(key, context)
         if newest is not None and context.clock.now() - datetime.strptime(newest["attempted_at_utc"], TIME_FORMAT).replace(tzinfo=UTC) < RETRY_INTERVAL:
-            return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"])
+            return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"], newest)
         reason = context.gate.admit(unit["url"])
         files, status = None, None
         if reason is None:
@@ -405,7 +444,7 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
             context.capture(unit, spec, files)
             return Outcome(unit["snapshot_id"], unit["source_id"], "captured", None, status)
         record = mark_stale(unit, spec, str(reason), status, context)
-        return Outcome(unit["snapshot_id"], unit["source_id"], "stale", reason, status, record)
+        return Outcome(unit["snapshot_id"], unit["source_id"], "stale", record["reason"], record["http_status"], record)
     finally:
         shutil.rmtree(context.scratch / key[:16], ignore_errors=True)
         shutil.rmtree(context.scratch / "records" / key[:16], ignore_errors=True)
@@ -423,7 +462,7 @@ def summary(record: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def split_lists(records: list[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def split_lists(records: Sequence[Mapping[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """Stale units, and apart from them the missing ones: a stale record whose last capture failed its HEAD check or names none."""
     stale = [summary(record) for record in records if record["last_capture_verified"]]
     missing = [summary(record) for record in records if not record["last_capture_verified"]]
@@ -451,15 +490,18 @@ def notice_text(stale: list[dict[str, Any]], missing: list[dict[str, Any]]) -> s
 
 
 def run(units: list[dict], specs: Mapping[str, dict], context: Context) -> Report:
-    """Attempt every approved manual unit once. A unit or specification the handler cannot run stops the run before any request."""
+    """Attempt every approved manual unit once. A unit or specification the handler cannot run stops the run before any request.
+
+    The stale and missing lists hold every unit whose stale record stands, including the units skipped for a record younger than 20 hours.
+    """
     if any(unit.get("disposition") != "approved_manual" for unit in units):
         raise ManualUnitError("The manual unit handler takes approved_manual units only")
     for unit in units:
         manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
     outcomes = [attempt(unit, specs[unit["snapshot_id"]], context) for unit in units]
     shutil.rmtree(context.scratch / "robots", ignore_errors=True)
-    written = [outcome.record for outcome in outcomes if outcome.record is not None]
-    stale, missing = split_lists(written)
+    standing = [outcome.record for outcome in outcomes if outcome.record is not None]
+    stale, missing = split_lists(standing)
     counts = Counter(outcome.status for outcome in outcomes)
     return Report(
         outcomes,

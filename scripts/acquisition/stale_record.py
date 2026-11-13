@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 KIND = "ingestion_unit_stale"
@@ -127,7 +127,7 @@ def build(
     code_sha256: str,
     bundle_sha256: str,
     last_capture_verified: bool,
-    last_capture: list[Mapping[str, Any]],
+    last_capture: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     """The record body, checked before it is returned."""
     record = {

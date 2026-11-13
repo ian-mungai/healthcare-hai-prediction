@@ -12,6 +12,7 @@ import json
 import re
 import urllib.parse
 import urllib.request
+import warnings
 import zipfile
 from collections import Counter
 from dataclasses import dataclass, field
@@ -36,7 +37,7 @@ from tests.support import check
 HUD_URL = "https://www.huduser.gov/apps/public/uspscrosswalk/home"
 WONDER_URL = "https://wonder.cdc.gov/ucd-icd10-expanded.html"
 ACS_URL = "https://data.census.gov/api/access/table/download?download_id=synthetic"
-OTHER_URL = "https://data.example.gov/files/history.zip"
+OTHER_URL = "https://data.example.gov/files/book.xlsx"
 ROBOTS = {"www.huduser.gov": "https://www.huduser.gov/robots.txt", "wonder.cdc.gov": "https://wonder.cdc.gov/robots.txt"}
 START = datetime(2026, 11, 13, 2, 0, 0, tzinfo=UTC)
 RUN_1 = "20261113T020000Z-aaaaaaaa"
@@ -79,11 +80,26 @@ class Seen:
     at: float
 
 
+class TimedBody(io.BytesIO):
+    """A response body whose first read takes ``seconds`` on the stand-in clock."""
+
+    def __init__(self, data: bytes, clock: Clock, seconds: float) -> None:
+        super().__init__(data)
+        self.clock, self.seconds = clock, seconds
+
+    def read(self, size: int | None = -1) -> bytes:
+        chunk = super().read(size)
+        self.clock.advance(seconds=self.seconds)
+        self.seconds = 0
+        return chunk
+
+
 @dataclass
 class Reply:
     status: int = 200
     body: bytes = b""
     headers: dict[str, str] = field(default_factory=dict)
+    read_seconds: float = 0
 
 
 class Site(urllib.request.BaseHandler):
@@ -109,7 +125,7 @@ class Site(urllib.request.BaseHandler):
         headers["Content-Length"] = str(len(reply.body))
         for name, value in reply.headers.items():
             headers[name] = value
-        return Answer(io.BytesIO(reply.body), headers, req.full_url, reply.status)
+        return Answer(TimedBody(reply.body, self.clock, reply.read_seconds), headers, req.full_url, reply.status)
 
     def urls(self) -> list[str]:
         return [item.url for item in self.seen]
@@ -121,6 +137,7 @@ class Bucket:
     def __init__(self) -> None:
         self.versions: dict[str, list[tuple[str, bytes]]] = {}
         self.calls: list[tuple[str, str]] = []
+        self.inject: list[str] = []
 
     def seed(self, key: str, body: bytes) -> dict[str, Any]:
         self.versions.setdefault(key, []).append((f"v{len(self.versions.get(key, [])) + 1}", body))
@@ -138,14 +155,16 @@ class Bucket:
             return {"Contents": [{"Key": name} for name in found]} if found else {}
         if operation == "put-object":
             check(options.get("--if-none-match") == "*", "an object was written without the create-once condition")
+            if self.inject:
+                raise StorageError("put-object", self.inject.pop(0))
             if key in self.versions:
                 raise StorageError("put-object", "PreconditionFailed")
             self.seed(key, Path(options["--body"]).read_bytes())
             return {"VersionId": "v1"}
-        found = self.versions.get(key)
-        if not found:
+        stored = self.versions.get(key)
+        if not stored:
             raise StorageError(operation, "404")
-        version, body = next(((v, b) for v, b in found if v == options.get("--version-id")), found[-1]) if "--version-id" in options else found[-1]
+        version, body = next(((v, b) for v, b in stored if v == options.get("--version-id")), stored[-1]) if "--version-id" in options else stored[-1]
         if "--version-id" in options and version != options["--version-id"]:
             raise StorageError(operation, "404")
         if operation == "get-object":
@@ -420,10 +439,11 @@ def test_a_wonder_export_that_passes_the_contract_is_captured_and_a_form_page_is
     check(len(world.sink.captured) == 1 and sorted(world.sink.captured[0][1]) == sorted([name, "county_year.csv"]), "the export was captured")
 
 
-def acs_zip(members: dict[str, bytes]) -> bytes:
+def acs_zip(members: list[tuple[str, bytes]]) -> bytes:
     buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w") as archive:
-        for name, body in members.items():
+    with warnings.catch_warnings(), zipfile.ZipFile(buffer, "w") as archive:
+        warnings.simplefilter("ignore")
+        for name, body in members:
             archive.writestr(name, body)
     return buffer.getvalue()
 
@@ -444,15 +464,28 @@ def acs_unit(world: World) -> dict:
     return unit
 
 
-def test_an_acs_archive_with_the_reviewed_member_map_is_captured_and_one_with_other_members_is_not(world: World) -> None:
+def corrupted_member_zip() -> bytes:
+    body = bytearray(acs_zip([("S1701-Data.csv", b"a,b\n1,2\n"), ("S1701-Notes.txt", b"notes\n")]))
+    body[body.index(b"a,b\n1,2\n")] ^= 0xFF
+    return bytes(body)
+
+
+ACS_ARCHIVES = {
+    "listed_members": acs_zip([("S1701-Data.csv", b"a,b\n1,2\n"), ("S1701-Notes.txt", b"notes\n")]),
+    "duplicate_member": acs_zip([("S1701-Data.csv", b"a,b\n1,2\n"), ("S1701-Data.csv", b"a,b\n9,9\n"), ("S1701-Notes.txt", b"notes\n")]),
+    "corrupt_member": corrupted_member_zip(),
+}
+
+
+@pytest.mark.parametrize("archive", sorted(ACS_ARCHIVES))
+def test_an_acs_unit_is_not_a_manual_unit_whatever_its_archive_holds_and_stops_the_run_before_any_request(world: World, archive: str) -> None:
+    [hud] = hud_units(world, 1)
     unit = acs_unit(world)
-    world.site.serve(ACS_URL, Reply(200, acs_zip({"S1701-Data.csv": b"a,b\n1,2\n", "Other.csv": b"x\n"})))
-    world.run([unit])
-    check(only_stale(world, unit)["reason"] == "contract_failed", "a member the map does not list stops the unit")
-    world.clock.advance(hours=21)
-    world.site.serve(ACS_URL, Reply(200, acs_zip({"S1701-Data.csv": b"a,b\n1,2\n", "S1701-Notes.txt": b"notes\n"})))
-    world.run([unit], "20261113T230000Z-bbbbbbbb")
-    check(len(world.sink.captured) == 1 and list(world.sink.captured[0][1]) == ["ACS_history_x.zip"], "captured under the stored name")
+    serve_workbook(world)
+    world.site.serve(ACS_URL, Reply(200, ACS_ARCHIVES[archive]))
+    with pytest.raises(manual_units.ManualUnitError, match="not a manual unit"):
+        world.run([hud, unit])
+    check(world.site.seen == [] and world.bucket.writes() == [] and world.sink.captured == [], "no request, no write, nothing captured")
 
 
 def test_a_second_run_of_the_same_failing_unit_adds_one_stale_record_and_no_data_object(world: World) -> None:
@@ -502,16 +535,16 @@ def test_a_unit_with_no_recorded_last_capture_is_missing(world: World) -> None:
     check(record["last_capture"] == [] and record["last_capture_verified"] is False and len(report.missing_units) == 1, "no pointer means missing")
 
 
+def other_unit(world: World) -> dict:
+    unit = world.add(make_unit("OTHER", "hud_xlsx", OTHER_URL, "OTHER__0"), {})
+    world.specs[unit["snapshot_id"]] = hud_spec(world, unit)
+    return unit
+
+
 def test_the_robots_result_of_a_non_manual_host_is_recorded_and_its_units_are_still_attempted(world: World) -> None:
-    unit = world.add(make_unit("OTHER", "file", OTHER_URL, "OTHER__0"), {})
-    world.specs[unit["snapshot_id"]] = {
-        "mode": "file",
-        "expected_format": "zip",
-        "stored_data_files": ["history.zip"],
-        "last_capture": world.last_capture(unit),
-    }
+    unit = other_unit(world)
     world.site.serve("https://data.example.gov/robots.txt", Reply(200, b"User-agent: *\nDisallow: /\n"))
-    world.site.serve(OTHER_URL, Reply(200, acs_zip({"a.csv": b"1\n"})))
+    world.site.serve(OTHER_URL, Reply(200, hud_batch_workbook()))
     report = world.run([unit])
     result = report.robots["data.example.gov"]
     check(result["enforced"] is False and result["outcome"] == "read" and result["would_disallow"] == 1, f"robots report {result}")
@@ -607,8 +640,8 @@ def test_a_mode_without_a_content_contract_is_refused_before_any_request(world: 
 
 
 def test_a_unit_with_an_unapproved_host_is_refused_before_any_request(world: World) -> None:
-    unit = world.add(make_unit("X", "file", "https://unapproved.example.org/a.zip", "X__0"), {})
-    world.specs[unit["snapshot_id"]] = {"mode": "file", "expected_format": "zip", "stored_data_files": ["a.zip"]}
+    unit = world.add(make_unit("X", "hud_xlsx", "https://unapproved.example.org/a.xlsx", "X__0"), {})
+    world.specs[unit["snapshot_id"]] = hud_spec(world, unit)
     world.run([unit])
     check(world.site.seen == [], "no request left the run")
     check(only_stale(world, unit)["reason"] == "network", "the refusal is recorded as stale")
@@ -640,13 +673,14 @@ def test_the_observer_reads_retry_after_the_way_the_transport_does_and_counts_ea
     check(observer.retry_after_too_long(transport.Limits().max_retry_delay) is too_long, f"Retry-After {value!r} against the 30 s limit")
 
 
-def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_locked_plan() -> None:
+def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_locked_plan_or_refused_before_any_request() -> None:
     folder = Path(__file__).resolve().parents[3] / "config/acquisition/baseline_run"
     queue = json.loads((folder / "queue.json").read_text())["queue"]
     specs = json.loads((folder / "capture_specs.json").read_text())["specs"]
     scopes = manual_content.Scopes()
-    units = [unit for unit in queue if unit["disposition"] == "approved_manual" and unit["mode"] != "reference_download"]
-    check(Counter(unit["source_id"] for unit in units) == {"HUD": 44, "ACS": 16, "WONDER": 6}, "the manual set is HUD 44, ACS 16 and WONDER 6")
+    manual = [unit for unit in queue if unit["disposition"] == "approved_manual"]
+    units = [unit for unit in manual if unit["mode"] in {"hud_xlsx", "wonder_export"}]
+    check(Counter(unit["source_id"] for unit in units) == {"HUD": 44, "WONDER": 6}, "the manual set is HUD 44 and WONDER 6")
     hud_files = {batch["file_name"] for batch in scopes.plan("hud_xlsx")["batches"]}
     wonder_files = {wonder_export_contract.stored_name(batch) for batch in scopes.plan("wonder_export")["batches"]}
     for unit in units:
@@ -654,3 +688,170 @@ def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_lock
         check(mode != "hud_xlsx" or name in hud_files, f"{name} is a planned HUD workbook")
         check(mode != "wonder_export" or name in wonder_files, f"{name} is a planned WONDER export")
         check(manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is on a manual host")
+    refused: Counter[tuple[str, str, bool]] = Counter()
+    for unit in (unit for unit in manual if unit not in units):
+        with pytest.raises(manual_units.ManualUnitError, match="not a manual unit|no content contract") as error:
+            manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
+        refused[(unit["source_id"], unit["mode"], "not a manual unit" in str(error.value))] += 1
+    check(
+        refused
+        == {
+            ("ACS", "file", True): 16,
+            ("HUD", "reference_download", False): 2,
+            ("WONDER", "reference_download", False): 2,
+            ("BLS", "reference_download", False): 1,
+        },
+        f"refused {refused}",
+    )
+
+
+def redirect(url: str) -> Reply:
+    return Reply(302, b"", {"Location": url})
+
+
+def gaps(world: World) -> list[float]:
+    times = [item.at for item in world.site.seen]
+    return [later - earlier for earlier, later in zip(times, times[1:], strict=False)]
+
+
+def test_a_redirect_to_a_path_that_robots_txt_disallows_is_never_requested(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    blocked = "https://www.huduser.gov/blocked/book.xlsx"
+    world.site.serve(ROBOTS["www.huduser.gov"], Reply(200, b"User-agent: *\nDisallow: /blocked/\n"))
+    world.site.serve(HUD_URL, redirect(blocked))
+    world.site.serve(blocked, Reply(200, hud_batch_workbook()))
+    report = world.run([unit])
+    check(world.site.urls() == [ROBOTS["www.huduser.gov"], HUD_URL], f"the disallowed destination was not requested: {world.site.urls()}")
+    record = only_stale(world, unit)
+    check(record["reason"] == "robots_disallowed" and record["http_status"] is None, f"reason {record['reason']}")
+    check(
+        world.sink.captured == [] and report.counts["captured"] == 0 and report.http_requests == 2, f"counts {report.counts}, requests {report.http_requests}"
+    )
+
+
+def test_a_redirect_to_an_allowed_path_is_followed_captured_and_five_seconds_after_the_first_request(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    allowed = "https://www.huduser.gov/apps/public/uspscrosswalk/book.xlsx"
+    world.site.serve(ROBOTS["www.huduser.gov"], Reply(200, b"User-agent: *\nDisallow: /blocked/\n"))
+    world.site.serve(HUD_URL, redirect(allowed))
+    world.site.serve(allowed, Reply(200, hud_batch_workbook()))
+    world.run([unit])
+    check(world.site.urls() == [ROBOTS["www.huduser.gov"], HUD_URL, allowed], f"requests {world.site.urls()}")
+    check(len(world.sink.captured) == 1 and read_all(world) == [], "the redirected file was captured")
+    check(min(gaps(world)) >= 5, f"gaps {gaps(world)}")
+
+
+def test_a_redirect_on_a_report_only_host_is_followed_and_counted_in_the_robots_report(world: World) -> None:
+    unit = other_unit(world)
+    blocked = "https://data.example.gov/blocked/book.xlsx"
+    world.site.serve("https://data.example.gov/robots.txt", Reply(200, b"User-agent: *\nDisallow: /blocked/\n"))
+    world.site.serve(OTHER_URL, redirect(blocked))
+    world.site.serve(blocked, Reply(200, hud_batch_workbook()))
+    report = world.run([unit])
+    check(blocked in world.site.urls() and len(world.sink.captured) == 1, "the report-only host's redirect was followed")
+    check(report.robots["data.example.gov"]["would_disallow"] == 1, f"robots report {report.robots['data.example.gov']}")
+
+
+def test_retries_are_five_seconds_apart(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    world.site.serve(HUD_URL, Reply(503), Reply(503), Reply(200, hud_batch_workbook()))
+    world.run([unit])
+    check(world.site.urls() == [ROBOTS["www.huduser.gov"], HUD_URL, HUD_URL, HUD_URL], f"requests {world.site.urls()}")
+    check(min(gaps(world)) >= 5 and len(world.sink.captured) == 1, f"gaps {gaps(world)}")
+
+
+def test_the_spacing_runs_from_the_end_of_the_last_download(world: World) -> None:
+    units = hud_units(world, 2)
+    world.site.serve(HUD_URL, Reply(200, b"<html>page</html>", read_seconds=8))
+    world.run(units)
+    check(
+        [item.at for item in world.site.seen] == [0, 5, 18], f"robots, then a unit that took 8 s to read, then the next unit 5 s after it ended: {gaps(world)}"
+    )
+
+
+def test_a_repeat_run_inside_the_retry_interval_keeps_the_stale_and_missing_lists(world: World) -> None:
+    [present] = hud_units(world, 1)
+    absent = world.add(hud_unit(1), {})
+    world.specs[absent["snapshot_id"]] = hud_spec(world, absent, HUD_NAMES[1], present=False)
+    world.site.serve(HUD_URL, Reply(200, b"<html>page</html>"))
+    first = world.run([present, absent])
+    before, sent = list(world.bucket.names()), len(world.site.seen)
+    world.clock.advance(hours=2)
+    repeat = world.run([present, absent], "20261113T040000Z-bbbbbbbb")
+    check(len(world.site.seen) == sent and list(world.bucket.names()) == before, "the repeat sent nothing and wrote nothing")
+    check(repeat.counts["skipped_recent_stale"] == 2 and repeat.counts["attempted"] == 0, f"counts {repeat.counts}")
+    check(repeat.stale_units == first.stale_units != [] and repeat.missing_units == first.missing_units != [], f"lists {repeat.run_record()}")
+    check(repeat.counts["missing"] == 1, f"counts {repeat.counts}")
+    check(
+        manual_units.notice_text(repeat.stale_units, repeat.missing_units) == manual_units.notice_text(first.stale_units, first.missing_units) != "", "notice"
+    )
+
+
+@pytest.mark.parametrize("code", ["ConditionalRequestConflict", "409", "412", "PreconditionFailed"])
+def test_a_conflict_with_no_stored_record_is_a_visible_failure_not_a_stale_unit(world: World, code: str) -> None:
+    [unit] = hud_units(world, 1)
+    world.site.serve(HUD_URL, Reply(403))
+    world.bucket.inject.append(code)
+    with pytest.raises(manual_units.ManualUnitError, match="stored stale record"):
+        world.run([unit])
+    check(world.stale_records(unit) == [], "no stale record exists")
+
+
+def seed_stale_record(world: World, unit: dict, **changes: Any) -> dict:
+    """A stale record of this run and unit that an earlier attempt of the same run left behind, older than the retry interval."""
+    fields: dict[str, Any] = {
+        "unit_key": unit_key_of(unit),
+        "run_id": RUN_1,
+        "collection": "example_publisher/example_collection",
+        "source_id": unit["source_id"],
+        "snapshot_id": unit["snapshot_id"],
+        "attempted_at_utc": "2026-11-12T00:00:00Z",
+        "reason": "network",
+        "http_status": None,
+        "code_sha256": "c" * 64,
+        "bundle_sha256": "b" * 64,
+        "last_capture_verified": True,
+        "last_capture": manual_units.pointers(world.specs[unit["snapshot_id"]]),
+    }
+    record = stale_record.build(**(fields | changes))
+    world.bucket.seed(stale_record.stale_key(world.root, unit_key_of(unit), RUN_1), stale_record.encode(record))
+    return record
+
+
+def test_a_conflict_is_settled_by_the_record_that_is_stored(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    stored = seed_stale_record(world, unit)
+    world.site.serve(HUD_URL, Reply(403))
+    report = world.run([unit])
+    check(report.stale_units == [manual_units.summary(stored)] and report.outcomes[0].reason == "network", f"report {report.run_record()}")
+    check(
+        world.stale_records(unit) == [stored] and world.bucket.writes().count(stale_record.stale_key(world.root, unit_key_of(unit), RUN_1)) == 1,
+        "stored record kept",
+    )
+
+
+@pytest.mark.parametrize("changes", [{"snapshot_id": "HUD__other"}, {"source_id": "WONDER"}, {"code_sha256": "d" * 64}], ids=["snapshot", "source", "code"])
+def test_a_conflict_with_a_stored_record_of_another_identity_is_a_visible_failure(world: World, changes: dict[str, str]) -> None:
+    [unit] = hud_units(world, 1)
+    seed_stale_record(world, unit, **changes)
+    world.site.serve(HUD_URL, Reply(403))
+    with pytest.raises(manual_units.ManualUnitError, match="stored stale record"):
+        world.run([unit])
+
+
+@pytest.mark.parametrize("name", ["../bad.xlsx", "dir/bad.xlsx", ".hidden.xlsx", "transport.json", "x" * 201 + ".xlsx"])
+def test_a_stored_file_name_that_is_not_plain_is_refused_before_any_request(world: World, name: str) -> None:
+    unit = world.add(hud_unit(0), {})
+    world.specs[unit["snapshot_id"]] = {"mode": "hud_xlsx", "stored_data_files": sorted([name, "crosswalk.csv"])}
+    with pytest.raises(manual_units.ManualUnitError, match="plain stored filename"):
+        world.run([unit])
+    check(world.site.seen == [] and world.bucket.writes() == [], "no request, not even robots.txt")
+
+
+@pytest.mark.parametrize("url", ["http://www.huduser.gov/apps/home", "https://www.huduser.gov/apps/home?token=x"])
+def test_a_url_that_is_not_a_plain_public_https_address_is_refused_before_any_request(world: World, url: str) -> None:
+    unit = world.add(make_unit("HUD", "hud_xlsx", url, "HUD__0"), {})
+    world.specs[unit["snapshot_id"]] = hud_spec(world, unit)
+    with pytest.raises(manual_units.ManualUnitError, match="HTTPS|Credentials"):
+        world.run([unit])
+    check(world.site.seen == [] and world.bucket.writes() == [], "no request, not even robots.txt")
