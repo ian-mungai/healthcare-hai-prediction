@@ -51,7 +51,7 @@ def client(name):
 
 
 LAYERS_TF = Path(__file__).resolve().parents[2] / "infra/jobs/layers.tf"
-FARGATE = {"AWS_EXECUTION_ENV": "AWS_ECS_FARGATE", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/SyntheticWalkProvider"}
+TASK = {"AWS_EXECUTION_ENV": "AWS_ECS_EC2", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/SyntheticWalkProvider"}
 
 
 def task_definition_environment() -> dict[str, str]:
@@ -72,8 +72,8 @@ def opens_spark_session(module: str) -> bool:
 
 def real_environment_standin(job: Any, module: str, arguments: Any, environment: dict[str, str] | None = None) -> None:
     """The stand-in for an image module, behind the checks that the real module makes of its environment before it does any work. The module gets the
-    container's variables and what Fargate adds. A module that opens a Spark session runs the real task settings: without the catalog endpoint they refuse."""
-    seen = {**os.environ, **FARGATE, **(environment or {})}
+    container's variables and what ECS adds. A module that opens a Spark session runs the real task settings: without the catalog endpoint they refuse."""
+    seen = {**os.environ, **TASK, **(environment or {})}
     if opens_spark_session(module) and "--local-warehouse" not in [str(item) for item in arguments]:
         with mock.patch.dict(os.environ, seen, clear=True):
             try:

@@ -1,6 +1,6 @@
 """Startup check of a host job: find a broken environment in seconds and name the cause in the first log lines.
 
-A job on the EC2 host or on Fargate runs this at the start of its first code step, from the staged code. It checks only what the job needs, each check with a
+A job on the EC2 host runs this at the start of its first code step, from the staged code. It checks only what the job needs, each check with a
 fixed bound, and logs one line per check on stderr. Failures come first. A run outside an ECS task checks nothing.
 
 - ``check_phase`` and ``check_environment``: the task environment is recognised, the task credential source is the native provider, the host services the
@@ -81,7 +81,7 @@ MAX_PARTS = 32
 MAX_RESULT_BYTES = 2_000_000
 # What the child sees of a forbidden credential variable that is set: the marker, never the value. The validator needs only the presence.
 PRESENT = "1"
-# ECS gives these to every container of a task, on Fargate and on the host.
+# ECS gives these to every container of a task on the host.
 ECS_MARKERS = ("ECS_CONTAINER_METADATA_URI_V4", "ECS_CONTAINER_METADATA_URI", "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI")
 DEFAULT_PORTS = {"http": 80, "https": 443}
 # The host jobs of config/orchestration/host_jobs.json, the phase at which each checks and the host services that phase needs. A phase that is not listed
@@ -105,7 +105,7 @@ SERVICE_VARIABLES = {"polaris": "POLARIS_URI", "mlflow": "MLFLOW_TRACKING_URI", 
 # Everything below is the allowlist of what a diagnostic may show. The child can only name these, and the parent checks each record against them again.
 SERVICES = ("polaris", "mlflow", "openmetadata", "redis", "s3", "ecr")
 VARIABLES = frozenset({"POLARIS_URI", "MLFLOW_TRACKING_URI", "OM_API", "AWS_EXECUTION_ENV", "AWS_REGION", "AWS_DEFAULT_REGION"})
-EXECUTION_LABELS = frozenset({"AWS_ECS_FARGATE", "AWS_ECS_EC2", "AWS_ECS_MANAGED_INSTANCES", "AWS_ECS_EXTERNAL"})
+EXECUTION_LABELS = frozenset({"AWS_ECS_EC2", "AWS_ECS_MANAGED_INSTANCES", "AWS_ECS_EXTERNAL"})
 AWS_REGIONS = frozenset(
     (
         "us-east-1",

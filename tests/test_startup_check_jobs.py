@@ -143,7 +143,7 @@ def test_an_unreachable_service_is_named_in_the_first_log_lines(
     check(f"{JOBS[entry][3]} {host}:{port}" in "\n".join(lines[:4]), f"the first lines name the address: {lines[:4]}")
 
 
-@pytest.mark.parametrize("execution", ["AWS_ECS_EC2", "AWS_ECS_FARGATE"])
+@pytest.mark.parametrize("execution", ["AWS_ECS_EC2"])
 @pytest.mark.parametrize("entry", ENTRIES)
 def test_a_job_with_its_services_reachable_reaches_its_own_code(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, entry: str, execution: str) -> None:
     runner, network = prepare(monkeypatch, entry, execution=execution)

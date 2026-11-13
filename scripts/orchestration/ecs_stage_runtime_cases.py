@@ -871,7 +871,7 @@ def engine_configuration(folder: Path) -> None:
     fake_dbt: Any = types.ModuleType("dbt.cli.main")
     fake_dbt.dbtRunner = DbtRunner
     environment = {
-        "AWS_EXECUTION_ENV": "AWS_ECS_FARGATE",
+        "AWS_EXECUTION_ENV": "AWS_ECS_EC2",
         "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "/v2/credentials/synthetic_task",
         "AWS_REGION": "us-west-2",
         "POLARIS_URI": "http://catalog.example.invalid:8181/api/catalog",

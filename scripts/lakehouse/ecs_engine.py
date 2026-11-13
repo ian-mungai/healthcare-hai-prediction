@@ -7,8 +7,8 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-# ECS sets one of these in a job's containers: Fargate in the cloud and EC2 on the job host. Both read their credentials from the task provider.
-TASK_ENVIRONMENTS = frozenset({"AWS_ECS_FARGATE", "AWS_ECS_EC2"})
+# ECS sets this in the containers of a job on the EC2 host, which read their credentials from the task provider. Any other value is no task.
+TASK_ENVIRONMENTS = frozenset({"AWS_ECS_EC2"})
 # A task reads its credentials from the native provider only, so any of these in the environment is refused.
 FORBIDDEN_CREDENTIAL_VARIABLES = (
     "AWS_ACCESS_KEY_ID",
@@ -35,7 +35,7 @@ def refusal_code(error: BaseException, fallback: str) -> str:
 
 
 def in_task() -> bool:
-    """Whether this process runs in an ECS task, on Fargate or on the EC2 host."""
+    """Whether this process runs in an ECS task on the EC2 host."""
     return os.environ.get("AWS_EXECUTION_ENV") in TASK_ENVIRONMENTS
 
 

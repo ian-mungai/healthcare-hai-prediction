@@ -136,7 +136,7 @@ def test_the_environment_is_checked_before_any_aws_call(monkeypatch: pytest.Monk
     check(cloud.calls == [] and cloud.puts == [], "no client was made and nothing was written")
 
 
-@pytest.mark.parametrize("execution", ["AWS_ECS_EC2", "AWS_ECS_FARGATE"])
+@pytest.mark.parametrize("execution", ["AWS_ECS_EC2"])
 def test_a_publisher_with_its_files_and_endpoints_starts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, execution: str, capsys: pytest.CaptureFixture[str]
 ) -> None:

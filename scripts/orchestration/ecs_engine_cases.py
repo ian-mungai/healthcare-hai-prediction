@@ -45,7 +45,7 @@ SOURCES = (
 )
 
 
-def environment(folder: Path, *, task: bool = True, bounded: bool = True, execution: str = "AWS_ECS_FARGATE") -> dict[str, str]:
+def environment(folder: Path, *, task: bool = True, bounded: bool = True, execution: str = "AWS_ECS_EC2") -> dict[str, str]:
     values = {
         "AWS_REGION": "us-west-2",
         "POLARIS_URI": "http://verified-catalog.example.invalid:8181/api/catalog",
@@ -114,7 +114,7 @@ def spark(values: dict[str, str], warehouse: Path | None = None) -> dict[str, An
             return self
 
         def config(self, name: str, value: Any) -> Builder:
-            if values.get("AWS_EXECUTION_ENV") in ("AWS_ECS_FARGATE", "AWS_ECS_EC2"):
+            if values.get("AWS_EXECUTION_ENV") == "AWS_ECS_EC2":
                 require(values["POLARIS_CLIENT_SECRET"] not in str(value), "secret_in_spark_arguments")
             startup.append((name, value))
             captured[name] = value
@@ -315,7 +315,7 @@ def task_profile_endpoint_required(folder: Path) -> None:
 
 
 def host_task_environment(folder: Path) -> None:
-    """A job on the EC2 host runs with AWS_ECS_EC2 and is a task as a Fargate job is: the offline profile and the same credential and catalog refusals."""
+    """A job on the EC2 host runs with AWS_ECS_EC2 and is a task: the offline profile and the credential and catalog refusals."""
     for index, (layer, mode, target) in enumerate(
         (("silver", "real", "lakehouse_task"), ("gold", "real", "pinned_silver_bounded"), ("silver", "publish_fixture", "fixture_bounded"))
     ):

@@ -244,7 +244,7 @@ def case_an_override_that_is_not_understood_fails_by_name(root: Path) -> None:
     expect_error(lambda: task_capacity.clip({"HAI_DUCKDB_MAX_TEMP_BYTES": "-1"}, derived), "HAI_DUCKDB_MAX_TEMP_BYTES")
 
 
-def task_environment(spill: Path | None, execution: str = "AWS_ECS_FARGATE") -> dict[str, str]:
+def task_environment(spill: Path | None, execution: str = "AWS_ECS_EC2") -> dict[str, str]:
     found = {"AWS_EXECUTION_ENV": execution}
     if spill is not None:
         found["HAI_DUCKDB_TEMP_DIRECTORY"] = str(spill)
@@ -284,7 +284,7 @@ def case_apply_does_nothing_outside_a_task(root: Path) -> None:
 
 
 def case_apply_does_nothing_for_an_unknown_ecs_environment(root: Path) -> None:
-    for value in ("AWS_ECS_UNKNOWN", "AWS_ECS", "AWS_ECS_FARGATE_X", "aws_ecs_ec2"):
+    for value in ("AWS_ECS_UNKNOWN", "AWS_ECS", "AWS_ECS_FARGATE", "AWS_ECS_FARGATE_X", "aws_ecs_ec2"):
         environ = {"AWS_EXECUTION_ENV": value, "DUCKDB_MEMORY_LIMIT": "150MB"}
         expect(task_capacity.apply("default", environ, root, None, None, None) is None, value)
         expect(environ == {"AWS_EXECUTION_ENV": value, "DUCKDB_MEMORY_LIMIT": "150MB"}, environ)

@@ -114,12 +114,12 @@ def test_gold_and_features_check_the_same_things_at_pin(
     check(f"polaris_unreachable {POLARIS_HOST}:8181" in "\n".join(first_lines(capsys)[:4]), f"{layer} names the Polaris address")
 
 
-def test_fargate_passes_the_same_checks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_a_fargate_label_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     host_environment(monkeypatch, execution="AWS_ECS_FARGATE")
     install_network(monkeypatch, Network())
-    profile_with_extensions(ROOT / "dbt/profiles.yml", profiles_of(tmp_path), tmp_path / "extensions")
-    check(drive(monkeypatch, tmp_path, "pin") == 0 and drive(monkeypatch, tmp_path, "build") == 0, "Fargate starts both phases")
-    check(any("ok dbt_target lakehouse_task" in line for line in first_lines(capsys)), "Fargate selects the same task target")
+    check(drive(monkeypatch, tmp_path, "pin") == 1, "a task that names Fargate stops at pin")
+    lines = "\n".join(first_lines(capsys)[:4])
+    check("task_environment_unrecognised" in lines and "expected AWS_ECS_EC2" in lines, f"the refusal names the one accepted label: {lines}")
 
 
 def test_a_run_outside_a_task_checks_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
