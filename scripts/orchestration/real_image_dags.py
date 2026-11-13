@@ -834,7 +834,7 @@ def cases_catalog() -> dict[str, Scenario]:
                     f"features_{model}_dag",
                     {"run_id": training.model_features_run_id(features, model), "mode": "real", "base_snapshot_run": features},
                     1,
-                    family("features"),
+                    family(f"features_{model}"),
                 )
                 for model in ("m1", "m2", "m3", "m4", "m5", "m6")
             ),
