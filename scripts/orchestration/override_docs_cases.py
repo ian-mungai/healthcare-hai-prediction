@@ -32,6 +32,7 @@ VALUES = {
     "BRONZE_TABLES": '["synthetic_table"]',
     "BRONZE_TARGET": "bronze_e2e",
     "HAI_DEADLINE_UTC": "2026-10-30T12:00:00Z",
+    "PHASE": "promote",
 }
 
 
