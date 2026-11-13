@@ -419,7 +419,7 @@ def bootstrap_cases(section: str, sink: list[str], helper: str) -> tuple[dict[st
 
     # A plan the helper cannot read, or that holds more than the two subscriptions, is never applied.
     for label, extra in (
-        ("a plan of the wrong JSON shape", {"show_raw": json.dumps(world.plan_document({}))}),
+        ("a plan of the wrong JSON shape", {"show_raw": json.dumps(world.plan_document(None, resource_changes={}))}),
         ("a plan that is not JSON", {"show_raw": "Plan: nothing"}),
         ("a plan document that is an empty object", {"show_raw": "{}"}),
         ("a plan document of a format version only", {"show_raw": '{"format_version": "1.2"}'}),
