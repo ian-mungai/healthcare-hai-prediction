@@ -19,7 +19,7 @@
       "Effect": "Allow",
       "Action": ["s3:ListBucketVersions"],
       "Resource": "${BUCKET_ARN}",
-      "Condition": {"StringLike": {"s3:prefix": ${INPUT_LIST_PREFIXES}}}
+      "Condition": {"StringLike": {"s3:prefix": ${INPUT_VERSION_PREFIXES}}}
     }
   ]
 }

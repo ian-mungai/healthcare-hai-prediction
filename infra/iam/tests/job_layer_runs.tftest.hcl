@@ -91,10 +91,10 @@ run "each_layer_reads_only_its_input_layer" {
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Effect == "Allow" &&
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Action == ["s3:ListBucketVersions"] &&
         jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
-        jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Condition.StringLike["s3:prefix"] == ["lakehouse/${source}/*"]
+        toset(jsondecode(aws_iam_role_policy.job_writer_layer_input[layer].policy).Statement[2].Condition.StringLike["s3:prefix"]) == toset(layer == "features" ? ["lakehouse/gold/*", "lakehouse/features/*"] : ["lakehouse/${source}/*"])
       )])
     )
-    error_message = "Silver reads bronze, gold reads silver and features reads gold. Each gets object reads, a scoped listing and a scoped version listing of that one prefix and nothing else."
+    error_message = "Silver reads bronze, gold reads silver and features reads gold. Each gets object reads, a scoped listing and a scoped version listing of that one prefix and nothing else, except that features also lists the versions of its own prefix, which a model set pins."
   }
 }
 

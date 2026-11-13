@@ -198,6 +198,8 @@ resource "aws_iam_role_policy" "job_writer_layer_input" {
     BUCKET_ARN          = local.bronze_bucket_arn
     INPUT_OBJECT_ARNS   = jsonencode(["${local.bronze_bucket_arn}/lakehouse/${local.job_layer_run_inputs[each.key]}/*"])
     INPUT_LIST_PREFIXES = jsonencode(["lakehouse/${local.job_layer_run_inputs[each.key]}/*"])
+    # A model set pins the published features base, so the features task also lists the versions of its own prefix (scripts/lakehouse/layer_run.py input_prefix).
+    INPUT_VERSION_PREFIXES = jsonencode(concat(["lakehouse/${local.job_layer_run_inputs[each.key]}/*"], each.key == "features" ? ["lakehouse/features/*"] : []))
   })
 }
 

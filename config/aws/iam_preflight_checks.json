@@ -1599,6 +1599,15 @@
     },
     {
       "role": "write_features",
+      "action": "s3:ListBucketVersions",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "context": {
+        "s3:prefix": "lakehouse/features/"
+      },
+      "scope": "features"
+    },
+    {
+      "role": "write_features",
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/gold/table/data/example.parquet",
       "scope": "features"

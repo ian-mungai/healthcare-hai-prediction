@@ -211,6 +211,7 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "BUCKET_ARN": f"arn:aws:s3:::{bucket}",
             "INPUT_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/{source}/*"]),
             "INPUT_LIST_PREFIXES": json.dumps([f"lakehouse/{source}/*"]),
+            "INPUT_VERSION_PREFIXES": json.dumps([f"lakehouse/{source}/*", *(["lakehouse/features/*"] if role["layer"] == "features" else [])]),
         }
     if policy.endswith("job_writer_layer_upload.json"):
         # Silver and gold upload their run folder. Features attaches the same template for its run claim object only.

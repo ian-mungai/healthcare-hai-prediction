@@ -60,7 +60,8 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             for action in WRITER_ACTIONS:
                 add(f"{layer} objects {namespace} {action}", layer, action, resource, own or (reads and action == "s3:GetObject"))
             add(f"{layer} list {namespace}", layer, "s3:ListBucket", BUCKET, own or reads, {"s3:prefix": (f"lakehouse/{namespace}/",)})
-            add(f"{layer} input versions {namespace}", layer, "s3:ListBucketVersions", BUCKET, reads, {"s3:prefix": (f"lakehouse/{namespace}/",)})
+            pins_base = layer == "features" and namespace == "features"  # a model set pins the published features base, which sits under its own prefix
+            add(f"{layer} input versions {namespace}", layer, "s3:ListBucketVersions", BUCKET, reads or pins_base, {"s3:prefix": (f"lakehouse/{namespace}/",)})
             for action in ("s3:GetObjectVersion", "s3:DeleteObjectVersion", "s3:PutObjectAcl"):
                 add(f"{layer} excludes table privilege {namespace} {action}", layer, action, resource, False)
         for namespace in PREFIXES[layer]:
@@ -137,6 +138,10 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             {"s3:prefix": (f"lakehouse/{INPUTS.get(layer, 'bronze')}/",)},
         )
         add(f"{layer} input versions need a prefix", layer, "s3:ListBucketVersions", BUCKET, False)
+        for prefix in ("", "lakehouse/", f"lakehouse/{layer}", f"lakehouse/{layer}_other/", f"lakehouse/{layer}_e2e/"):
+            add(f"{layer} versions boundary {prefix}", layer, "s3:ListBucketVersions", BUCKET, False, {"s3:prefix": (prefix,)})
+        add(f"{layer} model pin lists the features base", layer, "s3:ListBucketVersions", BUCKET, layer == "features", {"s3:prefix": ("lakehouse/features/",)})
+        add(f"{layer} model pin lists a base table", layer, "s3:ListBucketVersions", BUCKET, layer == "features", {"s3:prefix": ("lakehouse/features/table/",)})
         add(f"{layer} feast registry get", layer, "s3:GetObject", REGISTRY, layer == "features")
         add(f"{layer} feast registry put", layer, "s3:PutObject", REGISTRY, layer == "features")
         add(f"{layer} feast registry delete", layer, "s3:DeleteObject", REGISTRY, False)
@@ -355,6 +360,7 @@ def render_documents(root: Path, base: dict[str, dict[str, Any]], bucket: str, c
             "BUCKET_ARN": bucket,
             "INPUT_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/{source}/*"]),
             "INPUT_LIST_PREFIXES": json.dumps([f"lakehouse/{source}/*"]),
+            "INPUT_VERSION_PREFIXES": json.dumps([f"lakehouse/{source}/*", *(["lakehouse/features/*"] if layer == "features" else [])]),
         }
         documents[f"layer_input_{layer}"] = load(directory / "job_writer_layer_input.json", values)
     for layer in UPLOADS:
@@ -410,6 +416,18 @@ def verify(root: Path, base: dict[str, dict[str, Any]], output: Path) -> tuple[l
                 for namespace in (*PRODUCTION, *TEST_NAMESPACES)
                 if f"{BUCKET}/lakehouse/{namespace}/*" not in statement["Resource"]
             ]
+        if name == "layer_input_features" and statement["Sid"] == "ListLayerInputVersions":
+            prefixes = statement["Condition"]["StringLike"]["s3:prefix"]
+            variants += [
+                (f"versions_also_{label}", "Condition", {"StringLike": {"s3:prefix": [*prefixes, extra]}})
+                for label, extra in (
+                    ("features_e2e", "lakehouse/features_e2e/*"),
+                    ("silver", "lakehouse/silver/*"),
+                    ("lakehouse", "lakehouse/*"),
+                    ("wildcard", "lakehouse/feature*"),
+                )
+            ]
+            variants.append(("versions_without_features_base", "Condition", {"StringLike": {"s3:prefix": ["lakehouse/gold/*"]}}))
         if name == "project_iam" and statement["Sid"] == "PassLayerWriterRoles":
             variants.append(("writer_family_wildcard", "Resource", ["arn:aws:iam::111111111111:role/example_project_job_write_*_task_dev"]))
         if name.startswith(f"{MANAGED_PREFIX}source_objects_") and statement["Sid"] == "SourceObjectVersionsOnly":
