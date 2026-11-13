@@ -5,6 +5,8 @@ Every wait has a deadline.
 Usage::
 
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag silver_transform_dag --mode real --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --run-kind bootstrap --capture-root raw/ --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --capture-root ingestion_test/<run id>/ --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_base_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
@@ -14,6 +16,10 @@ A workflow whose job publishes from a producer run requires that run as a run ID
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
+
+``ingestion_dag`` also takes ``--run-kind`` (``bootstrap``, the form's default, or ``monthly``) and ``--capture-root`` (``raw/``, the form's default, or one
+``ingestion_test/<run id>/`` folder). Both are checked exactly as the launch preflight checks a publisher request (``require_publisher_request``), before the
+secret is read and before any request, and no other workflow takes them. An option left out is left to the form's default.
 
 A trigger creates the run before it polls, so a trigger that fails after the create can leave a queued or running run behind. ``--status`` reads the state of
 one run (``absent`` when Airflow holds none) and its task states, and changes nothing. ``--settle`` pauses the DAG, so the scheduler starts nothing more of
@@ -35,6 +41,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from orchestration.ecs_launch import LaunchRefused
+from orchestration.ecs_preflight import require_publisher_request
+from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS as TRAINING_DAGS
 from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, MODELS, parameters_for
 from scripts.infrastructure import secret_store
@@ -48,6 +57,8 @@ DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
+# The form defaults of ingestion_dag, which stand for an option that is left out when the pair is checked.
+PUBLISHER_DEFAULTS = {"run_kind": "bootstrap", "capture_root": "raw/"}
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 MAX_WAIT_SECONDS = 4 * 3600
 POLL_SECONDS = 2.0
@@ -73,15 +84,22 @@ def run_conf(
     silver_snapshot_run: str | None,
     training: dict[str, Any] | None = None,
     gold_snapshot_run: str | None = None,
+    run_kind: str | None = None,
+    capture_root: str | None = None,
 ) -> dict[str, Any]:
     """The validated configuration of one run. Gold names the committed silver run it reads, features and feature store the gold run; the others name
-    none."""
+    none. Ingestion may name its run kind and capture root, which the launch preflight checks again."""
     if dag not in DAGS or not RUN_ID.fullmatch(run_id):
         raise TriggerError(f"refused: unknown workflow or run ID ({dag!r}, {run_id!r})")
     accepted = FORM_MODES.get(dag, MODES)
     if mode not in accepted:
         raise TriggerError(f"refused: {dag} accepts only the mode its form offers ({', '.join(accepted)}), not {mode!r}")
     conf: dict[str, Any] = {"run_id": run_id, "mode": mode}
+    given_publisher = {"run_kind": run_kind, "capture_root": capture_root}
+    if dag == "ingestion_dag":
+        conf |= publisher_conf(dag, mode, run_id, given_publisher)
+    elif any(value is not None for value in given_publisher.values()):
+        raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag does")
     if dag in TRAINING_DAGS:
         if silver_snapshot_run is not None or gold_snapshot_run is not None:
             raise TriggerError("refused: a training workflow reads no silver or gold snapshot run")
@@ -110,6 +128,19 @@ def run_conf(
             raise TriggerError(f"refused: {dag} needs {flag} as a run ID (not latest), the producer run its job publishes from; got {value!r}")
         conf[needed] = value
     return conf
+
+
+def publisher_conf(dag: str, mode: str, run_id: str, given: dict[str, str | None]) -> dict[str, str]:
+    """The run kind and capture root that were named, after the pair that the run would use passes the preflight's own check of a publisher request."""
+    pair = {name: PUBLISHER_DEFAULTS[name] if value is None else value for name, value in given.items()}
+    request = SubmissionRequest(
+        "publisher_run", run_id, mode, 1, dag, "trigger", "manual__trigger", publisher={"kind": pair["run_kind"], "capture_root": pair["capture_root"]}
+    )
+    try:
+        require_publisher_request(request)
+    except LaunchRefused as error:
+        raise TriggerError(f"refused: {error}") from None
+    return {name: value for name, value in given.items() if value is not None}
 
 
 def api_port() -> int:
@@ -212,6 +243,8 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--mode", help="the mode of a new run: real for every workflow here; required for a trigger, refused with --status or --settle")
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
+    cli.add_argument("--run-kind", help="ingestion_dag only: bootstrap (the form's default) or monthly")
+    cli.add_argument("--capture-root", help="ingestion_dag only: raw/ (the form's default) or ingestion_test/<run id>/")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
     cli.add_argument("--features-run", default="latest")
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
@@ -228,8 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--settle", action="store_true", help="pause the DAG and mark the run --run-id failed unless it is absent or has ended")
     args = cli.parse_args(argv)
     inspecting = "status" if args.status else "settle" if args.settle else None
-    if inspecting and (args.run_id is None or args.mode is not None):
-        cli.error(f"--{inspecting} needs --run-id and takes no --mode")
+    if inspecting and (args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None):
+        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind and no --capture-root")
     if not inspecting and args.mode is None:
         cli.error("a trigger needs --mode")
     try:
@@ -249,7 +282,16 @@ def main(argv: list[str] | None = None) -> int:
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow", "model")}
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
-        conf = run_conf(args.dag, args.mode, new_run_id() if args.run_id is None else args.run_id, args.silver_snapshot_run, training, args.gold_snapshot_run)
+        conf = run_conf(
+            args.dag,
+            args.mode,
+            new_run_id() if args.run_id is None else args.run_id,
+            args.silver_snapshot_run,
+            training,
+            args.gold_snapshot_run,
+            args.run_kind,
+            args.capture_root,
+        )
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:

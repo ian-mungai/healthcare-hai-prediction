@@ -37,6 +37,8 @@ class StandIn:
         self.runs = dict(runs or {})
         self.paused: dict[str, bool] = {}
         self.calls: list[str] = []
+        self.confs: list[dict[str, Any]] = []
+        self.token_reads = 0
         self.down = down
         self.down_after = down_after
         self.sticky = sticky
@@ -56,6 +58,7 @@ class StandIn:
 
     def trigger(self, dag_id: str, dag_run_id: str, conf: dict[str, Any]) -> dict[str, Any]:
         self.call("trigger")
+        self.confs.append(dict(conf))
         self.runs[dag_run_id] = "queued"
         return {"dag_run_id": dag_run_id, "state": "queued"}
 
@@ -79,8 +82,13 @@ def invoke(api: StandIn, arguments: list[str]) -> tuple[int, dict[str, Any] | No
     """Run ``main`` with the stand-in; returns the exit code, the JSON it printed, its error text and the seconds it took."""
     out, err = io.StringIO(), io.StringIO()
     started = time.monotonic()
+
+    def read_secret(deadline: float) -> str:
+        api.token_reads += 1
+        return "SYNTHETIC-secret"
+
     with (
-        mock.patch.object(trigger_dag, "read_token_secret", lambda deadline: "SYNTHETIC-secret"),
+        mock.patch.object(trigger_dag, "read_token_secret", read_secret),
         mock.patch.object(trigger_dag, "AirflowApi", lambda port, secret, deadline=None: api),
         mock.patch.object(trigger_dag, "POLL_SECONDS", 0.05),
         contextlib.redirect_stdout(out),
@@ -210,12 +218,97 @@ def trigger_cases() -> dict[str, bool]:
     }
 
 
+TEST_ROOT = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+
+
+def publisher_cases() -> dict[str, bool]:
+    """``--run-kind`` and ``--capture-root`` of ingestion_dag are checked exactly as the preflight checks a publisher request, before the secret is read and
+    before any Airflow call."""
+    from orchestration.ecs_launch import LaunchRefused
+    from orchestration.ecs_preflight import require_publisher_request
+    from orchestration.interface import SubmissionRequest
+
+    class Ends(StandIn):
+        def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+            record = super().run(dag_id, dag_run_id)
+            self.runs[dag_run_id] = "success"
+            return record
+
+    base = ["--dag", "ingestion_dag", "--mode", "real", "--run-id", RUN, "--wait-seconds", "5"]
+
+    def triggered(*extra: str) -> tuple[int, StandIn]:
+        api = Ends()
+        return invoke(api, [*base, *extra])[0], api
+
+    def preflight_accepts(kind: str, root: str) -> bool:
+        request = SubmissionRequest("publisher_run", RUN, "real", 1, "ingestion_dag", "job", "manual__x", publisher={"kind": kind, "capture_root": root})
+        try:
+            require_publisher_request(request)
+        except LaunchRefused:
+            return False
+        return True
+
+    both, api = triggered("--run-kind", "monthly", "--capture-root", TEST_ROOT)
+    kind_only, kind_api = triggered("--run-kind", "monthly")
+    root_only, root_api = triggered("--capture-root", TEST_ROOT)
+    explicit, explicit_api = triggered("--run-kind", "bootstrap", "--capture-root", "raw/")
+    plain, plain_api = triggered()
+    kinds = ("bootstrap", "monthly", "retry", "", "Monthly", "monthly\n", " bootstrap")
+    roots = ("raw/", TEST_ROOT, "raw", "", "lakehouse/", "ingestion_test/t1/", "ingestion_test/../raw/", "raw/\n", TEST_ROOT + "x/", TEST_ROOT.upper())
+    pairs = [(kind, root) for kind in kinds for root in roots]
+    same, refused_quietly = True, True
+    for kind, root in pairs:
+        code, quiet = triggered("--run-kind", kind, "--capture-root", root)
+        same = same and ((code == 0) == preflight_accepts(kind, root))
+        if code != 0:
+            refused_quietly = refused_quietly and not quiet.calls and quiet.token_reads == 0 and not quiet.confs
+    kind_alone = [triggered("--run-kind", kind) for kind in kinds]
+    root_alone = [triggered("--capture-root", root) for root in roots]
+    other_api = Ends()
+    other_code, _, other_error, _ = invoke(
+        other_api, ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5", "--run-kind", "monthly"]
+    )
+    root_other_api = Ends()
+    root_other_code = invoke(
+        root_other_api, ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5", "--capture-root", "raw/"]
+    )[0]
+    code, _, error, _ = invoke(StandIn(), [*base, "--run-kind", "retry"])
+    return {
+        "a kind and a test root reach the run's conf": both == 0
+        and api.confs == [{"run_id": RUN, "mode": "real", "run_kind": "monthly", "capture_root": TEST_ROOT}],
+        "a kind alone sends the kind and leaves the root to the form": kind_only == 0
+        and kind_api.confs == [{"run_id": RUN, "mode": "real", "run_kind": "monthly"}],
+        "a root alone sends the root and leaves the kind to the form": root_only == 0
+        and root_api.confs == [{"run_id": RUN, "mode": "real", "capture_root": TEST_ROOT}],
+        "the explicit defaults are sent as given": explicit == 0
+        and explicit_api.confs == [{"run_id": RUN, "mode": "real", "run_kind": "bootstrap", "capture_root": "raw/"}],
+        "without either option the conf holds the run and the mode only": plain == 0 and plain_api.confs == [{"run_id": RUN, "mode": "real"}],
+        f"the trigger accepts exactly the {len(pairs)} kind and root pairs that the preflight accepts": same,
+        "every refused pair is refused before the secret is read and before any Airflow call": refused_quietly,
+        "a kind alone is accepted exactly when the preflight accepts it with the default root": all(
+            (code == 0) == preflight_accepts(kind, "raw/") for (code, _), kind in zip(kind_alone, kinds, strict=True)
+        ),
+        "a root alone is accepted exactly when the preflight accepts it with the default kind": all(
+            (code == 0) == preflight_accepts("bootstrap", root) for (code, _), root in zip(root_alone, roots, strict=True)
+        ),
+        "a refused kind names the preflight's reason": code == 1 and "publisher_request_has_wrong_kind" in error,
+        "another workflow refuses a run kind before any call": other_code == 1
+        and "run kind" in other_error
+        and not other_api.calls
+        and other_api.token_reads == 0,
+        "another workflow refuses a capture root before any call": root_other_code == 1 and not root_other_api.calls and root_other_api.token_reads == 0,
+        "status with a run kind is refused": invoke(StandIn({RUN: "queued"}), status("--run-kind", "monthly"))[0] == 2,
+        "settle with a capture root is refused": invoke(StandIn({RUN: "queued"}), [*settle(), "--capture-root", "raw/"])[0] == 2,
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
     "settle": settle_cases,
     "parse": parse_cases,
     "trigger": trigger_cases,
+    "publisher request": publisher_cases,
 }
 
 
