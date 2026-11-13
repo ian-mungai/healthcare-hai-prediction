@@ -7,3 +7,4 @@ config/acquisition/bootstrap_seed/**/*.tsv filter=lfs diff=lfs merge=lfs -text
 config/acquisition/bootstrap_seed/**/*.xlsx filter=lfs diff=lfs merge=lfs -text
 config/acquisition/bootstrap_seed/**/*.zip filter=lfs diff=lfs merge=lfs -text
 config/acquisition/bootstrap_seed/**/*.txt filter=lfs diff=lfs merge=lfs -text
+config/acquisition/baseline_run/capture_specs.json filter=lfs diff=lfs merge=lfs -text

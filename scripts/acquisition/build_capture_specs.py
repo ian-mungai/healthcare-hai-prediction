@@ -1,8 +1,11 @@
 """One-time development step: derive the capture specification from the kept stored receipts, job files and reconciliation files.
 
-A bootstrap capture compares nothing with an old download, but it still needs four facts the stored files hold: the stored data file names a
-collector must produce, the expected format and reviewed unsigned redirect of a file unit, and the reviewed archive member map. The result has one
-entry per queue unit and no bucket, object key or local path. The stored files are local only, so hosted CI cannot run this script.
+A bootstrap capture compares nothing with an old download, but it still needs facts the stored files hold: the stored data file names a collector must
+produce, the expected format, reviewed unsigned redirect and receipt template of a file unit, the reviewed archive member map, the planned item of a
+collector unit (its batch, release, year or file ID, or an MMD unit's measure and year) and the newest stored capture of a manual unit (object keys and
+versions, without the bucket). The result has one entry per queue unit and no bucket name or local path. The stored files are local only, so hosted CI cannot
+run this script. A receipt template carries the free text of old job plans: legacy agent-home pointers are rewritten as in the registry, phone examples of a
+public dataset profile are redacted, and the document header counts both.
 """
 
 from __future__ import annotations
@@ -10,12 +13,27 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.rewrite_registry_provenance import PHONE_PLACEHOLDER, POINTER_FROM, POINTER_TO
 
+PLAN_ITEM_KEYS = {
+    "bls_api_v2": "batch_id",
+    "census_acs_api": "batch_id",
+    "census_acs_detailed": "batch_id",
+    "hud_api": "batch_id",
+    "cms_owners_org": "release_id",
+    "hcai_util_workbook": "year_id",
+    "onc_mu_hospital": "file_id",
+}
+MMD_API_FLAG = "browser_export_moved_to_api"
+TEMPLATE_OMITS = ("route_id", "file_name", "expected_format")
+PHONE = re.compile(r"\(\d{3}\) \d{3}-\d{4}")
 FORMATS = {".csv": "csv", ".txt": "txt", ".zip": "zip", ".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf", ".json": "json", ".docx": "docx", ".gz": "gzip"}
 
 
@@ -53,29 +71,102 @@ def job_file(receipt: Path, base: Path) -> Path | None:
     return None
 
 
-def derive_unit(unit: dict[str, Any], base: Path) -> dict[str, Any]:
+def cleaned(value: Any, counts: Counter) -> Any:
+    """A template value with each legacy agent-home pointer rewritten (as in the registry) and each phone example of a public dataset profile redacted."""
+    if isinstance(value, str):
+        counts["pointers"] += value.count(POINTER_FROM)
+        counts["phone_examples"] += len(PHONE.findall(value))
+        return PHONE.sub(PHONE_PLACEHOLDER, value.replace(POINTER_FROM, POINTER_TO))
+    if isinstance(value, dict):
+        return {key: cleaned(item, counts) for key, item in value.items()}
+    if isinstance(value, list):
+        return [cleaned(item, counts) for item in value]
+    return value
+
+
+def lineage_of(receipt: dict[str, Any]) -> dict[str, Any]:
+    """The lineage record of a stored receipt: its extraction or query text parsed as JSON, or an empty record."""
+    text = receipt.get("lineage", {}).get("extraction_or_query")
+    return json.loads(text) if isinstance(text, str) and text.startswith("{") else {}
+
+
+def mmd_selection(unit: dict[str, Any], receipt: dict[str, Any], conditions: list[dict[str, Any]]) -> dict[str, Any]:
+    """The measure and year of an MMD unit: an API capture records them, a browser export is matched by its condition, domain and county geography."""
+    if unit["mode"] == "mmd_api":
+        detail = lineage_of(receipt)
+        return {"measure_id": detail["measure_id"], "year": int(detail["year"])}
+    chosen = receipt["acquisition"]["export_selections"]
+    matches = [item["measure_id"] for item in conditions if (item["condition_label"], item["domain_label"]) == (chosen["condition"], chosen["domain"])]
+    if len(matches) != 1 or chosen["geography"] != "County":
+        raise ValueError(f"Unit {unit['snapshot_id']} does not match exactly one planned county condition")
+    return {"measure_id": matches[0], "year": int(chosen["year"])}
+
+
+def last_capture(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any] | None:
+    """The newest stored capture of a manual unit from its reconciliation file: each object's role, key, version, digest and size, or None without records."""
+    record = receipt_path.parent / "s3_collections_reconciliation.json"
+    if not record.is_file():
+        return None
+    retrieved = receipt.get("acquisition", {}).get("retrieved_at_utc")
+    artifacts = [
+        {
+            "role": item["role"],
+            "key": item["object"]["key"],
+            "version_id": item["object"]["version_id"],
+            "sha256": item["object"]["sha256"],
+            "byte_count": item["object"]["byte_count"],
+            "retrieved_at_utc": retrieved,
+        }
+        for item in read_json(record)["objects"]
+        if "archive_member" not in item and item["storage_path"] != "receipt.json"
+    ]
+    if not artifacts:
+        return None
+    root = "raw/" if all(item["key"].startswith("raw/") for item in artifacts) else ""
+    return {"read_root": root, "artifacts": sorted(artifacts, key=lambda item: (item["role"], item["key"]))}
+
+
+def derive_unit(unit: dict[str, Any], base: Path, conditions: list[dict[str, Any]] | None = None, counts: Counter | None = None) -> dict[str, Any]:
     """The specification of one unit from its stored files under BASE."""
-    receipt = base / current(unit["receipt"])
-    if not receipt.is_file():
+    receipt_path = base / current(unit["receipt"])
+    if not receipt_path.is_file():
         raise ValueError(f"Unit {unit['snapshot_id']} has no stored receipt")
-    artifacts = read_json(receipt)["artifacts"]
+    receipt = read_json(receipt_path)
+    artifacts = receipt["artifacts"]
+    manual = unit.get("disposition") == "approved_manual"
     spec: dict[str, Any] = {"mode": unit["mode"], "stored_data_files": sorted(item["stored_file_name"] for item in artifacts if item["role"] == "data")}
+    moved_to_api = any(flag.startswith(MMD_API_FLAG) for flag in unit.get("flags", []))
     if unit["mode"] == "file":
-        job = job_file(receipt, base)
+        job = job_file(receipt_path, base)
         plan = read_json(job) if job else {}
         expected = plan.get("plan", {}).get("expected_format") or FORMATS.get(Path(artifacts[0]["stored_file_name"]).suffix.lower())
         redirect = plan.get("candidate", {}).get("reviewed_unsigned_redirect")
         spec |= ({"expected_format": expected} if expected else {}) | ({"reviewed_unsigned_redirect": redirect} if redirect else {})
-    members = archive_members(receipt.parent)
+        if plan.get("plan") and not manual and not moved_to_api:
+            spec["receipt_template"] = cleaned(
+                {key: value for key, value in plan["plan"].items() if key not in TEMPLATE_OMITS}, counts if counts is not None else Counter()
+            )
+    if unit["mode"] == "mmd_api" or moved_to_api:
+        spec["mmd"] = mmd_selection(unit, receipt, conditions or [])
+    elif unit["mode"] in PLAN_ITEM_KEYS:
+        item = lineage_of(receipt).get(PLAN_ITEM_KEYS[unit["mode"]])
+        if not isinstance(item, str) or not item:
+            raise ValueError(f"Unit {unit['snapshot_id']} has no planned item ID ({PLAN_ITEM_KEYS[unit['mode']]}) in its receipt lineage")
+        spec["plan_item"] = item
+    if manual and (capture := last_capture(receipt_path, receipt)):
+        spec["last_capture"] = capture
+    members = archive_members(receipt_path.parent)
     if members:
         spec["archive_members"] = members
     return spec
 
 
-def derive(units: list[dict[str, Any]], base: Path, queue_sha256: str) -> bytes:
-    """The capture specification bytes for UNITS: one entry per snapshot ID, sorted, bound to the tracked queue's digest."""
-    specs = {unit["snapshot_id"]: derive_unit(unit, base) for unit in sorted(units, key=lambda item: item["snapshot_id"])}
-    document = {"kind": "capture_specs", "queue_sha256": queue_sha256, "units": len(specs), "specs": specs}
+def derive(units: list[dict[str, Any]], base: Path, queue_sha256: str, conditions: list[dict[str, Any]] | None = None) -> bytes:
+    """The capture specification bytes for UNITS: one entry per snapshot ID, sorted, bound to the queue's digest. CONDITIONS: the MMD plans'."""
+    counts: Counter = Counter()
+    specs = {unit["snapshot_id"]: derive_unit(unit, base, conditions, counts) for unit in sorted(units, key=lambda item: item["snapshot_id"])}
+    rewrites = {"pointers": counts["pointers"], "phone_examples": counts["phone_examples"]}
+    document = {"kind": "capture_specs", "queue_sha256": queue_sha256, "units": len(specs), "template_rewrites": rewrites, "specs": specs}
     return (json.dumps(document, indent=1, sort_keys=True) + "\n").encode()
 
 
@@ -85,9 +176,13 @@ def main() -> None:
     parser.add_argument("queue", type=Path)
     parser.add_argument("mirror", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument(
+        "--mmd-plan", type=Path, action="append", default=[], help="an MMD collection plan whose conditions match the browser exports (repeatable)"
+    )
     args = parser.parse_args()
     body = args.queue.read_bytes()
-    result = derive(json.loads(body)["queue"], args.mirror, hashlib.sha256(body).hexdigest())
+    conditions = [item for plan in args.mmd_plan for item in read_json(plan)["conditions"]]
+    result = derive(json.loads(body)["queue"], args.mirror, hashlib.sha256(body).hexdigest(), conditions)
     args.output.write_bytes(result)
     sys.stdout.write(json.dumps({"units": json.loads(result)["units"], "bytes": len(result), "sha256": hashlib.sha256(result).hexdigest()}) + "\n")
 
