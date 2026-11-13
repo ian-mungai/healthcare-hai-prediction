@@ -3,7 +3,9 @@
 It runs inside the thin Airflow image as a finite job of the ``orchestration_dump`` template, on the stack's network, with the repository file mounted
 read-only. The connection string comes from the job's environment, which the launcher fills from AWS Parameter Store, and is never printed.
 ``metadata`` writes every table of the ``public`` schema as COPY text (a column of bytes appears as hexadecimal text) to
-``/out/metadata.sql``; ``xcom`` writes the XCom rows to ``/out/xcom.txt``. The session is read-only. The job prints only the number of tables and rows it wrote.
+``/out/metadata.sql``; ``xcom`` writes the rows of both XCom tables of Airflow 3.4.0 (``xcom_v1``, the renamed legacy table, and ``xcom_v2``) to
+``/out/xcom.txt``, each after a comment line with its name, and refuses a database that lacks either table. The session is read-only.
+The job prints only the number of tables and rows it wrote.
 
 It imports the standard library and ``psycopg2``, which the Airflow image provides.
 """
@@ -23,6 +25,7 @@ CONNECTION_VARIABLE = "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN"
 OUT = Path("/out")
 URL_PREFIX = "postgresql+psycopg2://"
 TARGETS = {"metadata": "metadata.sql", "xcom": "xcom.txt"}
+XCOM_TABLES = ("xcom_v1", "xcom_v2")  # Airflow 3.4.0 migration 0142 renames xcom to xcom_v1 and adds xcom_v2; no table is named xcom.
 
 
 def connect() -> Any:
@@ -61,8 +64,19 @@ def dump_metadata(connection: Any, handle: Any) -> tuple[int, int]:
 
 
 def dump_xcom(connection: Any, handle: Any) -> tuple[int, int]:
-    """The XCom rows, ordered by their first columns; returns one table and its rows."""
-    return 1, max(0, copy_query(connection, sql.SQL("SELECT * FROM xcom ORDER BY 1, 2, 3, 4, 5"), handle))
+    """The rows of both XCom tables, each after a comment line with its name and ordered by its first columns; returns the tables and rows written.
+
+    A database that lacks either table is refused, so the scan never passes on a part of the XCom data.
+    """
+    present = set(table_names(connection))
+    for name in XCOM_TABLES:
+        if name not in present:
+            raise SystemExit(f"the XCom table {name} is missing from the public schema; the dump needs the Airflow 3.4.0 tables {' and '.join(XCOM_TABLES)}")
+    rows = 0
+    for name in XCOM_TABLES:
+        handle.write(f"-- table {name}\n")
+        rows += max(0, copy_query(connection, sql.SQL("SELECT * FROM {} ORDER BY 1, 2, 3, 4, 5").format(sql.Identifier(name)), handle))
+    return len(XCOM_TABLES), rows
 
 
 def main() -> int:

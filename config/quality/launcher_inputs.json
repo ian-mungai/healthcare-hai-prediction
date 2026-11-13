@@ -410,6 +410,7 @@
   ],
   "dynamic_sites": {
     "orchestration/dag_runtime.py": 1,
+    "scripts/orchestration/db_dump_cases.py": 1,
     "scripts/orchestration/in_image_checks.py": 1
   },
   "inventory_sites": {
@@ -1903,6 +1904,7 @@
     "scripts/orchestration/catalog_transport_cases.py",
     "scripts/orchestration/catalog_transport_standin.py",
     "scripts/orchestration/db_dump.py",
+    "scripts/orchestration/db_dump_cases.py",
     "scripts/orchestration/ecs_adapter_cases.py",
     "scripts/orchestration/ecs_chain_cases.py",
     "scripts/orchestration/ecs_engine_cases.py",

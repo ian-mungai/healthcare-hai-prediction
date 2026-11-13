@@ -18,7 +18,8 @@ checks make no Docker call: the image checks are launcher requests (``image``, `
    finished DAG run. The pass row is judged only from this execution: every recorded step ended in success or failed as expected, the image's run time lies
    inside this attempt, and the inputs it ran equal the inventory taken before the attempt and unchanged after it. A result without that binding fails the
    row. ``run_real_image_dags_e2e`` starts the image itself and records that result; it reads no saved report.
-6. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
+6. The logical XCom dump (``db_dump.py``) on a stand-in metadata database with the Airflow 3.4.0 layout (``xcom_v1`` and ``xcom_v2``, no ``xcom``).
+7. Ruff over ``dags/``, ``orchestration/`` and ``scripts/orchestration/``; strict MyPy on the orchestration host scope.
    Files needing Airflow or PostgreSQL types are listed as pending in the report and in ``config/quality/mypy_runtimes.json``.
    Check them in their runtime environment with ``scripts.quality.typecheck --runtime orchestration_image`` and both strict flags.
 
@@ -45,7 +46,7 @@ from unittest import mock
 
 from orchestration import launcher
 from orchestration.graph import ALL_SUCCESS, GRAPH_DAGS, TaskNode, reference_graph, validate_transform_graph
-from scripts.orchestration import real_image_dags
+from scripts.orchestration import db_dump_cases, real_image_dags
 from scripts.process import run_command
 from scripts.quality import lock_env
 
@@ -521,7 +522,7 @@ def image_problems(description: dict[str, Any], platform: dict[str, Any]) -> lis
     return problems
 
 
-SECTIONS = ("inputs", "mutations", "graph", "distribution", "image", "lint")
+SECTIONS = ("inputs", "mutations", "graph", "distribution", "xcom_dump", "image", "lint")
 
 
 def collect(platform: dict[str, Any], sections: set[str], test_registry: str | None) -> dict[str, Any]:
@@ -545,6 +546,8 @@ def collect(platform: dict[str, Any], sections: set[str], test_registry: str | N
         results.update({f"graph (plain): {name}": case for name, case in graph_cases().items()})
     if "distribution" in sections:
         results.update({f"distribution check: {name}": case for name, case in distribution_cases().items()})
+    if "xcom_dump" in sections:
+        results.update({f"XCom dump: {name}": {"ok": ok} for name, ok in db_dump_cases.xcom_dump_cases().items()})
     if "image" in sections:
         image = in_image(platform, test_registry)
         if "error" in image:
