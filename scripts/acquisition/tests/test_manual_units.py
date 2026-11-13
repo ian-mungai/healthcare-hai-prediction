@@ -543,11 +543,71 @@ def test_a_seeded_run_stops_before_any_request_for_a_wonder_unit_with_no_seeded_
     check(world.site.seen == [] and world.bucket.writes() == [] and world.sink.captured == [], "nothing was requested, stored or captured")
 
 
-def test_the_seed_leaves_a_hud_unit_to_its_download(world: World) -> None:
-    [unit] = hud_units(world, 1)
-    serve_workbook(world)
-    world.run([unit], seed=world.scratch.parent / "seed")
-    check(len(world.sink.captured) == 1 and HUD_URL in world.site.urls(), "the workbook was downloaded as without a seed")
+def seeded_hud(world: World, *, recorded: str | None = "derived", original: bytes | None = None, present: bool = True) -> tuple[dict, Path]:
+    """A HUD unit whose last capture records the digest of its derived crosswalk.csv, and a seed folder holding the unit's workbook.
+
+    ``recorded``: "derived" records the digest of the file the plan's workbook rebuilds to, a digest string records that one, None records no derived file.
+    """
+    book = hud_batch_workbook()
+    plan = world.plans.plan("hud_xlsx")
+    derived = hud_xlsx_contract.validate_workbook(book, plan["batches"][0], plan)[0]
+    unit = world.add(hud_unit(), {})
+    stored = {HUD_NAMES[0]: book} | ({"crosswalk.csv": derived} if recorded is not None else {})
+    artifacts = []
+    for name, body in stored.items():
+        pointer = world.bucket.seed(f"raw/example_publisher/example_collection/datasets/d/{unit['snapshot_id']}/{name}", body)
+        artifacts.append({"role": "data", **pointer, "retrieved_at_utc": "2026-09-28T23:17:26Z"})
+    if recorded not in (None, "derived"):
+        artifacts[-1]["sha256"] = str(recorded)
+    world.specs[unit["snapshot_id"]] = {
+        "mode": "hud_xlsx",
+        "stored_data_files": sorted([HUD_NAMES[0], "crosswalk.csv"]),
+        "last_capture": {"read_root": "raw/", "artifacts": artifacts},
+    }
+    seed = world.scratch.parent / "seed"
+    if present:
+        folder = seed / "manual_units" / unit["snapshot_id"]
+        folder.mkdir(parents=True)
+        (folder / HUD_NAMES[0]).write_bytes(book if original is None else original)
+    return unit, seed
+
+
+def test_a_seeded_hud_workbook_is_rebuilt_into_its_recorded_crosswalk_and_captured_with_no_request(world: World) -> None:
+    unit, seed = seeded_hud(world)
+    report = world.run([unit], seed=seed)
+    captured = world.sink.captured
+    check(len(captured) == 1 and sorted(captured[0][1]) == sorted([HUD_NAMES[0], "crosswalk.csv"]), "the workbook and its rebuilt crosswalk were captured")
+    recorded = {Path(a["key"]).name: a["sha256"] for a in world.specs[unit["snapshot_id"]]["last_capture"]["artifacts"]}
+    check({name: hashlib.sha256(body).hexdigest() for name, body in captured[0][1].items()} == recorded, "every captured file has the recorded SHA-256")
+    check(world.site.seen == [] and report.http_requests == 0 and world.counter == [], "the seed replaces the download: not even robots.txt is requested")
+    check(read_all(world) == [] and report.counts["captured"] == 1, f"no stale record: {report.counts}")
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [{"recorded": "0" * 64}, {"original": hud_workbook([*hud_rows(2010, 1), ["99998", "01001", "1", "0", "0", "1"]])}],
+    ids=["rebuilt_crosswalk_differs_from_the_recorded_digest", "tampered_workbook_differs_from_the_plan"],
+)
+def test_a_seeded_hud_unit_whose_rebuilt_crosswalk_or_workbook_differs_is_refused_before_anything_is_written(world: World, changes: dict) -> None:
+    unit, seed = seeded_hud(world, **changes)
+    world.run([unit], seed=seed)
+    check(only_stale(world, unit)["reason"] == "contract_failed", "the mismatch makes the unit stale")
+    check(world.sink.captured == [] and data_objects(world) == [], "nothing was handed to the capture path or stored")
+    check(world.site.seen == [], "no request: the unit does not fall back to a download")
+
+
+@pytest.mark.parametrize(
+    ("changes", "refusal"),
+    [({"present": False}, "seed lacks the original"), ({"recorded": None}, "records no digest of its derived file")],
+    ids=["seed_without_the_workbook", "specification_without_the_crosswalk_digest"],
+)
+def test_a_seeded_run_stops_before_any_request_for_a_hud_unit_with_no_seeded_workbook_or_no_recorded_crosswalk_digest(
+    world: World, changes: dict, refusal: str
+) -> None:
+    unit, seed = seeded_hud(world, **changes)
+    with pytest.raises(manual_units.ManualUnitError, match=refusal):
+        world.run([unit], seed=seed)
+    check(world.site.seen == [] and world.bucket.writes() == [] and world.sink.captured == [], "nothing was requested, stored or captured")
 
 
 def acs_zip(members: list[tuple[str, bytes]]) -> bytes:

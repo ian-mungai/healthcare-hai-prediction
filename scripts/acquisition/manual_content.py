@@ -19,7 +19,7 @@ from scripts.acquisition.source_registry import canonical_hash, read_json
 # The mode of each unit that has a handler, its format and the derived file its contract writes beside the original.
 MODES = {"hud_xlsx": ("xlsx", "crosswalk.csv"), "wonder_export": ("txt", "county_year.csv")}
 # The modes whose derived file is rebuilt from the original: the bootstrap seed holds the original only (owner, Nov 13 2026).
-REBUILT_MODES = ("wonder_export",)
+REBUILT_MODES = ("hud_xlsx", "wonder_export")
 CONTRACT_ERRORS = (ValueError, KeyError, TypeError, zipfile.BadZipFile)
 
 

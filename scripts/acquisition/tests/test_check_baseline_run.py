@@ -13,8 +13,10 @@ import pytest
 from scripts.acquisition import build_bootstrap_queue as build
 from scripts.acquisition import check_baseline_run as check_run
 from scripts.acquisition import hud_api_contract as hud_api
-from scripts.acquisition import legacy_versions, manual_content, s3_store, wonder_export_contract
+from scripts.acquisition import hud_xlsx_contract, legacy_versions, manual_content, s3_store, wonder_export_contract
 from scripts.acquisition.history_routes import lineage_bindings
+from scripts.acquisition.run_hud_xlsx_e2e import rows as hud_rows
+from scripts.acquisition.run_hud_xlsx_e2e import workbook as hud_workbook
 from scripts.acquisition.run_wonder_export_e2e import FLOOR
 from scripts.acquisition.run_wonder_export_e2e import export_text as wonder_export_text
 from scripts.acquisition.tests.test_build_bootstrap_queue import HOSTS, source_bytes
@@ -252,7 +254,7 @@ def test_missing_seed_files_pass_unless_required_and_a_held_one_passes_always(tm
     check(found == ["example/seeded.csv is missing from the seed folder"], f"required files: {found}")
 
 
-def test_the_seed_holds_exactly_the_stored_files_of_the_manual_units(tmp_path: Path) -> None:
+def test_the_seed_holds_exactly_the_originals_of_the_manual_units(tmp_path: Path) -> None:
     def manual(queue: dict) -> None:
         queue["queue"][2]["route"] = "manual_browser_download"
         queue["queue"][2]["mode"] = "hud_xlsx"
@@ -264,12 +266,13 @@ def test_the_seed_holds_exactly_the_stored_files_of_the_manual_units(tmp_path: P
     relock(root)
     queue_sha = json.loads((seed_of(root) / "manifest.json").read_text())["queue_sha256"]
     found = " ".join(seed_problems(root))
-    check("the seed manifest lacks the stored file crosswalk.csv of unit c" in found and "lacks the stored file c.xlsx of unit c" in found, found)
+    check("lacks the stored file c.xlsx of unit c" in found and "lacks the stored file crosswalk.csv" not in found, found)
     unit = [{"path": f"manual_units/c/{name}", "sha256": None, "unit": "c", "hold": "x"} for name in ("c.xlsx", "crosswalk.csv")]
     extra = {"path": "manual_units/zz/z.xlsx", "sha256": None, "unit": "zz", "hold": "x"}
     document = seed_document(queue_sha256=queue_sha)
     write_seed(root, document | {"files": [*document["files"], *unit, extra]})
     found = " ".join(seed_problems(root))
+    check("manual_units/c/crosswalk.csv names a stored file the queue does not expect" in found, found)
     check("manual_units/zz/z.xlsx names a stored file the queue does not expect" in found and "lacks" not in found, found)
 
 
@@ -364,6 +367,101 @@ def test_an_absent_wonder_original_is_pending_but_a_unit_with_no_recorded_digest
     root, scopes = wonder_bundle(tmp_path / "c", recorded=None, present=False)
     found = check_run.derivation_problems(root, seed_of(root), scopes)
     check(found == ["unit c records no digest of its derived county_year.csv"], f"{found}")
+
+
+HUD_NAME = "ZIP-COUNTY_032010.xlsx"
+
+
+def hud_bundle(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, recorded: str | None = "derived", original: bytes | None = None, present: bool = True
+) -> tuple[Path, manual_content.Scopes]:
+    """A bundle whose third unit is a manual HUD workbook, its seed holding the workbook, and the plan that binds the workbook to its recorded digest.
+
+    ``recorded``: "derived" records the right digest of the rebuilt crosswalk.csv in the last capture, a digest string that one, None none.
+    """
+
+    def manual(queue: dict) -> None:
+        queue["queue"][2]["route"] = "manual_browser_download"
+        queue["queue"][2]["mode"] = "hud_xlsx"
+        queue["budgets"]["units_by_route"] = {"publisher_url": 2, "manual_browser_download": 1}
+
+    monkeypatch.setattr(hud_xlsx_contract, "DECISION_PATH", tmp_path / "no_repeat_decision.json")
+    root = bundle(tmp_path / "b", mutate=manual)
+    book = hud_workbook(hud_rows(2010, 1))
+    batch = {"id": "synthetic", "year": 2010, "quarter": 1, "file_name": HUD_NAME, "county_geography": "2000_census"}
+    batch |= {"sha256": hashlib.sha256(book).hexdigest(), "bytes": len(book)}
+    plan = {"header": hud_xlsx_contract.HEADER, "required_state_fips": hud_api.STATE_FIPS, "batches": [batch]}
+    derived = hud_xlsx_contract.validate_workbook(book, batch, plan)[0]
+    artifacts = [{"role": "data", "key": f"raw/x/{HUD_NAME}", "sha256": batch["sha256"], "byte_count": batch["bytes"]}]
+    if recorded is not None:
+        digest = hashlib.sha256(derived).hexdigest() if recorded == "derived" else recorded
+        artifacts.append({"role": "data", "key": "raw/x/crosswalk.csv", "sha256": digest, "byte_count": len(derived)})
+    specs = json.loads((root / "capture_specs.json").read_text())
+    specs["specs"]["c"] = {
+        "mode": "hud_xlsx",
+        "stored_data_files": sorted([HUD_NAME, "crosswalk.csv"]),
+        "last_capture": {"read_root": "raw/", "artifacts": artifacts},
+    }
+    (root / "capture_specs.json").write_text(json.dumps(specs))
+    relock(root)
+    if present:
+        folder = seed_of(root) / "manual_units" / "c"
+        folder.mkdir(parents=True)
+        (folder / HUD_NAME).write_bytes(book if original is None else original)
+    return root, manual_content.Scopes(hud=plan)
+
+
+def test_the_seed_holds_only_the_workbook_of_a_hud_unit_and_refuses_the_crosswalk_rebuilt_from_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, _ = hud_bundle(tmp_path, monkeypatch, present=False)
+    queue_sha = json.loads((seed_of(root) / "manifest.json").read_text())["queue_sha256"]
+    original = {"path": f"manual_units/c/{HUD_NAME}", "sha256": None, "unit": "c", "hold": "x"}
+    derived = {"path": "manual_units/c/crosswalk.csv", "sha256": None, "unit": "c", "hold": "x"}
+    base = seed_document(queue_sha256=queue_sha)
+    write_seed(root, base | {"files": [*base["files"], original]})
+    check(seed_problems(root) == [], f"the workbook alone is the whole seed of a HUD unit: {seed_problems(root)}")
+    write_seed(root, base | {"files": [*base["files"], original, derived]})
+    found = " ".join(seed_problems(root))
+    check("manual_units/c/crosswalk.csv names a stored file the queue does not expect" in found, found)
+
+
+def test_the_crosswalk_of_each_seeded_hud_workbook_is_rebuilt_and_equals_its_recorded_digest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, scopes = hud_bundle(tmp_path, monkeypatch)
+    found = check_run.derivation_problems(root, seed_of(root), scopes)
+    check(found == [], f"{found}")
+
+
+@pytest.mark.parametrize(
+    ("changes", "expected"),
+    [
+        ({"recorded": "0" * 64}, "does not rebuild the recorded crosswalk.csv of unit c"),
+        ({"original": hud_workbook([*hud_rows(2010, 1), ["99998", "01001", "1", "0", "0", "1"]])}, "does not rebuild the recorded crosswalk.csv of unit c"),
+        ({"recorded": None}, "unit c records no digest of its derived crosswalk.csv"),
+    ],
+    ids=["another_recorded_digest", "a_tampered_workbook", "no_recorded_digest"],
+)
+def test_a_hud_workbook_that_does_not_rebuild_its_recorded_crosswalk_or_a_unit_with_no_recorded_digest_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, changes: dict, expected: str
+) -> None:
+    root, scopes = hud_bundle(tmp_path, monkeypatch, **changes)
+    found = check_run.derivation_problems(root, seed_of(root), scopes)
+    check(len(found) == 1 and expected in found[0], f"{found}")
+
+
+def test_a_missing_hud_workbook_is_pending_but_a_unit_with_no_recorded_digest_is_refused_even_then(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, scopes = hud_bundle(tmp_path / "a", monkeypatch, present=False)
+    check(check_run.derivation_problems(root, seed_of(root), scopes) == [], "an absent workbook is pending")
+    root, scopes = hud_bundle(tmp_path / "c", monkeypatch, recorded=None, present=False)
+    found = check_run.derivation_problems(root, seed_of(root), scopes)
+    check(found == ["unit c records no digest of its derived crosswalk.csv"], f"{found}")
+
+
+def test_the_committed_seed_lists_the_44_hud_workbooks_by_their_plan_digests_and_leaves_no_entry_without_a_digest() -> None:
+    manifest = json.loads((check_run.SEED_ROOT / "manifest.json").read_text(encoding="utf-8"))
+    plan = manual_content.Scopes().plan("hud_xlsx")
+    wanted = {batch["file_name"]: batch["sha256"] for batch in plan["batches"]}
+    listed = {Path(item["path"]).name: item["sha256"] for item in manifest["files"] if "HUD_XLSX" in item["path"]}
+    check(listed == wanted and len(listed) == 44, f"listed {len(listed)} HUD files, not the 44 workbooks of the plan")
+    check([item["path"] for item in manifest["files"] if item["sha256"] is None] == [], "no seed entry is left without a digest")
 
 
 def test_the_committed_seed_lists_the_six_wonder_originals_by_their_plan_digests_and_no_derived_file() -> None:

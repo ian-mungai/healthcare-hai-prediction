@@ -3,8 +3,8 @@
 It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums), the capture specification, the hosts file with
 its approval and the required secrets list against the secrets the collector plans and the key reader name. It also checks that every expected plan input has
 exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches its manifest: the files the queue's manual HUD and
-WONDER units store (a WONDER unit's seed holds only its original), the digests, the Git LFS rule, and that each seeded WONDER original rebuilds the derived
-file its unit's last capture records. It makes no request and reads only the bundle, the seed folder and the collector plans.
+WONDER units store (a unit's seed holds only its original), the digests, the Git LFS rule, and that each seeded HUD workbook and WONDER original rebuilds
+the derived file its unit's last capture records. It makes no request and reads only the bundle, the seed folder and the collector plans.
 """
 
 from __future__ import annotations
@@ -176,7 +176,7 @@ def home_problems(root: Path, manifest: dict) -> list[str]:
 def expected_seed_files(root: Path) -> dict[str, str]:
     """The seed path of every stored data file of a manual HUD or WONDER unit, to its unit: ``manual_units/<unit>/<file name>``.
 
-    A unit whose derived file is rebuilt from its original (a WONDER export) is seeded with the original only.
+    A unit whose derived file is rebuilt from its original (a HUD workbook or a WONDER export) is seeded with the original only.
     """
     queue = json.loads((root / "queue.json").read_bytes())["queue"]
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
@@ -229,7 +229,7 @@ def seed_problems(root: Path, seed_root: Path, manifest: dict, *, require_files:
 
 
 def derivation_problems(root: Path, seed_root: Path, scopes: Scopes | None = None) -> list[str]:
-    """Return why a WONDER unit's derived file cannot be proven from its seeded original.
+    """Return why a HUD or WONDER unit's derived file cannot be proven from its seeded original.
 
     Each unit must record the SHA-256 of its derived file in its last capture. A seeded original, bound to the plan by its digest, must rebuild a file
     equal to that digest and size. An absent original is pending, like any other absent seed file.

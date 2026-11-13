@@ -9,9 +9,9 @@ generic agent header of the reviewed transport.
 * Every request to a manual host is at least 5 s after the last one, retries and redirects included, one at a time. A redirect destination is checked
   against robots.txt before it is requested. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
 * A unit with a stale record younger than 20 hours is skipped, so a repeat run on the same day sends nothing.
-* A unit whose derived file is rebuilt (a WONDER export) takes its original from the seed folder when the run has one, and sends no request: the run
-  stops before any request when the seed lacks the original or the specification records no digest of the derived file. The derived file is rebuilt
-  by the contract and must equal the recorded SHA-256 and size; a mismatch makes the unit stale and hands nothing to the capture path.
+* A unit whose derived file is rebuilt (a HUD workbook or a WONDER export) takes its original from the seed folder when the run has one, and sends
+  no request: the run stops before any request when the seed lacks the original or the specification records no digest of the derived file. The derived
+  file is rebuilt by the contract and must equal the recorded SHA-256 and size; a mismatch makes the unit stale and hands nothing to the capture path.
 * A stale record names, as the last capture, the data and other objects of the unit's newest completion record, and the specification's pointer only
   when the unit has no completion record. A completion record that is unreadable or refused stops the unit.
 """

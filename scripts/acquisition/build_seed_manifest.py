@@ -1,10 +1,11 @@
 """One-time development step: list the files of the bootstrap seed folder in its manifest.
 
 The seed folder holds what a run in an empty environment cannot fetch: the plan inputs that are data files (12 browser-history CSVs, 3 MMD references and the
-2010 county adjacency file) and the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API). A WONDER unit's
-county_year.csv is rebuilt on the host from its original, so the seed holds the original only. The manifest lists each file with the folder it takes and, where
-a tracked source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references from the MMD plan, the HUD workbooks from the HUD
-plan and the WONDER originals from the WONDER plan. Every other file has no digest until the files are added; the check then refuses a present file without one.
+2010 county adjacency file) and the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API). A unit's derived
+file (a HUD crosswalk.csv or a WONDER county_year.csv) is rebuilt on the host from its original, so the seed holds the original only. The manifest lists
+each file with the folder it takes and, where a tracked source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references
+from the MMD plan, the HUD workbooks from the HUD plan and the WONDER originals from the WONDER plan. Every other file has no digest until the files are
+added; the check then refuses a present file without one.
 """
 
 from __future__ import annotations
@@ -39,7 +40,7 @@ def input_folder(path: str) -> str:
 def build(queue_bytes: bytes, specs: dict[str, Any], inputs: list[str], digests: dict[str, str], originals: dict[str, str]) -> bytes:
     """The manifest bytes for the plan INPUTS held in the seed and the stored files of the manual HUD and WONDER units in SPECS.
 
-    DIGESTS and ORIGINALS map file names to SHA-256. A WONDER unit lists only its original: the host rebuilds county_year.csv from it.
+    DIGESTS and ORIGINALS map file names to SHA-256. A HUD or WONDER unit lists only its original: the host rebuilds crosswalk.csv or county_year.csv from it.
     """
     files: list[dict[str, Any]] = []
     for path in inputs:

@@ -48,7 +48,7 @@ def test_the_manifest_binds_the_queue_and_lists_every_file_sorted() -> None:
     document = manifest()
     check(document["kind"] == "bootstrap_seed_manifest" and document["queue_sha256"] == hashlib.sha256(json.dumps(QUEUE).encode()).hexdigest(), "header")
     paths = [item["path"] for item in document["files"]]
-    check(paths == sorted(paths) and len(paths) == 6, f"six files in order: {paths}")
+    check(paths == sorted(paths) and len(paths) == 5, f"five files in order: {paths}")
 
 
 def test_plan_inputs_get_a_folder_by_kind_a_digest_from_the_source_and_their_hold() -> None:
@@ -61,10 +61,10 @@ def test_plan_inputs_get_a_folder_by_kind_a_digest_from_the_source_and_their_hol
     check(adjacency["sha256"] is None and adjacency["hold"].startswith("pending"), f"adjacency: {adjacency}")
 
 
-def test_a_manual_hud_unit_lists_its_stored_files_and_only_the_workbook_has_a_digest() -> None:
+def test_a_manual_hud_unit_lists_only_its_workbook_with_the_plan_digest_and_not_the_crosswalk_rebuilt_from_it() -> None:
     files = by_path(manifest())
     check(files["manual_units/H1/ZIP-COUNTY_032010.xlsx"] == {"path": "manual_units/H1/ZIP-COUNTY_032010.xlsx", "sha256": "c" * 64, "unit": "H1"}, "workbook")
-    check(files["manual_units/H1/crosswalk.csv"]["sha256"] is None, "a derived file has no source")
+    check("manual_units/H1/crosswalk.csv" not in files, "the derived crosswalk.csv is rebuilt on the host, not seeded")
     check(not any(path.startswith(("manual_units/D1", "manual_units/A1")) for path in files), "a direct download and an ACS unit are not seeded")
 
 
