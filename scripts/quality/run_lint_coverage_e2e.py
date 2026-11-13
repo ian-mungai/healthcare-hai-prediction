@@ -44,7 +44,7 @@ SQLFLUFF_SIZE_LIMIT = (ROOT / ".sqlfluff").read_text().replace("large_file_skip_
 if "large_file_skip_byte_limit = 20000" not in SQLFLUFF_SIZE_LIMIT:
     raise SystemExit(".sqlfluff no longer sets large_file_skip_byte_limit = 0; adapt the size-skip samples")
 NO_IMAGES = ("infra/services/images.json", '{"images": {}}\n')
-AIRFLOW_HEADER = "# docker build --tag hai-airflow:3.3.2-python3.12 --build-context hai=services/hai services/orchestration\n"
+AIRFLOW_HEADER = "# docker build --tag hai-airflow:3.4.0-python3.12 --build-context hai=services/hai services/orchestration\n"
 
 
 @dataclass(frozen=True)
@@ -176,7 +176,7 @@ SAMPLES = (
         "build_header_context",
         "build-contexts",
         "services/orchestration/Dockerfile",
-        "# docker build --tag hai-airflow:3.3.2-python3.12 services/orchestration\nFROM debian:12\nCOPY --from=hai /one /two\n",
+        "# docker build --tag hai-airflow:3.4.0-python3.12 services/orchestration\nFROM debian:12\nCOPY --from=hai /one /two\n",
         AIRFLOW_HEADER + "FROM debian:12\nCOPY --from=hai /one /two\n",
         "header build command declares no contexts",
         support=(("docker-compose.yaml", "services: {}\n"), NO_IMAGES),

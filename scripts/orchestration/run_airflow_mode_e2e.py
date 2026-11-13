@@ -34,7 +34,7 @@ SOURCES = (
 SUBSTITUTIONS = [
     "fake ECS, Logs and write-once S3 clients, and an in-memory bucket for the staged inputs",
     "virtual clock (waits of minutes take no real time)",
-    "a stand-in of the Airflow SDK and of the Amazon provider 9.36.0 operator, not the real packages (rerun the cases in the Airflow image)",
+    "a stand-in of the Airflow SDK and of the Amazon provider 9.39.0 operator, not the real packages (rerun the cases in the Airflow image)",
     "the shipped DAG files run task by task in order, not under a scheduler",
     "the listings, closing evidence and report of a silver or gold job are stand-ins; scripts.lakehouse.run_layer_report_e2e runs the real ones",
 ]

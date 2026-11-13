@@ -1,8 +1,8 @@
 """The launch guarantees as a mixin for the Amazon provider's ``EcsRunTaskOperator``.
 
 ``BrokerlessEcsRunTaskOperator`` in ``orchestration/ecs_launch_provider.py`` puts this mixin before the provider operator. The provider's ``execute`` keeps
-its flow (reattach, start, wait, check) and the mixin replaces the four hooks it calls, written against apache-airflow-providers-amazon 9.36.0
-(``operators/ecs.py`` lines 519-590 for ``execute`` and 805-815 for ``on_kill``). The provider's own hook bodies are not used: they send no client token, list
+its flow (reattach, start, wait, check) and the mixin replaces the four hooks it calls, written against apache-airflow-providers-amazon 9.39.0
+(``operators/ecs.py`` lines 526-597 for ``execute`` and 815-825 for ``on_kill``). The provider's own hook bodies are not used: they send no client token, list
 tasks with ``startedBy`` and ``desiredStatus`` together, wait up to 1,000,000 attempts, count the guard's exit code and stop a killed task
 without confirming it.
 This module imports nothing from Airflow, so the offline cases can run it over a stand-in.
@@ -33,7 +33,7 @@ class LaunchGuarantees:
     def __init__(self, *, job: JobSpec, launcher: Callable[[], Launcher], stop_on_kill: bool = False, **kwargs: Any) -> None:
         if kwargs.get("deferrable"):
             raise ValueError("a launch operator cannot defer: the deadline, stop and records need this process")
-        kwargs["deferrable"] = False  # the provider's default is read from the operators.default_deferrable setting (operators/ecs.py line 466)
+        kwargs["deferrable"] = False  # the provider's default is read from the operators.default_deferrable setting (operators/ecs.py line 473)
         if kwargs.get("wait_for_completion", True) is False:
             raise ValueError("a launch operator always waits for the job to end")
         kwargs["reattach"] = True

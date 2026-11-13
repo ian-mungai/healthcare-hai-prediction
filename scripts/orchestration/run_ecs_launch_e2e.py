@@ -44,7 +44,7 @@ SUITES: dict[str, dict[str, Callable[[], None]]] = {
 SUBSTITUTIONS = [
     "fake ECS, Logs and write-once S3 clients",
     "virtual clock (waits of minutes take no real time)",
-    "operator cases: a stand-in of the Amazon provider 9.36.0 operator, not the real package (rerun them against the real provider in the Airflow image)",
+    "operator cases: a stand-in of the Amazon provider 9.39.0 operator, not the real package (rerun them against the real provider in the Airflow image)",
 ]
 
 

@@ -12,7 +12,7 @@
 name: hai-orchestration
 
 x-airflow: &airflow
-  image: hai-airflow:3.3.2-python3.12
+  image: hai-airflow:3.4.0-python3.12
   # The Mac user's UID with group 0, as the official image supports; the session files are written for this UID.
   user: "${HAI_ORCH_UID:?set by the launcher}:0"
   environment:

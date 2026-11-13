@@ -1,11 +1,11 @@
 {
   "schema_version": 1,
   "airflow": {
-    "version": "3.3.2",
+    "version": "3.4.0",
     "python": "3.12",
-    "base_image": "apache/airflow@sha256:9df9c8be4096b9cc626bd7cb1f2b8c712eef66c59c615f8c7e6200871ca10bd1",
-    "official_tag": "apache/airflow:3.3.2-python3.12",
-    "image": "hai-airflow:3.3.2-python3.12",
+    "base_image": "apache/airflow@sha256:818f94affc5bd7ce0be0cc04f2ace09aa8382e65190a73a08881229ff32700cb",
+    "official_tag": "apache/airflow:3.4.0-python3.12",
+    "image": "hai-airflow:3.4.0-python3.12",
     "builder_image": "golang:1.27.3-alpine@sha256:f2c872bcee949b7be9c490efd02b48a8a2fbf947cdf533f1c58525ec9d8170fd",
     "dockerfile": "services/orchestration/Dockerfile",
     "labels": {
@@ -15,15 +15,15 @@
     "constraints": {
       "path": "services/orchestration/constraints-3.12.txt",
       "generated_from": "the orchestration group of uv.lock (python -m scripts.quality.lock_env images); Git ignores the file",
-      "url": "https://raw.githubusercontent.com/apache/airflow/constraints-3.3.2/constraints-3.12.txt",
-      "upstream_sha256": "821effd0f491975682f2774fca3427d7bc2f59ca6de68dcb413ad2c8f890e58c",
-      "sha256": "063d35e224497df0729304dd412f54081e77df1eb612ce6555fc44e41bba71ba"
+      "url": "https://raw.githubusercontent.com/apache/airflow/constraints-3.4.0/constraints-3.12.txt",
+      "upstream_sha256": "3cecb4fe4a11d69bd772aef18434825bbed9b344703302ca0a55d50e30a33eda",
+      "sha256": "1e3ffc5ba953df8918638ecb37592a93ff65ff750028df4f72d5ad894c2b534b"
     },
     "user": "50000",
     "release_packages": {
-      "apache-airflow": "3.3.2",
-      "apache-airflow-core": "3.3.2",
-      "apache-airflow-task-sdk": "1.3.2"
+      "apache-airflow": "3.4.0",
+      "apache-airflow-core": "3.4.0",
+      "apache-airflow-task-sdk": "1.4.0"
     },
     "release_packages_source": "The only installed distributions the constraints file does not list; read once from the pinned base image digest (its content is fixed by the digest) and pinned here apart from the constraints file. Any other installed distribution must be in the constraints file."
   },

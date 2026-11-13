@@ -247,7 +247,7 @@ def mutation_cases(platform: dict[str, Any]) -> dict[str, bool]:
         "compose with another PostgreSQL digest refused": bool(compose_problems(compose.replace(postgres_digest, "f" * 64), platform)),
         "compose with an unpinned PostgreSQL tag refused": bool(compose_problems(compose.replace(f"@sha256:{postgres_digest}", ""), platform)),
         "compose with another Airflow image refused": bool(
-            compose_problems(compose.replace("image: hai-airflow:3.3.2-python3.12", "image: apache/airflow:latest", 1), platform)
+            compose_problems(compose.replace("image: hai-airflow:3.4.0-python3.12", "image: apache/airflow:latest", 1), platform)
         ),
         "compose with a socket mount refused": bool(
             compose_problems(compose.replace(volume, f"{volume}    - /var/run/engine.sock:/var/run/engine.sock\n", 1), platform)
@@ -295,7 +295,7 @@ def distribution_cases() -> dict[str, dict[str, Any]]:
     with mock.patch.dict(sys.modules, stubs):
         namespace = runpy.run_path(str(ROOT / IN_IMAGE), run_name="distribution_check")
     function = namespace["constraints"]
-    release = {"apache-airflow": "3.3.2", "apache-airflow-core": "3.3.2", "apache-airflow-task-sdk": "1.3.2"}
+    release = {"apache-airflow": "3.4.0", "apache-airflow-core": "3.4.0", "apache-airflow-task-sdk": "1.4.0"}
     with tempfile.TemporaryDirectory(prefix="a1_dist_") as folder:
         constraints_file = Path(folder) / "constraints.txt"
         constraints_file.write_text("jsonschema==4.26.0\napache-airflow-providers-standard==1.19.0\n")
@@ -315,7 +315,7 @@ def distribution_cases() -> dict[str, dict[str, Any]]:
         extra = run({**good, "ordinary-unreviewed": "9.9.9", "apache-airflow-unreviewed": "9.9.9", "apache-airflow-providers-extra": "1.0.0"})
         moved = run({**good, "apache-airflow-core": "3.3.1", "jsonschema": "4.25.0"})
         absent = run({name: version for name, version in good.items() if name != "apache-airflow-task-sdk"})
-        renamed = run({**good, "apache-airflow-task-sdk-extra": "1.3.2"})
+        renamed = run({**good, "apache-airflow-task-sdk-extra": "1.4.0"})
     cases = {
         "a tree equal to its pins passes (control)": (
             not control.get("unpinned") and not control.get("differing") and not control.get("release_problems"),

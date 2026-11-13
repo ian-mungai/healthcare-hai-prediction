@@ -7,7 +7,7 @@ read-only and runs ``python in_image_checks.py``. It prints one JSON object:
 - ``graph_cases``: synthetic DAGs built from real Airflow operators; the section 5 reference graph must pass the
   ``transform_dag`` validator and each mutation must fail with its rule.
 - ``transform_graph``: the validator on the real ``transform_dag`` object that Airflow imported from the DAG folder.
-- ``constraints``: every installed distribution is either in the Airflow 3.3.2 constraints file at the pinned version, or one of the pip and uv build
+- ``constraints``: every installed distribution is either in the Airflow 3.4.0 constraints file at the pinned version, or one of the pip and uv build
   tools at the version the image records, or in the exact release set of ``config/orchestration/platform.json`` at its own pinned version. Nothing is
   exempt by name prefix: any other distribution, an extra provider or the task SDK included, is reported as unpinned.
 

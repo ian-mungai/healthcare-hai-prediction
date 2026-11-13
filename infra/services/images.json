@@ -30,8 +30,8 @@
       "build_contexts": {
         "hai": "services/hai"
       },
-      "local_tag": "hai-airflow:3.3.2-python3.12",
-      "tag": "3.3.2-python3.12-arm64",
+      "local_tag": "hai-airflow:3.4.0-python3.12",
+      "tag": "3.4.0-python3.12-arm64",
       "arm64": "base and builder pins list linux/arm64; built on Apple silicon, so the local image is arm64 until docker image inspect says otherwise",
       "runs_as": "ECS services on the host (P7d)"
     },

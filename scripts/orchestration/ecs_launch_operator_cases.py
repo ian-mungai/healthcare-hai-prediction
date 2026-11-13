@@ -1,4 +1,4 @@
-"""Operator cases of the direct ECS launch core. They are stand-in based: the provider operator is a stand-in of apache-airflow-providers-amazon 9.36.0
+"""Operator cases of the direct ECS launch core. They are stand-in based: the provider operator is a stand-in of apache-airflow-providers-amazon 9.39.0
 (``ecs_launch_standin``), because the provider is not installed here. Rerun them against the real provider in the Airflow image.
 
 Each case runs ``execute`` as Airflow does, over the fake ECS API and the in-memory bucket of ``ecs_launch_cases``.
@@ -29,7 +29,7 @@ class StandInLaunchOperator(LaunchGuarantees, StandInEcsRunTaskOperator):
 
 
 class StartedStandIn(StandInEcsRunTaskOperator):
-    """The provider operator over a task that has already started, so ``execute`` reaches the defer branch (operators/ecs.py line 548) as the real one does."""
+    """The provider operator over a task that has already started, so ``execute`` reaches the defer branch (operators/ecs.py line 555) as the real one does."""
 
     def _start_task(self) -> None:
         self.arn = "arn:stand-in"
@@ -129,7 +129,7 @@ def wait_is_bounded() -> None:
 
 
 def configured_default_deferral_is_neutralized() -> None:
-    """The provider reads its deferrable default from the Airflow setting operators.default_deferrable (operators/ecs.py line 466)."""
+    """The provider reads its deferrable default from the Airflow setting operators.default_deferrable (operators/ecs.py line 473)."""
     rig = Rig()
     OPERATORS_CONFIG["default_deferrable"] = True
     try:
@@ -177,9 +177,9 @@ def provider_shaped_subclass_needs_its_own_init() -> None:
     rig = Rig()
     arguments: dict[str, Any] = {"job": spec(), "launcher": rig.launcher, "task_definition": "x", "cluster": CLUSTER, "overrides": {}}
     error = refuses(AttributeError, lambda: WithoutInit(**arguments))
-    require("__wrapped__" in str(error), f"a subclass without its own __init__ fails as Airflow 3.3.2 does: {error}")
+    require("__wrapped__" in str(error), f"a subclass without its own __init__ fails as Airflow 3.4.0 does: {error}")
     built = WithInit(**arguments)
-    require(getattr(built, "_instantiated", False) is True, "the outermost wrapped __init__ marks the end of construction, as in Airflow 3.3.2")
+    require(getattr(built, "_instantiated", False) is True, "the outermost wrapped __init__ marks the end of construction, as in Airflow 3.4.0")
     require(
         built.reattach is True and built.deferrable is False and built.wait_for_completion is True, "the subclass with its own __init__ keeps the guarantees"
     )
