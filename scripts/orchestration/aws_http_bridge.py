@@ -1,6 +1,6 @@
 """Serve the stand-in ECS, CloudWatch Logs, SSM and S3 objects over loopback HTTP, so real boto3 clients reach them through an endpoint override.
 
-The offline cases call the fakes (``ecs_broker_fake``, ``ecs_launch_fake``) as Python objects. The real-image DAG test (``real_image_dags.py``) needs the
+The offline cases call the fakes (``ecs_fake``, ``ecs_launch_fake``) as Python objects. The real-image DAG test (``real_image_dags.py``) needs the
 production client code to run too: ``airflow_steps.services()`` builds real boto3 clients, and the Amazon provider operator runs in the Airflow image.
 ``Bridge`` listens on ``127.0.0.1`` inside the container and answers the AWS JSON protocol (ECS, SSM, Logs, dispatched by ``X-Amz-Target``) and the
 path-style S3 REST calls the launch library makes (GetObject, PutObject with ``If-Match`` and ``If-None-Match``, ListObjectsV2). The container has no
@@ -14,7 +14,7 @@ The bridge is as strict as AWS is for what the launch library sends, so a reques
   ListContainerInstances, DescribeContainerInstances; SSM: GetParameter; Logs: GetLogEvents). Any other operation is answered ``AccessDeniedException``, as
   IAM answers an action the role does not hold, so a new call shows as a failure to review.
 - The request fields have the limits the bundled service models state (task ids, counts, enums, name patterns, lengths). The RunTask rules are in
-  ``ecs_broker_fake.check_run_task``, which the offline cases use too.
+  ``ecs_fake.check_run_task``, which the offline cases use too.
 - S3 serves one bucket (``NoSuchBucket`` for any other), only keys under the launch record prefix and the staged input prefixes (``AccessDenied`` for the
   rest) and keys of at most 1024 bytes. SSM serves the names the fake lists and refuses the others as the launch role would. Logs serves one log group.
 
@@ -114,7 +114,7 @@ def check_page(arguments: dict[str, Any]) -> None:
 
 
 def check_ecs(operation: str, arguments: dict[str, Any]) -> None:
-    """The ECS rules for the fields the launch library sends, other than RunTask (``ecs_broker_fake.check_run_task``)."""
+    """The ECS rules for the fields the launch library sends, other than RunTask (``ecs_fake.check_run_task``)."""
     if operation == "DescribeTasks":
         check_list(arguments.get("tasks"), TASK_ID, "tasks")
         for item in arguments.get("include", []):

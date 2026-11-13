@@ -43,7 +43,7 @@ from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
 from scripts.features.feast_harness import Checker, fake_module, stop_worker
 from scripts.features.publication_reads import ReadError
-from scripts.orchestration.ecs_broker_fake import client_error
+from scripts.orchestration.ecs_fake import client_error
 from scripts.orchestration.ecs_launch_fake import FakeLaunchBucket
 from scripts.training import promote_receipt
 

@@ -191,9 +191,9 @@ def rig_modules() -> SimpleNamespace:
     if str(ROOT / "orchestration") not in orchestration.__path__:
         orchestration.__path__.append(str(ROOT / "orchestration"))
     import scripts.orchestration.airflow_mode_cases as cases
-    from scripts.orchestration import ecs_broker_cases, ecs_broker_fake
+    from scripts.orchestration import ecs_fake
 
-    return SimpleNamespace(cases=cases, broker=ecs_broker_cases, fake=ecs_broker_fake)
+    return SimpleNamespace(cases=cases, fake=ecs_fake)
 
 
 def make_rig(*, capacity: str | None = None, hold: str | Exception | None = None) -> Any:
@@ -568,7 +568,7 @@ def cases_catalog() -> dict[str, Scenario]:
     import importlib
 
     modules = rig_modules()
-    c, b = modules.cases, modules.broker
+    c = modules.cases
     preflight = importlib.import_module("orchestration.ecs_preflight")
     training = importlib.import_module("orchestration.training_contract")
     derived = preflight.derived_run_id
@@ -778,7 +778,6 @@ def cases_catalog() -> dict[str, Scenario]:
             "launch record store refused the call: NoSuchBucket",
         ),
     )
-    del b
     form = Scenario("trigger_forms_validate_in_airflow", (), make_rig, after=form_check)
     conformance = Scenario("bridge_refuses_what_aws_refuses", (), make_rig, after=bridge_conformance)
     return {item.name: item for item in (pipeline, *refusals, *planted_cases, form, conformance)}
