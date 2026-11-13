@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import importlib
 import json
+import re
 import shutil
 import sys
 from collections.abc import Callable
@@ -32,6 +34,7 @@ KNOWN_DAGS = {
     "ingestion_dag",
     "metadata_ingest_dag",
     "model_promotion_dag",
+    "research_dag",
     "serving_deploy_dag",
     "silver_transform_dag",
     "training_dag",
@@ -130,6 +133,132 @@ def test_the_rig_builds_and_the_launch_environment_sets_every_required_setting()
 def test_the_inventory_comes_from_the_dag_folder() -> None:
     found = runner.discover_dag_ids(SOURCE_ROOT / "dags")
     check(set(found) == KNOWN_DAGS, f"the DAG folder names {sorted(found)}")
+
+
+def _form(dag_id: str) -> dict[str, ast.Call]:
+    """The ``Param`` call of each parameter in the trigger form of a shipped DAG file."""
+    for node in ast.walk(ast.parse((SOURCE_ROOT / "dags" / f"{dag_id}.py").read_text())):
+        if isinstance(node, ast.keyword) and node.arg == "params" and isinstance(node.value, ast.Dict):
+            return {
+                str(key.value): value
+                for key, value in zip(node.value.keys, node.value.values, strict=True)
+                if isinstance(key, ast.Constant) and isinstance(value, ast.Call)
+            }
+    raise AssertionError(f"{dag_id} declares no trigger form")
+
+
+def _literal(call: ast.Call, name: str) -> object:
+    """The value of a keyword of a ``Param`` call, or None when it is absent or not a literal."""
+    for item in call.keywords:
+        if item.arg == name:
+            try:
+                return ast.literal_eval(item.value)
+            except ValueError:
+                return None
+    return None
+
+
+def _steps() -> list[tuple[str, real_image_dags.Step]]:
+    return [(scenario.name, step) for scenario in real_image_dags.cases_catalog().values() for step in scenario.steps]
+
+
+def test_the_rig_runs_and_forms_every_dag_file() -> None:
+    files = {path.stem for path in (SOURCE_ROOT / "dags").glob("*.py")}
+    stepped, formed = {step.dag_id for _, step in _steps()}, set(real_image_dags.trigger_forms())
+    check(stepped == files, f"the scenarios run {sorted(stepped ^ files)} differently from the DAG folder")
+    check(formed == files, f"the form cases name {sorted(formed ^ files)} differently from the DAG folder")
+
+
+def test_each_form_case_names_exactly_the_values_its_form_requires() -> None:
+    for dag_id, values in real_image_dags.trigger_forms().items():
+        required = {name for name, call in _form(dag_id).items() if not call.args}
+        check(set(values) == required, f"{dag_id}: the form case holds {sorted(values)}, the form requires {sorted(required)}")
+
+
+def test_every_step_triggers_its_dag_with_values_its_form_accepts() -> None:
+    for scenario, step in _steps():
+        form, where = _form(step.dag_id), f"{scenario} {step.dag_id}"
+        unknown = set(step.params) - set(form)
+        required = {name for name, call in form.items() if not call.args}
+        check(
+            not unknown and required <= set(step.params),
+            f"{where}: the trigger holds {sorted(step.params)}, the form takes {sorted(form)} and requires {sorted(required)}",
+        )
+        for name, value in step.params.items():
+            pattern, enum = _literal(form[name], "pattern"), _literal(form[name], "enum")
+            check(not isinstance(pattern, str) or not isinstance(value, str) or re.search(pattern, value), f"{where}: {name}={value!r} breaks {pattern}")
+            check(not isinstance(enum, list) or value in enum, f"{where}: {name}={value!r} is not one of {enum}")
+
+
+def test_the_drift_and_training_runs_chain_from_the_model_features_run() -> None:
+    contract = importlib.import_module("orchestration.training_contract")
+    steps = [step for scenario, step in _steps() if scenario == "every_host_dag_runs_end_to_end"]
+    by_dag = {step.dag_id: step for step in steps}
+    base = by_dag["features_base_dag"].params["run_id"]
+    features = contract.model_features_run_id(str(base), "m1")
+    check(by_dag["features_m1_dag"].params["run_id"] == features, "the m1 features run is not derived from the base run")
+    drift = by_dag["drift_monitoring_dag"].params
+    check(drift["features_run"] == features and drift["run_id"] == contract.model_drift_run_id(features) and drift["model"] == "m1", f"the drift run: {drift}")
+    training = by_dag["training_dag"].params
+    check(training["model"] == "m1" and training["run_id"] == contract.trained_run_id(str(base), "m1"), f"the training run: {training}")
+
+
+def test_the_research_scenario_trains_the_three_models_on_one_base_and_researches_it() -> None:
+    contract = importlib.import_module("orchestration.training_contract")
+    steps = [step for scenario, step in _steps() if scenario == "research_dag_promotes_a_challenger"]
+    trained = [step for step in steps if step.dag_id == "training_dag"]
+    research = [step for step in steps if step.dag_id == "research_dag"]
+    check([step.params["model"] for step in trained] == list(contract.PROMOTION_MODELS), "the scenario does not train m1, m2 and m4 in order")
+    base = str(research[0].params["base_run"])
+    check(
+        [step.params["run_id"] for step in trained] == [contract.trained_run_id(base, model) for model in contract.PROMOTION_MODELS],
+        "a training run is not the run of its model on the base run",
+    )
+    check(research[0].params["run_id"] == contract.research_run_id(base) and len(research) == 2, f"the research steps: {[step.params for step in research]}")
+    check(research[1].starts == 0, "the second research run for the base starts a task again")
+
+
+def _chain_steps(objects: dict[str, bytes], base: str, research: str) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+    """The failures, the launch parameters and the steps of the promotion chain over the staged records, with the launches and the release recorded."""
+    chain = importlib.import_module("orchestration.promotion_chain")
+    launched: list[tuple[str, dict[str, Any]]] = []
+
+    def launch(step: str, run: str, parameters: dict[str, Any]) -> None:
+        launched.append((step, parameters))
+
+    failures = chain.run_types(base, research, ["HAI_1", "HAI_2"], launch=launch, read=objects.get, release=lambda model, features_run, run: None)
+    return failures, [parameters for _, parameters in launched], [step for step, _ in launched]
+
+
+def test_the_staged_research_records_drive_the_chain_through_the_promotion() -> None:
+    cases = real_image_dags.rig_modules().cases
+    challenger = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
+    for decision, expected in (
+        ("promote", ["serve_deploy", "canary_check", "promote", "serve_deploy", "owner_notice"]),
+        ("hold", ["serve_deploy", "canary_check", "owner_notice"]),
+    ):
+        objects = real_image_dags.research_objects(cases.SERVE_BASE, cases.SERVE_RESEARCH, {"HAI_1": challenger, "HAI_2": None}, decision)
+        failures, parameters, steps = _chain_steps(objects, cases.SERVE_BASE, cases.SERVE_RESEARCH)
+        check(not failures and steps == expected, f"{decision}: failures {failures}, steps {steps}")
+        check(parameters[-1]["outcome"] == ("promoted" if decision == "promote" else "held"), f"{decision}: the notice says {parameters[-1]}")
+
+
+def test_a_held_canary_is_refused_by_the_serve_preflight() -> None:
+    preflight, cases = importlib.import_module("orchestration.ecs_preflight"), real_image_dags.rig_modules().cases
+    challenger = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
+    held = real_image_dags.research_objects(cases.SERVE_BASE, cases.SERVE_RESEARCH, {"HAI_1": challenger}, "hold")
+    promoted = real_image_dags.research_objects(cases.SERVE_BASE, cases.SERVE_RESEARCH, {"HAI_1": challenger}, "promote")
+    request = {"hai_type": "HAI_1", "deploy_mode": "canary"}
+    with pytest.raises(Exception, match="serving_canary_held"):
+        preflight.serving_values(request, cases.SERVE_RESEARCH, 10, held.get, 24)
+    values = preflight.serving_values(request, cases.SERVE_RESEARCH, 10, promoted.get, 24)
+    check(json.loads(values["SERVING_REQUEST"])["canary_ttl_hours"] == 24, f"the canary request has no lifetime: {values}")
+
+
+def test_the_rig_names_none_of_the_retired_inputs() -> None:
+    text = Path(real_image_dags.__file__).read_text()
+    for retired in ("serving_request.json", "promotion_approval", "SERVING_REQUEST ="):
+        check(retired not in text, f"the rig still names {retired}")
 
 
 def test_a_complete_run_is_certified(checkout: Path, monkeypatch: pytest.MonkeyPatch) -> None:
