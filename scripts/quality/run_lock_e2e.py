@@ -119,15 +119,25 @@ def feast_is_upgraded() -> Problems:
     return problems
 
 
-def training_soupsieve_is_fixed() -> Problems:
-    """Soupsieve 4.0 (GHSA-4j63-6c4x-wfg4, GHSA-mmhr-3c5m-f64f) in the training image group, and no 3.0.4 anywhere in the lock."""
+def soupsieve_problems(exports: dict[str, str]) -> Problems:
+    """Soupsieve 4.0 (GHSA-4j63-6c4x-wfg4, GHSA-mmhr-3c5m-f64f) in the training image group, and 3.0.4 only in the orchestration group.
+
+    The official Airflow image pins 3.0.4 and installs nothing, so the orchestration group must follow it; no other group may hold it.
+    """
     problems: Problems = []
-    found = lock_env.versions(lock_env.export("training")).get("soupsieve", set())
+    found = lock_env.versions(exports["training"]).get("soupsieve", set())
     if found != {"4.0"}:
         problems.append(f"training: soupsieve is {sorted(found)}; 4.0 is required")
-    if re.search(r'name = "soupsieve"\nversion = "3\.0\.4"', (ROOT / "uv.lock").read_text(encoding="utf-8")):
-        problems.append("uv.lock still holds soupsieve 3.0.4")
+    holders = sorted(group for group, text in exports.items() if "3.0.4" in lock_env.versions(text).get("soupsieve", set()))
+    others = [group for group in holders if group != "orchestration"]
+    if others:
+        problems.append(f"soupsieve 3.0.4 is held by {', '.join(others)}; only the orchestration group may hold it")
     return problems
+
+
+def training_soupsieve_is_fixed() -> Problems:
+    """The real exports of every group satisfy ``soupsieve_problems``."""
+    return soupsieve_problems({group: lock_env.export(group) for group in lock_env.groups()})
 
 
 def orchestration_pins_airflow() -> Problems:
@@ -156,7 +166,7 @@ def scratch_copy(top: Path) -> Path:
 
 
 def planted_defects() -> Problems:
-    """A stale lock, an image group with a source-only package and a model library mismatch are each reported by name."""
+    """A stale lock, an image group with a source-only package, a model library mismatch and soupsieve 3.0.4 outside its group are each reported by name."""
     problems: Problems = []
     with tempfile.TemporaryDirectory(prefix="lock_e2e_") as folder:
         root = scratch_copy(Path(folder))
@@ -182,6 +192,15 @@ def planted_defects() -> Problems:
             problems.append(f"a model library mismatch was not reported once: {mismatch}")
         if lock_env.model_library_problems(training, serving):
             problems.append("the real training and model API exports were reported as different")
+        exports = {group: lock_env.export(group) for group in lock_env.groups()}
+        if soupsieve_problems(exports):
+            problems.append(f"the real exports were reported for soupsieve: {soupsieve_problems(exports)}")
+        planted_holder = soupsieve_problems({**exports, "feature_store": "soupsieve==3.0.4\n"})
+        if len(planted_holder) != 1 or "feature_store" not in planted_holder[0]:
+            problems.append(f"soupsieve 3.0.4 in another group than the orchestration group was not reported once: {planted_holder}")
+        unfixed_training = soupsieve_problems({**exports, "training": "soupsieve==3.0.4\n"})
+        if not any("training: soupsieve" in line for line in unfixed_training) or not any("held by training" in line for line in unfixed_training):
+            problems.append(f"soupsieve 3.0.4 in the training group was not reported twice: {unfixed_training}")
         pins = json.loads((root / "config/quality_tools.json").read_text(encoding="utf-8"))
         pins["tools"]["uv"]["version"] = "0.0.1"
         (root / "config/quality_tools.json").write_text(json.dumps(pins), encoding="utf-8")
