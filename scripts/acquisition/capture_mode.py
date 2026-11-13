@@ -649,6 +649,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
     tried: set[str] = set()
     manual: list[str] = []
     keys_off: list[str] = []
+    held: list[str] = []
     for unit in units:
         if unit["disposition"] not in redownload.ACTIVE:
             continue
@@ -657,6 +658,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             continue
         source = unit["source_id"]
         if source in paused:
+            held.append(unit["snapshot_id"])
             continue
         handler = redownload.handler_mode(unit)
         if handler in redownload.SECRET_MODES and run.task_keys is None and handler not in run.adapters:
@@ -708,7 +710,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
         "started_at_utc": started.isoformat(),
         "finished_at_utc": run.clock().isoformat(),
         "counters": {name: counters[name] for name in COUNTERS},
-        "units": {**done, "paused_sources": sorted(paused), "manual_not_attempted": manual, "keyed_not_attempted": keys_off},
+        "units": {**done, "paused_sources": sorted(paused), "manual_not_attempted": manual, "keyed_not_attempted": keys_off, "paused_not_attempted": held},
     }
     save_state(run, state)
     save_run_record(run, run_record)
