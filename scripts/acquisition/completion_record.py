@@ -3,7 +3,9 @@
 A unit is finished when ``<root>ingestion_units/<unit_key>/<payload_sha256>.json`` exists. ``unit_key`` is the SHA-256 of the unit's canonical request
 identity, so it is known before any request. ``payload_sha256`` is the SHA-256 of the sorted (role ``data``, stored file name, SHA-256) triples, so an API
 page that differs while the data files stay the same names the same record. The record is created once, after every object it names passed its version
-read-back. Nothing in this module reads or writes storage.
+read-back. When a unit's payload returns to an older record's payload while its newest record has another one (A, then B, then A), the run writes a
+reversion record under ``<payload_sha256>.<run_id>.json`` that names the older record's objects, so the newest record is that payload again and nothing is
+copied. Nothing in this module reads or writes storage.
 """
 
 from __future__ import annotations
@@ -23,6 +25,8 @@ DIGEST = re.compile(r"[a-f0-9]{64}")
 OBJECT_FIELDS = frozenset({"key", "version_id", "sha256", "byte_count"})
 ROLE_FIELDS = OBJECT_FIELDS | {"role"}
 DATA_FIELDS = ROLE_FIELDS | {"stored_file_name"}
+RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
+NAME = re.compile(rf"(?P<payload>[a-f0-9]{{64}})(?:\.(?P<run>{RUN_ID.pattern}))?\.json")
 COLLECTION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 FIELDS = frozenset(
     {
@@ -78,8 +82,20 @@ def stale_prefix(root: str, key: str) -> str:
     return f"{root}{STALE_FOLDER}{key}/"
 
 
-def record_key(root: str, key: str, payload: str) -> str:
-    return f"{unit_prefix(root, key)}{payload}.json"
+def record_key(root: str, key: str, payload: str, run_id: str | None = None) -> str:
+    """The key of a completion record. A reversion record adds its run ID; a run ID that cannot join a key is refused."""
+    if run_id is None:
+        return f"{unit_prefix(root, key)}{payload}.json"
+    if RUN_ID.fullmatch(run_id) is None:
+        raise RecordError("Run ID cannot join a completion record key")
+    return f"{unit_prefix(root, key)}{payload}.{run_id}.json"
+
+
+def key_payload(key: str, root: str, unit: str) -> tuple[str, str | None] | None:
+    """The payload digest and the run ID (None for the plain form) a listed key under a unit's folder names, or None when it is no completion record key."""
+    prefix = unit_prefix(root, unit)
+    found = NAME.fullmatch(key[len(prefix) :]) if key.startswith(prefix) else None
+    return (found.group("payload"), found.group("run")) if found else None
 
 
 def run_record_key(root: str, run_id: str) -> str:
@@ -185,15 +201,34 @@ def check(record: Any) -> None:
         raise RecordError("Completion record payload digest differs from its data objects")
 
 
+def reverted(older: Mapping[str, Any], *, run_id: str, code_sha256: str, bundle_sha256: str, retrieved_at_utc: str) -> dict[str, Any]:
+    """The reversion record of an older record's payload: the older record's unit, payload and objects, under this run's identity and retrieval time."""
+    return build(
+        key=older["unit_key"],
+        source_id=older["source_id"],
+        collection=older["collection"],
+        mode=older["mode"],
+        run_id=run_id,
+        code_sha256=code_sha256,
+        bundle_sha256=bundle_sha256,
+        retrieved_at_utc=retrieved_at_utc,
+        receipt=older["receipt"],
+        manifests=older["manifests"],
+        data_objects=older["data_objects"],
+        other_objects=older["other_objects"],
+    )
+
+
 def parse(body: bytes, *, key: str, root: str) -> dict[str, Any]:
-    """Read a stored record by its key: the key must be exactly ``<root>ingestion_units/<unit_key>/<payload_sha256>.json`` of the record's own digests,
-    so a copied, renamed or edited record is refused."""
+    """Read a stored record by its key: the key must be ``<root>ingestion_units/<unit_key>/<payload_sha256>.json`` of the record's own digests, or the same
+    name with the record's own run ID added (a reversion record), so a copied, renamed or edited record is refused."""
     try:
         record = json.loads(body)
     except ValueError:
         raise RecordError("Completion record is not JSON") from None
     check(record)
-    if key != record_key(root, record["unit_key"], record["payload_sha256"]):
+    plain = record_key(root, record["unit_key"], record["payload_sha256"])
+    if key != plain and not (RUN_ID.fullmatch(record["run_id"]) and key == record_key(root, record["unit_key"], record["payload_sha256"], record["run_id"])):
         raise RecordError("Completion record differs from the unit and payload its key names")
     return record
 

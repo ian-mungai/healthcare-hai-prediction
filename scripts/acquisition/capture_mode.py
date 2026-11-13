@@ -4,7 +4,9 @@ The run reads the tracked queue and ``capture_specs.json``, never a stored recei
 request. A verified record there means no request. Otherwise the unit is downloaded into its own working folder, stored through the project's storage path,
 read back by version and closed by one create-once completion record. Before it stores anything, the unit claims a create-once intent that names the
 snapshot ID its objects are stored under, so a retry after a crash stores under the same keys (``ingestion_intent.py``). The working folder is deleted
-after the record, or after a failure. The first attempted unit of a source that fails its contract pauses that source for the run. The run writes one
+after the record, or after a failure. A monthly run (``recheck``) that downloads a payload an older record has while the newest record has another writes a
+reversion record that names the older record's objects (``recheck_unit``), and writes nothing when the newest record has the payload. The first attempted
+unit of a source that fails its contract pauses that source for the run. The run writes one
 run record and, only when something was attempted, one state object under ``<root>ingestion_runs/<run_id>/``. One run owns its process while it executes:
 it replaces process-wide transport functions, host variables and redirect routes, so a second run started in the same process raises ``RunInProgress``.
 It sits beside the earlier redownload and compare paths in ``redownload.py``, which later work removes.
@@ -68,6 +70,7 @@ LINEAGE_ID = {
     "hcai_util_workbook": "year_id",
 }
 URL_BOUND = frozenset({"file", "cms_owners_org", "onc_mu_hospital", "hcai_util_workbook"})
+REVERTED = "payload_reverted"
 CONFLICT_READS = 3
 CONFLICT_WAIT = 1.0
 COUNTERS = (
@@ -775,7 +778,13 @@ def intent_problems(storage: Any, root: str, run_record: Mapping[str, Any], new_
         except IntentRefused as refusal:
             problems.append(f"{key}: {refusal.reason}")
     for item in [*run_record["units"]["completed"], *run_record["units"]["changed"]]:
-        generation = len(list_objects(storage, records.unit_prefix(root, item["unit_key"])))
+        found = list_objects(storage, records.unit_prefix(root, item["unit_key"]))
+        if item["reason"] == REVERTED:
+            parts = records.key_payload(newest(found)["Key"], root, item["unit_key"]) if found else None
+            if parts is None or parts[1] != run_record["run_id"]:
+                problems.append(f"unit {item['unit_key']} claims a reversion but its newest record is not this run's reversion record")
+            continue
+        generation = len(found)
         if not list_objects(storage, intents.intent_key(root, item["unit_key"], generation)):
             problems.append(f"unit {item['unit_key']} has no intent for generation {generation}")
     return problems
@@ -979,14 +988,14 @@ class Result:
     reason: str | None = None
 
 
-def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, expected: Mapping[str, Any]) -> Result:
+def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, expected: Mapping[str, Any], reason: str | None = None) -> Result:
     """Create the unit's completion record once. When another run created it first, the unit is complete if that record verifies as this unit's.
 
     A conflict whose winner cannot be read yet is read again a bounded number of times. The loser claims no creation: only its own successful puts count.
     """
     ended = "changed" if run.recheck else "completed"
     if create_new(run.storage, target, body):
-        return Result(key, unit, ended)
+        return Result(key, unit, ended, reason)
     for read in range(CONFLICT_READS):
         try:
             read_record(run.storage, target, run.root)
@@ -997,8 +1006,30 @@ def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, 
         except records.RecordError as error:
             return Result(key, unit, "refused", str(error))
         problems = verify_record(run.storage, target, run.root, expected)
-        return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, ended)
+        return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, ended, reason)
     raise ContractFailure("completion_conflict_unreadable")
+
+
+def recheck_unit(run: CaptureRun, unit: dict, key: str, payload: str, retrieved_at_utc: str, expected: Mapping[str, Any]) -> Result | None:
+    """A monthly run's decision for a downloaded payload against the unit's records, or None when no record has that payload (a new version).
+
+    The unit's newest record has the payload: unchanged, nothing is written. An older record has it and the newest one does not (A, then B, then A): a
+    reversion record names the older record's objects under a key that adds this run's ID, so the newest record is that payload again. No object is copied.
+    """
+    found = list_objects(run.storage, records.unit_prefix(run.root, key))
+    same = [item for item in found if (named := records.key_payload(item["Key"], run.root, key)) is not None and named[0] == payload]
+    if not same:
+        return None
+    latest = newest(found)
+    chosen = latest if latest in same else newest(same)
+    problems = verify_record(run.storage, chosen["Key"], run.root, expected)
+    if problems:
+        return Result(key, unit, "refused", problems[0])
+    if chosen is latest:
+        return Result(key, unit, "unchanged")
+    older = read_record(run.storage, chosen["Key"], run.root)
+    body = records.reverted(older, run_id=run.run_id, code_sha256=run.code_sha256, bundle_sha256=run.bundle_sha256, retrieved_at_utc=retrieved_at_utc)
+    return close_unit(run, unit, key, records.record_key(run.root, key, payload, run.run_id), records.encode(body), expected, REVERTED)
 
 
 def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, state: dict, expected: Mapping[str, Any]) -> Result:
@@ -1022,9 +1053,8 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, stat
         mapping = archive_mapping(unit, spec, receipt_path, registry) if spec.get("archive_members") else None
         payload = records.payload_sha256(local_payload(receipt, mapping))
         target = records.record_key(run.root, key, payload)
-        if run.recheck and (found := list_objects(run.storage, target)):
-            problems = verify_record(run.storage, found[0]["Key"], run.root, expected)
-            return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, "unchanged")
+        if run.recheck and (decided := recheck_unit(run, unit, key, payload, receipt["acquisition"]["retrieved_at_utc"], expected)) is not None:
+            return decided
         generation = len(list_objects(run.storage, records.unit_prefix(run.root, key))) + 1
         try:
             snapshot_id = claim_intent(run, unit, key, generation, receipt["snapshot_id"])

@@ -113,6 +113,42 @@ def test_a_record_that_is_not_exactly_the_schema_or_does_not_name_its_own_key_is
         record.parse(payload, key=key, root=ROOT)
 
 
+def test_a_reversion_record_has_its_own_key_form_and_parses_only_under_its_own_run() -> None:
+    item = body(run_id="run03")
+    plain, revert = key_of(item), record.record_key(ROOT, item["unit_key"], item["payload_sha256"], "run03")
+    check(revert == f"{ROOT}ingestion_units/{item['unit_key']}/{item['payload_sha256']}.run03.json" and revert != plain, f"the run ID joins the key: {revert}")
+    check(record.parse(record.encode(item), key=revert, root=ROOT) == item, "a record parses under the key that adds its own run ID")
+    check(record.parse(record.encode(item), key=plain, root=ROOT) == item, "the plain key still parses")
+    for other in (record.record_key(ROOT, item["unit_key"], item["payload_sha256"], "run04"), f"{plain[:-5]}..json", f"{plain[:-5]}.run/03.json"):
+        with pytest.raises(record.RecordError):
+            record.parse(record.encode(item), key=other, root=ROOT)
+
+
+@pytest.mark.parametrize("run_id", ["", "a.b", "a/b", "-a", "a b", "x" * 200])
+def test_a_run_id_that_cannot_join_a_key_is_refused(run_id: str) -> None:
+    with pytest.raises(record.RecordError):
+        record.record_key(ROOT, DIGEST, DIGEST, run_id)
+
+
+def test_a_listed_key_names_its_payload_and_its_run_in_either_form() -> None:
+    item = body()
+    plain = record.record_key(ROOT, item["unit_key"], item["payload_sha256"])
+    revert = record.record_key(ROOT, item["unit_key"], item["payload_sha256"], "20261113T180000Z-ab12cd34")
+    check(record.key_payload(plain, ROOT, item["unit_key"]) == (item["payload_sha256"], None), "the plain key names no run")
+    check(record.key_payload(revert, ROOT, item["unit_key"]) == (item["payload_sha256"], "20261113T180000Z-ab12cd34"), "the run key names both")
+    for bad in (f"{ROOT}ingestion_units/{'e' * 64}/{item['payload_sha256']}.json", f"{ROOT}ingestion_units/{item['unit_key']}/x.json", plain + ".bak"):
+        check(record.key_payload(bad, ROOT, item["unit_key"]) is None, f"a key of no record form is no record: {bad}")
+
+
+def test_a_reversion_record_names_the_older_records_objects_under_the_new_run() -> None:
+    older = body()
+    again = record.reverted(older, run_id="run03", code_sha256="d" * 64, bundle_sha256="e" * 64, retrieved_at_utc="2026-11-13T00:00:00Z")
+    check(again["run_id"] == "run03" and again["code_sha256"] == "d" * 64 and again["retrieved_at_utc"] == "2026-11-13T00:00:00Z", "the run's own facts")
+    same = ("unit_key", "payload_sha256", "source_id", "collection", "mode", "receipt", "manifests", "data_objects", "other_objects")
+    check(all(again[name] == older[name] for name in same), "everything the record names stays the older record's")
+    check(record.parse(record.encode(again), key=record.record_key(ROOT, again["unit_key"], again["payload_sha256"], "run03"), root=ROOT) == again, "it parses")
+
+
 def test_the_unit_key_is_the_digest_of_the_canonical_identity() -> None:
     identity = {"source_id": "S", "mode": "file", "request": {"method": "GET", "url": "https://example.org/a"}}
     reordered = copy.deepcopy(dict(reversed(list(identity.items()))))

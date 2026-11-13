@@ -1095,6 +1095,21 @@ def test_with_two_completion_records_the_newest_by_time_decides_whatever_the_key
     )
 
 
+def test_a_reversion_record_under_its_run_key_is_the_newest_completion_and_names_the_older_records_objects(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    _, older = completion_for(world, unit, "a", OLDER)
+    completion_for(world, unit, "b", "2026-10-10T00:00:00Z")
+    run = "20261012T000000Z-cccccccc"
+    again = completion_record.reverted(older, run_id=run, code_sha256="c" * 64, bundle_sha256="b" * 64, retrieved_at_utc=NEWER)
+    world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), again["payload_sha256"], run), completion_record.encode(again))
+    refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(
+        record["last_capture"] == sorted((artifact_of(unit, "a", name, NEWER) for name in OBJECT_NAMES), key=lambda item: item["key"]),
+        f"{record['last_capture']}",
+    )
+
+
 def test_the_newest_completion_record_is_found_by_the_instant_and_not_by_the_text_of_its_time(world: World) -> None:
     [unit] = hud_units(world, 1)
     completion_for(world, unit, "a", "2026-10-20T04:05:06Z")

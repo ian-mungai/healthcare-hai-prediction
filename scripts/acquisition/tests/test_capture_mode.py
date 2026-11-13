@@ -472,6 +472,94 @@ def test_a_monthly_run_after_a_completed_record_with_a_changed_payload_uses_the_
     )
 
 
+def flipped_world(tmp_path: Path) -> tuple[World, str, bytes]:
+    """One unit captured as payload A in run 1 and as payload B in run 2. The publisher serves A again afterwards."""
+    world = World(tmp_path, ["a.csv"])
+    url = world.units[0]["url"]
+    world.run()
+    served = world.bodies[url]
+    world.bodies[url] = csv_body(7)
+    world.run(recheck=True)
+    world.bodies[url] = served
+    return world, world.unit_key(), served
+
+
+def newest_key(world: World, key: str) -> str:
+    return mode.newest(mode.list_objects(storage(world.bucket), record.unit_prefix(ROOT, key)))["Key"]
+
+
+def test_a_payload_that_returns_to_an_older_record_writes_a_new_record_naming_the_old_objects(tmp_path: Path) -> None:
+    world, key, _ = flipped_world(tmp_path)
+    (older,) = (body for body in world.records().values() if body["run_id"] == "run01")
+    before_names, before = set(world.bucket.names()), listed(world)
+    result = world.run(recheck=True)
+    check(result["counters"]["changed"] == 1 and result["counters"]["unchanged"] == 0, f"a reversion is a change: {result['counters']}")
+    check(result["counters"]["intents_created"] == 0 and result["counters"]["objects_created"] == 1, f"one record and nothing else: {result['counters']}")
+    check([item["reason"] for item in result["units"]["changed"]] == ["payload_reverted"], f"the run record says why: {result['units']['changed']}")
+    check(
+        new_kinds(world, before_names) == Counter({"record": 1, "run": 2}), f"no data object, receipt or manifest is copied: {new_kinds(world, before_names)}"
+    )
+    check(result["counters"]["http_requests"] >= 1, "the payload was downloaded to compare it")
+    (added,) = (name for name in world.bucket.names() - before_names if kind_of(name) == "record")
+    check(added == record.record_key(ROOT, key, older["payload_sha256"], "run03"), f"the key adds the run ID: {added}")
+    body = world.records()[added]
+    shared = ("unit_key", "payload_sha256", "source_id", "collection", "mode", "receipt", "manifests", "data_objects", "other_objects")
+    check(all(body[name] == older[name] for name in shared), "it names the older record's objects")
+    check(body["run_id"] == "run03" and body["code_sha256"] == CODE, "it carries this run's identity")
+    check(newest_key(world, key) == added, "the newest record is now payload A again")
+    check(mode.check_run(storage(world.bucket), result, before) == [], f"the evidence step accepts it: {mode.check_run(storage(world.bucket), result, before)}")
+
+
+def test_an_unchanged_run_on_the_newest_payload_writes_nothing_and_a_second_reversion_writes_another_record(tmp_path: Path) -> None:
+    world, key, served = flipped_world(tmp_path)
+    world.run(recheck=True)
+    url = world.units[0]["url"]
+    before_names = set(world.bucket.names())
+    same = world.run(recheck=True)
+    check(same["counters"]["unchanged"] == 1 and same["counters"]["objects_created"] == 0, str(same["counters"]))
+    check(new_kinds(world, before_names) == Counter({"run": 2}), "an unchanged run writes only its run records")
+    check(len(world.records()) == 3, "no record was added")
+    world.bodies[url] = csv_body(7)
+    before_names = set(world.bucket.names())
+    back = world.run(recheck=True)
+    check(back["counters"]["changed"] == 1 and len(world.records()) == 4, f"B again is another reversion: {back['counters']}")
+    check(new_kinds(world, before_names) == Counter({"record": 1, "run": 2}), "again only the record")
+    check(world.records()[newest_key(world, key)]["run_id"] == "run05", "the newest record is the latest reversion")
+    world.bodies[url] = served
+    last = world.run(recheck=True)
+    check(last["counters"]["changed"] == 1 and len(world.records()) == 5, "and A once more")
+
+
+def test_a_reversion_to_a_record_that_does_not_verify_is_refused_and_writes_no_record(tmp_path: Path) -> None:
+    world, _, _ = flipped_world(tmp_path)
+    key, body = next((name, item) for name, item in world.records().items() if item["run_id"] == "run01")
+    body["data_objects"][0]["sha256"] = "f" * 64
+    version, _, fields = world.bucket.objects[key]
+    world.bucket.objects[key] = (version, encoded_json(body), fields)
+    before_names = set(world.bucket.names())
+    result = world.run(recheck=True)
+    check(len(result["units"]["refused"]) == 1 and result["units"]["changed"] == [], f"the unit is refused: {result['units']}")
+    check(len(world.records()) == 2 and new_kinds(world, before_names).get("record", 0) == 0, "no record was written")
+
+
+def test_the_evidence_step_checks_a_claimed_reversion_against_the_stored_newest_record(tmp_path: Path) -> None:
+    world, key, _ = flipped_world(tmp_path)
+    before = listed(world)
+    result = world.run(recheck=True)
+    forged = copy.deepcopy(result)
+    forged["units"]["changed"][0]["reason"] = None
+    check(any("intent" in problem for problem in mode.check_run(storage(world.bucket), forged, before)), "a reversion not claimed as one lacks its intent")
+    other = copy.deepcopy(result)
+    other["units"]["changed"][0]["unit_key"] = "e" * 64
+    check(
+        any("e" * 64 in problem for problem in mode.check_run(storage(world.bucket), other, before)), "a claimed reversion of a unit with no such record fails"
+    )
+    world.bodies[world.units[0]["url"]] = csv_body(7)
+    world.run(recheck=True)
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any(key in problem and "reversion" in problem for problem in problems), f"a claimed reversion that is not the newest record fails: {problems}")
+
+
 FORGERIES: dict[str, Callable[[dict], Any]] = {
     "not_json": lambda body: b"{not json",
     "extra_field": lambda body: body | {"note": "x"},
