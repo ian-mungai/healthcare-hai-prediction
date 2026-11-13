@@ -20,7 +20,7 @@ from typing import Any
 
 from botocore.exceptions import ReadTimeoutError
 
-from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
+from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import (
     CleanupFailed,
     EcsFitProbe,
@@ -48,8 +48,6 @@ PREFIX = launch_record_prefix()
 SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",
-    subnets=(),
-    networks={},
     project_tag="example",
     log_group="example_jobs_dev",
     families=frozenset({"gold", "drift"}),
@@ -165,7 +163,7 @@ def gold_tasks(rig: Rig) -> list[str]:
 def stopped_decoys(rig: Rig, count: int) -> None:
     """Tasks of other jobs that have already stopped, so a lookup of stopped tasks has to read past them."""
     for number in range(count):
-        arn = rig.adapter.start("drift", f"2026110{number + 1}T090000Z-1111111{number}:drift:1", {"drift": {"RUN_ID": "x"}}, "", HOST)
+        arn = rig.adapter.start("drift", f"2026110{number + 1}T090000Z-1111111{number}:drift:1", {"drift": {"RUN_ID": "x"}})
         rig.ecs.finish(arn)
 
 
@@ -1403,7 +1401,7 @@ def settle_refused_while_a_family_task_is_not_stopped() -> None:
     unresolved_gold(rig)
     rig.time.now += 700
     rig.ecs.hold = True
-    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
+    other = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT)
     error = refused_gate(rig)
     require(other in str(error) and "end" not in rig.events(1), f"the launch ended beside an unstopped task: {error}")
     refuses(FamilyBusy, lambda: rig.launcher().auto_settle(RUN, "gold"))
@@ -1791,7 +1789,7 @@ def family_busy_while_a_task_of_the_family_is_stopping() -> None:
     so only the cloud shows it."""
     rig = Rig()
     rig.ecs.stop_lag = 3
-    arn = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT, "", HOST)
+    arn = rig.adapter.start("gold", "20261104T090000Z-99999999:gold:1", ENVIRONMENT)
     rig.ecs.stop_task(cluster=CLUSTER, task=arn, reason="owner stop")
     require(rig.ecs.tasks[arn]["desiredStatus"] == "STOPPED" and rig.ecs.tasks[arn]["lastStatus"] != "STOPPED", "the stand-in task is not stopping")
     error = refuses(FamilyBusy, lambda: rig.launcher().run(spec()))

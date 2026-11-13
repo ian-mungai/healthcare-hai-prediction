@@ -75,7 +75,7 @@ from unittest import mock
 import jinja2
 from botocore.exceptions import ClientError
 
-from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
+from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
@@ -202,8 +202,6 @@ class Rig:
         settings = EcsSettings(
             cluster=CLUSTER,
             family_prefix="example_dev_job_",
-            subnets=(),
-            networks={},
             project_tag="example",
             log_group="example_jobs_dev",
             families=frozenset(table["jobs"]),
@@ -232,7 +230,7 @@ class Rig:
             launcher=self.launcher,
             operator_class=StandInLaunchOperator,
             cluster=CLUSTER,
-            definition=lambda job: self.adapter.definition(job, HOST),
+            definition=lambda job: self.adapter.definition(job),
             clock=self.time.clock(),
             report=steps.layer_report.ReportAccess(
                 s3=None,

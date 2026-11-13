@@ -66,7 +66,6 @@ from typing import Any, Protocol
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration.ecs_adapter import (
-    HOST,
     CapacityUnavailable,
     EcsAdapter,
     SendUnknown,
@@ -557,7 +556,7 @@ class Launcher:
             problems.append("need")
         if not all(isinstance(name, str) and name for name in spec.acceptance):
             problems.append("acceptance")
-        if "job" not in problems and not (isinstance(spec.task_definition, str) and self.adapter.is_revision(spec.job, spec.task_definition, HOST)):
+        if "job" not in problems and not (isinstance(spec.task_definition, str) and self.adapter.is_revision(spec.job, spec.task_definition)):
             problems.append("task_definition (the checked revision of the job's host definition)")
         if problems:
             raise LaunchRefused(f"request refused: {', '.join(problems)}")
@@ -588,7 +587,7 @@ class Launcher:
     def lookup(self, claim: Mapping[str, Any]) -> TaskFound | None:
         """The task started under the identity of the claim's attempt, running or stopped. None only when ECS lists no such task."""
         try:
-            return self.adapter.lookup(f"{claim['run_id']}:{claim['job']}:{claim['attempt']}", self.adapter.definition(str(claim["job"]), HOST))
+            return self.adapter.lookup(f"{claim['run_id']}:{claim['job']}:{claim['attempt']}", self.adapter.definition(str(claim["job"])))
         except TaskUnavailable as error:
             raise LaunchUnavailable(f"the task of attempt {claim['attempt']} cannot be looked up now ({error})") from None
 
@@ -719,7 +718,7 @@ class Launcher:
         unresolved refuses the run with its reason. Two runs that pass this gate at the
         same moment are kept apart by the Airflow pool of host jobs (a full-size job takes all its slots) and, when they both settle the same launch, by the
         write-once end record. The run is not claimed, so it launches once the earlier launch is settled."""
-        definition = self.adapter.definition(spec.job, HOST)
+        definition = self.adapter.definition(spec.job)
         busy = self.unstopped_tasks(definition, "nothing was claimed")
         if busy:
             raise FamilyBusy(
@@ -857,7 +856,7 @@ class Launcher:
                     continue
                 try:
                     arn = self.adapter.start(
-                        spec.job, key, spec.environment, "", HOST, guard=partial(self.send_guard, run_id, job, end, need), revision=spec.task_definition
+                        spec.job, key, spec.environment, guard=partial(self.send_guard, run_id, job, end, need), revision=spec.task_definition
                     )
                     return arn, iso(self.clock.wall())
                 except SendWithheld:

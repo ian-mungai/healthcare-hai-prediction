@@ -4,10 +4,10 @@ The adapter holds no state. A job key names one task: the key gives both the ``c
 start returns the task that already runs (``list_tasks`` finds it by tag) or the one the first call created. Only the named job families start. Every call
 has a 5 second connect and 10 second read limit, and the caller owns the job deadline. Reads have two SDK retries. RunTask has none: it goes through a client
 of its own that makes one attempt per call (``send_config``), so every request that may reach ECS passes the caller's guard, and a retry can never answer
-for a request whose reply was lost (a task may exist). The adapter refuses a RunTask client with retries. A job runs in one of two places. ``fargate`` is the
-awsvpc task of the family's own definition. ``host`` is the bridge task of its ``_host`` definition on the host's EC2 capacity provider: it carries no awsvpc
-network, and the capacity provider strategy is always sent, because the cluster default strategy would place the task on Fargate. A failure that a later call
-can cure raises ``TaskUnavailable``, the rest raise ``TaskRefused``. Reasons shown to callers carry no ARN and no account number.
+for a request whose reply was lost (a task may exist). The adapter refuses a RunTask client with retries. Every job runs in one place: the bridge task of the
+family's ``_host`` definition on the host's EC2 capacity provider. It carries no awsvpc network, and the capacity provider strategy is always sent, so no
+change of the cluster default can move a task. A failure that a later call can cure raises ``TaskUnavailable``, the rest raise ``TaskRefused``. Reasons shown
+to callers carry no ARN and no account number.
 """
 
 from __future__ import annotations
@@ -29,8 +29,6 @@ PENDING_STATUSES = frozenset({"PROVISIONING", "PENDING", "ACTIVATING"})
 STOPPED = "STOPPED"
 NO_EXIT_CODE = 125
 USER_STOP_CODE = 143
-FARGATE = "fargate"
-HOST = "host"
 HOST_SUFFIX = "_host"
 GUARD = "guard"  # the container of a layer task that ends the task when a phase fails (scripts/orchestration/task_guard.py)
 REASON_LIMIT = 200
@@ -85,17 +83,15 @@ class LogsClient(Protocol):
 
 @dataclass(frozen=True)
 class EcsSettings:
-    """Where a job runs. ``family_prefix`` is ``<project>_<environment>_job_``, so a job named ``train`` runs the definition ``<prefix>train`` on Fargate and
-    ``<prefix>train_host`` on the capacity provider ``host_capacity_provider``, which stays empty while no job runs on the host."""
+    """Where a job runs. ``family_prefix`` is ``<project>_<environment>_job_``, so a job named ``train`` runs the definition ``<prefix>train_host`` on the
+    capacity provider ``host_capacity_provider``. An empty provider refuses every start."""
 
     cluster: str
     family_prefix: str
-    subnets: tuple[str, ...]
-    networks: Mapping[str, tuple[str, ...]]
     project_tag: str
     log_group: str
     families: frozenset[str]
-    host_capacity_provider: str = ""
+    host_capacity_provider: str
 
 
 @dataclass(frozen=True)
@@ -246,30 +242,23 @@ class EcsAdapter:
         created = task.get("createdAt")
         return created.timestamp() if isinstance(created, datetime) else None
 
-    def definition(self, family: str, placement: str = FARGATE) -> str:
-        """The task definition that runs the family in the placement."""
-        if placement == FARGATE:
-            return f"{self.settings.family_prefix}{family}"
-        if placement == HOST:
-            return f"{self.settings.family_prefix}{family}{HOST_SUFFIX}"
-        raise TaskRefused("placement_unknown")
+    def definition(self, family: str) -> str:
+        """The task definition that runs the family."""
+        return f"{self.settings.family_prefix}{family}{HOST_SUFFIX}"
 
-    def is_revision(self, family: str, arn: str, placement: str = HOST) -> bool:
-        """True when ``arn`` names one revision of the task definition that runs the family in the placement."""
-        return (
-            re.fullmatch(rf"arn:aws[a-z-]*:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/{re.escape(self.definition(family, placement))}:[1-9][0-9]*", arn)
-            is not None
-        )
+    def is_revision(self, family: str, arn: str) -> bool:
+        """True when ``arn`` names one revision of the task definition that runs the family."""
+        return re.fullmatch(rf"arn:aws[a-z-]*:ecs:[a-z0-9-]+:[0-9]{{12}}:task-definition/{re.escape(self.definition(family))}:[1-9][0-9]*", arn) is not None
 
-    def task_definition(self, family: str, placement: str = HOST) -> dict[str, Any]:
-        """The latest active revision of the task definition that runs the family in the placement, as ECS describes it: a family name without a
-        revision names that revision. A failed call raises ``TaskUnavailable`` or ``TaskRefused``, a reply without a task definition ``TaskUnavailable``."""
+    def task_definition(self, family: str) -> dict[str, Any]:
+        """The latest active revision of the task definition that runs the family, as ECS describes it: a family name without a revision names that
+        revision. A failed call raises ``TaskUnavailable`` or ``TaskRefused``, a reply without a task definition ``TaskUnavailable``."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
         if not isinstance(self.ecs, DefinitionClient):
             raise TaskRefused("task_definition_reader_missing")
         try:
-            reply = self.ecs.describe_task_definition(taskDefinition=self.definition(family, placement))
+            reply = self.ecs.describe_task_definition(taskDefinition=self.definition(family))
         except (ClientError, BotoCoreError) as error:
             raise classify(error) from None
         found = reply.get("taskDefinition")
@@ -277,47 +266,29 @@ class EcsAdapter:
             raise TaskUnavailable("task_definition_not_described")
         return dict(found)
 
-    def placement(self, placement: str, network: str) -> dict[str, Any]:
-        """The ``RunTask`` arguments that choose where the task runs. A refusal comes before any cloud call."""
-        if placement == FARGATE:
-            if network not in self.settings.networks:
-                raise TaskRefused("network_not_bound")
-            return {
-                "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
-                "networkConfiguration": {
-                    "awsvpcConfiguration": {
-                        "subnets": list(self.settings.subnets),
-                        "securityGroups": list(self.settings.networks[network]),
-                        "assignPublicIp": "DISABLED",
-                    }
-                },
-            }
-        if placement == HOST:
-            if not self.settings.host_capacity_provider:
-                raise TaskRefused("host_provider_not_set")
-            return {"capacityProviderStrategy": [{"capacityProvider": self.settings.host_capacity_provider, "weight": 1}]}
-        raise TaskRefused("placement_unknown")
+    def placement(self) -> dict[str, Any]:
+        """The ``RunTask`` arguments that place the task on the host capacity provider. A refusal comes before any cloud call."""
+        if not self.settings.host_capacity_provider:
+            raise TaskRefused("host_provider_not_set")
+        return {"capacityProviderStrategy": [{"capacityProvider": self.settings.host_capacity_provider, "weight": 1}]}
 
     def start(
         self,
         family: str,
         key: str,
         environment: Mapping[str, Mapping[str, str]],
-        network: str,
-        placement: str = FARGATE,
         guard: Callable[[], None] | None = None,
         revision: str | None = None,
     ) -> str:
-        """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. ``network`` names the
-        class whose security groups a Fargate task gets: each family runs only in the network its job table row approves. A host task has no security group,
-        the host firewall bounds it. ``guard`` runs immediately before the RunTask call, after the discovery of a running task, and raises ``SendWithheld`` to
-        stop the call. The call is one request with no SDK retry. A RunTask call that may have been sent and has no answer raises ``SendUnknown``.
-        ``revision``, when given, is the ARN of the one revision of the family's definition to run, in place of the family's latest active revision."""
+        """Run the family's task once for ``key`` and return its ARN. ``environment`` maps a container name to the variables it receives. The task has no
+        security group: the host firewall bounds it. ``guard`` runs immediately before the RunTask call, after the discovery of a running task, and raises
+        ``SendWithheld`` to stop the call. The call is one request with no SDK retry. A RunTask call that may have been sent and has no answer raises
+        ``SendUnknown``. ``revision``, when given, is the ARN of the one revision of the family's definition to run, in place of its latest active revision."""
         if family not in self.settings.families:
             raise TaskRefused("family_not_named")
-        if revision is not None and not self.is_revision(family, revision, placement):
+        if revision is not None and not self.is_revision(family, revision):
             raise TaskRefused("revision_not_of_family")
-        where = self.placement(placement, network)
+        where = self.placement()
         digest = hashlib.sha256(key.encode()).hexdigest()
         started_by = self.identity(key)
         try:
@@ -331,7 +302,7 @@ class EcsAdapter:
         try:
             reply = self.sender.run_task(
                 cluster=self.settings.cluster,
-                taskDefinition=revision if revision is not None else self.definition(family, placement),
+                taskDefinition=revision if revision is not None else self.definition(family),
                 count=1,
                 **where,
                 overrides={

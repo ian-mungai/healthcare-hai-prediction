@@ -5,12 +5,12 @@
 a token returns the first task), ``startedBy`` of at most 128 characters, and no ``startedBy`` together with ``desiredStatus`` in ``list_tasks``. A task moves
 on each ``describe_tasks``: provisioning, then running, then stopped with the exit codes planned for it. It never leaves the machine.
 
-It knows the two task shapes of the cluster. A definition whose name ends in ``_host`` is a bridge task for the EC2 capacity provider ``host_provider``: ECS
-refuses an awsvpc network for it, refuses a strategy that names another provider and, when the strategy is omitted, places it by the cluster default
-(``FARGATE_SPOT``), which cannot run it. Every other definition is an awsvpc Fargate task: it needs the network and a Fargate provider. ``host_full`` makes
-the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room. ``describe_overrides`` replaces the next DescribeTasks replies, for example
-with one that names no task while the task runs. ``definitions`` names the containers of a task definition: ECS refuses an override for a container that
-the definition lacks, and so does the fake for each definition named there (a definition not named there takes any override).
+The cluster registers one capacity provider, the EC2 provider ``host_provider``, and it is the cluster default. A definition whose name ends in ``_host`` is a
+bridge task for it: ECS refuses an awsvpc network for it and a strategy that names another provider. Any other definition is an awsvpc task, which no provider
+of the cluster can run. ``host_full`` makes the host answer ``RESOURCE:CPU``, as ECS does when the instance has no room. ``describe_overrides`` replaces the
+next DescribeTasks replies, for example with one that names no task while the task runs. ``definitions`` names the containers of a task definition: ECS
+refuses an override for a container that the definition lacks, and so does the fake for each definition named there (a definition not named there takes any
+override).
 
 ``SdkStub`` is a different kind of stand-in: a real botocore client whose HTTP layer alone is replaced by scripted answers, so the SDK's own retry handling
 runs as it does against AWS. It sends nothing over the network: every request is answered by the ``before-send`` event, and the endpoint is a reserved
@@ -38,8 +38,6 @@ REGION = "stand-in-region"
 FINISH_AFTER = 3
 HOST_SUFFIX = "_host"
 STOPPED = "STOPPED"
-FARGATE_PROVIDERS = frozenset({"FARGATE", "FARGATE_SPOT"})
-CLUSTER_DEFAULT_PROVIDER = "FARGATE_SPOT"
 STAND_IN_CREDENTIAL = "stand-in"  # signs the requests of SdkStub, which never leave the process
 
 
@@ -50,7 +48,7 @@ def client_error(code: str, operation: str, message: str = "stand-in refusal") -
 
 STARTED_BY = re.compile(r"[A-Za-z0-9/_-]{0,128}")
 TASK_DEFINITION = re.compile(r"[A-Za-z0-9_-]{1,255}(:[0-9]+)?|arn:aws:ecs:[a-z0-9-]+:[0-9]{12}:task-definition/[A-Za-z0-9_-]{1,255}:[0-9]+")
-LAUNCH_TYPES = frozenset({"EC2", "FARGATE", "EXTERNAL", "MANAGED_INSTANCES"})
+LAUNCH_TYPES = frozenset({"EC2", "EXTERNAL", "MANAGED_INSTANCES"})
 PROPAGATE_TAGS = frozenset({"TASK_DEFINITION", "NONE"})  # RunTask refuses SERVICE, which only a service may set
 OVERRIDES_LIMIT = 8192  # characters of the overrides JSON, the formatting included (the bundled RunTask model)
 
@@ -126,7 +124,7 @@ class FakeEcs:
         self.forget_stopped_tokens = False  # worst case for a repeated client token after the task stopped, which the service documentation leaves open
         self.list_page = 100  # tasks per ListTasks page
         self.instance_free = {"CPU": 4096, "MEMORY": 31000}  # what the host's container instance reports as remaining
-        self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as Fargate does while it shuts down
+        self.stop_lag = 0  # describe calls a stopped task keeps answering RUNNING after StopTask accepted the request, as ECS does while it shuts down
         self.describe_overrides: list[dict[str, Any] | None] = []  # replies for the next describe_tasks calls, in order (None lets a call through)
         self.definitions: dict[str, frozenset[str]] = {}  # the containers of a task definition, for the definitions a case names
 
@@ -145,20 +143,17 @@ class FakeEcs:
             if fault is not None:  # None lets this call through, to interleave failing and working calls
                 raise fault
 
-    def _check_shape(self, arguments: Mapping[str, Any]) -> bool:
-        """Refuse what ECS refuses for the task definition's shape and return True when the task runs on the host."""
+    def _check_shape(self, arguments: Mapping[str, Any]) -> None:
+        """Refuse what ECS refuses for the task definition's shape: only a bridge task of the host provider can run in this cluster."""
         on_host = str(arguments["taskDefinition"]).endswith(HOST_SUFFIX)
-        strategy = arguments.get("capacityProviderStrategy") or [{"capacityProvider": CLUSTER_DEFAULT_PROVIDER, "weight": 1}]
+        strategy = arguments.get("capacityProviderStrategy") or [{"capacityProvider": self.host_provider, "weight": 1}]
         providers = {str(item["capacityProvider"]) for item in strategy}
-        if not providers <= FARGATE_PROVIDERS | {self.host_provider}:
+        if providers != {self.host_provider}:
             raise client_error("InvalidParameterException", "RunTask", "The capacity provider was not found in the cluster.")
         if on_host and "networkConfiguration" in arguments:
             raise client_error("InvalidParameterException", "RunTask", "Network configuration is not valid for a bridge task definition.")
-        if not on_host and "networkConfiguration" not in arguments:
-            raise client_error("InvalidParameterException", "RunTask", "Network configuration must be provided for an awsvpc task definition.")
-        if on_host != (providers == {self.host_provider}):
+        if not on_host:
             raise client_error("InvalidParameterException", "RunTask", "The task definition is not compatible with the capacity provider.")
-        return on_host
 
     def run_task(self, **arguments: Any) -> dict[str, Any]:
         self._enter("run_task", arguments)
@@ -167,7 +162,7 @@ class FakeEcs:
         started_by = arguments.get("startedBy", "")
         if arguments.get("count") != 1 or not 1 <= len(token) <= 64 or len(started_by) > 128 or not all(33 <= ord(c) <= 126 for c in token):
             raise client_error("InvalidParameterException", "RunTask")
-        on_host = self._check_shape(arguments)
+        self._check_shape(arguments)
         known = self.definitions.get(str(arguments["taskDefinition"]))
         lacking = sorted({item["name"] for item in arguments.get("overrides", {}).get("containerOverrides", [])} - known) if known is not None else []
         if lacking:
@@ -175,7 +170,7 @@ class FakeEcs:
         expired = self.token_ttl is not None and self.clock is not None and token in self.tokens and self.clock() - self.token_made[token] > self.token_ttl
         if token in self.tokens and not expired and not (self.forget_stopped_tokens and self.tasks[self.tokens[token]]["lastStatus"] == STOPPED):
             return {"tasks": [self.tasks[self.tokens[token]]], "failures": []}
-        if on_host and self.host_full:
+        if self.host_full:
             return {"tasks": [], "failures": [{"arn": f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in", "reason": "RESOURCE:CPU"}]}
         if self.run_task_hook is not None:
             self.run_task_hook("before")
@@ -196,14 +191,11 @@ class FakeEcs:
         if self.clock is not None:
             task["createdAt"] = datetime.fromtimestamp(self.clock(), UTC)
             task["createdClock"] = self.clock()
-        if on_host:
-            task.update(
-                launchType="EC2",
-                capacityProviderName=self.host_provider,
-                containerInstanceArn=f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in",
-            )
-        else:
-            task.update(launchType="FARGATE", attachments=[{"type": "ElasticNetworkInterface", "status": "PRECREATED"}])
+        task.update(
+            launchType="EC2",
+            capacityProviderName=self.host_provider,
+            containerInstanceArn=f"arn:aws:ecs:{REGION}:{ACCOUNT}:container-instance/{CLUSTER}/stand-in",
+        )
         self.tasks[arn] = task
         self.tokens[token] = arn
         if self.clock is not None:

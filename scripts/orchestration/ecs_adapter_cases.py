@@ -7,6 +7,7 @@ adapter through the launch library. Every case runs offline against ``FakeEcs``.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -24,11 +25,10 @@ JOBS_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_brok
 SETTINGS = EcsSettings(
     cluster=CLUSTER,
     family_prefix="example_dev_job_",
-    subnets=("subnet-0example",),
-    networks={"training": ("sg-0train",), "lakehouse": ("sg-0lake",)},
     project_tag="example",
     log_group="example_jobs_dev",
     families=frozenset({"train"}),
+    host_capacity_provider=FakeEcs().host_provider,
 )
 ENVIRONMENT = {"fetch": {"RUN_ID": "20261030T100000Z-abcdef01"}, "train": {"RUN_ID": "20261030T100000Z-abcdef01"}}
 KEY = "20261030T100000Z-abcdef01:train:1"
@@ -63,58 +63,54 @@ def settle(adapter: EcsAdapter, arn: str) -> ecs_adapter.TaskReport:
 
 def start_twice_one_task() -> None:
     adapter, ecs, _ = build()
-    first, second = adapter.start("train", KEY, ENVIRONMENT, "training"), adapter.start("train", KEY, ENVIRONMENT, "training")
+    first, second = adapter.start("train", KEY, ENVIRONMENT), adapter.start("train", KEY, ENVIRONMENT)
     require(first == second and len(ecs.tasks) == 1, "a second start with the same key made a second task")
 
 
 def lost_reply_one_task() -> None:
     adapter, ecs, _ = build()
     ecs.lose_reply_once = True
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
     require(len(ecs.tasks) == 1, "the lost reply case did not create the task")
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     require(len(ecs.tasks) == 1 and arn in ecs.tasks, "the retry after a lost reply made a second task")
 
 
 def another_key_another_task() -> None:
     adapter, ecs, _ = build()
-    adapter.start("train", KEY, ENVIRONMENT, "training")
-    adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT, "training")
+    adapter.start("train", KEY, ENVIRONMENT)
+    adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT)
     require(len(ecs.tasks) == 2, "a new attempt did not start its own task")
 
 
 def run_task_request() -> None:
     adapter, ecs, _ = build()
-    adapter.start("train", KEY, ENVIRONMENT, "training")
+    adapter.start("train", KEY, ENVIRONMENT)
     request = next(arguments for name, arguments in ecs.calls if name == "run_task")
-    network = request["networkConfiguration"]["awsvpcConfiguration"]
     names = [item["name"] for item in request["overrides"]["containerOverrides"]]
-    require(request["taskDefinition"] == "example_dev_job_train" and request["count"] == 1, "wrong task definition or count")
-    require(request["capacityProviderStrategy"] == [{"capacityProvider": "FARGATE", "weight": 1}], "the capacity provider is not on-demand Fargate")
-    require(network["assignPublicIp"] == "DISABLED" and network["subnets"] == ["subnet-0example"], "wrong network")
+    require(request["taskDefinition"] == "example_dev_job_train_host" and request["count"] == 1, "wrong task definition or count")
+    require(request["capacityProviderStrategy"] == [{"capacityProvider": ecs.host_provider, "weight": 1}], "the capacity provider is not the host")
+    require("networkConfiguration" not in request, "a bridge task was given an awsvpc network")
+    require("launchType" not in request, "a launch type was sent beside the capacity provider strategy")
     require(
         request["propagateTags"] == "TASK_DEFINITION" and request["tags"] == [{"key": "Project", "value": "example"}, {"key": "HaiJob", "value": "train"}],
-        "wrong tags",
+        "wrong tags: the HaiJob tag is the plain family name",
     )
     require(names == ["fetch", "train"], "overrides name a container that was not asked for")
-    require(0 < len(request["clientToken"]) <= 64 and request["startedBy"].startswith("hai-"), "no client token or startedBy")
+    require(
+        request["clientToken"] == hashlib.sha256(KEY.encode()).hexdigest() and request["startedBy"] == EcsAdapter.identity(KEY), "the launch identity changed"
+    )
 
 
 def family_not_allowed() -> None:
     adapter, ecs, _ = build()
-    raises(TaskRefused, lambda: adapter.start("write_gold", KEY, ENVIRONMENT, "training"))
+    raises(TaskRefused, lambda: adapter.start("write_gold", KEY, ENVIRONMENT))
     require(not ecs.calls, "an unnamed family reached the cloud")
-
-
-def network_not_bound() -> None:
-    adapter, ecs, _ = build()
-    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "other"))
-    require(not ecs.calls, "a family without a bound network reached the cloud")
 
 
 def all_containers_zero_passes() -> None:
     adapter, _, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     require(adapter.poll(arn).state == "pending", "a new task was not pending")
     report = settle(adapter, arn)
     require(report.state == "succeeded" and report.exit_code == 0, f"all zero exits did not pass: {report}")
@@ -123,28 +119,28 @@ def all_containers_zero_passes() -> None:
 def one_container_nonzero_fails() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {"init": 0, "fetch": 0, "prepare": 0, "extract": 0, "train": 3}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
     require(report.state == "failed" and report.exit_code == 3, f"a non-zero exit did not fail the job: {report}")
 
 
 def early_failure_names_first_nonzero() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {"init": 0, "fetch": 2, "prepare": None, "extract": None, "train": None}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
     require(report.state == "failed" and report.exit_code == 2, f"the fetch failure was not reported: {report}")
 
 
 def stopped_without_exit_codes_fails() -> None:
     adapter, ecs, _ = build()
     ecs.plan = {name: None for name in ("init", "fetch", "train")}
-    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT, "training"))
+    report = settle(adapter, adapter.start("train", KEY, ENVIRONMENT))
     require(report.state == "failed" and report.exit_code == 125, f"a task with no exit codes passed or lost its code: {report}")
 
 
 def layer_task(layer: str, codes: dict[str, int | None], stop_code: str = "EssentialContainerExited") -> tuple[EcsAdapter, str]:
     """A stopped task of a layer job as ECS reports it: init, the containers of the job catalog in order and the guard, each with the exit code given."""
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     table = json.loads(JOBS_FILE.read_text())["jobs"][layer]["containers"]
     containers = []
     for name in ["init", *table, "guard"]:
@@ -200,7 +196,7 @@ def undescribed_task_is_unavailable() -> None:
 
 def stop_is_repeatable() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     adapter.stop(arn, "cancel")
     adapter.stop(arn, "cancel")
     require(ecs.tasks[arn]["lastStatus"] == "STOPPED", "the task was not stopped")
@@ -211,26 +207,26 @@ def stop_is_repeatable() -> None:
 def throttled_start_is_transient() -> None:
     adapter, ecs, _ = build()
     ecs.faults["run_task"] = [client_error("ThrottlingException", "RunTask")]
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
     require(not ecs.tasks, "a throttled call created a task")
 
 
 def denied_start_is_permanent() -> None:
     adapter, ecs, _ = build()
     ecs.faults["run_task"] = [client_error("AccessDeniedException", "RunTask")]
-    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training"))
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT))
 
 
 def throttled_poll_is_transient() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     ecs.faults["describe_tasks"] = [client_error("ThrottlingException", "DescribeTasks")]
     raises(TaskUnavailable, lambda: adapter.poll(arn))
 
 
 def reasons_hide_identifiers() -> None:
     adapter, ecs, _ = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     account = "7" * 12
     ecs.tasks[arn]["stoppedReason"] = f"failed for {arn} in account {account}"
     ecs.tasks[arn]["lastStatus"] = "STOPPED"
@@ -240,7 +236,7 @@ def reasons_hide_identifiers() -> None:
 
 def tail_reads_the_container_stream() -> None:
     adapter, ecs, logs = build()
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     stream = f"train/train/{arn.rsplit('/', 1)[-1]}"
     logs.streams[stream] = ["one", "two", "three"]
     require(adapter.tail(arn, "train", "train", 2) == "two\nthree", "the tail is wrong")
@@ -273,7 +269,7 @@ def runtask_sends_once_through_the_sdk() -> None:
     adapter = EcsAdapter.from_session(stub, replace(SETTINGS, host_capacity_provider="stand-in_host"))
     guards: list[str] = []
     try:
-        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: guards.append("guard"))
+        adapter.start("train", KEY, ENVIRONMENT, guard=lambda: guards.append("guard"))
     except ecs_adapter.SendUnknown:
         pass
     except TaskRefused as error:
@@ -283,7 +279,7 @@ def runtask_sends_once_through_the_sdk() -> None:
     require(stub.sent.count("RunTask") == 1 and guards == ["guard"], f"one request per guard call: {stub.sent}, {guards}")
     stub = SdkStub({"ListTasks": [{"taskArns": []}], "RunTask": [("ThrottlingException", 400), ("AccessDeniedException", 400)]})
     adapter = EcsAdapter.from_session(stub, replace(SETTINGS, host_capacity_provider="stand-in_host"))
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
     require(stub.sent.count("RunTask") == 1, f"a throttled RunTask is not resent by the SDK either: {stub.sent}")
     reads = SdkStub({"ListTasks": [("ThrottlingException", 400), {"taskArns": []}]})
     require(EcsAdapter.from_session(reads, SETTINGS).find(KEY) is None and reads.sent == ["ListTasks", "ListTasks"], f"reads keep their retries: {reads.sent}")
@@ -305,104 +301,58 @@ def retrying_runtask_client_refused() -> None:
 NINE_FAMILIES = frozenset({"train", "silver", "gold", "features", "drift", "promote", "serve", "metadata", "bronze"})
 
 
-def host_build() -> tuple[EcsAdapter, FakeEcs, FakeLogs]:
-    """An adapter whose settings name the capacity provider of the host that the fake cluster registers."""
-    ecs, logs = FakeEcs(), FakeLogs()
-    return EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider)), ecs, logs
-
-
-def host_run_task_request() -> None:
-    adapter, ecs, _ = host_build()
-    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
-    request = next(arguments for name, arguments in ecs.calls if name == "run_task")
-    names = [item["name"] for item in request["overrides"]["containerOverrides"]]
-    require(request["taskDefinition"] == "example_dev_job_train_host" and request["count"] == 1, "wrong host task definition or count")
-    require(
-        request["capacityProviderStrategy"] == [{"capacityProvider": ecs.host_provider, "weight": 1}], "the task is not placed on the host capacity provider"
-    )
-    require("networkConfiguration" not in request, "a bridge task was given an awsvpc network")
-    require("launchType" not in request, "a launch type was sent beside the capacity provider strategy")
-    require(
-        request["propagateTags"] == "TASK_DEFINITION" and request["tags"] == [{"key": "Project", "value": "example"}, {"key": "HaiJob", "value": "train"}],
-        "wrong tags: the HaiJob tag is the plain family name on the host too",
-    )
-    require(names == ["fetch", "train"], "overrides name a container that was not asked for")
-    require(
-        request["clientToken"] == hashlib.sha256(KEY.encode()).hexdigest() and request["startedBy"] == EcsAdapter.identity(KEY), "the launch identity changed"
-    )
-
-
 def host_family_map() -> None:
-    adapter, _, _ = host_build()
+    adapter, _, _ = build()
     jobs = json.loads(JOBS_FILE.read_text())["jobs"]
     require(set(jobs) == NINE_FAMILIES, f"the job table names other families than the nine: {sorted(jobs)}")
     for family in jobs:
-        require(adapter.definition(family, "fargate") == f"example_dev_job_{family}", f"{family}: the Fargate definition name changed")
-        require(adapter.definition(family, "host") == f"example_dev_job_{family}_host", f"{family}: the host definition is not <prefix><family>_host")
-    require(
-        len({adapter.definition(family, placement) for family in jobs for placement in ("fargate", "host")}) == 2 * len(jobs), "two definitions share a name"
-    )
+        require(adapter.definition(family) == f"example_dev_job_{family}_host", f"{family}: the host definition is not <prefix><family>_host")
+    require(len({adapter.definition(family) for family in jobs}) == len(jobs), "two definitions share a name")
 
 
 def host_provider_required() -> None:
     ecs, logs = FakeEcs(), FakeLogs()
-    adapter = EcsAdapter(ecs, logs, SETTINGS)
-    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
-    require(not ecs.calls, "a host start without a capacity provider reached the cloud, where the cluster default would place it on Fargate")
-
-
-def unknown_placement_refused() -> None:
-    adapter, ecs, _ = host_build()
-    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="spot"))
-    raises(TaskRefused, lambda: adapter.definition("train", "spot"))
-    require(not ecs.calls, "an unknown placement reached the cloud")
-
-
-def host_start_needs_no_awsvpc_settings() -> None:
-    ecs, logs = FakeEcs(), FakeLogs()
-    adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, subnets=(), networks={}))
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
-    require(list(ecs.tasks) == [arn], "a host job needs no subnet and no security group, and started nothing without them")
+    adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=""))
+    raises(TaskRefused, lambda: adapter.start("train", KEY, ENVIRONMENT))
+    require(not ecs.calls, "a start without a host capacity provider reached the cloud, where the cluster default would place it")
 
 
 def host_start_twice_one_task() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     first, second = (
-        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"),
-        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"),
+        adapter.start("train", KEY, ENVIRONMENT),
+        adapter.start("train", KEY, ENVIRONMENT),
     )
     require(first == second and len(ecs.tasks) == 1, "a second host start with the same key made a second task")
     ecs.lose_reply_once = True
     lost = KEY.replace(":1", ":2")
-    raises(TaskUnavailable, lambda: adapter.start("train", lost, ENVIRONMENT, "training", placement="host"))
-    arn = adapter.start("train", lost, ENVIRONMENT, "training", placement="host")
+    raises(TaskUnavailable, lambda: adapter.start("train", lost, ENVIRONMENT))
+    arn = adapter.start("train", lost, ENVIRONMENT)
     require(len(ecs.tasks) == 2 and arn in ecs.tasks, "the retry after a lost reply made a second host task")
 
 
 def host_task_shape() -> None:
-    adapter, ecs, _ = host_build()
-    host = ecs.tasks[adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")]
+    adapter, ecs, _ = build()
+    host = ecs.tasks[adapter.start("train", KEY, ENVIRONMENT)]
     require(host["launchType"] == "EC2" and host["capacityProviderName"] == ecs.host_provider, f"not an EC2 task of the host provider: {host}")
     require("containerInstanceArn" in host and "attachments" not in host, "a bridge task has a container instance and no network interface")
-    fargate = ecs.tasks[adapter.start("train", KEY.replace(":1", ":2"), ENVIRONMENT, "training")]
-    require(fargate["launchType"] == "FARGATE" and "attachments" in fargate and "containerInstanceArn" not in fargate, f"the Fargate shape changed: {fargate}")
 
 
 def host_capacity_exhausted_is_transient() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     ecs.host_full = True
-    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
+    raises(TaskUnavailable, lambda: adapter.start("train", KEY, ENVIRONMENT))
     require(not ecs.tasks, "a full host created a task")
     ecs.host_full = False
-    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    adapter.start("train", KEY, ENVIRONMENT)
     require(len(ecs.tasks) == 1, "the retry after the host had room made no task")
 
 
 def capacity_answer_is_definite() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     ecs.host_full = True
     try:
-        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+        adapter.start("train", KEY, ENVIRONMENT)
     except ecs_adapter.CapacityUnavailable:
         pass
     else:
@@ -410,7 +360,7 @@ def capacity_answer_is_definite() -> None:
     ecs.host_full = False
     ecs.lose_reply_once = True
     try:
-        adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+        adapter.start("train", KEY, ENVIRONMENT)
     except ecs_adapter.CapacityUnavailable:
         raise AssertionError("a lost reply is not a capacity answer: a task may exist") from None
     except TaskUnavailable:
@@ -419,7 +369,7 @@ def capacity_answer_is_definite() -> None:
 
 
 def guard_runs_just_before_the_send() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     order: list[str] = []
     ecs.call_hook = order.append
 
@@ -427,23 +377,23 @@ def guard_runs_just_before_the_send() -> None:
         order.append("guard")
         raise ecs_adapter.SendWithheld
 
-    raises(ecs_adapter.SendWithheld, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=refuse))
+    raises(ecs_adapter.SendWithheld, lambda: adapter.start("train", KEY, ENVIRONMENT, guard=refuse))
     require(order == ["list_tasks", "guard"] and not ecs.tasks, f"the guard comes after the discovery and before RunTask, and a refusal sends nothing: {order}")
     seen: list[str] = []
     ecs.call_hook = None
-    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: seen.append("guard"))
-    adapter.start("train", KEY, ENVIRONMENT, "training", placement="host", guard=lambda: seen.append("guard"))
+    adapter.start("train", KEY, ENVIRONMENT, guard=lambda: seen.append("guard"))
+    adapter.start("train", KEY, ENVIRONMENT, guard=lambda: seen.append("guard"))
     require(seen == ["guard"], "a task that already runs is returned without the guard or a send")
 
 
 def unknown_reply_is_told_from_an_unsent_call() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     ecs.lose_reply_once = True
-    raises(ecs_adapter.SendUnknown, lambda: adapter.start("train", KEY, ENVIRONMENT, "training", placement="host"))
-    adapter2, ecs2, _ = host_build()
+    raises(ecs_adapter.SendUnknown, lambda: adapter.start("train", KEY, ENVIRONMENT))
+    adapter2, ecs2, _ = build()
     ecs2.faults["list_tasks"] = [client_error("ThrottlingException", "ListTasks")]
     try:
-        adapter2.start("train", KEY, ENVIRONMENT, "training", placement="host")
+        adapter2.start("train", KEY, ENVIRONMENT)
     except ecs_adapter.SendUnknown:
         raise AssertionError("a throttled discovery sent nothing and must not read as an unknown send") from None
     except TaskUnavailable:
@@ -455,15 +405,15 @@ TRAIN_HOST = "example_dev_job_train_host"
 
 
 def lookup_finds_running_and_stopped_tasks() -> None:
-    adapter, ecs, _ = host_build()
+    adapter, ecs, _ = build()
     require(adapter.lookup(KEY, TRAIN_HOST) is None, "a task was found where none was started")
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     found = adapter.lookup(KEY, TRAIN_HOST)
     require(found is not None and found.arn == arn and found.created_at is None, f"running task not found: {found}")
     ecs.finish(arn)
     require(adapter.find(KEY) is None, "the running listing must miss a stopped task: that is what lookup has to cover")
     for number in range(5):
-        decoy = adapter.start("train", KEY.replace(":1", f":{number + 2}"), ENVIRONMENT, "training", placement="host")
+        decoy = adapter.start("train", KEY.replace(":1", f":{number + 2}"), ENVIRONMENT)
         ecs.finish(decoy)
     ecs.list_page = 2
     found = adapter.lookup(KEY, TRAIN_HOST)
@@ -479,9 +429,9 @@ def lookup_describes_only_its_own_family() -> None:
     ecs, logs = FakeEcs(), FakeLogs()
     adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, families=frozenset({"train", "silver"})))
     for number in range(3):
-        other = adapter.start("silver", KEY.replace(":train:1", f":silver:{number + 1}"), {"layer": {"RUN_ID": "x"}}, "lakehouse", placement="host")
+        other = adapter.start("silver", KEY.replace(":train:1", f":silver:{number + 1}"), {"layer": {"RUN_ID": "x"}})
         ecs.finish(other)
-    arn = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
+    arn = adapter.start("train", KEY, ENVIRONMENT)
     ecs.finish(arn)
     ecs.calls.clear()
     found = adapter.lookup(KEY, TRAIN_HOST)
@@ -500,8 +450,8 @@ def unstopped_lists_running_and_stopping_tasks_of_the_family() -> None:
     adapter = EcsAdapter(ecs, logs, replace(SETTINGS, host_capacity_provider=ecs.host_provider, families=frozenset({"train", "silver"})))
     require(adapter.unstopped(TRAIN_HOST) == [], "an empty cluster has an unstopped task")
     ecs.hold = True
-    running = adapter.start("train", KEY, ENVIRONMENT, "training", placement="host")
-    other = adapter.start("silver", KEY.replace(":train:1", ":silver:1"), {"layer": {"RUN_ID": "x"}}, "lakehouse", placement="host")
+    running = adapter.start("train", KEY, ENVIRONMENT)
+    other = adapter.start("silver", KEY.replace(":train:1", ":silver:1"), {"layer": {"RUN_ID": "x"}})
     require(adapter.unstopped(TRAIN_HOST) == [running], f"the running task of the family is not named, or another family's is: {adapter.unstopped(TRAIN_HOST)}")
     ecs.stop_lag = 5
     ecs.stop_task(cluster=CLUSTER, task=running, reason="stop")
@@ -529,13 +479,18 @@ def fake_refuses_a_wrong_shape() -> None:
             {"taskDefinition": host_definition, "capacityProviderStrategy": host, "networkConfiguration": awsvpc},
             "network",
         ),
-        "host task with no strategy, which the cluster default places on Fargate": ({"taskDefinition": host_definition}, "compatible"),
-        "host task on a Fargate provider": ({"taskDefinition": host_definition, "capacityProviderStrategy": fargate}, "compatible"),
+        "host task on a Fargate provider, which the cluster no longer registers": (
+            {"taskDefinition": host_definition, "capacityProviderStrategy": fargate},
+            "not found",
+        ),
         "Fargate task on the host provider": (
             {"taskDefinition": fargate_definition, "capacityProviderStrategy": host, "networkConfiguration": awsvpc},
             "compatible",
         ),
-        "Fargate task with no network": ({"taskDefinition": fargate_definition, "capacityProviderStrategy": fargate}, "network"),
+        "Fargate task on a Fargate provider, which the cluster no longer registers": (
+            {"taskDefinition": fargate_definition, "capacityProviderStrategy": fargate, "networkConfiguration": awsvpc},
+            "not found",
+        ),
         "unknown capacity provider": (
             {"taskDefinition": host_definition, "capacityProviderStrategy": [{"capacityProvider": "typo", "weight": 1}]},
             "not found",
@@ -552,6 +507,27 @@ def fake_refuses_a_wrong_shape() -> None:
     require(not ecs.tasks, "a refused call created a task")
     accepted = ecs.run_task(**base, clientToken="right-0", taskDefinition=host_definition, capacityProviderStrategy=host)["tasks"]
     require(len(accepted) == 1 and len(ecs.tasks) == 1, "the fake refused a correct host request")
+    by_default = ecs.run_task(**base, clientToken="right-1", taskDefinition=host_definition)["tasks"]
+    require(len(by_default) == 1 and by_default[0]["capacityProviderName"] == ecs.host_provider, "the cluster default is not the host provider")
+
+
+def no_fargate_mode() -> None:
+    """The adapter has no Fargate placement: no name, no network settings and no placement or network argument, and its source never names one."""
+    fields = set(EcsSettings.__dataclass_fields__)
+    require(not fields & {"subnets", "networks"}, f"the settings still carry awsvpc network fields: {sorted(fields)}")
+    require(not hasattr(ecs_adapter, "FARGATE"), "the adapter still names a Fargate placement")
+    for method in ("start", "definition", "is_revision", "task_definition"):
+        taken = set(inspect.signature(getattr(EcsAdapter, method)).parameters)
+        require(not taken & {"placement", "network"}, f"{method} still takes a placement or a network: {sorted(taken)}")
+    require("fargate" not in Path(ecs_adapter.__file__).read_text().lower(), "the adapter source still mentions Fargate")
+    adapter, ecs, _ = build()
+    arn = adapter.start("train", KEY, ENVIRONMENT)
+    request = ecs.tasks[arn]["request"]
+    require(
+        set(item["capacityProvider"] for item in request["capacityProviderStrategy"]) == {ecs.host_provider},
+        "a task was sent to a provider other than the host",
+    )
+    require(ecs.tasks[arn]["launchType"] == "EC2" and "attachments" not in ecs.tasks[arn], "the task is not an EC2 bridge task")
 
 
 CASES: dict[str, Callable[[], None]] = {
@@ -560,7 +536,6 @@ CASES: dict[str, Callable[[], None]] = {
     "another_key_another_task": another_key_another_task,
     "run_task_request": run_task_request,
     "family_not_allowed": family_not_allowed,
-    "network_not_bound": network_not_bound,
     "all_containers_zero_passes": all_containers_zero_passes,
     "layer_tasks_with_a_guard": layer_tasks_with_a_guard,
     "one_container_nonzero_fails": one_container_nonzero_fails,
@@ -574,15 +549,13 @@ CASES: dict[str, Callable[[], None]] = {
     "reasons_hide_identifiers": reasons_hide_identifiers,
     "tail_reads_the_container_stream": tail_reads_the_container_stream,
     "client_timeouts": client_timeouts,
-    "host_run_task_request": host_run_task_request,
     "host_family_map": host_family_map,
     "host_provider_required": host_provider_required,
-    "unknown_placement_refused": unknown_placement_refused,
-    "host_start_needs_no_awsvpc_settings": host_start_needs_no_awsvpc_settings,
     "host_start_twice_one_task": host_start_twice_one_task,
     "host_task_shape": host_task_shape,
     "host_capacity_exhausted_is_transient": host_capacity_exhausted_is_transient,
     "fake_refuses_a_wrong_shape": fake_refuses_a_wrong_shape,
+    "no_fargate_mode": no_fargate_mode,
     "capacity_answer_is_definite": capacity_answer_is_definite,
     "guard_runs_just_before_the_send": guard_runs_just_before_the_send,
     "unknown_reply_is_told_from_an_unsent_call": unknown_reply_is_told_from_an_unsent_call,

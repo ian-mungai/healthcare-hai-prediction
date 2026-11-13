@@ -25,7 +25,7 @@ from typing import Any
 from botocore.exceptions import BotoCoreError, ClientError
 
 from orchestration import layer_report, promotion_chain
-from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings, client_config
+from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_preflight import (
@@ -110,8 +110,6 @@ def services() -> LaunchServices:
         EcsSettings(
             cluster=values["HAI_LAUNCH_CLUSTER"],
             family_prefix=values["HAI_LAUNCH_FAMILY_PREFIX"],
-            subnets=(),
-            networks={},
             project_tag=values["HAI_LAUNCH_PROJECT_TAG"],
             log_group=values["HAI_LAUNCH_LOG_GROUP"],
             families=frozenset(table["jobs"]),
@@ -164,7 +162,7 @@ def services() -> LaunchServices:
         launcher,
         BrokerlessEcsRunTaskOperator,
         values["HAI_LAUNCH_CLUSTER"],
-        lambda job: adapter.definition(job, HOST),
+        lambda job: adapter.definition(job),
         clock,
         report,
         object_reader(s3, bucket),
