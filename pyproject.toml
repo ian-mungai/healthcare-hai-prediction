@@ -6,7 +6,7 @@ requires-python = "==3.12.*"
 dependencies = []
 
 [dependency-groups]
-# The host environment (.venv): the pre-commit hooks, the quality tools and the host scripts. No pin here is a transitive one except the Linux filelock; the lock fixes the rest.
+# The host environment (.venv): the pre-commit hooks, the quality tools and the host scripts. No pin here is a transitive one except the Linux filelock, distlib, markdown and python-discovery; the lock fixes the rest.
 host = [
   "boto3==1.35.49",
   "boto3-stubs==1.35.49",
@@ -15,17 +15,21 @@ host = [
   "checkov==3.3.19",
   "defusedxml==0.7.1",
   "deptry==0.25.1",
+  # Held on Linux at the versions the host had before the Airflow 3.4.0 constraints: the resolver otherwise gives the host the newer versions that the image pins.
+  "distlib==0.4.3; sys_platform == 'linux'",
   "duckdb==1.5.6",
   # Held on Linux at the lowest release that fixes the filelock advisories: the resolver otherwise keeps filelock 3.32.6 and the older virtualenv that needs it.
   "filelock==4.2.1; sys_platform == 'linux'",
   "jinja2==3.1.6",
   "jsonschema[format]==4.26.0",
+  "markdown==3.10.3; sys_platform == 'linux'",
   "markdown-it-py==4.2.0",
   "mypy==2.3.1",
   "numpy==2.5.3",
   "pre-commit==4.6.2",
   "pytest==9.1.1",
   "pytest-cov==7.1.0",
+  "python-discovery==1.6.0; sys_platform == 'linux'",
   "python-dotenv==1.2.3",
   "pyyaml==6.0.3",
   "referencing==0.37.0",
