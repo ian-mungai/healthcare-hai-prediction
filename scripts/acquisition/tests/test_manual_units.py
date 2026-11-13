@@ -864,7 +864,7 @@ def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_lock
         with pytest.raises(manual_units.ManualUnitError, match="not a manual unit|no content contract") as error:
             manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
         refused[(unit["source_id"], unit["mode"], "not a manual unit" in str(error.value))] += 1
-    check(refused == {("ACS", "file", True): 16}, f"refused {refused}")
+    check(refused == {}, f"refused {refused}")
 
 
 def redirect(url: str) -> Reply:
