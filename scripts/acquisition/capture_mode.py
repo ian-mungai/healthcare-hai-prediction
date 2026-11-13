@@ -27,7 +27,7 @@ from typing import Any
 from scripts.acquisition import completion_record as records
 from scripts.acquisition import redownload, redownload_route, task_role, transport
 from scripts.acquisition.capture import capture, receipt_validator
-from scripts.acquisition.collection_layout import load_routes
+from scripts.acquisition.collection_layout import capture_root, load_routes
 from scripts.acquisition.mapped_archives import expand_tree
 from scripts.acquisition.s3_store import StorageError, encoded_json, upload_snapshot
 from scripts.acquisition.source_registry import RegistryError, canonical_hash, load_registry, read_json, require
@@ -617,6 +617,7 @@ def execute(run: CaptureRun) -> dict[str, Any]:
     The downloader reads the approved hosts file from the environment. The run sets the files it checked against the queue and restores the old values.
     """
     units, specs, queue_sha256 = load_inputs(run)
+    require(capture_root() == run.root, "The run's root differs from the capture root the storage path writes under")
     hosts, approval = run.hosts, run.hosts_approval
     if hosts is None or approval is None:
         raise RegistryError("A capture run needs the approved hosts file and its approval")

@@ -501,6 +501,13 @@ def test_the_run_refuses_inputs_that_do_not_match_or_hosts_that_are_missing(tmp_
     check(world.site.requests == 0 and world.bucket.names() == set(), "nothing was requested or written")
 
 
+def test_the_run_refuses_a_root_other_than_the_one_the_storage_path_writes_under(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    with pytest.raises(Exception, match="capture root"):
+        world.run(root="ingestion_test/t1/")
+    check(world.site.requests == 0 and world.bucket.names() == set(), "nothing was requested or written")
+
+
 def test_a_unit_over_the_byte_cap_fails_without_a_request(tmp_path: Path) -> None:
     world = World(tmp_path, ["a.csv"])
     result = world.run(byte_cap=10)
