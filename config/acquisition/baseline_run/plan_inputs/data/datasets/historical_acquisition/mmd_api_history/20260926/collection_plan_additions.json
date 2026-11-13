@@ -104,7 +104,7 @@
     },
     "map.html": {
       "path": "data/e2e/mmd_api_comparison/20260925/references/map.html",
-      "sha256": "c7841068589956b273c501767d441d93d03a9f095605ab37d6259065a8baaadb",
+      "sha256": "d31b0a21223b4a24a3c94bed3fb6cf0c71feb9db28448b0359425c46bbcfdc45",
       "url": "https://data.cms.gov/mmd-population/map.html"
     },
     "menus.js": {
@@ -128,6 +128,6 @@
       "url": "https://data.cms.gov/mmd-population/assets/F7FDCF9D-F44B-4A31-B751-5A5FEB29084E?urban.tsv"
     }
   },
-  "registry_additions_lock_sha256": "878a8022255494cfd988370bce16945db8938c8bac6ea2dd8d05c6e9970c2686",
-  "registry_sha256": "12545f626ca9faf9df44382cdf642356a606b3049249e45e665cc659b7ce0b0c"
+  "registry_additions_lock_sha256": "4dedf75b265fccc4c1e42c8dd3323a6d4a180b60c3276a1d5304dd017b346066",
+  "registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e"
 }

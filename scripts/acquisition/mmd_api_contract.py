@@ -16,9 +16,9 @@ from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, load_reg
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json")
-PLAN_SHA256 = "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
+PLAN_SHA256 = "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
 ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
-ADDITIONS_PLAN_SHA256 = "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
+ADDITIONS_PLAN_SHA256 = "abfc97d49fe741b6d2c5685012fd49b5906e53573b25061d54087a2241723628"
 # Each capture records the hash of the plan that authorized it, so adding a plan never touches earlier captures.
 PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
 FIELDS = {"agecat", "condition", "dencat", "dual", "eligcat", "fips", "fltr", "geography", "measure", "racecat", "rate", "sexcat", "year"}

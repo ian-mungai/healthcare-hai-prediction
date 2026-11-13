@@ -1,5 +1,5 @@
 {
-  "bundle_sha256": "1140b955889243daabc7194cd7d564e554ced987275b1daa546a04f249da9bc4",
+  "bundle_sha256": "d654b1acc82874335f8df3a8d56baacbc664e8158eae5ba8adc172e4d20f662f",
   "files": [
     {
       "bytes": 1039786,
@@ -39,7 +39,7 @@
     {
       "bytes": 54045,
       "path": "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json",
-      "sha256": "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
+      "sha256": "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
     },
     {
       "bytes": 38847,
@@ -49,7 +49,7 @@
     {
       "bytes": 5350,
       "path": "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json",
-      "sha256": "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
+      "sha256": "abfc97d49fe741b6d2c5685012fd49b5906e53573b25061d54087a2241723628"
     },
     {
       "bytes": 2562,
@@ -80,6 +80,11 @@
       "bytes": 12986,
       "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/legend.js",
       "sha256": "7d403f3f2411061685718586ead4e45dcb36c36579a3fb4c4695f693b705ad6c"
+    },
+    {
+      "bytes": 320140,
+      "path": "plan_inputs/data/e2e/mmd_api_comparison/20260925/references/map.html",
+      "sha256": "d31b0a21223b4a24a3c94bed3fb6cf0c71feb9db28448b0359425c46bbcfdc45"
     },
     {
       "bytes": 109363,
