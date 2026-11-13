@@ -546,10 +546,9 @@
    "sha256": "53a45dbdb034e033bc5e88716efebbdd41d8ae90449582e68e10dbd48cb5e830"
   },
   {
-   "hold": "pending: a Latin-1 file waits on the removed-names hook fix",
    "path": "structure_history/county_adjacency2010.txt",
    "plan_input": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_a781cd426896963a/captures/ADJ/ADJ__20260924T173148Z__54733defc85e43929fcc21fb260cc475/raw/county_adjacency2010.txt",
-   "sha256": null
+   "sha256": "b6df774db9ad5b94c47036379e207dd4622e46ef22c01ca2b7603453a4901014"
   }
  ],
  "kind": "bootstrap_seed_manifest",

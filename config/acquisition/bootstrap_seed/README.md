@@ -8,7 +8,7 @@ The files a bootstrap run in an empty environment cannot fetch from a publisher 
 | --- | --- | --- |
 | `mmd_browser_history/` | the 12 MMD browser-history CSV captures (plan inputs) | the comparison report in the bundle |
 | `mmd_references/` | `codebook_crosswalk.csv`, `countynames.tsv`, `urban.tsv`, which the MMD collector reads to build its requests and derived CSV files | the MMD plan |
-| `structure_history/` | `county_adjacency2010.txt`. Held until the removed-names hook reads Latin-1 files | none yet |
+| `structure_history/` | `county_adjacency2010.txt`, a Latin-1 text file | the companion list of the seed download, checked against the four copies of the stored capture in the proof inputs |
 | `manual_units/<snapshot ID>/` | the stored data files of the 44 HUD units plus, for each of the 6 WONDER units, its original text export only, as the publisher served it | the HUD plan for the 44 workbooks, the WONDER plan for the 6 originals, none for the other files |
 
 A WONDER unit's `county_year.csv` is not seeded. The bootstrap rebuilds it on the host from the original with the WONDER contract and captures the unit only when the rebuilt file's SHA-256 and size equal the ones the unit's last capture records in `capture_specs.json`, so the unit's completion record matches. A mismatch makes the unit stale and stores nothing. The check recomputes this for every WONDER original present.
