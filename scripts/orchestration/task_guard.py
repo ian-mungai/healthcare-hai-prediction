@@ -47,7 +47,7 @@ def failed_phase(task: object) -> str:
     return ""
 
 
-def read_task(seconds: float) -> object:
+def read_task_metadata(seconds: float) -> object:
     """The task metadata of the version 4 endpoint that ECS sets in the environment of every container."""
     address = urllib.parse.urlsplit(os.environ["ECS_CONTAINER_METADATA_URI_V4"])
     connection = http.client.HTTPConnection(address.hostname or "", address.port or 80, timeout=seconds)
@@ -81,7 +81,7 @@ def main() -> int:
     while time.monotonic() - started < limit:
         found = ""
         try:
-            found = failed_phase(read_task(seconds))
+            found = failed_phase(read_task_metadata(seconds))
             if not seen:
                 say("guard: the task metadata can be read")
             seen, blind = True, 0

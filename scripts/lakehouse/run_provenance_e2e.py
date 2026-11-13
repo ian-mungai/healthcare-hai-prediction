@@ -153,7 +153,7 @@ class Fakes:
             return container.get("_plan", (0.5, 0))
         if template == "sealed_consumer" or self.sealed_reader(container):
             return None
-        if template == "spark_read":
+        if template == "pin_read":
             return 0.4, 0
         if labels.get("hai.service") == "polaris-bootstrap":
             return 0.3, 0
@@ -162,7 +162,7 @@ class Fakes:
     def on_start(self, container: dict[str, Any]) -> None:
         """Run the template's side effects at the moment the daemon starts the container."""
         template = container["Config"]["Labels"].get("hai.template")
-        if template == "spark_read":
+        if template == "pin_read":
             self.pins(container)
         elif template == "real_dbt":
             self.dbt(container)
@@ -319,7 +319,7 @@ def prepare(
     run = env.acquire_run(run_id, "transform")
     client = env.client()
     if pinned:
-        body = {"template": "spark_read", "launch_id": "pin", "args": ["pin", "--run", run_id], "params": {"job": "pins"}, "checkout": str(ROOT)}
+        body = {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", run_id], "params": {"job": "pins"}, "checkout": str(ROOT)}
         env.wait_ended(client.call("submit", body, run)["attempt_id"], 30)
         env.wait(lambda: env.state()["runs"][run_id].get("pins_sha256"), 10, "the pins digest is recorded")
     if snapshot:
@@ -592,7 +592,7 @@ def provenance_selection_bypass(env: Env) -> dict[str, bool]:
     errors = {name: expect_error(partial(dbt_submit, env, run, f"x{index}", args)) for index, (name, args) in enumerate(commands.items())}
     checks = {f"{name} is refused without pins": refused(error, "provenance") for name, error in errors.items()}
     checks["no container was created for any of them"] = not any(creates(env, f"-x{index}-") for index in range(len(commands)))
-    body = {"template": "spark_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}
+    body = {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}
     env.wait_ended(env.client().call("submit", body, run)["attempt_id"], 30)
     env.wait(lambda: env.state()["runs"][PINS_RUN].get("pins_sha256"), 10, "the pins digest is recorded")
     accepted = expect_error(lambda: dbt_submit(env, run, "after", ["build", "--select", "int_hai_state_windows"]))

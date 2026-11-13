@@ -3025,7 +3025,7 @@ def catalog_down_refusals(env: Env) -> dict[str, bool]:
     client.call("release_allocation", {}, principal)
     run = env.acquire_run(PINS_RUN, "transform")
     attempt = client.call(
-        "submit", {"template": "spark_read", "launch_id": "pins", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
+        "submit", {"template": "pin_read", "launch_id": "pins", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
     )
     env.wait_phase(attempt["attempt_id"], ("started",))
     with_attempt = expect_error(lambda: client.call("catalog_down"))
@@ -3061,7 +3061,7 @@ def catalog_down_barrier(env: Env) -> dict[str, bool]:
                 expect_error(
                     lambda: client.call(
                         "submit",
-                        {"template": "spark_read", "launch_id": "p", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)},
+                        {"template": "pin_read", "launch_id": "p", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)},
                         run,
                     )
                 ),
@@ -6027,8 +6027,8 @@ def template_owner_predicates(env: Env) -> dict[str, bool]:
     checks["fixture_dbt under a real run is refused"] = refused(
         expect_error(lambda: env.submit(real_transform, "fixture_dbt", "f", params=env.fixture_params("f"))), "refused", "mode fixture"
     )
-    checks["spark_read under a transform run is accepted"] = (
-        expect_error(lambda: submit(real_transform, "spark_read", "p", {"job": "pins"}, ["pin", "--run", PINS_RUN])) is None
+    checks["pin_read under a transform run is accepted"] = (
+        expect_error(lambda: submit(real_transform, "pin_read", "p", {"job": "pins"}, ["pin", "--run", PINS_RUN])) is None
     )
     for attempt_id, attempt in env.state()["attempts"].items():
         if attempt["owner"] == f"run:{PINS_RUN}" and attempt["phase"] != "ended":
@@ -7086,8 +7086,8 @@ def render_templates(env: Env) -> dict[str, bool]:
         and f["env"]["DBT_ENV_SECRET_POLARIS_CLIENT_ID"] == secrets_file["POLARIS_READER_CLIENT_ID"]
     )
     aws = (f"{home}/.aws", "/aws", True)
-    f = render("spark_read", ["pin", "--run", PINS_RUN], {"job": "pins"}, run_folder=run_folder)
-    out["spark_read"] = (
+    f = render("pin_read", ["pin", "--run", PINS_RUN], {"job": "pins"}, run_folder=run_folder)
+    out["pin_read"] = (
         f["mounts"]
         == {
             (str(ROOT / "scripts"), "/workspace/scripts", True),
@@ -7587,7 +7587,7 @@ def pins_script(env: Env, replace_after: float | None = None) -> None:
     tables = pins_module.mapped_tables(ROOT / pins_module.TABLE_MAP)
 
     def on_start(container: dict[str, Any]) -> None:
-        if container["Config"]["Labels"].get("hai.template") != "spark_read":
+        if container["Config"]["Labels"].get("hai.template") != "pin_read":
             return
         mount = next(m for m in container["Mounts"] if m["Destination"].startswith("/workspace/data/analytics/dbt/runs/"))
         folder = Path(mount["Source"])
@@ -7603,7 +7603,7 @@ def pins_script(env: Env, replace_after: float | None = None) -> None:
 
     def script(container: dict[str, Any]) -> tuple[float, int] | None:
         labels = container["Config"]["Labels"]
-        if labels.get("hai.template") == "spark_read":
+        if labels.get("hai.template") == "pin_read":
             return 1.0, 0
         return (0.3, 0) if labels.get("hai.service") == "polaris-bootstrap" else None
 
@@ -7620,7 +7620,7 @@ def pins_record(env: Env) -> dict[str, bool]:
     catalog_up(env)
     run = env.acquire_run(PINS_RUN, "transform")
     reply = client.call(
-        "submit", {"template": "spark_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
+        "submit", {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
     )
     env.wait_ended(reply["attempt_id"], 30)
     recorded = client.call("status", {"what": "run", "id": PINS_RUN}, run)
@@ -7631,7 +7631,7 @@ def pins_record(env: Env) -> dict[str, bool]:
         lambda: client.call(
             "submit",
             {
-                "template": "spark_read",
+                "template": "pin_read",
                 "launch_id": "p2",
                 "args": ["pin", "--run", "20261012T120000Z-ffffffff"],
                 "params": {"job": "pins"},
@@ -7659,6 +7659,34 @@ def pins_record(env: Env) -> dict[str, bool]:
     }
 
 
+@case("pin_read_reads_a_record_of_the_old_name")
+def pin_read_reads_a_record_of_the_old_name(env: Env) -> dict[str, bool]:
+    """The read-only pin template was called spark_read before its rename. An open launch record that still says spark_read, left by an older launcher, is
+    read as pin_read after a restart, and its attempt ends like any other pin attempt."""
+    catalog_script(env)
+    pins_script(env)
+    env.start()
+    client = env.client()
+    catalog_up(env)
+    run = env.acquire_run(PINS_RUN, "transform")
+    gate = env.daemon.add_gate("create", "after", match=lambda c: c["labels"].get("hai.template") == "pin_read")
+    body = {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}
+    attempt_id = client.call("submit", body, run)["attempt_id"]
+    gate.wait_reached()
+    env.kill_launcher()
+    gate.release()
+    with run_lock.transaction(run_lock.Registry(env.registry, "test")) as state:
+        state["attempts"][attempt_id]["template"] = "spark_read"
+    env.start()
+    listed = client.call("status", {"what": "launcher"}, run)
+    ended = env.wait_ended(attempt_id, 40)
+    return {
+        "the open record of the old name is listed under the new name": "pin_read" in listed["open_templates"] and "spark_read" not in listed["open_templates"],
+        "the attempt of the old record ended like any other pin attempt": ended["reason"] == "exited" and ended["exit_code"] == 0,
+        "the record carries the new name once the launcher has read it": ended["template"] == "pin_read",
+    }
+
+
 @case("pins_replaced_before_record")
 def pins_replaced_before_record(env: Env) -> dict[str, bool]:
     """914: a pins file replaced between the writer and the launcher's read is not recorded."""
@@ -7669,7 +7697,7 @@ def pins_replaced_before_record(env: Env) -> dict[str, bool]:
     catalog_up(env)
     run = env.acquire_run(PINS_RUN, "transform")
     reply = client.call(
-        "submit", {"template": "spark_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
+        "submit", {"template": "pin_read", "launch_id": "pin", "args": ["pin", "--run", PINS_RUN], "params": {"job": "pins"}, "checkout": str(ROOT)}, run
     )
     env.wait_ended(reply["attempt_id"], 30)
     recorded = client.call("status", {"what": "run", "id": PINS_RUN}, run)
@@ -11104,6 +11132,7 @@ ALL_CASES = (
     interactive_sessions,
     package_folder_guard,
     pins_record,
+    pin_read_reads_a_record_of_the_old_name,
     pins_replaced_before_record,
     snapshot_copy,
     snapshot_copy_failures,

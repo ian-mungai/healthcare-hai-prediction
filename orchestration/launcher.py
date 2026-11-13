@@ -1266,7 +1266,7 @@ TEMPLATES: dict[str, Template] = {
         Template("quality_reconcile", "quality", True, ("alloc", "run"), default_seconds=3600),
         Template("query_reader", "analytics", False, ("alloc",), needs_catalog=True, reader=True, session="forward", default_seconds=43200),
         Template("ui_reader", "analytics-ui", False, ("alloc",), needs_catalog=True, reader=True, session="cancel", default_seconds=43200),
-        Template("spark_read", "spark", True, ("run",), needs_catalog=True, default_seconds=7200, run_domains=("transform",)),
+        Template("pin_read", "spark", True, ("run",), needs_catalog=True, default_seconds=7200, run_domains=("transform",)),
         Template("spark_write", "spark", True, ("run",), needs_catalog=True, default_seconds=43200, run_modes=("real",)),
         Template("spark_e2e", "spark", True, ("alloc",), default_seconds=7200),
         Template("pipeline_dbt", "analytics-dbt", True, ("run",), run_domains=("transform",), run_modes=("publish_fixture", "real")),
@@ -1322,10 +1322,20 @@ TEMPLATES: dict[str, Template] = {
 # Catalog services that run to their end: they run under the in-image deadline entrypoint like every finite job (a static binary in the
 # polaris-admin-tool image, which has no Python) and the launcher enforces the same deadline as well.
 FINITE_SERVICES = frozenset({"polaris-bootstrap"})
+# Launch records of an older launcher name the read-only pin template spark_read, its name before the rename. The launcher reads that name only here.
+LEGACY_TEMPLATES = {"spark_read": "pin_read"}
+
+
+def rename_legacy_templates(state: dict[str, Any]) -> None:
+    """Give every launch record that carries an old template name its current name, so the rest of the launcher knows only the current names."""
+    for attempt in state.get("attempts", {}).values():
+        attempt["template"] = LEGACY_TEMPLATES.get(attempt["template"], attempt["template"])
+
+
 # Spark jobs by template: module, whether it writes, the folders it writes under the checkout and the closed argument grammar.
 SPARK_JOBS: dict[str, dict[str, Any]] = {
     "pins": {
-        "template": "spark_read",
+        "template": "pin_read",
         "module": "scripts.lakehouse.pins",
         "writes": (),
         "contract_files": ("dbt/models/silver/staging/_bronze__sources.yml",),
@@ -1724,7 +1734,7 @@ class Renderer:
             "ui_reader": self.render_ui_reader,
             "real_dbt": self.render_real_dbt,
             "sealed_consumer": self.render_sealed_consumer,
-            "spark_read": self.render_spark_read,
+            "pin_read": self.render_pin_read,
             "spark_write": self.render_spark_write,
             "spark_e2e": self.render_spark_e2e,
             "pipeline_dbt": self.render_pipeline,
@@ -2450,7 +2460,7 @@ class Renderer:
             hostname="spark-job" if network == "none" else "",
         )
 
-    def render_spark_read(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
+    def render_pin_read(self, inp: RenderInput, template: Template, name: str, registry_id: str) -> Rendered:
         """Catalog jobs that only read: the read-only principal."""
         return self.render_spark(inp, name, registry_id, True)
 
@@ -3716,10 +3726,15 @@ class Launcher:
         if schema == run_lock.LAUNCHER_SCHEMA:
             with self.tx(write=False) as state:
                 self.registry_id = str(state["registry_id"])
+                has_old_name = any(attempt["template"] in LEGACY_TEMPLATES for attempt in state["attempts"].values())
+            if has_old_name:
+                with self.tx() as state:
+                    rename_legacy_templates(state)
             return
         legacy = self.docker.containers(label=LABEL_RUN) if self.docker_reachable() else None
         with self.tx() as state:
             self.registry_id = str(state["registry_id"])
+            rename_legacy_templates(state)
             if state["schema_version"] == run_lock.LAUNCHER_SCHEMA:
                 return
             blockers = self.migration_blockers(state, legacy)
@@ -4698,7 +4713,7 @@ class Launcher:
                 snapshot = run_folder / "snapshots" / str(pointer)
             if attempt["template"] == "sealed_consumer":
                 provenance = consumer_vars(state["runs"][ident])
-            if attempt["template"] == "spark_read":
+            if attempt["template"] == "pin_read":
                 run_folder = run_folder
         if attempt["template"] in SEALED_READERS and build_provenance.SEALED_RUN_PARAM in attempt["params"]:
             sealed_id = str(attempt["params"][build_provenance.SEALED_RUN_PARAM])
@@ -5558,7 +5573,7 @@ class Launcher:
                     a["reason"] == "exited"
                     and a.get("exit_code") == 0
                     and (
-                        (a["template"] == "spark_read" and a["args"][:1] == ["pin"])
+                        (a["template"] == "pin_read" and a["args"][:1] == ["pin"])
                         or (a["template"] == "pipeline_spark" and a["params"].get("job") == "pin_bronze")
                     )
                 ):

@@ -484,7 +484,7 @@ class Declarations:
         for method, function in self.functions[LAUNCHER].items():
             if not method.startswith("render_") or method in {
                 "render_spark",
-                "render_spark_read",
+                "render_pin_read",
                 "render_spark_write",
                 "render_spark_e2e",
                 "render_gold_publish",

@@ -1,6 +1,6 @@
 """Pin the bronze snapshot every table the silver build reads is at before a build, and check after the build that none moved.
 
-Run from the repository root; the catalog script asks the launcher to run it as a ``spark_read`` attempt with the read-only principal:
+Run from the repository root; the catalog script asks the launcher to run it as a ``pin_read`` attempt with the read-only principal:
 
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- pin --run <run_id>      # write runs/<run_id>/pins.json
     .venv/bin/python -m scripts.lakehouse.catalog job pins -- verify --run <run_id>   # exit 1 when a table moved

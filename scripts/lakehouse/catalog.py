@@ -25,7 +25,7 @@ answer (``desktop_start``, within the launcher's start deadline). ``release`` fr
 run: it asks the launcher for ``docker_release``, which stops the idle catalog and quits Docker Desktop, but only when this process (or a
 run that began before it) created a container and nothing of the registry runs and no foreign container runs; otherwise it changes nothing and
 names the reason (failure modes 545 to 547 and Build part 2). The next ``up`` starts Docker Desktop again. A catalog job runs as an attempt of the template
-``spark_read`` (``pins``), ``spark_write`` (the loaders) or ``spark_e2e`` (the throwaway-catalog checks).
+``pin_read`` (``pins``), ``spark_write`` (the loaders) or ``spark_e2e`` (the throwaway-catalog checks).
 """
 
 from __future__ import annotations
