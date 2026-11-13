@@ -184,11 +184,17 @@ def exercise(root: Path) -> list[dict]:
             require(sizes["2018/10"] == ("a9c6cc3c6dc77851a64c7d69c9d30b76dad235ea54c706c7cdc549fded4fa6de", 14889985), "2018/10 binding differs")
             require(sizes["2018/07"] == ("0e9c9363114172e81743e74720bfe8f4d4fd2d937264890ecd5280cb52b8806f", 16203900), "2018/07 binding differs")
             require(
-                "2017/10" not in sizes and real["pending_releases"] == [{"folder": "2017/10", "reason": contract.PENDING_REASON}],
-                "2017/10 not marked incomplete",
+                sizes.get("2017/10") == ("59ce401e7c8856683a23b7866d4ec2b07d3b336f40588e4612bb573d6a4bf249", 16385953),
+                "2017/10 binding differs",
             )
+            require(real["pending_releases"] == [] and sorted(sizes) == ["2017/10", "2018/07", "2018/10"], "Committed plan releases differ")
+            dates = {r["folder"]: r["release_date"] for r in real["releases"]}
+            require(dates == {"2017/10": "2017-10-06", "2018/07": "2018-06-19", "2018/10": "2018-09-27"}, f"Committed release dates differ: {dates}")
+            members = {r["folder"]: r["members"] for r in real["releases"]}
+            require(members["2017/10"] == {HAI: contract.HAI_ID}, f"2017/10 maps more than its HAI member: {members['2017/10']}")
+            require(members["2018/07"] == {TIMELY: contract.TIMELY_ID}, f"2018/07 members differ: {members['2018/07']}")
 
-        scenario("committed_plan_binds_registry_gate_and_marks_2017_10_incomplete", real_plan)
+        scenario("committed_plan_binds_registry_gate_and_all_three_releases", real_plan)
 
         def tampered_plan() -> None:
             original = plan_path.read_bytes()

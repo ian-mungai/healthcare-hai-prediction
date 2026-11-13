@@ -19,14 +19,23 @@
     ]
   },
   "model_eligible": false,
-  "pending_releases": [
-    {
-      "folder": "2017/10",
-      "reason": "The zip hash and size are not recorded yet; add them with the plan builder before this release is captured."
-    }
-  ],
+  "pending_releases": [],
   "registry_sha256": "60b89b7ac6d1913e8f8ba0d305d02ba7ab023d0165ef78927631cb3c10303a25",
   "releases": [
+    {
+      "bytes": 16385953,
+      "expected_sha256": "59ce401e7c8856683a23b7866d4ec2b07d3b336f40588e4612bb573d6a4bf249",
+      "folder": "2017/10",
+      "id": "74efbe2227b36c66b7f0da6b1fef41fa30c035a3a5874b6471b1ecab4d9736ea",
+      "members": {
+        "Healthcare Associated Infections - Hospital.csv": "cms_legacy_healthcare_associated_infections_hospital"
+      },
+      "release_date": "2017-10-06",
+      "release_label": "Hospital Compare 2017-10 (NBER mirror)",
+      "route_id": "care-timely-cms:nber:2017-10",
+      "source_id": "care-timely-cms",
+      "url": "https://data.nber.org/compare/hospital/2017/10/hospitals_compare_201710.zip"
+    },
     {
       "bytes": 16203900,
       "expected_sha256": "0e9c9363114172e81743e74720bfe8f4d4fd2d937264890ecd5280cb52b8806f",
