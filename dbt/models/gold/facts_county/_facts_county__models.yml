@@ -2,7 +2,10 @@ version: 2
 
 models:
   - name: fct_acs_county_value
-    description: One row per row of int_acs_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    description: >-
+      Business process: American Community Survey five-year estimates published per county. Grain: one row per county, vintage and published estimate column
+      of a stored ACS file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_acs_county_values stays unchanged, every silver
+      column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -74,7 +77,10 @@ models:
           arguments:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_bls_county_series
-    description: One row per row of int_bls_county_series, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    description: >-
+      Business process: BLS Local Area Unemployment Statistics published per county. Grain: one row per county, series and month or annual average of a
+      stored LAUS file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_bls_county_series stays unchanged, every silver
+      column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -149,7 +155,10 @@ models:
           arguments:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_gv_county_value
-    description: One row per row of int_gv_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    description: >-
+      Business process: Medicare Geographic Variation values published per county. Grain: one row per county, year, age level and published field of a
+      stored file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_gv_county_values stays unchanged, every silver column
+      unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -218,7 +227,10 @@ models:
           arguments:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_hpsa_component
-    description: One row per row of int_hpsa_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    description: >-
+      Business process: HRSA primary-care shortage area designations. Grain: one row per published designation component of a stored HPSA file. Dimensions:
+      dim_county, dim_release. Measures: hpsa_score. Every column of int_hpsa_components stays unchanged, every silver column unchanged, then the surrogate
+      keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -330,7 +342,10 @@ models:
           arguments:
             expression: typeof(county_token) = 'VARCHAR'
   - name: fct_hsa_zip_cases
-    description: One row per row of int_hsa_zip_cases, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    description: >-
+      Business process: Medicare hospital service area case counts. Grain: one row per provider, beneficiary ZIP code and data year of a stored service area
+      file. Dimensions: dim_release, dim_zip. Measures: total_cases, total_charges, total_days_of_care. Every column of int_hsa_zip_cases stays unchanged,
+      every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -417,7 +432,10 @@ models:
           arguments:
             expression: typeof(zip_published) = 'VARCHAR'
   - name: fct_hud_zip_county_hold
-    description: One row per row of int_hud_zip_county_holds, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    description: >-
+      Business process: HUD ZIP-to-county crosswalk rows held out of the crosswalk. Grain: one row per held crosswalk row whose code is not a county.
+      Dimensions: dim_release, dim_zip. Measures: none. Every column of int_hud_zip_county_holds stays unchanged, every silver column unchanged, then the
+      surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -474,7 +492,10 @@ models:
           arguments:
             expression: typeof(geoid_published) = 'VARCHAR'
   - name: fct_mmd_prevalence
-    description: One row per row of int_mmd_prevalence, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    description: >-
+      Business process: Mapping Medicare Disparities prevalence published per county or state. Grain: one row per condition, year and county or state of a
+      stored prevalence file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_mmd_prevalence stays unchanged, every silver
+      column unchanged, then the surrogate keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -546,7 +567,10 @@ models:
           arguments:
             expression: typeof(value_published) = 'VARCHAR'
   - name: fct_mua_component
-    description: One row per row of int_mua_components, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    description: >-
+      Business process: HRSA medically underserved area and population designations. Grain: one row per published designation component of a stored MUA
+      file. Dimensions: dim_county, dim_release. Measures: imu_score. Every column of int_mua_components stays unchanged, every silver column unchanged,
+      then the surrogate keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -658,7 +682,11 @@ models:
           arguments:
             expression: typeof(county_token) = 'VARCHAR'
   - name: fct_places_county_value
-    description: One row per row of int_places_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks the published values.
+    description: >-
+      Business process: CDC PLACES health estimates published per county. Grain: one row per county, data year, measure and value type of a stored PLACES
+      release. Dimensions: dim_county, dim_release. Measures: data_value, high_confidence_limit, low_confidence_limit, total_population. Every column of
+      int_places_county_values stays unchanged, every silver column unchanged, then the surrogate keys; silver test assert_county_health_values_cast checks
+      the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -746,7 +774,10 @@ models:
           arguments:
             expression: typeof(data_value_published) = 'VARCHAR'
   - name: fct_ruca_code
-    description: One row per row of int_ruca_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    description: >-
+      Business process: Rural-Urban Commuting Area code assignments. Grain: one row per census tract or ZIP code and vintage of a stored RUCA file.
+      Dimensions: dim_county, dim_release. Measures: none. Every column of int_ruca_codes stays unchanged, every silver column unchanged, then the surrogate
+      keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -820,7 +851,10 @@ models:
           arguments:
             expression: typeof(secondary_published) = 'VARCHAR'
   - name: fct_rucc_county
-    description: One row per row of int_rucc_county_codes, every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+    description: >-
+      Business process: Rural-Urban Continuum Code assignments per county. Grain: one row per county and vintage of a stored RUCC file. Dimensions:
+      dim_county, dim_release, dim_state. Measures: population. Every column of int_rucc_county_codes stays unchanged, every silver column unchanged, then
+      the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -906,7 +940,10 @@ models:
           arguments:
             expression: typeof(population_published) = 'VARCHAR'
   - name: fct_sahie_county_value
-    description: One row per row of int_sahie_county_rows, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    description: >-
+      Business process: Census small area health insurance estimates per county. Grain: one row per county, year and published age, race, sex and income
+      group of a stored SAHIE file. Dimensions: dim_county, dim_release. Measures: the 15 additivity columns. Every column of int_sahie_county_rows stays
+      unchanged, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1046,7 +1083,10 @@ models:
           arguments:
             expression: typeof(estimate_year) = 'INTEGER'
   - name: fct_saipe_county_estimate
-    description: One row per row of int_saipe_county_estimates, every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+    description: >-
+      Business process: Census small area income and poverty estimates per county. Grain: one row per county and year of a stored SAIPE file. Dimensions:
+      dim_county, dim_release. Measures: the 22 additivity columns. Every column of int_saipe_county_estimates stays unchanged, every silver column
+      unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1212,7 +1252,10 @@ models:
           arguments:
             expression: typeof(estimate_year) = 'INTEGER'
   - name: fct_svi_county_value
-    description: One row per row of int_svi_county_values, every silver column unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
+    description: >-
+      Business process: CDC Social Vulnerability Index values published per county. Grain: one row per county, edition and published field of a stored SVI
+      file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_svi_county_values stays unchanged, every silver column
+      unchanged, then the surrogate keys; silver test assert_county_context_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1280,7 +1323,10 @@ models:
           arguments:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_wonder_county_deaths
-    description: One row per row of int_wonder_county_deaths, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+    description: >-
+      Business process: CDC WONDER all-cause death counts per county. Grain: one row per county, year and export of a stored WONDER file. Dimensions:
+      dim_county, dim_release. Measures: crude_rate, crude_rate_lower_95, crude_rate_standard_error, crude_rate_upper_95, deaths, population. Every column
+      of int_wonder_county_deaths stays unchanged, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot

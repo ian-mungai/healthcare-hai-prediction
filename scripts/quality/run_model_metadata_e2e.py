@@ -71,6 +71,9 @@ ONC_PROPOSALS = {
 ALL_COLUMNS_REASON = (
     "Every publisher column is confidential until an ONC publisher dictionary is stored; loader lineage _object_key and _member_sha256 are exempt (A273)."
 )
+DEMO_DESIGN = "Business process: demo amounts reported per county. Grain: one row per county and data year. Dimensions: none. Measures: amount, rate."
+PLAIN_DESIGN = "Business process: plain records. Grain: one row per record. Dimensions: none. Measures: none."
+NEW_DESIGN = "Business process: new records. Grain: one row per record. Dimensions: none. Measures: none."
 LINEAGE_ENTRY = "  - name: stg_bronze__file_copies\n    description: Staged lineage.\n    meta:\n      classification: Public\n"
 LINEAGE_SELECT = "select _object_key as object_key, count(distinct _member_sha256) as checksum_count, count(*) as row_count"
 LINEAGE_FROM = "from {{ source('bronze', 'raw_owner') }}\ngroup by _object_key\n"
@@ -165,10 +168,10 @@ BASE = {
     "dbt/models/gold/facts/fct_plain.sql": "{{ gold_fact('int_public', 'k', {}) }}\n",
     FACTS: (
         "version: 2\nmodels:\n"
-        "  - name: fct_demo\n    description: A fact.\n    meta:\n      classification: Confidential\n      fact_type: periodic_snapshot\n"
+        f"  - name: fct_demo\n    description: '{DEMO_DESIGN}'\n    meta:\n      classification: Confidential\n      fact_type: periodic_snapshot\n"
         "    columns:\n      - name: amount\n        meta:\n          additivity: additive\n"
         "      - name: rate\n        meta:\n          additivity: non_additive\n"
-        "  - name: fct_plain\n    description: A fact with no numeric column.\n    meta:\n      classification: Public\n      fact_type: transaction\n"
+        f"  - name: fct_plain\n    description: '{PLAIN_DESIGN}'\n    meta:\n      classification: Public\n      fact_type: transaction\n"
     ),
     CONTRACT: json.dumps(CONTRACT_DOCUMENT, indent=2) + "\n",
     BRONZE_MAP: json.dumps(BRONZE, indent=2) + "\n",
@@ -1229,6 +1232,40 @@ def make_cases() -> list[Case]:
                 f"  - name: stg_all_copies\n    description: Staged.\n{PUBLIC}",
             ),
         ),
+        Case(
+            "fact_design_missing",
+            "[fact-design]",
+            "gold fact fct_demo description must state its business process, grain, dimensions and measures",
+            replacing(
+                FACTS,
+                "Business process: demo amounts reported per county. Grain: one row per county and data year. Dimensions: none. Measures: amount, rate.",
+                "A fact.",
+            ),
+        ),
+        Case(
+            "fact_design_grain_names_input_row",
+            "[fact-design]",
+            "gold fact fct_demo grain must name what one row records, not a row of its input",
+            replacing(FACTS, "one row per county and data year", "one row per row of int_public"),
+        ),
+        Case(
+            "fact_design_dimensions_differ",
+            "[fact-design]",
+            "gold fact fct_demo lists dimensions dim_county but its relationships tests name none",
+            replacing(FACTS, "Dimensions: none. Measures: amount", "Dimensions: dim_county. Measures: amount"),
+        ),
+        Case(
+            "fact_design_measures_differ",
+            "[fact-design]",
+            "gold fact fct_demo lists measures amount but its additivity columns are amount, rate",
+            replacing(FACTS, "Measures: amount, rate.", "Measures: amount."),
+        ),
+        Case(
+            "fact_design_measure_count_differs",
+            "[fact-design]",
+            "gold fact fct_demo counts 3 measures but it has 2 additivity columns",
+            replacing(FACTS, "Measures: amount, rate.", "Measures: the 3 additivity columns."),
+        ),
         Case("fact_missing_type", "[fact-type]", "gold fact fct_demo has no meta.fact_type", replacing(FACTS, "      fact_type: periodic_snapshot\n", "")),
         Case(
             "fact_bad_type",
@@ -1322,7 +1359,8 @@ def make_cases() -> list[Case]:
             "gold fact fct_new is not in data_contracts/lakehouse/gold_contract.json",
             files={
                 "dbt/models/gold/facts/fct_new.sql": "{{ gold_fact('int_public', 'k', {}) }}\n",
-                FACTS: BASE[FACTS] + "  - name: fct_new\n    description: A new fact.\n    meta:\n      classification: Public\n      fact_type: transaction\n",
+                FACTS: BASE[FACTS]
+                + f"  - name: fct_new\n    description: '{NEW_DESIGN}'\n    meta:\n      classification: Public\n      fact_type: transaction\n",
             },
         ),
         Case(
@@ -1331,7 +1369,7 @@ def make_cases() -> list[Case]:
             "contract fact fct_plain has no model",
             replacing(
                 FACTS,
-                "  - name: fct_plain\n    description: A fact with no numeric column.\n    meta:\n      classification: Public\n      fact_type: transaction\n",
+                f"  - name: fct_plain\n    description: '{PLAIN_DESIGN}'\n    meta:\n      classification: Public\n      fact_type: transaction\n",
                 "",
             ),
             delete=("dbt/models/gold/facts/fct_plain.sql",),

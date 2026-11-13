@@ -3,8 +3,9 @@ version: 2
 models:
   - name: fct_cc_window_hold
     description: >-
-      The silver model int_cc_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key. Keeps
-      every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: Care Compare measure rows held out of the measurement windows. Grain: one row per held Care Compare row group and hold reason.
+      Dimensions: dim_hospital. Measures: none. The silver model int_cc_window_holds with every column unchanged and one surrogate key per dimension it
+      joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -51,8 +52,10 @@ models:
             expression: typeof(window_start) = 'DATE' and typeof(window_end) = 'DATE'
   - name: fct_complications_deaths_window
     description: >-
-      The silver model int_cc_complications_deaths_windows with every column unchanged and one surrogate key per dimension it joins. One row per
-      window_key. Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
+      Business process: Care Compare complications and deaths reporting. Grain: one row per hospital, measure and measurement window from the latest
+      release. Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_complications_deaths_windows with every column
+      unchanged and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver
+      test assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -132,8 +135,10 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_hac_program_year
     description: >-
-      The silver model int_hac_program_years with every column unchanged and one surrogate key per dimension it joins. One row per program_key.
-      Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
+      Business process: HAC Reduction Program scoring. Grain: one row per hospital and program fiscal year from the latest release. Dimensions:
+      dim_hospital, dim_release. Measures: total_hac_score_number. The silver model int_hac_program_years with every column unchanged and one surrogate key
+      per dimension it joins. The key is program_key. Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast
+      covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -229,7 +234,9 @@ models:
               typeof(hai_measures_end_date_text) = 'VARCHAR'
   - name: fct_hai_hospital_window
     description: >-
-      The silver model int_hai_hospital_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
+      Business process: Care Compare healthcare-associated infection reporting per hospital. Grain: one row per hospital, HAI measure and measurement window
+      from the latest release. Dimensions: dim_hospital, dim_release. Measures: none. The silver model int_hai_hospital_windows with every column unchanged
+      and one surrogate key per dimension it joins. The key is window_key.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -300,8 +307,9 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_hai_national_window
     description: >-
-      The silver model int_hai_national_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
-      The national rows have no geography key; entity_id holds US.
+      Business process: Care Compare healthcare-associated infection reporting for the nation. Grain: one row per HAI measure and measurement window from
+      the latest release. Dimensions: dim_release. Measures: none. The silver model int_hai_national_windows with every column unchanged and one surrogate
+      key per dimension it joins. The key is window_key. The national rows have no geography key; entity_id holds US.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -355,8 +363,9 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_hai_state_window
     description: >-
-      The silver model int_hai_state_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key. The
-      state key is state_sk on dim_state, built from entity_id.
+      Business process: Care Compare healthcare-associated infection reporting per state. Grain: one row per state, HAI measure and measurement window from
+      the latest release. Dimensions: dim_state, dim_release. Measures: none. The silver model int_hai_state_windows with every column unchanged and one
+      surrogate key per dimension it joins. The key is window_key. The state key is state_sk on dim_state, built from entity_id.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -425,8 +434,9 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_hai_window_hold
     description: >-
-      The silver model int_hai_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key. Keeps
-      every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: HAI rows held out of the measurement windows. Grain: one row per held HAI row group and hold reason. Dimensions: dim_hospital.
+      Measures: none. The silver model int_hai_window_holds with every column unchanged and one surrogate key per dimension it joins. The key is hold_key.
+      Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -473,8 +483,10 @@ models:
             expression: typeof(window_start) = 'DATE' and typeof(window_end) = 'DATE'
   - name: fct_hcahps_window
     description: >-
-      The silver model int_cc_hcahps_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
-      Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
+      Business process: Care Compare HCAHPS patient survey reporting. Grain: one row per hospital, HCAHPS measure and measurement window from the latest
+      release. Dimensions: dim_hospital, dim_release. Measures: hcahps_answer_percent_number, number_of_completed_surveys_number,
+      survey_response_rate_percent_number. The silver model int_cc_hcahps_windows with every column unchanged and one surrogate key per dimension it joins.
+      The key is window_key. Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -570,8 +582,10 @@ models:
               typeof(number_of_completed_surveys_footnote) = 'VARCHAR' and typeof(survey_response_rate_percent_footnote) = 'VARCHAR'
   - name: fct_hrrp_window
     description: >-
-      The silver model int_cc_hrrp_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
-      Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
+      Business process: Hospital Readmissions Reduction Program scoring. Grain: one row per hospital, condition and performance window from the latest
+      release. Dimensions: dim_hospital, dim_release. Measures: excess_readmission_ratio_number. The silver model int_cc_hrrp_windows with every column
+      unchanged and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver
+      test assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -650,8 +664,10 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_maternal_health_window
     description: >-
-      The silver model int_cc_maternal_windows with every column unchanged and one surrogate key per dimension it joins. One row per window_key.
-      Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
+      Business process: Care Compare maternal health reporting. Grain: one row per hospital, measure and measurement window from the latest release.
+      Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_maternal_windows with every column unchanged and one surrogate
+      key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver test
+      assert_care_compare_numbers_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -727,8 +743,10 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_timely_effective_care_window
     description: >-
-      The silver model int_cc_timely_effective_windows with every column unchanged and one surrogate key per dimension it joins. One row per
-      window_key. Published numbers and text are unchanged from silver, so the silver test assert_care_compare_numbers_cast covers the values.
+      Business process: Care Compare timely and effective care reporting. Grain: one row per hospital, measure and measurement window from the latest
+      release. Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_timely_effective_windows with every column unchanged
+      and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver test
+      assert_care_compare_numbers_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -805,8 +823,10 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_unplanned_visits_window
     description: >-
-      The silver model int_cc_unplanned_visits_windows with every column unchanged and one surrogate key per dimension it joins. One row per
-      window_key. Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
+      Business process: Care Compare unplanned hospital visit reporting. Grain: one row per hospital, measure and measurement window from the latest
+      release. Dimensions: dim_hospital, dim_release. Measures: score_number. The silver model int_cc_unplanned_visits_windows with every column unchanged
+      and one surrogate key per dimension it joins. The key is window_key. Published numbers and text are unchanged from silver, so the silver test
+      assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -888,8 +908,9 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_validation_program_hold
     description: >-
-      The silver model int_validation_program_holds with every column unchanged and one surrogate key per dimension it joins. One row per
-      hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: HAC Reduction and VBP rows held out of the program years. Grain: one row per held program row group and hold reason. Dimensions:
+      dim_hospital. Measures: none. The silver model int_validation_program_holds with every column unchanged and one surrogate key per dimension it joins.
+      The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -934,8 +955,9 @@ models:
             expression: typeof(fiscal_year) = 'INTEGER'
   - name: fct_validation_window_hold
     description: >-
-      The silver model int_validation_window_holds with every column unchanged and one surrogate key per dimension it joins. One row per hold_key.
-      Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: validation measure rows held out of the measurement windows. Grain: one row per bronze table, hold reason, held entity, held measure
+      and window. Dimensions: dim_hospital. Measures: none. The silver model int_validation_window_holds with every column unchanged and one surrogate key
+      per dimension it joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -982,8 +1004,10 @@ models:
             expression: typeof(window_start) = 'DATE' and typeof(window_end) = 'DATE'
   - name: fct_vbp_program_year
     description: >-
-      The silver model int_vbp_program_years with every column unchanged and one surrogate key per dimension it joins. One row per program_key.
-      Published numbers and text are unchanged from silver, so the silver test assert_validation_values_cast covers the values.
+      Business process: Hospital Value-Based Purchasing scoring. Grain: one row per hospital and program fiscal year from the latest release. Dimensions:
+      dim_hospital, dim_release. Measures: the 11 additivity columns. The silver model int_vbp_program_years with every column unchanged and one surrogate
+      key per dimension it joins. The key is program_key. Published numbers and text are unchanged from silver, so the silver test
+      assert_validation_values_cast covers the values.
     meta:
       classification: Public
       fact_type: periodic_snapshot

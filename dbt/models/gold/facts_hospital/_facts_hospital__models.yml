@@ -3,7 +3,9 @@ version: 2
 models:
   - name: fct_cmi_observation
     description: >-
-      One row per int_cmi_hospital_rows row, grain cmi_row_key: every silver column unchanged, then 2 surrogate keys.
+      Business process: CMS case-mix index publication per hospital. Grain: one row per hospital (CCN), case-mix index file and the rule year and stage its
+      copy carries. Dimensions: dim_hospital, dim_release. Measures: cases, cmi, relative_weights, transfer_adjusted_cases, transfer_adjusted_cmi. Every
+      column of int_cmi_hospital_rows stays unchanged, keyed by cmi_row_key, then 2 surrogate keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -79,8 +81,9 @@ models:
               typeof(transfer_adjusted_cmi_text) = 'VARCHAR' and typeof(transfer_adjusted_cases_text) = 'VARCHAR'
   - name: fct_cost_report
     description: >-
-      One row per int_cost_reports row, grain rpt_rec_num: every silver column unchanged, then 4 surrogate keys.
-      Published values are covered by the silver test assert_cost_report_values_cast.
+      Business process: hospital Medicare cost report filing (HCRIS). Grain: one row per filed cost report (report record number). Dimensions: dim_hospital,
+      dim_release, dim_state, dim_zip. Measures: the 103 additivity columns. Every column of int_cost_reports stays unchanged, keyed by rpt_rec_num, then 4
+      surrogate keys. Published values are covered by the silver test assert_cost_report_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -652,8 +655,9 @@ models:
               typeof(fiscal_year) = 'BIGINT'
   - name: fct_enrollment_release
     description: >-
-      One row per int_hospital_enrollment_rows row, grain enrollment_key: every silver column unchanged, then 6
-      surrogate keys.
+      Business process: Medicare hospital enrollment listing. Grain: one row per hospital enrollment and enrollment file release. Dimensions:
+      dim_enrollment, dim_hospital, dim_owner_organization, dim_release, dim_state, dim_zip. Measures: none. Every column of int_hospital_enrollment_rows
+      stays unchanged, keyed by enrollment_key, then 6 surrogate keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -757,8 +761,9 @@ models:
               typeof(subgroup_other_text) = 'VARCHAR'
   - name: fct_hgi_release
     description: >-
-      One row per int_hgi_hospital_releases row, grain release_key: every silver column unchanged, then 4 surrogate
-      keys. Published values are covered by the silver test assert_hgi_values_cast.
+      Business process: Hospital General Information listing on Care Compare. Grain: one row per hospital (CCN) and stored Hospital General Information
+      file. Dimensions: dim_hospital, dim_release, dim_state, dim_zip. Measures: overall_rating. Every column of int_hgi_hospital_releases stays unchanged,
+      keyed by release_key, then 4 surrogate keys. Published values are covered by the silver test assert_hgi_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -840,8 +845,9 @@ models:
               typeof(overall_rating_text) = 'VARCHAR' and typeof(overall_rating_footnote) = 'VARCHAR'
   - name: fct_hhs_capacity_week
     description: >-
-      One row per int_hhs_capacity_weeks row, grain week_key: every silver column unchanged, then 4 surrogate keys.
-      Published values are covered by the silver test assert_hhs_onc_values_cast.
+      Business process: HHS weekly hospital capacity reporting. Grain: one row per HHS hospital and collection week. Dimensions: dim_hospital, dim_release,
+      dim_state, dim_zip. Measures: the 114 additivity columns. Every column of int_hhs_capacity_weeks stays unchanged, keyed by week_key, then 4 surrogate
+      keys. Published values are covered by the silver test assert_hhs_onc_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1428,8 +1434,9 @@ models:
               typeof(ccn_published) = 'VARCHAR' and typeof(nulled_values_published) = 'VARCHAR'
   - name: fct_hospital_owner_release
     description: >-
-      One row per int_hospital_owner_rows row, grain owner_row_key: every silver column unchanged, then 3 surrogate
-      keys. Published values are covered by the silver test assert_ownership_values_cast.
+      Business process: hospital ownership listing of organisation owners. Grain: one row per organisation owner row and owner file release. Dimensions:
+      dim_enrollment, dim_owner_organization, dim_release. Measures: percentage_ownership. Every column of int_hospital_owner_rows stays unchanged, keyed by
+      owner_row_key, then 3 surrogate keys. Published values are covered by the silver test assert_ownership_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1501,8 +1508,9 @@ models:
               typeof(role_text) = 'VARCHAR' and typeof(flags_published) = 'BOOLEAN'
   - name: fct_impact_hold
     description: >-
-      One row per int_impact_holds row, grain hold_key: every silver column unchanged, then 2 surrogate keys. A hold
-      fact: it keeps the silver hold model's rows exactly.
+      Business process: IPPS impact file rows held out of the hospital values. Grain: one row per impact file release and hospital (CCN) that appears in
+      more than one row. Dimensions: dim_hospital, dim_release. Measures: none. Every column of int_impact_holds stays unchanged, keyed by hold_key, then 2
+      surrogate keys. A hold fact: it keeps the silver hold model's rows exactly.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1552,7 +1560,9 @@ models:
               typeof(rule_fiscal_year) = 'INTEGER'
   - name: fct_ipps_impact_value
     description: >-
-      One row per int_impact_hospital_values row, grain value_key: every silver column unchanged, then 2 surrogate keys.
+      Business process: IPPS impact file publication per hospital. Grain: one row per impact file release, hospital (CCN) and mapped field. Dimensions:
+      dim_hospital, dim_release. Measures: value_number. Every column of int_impact_hospital_values stays unchanged, keyed by value_key, then 2 surrogate
+      keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1611,8 +1621,9 @@ models:
               typeof(value_text) = 'VARCHAR'
   - name: fct_medicare_inpatient_drg
     description: >-
-      One row per int_mup_drg_discharges row, grain drg_key: every silver column unchanged, then 2 surrogate keys.
-      Published values are covered by the silver test assert_mup_values_cast.
+      Business process: Medicare inpatient discharges per hospital and DRG. Grain: one row per Medicare inpatient provider, DRG and stored file. Dimensions:
+      dim_hospital, dim_release. Measures: tot_dschrgs, avg_mdcr_pymt_amt, avg_submtd_cvrd_chrg, avg_tot_pymt_amt. Every column of int_mup_drg_discharges
+      stays unchanged, keyed by drg_key, then 2 surrogate keys. Published values are covered by the silver test assert_mup_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1678,8 +1689,9 @@ models:
               typeof(data_year) = 'INTEGER' and typeof(release_year) = 'INTEGER'
   - name: fct_medicare_inpatient_provider
     description: >-
-      One row per int_mup_providers row, grain provider_key: every silver column unchanged, then 3 surrogate keys.
-      Published values are covered by the silver test assert_mup_values_cast.
+      Business process: Medicare inpatient provider summary per hospital. Grain: one row per Medicare inpatient provider (CCN) and stored file. Dimensions:
+      dim_hospital, dim_release, dim_state. Measures: the 48 additivity columns. Every column of int_mup_providers stays unchanged, keyed by provider_key,
+      then 3 surrogate keys. Published values are covered by the silver test assert_mup_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1932,8 +1944,8 @@ models:
               typeof(data_year) = 'INTEGER' and typeof(release_year) = 'INTEGER'
   - name: fct_occupational_mix_survey
     description: >-
-      One row per int_occmix_survey_rows row, grain survey_row_key: every silver column unchanged, then 2 surrogate
-      keys.
+      Business process: CMS occupational mix survey responses. Grain: one row per survey file, sheet and source row. Dimensions: dim_hospital, dim_release.
+      Measures: the 7 additivity columns. Every column of int_occmix_survey_rows stays unchanged, keyed by survey_row_key, then 2 surrogate keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -2019,8 +2031,9 @@ models:
               and typeof(rnahw_text) = 'VARCHAR' and typeof(ccn_published) = 'VARCHAR'
   - name: fct_onc_attestation
     description: >-
-      One row per int_onc_attestation_rows row, grain attestation_key: every silver column unchanged, then 3 surrogate
-      keys.
+      Business process: hospital EHR incentive program attestation. Grain: one row per hospital Medicare or Medicaid EHR incentive attestation. Dimensions:
+      dim_hospital, dim_release, dim_zip. Measures: none. Every column of int_onc_attestation_rows stays unchanged, keyed by attestation_key, then 3
+      surrogate keys.
     meta:
       classification: Public
       fact_type: transaction
@@ -2087,8 +2100,9 @@ models:
               typeof(ccn_published) = 'VARCHAR' and typeof(payment_year_text) = 'VARCHAR'
   - name: fct_onc_ehr_product
     description: >-
-      One row per int_onc_chpl_linkage_rows row, grain linkage_key: every silver column unchanged, then 4 surrogate
-      keys. Published values are covered by the silver test assert_hhs_onc_values_cast.
+      Business process: ONC Promoting Interoperability certified product linkage. Grain: one row per hospital, program year, performance period and
+      certified product. Dimensions: dim_hospital, dim_release, dim_state, dim_zip. Measures: program_year. Every column of int_onc_chpl_linkage_rows stays
+      unchanged, keyed by linkage_key, then 4 surrogate keys. Published values are covered by the silver test assert_hhs_onc_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -2165,8 +2179,9 @@ models:
               typeof(start_date) = 'DATE' and typeof(end_date) = 'DATE' and typeof(program_year) = 'INTEGER'
   - name: fct_ownership_change
     description: >-
-      One row per int_change_of_ownership_rows row, grain event_key: every silver column unchanged, then 7 surrogate
-      keys.
+      Business process: hospital change of ownership. Grain: one row per change of ownership event, taken from the latest release that lists it. Dimensions:
+      dim_enrollment, dim_hospital, dim_owner_organization, dim_release. Measures: none. Every column of int_change_of_ownership_rows stays unchanged, keyed
+      by event_key, then 7 surrogate keys.
     meta:
       classification: Public
       fact_type: transaction
@@ -2282,8 +2297,9 @@ models:
               typeof(ccn_seller_published) = 'VARCHAR'
   - name: fct_ownership_change_hold
     description: >-
-      One row per int_change_of_ownership_holds row, grain hold_key: every silver column unchanged; no surrogate keys. A
-      hold fact: it keeps the silver hold model's rows exactly.
+      Business process: change of ownership rows held out of the ownership changes. Grain: one row per change of ownership event and release that the kept
+      row does not use. Dimensions: none. Measures: none. Every column of int_change_of_ownership_holds stays unchanged, keyed by hold_key; no surrogate
+      keys. A hold fact: it keeps the silver hold model's rows exactly.
     meta:
       classification: Public
       fact_type: transaction
@@ -2300,8 +2316,9 @@ models:
             compare_model: ref('int_change_of_ownership_holds')
   - name: fct_pos_snapshot
     description: >-
-      One row per int_pos_hospital_snapshots row, grain snapshot_key: every silver column unchanged, then 5 surrogate
-      keys. Published values are covered by the silver test assert_pos_values_cast.
+      Business process: Provider of Services hospital listing. Grain: one row per hospital (CCN) and Provider of Services snapshot. Dimensions: dim_county,
+      dim_hospital, dim_release, dim_state, dim_zip. Measures: the 12 additivity columns. Every column of int_pos_hospital_snapshots stays unchanged, keyed
+      by snapshot_key, then 5 surrogate keys. Published values are covered by the silver test assert_pos_values_cast.
     meta:
       classification: Public
       fact_type: periodic_snapshot

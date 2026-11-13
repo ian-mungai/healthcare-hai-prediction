@@ -1,4 +1,4 @@
-"""Model metadata check: sensitivity classes, gold fact types and measure additivity in the dbt project.
+"""Model metadata check: sensitivity classes, gold fact types and four-step designs and measure additivity in the dbt project.
 
 Run from the repository root: ``.venv/bin/python -m scripts.quality.model_metadata``. The check reads the dbt project (YAML, SQL, macros,
 ``dbt_project.yml``), the gold contract and the bronze table map. The installed SQLFluff dbt templater compiles models using an in-memory lint profile.
@@ -59,6 +59,12 @@ DBT_PATHS = (
     ("macro-paths", "macros"),
     ("snapshot-paths", "snapshots"),
 )
+FACT_DESIGN = re.compile(
+    r"^Business process: (?P<process>[^.]+)\. Grain: one row per (?P<grain>[^.]+)\. Dimensions: (?P<dimensions>[^.]+)\. Measures: (?P<measures>[^.]+)\."
+)
+MEASURE_COUNT = re.compile(r"^the (\d+) additivity columns$")
+INPUT_ROW_GRAIN = re.compile(r"^(?:each )?row of ")
+RELATIONSHIP_TARGET = re.compile(r"""ref\(\s*['"](\w+)['"]\s*\)""")
 DISABLED_MODEL = re.compile(r"\{\{-?\s*config\([^)]*\benabled\s*=\s*false\b")
 NUMERIC_TYPES = frozenset({"TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "HUGEINT", "FLOAT", "REAL", "DOUBLE", "DECIMAL"})
 OTHER_TYPES = frozenset({"VARCHAR", "BOOLEAN", "DATE", "TIMESTAMP", "TIME"})
@@ -170,6 +176,8 @@ class Entry:
     meta: dict[str, Any]
     columns: dict[str, dict[str, Any]] = field(default_factory=dict)
     column_lines: dict[str, int] = field(default_factory=dict)
+    description: str = ""
+    dimensions: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -359,9 +367,56 @@ def read_properties(root: Path, directories: dict[str, list[Path]]) -> Propertie
                 found.problems.append(Problem("duplicate-entry", where, model.line, f"model {name} is defined more than once in YAML"))
             else:
                 column_meta = {column.data["name"]: meta_of(column.data) for column in columns}
-                found.models[name] = Entry(name, where, model.line, meta_of(model.data), column_meta, {c.data["name"]: c.line for c in columns})
+                lines = {c.data["name"]: c.line for c in columns}
+                description = model.data.get("description")
+                text = description if isinstance(description, str) else ""
+                dimensions = relationship_targets([column.data for column in columns])
+                found.models[name] = Entry(name, where, model.line, meta_of(model.data), column_meta, lines, text, dimensions)
         found.seeds |= {seed.data["name"] for seed in items_of(document, composed, "seeds", where)}
     return found
+
+
+def relationship_targets(columns: list[dict[str, Any]]) -> tuple[str, ...]:
+    """Return the models that the relationships tests of these columns name, in column order."""
+    targets: list[str] = []
+    for column in columns:
+        for test in [*(column.get("data_tests") or []), *(column.get("tests") or [])]:
+            relationship = test.get("relationships") if isinstance(test, dict) else None
+            if not isinstance(relationship, dict):
+                continue
+            arguments = relationship.get("arguments")
+            target = (arguments if isinstance(arguments, dict) else relationship).get("to")
+            found = RELATIONSHIP_TARGET.search(target) if isinstance(target, str) else None
+            if found and found.group(1) not in targets:
+                targets.append(found.group(1))
+    return tuple(targets)
+
+
+def listed(text: str) -> list[str]:
+    """Return the names of a design list: 'none' or names separated by commas; a long measure list is 'the N additivity columns'."""
+    return [] if text.strip() == "none" else [name.strip() for name in text.split(",")]
+
+
+def fact_design_problems(model: str, entry: Entry) -> list[str]:
+    """Return why a gold fact description does not state the four-step design, in the order of the design."""
+    design = FACT_DESIGN.match(entry.description.strip())
+    if design is None:
+        return [f"gold fact {model} description must state its business process, grain, dimensions and measures"]
+    problems = []
+    if INPUT_ROW_GRAIN.match(design["grain"]):
+        problems.append(f"gold fact {model} grain must name what one row records, not a row of its input")
+    dimensions = listed(design["dimensions"])
+    if sorted(dimensions) != sorted(entry.dimensions):
+        named = ", ".join(entry.dimensions) or "none"
+        problems.append(f"gold fact {model} lists dimensions {', '.join(dimensions) or 'none'} but its relationships tests name {named}")
+    declared = [column for column, meta in entry.columns.items() if "additivity" in meta]
+    counted = MEASURE_COUNT.match(design["measures"])
+    if counted and int(counted.group(1)) != len(declared):
+        problems.append(f"gold fact {model} counts {counted.group(1)} measures but it has {len(declared)} additivity columns")
+    measures = listed(design["measures"])
+    if not counted and sorted(measures) != sorted(declared):
+        problems.append(f"gold fact {model} lists measures {', '.join(measures) or 'none'} but its additivity columns are {', '.join(declared) or 'none'}")
+    return problems
 
 
 def read_macros(root: Path, env: Environment, directories: list[Path]) -> tuple[dict[str, MacroDef], list[Problem]]:
@@ -1572,6 +1627,8 @@ def check(project: Project) -> list[Problem]:
             add("fact-type", entry, f"gold fact {model.name} has no meta.fact_type")
         elif entry.meta["fact_type"] not in FACT_TYPES:
             not_allowed(entry, f"{model.name}: fact_type", entry.meta["fact_type"], FACT_TYPES)
+        for message in fact_design_problems(model.name, entry):
+            add("fact-design", entry, message)
         for column, declared in entry.columns.items():
             if "additivity" in declared and declared["additivity"] not in ADDITIVITY:
                 not_allowed(entry, f"{model.name}.{column}: additivity", declared["additivity"], ADDITIVITY, entry.column_lines.get(column))
