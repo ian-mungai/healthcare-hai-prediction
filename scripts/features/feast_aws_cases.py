@@ -1594,7 +1594,10 @@ def case_fa25(c: Checker) -> None:
         not any(name.startswith("MLFLOW") for name in variables) and "MLFLOW" not in json.dumps(jobs["jobs"]["features"]),
     )
     owner_lists = json.loads((feast_job.REPO.parent / "config/aws/owner_command_lists.json").read_text())
-    c.check("the owner command lists give the features overrides no MLflow address", "--mlflow-uri" not in owner_lists["Features after gold"])
+    c.check(
+        "no owner command list gives a features override an MLflow address",
+        not any("--mlflow-uri" in value for value in owner_lists.values() if isinstance(value, str)),
+    )
     group = tomllib.loads((feast_job.REPO.parent / "pyproject.toml").read_text())["dependency-groups"]["feature_store"]
     c.check("the feature store image pins no MLflow client", not any(str(line).startswith("mlflow") for line in group))
     runtime = json.loads((feast_job.REPO.parent / "config/quality/dependency_runtimes.json").read_text())["runtimes"]["feature_store"]["code"]
