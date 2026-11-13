@@ -4,6 +4,10 @@
   "enabled": true,
   "mirror_marker": "hai_mirror",
   "layers": {
+    "bronze": {
+      "namespace": "bronze",
+      "database": "hai_mirror_bronze"
+    },
     "silver": {
       "namespace": "silver",
       "database": "hai_mirror_silver"
@@ -15,10 +19,6 @@
     "features": {
       "namespace": "features",
       "database": "hai_mirror_features"
-    },
-    "bronze": {
-      "namespace": "bronze",
-      "database": "hai_mirror_bronze"
     }
   },
   "workgroup": {

@@ -637,7 +637,7 @@ def case_config_scope_is_silver_gold_and_features_only() -> Check:
     config = glue_mirror.load_config()
     gold = config.layers["gold"]
     return {
-        "only_the_four_layers_are_configured": list(config.layers) == ["silver", "gold", "features", "bronze"]
+        "only_the_four_layers_are_configured_bronze_first": list(config.layers) == ["bronze", "silver", "gold", "features"]
         and all(config.layers[layer].namespace == layer for layer in ("silver", "gold", "features", "bronze"))
         and config.layers["bronze"].database == "hai_mirror_bronze",
         "real_config_has_no_violation": glue_mirror.violations(config) == [],

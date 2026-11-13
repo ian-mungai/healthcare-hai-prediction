@@ -41,7 +41,7 @@ CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
 # The layers with a publish contract and a publish_runs table: their publishes register tables and ``check`` compares them with Polaris.
 PUBLISHED_LAYERS = ("silver", "gold", "features")
 # Bronze has no publish step, so no hook and no check. Its tables are the ones that ``config/lakehouse/bronze_tables.json`` lists, registered by ``register``.
-MIRRORED_LAYERS = (*PUBLISHED_LAYERS, "bronze")
+MIRRORED_LAYERS = ("bronze", *PUBLISHED_LAYERS)
 BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
 # The publish contract of each mirrored layer: the features publish is the gold engine with its own contract (scripts/features/features_publish.py).
 LAYER_CONTRACTS = {
