@@ -46,8 +46,8 @@ SUBSTITUTIONS = (
     "airflow_steps.UNAVAILABLE_SECONDS is 1 second: a staged input that is not there yet is waited for one second, not ten minutes",
     "the layer acceptance report (orchestration/layer_report.py): its listing, closing evidence and acceptance functions are replaced by the stand-ins of the "
     "airflow_mode_cases rig, because they read the S3 object versions, the ECS hosts and the staged code archive, which the bridge does not model",
-    "the release of a model set's held online load (promotion_chain.release_online) in the research chain: a recorder, because the features family has no "
-    "release step in the job table yet and the shipped function refuses by name",
+    "the release of a model set's held online load (promotion_chain.release_online) in the one research scenario that names it: a recorder there only, "
+    "because the features family has no release step in the job table yet; its own scenario runs the shipped function and expects its refusal by name",
     "the fake task ends at its first status read (finish_after 1) and its exit codes are planned by the scenario",
     "USER is set when the environment has none: the check runs python without the image entrypoint that adds the passwd entry for the user id",
     "the Airflow metadata database is SQLite in a temporary folder and DAG.test() runs the tasks in process (no scheduler, no API server)",
@@ -65,6 +65,9 @@ SOURCES = (
     "orchestration/ecs_launch.py",
     "orchestration/ecs_launch_operator.py",
     "orchestration/ecs_launch_provider.py",
+    "orchestration/ecs_preflight.py",
+    "orchestration/promotion_chain.py",
+    "orchestration/training_contract.py",
     "scripts/orchestration/aws_http_bridge.py",
     "scripts/orchestration/ecs_fake.py",
     "scripts/orchestration/ecs_launch_fake.py",
@@ -130,7 +133,8 @@ class Step:
     calls the run sends, and ``family`` the host task definition family they name. ``reason`` is text each failing task's error must contain, ``skip`` the
     tasks that need the Airflow API server or other DAGs (they are marked as passed and not run), ``skipped`` the tasks that must end skipped (a mapped trigger
     with no request, a research run that waits), ``plan`` the exit code per container of the task and ``release_recorded`` that the research chain's release
-    of the held online load is a recorder, and ``sent`` a check of the environment of each container of the first RunTask call."""
+    of the held online load is a recorder, ``sent`` a check of the environment of each container of the first RunTask call and ``after`` a check of the rig
+    once the run ended."""
 
     dag_id: str
     params: Mapping[str, Any]
@@ -149,6 +153,7 @@ class Step:
     skipped: tuple[str, ...] = ()
     release_recorded: bool = False
     sent: Callable[[dict[str, dict[str, str]]], None] | None = None
+    after: Callable[[Any], None] | None = None
 
 
 class RefusedRun(TypedDict):
@@ -356,6 +361,8 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
         "bridge_requests": len(requests),
     }
     check_run(rig, step, facts, calls)
+    if step.after is not None:
+        step.after(rig)
     return facts
 
 
@@ -671,6 +678,50 @@ def serving_request_is(expected: Mapping[str, Any]) -> Callable[[dict[str, dict[
     return check
 
 
+def drift_inputs_are(model: str, features_run: str, code_run: str) -> Callable[[dict[str, dict[str, str]]], None]:
+    """A check of the drift launch's containers: the baseline container is told the model, the current-window container the model's features run and the fetch
+    container the run whose code the chain gate bound. A missing container or value, ``latest`` or another run is a break."""
+
+    def check(environment: dict[str, dict[str, str]]) -> None:
+        for container, name, value in (("baseline", "FEATURE_SET", model), ("current", "INPUT_RUN_ID", features_run), ("fetch", "CODE_RUN_ID", code_run)):
+            found = environment.get(container, {}).get(name)
+            require(found == value, f"the {container} container got {name}={found!r}, not {value!r}")
+
+    return check
+
+
+def code_bindings(rig: Any) -> dict[str, bytes]:
+    """The code run bindings staged in the rig, by key."""
+    return {key: body for key, body in rig.stage.objects.items() if key.endswith("/code_run.json")}
+
+
+def research_conf(base_run: str, hai_types: Sequence[str]) -> dict[str, Any]:
+    """The configuration of the research run that a training run of a promotion model with this base run starts."""
+    import importlib
+
+    return {
+        "run_id": importlib.import_module("orchestration.training_contract").research_run_id(base_run),
+        "mode": "real",
+        "base_run": base_run,
+        "population": "primary",
+        "hai_types": list(hai_types),
+        "mlflow": "aws",
+    }
+
+
+def research_trigger_run(training_run: str) -> str:
+    """The DAG run ID of the research run that a training run starts, so that each model's trigger has a run of its own."""
+    return f"training__{training_run}"
+
+
+def triggered_confs(dag_id: str, run_id: str) -> list[Any]:
+    """The configuration of each DAG run of ``dag_id`` with ``run_id`` in the Airflow metadata database."""
+    import importlib
+
+    runs = importlib.import_module("airflow.models.dagrun").DagRun.find(dag_id=dag_id, run_id=run_id)
+    return [item.conf for item in runs]
+
+
 def drift_objects(drift_run: str, model: str, *, gated: bool = True) -> dict[str, bytes]:
     """The staged objects of a quiet drift run of ``model``: one drift record of HAI_1 that did not trigger, and the marker that lists it. ``gated`` adds the
     gate decision of the drift rule (``decide_drift_gate``), as the drift task writes it; a marker without it is the one the drift DAG refuses."""
@@ -746,8 +797,14 @@ def cases_catalog() -> dict[str, Scenario]:
     def job_states(*, failed: tuple[str, ...] = ()) -> dict[str, str]:
         return {name: "failed" if name in failed else DONE_STATE for name in chain}
 
+    bound: dict[str, dict[str, bytes]] = {}
+
     def stage_drift(rig: Any, gated: bool = True) -> None:
         rig.stage.objects.update(drift_objects(drift, "m1", gated=gated))
+        bound["before"] = code_bindings(rig)
+
+    def drift_bound_nothing(rig: Any) -> None:
+        require(code_bindings(rig) == bound["before"], "the drift launch bound a run: the chain gate binds every run of the chain")
 
     def stage_other(rig: Any) -> None:
         rig.stage_runs(c.OTHER_RUN)
@@ -781,7 +838,16 @@ def cases_catalog() -> dict[str, Scenario]:
                 )
                 for model in ("m1", "m2", "m3", "m4", "m5", "m6")
             ),
-            Step("drift_monitoring_dag", drift_params, 1, family("drift"), drift_states, prepare=stage_drift),
+            Step(
+                "drift_monitoring_dag",
+                drift_params,
+                1,
+                family("drift"),
+                drift_states,
+                prepare=stage_drift,
+                sent=drift_inputs_are("m1", features_m1, c.BRONZE_RUN),
+                after=drift_bound_nothing,
+            ),
             # The same run's marker without the gate decision: the drift job joins its launch, and the decision step refuses the marker and trains nothing.
             Step(
                 "drift_monitoring_dag",
@@ -853,19 +919,67 @@ def cases_catalog() -> dict[str, Scenario]:
         wanted = f"release m2 {training.model_features_run_id(base, 'm2')} {training.chain_run_id(research, 'HAI_1', 'release')}"
         require(released == [wanted], f"the release of the held online load was {released}, not {[wanted]}")
 
+    def release_step_missing(rig: Any, facts: dict[str, Any]) -> None:
+        """The shipped release refuses by name: the chain launches research, the canary deploy and check, the promotion and the notice, no rollout."""
+        first = rig.tasks_started() - facts["run_task_calls"]
+        found = [item["serve"] if "serve" in item else item["promote"] for item in (rig.environment(first + index) for index in range(5))]
+        phases = [item.get("PHASE") for item in found]
+        require(phases == ["research", None, "canary", "promote", "notify"], f"the chain ran the phases {phases}, not the five before the release")
+        notice = json.loads(found[4]["TRAINING_PARAMETERS"])
+        require(notice["outcome"] == "promoted_not_rolled_out", f"the owner was told {notice['outcome']}")
+        require(not [item for item in rig.reports if item.startswith("release ")], "a release ran although the step is not built")
+
+    def research_started(rig: Any) -> None:
+        found = triggered_confs("research_dag", research_trigger_run(trigger_run))
+        require(found == [research_conf(trigger_base, trigger_types)], f"the training run started the research runs {found}")
+
     def no_launch(rig: Any) -> None:
         require(not rig.ecs.tasks and not rig.records.objects, f"a refused run started a task or wrote a launch record: {sorted(rig.records.objects)}")
 
+    trigger_base, trigger_types = c.SERVE_BASE, list(c.TRAIN_PARAMS["hai_types"])
+    trigger_run = training.trained_run_id(trigger_base, "m4")
     waiting = {"ready": "skipped", "research": "skipped", "chain": "skipped", "gate": DONE_STATE}
     research_cases = (
         Scenario(
-            "research_dag_promotes_a_challenger",
+            "research_dag_promotes_a_challenger_with_a_recorded_release",
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
                 Step("research_dag", research_params, 6, check=promotion_chain_ran, release_recorded=True, prepare=stage_research),
                 # A second run for the base joins the launches of the first and starts nothing again.
                 Step("research_dag", research_params, 0, check=joined, release_recorded=True),
+            ),
+            make_rig,
+        ),
+        Scenario(
+            "research_dag_fails_after_the_notice_when_the_release_step_is_missing",
+            (
+                bronze,
+                *(trained(model) for model in training.PROMOTION_MODELS),
+                Step(
+                    "research_dag",
+                    research_params,
+                    5,
+                    states={"ready": DONE_STATE, "research": DONE_STATE, "chain": "failed", "gate": "failed"},
+                    run_state="failed",
+                    reason="release_online",
+                    check=release_step_missing,
+                    prepare=stage_research,
+                ),
+            ),
+            make_rig,
+        ),
+        Scenario(
+            "training_dag_starts_the_research_for_its_base",
+            (
+                Step(
+                    "training_dag",
+                    {**c.TRAIN_PARAMS, "run_id": trigger_run, "model": "m4", "base_run": trigger_base},
+                    1,
+                    family("train"),
+                    prepare=lambda rig: rig.stage_runs(trigger_run),
+                    after=research_started,
+                ),
             ),
             make_rig,
         ),

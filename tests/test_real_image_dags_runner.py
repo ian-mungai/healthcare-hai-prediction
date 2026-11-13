@@ -205,7 +205,7 @@ def test_the_drift_and_training_runs_chain_from_the_model_features_run() -> None
 
 def test_the_research_scenario_trains_the_three_models_on_one_base_and_researches_it() -> None:
     contract = importlib.import_module("orchestration.training_contract")
-    steps = [step for scenario, step in _steps() if scenario == "research_dag_promotes_a_challenger"]
+    steps = [step for scenario, step in _steps() if scenario == "research_dag_promotes_a_challenger_with_a_recorded_release"]
     trained = [step for step in steps if step.dag_id == "training_dag"]
     research = [step for step in steps if step.dag_id == "research_dag"]
     check([step.params["model"] for step in trained] == list(contract.PROMOTION_MODELS), "the scenario does not train m1, m2 and m4 in order")
@@ -255,6 +255,77 @@ def test_a_held_canary_is_refused_by_the_serve_preflight() -> None:
     check(json.loads(values["SERVING_REQUEST"])["canary_ttl_hours"] == 24, f"the canary request has no lifetime: {values}")
 
 
+BOUND_MODULES = ("orchestration/promotion_chain.py", "orchestration/ecs_preflight.py", "orchestration/training_contract.py")
+
+
+def test_the_inventory_binds_the_promotion_preflight_and_training_code_the_image_mounts() -> None:
+    found = real_image_dags.inventory(SOURCE_ROOT, real_image_dags.IMAGE_SOURCES)["sources"]
+    for name in BOUND_MODULES:
+        check(name in real_image_dags.SOURCES and name in real_image_dags.IMAGE_SOURCES and name in found, f"the inventory does not bind {name}")
+    compose = (SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text()
+    check(
+        "${HAI_ORCH_REPO}/orchestration:/opt/hai/repo/orchestration:ro" in compose,
+        "the airflow-check service does not mount the orchestration folder the image reads",
+    )
+    check(all(name.startswith("orchestration/") for name in BOUND_MODULES), "a bound module is outside the mounted folder")
+
+
+def test_the_drift_launch_is_checked_for_its_exact_model_and_run_inputs() -> None:
+    drift = next(step for scenario, step in _steps() if step.dag_id == "drift_monitoring_dag" and step.starts == 1)
+    check(drift.sent is not None and drift.after is not None, "the drift step checks neither its container inputs nor its code bindings")
+    environment = {
+        "baseline": {"FEATURE_SET": "m1"},
+        "current": {"INPUT_RUN_ID": "20261104T100000Z-feed5eed"},
+        "fetch": {"CODE_RUN_ID": "20261030T090000Z-b0b0b0b0"},
+    }
+    right = real_image_dags.drift_inputs_are("m1", "20261104T100000Z-feed5eed", "20261030T090000Z-b0b0b0b0")
+    right(environment)
+    for container, name, value in (
+        ("baseline", "FEATURE_SET", "m2"),
+        ("current", "INPUT_RUN_ID", "latest"),
+        ("current", "INPUT_RUN_ID", "20261104T110000Z-0f0f0f0f"),
+        ("fetch", "CODE_RUN_ID", "20261104T100000Z-feed5eed"),
+    ):
+        changed = {**environment, container: {**environment[container], name: value}}
+        with pytest.raises(real_image_dags.Expectation, match=name):
+            right(changed)
+    with pytest.raises(real_image_dags.Expectation, match="INPUT_RUN_ID"):
+        right({key: value for key, value in environment.items() if key != "current"})
+
+
+def test_the_missing_release_step_has_an_unpatched_scenario() -> None:
+    catalog = real_image_dags.cases_catalog()
+    recorded = catalog["research_dag_promotes_a_challenger_with_a_recorded_release"]
+    missing = catalog["research_dag_fails_after_the_notice_when_the_release_step_is_missing"]
+    check([step.release_recorded for step in recorded.steps if step.dag_id == "research_dag"] == [True, True], "the recorder case does not name its recorder")
+    research = [step for step in missing.steps if step.dag_id == "research_dag"]
+    check(len(research) == 1 and not research[0].release_recorded, "the missing-release scenario replaces the release")
+    check(research[0].starts == 5 and research[0].run_state == "failed" and research[0].reason == "release_online", f"the missing-release step: {research[0]}")
+    check(research[0].states == {"ready": "success", "research": "success", "chain": "failed", "gate": "failed"}, f"its states: {research[0].states}")
+    check(not any(step.release_recorded for step in missing.steps), "a step of the missing-release scenario replaces the release")
+    check(
+        "release_online" in " ".join(real_image_dags.SUBSTITUTIONS) and "only" in " ".join(real_image_dags.SUBSTITUTIONS),
+        "the recorder substitution is not scoped",
+    )
+
+
+def test_a_training_run_with_a_base_starts_the_research_through_the_mapped_trigger() -> None:
+    contract = importlib.import_module("orchestration.training_contract")
+    scenario = real_image_dags.cases_catalog()["training_dag_starts_the_research_for_its_base"]
+    (step,) = scenario.steps
+    base = str(step.params["base_run"])
+    check(step.dag_id == "training_dag" and step.params["model"] in contract.PROMOTION_MODELS and not step.skipped and step.skip is None, f"the step: {step}")
+    check(step.params["run_id"] == contract.trained_run_id(base, str(step.params["model"])), "the training run is not the model's run on the base")
+    check(step.after is not None, "the scenario does not check the research run the trigger created")
+    request = contract.research_requests(str(step.params["model"]), str(step.params["run_id"]), base, "primary", list(step.params["hai_types"]), "aws")
+    check(
+        len(request) == 1 and request[0]["conf"] == real_image_dags.research_conf(base, list(step.params["hai_types"])),
+        f"the expected trigger conf differs: {request}",
+    )
+    check(request[0]["trigger_run_id"] == real_image_dags.research_trigger_run(str(step.params["run_id"])), "the expected trigger run id differs")
+    check(request[0]["conf"]["run_id"] == contract.research_run_id(base), "the research run is not derived from the base")
+
+
 def test_the_rig_names_none_of_the_retired_inputs() -> None:
     text = Path(real_image_dags.__file__).read_text()
     for retired in ("serving_request.json", "promotion_approval", "SERVING_REQUEST ="):
@@ -278,6 +349,14 @@ def test_the_unchanged_input_hashes_are_recorded(checkout: Path, monkeypatch: py
 def _edit_source(checkout: Path) -> None:
     with (checkout / "orchestration/ecs_launch.py").open("a") as handle:
         handle.write('\nraise RuntimeError("changed after the image consumed it")\n')
+
+
+def _edit_module(name: str) -> Callable[[Path], None]:
+    def edit(checkout: Path) -> None:
+        with (checkout / name).open("a") as handle:
+            handle.write('\nraise RuntimeError("changed after the image consumed it")\n')
+
+    return edit
 
 
 def _edit_dag(checkout: Path) -> None:
@@ -305,13 +384,16 @@ def _add_source(checkout: Path) -> None:
     ("change", "named", "before"),
     [
         (_edit_source, "orchestration/ecs_launch.py", None),
+        (_edit_module("orchestration/promotion_chain.py"), "orchestration/promotion_chain.py", None),
+        (_edit_module("orchestration/ecs_preflight.py"), "orchestration/ecs_preflight.py", None),
+        (_edit_module("orchestration/training_contract.py"), "orchestration/training_contract.py", None),
         (_edit_dag, "ingestion_dag.py", None),
         (_add_dag, "added_dag.py", None),
         (_remove_dag, "training_dag.py", None),
         (_remove_source, "orchestration/ecs_launch.py", None),
         (_add_source, "orchestration/ecs_launch.py", _remove_source),
     ],
-    ids=["edit_source", "edit_dag", "add_dag", "remove_dag", "remove_source", "add_source"],
+    ids=["edit_source", "edit_promotion_chain", "edit_preflight", "edit_training_contract", "edit_dag", "add_dag", "remove_dag", "remove_source", "add_source"],
 )
 def test_an_input_that_changes_while_the_image_runs_is_refused(
     checkout: Path,
