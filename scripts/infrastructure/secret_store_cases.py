@@ -277,23 +277,8 @@ def store_deadline(root: Path) -> dict[str, bool]:
     }
 
 
-HOST_JOB_CAP_FILE = "infra/services/main.tf"
-HOST_JOB_CAP_LABEL = re.compile(r'\s+"host_job_cap"\s*\{')
-
-
-def host_job_cap_block(relative: str, after_type: str, body: str) -> bool:
-    """True only for the one parameter the services stack manages by owner decision: a plain ``String`` named by ``host_job_cap_parameter_name``."""
-    return (
-        relative == HOST_JOB_CAP_FILE
-        and HOST_JOB_CAP_LABEL.match(after_type) is not None
-        and re.search(r'^\s*type\s*=\s*"String"\s*$', body, re.MULTILINE) is not None
-        and re.search(r"^\s*name\s*=\s*var\.host_job_cap_parameter_name\s*$", body, re.MULTILINE) is not None
-    )
-
-
 def source_offenders(root: Path) -> list[str]:
-    """The Terraform files that declare a secret or a parameter; a data source of a public AWS parameter (``/aws/service/...``) and the host job cap
-    parameter of the services stack (a plain String that holds a memory size) are no offenders."""
+    """The Terraform files that declare a secret or a parameter; only a data source of a public AWS parameter (``/aws/service/...``) is no offender."""
     found = []
     for path in sorted((root / "infra").rglob("*.tf")):
         if ".terraform" in path.parts:
@@ -302,12 +287,6 @@ def source_offenders(root: Path) -> list[str]:
         for match in SECRET_RESOURCE.finditer(text):
             body = text[match.end() : text.find("\n}", match.end())]
             if match.group(2) == "aws_ssm_parameter" and match.group(1) == "data" and re.search(r'^\s*name\s*=\s*"/aws/service/', body, re.MULTILINE):
-                continue
-            if (
-                match.group(1) == "resource"
-                and match.group(2) == "aws_ssm_parameter"
-                and host_job_cap_block(str(path.relative_to(root)), text[match.end() :], body)
-            ):
                 continue
             found.append(str(path.relative_to(root)))
     return found
@@ -319,17 +298,14 @@ def variable_defaults(root: Path, names: Iterable[str]) -> list[str | None]:
     return [(found.group(1) if (found := re.search(rf'variable "{name}" \{{[^}}]*?default\s*=\s*"([^"]*)"', text, re.DOTALL)) else None) for name in names]
 
 
-def host_job_cap_exemption_is_narrow() -> bool:
-    """A SecureString, another name, another label or another file is still an offender."""
-    after = ' "host_job_cap" {'
-    good = '  name = var.host_job_cap_parameter_name\n  type = "String"\n'
-    return (
-        host_job_cap_block(HOST_JOB_CAP_FILE, after, good)
-        and not host_job_cap_block(HOST_JOB_CAP_FILE, after, good.replace('"String"', '"SecureString"'))
-        and not host_job_cap_block(HOST_JOB_CAP_FILE, after, good.replace("host_job_cap_parameter_name", "other_name"))
-        and not host_job_cap_block(HOST_JOB_CAP_FILE, ' "other" {', good)
-        and not host_job_cap_block("infra/iam/main.tf", after, good)
-    )
+def a_parameter_resource_is_always_an_offender() -> bool:
+    """The services stack manages no parameter: a plain String parameter resource there is an offender like any other."""
+    block = 'resource "aws_ssm_parameter" "managed_value" {\n  name = "/healthcare_hai_prediction/managed_value"\n  type = "String"\n  value = "1"\n}\n'
+    with tempfile.TemporaryDirectory() as folder:
+        root = Path(folder)
+        (root / "infra/services").mkdir(parents=True)
+        (root / "infra/services/main.tf").write_text(block)
+        return source_offenders(root) == ["infra/services/main.tf"]
 
 
 def terraform_names(root: Path) -> dict[str, bool]:
@@ -360,7 +336,7 @@ def terraform_names(root: Path) -> dict[str, bool]:
         "the shared keys keep their Secrets Manager names and are not parameters": sorted(name or "" for name in shared_defaults) == sorted(secret_store.SHARED)
         and not any(name.startswith("/") for name in secret_store.SHARED),
         "no Terraform file declares a secret, a secret version, a parameter or a secret data source": not offenders,
-        "the host job cap exemption accepts only the plain String parameter of the services stack": host_job_cap_exemption_is_narrow(),
+        "a parameter resource in the services stack is an offender, with no exemption by name": a_parameter_resource_is_always_an_offender(),
     }
 
 
