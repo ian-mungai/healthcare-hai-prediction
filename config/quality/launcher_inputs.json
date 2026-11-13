@@ -1928,6 +1928,7 @@
     "scripts/orchestration/override_docs_cases.py",
     "scripts/orchestration/process_group_stop_cases.py",
     "scripts/orchestration/real_image_dags.py",
+    "scripts/orchestration/research_chain_cases.py",
     "scripts/orchestration/run_airflow_mode_e2e.py",
     "scripts/orchestration/run_contracts_e2e.py",
     "scripts/orchestration/run_ecs_launch_e2e.py",
