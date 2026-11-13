@@ -577,9 +577,7 @@ def main() -> int:
             for path, entry in json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())["pending"].items()
             if entry["runtime"] == "orchestration_image"
         },
-        "limits": [
-            "Static and in-image checks; no DAG run, broker launch or Airflow service starts here (see run_broker_e2e, run_stack_e2e and run_real_e2e)."
-        ],
+        "limits": ["Static and in-image checks; no DAG run, job launch or Airflow service starts here."],
     }
     (folder / "report.json").write_text(json.dumps(report, indent=2) + "\n")
     sys.stdout.write(f"pending: {len(report['pending_typechecks'])} Airflow-runtime typechecks (dependencies and stubs required).\n")

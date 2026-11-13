@@ -134,7 +134,17 @@ def projection() -> None:
         require(not provider.emit(root, event), "provider accepted an invalid native UUID")
 
 
-CASES = {"projection": projection}
+def record_events() -> None:
+    from orchestration.lineage import build_events
+
+    events = build_events(record_fixture())
+    require(
+        len(events) == 2 and {event["eventType"] for event in events} == {"START", "COMPLETE"},
+        "a valid completion record did not yield its START and COMPLETE events",
+    )
+
+
+CASES = {"projection": projection, "record_events": record_events}
 
 
 def main() -> int:

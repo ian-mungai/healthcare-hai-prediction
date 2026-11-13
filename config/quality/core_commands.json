@@ -42,6 +42,7 @@
     "\"$python_bin\" -m scripts.orchestration.run_ecs_target_e2e --proof S",
     "\"$python_bin\" -m scripts.orchestration.run_job_catalog_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_completion_e2e",
+    "\"$python_bin\" -m scripts.orchestration.run_lineage_service_cases",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_pipeline_light",
     "\"$python_bin\" -m scripts.orchestration.run_publish_contracts",

@@ -53,7 +53,7 @@ def canonical(value: Any) -> str:
 
 def record_validators() -> tuple[Draft202012Validator, Draft202012Validator]:
     request = json.loads((ROOT / "data_contracts/orchestration/submission_request.schema.json").read_text())
-    definitions = json.loads((ROOT / "config/orchestration/broker_templates.schema.json").read_text())["$defs"]
+    definitions = json.loads((ROOT / "data_contracts/orchestration/ledger_line.schema.json").read_text())["$defs"]
     envelope = {"$ref": "#/$defs/lineage", "$defs": {key: definitions[key] for key in ("lineage", "dataset")}}
     return Draft202012Validator(request), Draft202012Validator(envelope)
 
