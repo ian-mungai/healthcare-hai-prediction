@@ -17,11 +17,11 @@
         },
         "additions": {
           "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions.json",
-          "sha256": "b62976df10a5a77643086a11594c7c0a3ad62667b9a9affbdfcc9019c863d5c2"
+          "sha256": "6e4a910f50f0469a3d9a323e802e89da59e02d8c178d1486080a3db05d8979b4"
         },
         "additions_lock": {
           "path": "data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
-          "sha256": "4dedf75b265fccc4c1e42c8dd3323a6d4a180b60c3276a1d5304dd017b346066"
+          "sha256": "569f81c1d5fa731b31122ef3a0a3c0d460db8392eb6f9db2484fca3a729026c6"
         }
       }
     },

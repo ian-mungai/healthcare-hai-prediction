@@ -18,7 +18,7 @@ from scripts.acquisition.source_registry import canonical_hash, load_registry, r
 PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json")
 PLAN_SHA256 = "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
 ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
-ADDITIONS_PLAN_SHA256 = "abfc97d49fe741b6d2c5685012fd49b5906e53573b25061d54087a2241723628"
+ADDITIONS_PLAN_SHA256 = "afc4a6f2a71d1a451dfeb2e05c16738fc31600e4153445fe60a9055a6f6e0af5"
 # Each capture records the hash of the plan that authorized it, so adding a plan never touches earlier captures.
 PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
 FIELDS = {"agecat", "condition", "dencat", "dual", "eligcat", "fips", "fltr", "geography", "measure", "racecat", "rate", "sexcat", "year"}
