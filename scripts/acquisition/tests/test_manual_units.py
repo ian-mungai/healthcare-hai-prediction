@@ -797,15 +797,19 @@ def test_a_conflict_with_no_stored_record_is_a_visible_failure_not_a_stale_unit(
     check(world.stale_records(unit) == [], "no stale record exists")
 
 
+OLD_ATTEMPT = "2026-11-12T00:00:00Z"
+RECENT_ATTEMPT = "2026-11-13T01:00:00Z"
+
+
 def seed_stale_record(world: World, unit: dict, **changes: Any) -> dict:
-    """A stale record of this run and unit that an earlier attempt of the same run left behind, older than the retry interval."""
+    """A stale record of the unit that an earlier attempt left behind, by default of this run and older than the retry interval."""
     fields: dict[str, Any] = {
         "unit_key": unit_key_of(unit),
         "run_id": RUN_1,
         "collection": "example_publisher/example_collection",
         "source_id": unit["source_id"],
         "snapshot_id": unit["snapshot_id"],
-        "attempted_at_utc": "2026-11-12T00:00:00Z",
+        "attempted_at_utc": OLD_ATTEMPT,
         "reason": "network",
         "http_status": None,
         "code_sha256": "c" * 64,
@@ -814,7 +818,7 @@ def seed_stale_record(world: World, unit: dict, **changes: Any) -> dict:
         "last_capture": manual_units.pointers(world.specs[unit["snapshot_id"]]),
     }
     record = stale_record.build(**(fields | changes))
-    world.bucket.seed(stale_record.stale_key(world.root, unit_key_of(unit), RUN_1), stale_record.encode(record))
+    world.bucket.seed(stale_record.stale_key(world.root, unit_key_of(unit), record["run_id"]), stale_record.encode(record))
     return record
 
 
@@ -830,13 +834,62 @@ def test_a_conflict_is_settled_by_the_record_that_is_stored(world: World) -> Non
     )
 
 
-@pytest.mark.parametrize("changes", [{"snapshot_id": "HUD__other"}, {"source_id": "WONDER"}, {"code_sha256": "d" * 64}], ids=["snapshot", "source", "code"])
-def test_a_conflict_with_a_stored_record_of_another_identity_is_a_visible_failure(world: World, changes: dict[str, str]) -> None:
+IDENTITY_CASES = {
+    "old_snapshot": ({"snapshot_id": "HUD__other"}, OLD_ATTEMPT, "newest stale record"),
+    "old_source": ({"source_id": "WONDER"}, OLD_ATTEMPT, "newest stale record"),
+    "old_collection": ({"collection": "other/wrong"}, OLD_ATTEMPT, "newest stale record"),
+    "old_code": ({"code_sha256": "d" * 64}, OLD_ATTEMPT, "stored stale record"),
+    "recent_snapshot": ({"snapshot_id": "HUD__other"}, RECENT_ATTEMPT, "newest stale record"),
+    "recent_source": ({"source_id": "WONDER"}, RECENT_ATTEMPT, "newest stale record"),
+    "recent_collection": ({"collection": "other/wrong"}, RECENT_ATTEMPT, "newest stale record"),
+}
+
+
+@pytest.mark.parametrize(("changes", "attempted", "refusal"), IDENTITY_CASES.values(), ids=IDENTITY_CASES)
+def test_a_stored_record_of_another_identity_is_a_visible_failure_whether_it_is_recent_or_old(
+    world: World, changes: dict[str, str], attempted: str, refusal: str
+) -> None:
     [unit] = hud_units(world, 1)
-    seed_stale_record(world, unit, **changes)
+    seed_stale_record(world, unit, attempted_at_utc=attempted, **changes)
     world.site.serve(HUD_URL, Reply(403))
-    with pytest.raises(manual_units.ManualUnitError, match="stored stale record"):
+    with pytest.raises(manual_units.ManualUnitError, match=refusal) as error:
         world.run([unit])
+    if refusal == "newest stale record":
+        check(
+            unit_key_of(unit) in str(error.value) and stale_record.stale_key(world.root, unit_key_of(unit), RUN_1) in str(error.value), "names unit and record"
+        )
+        check(world.site.seen == [] and world.bucket.writes() == [], "refused before any request or write")
+
+
+def test_a_recent_stale_record_of_another_run_and_build_still_skips_the_unit(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    earlier = seed_stale_record(world, unit, run_id="20261112T210000Z-dddddddd", attempted_at_utc=RECENT_ATTEMPT, code_sha256="d" * 64, bundle_sha256="e" * 64)
+    report = world.run([unit], "20261113T030000Z-bbbbbbbb")
+    check(report.counts["skipped_recent_stale"] == 1 and report.http_requests == 0 and world.bucket.writes() == [], f"counts {report.counts}")
+    check(report.stale_units == [manual_units.summary(earlier)] and report.outcomes[0].record == earlier, f"lists {report.run_record()}")
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["2026-09-24T01:47:28Z", "2026-09-24T01:47:28+00:00", "2026-09-24T01:47:28.123456+00:00", "2026-09-24T01:47:28.5Z", "2026-09-23T18:47:28-07:00"],
+    ids=["z", "offset", "microseconds_and_offset", "fraction_and_z", "other_offset"],
+)
+def test_a_last_capture_time_in_any_iso_form_is_stored_in_the_record_form(world: World, value: str) -> None:
+    [unit] = hud_units(world, 1)
+    world.specs[unit["snapshot_id"]]["last_capture"]["artifacts"][0]["retrieved_at_utc"] = value
+    world.site.serve(HUD_URL, Reply(403))
+    report = world.run([unit])
+    check(only_stale(world, unit)["last_capture"][0]["retrieved_at_utc"] == "2026-09-24T01:47:28Z", f"stored {only_stale(world, unit)['last_capture']}")
+    check(report.stale_units[0]["last_retrieved_at_utc"] == "2026-09-24T01:47:28Z", f"list {report.stale_units}")
+
+
+@pytest.mark.parametrize("value", ["not a time", "2026-09-24T01:47:28", "2026-09-24", "", None], ids=["text", "no_offset", "date_only", "empty", "none"])
+def test_a_last_capture_time_that_is_no_zoned_time_is_refused_before_any_request(world: World, value: str | None) -> None:
+    [unit] = hud_units(world, 1)
+    world.specs[unit["snapshot_id"]]["last_capture"]["artifacts"][0]["retrieved_at_utc"] = value
+    with pytest.raises(manual_units.ManualUnitError, match="retrieved_at_utc"):
+        world.run([unit])
+    check(world.site.seen == [] and world.bucket.writes() == [], "no request, not even robots.txt")
 
 
 @pytest.mark.parametrize("name", ["../bad.xlsx", "dir/bad.xlsx", ".hidden.xlsx", "transport.json", "x" * 201 + ".xlsx"])

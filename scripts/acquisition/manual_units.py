@@ -42,7 +42,8 @@ RETRY_INTERVAL = timedelta(hours=20)
 RETRYABLE_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
 ABSENT_ROBOTS = frozenset({"http_404", "http_410"})
 CREATE_CONFLICTS = frozenset({"412", "PreconditionFailed", "409", "ConditionalRequestConflict"})
-RUN_IDENTITY = ("unit_key", "run_id", "collection", "source_id", "snapshot_id", "code_sha256", "bundle_sha256")
+STABLE_IDENTITY = ("unit_key", "collection", "source_id", "snapshot_id")
+RUN_IDENTITY = (*STABLE_IDENTITY, "run_id", "code_sha256", "bundle_sha256")
 TIME_FORMAT = "%Y-%m-%dT%H:%M:%SZ"
 __all__ = ["ContentRefusal", "Context", "ManualUnitError", "Outcome", "Report", "Scopes", "attempt", "is_manual_host", "notice_text", "run"]
 
@@ -78,6 +79,17 @@ def host_of(url: str) -> str:
 
 def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime(TIME_FORMAT)
+
+
+def record_time(value: object) -> str:
+    """A recorded time in the stale record's form, whichever ISO 8601 form with an offset a specification or earlier receipt gave it."""
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        moment = None
+    if moment is None or moment.tzinfo is None:
+        raise ManualUnitError("A last capture pointer needs retrieved_at_utc as an ISO 8601 time with a UTC offset")
+    return stamp(moment)
 
 
 class Observer(urllib.request.BaseHandler):
@@ -300,7 +312,7 @@ def pointers(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "byte_count": item["byte_count"],
                 "role": item["role"],
                 "stored_file_name": item.get("stored_file_name") or key.rsplit("/", 1)[-1],
-                "retrieved_at_utc": item["retrieved_at_utc"],
+                "retrieved_at_utc": record_time(item["retrieved_at_utc"]),
                 "read_root": root,
             }
         )
@@ -342,16 +354,18 @@ def create_once(client: Any, key: str, body: bytes, folder: Path) -> bytes:
     return body
 
 
+def unit_identity(unit: dict, context: Context) -> dict[str, str]:
+    """What a stale record of this unit says about the unit, in every run."""
+    return {"unit_key": context.unit_key(unit), "collection": context.collection(unit), "source_id": unit["source_id"], "snapshot_id": unit["snapshot_id"]}
+
+
 def mark_stale(unit: dict, spec: dict, reason: str, http_status: int | None, context: Context) -> dict[str, Any]:
     """Write the unit's create-once stale record for this run and return the record that is stored."""
     found = pointers(spec)
     key = context.unit_key(unit)
     record = stale_record.build(
-        unit_key=key,
+        **unit_identity(unit, context),
         run_id=context.run_id,
-        collection=context.collection(unit),
-        source_id=unit["source_id"],
-        snapshot_id=unit["snapshot_id"],
         attempted_at_utc=stamp(context.clock.now()),
         reason=reason,
         http_status=http_status,
@@ -369,8 +383,9 @@ def mark_stale(unit: dict, spec: dict, reason: str, http_status: int | None, con
     return stored
 
 
-def newest_stale(unit_key: str, context: Context) -> dict[str, Any] | None:
-    """The unit's newest stale record, read and checked. Run IDs start with their UTC time, so the last key is the newest."""
+def newest_stale(unit: dict, context: Context) -> dict[str, Any] | None:
+    """The unit's newest stale record, read and checked against the unit. Run IDs start with their UTC time, so the last key is the newest."""
+    unit_key = context.unit_key(unit)
     prefix = stale_record.stale_prefix(context.root, unit_key)
     listing = context.client.call("s3api", "list-objects-v2", ["--prefix", prefix])
     keys = sorted(item["Key"] for item in listing.get("Contents", []))
@@ -380,7 +395,12 @@ def newest_stale(unit_key: str, context: Context) -> dict[str, Any] | None:
     folder.mkdir(parents=True, exist_ok=True)
     local = folder / "newest.json"
     context.client.call("s3api", "get-object", ["--key", keys[-1], str(local)])
-    return stale_record.parse(local.read_bytes(), key=keys[-1], root=context.root)
+    newest = stale_record.parse(local.read_bytes(), key=keys[-1], root=context.root)
+    expected = unit_identity(unit, context)
+    differing = [name for name in STABLE_IDENTITY if newest[name] != expected[name]]
+    if differing:
+        raise ManualUnitError(f"The newest stale record {keys[-1]} does not belong to unit {unit_key}: its {', '.join(differing)} differ")
+    return newest
 
 
 def classify(result: transport.Download, observer: Observer, limits: transport.Limits) -> tuple[str, int | None]:
@@ -433,7 +453,7 @@ def attempt(unit: dict, spec: dict, context: Context) -> Outcome:
     mode, name = manual_content.plan_unit(unit, spec)
     key = context.unit_key(unit)
     try:
-        newest = newest_stale(key, context)
+        newest = newest_stale(unit, context)
         if newest is not None and context.clock.now() - datetime.strptime(newest["attempted_at_utc"], TIME_FORMAT).replace(tzinfo=UTC) < RETRY_INTERVAL:
             return Outcome(unit["snapshot_id"], unit["source_id"], "skipped_recent_stale", newest["reason"], newest["http_status"], newest)
         reason = context.gate.admit(unit["url"])
@@ -498,6 +518,7 @@ def run(units: list[dict], specs: Mapping[str, dict], context: Context) -> Repor
         raise ManualUnitError("The manual unit handler takes approved_manual units only")
     for unit in units:
         manual_content.plan_unit(unit, specs.get(unit["snapshot_id"]))
+        pointers(specs[unit["snapshot_id"]])
     outcomes = [attempt(unit, specs[unit["snapshot_id"]], context) for unit in units]
     shutil.rmtree(context.scratch / "robots", ignore_errors=True)
     standing = [outcome.record for outcome in outcomes if outcome.record is not None]
