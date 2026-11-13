@@ -7,9 +7,13 @@ import datetime
 import hashlib
 import io
 import json
+import os
+import threading
 import zipfile
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +28,7 @@ from scripts.acquisition import (
     collect_hud_api,
     collect_mmd_api,
     collection_layout,
+    redownload_controls,
     s3_store,
     store_cms_owners,
     store_hcai_util,
@@ -404,6 +409,7 @@ def test_a_crash_retry_of_an_archive_unit_stores_no_new_member_version(tmp_path:
     check(new_kinds(world, before)["data"] == 0, f"{new_kinds(world, before)}")
 
 
+@pytest.mark.usefixtures("stand_in_modes")
 def test_a_crash_retry_of_a_collector_unit_with_an_api_page_stores_no_new_data_or_page_version(tmp_path: Path) -> None:
     world, page = api_world(tmp_path)
     adapters = {"hud_api": api_adapter(page)}
@@ -572,15 +578,38 @@ def test_the_listing_diff_fails_on_any_extra_version_or_delete_marker(three: Wor
     before = mode.list_versions(client, [ROOT])
     three.run()
     after = mode.list_versions(client, [ROOT])
-    allowed = {f"{ROOT}ingestion_runs/run02/run.json"}
+    allowed = Counter({f"{ROOT}ingestion_runs/run02/run.json": 1})
     check(mode.diff_versions(before, after, allowed) == [], "run two differs by exactly its run record")
-    check(mode.diff_versions(before, after, set()) != [], "an unexpected new object fails")
+    check(mode.diff_versions(before, after, Counter()) != [], "an unexpected new object fails")
     plant(three.bucket, f"{ROOT}stray.json", b"{}")
     extra = mode.list_versions(client, [ROOT])
-    check(any("stray.json" in problem for problem in mode.diff_versions(after, extra, set())), "an extra version fails")
+    check(any("stray.json" in problem for problem in mode.diff_versions(after, extra, Counter())), "an extra version fails")
     three.bucket.delete_markers.append({"Key": f"{ROOT}cms/marker", "VersionId": "m1"})
     marked = mode.list_versions(client, [ROOT])
-    check(any("delete marker" in problem for problem in mode.diff_versions(extra, marked, {f"{ROOT}stray.json"})), "a delete marker fails")
+    check(any("delete marker" in problem for problem in mode.diff_versions(extra, marked, Counter({f"{ROOT}stray.json": 1}))), "a delete marker fails")
+    second = three.bucket.versions[-1] | {"VersionId": "second-version-of-the-stray-key"}
+    three.bucket.versions.append(second)
+    twice = mode.list_versions(client, [ROOT])
+    check(
+        any("2 new versions of" in problem and "stray.json" in problem for problem in mode.diff_versions(after, twice, Counter({f"{ROOT}stray.json": 1}))),
+        "a second new version of an allowed key fails",
+    )
+
+
+STAND_IN_MODES = frozenset({"hud_api", "mmd_api"})
+
+
+@pytest.fixture
+def stand_in_modes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The API and MMD stand-ins capture through the file route and name their handler in the receipt, as the real collectors do. Storage checks the real
+    collectors' route evidence for those two modes, which the stand-ins have none of, so for them storage checks the file route they captured through.
+    Real-collector cases keep every storage check."""
+    original = s3_store.verify_route
+
+    def verify(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
+        original(receipt, source, lineage | {"mode": "file"} if lineage.get("mode") in STAND_IN_MODES else lineage, root, evidence_only)
+
+    monkeypatch.setattr(s3_store, "verify_route", verify)
 
 
 def api_adapter(page: dict[str, bytes]) -> Any:
@@ -589,7 +618,7 @@ def api_adapter(page: dict[str, bytes]) -> Any:
     def adapt(unit: dict, spec: dict, folder: Path, run: mode.CaptureRun, opener: Any) -> Path:
         path = mode.capture_file(unit, spec, folder, run, opener)
         receipt = read_json(path)
-        lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | {"batch_id": spec["plan_item"]}
+        lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | {"mode": spec["mode"], "batch_id": spec["plan_item"]}
         receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
         target = path.parent / "raw" / "page_0001.json"
         target.write_bytes(page["body"])
@@ -620,6 +649,7 @@ def api_world(folder: Path) -> tuple[World, dict[str, bytes]]:
     return world, {"body": b'{"page": 1}'}
 
 
+@pytest.mark.usefixtures("stand_in_modes")
 def test_an_api_page_that_differs_while_the_data_roles_are_the_same_counts_as_unchanged(tmp_path: Path) -> None:
     world, page = api_world(tmp_path)
     adapters = {"hud_api": api_adapter(page)}
@@ -1061,6 +1091,16 @@ def test_the_run_record_lists_the_units_it_skipped_and_the_evidence_step_reconci
     )
 
 
+@contextmanager
+def another_process() -> Iterator[None]:
+    """A rival run is another process in production. The stand-in rival runs inside this one, so it takes the process back for the rival's duration."""
+    mode.RUN_OWNER.release()
+    try:
+        yield
+    finally:
+        mode.RUN_OWNER.acquire()
+
+
 def race_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict: str) -> tuple[World, dict, list[str]]:
     """Two units. While the first unit's record is written, a rival run completes that unit, and the write then reports the conflict."""
     outer = World(tmp_path, ["a.csv", "b.csv"])
@@ -1074,7 +1114,8 @@ def race_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, conflict: str) -
             return original(**arguments)
         if arguments["Key"].startswith(f"{ROOT}ingestion_units/") and not state["lost"]:
             state["racing"] = True
-            rival_result = rival.run()
+            with another_process():
+                rival_result = rival.run()
             state["racing"], state["lost"] = False, True
             state["rival"] = rival_result
             raise outer.bucket.missing("PutObject", conflict)
@@ -1423,6 +1464,7 @@ def test_a_put_through_the_bounded_call_is_journaled_like_any_other_create(tmp_p
     check(journal.keys == [f"{ROOT}ingestion_runs/x/run.json"], f"only the successful put is noted: {journal.keys}")
 
 
+@pytest.mark.usefixtures("stand_in_modes")
 def test_a_record_of_one_planned_item_is_refused_for_another_item_of_the_same_request(tmp_path: Path) -> None:
     world, page = api_world(tmp_path)
     adapters = {"hud_api": api_adapter(page)}
@@ -1461,14 +1503,10 @@ def test_a_record_that_names_another_source_mode_or_collection_than_its_unit_is_
     )
 
 
-def test_a_record_whose_manifest_lists_its_data_object_at_another_version_is_refused(tmp_path: Path) -> None:
-    world = World(tmp_path, ["a.csv"])
-    world.run()
-    (key, body), *_ = world.records().items()
+def forge_manifest(world: World, key: str, body: dict, change: Callable[[dict], None]) -> None:
+    """Store a changed copy of the record's manifest as a new object and point the record at it, as a forger who can write new objects would."""
     manifest = json.loads(world.bucket.objects[body["manifests"][0]["key"]][1])
-    for item in manifest["objects"]:
-        if item["object"]["key"] == body["data_objects"][0]["key"]:
-            item["object"]["version_id"] = "version_that_lists_another_copy"
+    change(manifest)
     raw = encoded_json(manifest)
     digest = hashlib.sha256(raw).hexdigest()
     forged_key = f"{DATASETS}forged/manifest.json"
@@ -1483,6 +1521,19 @@ def test_a_record_whose_manifest_lists_its_data_object_at_another_version_is_ref
     )
     forged = {"key": forged_key, "version_id": answer["VersionId"], "sha256": digest, "byte_count": len(raw)}
     rewrite_record(world, key, body | {"manifests": [forged]})
+
+
+def test_a_record_whose_manifest_lists_its_data_object_at_another_version_is_refused(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    (key, body), *_ = world.records().items()
+
+    def relist(manifest: dict) -> None:
+        for item in manifest["objects"]:
+            if item["object"]["key"] == body["data_objects"][0]["key"]:
+                item["object"]["version_id"] = "version_that_lists_another_copy"
+
+    forge_manifest(world, key, body, relist)
     result = world.run()
     check(
         len(result["units"]["refused"]) == 1 and "not listed" in result["units"]["refused"][0]["reason"],
@@ -1490,16 +1541,37 @@ def test_a_record_whose_manifest_lists_its_data_object_at_another_version_is_ref
     )
 
 
+def test_a_record_whose_manifest_places_a_member_in_another_dataset_than_the_reviewed_map_is_refused(tmp_path: Path) -> None:
+    world = archive_world(tmp_path)
+    world.run()
+    (key, body), *_ = world.records().items()
+
+    def move(manifest: dict) -> None:
+        for item in manifest["objects"]:
+            if item.get("role") == "data" and "member_chain" in item:
+                item["mapped_dataset_id"] = "moved_table"
+
+    forge_manifest(world, key, body, move)
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the moved member is not a skip: {result['counters']}")
+    check(
+        len(result["units"]["refused"]) == 1 and "dataset folders" in result["units"]["refused"][0]["reason"],
+        f"the refusal names the dataset folders: {result['units']}",
+    )
+
+
 def mmd_adapter(unit: dict, spec: dict, folder: Path, run: mode.CaptureRun, opener: Any) -> Path:
     """A collector stand-in that keeps the measure and year in the receipt lineage, as the real MMD collector does."""
     path = mode.capture_file(unit, spec, folder, run, opener)
     receipt = read_json(path)
-    lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | spec["mmd"]
+    lineage = json.loads(receipt["lineage"]["extraction_or_query"]) | {"mode": spec["mode"]} | spec["mmd"]
     receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
     path.write_bytes(encoded_json(receipt))
     return path
 
 
+@pytest.mark.usefixtures("stand_in_modes")
 def test_a_record_of_one_mmd_year_is_refused_for_another_year(tmp_path: Path) -> None:
     world = World(tmp_path, ["a.csv"])
     world.units[0]["mode"] = "mmd_api"
@@ -1519,3 +1591,298 @@ def test_a_record_of_one_mmd_year_is_refused_for_another_year(tmp_path: Path) ->
     result = world.run(adapters=adapters)
     check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other year's record is not a skip: {result['counters']}")
     check(len(result["units"]["refused"]) == 1, f"the unit is refused: {result['units']}")
+
+
+def restated(body: dict, *, data: list | None = None, other: list | None = None) -> dict:
+    """A record body with its data or other objects replaced, its payload digest recomputed and every other field kept."""
+    return record.build(
+        key=body["unit_key"],
+        source_id=body["source_id"],
+        collection=body["collection"],
+        mode=body["mode"],
+        run_id="forger",
+        code_sha256=CODE,
+        bundle_sha256=BUNDLE,
+        retrieved_at_utc=body["retrieved_at_utc"],
+        receipt=body["receipt"],
+        manifests=body["manifests"],
+        data_objects=body["data_objects"] if data is None else data,
+        other_objects=body["other_objects"] if other is None else other,
+    )
+
+
+OMISSIONS: dict[str, Callable[[dict], dict]] = {
+    "omits_all_its_data": lambda body: restated(body, data=[]),
+    "omits_its_reference": lambda body: restated(body, other=[]),
+    "renames_its_data": lambda body: restated(body, data=[body["data_objects"][0] | {"stored_file_name": "renamed.csv"}]),
+    "relabels_its_reference_role": lambda body: restated(body, other=[body["other_objects"][0] | {"role": "methodology"}]),
+}
+
+
+@pytest.mark.parametrize("change", sorted(OMISSIONS))
+def test_a_record_that_does_not_name_exactly_the_objects_its_manifest_lists_is_refused_and_not_skipped(tmp_path: Path, change: str) -> None:
+    world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
+    world.bodies[world.units[0]["url"]] = archive(pdf(1), b"id,value\n1,2\n")
+    world.run()
+    ((_, body),) = world.records().items()
+    check(len(body["data_objects"]) == 1 and len(body["other_objects"]) == 1, "the stored unit has one data object and one reference")
+    forged = OMISSIONS[change](body)
+    target = record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"])
+    if target in world.bucket.objects:
+        rewrite_record(world, target, forged)
+    else:
+        plant(world.bucket, target, record.encode(forged))
+    before, asked = listed(world), world.site.requests
+    check(any("manifests" in problem for problem in mode.verify_records(storage(world.bucket), ROOT)), f"the record check names the disagreement for {change}")
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the changed record is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1 and result["units"]["refused"][0]["reason"], f"the unit is refused with its reason: {result['units']}")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any("did not complete" in problem for problem in problems), f"the evidence step fails the refused unit: {problems}")
+
+
+def test_a_reference_only_unit_completes_and_its_record_with_no_data_objects_is_skipped(tmp_path: Path) -> None:
+    world = hcai_world(tmp_path, "access_release")
+    first = world.run()
+    check(len(first["units"]["completed"]) == 1, f"the reference-only unit completed: {first['units']}")
+    (only,) = world.records().values()
+    check(only["data_objects"] == [] and len(only["other_objects"]) >= 1, "the unit stores a reference and no data object")
+    before, asked = listed(world), world.site.requests
+    again = world.run()
+    check(again["counters"]["skipped_complete"] == 1 and world.site.requests == asked, f"its record is a skip: {again['counters']}")
+    check(mode.check_run(storage(world.bucket), again, before) == [], "the evidence step passes the reference-only unit")
+
+
+def reviewed(change: Callable[[list[dict]], None]) -> Callable[[dict], None]:
+    return lambda spec: change(spec["archive_members"])
+
+
+def swap_roles(members: list[dict]) -> None:
+    for item in members:
+        item["role"] = "reference" if item["role"] == "data" else "data"
+
+
+SELECTIONS: dict[str, Callable[[dict], None]] = {
+    "data_member_to_another_table": reviewed(lambda members: members[0].update(dataset_id="different_table")),
+    "reference_member_to_another_table": reviewed(lambda members: members[1].update(dataset_id="other_table")),
+    "member_roles_swapped": reviewed(swap_roles),
+}
+
+
+@pytest.mark.parametrize("change", sorted(SELECTIONS))
+def test_a_record_of_one_member_map_is_refused_for_another_member_map(tmp_path: Path, change: str) -> None:
+    world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
+    world.bodies[world.units[0]["url"]] = archive(pdf(1), b"id,value\n1,2\n")
+    world.run()
+    ((_, body),) = world.records().items()
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    SELECTIONS[change](specs[world.units[0]["snapshot_id"]])
+    world.write_inputs(specs)
+    forged = body | {"unit_key": world.unit_key()}
+    check(forged["unit_key"] != body["unit_key"], "the reviewed member map is part of the requested identity")
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    before, asked = listed(world), world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other member map's record is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1, f"the unit is refused: {result['units']}")
+    check(any("did not complete" in problem for problem in mode.check_run(storage(world.bucket), result, before)), "the evidence step fails the refused unit")
+
+
+def test_a_record_of_a_collector_unit_is_refused_for_a_unit_that_names_the_file_handler(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    data = onc_body()
+    plan, plan_path = onc_locked(tmp_path, data)
+    versions = tmp_path / "onc_versions.json"
+    s3_store.write_once(versions, encoded_json({"versions": [{"code_sha256": onc_contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(onc_contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(onc_contract, "VERSIONS_PATH", versions)
+    (tmp_path / "world").mkdir()
+    world = World(tmp_path / "world", ["x.csv"])
+    unit = world.units[0] | {"url": plan["url"], "source_id": onc_contract.SOURCE_ID, "mode": "onc_mu_hospital", "bytes": len(data)}
+    world.units[0] = unit
+    world.bodies.clear()
+    world.bodies[plan["url"]] = data
+    world.write_inputs({unit["snapshot_id"]: {"mode": "onc_mu_hospital", "plan_item": plan["id"], "stored_data_files": []}})
+    check(len(world.run()["units"]["completed"]) == 1, "the real ONC collector completed the unit")
+    ((_, body),) = world.records().items()
+    receipt = json.loads(world.bucket.objects[body["receipt"]["key"]][1])
+    check(json.loads(receipt["lineage"]["extraction_or_query"])["mode"] == "onc_mu_hospital", "the stored receipt names the collector handler")
+    world.units[0] = unit | {"mode": "file"}
+    spec = spec_of("x.csv")
+    spec["receipt_template"]["source_id"] = onc_contract.SOURCE_ID
+    world.write_inputs({unit["snapshot_id"]: spec})
+    forged = body | {"unit_key": world.unit_key(), "mode": "file"}
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    before, asked = listed(world), world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other handler's record is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1 and "handler" in result["units"]["refused"][0]["reason"], f"the refusal names the handler: {result['units']}")
+    check(any("did not complete" in problem for problem in mode.check_run(storage(world.bucket), result, before)), "the evidence step fails the refused unit")
+
+
+def extra_version(world: World, key: str) -> None:
+    """Another version of a key, as a second write by anyone would list it."""
+    existing = next(item for item in world.bucket.versions if item["Key"] == key)
+    world.bucket.versions.append(existing | {"VersionId": "extra-unrecorded-version"})
+
+
+@pytest.mark.parametrize("which", ["run_record_of_a_proof_run", "data_object_this_run_wrote"])
+def test_an_extra_version_of_a_key_the_run_may_write_fails_the_evidence_step(tmp_path: Path, which: str) -> None:
+    world = World(tmp_path, ["a.csv"])
+    if which == "run_record_of_a_proof_run":
+        world.run()
+    before = listed(world)
+    result = world.run()
+    target = records_run_key(result) if which == "run_record_of_a_proof_run" else next(iter(world.records().values()))["data_objects"][0]["key"]
+    check(mode.check_run(storage(world.bucket), result, before) == [], "the run passes before the extra version")
+    extra_version(world, target)
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any(target in problem and "2 new versions" in problem for problem in problems), f"the second new version of {which} fails: {problems}")
+
+
+def records_run_key(result: dict) -> str:
+    return record.run_record_key(ROOT, result["run_id"])
+
+
+def test_a_second_version_of_a_foreign_ledger_entry_fails_a_run_that_attempted_units(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world = World(tmp_path, ["a.csv"])
+    before = listed(world)
+    foreign_ledger_entry(world, monkeypatch, 1)
+    result = world.run()
+    check(mode.check_run(storage(world.bucket), result, before) == [], "one foreign entry is tolerated in a run that attempted units")
+    extra_version(world, f"{mode.task_role.BLS_LEDGER_PREFIX}{1:010d}.json")
+    problems = mode.check_run(storage(world.bucket), result, before)
+    check(any("2 new versions" in problem and "000001.json" in problem for problem in problems), f"a second version of the foreign entry fails: {problems}")
+
+
+def test_a_second_run_in_the_process_is_refused_before_it_touches_anything_and_the_first_run_is_unharmed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first_folder, second_folder = tmp_path / "first", tmp_path / "second"
+    first_folder.mkdir()
+    second_folder.mkdir()
+    first, second = World(first_folder, ["a.csv"]), World(second_folder, ["a.csv"])
+    second.bodies[second.units[0]["url"]] = b"id,value\n" + b"1,2\n" * 100
+    names = (transport.APPROVED_HOSTS_VARIABLE, transport.APPROVED_HOSTS_APPROVAL_VARIABLE)
+    outside = {name: os.environ.get(name) for name in names}
+    entered, release = threading.Event(), threading.Event()
+    original_attempt, original_read = mode.attempt, redownload_controls.read
+    original_connections = [(module, module.https_connection) for module in mode.API_TRANSPORTS]
+
+    def held_attempt(run: mode.CaptureRun, *arguments: Any) -> Any:
+        if run.run_id == "first":
+            entered.set()
+            check(release.wait(5), "the first run was released within its deadline")
+        return original_attempt(run, *arguments)
+
+    monkeypatch.setattr(mode, "attempt", held_attempt)
+    try:
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            a = pool.submit(first.run, run_id="first")
+            check(entered.wait(5), "the first run reached its first unit")
+            installed = (redownload_controls.read, [module.https_connection for module in mode.API_TRANSPORTS], {name: os.environ.get(name) for name in names})
+            b = pool.submit(second.run, run_id="second", byte_cap=101)
+            with pytest.raises(mode.RunInProgress):
+                b.result(timeout=10)
+            now = (redownload_controls.read, [module.https_connection for module in mode.API_TRANSPORTS], {name: os.environ.get(name) for name in names})
+            check(now == installed, "the refused run changed no shared transport function or host variable")
+            check(second.bucket.names() == set() and second.site.requests == 0, "the refused run stored and requested nothing")
+            release.set()
+            owner = a.result(timeout=10)
+    finally:
+        release.set()
+        redownload_controls.read = original_read
+        for module, original in original_connections:
+            module.https_connection = original
+    check(
+        len(owner["units"]["completed"]) == 1 and owner["counters"]["bytes_downloaded"] == len(csv_body(1)),
+        f"the first run's own accounting: {owner['counters']}",
+    )
+    check(mode.check_run(storage(first.bucket), owner, []) == [], "the first run passes its evidence step")
+    check({name: os.environ.get(name) for name in names} == outside, "the host variables are restored after the first run")
+    again = second.run(run_id="second")
+    check(len(again["units"]["completed"]) == 1, f"the process is free again after the first run: {again['units']}")
+
+
+def test_a_run_that_dies_releases_the_process_for_the_next_run(tmp_path: Path) -> None:
+    (tmp_path / "crash").mkdir()
+    crashing = World(tmp_path / "crash", ["a.csv"])
+    crashing.bucket.crash_on_prefix = f"{ROOT}ingestion_units/"
+    with pytest.raises(Crash):
+        crashing.run()
+    (tmp_path / "next").mkdir()
+    check(len(World(tmp_path / "next", ["a.csv"]).run()["units"]["completed"]) == 1, "a later run is not refused after a process death")
+
+
+def test_a_reviewed_redirect_a_unit_installs_does_not_outlive_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.acquisition import history_redirects
+
+    shared = dict(transport.SIGNED_REDIRECT_ROUTES)
+    installed: list[str] = []
+
+    def install(source: str, target: str) -> None:
+        installed.append(source)
+        transport.SIGNED_REDIRECT_ROUTES[source] = target
+
+    monkeypatch.setattr(history_redirects, "install_redirect", install)
+    world = World(tmp_path, ["a.csv"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    (spec,) = specs.values()
+    spec["reviewed_unsigned_redirect"] = "https://data.cms.gov/sites/default/files/synthetic/reviewed_target.csv"
+    world.write_inputs(specs)
+    check(len(world.run()["units"]["completed"]) == 1 and len(installed) == 1, f"the unit installed its reviewed redirect: {installed}")
+    check(shared == transport.SIGNED_REDIRECT_ROUTES, "the reviewed redirect routes are the ones the process started with")
+
+
+def archive_world(tmp_path: Path) -> World:
+    world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
+    world.bodies[world.units[0]["url"]] = archive(pdf(1), b"id,value\n1,2\n")
+    return world
+
+
+def test_a_stored_member_map_edited_in_place_differs_from_the_digest_its_manifest_lists(tmp_path: Path) -> None:
+    world = archive_world(tmp_path)
+    world.run()
+    ((_, body),) = world.records().items()
+    (inventory,) = [key for key in world.bucket.names() if key.endswith("archive_mapping.json")]
+    version, stored, fields = world.bucket.objects[inventory]
+    world.bucket.objects[inventory] = (version, encoded_json(json.loads(stored) | {"note": "edited after it was listed"}), fields)
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"an edited member map is not a skip: {result['counters']}")
+    check(
+        [item["unit_key"] for item in result["units"]["refused"]] == [body["unit_key"]] and "digest" in result["units"]["refused"][0]["reason"],
+        f"the refusal names the digest: {result['units']}",
+    )
+
+
+@pytest.mark.parametrize("direction", ["map_dropped_from_the_specification", "map_added_to_the_specification"])
+def test_a_record_stored_with_a_member_map_and_a_unit_without_one_do_not_match_in_either_direction(tmp_path: Path, direction: str) -> None:
+    world = archive_world(tmp_path) if direction == "map_dropped_from_the_specification" else World(tmp_path, ["a.csv"])
+    world.run()
+    ((_, body),) = world.records().items()
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    (spec,) = specs.values()
+    if direction == "map_dropped_from_the_specification":
+        del spec["archive_members"]
+    else:
+        spec["archive_members"] = copy.deepcopy(MEMBERS)
+    world.write_inputs(specs)
+    forged = body | {"unit_key": world.unit_key()}
+    check(forged["unit_key"] != body["unit_key"], "the member map is part of the requested identity")
+    plant(world.bucket, record.record_key(ROOT, forged["unit_key"], forged["payload_sha256"]), record.encode(forged))
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"the other selection's record is not a skip: {result['counters']}")
+    check(
+        len(result["units"]["refused"]) == 1 and "member map" in result["units"]["refused"][0]["reason"], f"the refusal names the member map: {result['units']}"
+    )
+
+
+def test_the_evidence_step_fails_a_run_whose_record_and_writes_are_not_new_in_the_listing(three: World) -> None:
+    result = three.run()
+    problems = mode.check_run(storage(three.bucket), result, listed(three))
+    check(any("the run record is not new" in problem for problem in problems), f"a run record already in the earlier listing is not new: {problems}")
+    check(
+        any("recorded write" in problem and "is not a new version" in problem for problem in problems),
+        f"a recorded write already listed is not new: {problems}",
+    )

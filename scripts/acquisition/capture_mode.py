@@ -5,8 +5,9 @@ request. A verified record there means no request. Otherwise the unit is downloa
 read back by version and closed by one create-once completion record. Before it stores anything, the unit claims a create-once intent that names the
 snapshot ID its objects are stored under, so a retry after a crash stores under the same keys (``ingestion_intent.py``). The working folder is deleted
 after the record, or after a failure. The first attempted unit of a source that fails its contract pauses that source for the run. The run writes one
-run record and, only when something was attempted, one state object under ``<root>ingestion_runs/<run_id>/``. It sits beside the earlier redownload and
-compare paths in ``redownload.py``, which later work removes.
+run record and, only when something was attempted, one state object under ``<root>ingestion_runs/<run_id>/``. One run owns its process while it executes:
+it replaces process-wide transport functions, host variables and redirect routes, so a second run started in the same process raises ``RunInProgress``.
+It sits beside the earlier redownload and compare paths in ``redownload.py``, which later work removes.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ import os
 import re
 import shutil
 import tempfile
+import threading
 import time
 import urllib.request
 from collections import Counter
@@ -98,6 +100,13 @@ class IntentRefused(Exception):
         self.reason = reason
 
 
+class RunInProgress(RuntimeError):
+    """A second capture run asked to start while this process already executes one. It is refused before it changes anything."""
+
+
+RUN_OWNER = threading.Lock()
+
+
 class Observer:
     """The run's one request and byte observer. A request counts when it is sent and a response counts when its body is read, so a failed or rejected
     response counts too. The byte cap is enforced against the same count. The observer holds no URL, header or credential."""
@@ -153,11 +162,26 @@ def observed_connection(observer: Observer, original: Callable[..., Any]) -> Cal
 
 
 @contextmanager
+def owning_process() -> Iterator[None]:
+    """One run owns the process at a time. A run replaces process-wide transport functions, host variables and reviewed redirect routes, so an
+    overlapping run is refused visibly. The reviewed redirect routes a run installed are removed when it ends."""
+    if not RUN_OWNER.acquire(blocking=False):
+        raise RunInProgress("Another capture run owns this process; a run starts only after the earlier one ends")
+    routes = dict(transport.SIGNED_REDIRECT_ROUTES)
+    try:
+        yield
+    finally:
+        transport.SIGNED_REDIRECT_ROUTES.clear()
+        transport.SIGNED_REDIRECT_ROUTES.update(routes)
+        RUN_OWNER.release()
+
+
+@contextmanager
 def observing(observer: Observer) -> Iterator[None]:
     """Route every direct API connection and every response read of the process through the observer, then restore them.
 
     The API transports import ``https_connection`` by name and read bodies through ``redownload_controls.read``, so these are the two places every send
-    and every read pass. A run owns the process while it executes.
+    and every read pass. ``owning_process`` keeps a second run from nesting its own replacements.
     """
     saved: list[tuple[Any, Any]] = []
     for module in API_TRANSPORTS:
@@ -456,6 +480,7 @@ def expectation(run: CaptureRun, unit: dict, spec: Mapping[str, Any]) -> dict[st
         "method": "POST" if handler == "bls_api_v2" else "GET",
         "plan_item": spec.get("plan_item"),
         "mmd": {"measure_id": mmd["measure_id"], "year": mmd["year"]} if mmd else None,
+        "members": spec.get("archive_members") or None,
     }
 
 
@@ -502,21 +527,28 @@ def list_versions(storage: Any, prefixes: Iterable[str]) -> list[dict]:
     return [found[name] for name in sorted(found)]
 
 
-def diff_versions(before: list[dict], after: list[dict], allowed_new: set[str]) -> list[str]:
-    """What differs between two version listings, as problems: a removed or changed version, any new delete marker, a new version outside ``allowed_new``."""
+def diff_versions(before: list[dict], after: list[dict], allowed_new: Mapping[str, int]) -> list[str]:
+    """What differs between two version listings, as problems: a removed or changed version, any new delete marker, and more new versions of a key than
+    ``allowed_new`` names for it."""
     problems = []
     earlier = {(item["key"], item["version_id"], item["kind"]): item for item in before}
     later = {(item["key"], item["version_id"], item["kind"]): item for item in after}
     for name, item in earlier.items():
         if name not in later or later[name]["etag"] != item["etag"]:
             problems.append(f"version of {item['key']} was removed or replaced")
+    added: Counter = Counter()
     for name, item in later.items():
         if name in earlier:
             continue
         if item["kind"] == "delete_marker":
             problems.append(f"new delete marker on {item['key']}")
-        elif item["key"] not in allowed_new:
-            problems.append(f"unexpected new version of {item['key']}")
+        else:
+            added[item["key"]] += 1
+    for key, count in sorted(added.items()):
+        if key not in allowed_new:
+            problems.append(f"unexpected new version of {key}")
+        elif count > allowed_new[key]:
+            problems.append(f"{count} new versions of {key}; the run may add {allowed_new[key]}")
     return problems
 
 
@@ -591,17 +623,75 @@ def read_json_object(storage: Any, item: Mapping[str, Any]) -> Any:
     return json.loads(read_version(storage, item["key"], item["version_id"]))
 
 
-def manifest_problems(storage: Any, record: Mapping[str, Any]) -> list[str]:
-    """Problems with the object set: every object the record names must be listed, at its exact version and digest, by the manifests the record names."""
-    listed: set[tuple[str, str, str]] = set()
-    for manifest in record["manifests"]:
-        try:
-            for item in read_json_object(storage, manifest)["objects"]:
-                listed.add((item["object"]["key"], str(item["object"]["version_id"]), item["object"]["sha256"]))
-        except (StorageError, ValueError, KeyError, TypeError):
-            return [f"{manifest['key']}: the manifest cannot be read as a list of objects"]
-    named = [record["receipt"], *record["data_objects"], *record["other_objects"]]
-    return [f"{item['key']} is not listed by the record's manifests" for item in named if (item["key"], item["version_id"], item["sha256"]) not in listed]
+def stored_name(entry: Mapping[str, Any]) -> str:
+    """The name a stored object carries: its stored file name, else the last part of its storage path."""
+    return str(entry.get("stored_file_name") or Path(entry["storage_path"]).name)
+
+
+def listed_objects(entries: Iterable[Mapping[str, Any]]) -> tuple[set[tuple], set[tuple], set[tuple]]:
+    """The receipt, data and other objects manifest entries list, as comparable facts: key, exact version, digest and length, then the stored file name of
+    a data object or the role of another one. Only the transport and inventory roles are left out."""
+    receipts: set[tuple] = set()
+    data: set[tuple] = set()
+    other: set[tuple] = set()
+    for entry in entries:
+        role, item = entry["role"], entry["object"]
+        fact = (item["key"], str(item["version_id"]), item["sha256"], item["byte_count"])
+        if role == "capture_receipt":
+            receipts.add(fact)
+        elif role == "data":
+            data.add((*fact, stored_name(entry)))
+        elif role not in SKIPPED_ROLES:
+            other.add((*fact, role))
+    return receipts, data, other
+
+
+def recorded_objects(record: Mapping[str, Any]) -> tuple[set[tuple], set[tuple], set[tuple]]:
+    """The receipt, data and other objects a record names, as the same facts ``listed_objects`` gives."""
+
+    def fact(item: Mapping[str, Any]) -> tuple:
+        return (item["key"], item["version_id"], item["sha256"], item["byte_count"])
+
+    return (
+        {fact(record["receipt"])},
+        {(*fact(item), item["stored_file_name"]) for item in record["data_objects"]},
+        {(*fact(item), item["role"]) for item in record["other_objects"]},
+    )
+
+
+def manifest_entries(storage: Any, record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """Every object entry the record's manifests list, each manifest read at the exact version the record names."""
+    return [entry for manifest in record["manifests"] for entry in read_json_object(storage, manifest)["objects"]]
+
+
+def object_set_problems(record: Mapping[str, Any], entries: Iterable[Mapping[str, Any]]) -> list[str]:
+    """Problems with the object set, in both directions: what the record names must be what its manifests list, with the same roles and stored names."""
+    problems: list[str] = []
+    for found, said, label in zip(listed_objects(entries), recorded_objects(record), ("receipt", "data object", "other object"), strict=True):
+        problems.extend(f"{key} is not listed by the record's manifests as it is named" for key, *_ in sorted(said - found))
+        problems.extend(f"{key} is listed by the record's manifests as a {label} that the record omits or names otherwise" for key, *_ in sorted(found - said))
+    return problems
+
+
+def member_problems(storage: Any, entries: list[dict[str, Any]], reviewed: list[dict[str, Any]] | None) -> list[str]:
+    """Problems with the archive member map the manifests bind: the stored map and the stored members must be the specification's reviewed member map."""
+    inventories = [entry["object"] for entry in entries if entry["role"] == "archive_inventory"]
+    if not reviewed:
+        return ["the manifests list an archive member map that the specification does not name"] if inventories else []
+    if len(inventories) != 1:
+        return ["the manifests do not list exactly one archive member map"]
+    body = read_version(storage, inventories[0]["key"], str(inventories[0]["version_id"]))
+    if hashlib.sha256(body).hexdigest() != inventories[0]["sha256"]:
+        return ["the archive member map differs from its listed digest"]
+    wanted = {(tuple(item["member_chain"]), item["role"], item["dataset_id"]) for item in reviewed}
+    stored = {(tuple(item["member_chain"]), item["role"], item["dataset_id"]) for item in json.loads(body)["members"]}
+    placed = {(tuple(entry["member_chain"]), entry["role"], entry["mapped_dataset_id"]) for entry in entries if "member_chain" in entry}
+    problems = []
+    if stored != wanted:
+        problems.append("the stored archive member map differs from the specification's reviewed member map")
+    if placed != {(chain, role, dataset if role == "data" else None) for chain, role, dataset in wanted}:
+        problems.append("the stored members' roles or dataset folders differ from the specification's reviewed member map")
+    return problems
 
 
 def receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any]) -> list[str]:
@@ -614,6 +704,8 @@ def receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any]) ->
     problems = []
     if found_source != expected["source_id"]:
         problems.append("the receipt belongs to another source")
+    if lineage.get("mode") != expected["mode"]:
+        problems.append("the receipt belongs to another handler")
     if expected["mode"] in URL_BOUND and (
         canonical_url(acquisition.get("requested_url") or "") != expected["url"] or acquisition.get("request_method") != expected["method"]
     ):
@@ -627,8 +719,13 @@ def receipt_problems(receipt: Mapping[str, Any], expected: Mapping[str, Any]) ->
 
 
 def binding_problems(storage: Any, record: Mapping[str, Any], expected: Mapping[str, Any] | None) -> list[str]:
-    """Problems with the binding of a record: its objects agree with its manifests and, when the requested unit is known, with that unit's request."""
-    problems = manifest_problems(storage, record)
+    """Problems with the binding of a record: its objects are exactly what its manifests list and, when the requested unit is known, its receipt, handler
+    and member map are that unit's."""
+    try:
+        entries = manifest_entries(storage, record)
+        problems = object_set_problems(record, entries)
+    except (StorageError, ValueError, KeyError, TypeError):
+        return ["the record's manifests cannot be read as a list of objects"]
     if expected is None:
         return problems
     problems.extend(f"the record names another {name}" for name in ("source_id", "mode", "collection") if record[name] != expected[name])
@@ -636,6 +733,10 @@ def binding_problems(storage: Any, record: Mapping[str, Any], expected: Mapping[
         problems.extend(receipt_problems(read_json_object(storage, record["receipt"]), expected))
     except (StorageError, ValueError):
         problems.append("the receipt cannot be read")
+    try:
+        problems.extend(member_problems(storage, entries, expected["members"]))
+    except (StorageError, ValueError, KeyError, TypeError):
+        problems.append("the archive member map cannot be read")
     return problems
 
 
@@ -721,24 +822,24 @@ def skip_problems(storage: Any, root: str, run_record: Mapping[str, Any]) -> lis
 def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
     """The host evidence step: reconcile every unit, verify the records by version and diff the version listings before and after the run.
 
-    The only new versions allowed are the writes the run recorded at its storage boundary and its run record. A recorded write must be new in the
-    listing, nothing may be removed, replaced or marked deleted, and a run that attempted nothing allows no new shared ledger entry. Every unit ends
-    with a verified record, or the run fails.
+    The only new versions allowed are the writes the run recorded at its storage boundary, one new version for each, and exactly one new version of its
+    run record. A recorded write must be new in the listing, nothing may be removed, replaced or marked deleted, and a run that attempted nothing allows
+    no new shared ledger entry. Every unit ends with a verified record, or the run fails.
     """
     root, run_id, counters, units = run_record["root"], run_record["run_id"], run_record["counters"], run_record["units"]
     after = list_versions(storage, evidence_prefixes(root))
     known = {(item["key"], item["version_id"], item["kind"]) for item in before}
     new_keys = [item["key"] for item in after if (item["key"], item["version_id"], item["kind"]) not in known and item["kind"] == "version"]
-    run_key, writes = records.run_record_key(root, run_id), set(run_record["writes"])
+    run_key, writes, listed_new = records.run_record_key(root, run_id), Counter(run_record["writes"]), Counter(new_keys)
     proof = counters["units_attempted"] == 0
-    foreign = {key for key in new_keys if key.startswith(task_role.BLS_LEDGER_PREFIX) and key not in writes}
-    problems = diff_versions(before, after, writes | {run_key} | (set() if proof else foreign))
+    foreign = Counter({key: 1 for key in listed_new if key.startswith(task_role.BLS_LEDGER_PREFIX) and key not in writes})
+    problems = diff_versions(before, after, writes + Counter({run_key: 1}) + (Counter() if proof else foreign))
     if proof and foreign:
         problems.append("the shared BLS ledger changed during a run that attempted nothing")
-    problems.extend(f"recorded write {key} is not a new version in the listing" for key in sorted(writes - set(new_keys)))
-    if run_key not in new_keys:
+    problems.extend(f"recorded write {key} is not a new version in the listing" for key in sorted(writes - listed_new))
+    if run_key not in listed_new:
         problems.append("the run record is not new")
-    tally = tally_writes(root, writes)
+    tally = tally_writes(root, run_record["writes"])
     said = {name: counters[name] for name in ("objects_created", "intents_created", "bls_ledger_entries_added")}
     if said != {name: tally[name] for name in said}:
         problems.append(f"the recorded writes hold { ({name: tally[name] for name in said}) }; the counters say {said}")
@@ -862,8 +963,7 @@ def stored_objects(reconciliation: dict) -> tuple[dict, list[dict], list[dict], 
         if item["role"] in SKIPPED_ROLES or (item["role"], record["key"]) in seen:
             continue
         seen.add((item["role"], record["key"]))
-        name = item.get("stored_file_name") or Path(item["storage_path"]).name
-        (data if item["role"] == "data" else other).append(record | {"role": item["role"], "stored_file_name": name})
+        (data if item["role"] == "data" else other).append(record | {"role": item["role"], "stored_file_name": stored_name(item)})
     return receipt["object"], [item["object"] for item in reconciliation["manifests"]], data, other
 
 
@@ -984,25 +1084,27 @@ def execute(run: CaptureRun) -> dict[str, Any]:
     """Process the queue once and return the run record, which is also stored create-once. A crash leaves no run record.
 
     The downloader reads the approved hosts file from the environment. The run sets the files it checked against the queue and restores the old values.
+    A run that starts while another run executes in the process raises ``RunInProgress`` before it reads or changes anything.
     """
-    units, specs, queue_sha256 = load_inputs(run)
-    require(capture_root() == run.root, "The run's root differs from the capture root the storage path writes under")
-    hosts, approval = run.hosts, run.hosts_approval
-    if hosts is None or approval is None:
-        raise RegistryError("A capture run needs the approved hosts file and its approval")
-    problems = redownload_route.host_problems(run.queue_path.read_bytes(), hosts, approval)
-    require(not problems, "Approved hosts: " + "; ".join(problems))
-    names = (transport.APPROVED_HOSTS_VARIABLE, transport.APPROVED_HOSTS_APPROVAL_VARIABLE)
-    earlier = {name: os.environ.get(name) for name in names}
-    os.environ[names[0]], os.environ[names[1]] = str(hosts), str(approval)
-    try:
-        return process(run, units, specs, queue_sha256)
-    finally:
-        for name, value in earlier.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+    with owning_process():
+        units, specs, queue_sha256 = load_inputs(run)
+        require(capture_root() == run.root, "The run's root differs from the capture root the storage path writes under")
+        hosts, approval = run.hosts, run.hosts_approval
+        if hosts is None or approval is None:
+            raise RegistryError("A capture run needs the approved hosts file and its approval")
+        problems = redownload_route.host_problems(run.queue_path.read_bytes(), hosts, approval)
+        require(not problems, "Approved hosts: " + "; ".join(problems))
+        names = (transport.APPROVED_HOSTS_VARIABLE, transport.APPROVED_HOSTS_APPROVAL_VARIABLE)
+        earlier = {name: os.environ.get(name) for name in names}
+        os.environ[names[0]], os.environ[names[1]] = str(hosts), str(approval)
+        try:
+            return process(run, units, specs, queue_sha256)
+        finally:
+            for name, value in earlier.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
 
 def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sha256: str) -> dict[str, Any]:
@@ -1090,7 +1192,7 @@ def finish(
     save_state(run, state)
     done["skipped_complete"].sort()
     done["skipped_recent_stale"].sort()
-    writes = sorted(set(journal.keys))
+    writes = sorted(journal.keys)
     counters.update({name: count for name, count in tally_writes(run.root, writes).items() if name != "run_objects"})
     counters["http_requests"], counters["bytes_downloaded"], counters["skipped_complete"], counters["skipped_recent_stale"] = (
         observer.requests,
