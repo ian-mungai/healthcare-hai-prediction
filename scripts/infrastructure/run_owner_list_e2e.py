@@ -293,13 +293,13 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
 
 MUTANTS = (
     ("terraform output with two names", "output -json host_code_fetch_role", "output -json host_code_fetch_role project_tag"),
-    ("manage_policies without the administrator profile", "manage_policies plan --admin-profile <ADMIN_PROFILE>", "manage_policies plan"),
-    ("manage_policies apply without the reviewed plan's digest", " --digest <PLAN_DIGEST>", ""),
-    ("push_images without the repository file", "--repository-urls <RECORD_DIR>/repository_urls.json ", ""),
+    ("manage_policies without the administrator profile", 'manage_policies plan --admin-profile "$ADMIN_PROFILE"', "manage_policies plan"),
+    ("manage_policies apply without the reviewed plan's digest", ' --digest "$PLAN_DIGEST"', ""),
+    ("push_images without the repository file", '--repository-urls "$RECORD_DIR/repository_urls.json" ', ""),
     ("a mistyped module", "scripts.lakehouse.code_archive build", "scripts.lakehouse.code_arch build"),
-    ("an unknown placeholder", "--output /tmp/code_<RUN_ID>", "--output /tmp/code_<CODE_DIR>"),
-    ("a mistyped wrapper option", "--preparation-sha256 <SHA256> plan", "--preparation-sha25 <SHA256> plan"),
-    ("a mistyped host start option", "host_session start --code-run <RUN_ID>", "host_session start --code-runs <RUN_ID>"),
+    ("a mistyped code archive option", '--output "$CODE_DIR"', '--outputs "$CODE_DIR"'),
+    ("a mistyped wrapper option", '--preparation-sha256 "$SERVICES_INPUTS_SHA256" plan', '--preparation-sha25 "$SERVICES_INPUTS_SHA256" plan'),
+    ("a mistyped host start option", 'host_session start --code-run "$RUN_ID"', 'host_session start --code-runs "$RUN_ID"'),
     ("a services apply status without its subcommand", "services_apply status", "services_apply"),
 )
 
