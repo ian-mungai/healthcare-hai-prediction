@@ -1,5 +1,5 @@
 {
-  "bundle_sha256": "d654b1acc82874335f8df3a8d56baacbc664e8158eae5ba8adc172e4d20f662f",
+  "bundle_sha256": "4eca324bbbd6133f1ad5bf6765db1db0c3de12627defb95d9cc8268a97f04509",
   "files": [
     {
       "bytes": 1039786,
@@ -115,6 +115,11 @@
       "bytes": 108,
       "path": "queue.lock.json",
       "sha256": "620973edb7beb62fbdd5eb5ddc99c332d2a8e39eb54437f4b2bee0ca9b52139c"
+    },
+    {
+      "bytes": 13924,
+      "path": "remote_pins.json",
+      "sha256": "d7684424de6f68f6548caf07b9c47082105b7d078085f5376beabda25d3a1025"
     }
   ]
 }

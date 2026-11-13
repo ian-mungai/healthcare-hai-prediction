@@ -35,10 +35,30 @@ def bundle(root: Path, *, mutate: Callable[[dict], None] | None = None) -> Path:
     )
     (root / "hosts_approval.json").write_text(json.dumps({"hosts_sha256": hosts_digest(HOSTS), "approved_by": "owner"}))
     (root / "capture_specs.json").write_bytes(specs_for(trimmed))
+    (root / "remote_pins.json").write_text(json.dumps(pins_document(), indent=1, sort_keys=True))
     (root / PLAN_INPUT).parent.mkdir(parents=True)
     (root / PLAN_INPUT).write_text('{"a": 1}\n')
     (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
     return root
+
+
+REMOTE_PATH = "data/example/remote.csv"
+PENDING_PATH = "data/example/pending.txt"
+
+
+def pins_document(**changes: object) -> dict:
+    """Three expected plan inputs: one tracked in the bundle, one pinned in S3 and one pending with its reason."""
+    document = {
+        "expected_plan_inputs": sorted([PLAN_INPUT.removeprefix("plan_inputs/"), REMOTE_PATH, PENDING_PATH]),
+        "remote": [{"path": REMOTE_PATH, "sha256": "a" * 64, "bytes": 5, "s3_key": "example/remote.csv", "s3_version_id": "v1"}],
+        "pending": [{"path": PENDING_PATH, "reason": "not decided"}],
+    }
+    return document | changes
+
+
+def write_pins(root: Path, document: dict) -> None:
+    (root / "remote_pins.json").write_text(json.dumps(document, indent=1, sort_keys=True))
+    (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
 
 
 def specs_for(trimmed: bytes) -> bytes:
@@ -131,3 +151,24 @@ def test_specs_with_a_bucket_key_or_local_path_are_refused(tmp_path: Path) -> No
     (root / "capture_specs.json").write_text(json.dumps(document))
     (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
     check(any("capture specification holds" in p for p in check_run.problems(root)), "environment value")
+
+
+def test_a_plan_input_with_no_copy_pin_or_pending_note_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    write_pins(root, pins_document(expected_plan_inputs=[PLAN_INPUT.removeprefix("plan_inputs/"), REMOTE_PATH, PENDING_PATH, "data/example/forgotten.csv"]))
+    check(any("forgotten.csv has no tracked copy, S3 pin or pending note" in p for p in check_run.problems(root)), "unaccounted plan input")
+
+
+def test_an_incomplete_s3_pin_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    pin = {"path": REMOTE_PATH, "sha256": "a" * 64, "bytes": 5, "s3_key": "example/remote.csv", "s3_version_id": ""}
+    write_pins(root, pins_document(remote=[pin]))
+    check(any("pin is incomplete" in p for p in check_run.problems(root)), "empty version")
+
+
+def test_a_pin_must_not_carry_a_bucket_name_and_a_path_has_one_home(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    pin = {"path": PLAN_INPUT.removeprefix("plan_inputs/"), "sha256": "a" * 64, "bytes": 5, "s3_key": "s3://example-bucket/key", "s3_version_id": "v"}
+    write_pins(root, pins_document(remote=[pin]))
+    found = " ".join(check_run.problems(root))
+    check("is tracked and also pinned" in found and "pin is incomplete" in found, "double home and bucket in key")

@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
@@ -108,12 +109,40 @@ def specs_problems(root: Path) -> list[str]:
     return problems
 
 
+def pin_problems(root: Path) -> list[str]:
+    """Return why a plan input is not accounted for: every expected input has exactly one home, a tracked copy, an S3 pin or a pending note."""
+    document = json.loads((root / "remote_pins.json").read_text(encoding="utf-8"))
+    expected = set(document["expected_plan_inputs"])
+    tracked = {item["path"].removeprefix("plan_inputs/") for item in file_entries(root) if item["path"].startswith("plan_inputs/")}
+    remote = {pin["path"]: pin for pin in document["remote"]}
+    pending = {item["path"] for item in document["pending"]}
+    problems = []
+    for path in sorted(expected):
+        homes = [name for name, group in (("tracked", tracked), ("pinned", remote.keys()), ("pending", pending)) if path in group]
+        if not homes:
+            problems.append(f"{path} has no tracked copy, S3 pin or pending note")
+        elif len(homes) > 1:
+            problems.append(f"{path} is {' and also '.join(homes)}")
+    problems += [f"{path} is a tracked plan input the expected list lacks" for path in sorted(tracked - expected)]
+    for path, pin in sorted(remote.items()):
+        key, version = pin.get("s3_key"), pin.get("s3_version_id")
+        sha = pin.get("sha256")
+        complete = isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha) and isinstance(pin.get("bytes"), int) and pin["bytes"] > 0
+        complete = (
+            complete and isinstance(key, str) and bool(key) and "://" not in key and not key.startswith("/") and isinstance(version, str) and bool(version)
+        )
+        if not complete:
+            problems.append(f"the S3 pin is incomplete: {path}")
+    return problems
+
+
 def problems(root: Path = ROOT) -> list[str]:
     """Return every problem of the bundle at ROOT, or an empty list."""
     found = lock_problems(root)
     try:
         found += queue_problems(root)
         found += specs_problems(root)
+        found += pin_problems(root)
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:
         found.append(f"the queue or hosts files are unusable: {error}")
@@ -132,7 +161,9 @@ def main() -> None:
     if found:
         sys.stderr.write("\n".join(found) + "\n")
         raise SystemExit(1)
-    sys.stdout.write(json.dumps({"bundle": "ok", "files": len(file_entries(args.root))}) + "\n")
+    pending = json.loads((args.root / "remote_pins.json").read_text(encoding="utf-8"))["pending"]
+    sys.stderr.write("".join(f"pending: {item['path']}: {item['reason']}\n" for item in pending))
+    sys.stdout.write(json.dumps({"bundle": "ok", "files": len(file_entries(args.root)), "pending": len(pending)}) + "\n")
 
 
 if __name__ == "__main__":
