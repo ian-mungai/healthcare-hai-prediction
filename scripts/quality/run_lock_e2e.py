@@ -45,6 +45,12 @@ EXPECTED_GROUPS = {
     "training",
 }
 PIP_DEADLINE = 900
+WRONG_HASH_DIAGNOSTIC = (
+    "THESE PACKAGES DO NOT MATCH THE HASHES FROM THE REQUIREMENTS FILE"  # What pip prints when a downloaded file matches none of the listed hashes.
+)
+MISSING_HASH_DIAGNOSTIC = (
+    "Hashes are required in --require-hashes mode, but they are missing from some requirements"  # What pip prints for a pin that lists no hash.
+)
 Problems = list[str]
 
 
@@ -229,11 +235,11 @@ def pip_install(environment: Path, requirements: Path) -> tuple[int, str]:
         str(requirements),
     ]
     result = run_command(sys.executable, arguments, timeout=PIP_DEADLINE)
-    return result.returncode, result.stderr[-300:]
+    return result.returncode, result.stderr
 
 
 def hashed_install() -> Problems:
-    """The import-linter group installs under --require-hashes and runs; one wrong hash and no hash each fail the install."""
+    """The import-linter group installs under --require-hashes and runs; one wrong hash and no hash each fail the install with pip's own hash diagnostic."""
     problems: Problems = []
     with tempfile.TemporaryDirectory(prefix="lock_e2e_") as folder:
         top = Path(folder)
@@ -242,17 +248,23 @@ def hashed_install() -> Problems:
         wrong_lines = [line.replace("--hash=sha256:", "--hash=sha256:0") if index < 3 else line for index, line in enumerate(lines)]
         wrong = "\n".join(wrong_lines) + "\n"
         bare = "".join(line.rstrip(" \\") + "\n" for line in text.splitlines() if not line.startswith("    --hash="))
-        for label, content in (("wrong_hash", wrong), ("no_hash", bare)):
+        target = re.match(r"[A-Za-z0-9._-]+==[^\s;]+", lines[0])
+        if not target:
+            return [f"the first line of the import_linter export is not a pinned requirement: {lines[0][:80]!r}"]
+        for label, content, diagnostic in (("wrong_hash", wrong, WRONG_HASH_DIAGNOSTIC), ("no_hash", bare, MISSING_HASH_DIAGNOSTIC)):
             run_command(sys.executable, ["-m", "venv", str(top / label)], timeout=300, check=True)
             (top / f"{label}.txt").write_text(content, encoding="utf-8")
-            code, _ = pip_install(top / label, top / f"{label}.txt")
+            code, error = pip_install(top / label, top / f"{label}.txt")
             if code == 0:
                 problems.append(f"{label}: the install did not fail")
+            elif diagnostic not in error or target.group(0) not in error:
+                # A failure for another reason (a malformed line, an unknown option, a package that cannot be fetched) proves nothing about hashes.
+                problems.append(f"{label}: pip failed, but not with its hash diagnostic {diagnostic!r} for {target.group(0)}: {error.strip()[-300:]}")
         run_command(sys.executable, ["-m", "venv", str(top / "good")], timeout=300, check=True)
         (top / "good.txt").write_text(text, encoding="utf-8")
         code, error = pip_install(top / "good", top / "good.txt")
         if code:
-            return [*problems, f"good export did not install: {error}"]
+            return [*problems, f"good export did not install: {error[-300:]}"]
         shown = run_command(sys.executable, ["-m", "pip", "--python", str(top / "good/bin/python"), "show", "import-linter"], timeout=60)
         pinned = json.loads((ROOT / "config/quality_tools.json").read_text(encoding="utf-8"))["tools"]["import-linter"]["version"]
         if shown.returncode or f"Version: {pinned}" not in shown.stdout:
