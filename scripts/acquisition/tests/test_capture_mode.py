@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from scripts.acquisition import capture_mode as mode
+from scripts.acquisition import cms_owners_contract as owners_contract
 from scripts.acquisition import (
     collect_bls_api,
     collect_census_acs_api,
@@ -30,6 +31,7 @@ from scripts.acquisition import (
 from scripts.acquisition import completion_record as record
 from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload_route as route
+from scripts.acquisition.run_cms_owners_e2e import synthetic_plan as owners_plan
 from scripts.acquisition.run_onc_mu_e2e import body as onc_body
 from scripts.acquisition.run_onc_mu_e2e import locked as onc_locked
 from scripts.acquisition.s3_store import encoded_json
@@ -659,3 +661,23 @@ def test_a_stale_expected_digest_in_a_receipt_template_is_ignored_and_a_referenc
     by_name = {item["data_objects"][0]["stored_file_name"] if item["data_objects"] else "": item for item in world.records().values()}
     check(set(by_name) == {"a.csv", ""}, f"the reference-only unit names no data object: {sorted(by_name)}")
     check([item["role"] for item in by_name[""]["other_objects"]] == ["methodology"], "its document is named with its role")
+
+
+def test_a_real_grouped_plan_item_resolves_and_its_collector_runs_through_capture_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The CMS owners collector reads a plan with a list of releases, so the plan item names one release inside its plan."""
+    plan, plan_path, bodies = owners_plan(tmp_path)
+    versions = tmp_path / "owners_versions.json"
+    s3_store.write_once(versions, encoded_json({"versions": [{"code_sha256": owners_contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(owners_contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(owners_contract, "VERSIONS_PATH", versions)
+    release = plan["releases"][0]
+    (tmp_path / "world").mkdir()
+    world = World(tmp_path / "world", ["x.csv"])
+    unit = world.units[0] | {"url": release["url"], "source_id": "CMS_OWNERS", "mode": "cms_owners_org", "bytes": len(bodies[release["url"]])}
+    world.units[0] = unit
+    world.bodies.clear()
+    world.bodies.update(bodies)
+    world.write_inputs({unit["snapshot_id"]: {"mode": "cms_owners_org", "plan_item": release["id"], "stored_data_files": []}})
+    result = world.run()
+    check(len(result["units"]["completed"]) == 1, f"{result['units']} {result['counters']}")
+    check(mode.verify_records(storage(world.bucket), ROOT) == [], "the record verifies by version")
