@@ -1565,6 +1565,7 @@
     "scripts/lakehouse/run_catalog_migration_defects.py",
     "scripts/lakehouse/run_catalog_migration_e2e.py",
     "scripts/lakehouse/run_catalog_registration_e2e.py",
+    "scripts/lakehouse/run_code_archive_e2e.py",
     "scripts/lakehouse/run_county_change_seed_e2e.py",
     "scripts/lakehouse/run_duckdb_bounds_cases.py",
     "scripts/lakehouse/run_duckdb_spill_cases.py",
