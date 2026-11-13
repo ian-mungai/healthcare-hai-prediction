@@ -37,7 +37,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from orchestration import ecs_target
 from scripts.features import feast_aws, feast_cases, feast_job, feast_materialize, online_cases
 from scripts.features import online_protocol as online
 from scripts.features import publication_reads as reads
@@ -868,35 +867,6 @@ def case_fa14(c: Checker) -> None:
                 f"{mode}: the record holds no secret",
                 SENTINEL not in json.dumps(record) and STORE_VALUE not in json.dumps(record) and ISSUED not in json.dumps(record),
             )
-
-
-def case_fa15(c: Checker) -> None:
-    """FA15: the materialization row exists, is closed to its step, and the switch stays off."""
-    root = reads.REPO_ROOT
-    jobs = ecs_target.load_jobs(root)
-    row = {"template": "pipeline_feast", "step": "materialize", "class": "lakehouse_read"}
-    c.check("the materialization row is in the table", row in jobs["jobs"])
-    c.check("the rollout switch stays off", jobs["enabled"] is False)
-    c.check("the row matches the materialize step", ecs_target.row_for(jobs, "pipeline_feast", {"step": "materialize"}, "lakehouse_read") == row)
-    for step in ("apply", "probe", "other"):
-        c.check(f"the row does not match the {step} step", ecs_target.row_for(jobs, "pipeline_feast", {"step": step}, "lakehouse_read") is None)
-    c.check("the row does not match another class", ecs_target.row_for(jobs, "pipeline_feast", {"step": "materialize"}, "offline") is None)
-    c.check("the other rows keep their meaning", ecs_target.row_for(jobs, "pipeline_spark", {"layer": "silver"}, "lakehouse_read") is not None)
-    c.check("the table has the earlier rows and the new one", len(jobs["jobs"]) == 9)
-    schema = json.loads((root / "config/orchestration/ecs_jobs.schema.json").read_text())
-    c.check("the schema names pipeline_feast and the step", "pipeline_feast" in json.dumps(schema) and "materialize" in json.dumps(schema))
-    forbidden = dict(jobs, jobs=[*jobs["jobs"], {"template": "pipeline_feast", "step": "apply", "class": "lakehouse_read"}])
-    with tempfile.TemporaryDirectory(prefix="feast_aws_") as raw:
-        folder = Path(raw)
-        (folder / "config/orchestration").mkdir(parents=True)
-        (folder / "config/orchestration/ecs_jobs.schema.json").write_text(json.dumps(schema))
-        (folder / "config/orchestration/ecs_jobs.json").write_text(json.dumps(forbidden))
-        try:
-            ecs_target.load_jobs(folder)
-            refused = False
-        except ecs_target.PlacementError:
-            refused = True
-    c.check("a row for the apply step is refused by the schema", refused)
 
 
 def case_fa16(c: Checker) -> None:
@@ -1865,7 +1835,6 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "FA12": (case_fa12, "FA12"),
     "FA13": (case_fa13, "FA13"),
     "FA14": (case_fa14, "FA14"),
-    "FA15": (case_fa15, "FA15"),
     "FA16": (case_fa16, "FA16"),
     "FA17": (case_fa17, "FA17"),
     "FA18": (case_fa18, "FA18"),

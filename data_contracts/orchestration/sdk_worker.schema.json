@@ -43,7 +43,7 @@
               "items": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {"capacityProvider": {"enum": ["FARGATE", "FARGATE_SPOT"]}, "weight": {"const": 1}},
+                "properties": {"capacityProvider": {"type": "string", "pattern": "^[a-z][a-z0-9_]*_host_(dev|prod)$(?![\\s\\S])"}, "weight": {"const": 1}},
                 "required": ["capacityProvider", "weight"]
               },
               "maxItems": 1

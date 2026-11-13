@@ -33,7 +33,6 @@ from unittest import mock
 
 from botocore.exceptions import ClientError
 
-from orchestration import ecs_target
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import secret_store
@@ -1004,13 +1003,8 @@ def case_check_grants(_: Path) -> dict[str, bool]:
 def seed_registry(services: Services, live: bool) -> None:
     """A test launcher registry with one attempt whose cloud try is live, or confirmed complete."""
     now = int(time.time())
-    attempt: dict[str, Any] = {"id": "a1", "deadline_utc": now + 3600}
-    ecs_target.initialize(attempt, "ecs", now, 1)
-    placement = ecs_target.reserve(
-        attempt, ecs_target.Size(1024, 2048, 21), ecs_target.Decision("dispatch", "ecs", "aws_first", "FARGATE"), now, ecs_target.Usage()
-    )
-    if not live:
-        ecs_target.fenced(attempt, str(placement["try_id"]), now, no_start=True)
+    placement = {"try_id": "hai_a1_1", "target": "ecs", "state": "unknown" if live else "fenced"}
+    attempt: dict[str, Any] = {"id": "a1", "deadline_utc": now + 3600, "execution": {"live_try": "hai_a1_1" if live else None, "placements": [placement]}}
     folder = services.registry.path
     folder.mkdir(parents=True, exist_ok=True)
     registry_id = secrets.token_hex(8)

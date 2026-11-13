@@ -11,12 +11,6 @@
   ],
   "pairs": [
     {
-      "schema": "config/orchestration/ecs_jobs.schema.json",
-      "files": [
-        "config/orchestration/ecs_jobs.json"
-      ]
-    },
-    {
       "schema": "config/acquisition/projection_policies.schema.json",
       "files": [
         "config/acquisition/projection_policies.json"

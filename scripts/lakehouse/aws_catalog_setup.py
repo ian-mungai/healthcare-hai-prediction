@@ -49,7 +49,7 @@ import sys
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -57,7 +57,7 @@ from typing import Any, Protocol
 
 from botocore.exceptions import BotoCoreError, ClientError
 
-from orchestration import ecs_target, launcher
+from orchestration import launcher
 from orchestration.catalog_transport import CatalogTransport, TransportSpec
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure import secret_store
@@ -669,12 +669,25 @@ def compare_grants(request: Request, access: str, role: str, expected: list[dict
         raise SetupError("grants", f"the grants of catalog role {role} differ from the approved plan; the role stays unassigned") from None
 
 
+TERMINAL_PLACEMENTS = ("fenced", "complete")
+
+
+def live_cloud_tries(attempts: Iterable[Mapping[str, Any]]) -> int:
+    """The cloud placements of the attempts that have no confirmed end. A malformed record raises, so the caller treats the registry as unreadable."""
+    return sum(
+        1
+        for attempt in attempts
+        for placement in attempt.get("execution", {}).get("placements", [])
+        if placement["target"] == "ecs" and placement["state"] not in TERMINAL_PLACEMENTS
+    )
+
+
 @contextlib.contextmanager
 def no_live_writer_try(registry: run_lock.Registry, *, deadline: float, clock: Clock = time.monotonic) -> Iterator[None]:
     """Hold the launcher registry lock, under which the launcher admits every try, and stop unless the registry proves no cloud try is live (P5).
 
     The registry records each cloud try and its placement state but not the catalog pair it holds, so any try without a confirmed end
-    (``ecs_target.TERMINAL_PLACEMENTS``) stops the setup of every identity, and a registry that cannot be read proves nothing and stops it too. A
+    (``TERMINAL_PLACEMENTS``) stops the setup of every identity, and a registry that cannot be read proves nothing and stops it too. A
     registry that does not exist yet has admitted nothing. The lock stays held until the credentials are stored, so no try is admitted in between.
     """
     registry.path.mkdir(parents=True, exist_ok=True)
@@ -692,11 +705,11 @@ def no_live_writer_try(registry: run_lock.Registry, *, deadline: float, clock: C
                 try:
                     identity = run_lock.read_identity(registry)
                     state = run_lock.parse_state(registry.state_file.read_bytes(), identity["registry_id"], registry.state_file.name)
-                    usage = ecs_target.active_usage((state.get("attempts") or {}).values())
-                except (OSError, run_lock.RegistryError, ecs_target.PlacementError, KeyError, TypeError, AttributeError):
+                    live_tries = live_cloud_tries((state.get("attempts") or {}).values())
+                except (OSError, run_lock.RegistryError, KeyError, TypeError, AttributeError):
                     raise SetupError("writer_try", "the launcher registry cannot be read, so no live writer try can be ruled out") from None
-                if usage.tasks:
-                    raise SetupError("writer_try", f"the launcher registry holds {usage.tasks} cloud try without a confirmed end; rerun after it ends")
+                if live_tries:
+                    raise SetupError("writer_try", f"the launcher registry holds {live_tries} cloud try without a confirmed end; rerun after it ends")
             yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)

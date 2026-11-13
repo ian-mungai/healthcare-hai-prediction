@@ -9,7 +9,6 @@ orchestration_checks() {
   timed "orchestration_checks: SDK source mutations" "$python_bin" -B -m scripts.orchestration.sdk_static_mutations --output "$quality_output/sdk_static_mutations/report.json"
   timed "orchestration_checks: catalog transport cases" "$python_bin" -B -m scripts.orchestration.catalog_transport_cases --mutations --output "$quality_output/catalog_transport_cases/report.json"
   timed "orchestration_checks: lineage E2E" "$python_bin" -m scripts.orchestration.run_lineage_e2e
-  timed "orchestration_checks: ECS placement static proof" "$python_bin" -m scripts.orchestration.run_ecs_target_e2e --proof S
   timed "orchestration_checks: task guard cases" "$python_bin" -m scripts.orchestration.task_guard_cases
   timed "orchestration_checks: trigger_dag cases" "$python_bin" -B -m scripts.orchestration.trigger_dag_cases --output "$quality_output/trigger_dag_cases/report.json"
   timed "orchestration_checks: direct ECS launch E2E" "$python_bin" -m scripts.orchestration.run_ecs_launch_e2e

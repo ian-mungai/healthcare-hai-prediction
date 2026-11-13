@@ -7,7 +7,7 @@
   "required": ["version", "requested_target", "queued_at", "deadline_utc", "catalog_epoch", "live_try", "placements"],
   "properties": {
     "version": {"const": 1},
-    "requested_target": {"enum": ["auto", "ecs", "docker"]},
+    "requested_target": {"enum": ["auto", "docker"]},
     "queued_at": {"type": "number", "minimum": 0},
     "deadline_utc": {"type": "integer", "minimum": 1},
     "catalog_epoch": {"type": ["integer", "null"], "minimum": 1},
@@ -20,8 +20,8 @@
         "required": ["try_id", "target", "capacity_provider", "state", "reason", "created_at", "deadline_utc", "cpu", "memory_mib", "storage_gib", "task_arn", "started"],
         "properties": {
           "try_id": {"type": "string", "pattern": "^[A-Za-z0-9_-]{1,100}$(?![\\s\\S])"},
-          "target": {"enum": ["ecs", "docker"]},
-          "capacity_provider": {"enum": ["FARGATE_SPOT", "FARGATE", null]},
+          "target": {"enum": ["docker"]},
+          "capacity_provider": {"enum": [null]},
           "state": {"enum": ["intent", "pending", "running", "unknown", "stopping", "fenced", "complete"]},
           "reason": {"enum": ["aws_first", "spot_capacity_unavailable", "capacity", "patience", "cloud_cap", "breaker"]},
           "created_at": {"type": "number", "minimum": 0},
@@ -39,7 +39,6 @@
           }
         },
         "allOf": [
-          {"if": {"properties": {"target": {"const": "ecs"}}}, "then": {"properties": {"capacity_provider": {"enum": ["FARGATE_SPOT", "FARGATE"]}}}},
           {"if": {"properties": {"target": {"const": "docker"}}}, "then": {"properties": {"capacity_provider": {"type": "null"}, "task_arn": {"type": "null"}}}},
           {"if": {"properties": {"state": {"const": "fenced"}}}, "then": {"required": ["fenced_at", "no_start"]}}
         ]

@@ -3684,7 +3684,6 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.sdk_static_mutations", "-B", "--output", "@quality@/sdk_static_mutations/report.json"),
     ("scripts.orchestration.catalog_transport_cases", "-B", "--mutations", "--output", "@quality@/catalog_transport_cases/report.json"),
     ("scripts.orchestration.run_lineage_e2e",),
-    ("scripts.orchestration.run_ecs_target_e2e", "--proof", "S"),
     ("scripts.orchestration.task_guard_cases",),
     ("scripts.orchestration.trigger_dag_cases", "-B", "--output", "@quality@/trigger_dag_cases/report.json"),
     ("scripts.orchestration.run_ecs_launch_e2e",),

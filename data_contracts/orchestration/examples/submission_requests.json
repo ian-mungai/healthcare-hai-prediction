@@ -29,7 +29,7 @@
       "dag_id": "lineage_fixture",
       "task_id": "silver_build",
       "dag_run_id": "manual__fixture",
-      "target": "ecs"
+      "target": "auto"
     },
     {
       "template": "silver_build",

@@ -11,7 +11,7 @@
           "cluster": "synthetic_cluster",
           "taskDefinition": "synthetic_definition",
           "count": 1,
-          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "capacityProviderStrategy": [{"capacityProvider": "example_project_host_dev", "weight": 1}],
           "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
           "overrides": {
             "cpu": "1024",
@@ -306,7 +306,7 @@
           "cluster": "synthetic_cluster",
           "taskDefinition": "synthetic_definition",
           "count": 1,
-          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "capacityProviderStrategy": [{"capacityProvider": "example_project_host_dev", "weight": 1}],
           "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
           "overrides": {
             "cpu": "1024",
@@ -630,7 +630,7 @@
           "cluster": "synthetic_cluster",
           "taskDefinition": "synthetic_definition",
           "count": 1,
-          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "capacityProviderStrategy": [{"capacityProvider": "example_project_host_dev", "weight": 1}],
           "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "DISABLED"}},
           "overrides": {
             "cpu": "1024",
@@ -659,7 +659,7 @@
           "cluster": "synthetic_cluster",
           "taskDefinition": "synthetic_definition",
           "count": 1,
-          "capacityProviderStrategy": [{"capacityProvider": "FARGATE", "weight": 1}],
+          "capacityProviderStrategy": [{"capacityProvider": "example_project_host_dev", "weight": 1}],
           "networkConfiguration": {"awsvpcConfiguration": {"subnets": ["synthetic_subnet"], "securityGroups": ["synthetic_group"], "assignPublicIp": "ENABLED"}},
           "overrides": {
             "cpu": "1024",

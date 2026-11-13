@@ -33,11 +33,8 @@ unused-code scripts/quality/install_tools.py -- urllib's opener dispatches http_
 unused-code scripts/quality/run_e2e.py -- http.server dispatches do_GET of the scripted download stand-in by method name -- permanent
 config tests/test_services_preparation.py -- the case types the removed mlflow_host_ip into the reviewed file to prove the renderer refuses the old name as well as host_private_ip -- permanent
 airflow config/orchestration/ecs_broker_jobs.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
-airflow config/orchestration/ecs_jobs.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
-airflow config/orchestration/ecs_jobs.schema.json -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow dags/gold_transform_dag.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow dags/silver_transform_dag.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
-airflow orchestration/ecs_target.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow orchestration/graph.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow orchestration/launcher.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
 airflow orchestration/pipeline_render.py -- step and catalog_up stay live task and step names here; the direct launch change removed only the literal task IDs of the broker test stand-ins -- expires 2026-11-30
