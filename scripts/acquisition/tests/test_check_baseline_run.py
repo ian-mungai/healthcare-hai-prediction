@@ -8,10 +8,16 @@ import json
 from collections.abc import Callable
 from pathlib import Path
 
+import pytest
+
 from scripts.acquisition import build_bootstrap_queue as build
 from scripts.acquisition import check_baseline_run as check_run
+from scripts.acquisition import legacy_versions, s3_store
+from scripts.acquisition.history_routes import lineage_bindings
 from scripts.acquisition.tests.test_build_bootstrap_queue import HOSTS, source_bytes
 from scripts.acquisition.transport import hosts_digest
+from scripts.process import run_command
+from scripts.quality import scan_secrets
 from tests.support import check
 
 PLAN_INPUT = "plan_inputs/data/example/input.json"
@@ -316,3 +322,71 @@ def test_a_manual_unit_that_moves_to_an_api_has_no_seed_files(tmp_path: Path) ->
     (root / "capture_specs.json").write_text(json.dumps(specs))
     relock(root)
     check(seed_problems(root) == [], "a manual unit of mode file (an ACS file) is not seeded")
+
+
+def only_tracked_records(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A clean Git checkout: no archived predecessor of any record or plan resolves, as on a host that holds only what Git supplies."""
+    monkeypatch.setattr(legacy_versions, "CATALOG_PATH", tmp_path / "no_catalog.json")
+
+
+def with_spec(root: Path, **changes: object) -> None:
+    """Add fields to the first unit's specification and relock."""
+    document = json.loads((root / "capture_specs.json").read_text())
+    document["specs"]["a"].update(changes)
+    (root / "capture_specs.json").write_text(json.dumps(document))
+    relock(root)
+
+
+def released_spec(binding: str = "access_release", source: str = "HCAI_UTIL") -> dict:
+    return {"release_binding": binding, "receipt_template": {"source_id": source}}
+
+
+def test_a_template_that_carries_a_frozen_release_hash_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    with_spec(root, receipt_template={"source_id": "HCAI_UTIL", "lineage_bindings": {"access_release_sha256": "c" * 64}})
+    found = " ".join(seed_problems(root))
+    check("unit a carries a release hash in its receipt template" in found, found)
+
+
+def test_a_release_binding_that_names_no_tracked_record_or_does_not_release_the_source_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    with_spec(root, **released_spec(binding="archived_record"))
+    check("unit a names the release binding archived_record, which is no tracked record" in " ".join(seed_problems(root)), "unknown binding")
+    with_spec(root, **released_spec(source="OTHER_SOURCE"))
+    check("the tracked access_release record does not release OTHER_SOURCE of unit a" in " ".join(seed_problems(root)), "unreleased source")
+
+
+def test_a_release_binding_is_accepted_from_the_tracked_records_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    only_tracked_records(monkeypatch, tmp_path)
+    root = bundle(tmp_path / "b")
+    with_spec(root, **released_spec())
+    check(seed_problems(root) == [], f"{seed_problems(root)}")
+
+
+def test_every_fresh_capture_of_a_held_source_is_released_by_the_tracked_records_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Storage frees a held source's reference document only when its receipt binds a record it can read: on a Git-only tree, the tracked one."""
+    only_tracked_records(monkeypatch, tmp_path)
+    specs = json.loads((check_run.ROOT / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    refused = []
+    held = 0
+    for snapshot, spec in sorted(specs.items()):
+        template = spec.get("receipt_template", {})
+        name = spec.get("release_binding")
+        bound = lineage_bindings({"preferred_route": "access_hold"}, {"release_binding": name}) if name else {}
+        lineage = template.get("lineage_bindings", {}) | bound
+        if lineage:
+            held += 1
+            if not s3_store.access_released({"source_id": template["source_id"]}, lineage):
+                refused.append(snapshot)
+    check(held == 28 and refused == [], f"{held} held units, storage refuses {len(refused)} on a Git-only tree: {refused[:2]}")
+
+
+def test_the_committed_capture_specification_passes_the_outgoing_secret_scan(tmp_path: Path) -> None:
+    """The outgoing hook scans every file Git holds, so a hydrated specification is scanned by the real scanner, as CI runs it."""
+    body = (check_run.ROOT / "capture_specs.json").read_bytes()
+    check(body.startswith(b"{"), "the specification is hydrated, not a Git LFS pointer")
+    repository = tmp_path / "repository"
+    repository.mkdir()
+    run_command("git", ["init", "-q"], cwd=repository, check=True)
+    (repository / "capture_specs.json").write_bytes(body)
+    check(scan_secrets.scan(repository, staged=False) == 0, "the scanner flags a value of the specification")

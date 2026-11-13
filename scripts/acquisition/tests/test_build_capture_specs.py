@@ -100,6 +100,19 @@ def collector_receipt(**lineage: object) -> dict:
     return {"lineage": {"extraction_or_query": json.dumps(lineage)}}
 
 
+def full_receipt(**changes: object) -> dict:
+    """A stored receipt of a file unit that has no job file: the fields a fresh capture plan needs sit in the receipt itself."""
+    receipt = {
+        "source": {"source_record_id": TEMPLATE["source_id"], "publisher": TEMPLATE["publisher"]},
+        "release": TEMPLATE["release"],
+        "measurement_periods": TEMPLATE["measurement_periods"],
+        "governance": TEMPLATE["governance"],
+        "acquisition": {"export_selections": {}},
+        "lineage": {"extraction_or_query": json.dumps({"mode": "file", "scope": TEMPLATE["scope"]})},
+    }
+    return receipt | changes
+
+
 def collector_units(root: Path) -> list[dict]:
     """Two BLS units that share one URL, an MMD API unit, a flagged browser export, a file unit with a job plan, one without, and manual units."""
     url = "https://api.example.invalid/timeseries"
@@ -131,7 +144,7 @@ def collector_units(root: Path) -> list[dict]:
             "mode": "file",
             "receipt": stored(root, "F1", {}, job={"plan": {**TEMPLATE, "route_id": "r", "file_name": "f.csv", "expected_format": "csv"}}),
         },
-        {"snapshot_id": "F2", "mode": "file", "receipt": stored(root, "F2", {})},
+        {"snapshot_id": "F2", "mode": "file", "receipt": stored(root, "F2", full_receipt())},
         {"snapshot_id": "O1", "mode": "cms_owners_org", "receipt": stored(root, "O1", collector_receipt(release_id="r1"))},
     ]
     objects = [
@@ -182,11 +195,58 @@ def test_an_mmd_unit_names_its_measure_and_year_from_its_lineage_or_its_export_s
         specs.derive(collector_units(tmp_path), tmp_path, "f" * 64, [])
 
 
-def test_a_file_unit_keeps_the_plan_fields_of_its_job_and_one_without_a_job_has_none(tmp_path: Path) -> None:
+def test_a_file_unit_keeps_the_plan_fields_of_its_job_and_one_without_a_job_takes_them_from_its_receipt(tmp_path: Path) -> None:
     result = derived(tmp_path)
     check(result["F1"]["receipt_template"] == TEMPLATE, f"template: {result['F1']}")
     check(result["F1"]["expected_format"] == "csv" and "route_id" not in result["F1"]["receipt_template"], "format stays beside, route and file name out")
-    check("receipt_template" not in result["F2"] and "receipt_template" not in result["M2"], "no job, or an MMD unit")
+    check(result["F2"]["receipt_template"] == TEMPLATE, f"template from the receipt: {result['F2']}")
+    check("receipt_template" not in result["M2"] and "receipt_template" not in result["H2"], "an MMD unit moved to the API and a manual unit keep none")
+
+
+@pytest.mark.parametrize("missing", ["governance", "release", "measurement_periods", "source", "lineage"])
+def test_a_file_unit_without_a_job_whose_receipt_lacks_a_plan_field_is_refused_with_its_unit(tmp_path: Path, missing: str) -> None:
+    units = collector_units(tmp_path)
+    receipt = full_receipt()
+    del receipt[missing]
+    units[5]["receipt"] = stored(tmp_path, "F3", receipt)
+    units[5]["snapshot_id"] = "F3"
+    with pytest.raises(ValueError, match=f"F3.*{missing}"):
+        specs.derive(units, tmp_path, "f" * 64, CONDITIONS)
+
+
+def test_a_template_taken_from_a_receipt_keeps_the_role_of_a_reference_document(tmp_path: Path) -> None:
+    stored(tmp_path, "F7", full_receipt(artifacts=[{"role": "methodology", "stored_file_name": "m.pdf"}]))
+    unit = {"snapshot_id": "F7", "mode": "file", "receipt": "data/datasets/snapshots/F7/F7__1/receipt.json"}
+    template = json.loads(specs.derive([unit], tmp_path, "f" * 64))["specs"]["F7"]["receipt_template"]
+    check(template == TEMPLATE | {"role": "methodology"}, f"{template}")
+
+
+def test_a_template_taken_from_a_receipt_loses_agent_home_pointers_like_one_from_a_job(tmp_path: Path) -> None:
+    stored(tmp_path, "F4", full_receipt(release={"observed_history": f"{POINTER_FROM}a.csv"}))
+    unit = {"snapshot_id": "F4", "mode": "file", "receipt": "data/datasets/snapshots/F4/F4__1/receipt.json"}
+    document = json.loads(specs.derive([unit], tmp_path, "f" * 64))
+    check(document["specs"]["F4"]["receipt_template"]["release"] == {"observed_history": "/workspace/provenance/a.csv"}, "pointer rewritten")
+    check(document["template_rewrites"]["pointers"] == 1, "counted in the header")
+
+
+@pytest.mark.parametrize(("key", "binding"), [("access_release_sha256", "access_release"), ("terms_sha256", "terms")])
+def test_a_held_source_template_names_its_release_binding_and_carries_no_hash(tmp_path: Path, key: str, binding: str) -> None:
+    frozen = "b" * 64
+    stored(tmp_path, "F5", {}, job={"plan": {**TEMPLATE, "lineage_bindings": {key: frozen}}})
+    unit = {"snapshot_id": "F5", "mode": "file", "receipt": "data/datasets/snapshots/F5/F5__1/receipt.json"}
+    text = specs.derive([unit], tmp_path, "f" * 64).decode()
+    spec = json.loads(text)["specs"]["F5"]
+    check(spec["release_binding"] == binding, f"binding: {spec}")
+    check(spec["receipt_template"] == TEMPLATE, "the template keeps every other field and no lineage bindings")
+    check(frozen not in text, "the stored hash is not written")
+
+
+@pytest.mark.parametrize("bindings", [{"other_sha256": "b" * 64}, {"access_release_sha256": "b" * 64, "terms_sha256": "c" * 64}])
+def test_a_template_with_an_unknown_or_double_lineage_binding_is_refused_with_its_unit(tmp_path: Path, bindings: dict) -> None:
+    stored(tmp_path, "F6", {}, job={"plan": {**TEMPLATE, "lineage_bindings": bindings}})
+    unit = {"snapshot_id": "F6", "mode": "file", "receipt": "data/datasets/snapshots/F6/F6__1/receipt.json"}
+    with pytest.raises(ValueError, match="F6.*no tracked release record"):
+        specs.derive([unit], tmp_path, "f" * 64)
 
 
 def test_a_manual_unit_names_its_newest_stored_capture_and_one_without_records_has_no_field(tmp_path: Path) -> None:

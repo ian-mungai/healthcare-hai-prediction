@@ -21,6 +21,7 @@ from typing import Any
 
 from scripts.acquisition.check_baseline_run import SEED_MODES
 from scripts.acquisition.data_paths import current
+from scripts.acquisition.history_routes import RELEASE_BINDINGS
 from scripts.acquisition.rewrite_registry_provenance import PHONE_PLACEHOLDER, POINTER_FROM, POINTER_TO
 
 PLAN_ITEM_KEYS = {
@@ -33,6 +34,9 @@ PLAN_ITEM_KEYS = {
     "onc_mu_hospital": "file_id",
 }
 MMD_API_FLAG = "browser_export_moved_to_api"
+# A job plan binds a held source's reference document to a dated release record by that file's SHA-256. The specification names the record instead:
+# a stored hash would bind the record the old capture used, which a clean checkout does not hold, and the hash text trips the secret scan.
+BINDING_NAMES = {key: name for name, (key, _path) in RELEASE_BINDINGS.items()}
 TEMPLATE_OMITS = ("route_id", "file_name", "expected_format")
 PHONE = re.compile(r"\(\d{3}\) \d{3}-\d{4}")
 FORMATS = {".csv": "csv", ".txt": "txt", ".zip": "zip", ".xlsx": "xlsx", ".xls": "xls", ".pdf": "pdf", ".json": "json", ".docx": "docx", ".gz": "gzip"}
@@ -91,6 +95,39 @@ def lineage_of(receipt: dict[str, Any]) -> dict[str, Any]:
     return json.loads(text) if isinstance(text, str) and text.startswith("{") else {}
 
 
+def release_binding(unit: dict[str, Any], bindings: dict[str, Any]) -> str:
+    """The name of the tracked release record that a job plan's lineage binding stands for."""
+    names = [BINDING_NAMES.get(key) for key in bindings]
+    if len(names) != 1 or names[0] is None:
+        raise ValueError(f"Unit {unit['snapshot_id']} has lineage bindings ({', '.join(sorted(bindings))}) that name no tracked release record")
+    return names[0]
+
+
+def template_from_receipt(unit: dict[str, Any], receipt: dict[str, Any]) -> dict[str, Any]:
+    """The receipt template of a file unit that has no job file: its stored receipt holds the plan fields a capture copies."""
+    lineage = lineage_of(receipt)
+    source = receipt.get("source", {})
+    fields = {
+        "source_id": ("source.source_record_id", source.get("source_record_id")),
+        "publisher": ("source.publisher", source.get("publisher")),
+        "scope": ("lineage scope", lineage.get("scope")),
+        "release": ("release", receipt.get("release")),
+        "measurement_periods": ("measurement_periods", receipt.get("measurement_periods")),
+        "governance": ("governance", receipt.get("governance")),
+    }
+    missing = [label for label, value in fields.values() if value is None or value == ""]
+    if missing:
+        raise ValueError(f"Unit {unit['snapshot_id']} has no job file and its receipt lacks {', '.join(missing)}")
+    roles = [item["role"] for item in receipt["artifacts"]]
+    template = {name: value for name, (_label, value) in fields.items()}
+    template |= {
+        "mode": lineage.get("mode", "file"),
+        "role": "data" if "data" in roles else roles[0],
+        "export_selections": receipt.get("acquisition", {}).get("export_selections", {}),
+    }
+    return template
+
+
 def mmd_selection(unit: dict[str, Any], receipt: dict[str, Any], conditions: list[dict[str, Any]]) -> dict[str, Any]:
     """The measure and year of an MMD unit: an API capture records them, a browser export is matched by its condition, domain and county geography."""
     if unit["mode"] == "mmd_api":
@@ -143,10 +180,13 @@ def derive_unit(unit: dict[str, Any], base: Path, conditions: list[dict[str, Any
         expected = plan.get("plan", {}).get("expected_format") or FORMATS.get(Path(artifacts[0]["stored_file_name"]).suffix.lower())
         redirect = plan.get("candidate", {}).get("reviewed_unsigned_redirect")
         spec |= ({"expected_format": expected} if expected else {}) | ({"reviewed_unsigned_redirect": redirect} if redirect else {})
-        if plan.get("plan") and not manual and not moved_to_api:
-            spec["receipt_template"] = cleaned(
-                {key: value for key, value in plan["plan"].items() if key not in TEMPLATE_OMITS}, counts if counts is not None else Counter()
+        if not manual and not moved_to_api:
+            template = (
+                {key: value for key, value in plan["plan"].items() if key not in TEMPLATE_OMITS} if plan.get("plan") else template_from_receipt(unit, receipt)
             )
+            if bindings := template.pop("lineage_bindings", None):
+                spec["release_binding"] = release_binding(unit, bindings)
+            spec["receipt_template"] = cleaned(template, counts if counts is not None else Counter())
     if unit["mode"] == "mmd_api" or moved_to_api:
         spec["mmd"] = mmd_selection(unit, receipt, conditions or [])
     elif unit["mode"] in PLAN_ITEM_KEYS:

@@ -17,8 +17,9 @@ from collections import Counter
 from pathlib import Path
 
 from scripts.acquisition.api_keys import SHARED_KEYS
+from scripts.acquisition.history_routes import RELEASE_BINDINGS, lineage_bindings
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
-from scripts.acquisition.s3_store import encoded_json
+from scripts.acquisition.s3_store import access_released, encoded_json
 from scripts.process import run_command
 
 ROOT = Path("config/acquisition/baseline_run")
@@ -107,6 +108,27 @@ def queue_problems(root: Path) -> list[str]:
     return problems
 
 
+def release_problems(specs: dict[str, dict]) -> list[str]:
+    """Return why a fresh capture of a held source's reference document would fail at storage on a Git-only tree.
+
+    A template never carries a release hash, which would bind a record that only an ignored archive holds. The unit names the tracked record in
+    ``release_binding`` and storage must free the unit's source through that record.
+    """
+    problems = []
+    for snapshot, spec in sorted(specs.items()):
+        template = spec.get("receipt_template", {})
+        if "lineage_bindings" in template:
+            problems.append(f"unit {snapshot} carries a release hash in its receipt template: name release_binding instead")
+        name = spec.get("release_binding")
+        if name is None:
+            continue
+        if name not in RELEASE_BINDINGS:
+            problems.append(f"unit {snapshot} names the release binding {name}, which is no tracked record")
+        elif not access_released({"source_id": template.get("source_id")}, lineage_bindings({"preferred_route": "access_hold"}, {"release_binding": name})):
+            problems.append(f"the tracked {name} record does not release {template.get('source_id')} of unit {snapshot}")
+    return problems
+
+
 def specs_problems(root: Path) -> list[str]:
     """Return why the capture specification does not belong to the queue, misses a unit, names a unit twice or holds a bucket, key or local path."""
     body = (root / "queue.json").read_bytes()
@@ -122,7 +144,7 @@ def specs_problems(root: Path) -> list[str]:
         problems.append("the capture specification unit count differs from its entries")
     if any(marker in text for marker in ENVIRONMENT_MARKERS):
         problems.append("the capture specification holds a bucket path, object key or local path")
-    return problems
+    return problems + release_problems(document["specs"])
 
 
 def home_problems(root: Path, manifest: dict) -> list[str]:
