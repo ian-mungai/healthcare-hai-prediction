@@ -368,10 +368,47 @@ def command_checks(text: str, folder: Path) -> dict[str, bool]:
     for number, (line, found) in enumerate(problems.items(), 1):
         checks[f"{CODE}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
     for heading in (ALERT, TEARDOWN):
-        problems = owner_commands.check_section(owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper, {"ADMIN_PROFILE": ADMIN})
-        checks[f"{heading}: {len(problems)} printed commands were found"] = len(problems) >= 5
-        for number, (line, found) in enumerate(problems.items(), 1):
-            checks[f"{heading}: command {number} parses: {line[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
+        checks |= alert_block_checks(heading, owner_commands.section(text, heading), folder / heading.split()[0].lower(), wrapper)
+    return checks
+
+
+ALERT_BLOCKS = {ALERT: 9, TEARDOWN: 4}
+
+
+def alert_block_checks(heading: str, body: str, folder: Path, wrapper: Any) -> dict[str, bool]:
+    """Every block of an alert list is unwrapped by the frame that ``block_problems`` pins, and its helper call goes through the real parser. A block that does
+    not unwrap fails its own check and is never skipped."""
+    blocks = alert_email_block_cases.fences(body)
+    checks = {f"{heading}: {len(blocks)} printed blocks were found, {ALERT_BLOCKS[heading]} expected": len(blocks) == ALERT_BLOCKS[heading]}
+    folder.mkdir(parents=True, exist_ok=True)
+    for number, block in enumerate(blocks, 1):
+        call = alert_email_block_cases.helper_call(block)
+        if call is None:
+            checks[f"{heading}: command {number} unwraps: {alert_email_block_cases.block_problems(block)}"] = False
+            continue
+        found = owner_commands.check_line(call, folder, wrapper)
+        checks[f"{heading}: command {number} parses: {call[:110]}" + (f" -> {found[0][:150]}" if found else "")] = not found
+    return checks
+
+
+ALERT_MUTANTS = (
+    ("a mistyped strict option in the frame", "set -euo pipefail", "set -euo pipefial"),
+    ("a mistyped step of the helper call", "alert_email topics", "alert_email topicz"),
+)
+
+
+def alert_mutant_checks(text: str, folder: Path) -> dict[str, bool]:
+    """Each planted typo in one alert block must fail exactly the check of that block, and the unplanted lists must fail none."""
+    wrapper = make_wrapper(Workspace(folder / "alert_mutant_workspace"), {})
+    body = owner_commands.section(text, ALERT)
+    blocks = alert_email_block_cases.fences(body)
+    clean = [name for name, ok in alert_block_checks(ALERT, body, folder / "alert_mutant_clean", wrapper).items() if not ok]
+    checks = {"the unplanted alert list fails no check": not clean}
+    for label, old, new in ALERT_MUTANTS:
+        number = next((index for index, block in enumerate(blocks, 1) if old in block), 0)
+        mutated = body.replace(blocks[number - 1], blocks[number - 1].replace(old, new, 1), 1) if number else body
+        failed = [name for name, ok in alert_block_checks(ALERT, mutated, folder / "alert_mutant", wrapper).items() if not ok]
+        checks[f"alert mutant {label} fails only block {number}"] = number > 0 and len(failed) == 1 and failed[0].startswith(f"{ALERT}: command {number} ")
     return checks
 
 
@@ -432,7 +469,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
             "alert_email": alert_email_checks(text),
             "alert_blocks": block_checks | alert_call_checks(block_calls, Path(folder)) | alert_email_block_cases.mutant_checks(text),
             "commands": command_checks(text, Path(folder)),
-            "mutants": mutant_checks(text, Path(folder)),
+            "mutants": mutant_checks(text, Path(folder)) | alert_mutant_checks(text, Path(folder)),
             "host": owner_list_host_cases.host_checks(text, Path(folder)),
         }
     output.mkdir(parents=True)

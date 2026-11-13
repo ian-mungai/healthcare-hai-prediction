@@ -205,6 +205,11 @@ def block_problems(block: str) -> list[str]:
     return problems
 
 
+def helper_call(block: str) -> str | None:
+    """The helper call of a block that is exactly the frame ``block_problems`` pins, or None when the block is not."""
+    return None if block_problems(block) else [line for line in block.splitlines() if line.strip()][3]
+
+
 def static_checks(sections: dict[str, str]) -> dict[str, bool]:
     """Every block is a bash heredoc with the strict options, a fixed value-free ERR trap and one placeholder-free call of the helper, with valid syntax in
     bash and in zsh, and nothing of the removed path is left in the lists."""
