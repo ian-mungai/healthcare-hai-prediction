@@ -581,7 +581,7 @@
         },
         {
           "file": "scripts/acquisition/legacy_versions.py",
-          "sha256": "7a3f5f54f04f8a577f8f214a6bc0642b4095aa267d57156169ac0eca6eba264d"
+          "sha256": "ca66d0226179136947759508e1a887b8a02fad73b88d6e7c342c340de85fca99"
         },
         {
           "file": "scripts/acquisition/mapped_archives.py",
@@ -589,7 +589,7 @@
         },
         {
           "file": "scripts/acquisition/mmd_api_contract.py",
-          "sha256": "f5b96f4ef070f4c2c6fb40c14a279822107e1f3643ad26006d015cd6c472e217"
+          "sha256": "b415abd084824f9a34637058e729eea36d98acfc7ee956972641e20183a29915"
         },
         {
           "file": "scripts/acquisition/nber_hc_contract.py",
@@ -617,7 +617,7 @@
         },
         {
           "file": "scripts/acquisition/reference_download_contract.py",
-          "sha256": "34718470b9a35ae243c23f3767c8f1d846763a879d2ca97ea05d863760c8409d"
+          "sha256": "86b8f134ecd82c1fd07781711f137a06cf83eb3a4cd1bd6a4a508c6444f83492"
         },
         {
           "file": "scripts/acquisition/registry_additions.py",
@@ -692,9 +692,9 @@
           "sha256": "9e9f986a690edb02c365bdefe6ac07d2118d00831dadb6edc276bd37ef4eeb57"
         }
       ],
-      "reason": "Relist on the combined final code of the host job cap, the direct ECS launch route, the startup check and the broker plane removal: the collector's closure grew from 53 to 60 files (raw_root.py, sdk_logs.py and five store modules) and 21 of the 53 hashes of version 2 changed, so version 2 no longer matched the code on origin/main either. No behavior of the NBER capture changed. Written by the build agent and checked by the NBER E2E on this code (64 of 64 scenarios); an independent review is pending. No model-use approval.",
+      "reason": "Relist on the combined final code of the host job cap, the direct ECS launch route, the startup check, the broker plane removal and the ingestion inputs and manual units lanes: the closure holds 60 files and 29 of them differ from version 2. No collector behavior was reviewed again by this relist. Version 2 stays listed because a capture that used it must still pass. This collector's own E2E passed on this code. Written by the build agent; an independent review is pending. No model-use approval.",
       "evidence": [
-        "data/e2e/final_combine_20261112/step3/nber/e2e_out"
+        "data/e2e/final_combine_20261112/fix_round1/relist2/code_versions/nber_hc.json"
       ],
       "review": "pending: no independent review of this version yet",
       "reviewed_on": null
