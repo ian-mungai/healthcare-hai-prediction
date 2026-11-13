@@ -12,7 +12,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-from scripts.lakehouse.bronze import BronzeError, RetiredObjects, Storage, discover
+from scripts.acquisition.raw_root import RAW_ROOT
+from scripts.lakehouse.bronze import RECORD_FOLDERS, BronzeError, RetiredObjects, Storage, discover
 
 VERSION = 1
 SHA256_HEX = 64
@@ -87,6 +88,7 @@ def build_inventory(storage: Storage, bucket: str, config: dict[str, Any], names
         manifest = json.loads(raw)
         if "objects" not in manifest and "sha256" in manifest:
             documents += [[key, version] for key, version in recorder.listed if f"/{manifest['sha256']}/" in key and "/manifests/" not in key]
+    documents += [[key, version] for key, version in recorder.listed if key.startswith(tuple(f"{RAW_ROOT}{folder}" for folder in RECORD_FOLDERS))]
     objects = [[item["table"], item["key"], item["version_id"], item["sha256"], item["byte_count"]] for item in inputs]
     manifests = [[key, version, hashlib.sha256(raw).hexdigest()] for (key, version), raw in recorder.manifests.items()]
     return {"version": VERSION, "tables": sorted(names), "manifests": sorted(manifests), "objects": sorted(objects), "documents": sorted(documents)}

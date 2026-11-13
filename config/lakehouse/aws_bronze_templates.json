@@ -36,10 +36,12 @@
     "config/lakehouse/person_policies.json",
     "config/lakehouse/removed_tables.json",
     "config/lakehouse/retired_objects.json",
+    "scripts/acquisition/completion_record.py",
     "scripts/acquisition/raw_root.py",
     "scripts/acquisition/redownload_controls.py",
     "scripts/acquisition/single_copy.py",
     "scripts/acquisition/source_registry.py",
+    "scripts/acquisition/stale_record.py",
     "scripts/acquisition/transport.py",
     "scripts/lakehouse/__init__.py",
     "scripts/lakehouse/aws_bronze.py",
@@ -55,6 +57,7 @@
     "scripts/lakehouse/person_fields.py",
     "scripts/lakehouse/session.py",
     "scripts/lakehouse/smoke.py",
+    "scripts/lakehouse/unit_records.py",
     "scripts/pseudonym_core.py",
     "scripts/sdk_logs.py"
   ]

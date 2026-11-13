@@ -4,10 +4,12 @@ locals {
   bronze_namespaces       = ["bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check"]
   bronze_test_namespaces  = [for name in local.bronze_namespaces : "${name}_e2e"]
   # The bronze job writes its two namespaces for a real run and their two test twins for a qualification run.
-  bronze_job_twins       = ["bronze_e2e", "bronze_dictionary_e2e"]
-  bronze_table_map       = jsondecode(file("${path.module}/../../config/lakehouse/bronze_tables.json"))
-  bronze_collections     = sort(distinct([for table in local.bronze_table_map.tables : table.collection]))
-  bronze_source_roots    = var.source_raw_root_enabled ? ["", "raw/"] : [""]
+  bronze_job_twins    = ["bronze_e2e", "bronze_dictionary_e2e"]
+  bronze_table_map    = jsondecode(file("${path.module}/../../config/lakehouse/bronze_tables.json"))
+  bronze_collections  = sort(distinct([for table in local.bronze_table_map.tables : table.collection]))
+  bronze_source_roots = var.source_raw_root_enabled ? ["", "raw/"] : [""]
+  # Bronze lists the completion and stale records of the ingestion units under raw only while the raw root switch is on. Never ingestion_test/.
+  bronze_record_folders  = var.source_raw_root_enabled ? ["raw/ingestion_units/", "raw/ingestion_stale/"] : []
   bronze_parameter_names = [var.aws_polaris_bronze_client_id_name, var.aws_polaris_bronze_client_secret_name]
   bronze_parameter_arns  = [for name in local.bronze_parameter_names : "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${name}"]
   # The loader reads the pseudonym key of the version its reviewed person-field policy names, at use, with this task role (no ECS secret injection).
@@ -30,7 +32,7 @@ locals {
         description = "List source versions of each mapped collection at every enabled source root."
         document = templatefile("${path.module}/owner_policies/bronze_writer_source_lists.json", {
           BUCKET_ARN           = local.bronze_bucket_arn
-          SOURCE_LIST_PREFIXES = jsonencode(flatten([for root in local.bronze_source_roots : [for collection in local.bronze_collections : "${root}${collection}/*"]]))
+          SOURCE_LIST_PREFIXES = jsonencode(concat(flatten([for root in local.bronze_source_roots : [for collection in local.bronze_collections : "${root}${collection}/*"]]), [for folder in local.bronze_record_folders : "${folder}*"]))
         })
       }
     },
@@ -39,7 +41,7 @@ locals {
       for root in local.bronze_source_roots : "source_objects_${root == "" ? "root" : "raw"}" => {
         description = "Read source object versions of each mapped collection and the content-addressed payloads, ${root == "" ? "at the bucket root" : "under raw"}."
         document = templatefile("${path.module}/owner_policies/bronze_writer_source_objects.json", {
-          SOURCE_OBJECT_ARNS = jsonencode(concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${root}${collection}/*"], ["${local.bronze_bucket_arn}/${root}bronze_objects/sha256/*"]))
+          SOURCE_OBJECT_ARNS = jsonencode(concat([for collection in local.bronze_collections : "${local.bronze_bucket_arn}/${root}${collection}/*"], ["${local.bronze_bucket_arn}/${root}bronze_objects/sha256/*"], [for folder in local.bronze_record_folders : "${local.bronze_bucket_arn}/${folder}*" if root == "raw/"]))
         })
       }
     }

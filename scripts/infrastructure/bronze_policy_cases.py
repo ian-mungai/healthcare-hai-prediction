@@ -16,6 +16,7 @@ BUCKET = "arn:aws:s3:::example-data-bucket"
 PRODUCTION = ("bronze", "bronze_dictionary", "smoke_check", "duckdb_view_check")
 TWINS = ("bronze_e2e", "bronze_dictionary_e2e", "smoke_check_e2e", "duckdb_view_check_e2e")
 PAYLOADS = "bronze_objects/sha256"
+RECORD_FOLDERS = ("raw/ingestion_units/", "raw/ingestion_stale/")
 KEY_PARAMETER = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/pseudonym_key_v1"
 LARGEST_BUCKET = "a" * 63  # the longest valid bucket name
 INLINE_QUOTA = 10240  # all inline policies of one role together, whitespace excluded
@@ -60,13 +61,19 @@ def render(
         "inline": load("bronze_writer_storage", table, defect),
         "source_lists": load(
             "bronze_writer_source_lists",
-            {"BUCKET_ARN": bucket, "SOURCE_LIST_PREFIXES": json.dumps([f"{root}{collection}/*" for root in roots for collection in collections])},
+            {
+                "BUCKET_ARN": bucket,
+                "SOURCE_LIST_PREFIXES": json.dumps(
+                    [*(f"{root}{collection}/*" for root in roots for collection in collections), *(f"{folder}*" for folder in RECORD_FOLDERS if raw)]
+                ),
+            },
             defect,
         ),
         "key": load("bronze_writer_pseudonym_key", {"PSEUDONYM_KEY_ARN": KEY_PARAMETER}, defect),
     }
     for root in roots:
         arns = [*(f"{bucket}/{root}{collection}/*" for collection in collections), f"{bucket}/{root}{PAYLOADS}/*"]
+        arns += [f"{bucket}/{folder}*" for folder in RECORD_FOLDERS if root]
         documents[f"source_objects_{'raw' if root else 'root'}"] = load("bronze_writer_source_objects", {"SOURCE_OBJECT_ARNS": json.dumps(arns)}, defect)
     return documents
 
@@ -110,6 +117,20 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
             check(action, f"{BUCKET}/raw/{collection}/objects/source.csv", False)
     for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
         check(action, payload, False)
+    for folder in ("ingestion_units", "ingestion_stale"):
+        record = f"{BUCKET}/raw/{folder}/" + "ab" * 32 + "/" + "cd" * 32 + ".json"
+        check("s3:GetObjectVersion", record, raw)
+        check("s3:GetObjectVersion", record.removesuffix(".json") + ".20261113T180000Z-ab12cd34.json", raw)
+        check("s3:ListBucketVersions", BUCKET, raw, prefix=f"raw/{folder}/")
+        check("s3:GetObjectVersion", f"{BUCKET}/{folder}/" + "ab" * 32 + "/" + "cd" * 32 + ".json", False)
+        check("s3:ListBucketVersions", BUCKET, False, prefix=f"{folder}/")
+        for action in ("s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:GetObject"):
+            check(action, record, False)
+    test_record = f"{BUCKET}/ingestion_test/20261110T000000Z-aaaaaaaa/ingestion_units/" + "ab" * 32 + "/" + "cd" * 32 + ".json"
+    check("s3:GetObjectVersion", test_record, False)
+    check("s3:ListBucketVersions", BUCKET, False, prefix="ingestion_test/20261110T000000Z-aaaaaaaa/ingestion_units/")
+    check("s3:GetObjectVersion", test_record.replace(f"{BUCKET}/", f"{BUCKET}/raw/"), False)
+    check("s3:ListBucketVersions", BUCKET, False, prefix="raw/ingestion_test/20261110T000000Z-aaaaaaaa/")
     check("s3:GetObjectVersion", f"{BUCKET}/bronze_objects/other/" + "ab" * 32, False)
     check("s3:ListBucketVersions", BUCKET, False, prefix=f"{PAYLOADS}/")
     check("s3:GetObjectVersion", f"{BUCKET}/example/not_mapped/source.csv", False)

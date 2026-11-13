@@ -15,7 +15,10 @@ lineage back to the manifest and the stored file; ``bronze.column_map`` records 
 variable label, beside its column. After the counts pass, each loaded table's dictionary in ``bronze_dictionary`` is
 rebuilt (``scripts/lakehouse/dictionary.py``). Only S3 and the committed table map are read, so a clean checkout can
 rebuild bronze. A table may declare how its CSV is laid out (delimiter, byte-order mark, label row, preamble, unnamed
-headers) and narrow its files by capture with a snapshot pattern. Failure modes: plans/
+headers) and narrow its files by capture with a snapshot pattern. While the raw read capability is on (``HAI_READ_RAW_ROOT=true``), the completion and
+stale records of the ingestion units choose what loads (``scripts/lakehouse/unit_records.py``). Every earlier capture stays a retired observation, an object no
+record names stops its table, and an object the newest record names that an earlier generation retired stops its table. A stale record that points at anything
+but the unit's newest completion record's objects stops its table. Bronze never matches an object between the bucket root and ``raw/``. Failure modes: plans/
 bronze_hai_20261002/, bronze_manifest_20261002/ and bronze_county_20261002/.
 """
 
@@ -38,7 +41,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from scripts.acquisition.raw_root import read_roots, strip_root
+from scripts.acquisition.raw_root import RAW_ROOT, read_roots, strip_root
 from scripts.lakehouse import person_fields
 from scripts.lakehouse.file_readers import UTF16_MARKS, ReaderError, parse_line
 from scripts.lakehouse.namespace_binding import DICTIONARY_NAMESPACE, namespace_name
@@ -52,6 +55,8 @@ REMOVED = Path("config/lakehouse/removed_tables.json")
 # A manifest with these fields and no objects list records one document by checksum [153].
 SINGLE_DOCUMENT = frozenset({"role", "sha256", "byte_count", "source_id"})
 DEPLOYMENT = Path("infra/deployment.auto.tfvars.json")
+# The folders under raw/ that hold the completion and stale records of each ingestion unit.
+RECORD_FOLDERS = ("ingestion_units/", "ingestion_stale/")
 KeyReader = Callable[[str], str | None]
 SCRATCH = Path(tempfile.gettempdir()) / "bronze_scratch"
 REPORT_ROOT = Path("data/e2e/bronze_load")
@@ -392,6 +397,25 @@ def superseded(manifests: dict[tuple[str, str], bytes]) -> dict[tuple[str, str],
     return replaced
 
 
+def retirement_for(older: dict[str, str] | None, identity: tuple[str, str], sha256: str, earlier: str | None) -> str:
+    """The audit record of an object that a newer record supersedes, or the one an earlier generation stored for it. Empty when the object is not superseded."""
+    if earlier:
+        return earlier
+    if older is None:
+        return ""
+    return json.dumps({"key": identity[0], "version_id": identity[1], "sha256": sha256, "reason": "superseded_by_newer_record", **older}, sort_keys=True)
+
+
+def refuse_retired(selection: Any, item: dict[str, Any], named: dict[tuple[str, str], dict[str, Any]], retired_before: dict[str, str | None]) -> None:
+    """A record never makes bronze load an observation an earlier generation retired again: the metadata forbids resurrection, so the table stops by name."""
+    identity = (item["key"], item["version_id"])
+    if selection is not None and item["observation_id"] in retired_before:
+        raise BronzeError(
+            f"{item['table']}: {named[identity]['record']} names {identity[0]}, which an earlier generation retired; "
+            "a reviewed mapping is needed to load it again"
+        )
+
+
 def discover(
     storage: Storage,
     bucket: str,
@@ -402,10 +426,14 @@ def discover(
     canonical_observations: dict[tuple[str, str], str] | None = None,
     published_observations: set[str] | None = None,
     roots: tuple[str, ...] | None = None,
+    retired_before: dict[str, str | None] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """List the chosen tables' inputs from the S3 manifests under each read root; return them with the unselected data objects.
 
     Objects keep the exact key and version ID they were stored with, whichever root holds them.
+
+    With the raw read capability on, the newest record of each unit chooses the loaded objects. Manifests are still listed, so the observation
+    history stays: an object only an older record names becomes a retired observation, and one no record names stops its table.
 
     Objects on the retired list are skipped and reported as retired, matched on key, version and SHA-256; every list
     entry under a discovered collection must match a manifest object [146] to [148].
@@ -415,6 +443,7 @@ def discover(
             raise BronzeError("discovery requires typed retirement evidence, not a checksum mapping")
         retired = RetiredObjects()
     published_observations = published_observations or set()
+    retired_before = retired_before or {}
     tables = {table["table"]: table for table in config["tables"]}
     chosen = [tables[name] for name in names]
     by_collection: dict[str, list[dict[str, Any]]] = {}
@@ -422,16 +451,35 @@ def discover(
         by_collection.setdefault(table["collection"], []).append(table)
     inputs: list[dict[str, Any]] = []
     unselected: list[dict[str, Any]] = []
+    manifest_cache: dict[str, dict[tuple[str, str], bytes]] = {}
+
+    def manifests_of(prefix: str) -> dict[tuple[str, str], bytes]:
+        """Every manifest stored under one collection prefix, read once."""
+        if prefix not in manifest_cache:
+            manifest_cache[prefix] = {
+                (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
+                for manifest_key, manifest_version in storage.list_keys(bucket, f"{prefix}manifests/")
+                if manifest_key.endswith("/manifest.json")
+            }
+        return manifest_cache[prefix]
+
+    selection = None
+    if roots is None and RAW_ROOT in read_roots():
+        from scripts.lakehouse import unit_records
+
+        selection = unit_records.select(
+            storage, bucket, {collection: [table["table"] for table in group] for collection, group in by_collection.items()}, manifests_of
+        )
     for collection, group in sorted(by_collection.items()):
         prefixes = source_roots(collection) if roots is None else source_roots(collection, roots)
+        named = selection.named[collection] if selection is not None else {}
+        named_manifests = selection.manifests[collection] if selection is not None else {}
+        unnamed: dict[str, list[str]] = {}
+        superseded_copies: list[tuple[dict[str, Any], str, str, str | None]] = []
+        seen: set[tuple[str, str]] = set()
         listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(prefixes)}
         matched: set[tuple[str, str]] = set()
-        stored_manifests = {
-            (manifest_key, manifest_version): storage.get(bucket, manifest_key, manifest_version)
-            for root in prefixes
-            for manifest_key, manifest_version in storage.list_keys(bucket, f"{root}manifests/")
-            if manifest_key.endswith("/manifest.json")
-        }
+        stored_manifests = {identity: raw for prefix in prefixes for identity, raw in manifests_of(prefix).items()} | named_manifests
         skipped = superseded(stored_manifests)
         for (manifest_key, manifest_version), raw in stored_manifests.items():
             replacement = skipped.get((manifest_key, manifest_version))
@@ -443,6 +491,8 @@ def discover(
             for entry_index, stored in enumerate(manifest["objects"]):
                 role = stored.get("role")
                 identity = (stored["object"].get("key", ""), stored["object"].get("version_id", ""))
+                if selection is not None and (manifest_key, manifest_version) in named_manifests and selection.confirm(collection, identity, stored):
+                    seen.add(identity)
                 is_retired = identity in listed
                 if is_retired:
                     if listed[identity] != stored["object"].get("sha256"):
@@ -492,11 +542,32 @@ def discover(
                     unselected.append(
                         {"collection": collection, "dataset_id": item["dataset_id"], "file_name": file_name, "failed_attempt": True, "copy": item}
                     )
-                else:
+                elif selection is None or (identity in named and (manifest_key, manifest_version) in named_manifests):
+                    refuse_retired(selection, item, named, retired_before)
                     inputs.append(item)
+                elif retirement := retirement_for(
+                    selection.superseded[collection].get(identity), identity, target["sha256"], retired_before.get(item["observation_id"], "")
+                ):
+                    superseded_copies.append((item, retirement, file_name, role))
+                elif identity in named:
+                    refuse_retired(selection, item, named, retired_before)
+                    inputs.append(item)
+                else:
+                    unnamed.setdefault(table["table"], []).append(identity[0])
+        for item, retirement, file_name, role in superseded_copies:
+            copy = {**item, "retired": True, "retirement_record_json": retirement}
+            unselected.append({"collection": collection, "dataset_id": item["dataset_id"], "file_name": file_name, "role": role, "retired": True, "copy": copy})
         stale = sorted(identity[0] for identity in set(listed) - matched)
         if stale:
             raise BronzeError(f"{stale[0]}: the retired list entry matches no manifest object ({len(stale)} such entries)")
+        unlisted = sorted(set(named) - seen)
+        if unlisted:
+            raise BronzeError(
+                f"{named[unlisted[0]]['record']}: the record names {unlisted[0][0]}, which no manifest it names lists ({len(unlisted)} such objects)"
+            )
+        if unnamed:
+            table_name, keys = min(unnamed.items())
+            raise BronzeError(f"{table_name}: {len(keys)} stored objects are named by no completion or stale record, for example {sorted(keys)[0]}")
     inputs.sort(key=lambda item: (item["table"], item["snapshot_id"], json.dumps(item["member_chain"]), item["manifest_key"]))
     # One archive snapshot can list a shared member (its dictionary) in each dataset's manifest: same bytes load once [111].
     canonical_observations = canonical_observations or {}
@@ -538,7 +609,26 @@ def discover(
             raise BronzeError(f"{identity[0]}: immutable canonical key {canonical_keys[identity]} is absent or retired; reviewed mapping required")
     inputs = [item for item in inputs if kept[(item["table"], item["sha256"])] is item]
     unselected.sort(key=lambda entry: (entry["collection"], entry["dataset_id"], entry["file_name"]))
+    if selection is not None:
+        labels = {identity: info["label"] for group_named in selection.named.values() for identity, info in group_named.items()}
+        for item in [*inputs, *(entry["copy"] for entry in unselected if "copy" in entry)]:
+            identity = (item["key"], item["version_id"])
+            item.update(labels.get(identity, {}))
+        empty = sorted(table["table"] for table in chosen if not any(item["table"] == table["table"] for item in inputs))
+        if empty:
+            raise BronzeError(f"{empty[0]}: no completion or stale record names an object this table loads ({len(empty)} such tables)")
     return inputs, unselected
+
+
+def freshness_report(inputs: list[dict[str, Any]]) -> dict[str, Any]:
+    """Count the loaded objects by freshness and list each with its label and last retrieval time. Empty unless the inputs came from ingestion records."""
+    labelled = [item for item in inputs if "freshness" in item]
+    if not labelled:
+        return {}
+    names = ("table", "key", "version_id", "sha256", "freshness", "stale_reason", "stale_record", "last_retrieved_at_utc")
+    objects = sorted(({name: item[name] for name in names} for item in labelled), key=lambda row: (row["table"], row["key"], row["version_id"]))
+    stale = sum(row["freshness"] == "stale" for row in objects)
+    return {"current_objects": len(objects) - stale, "stale_objects": stale, "objects": objects}
 
 
 def validate_csv(path: Path, jsonl: Path | None = None, encodings: Iterable[str] = ("utf-8",)) -> tuple[list[str], int, str]:
@@ -1239,7 +1329,10 @@ def main(argv: list[str] | None = None) -> int:
         canonical_keys = {(row["table_name"], row["sha256"]): row["_object_key"] for row in previous if row["kind"] == "object"}
         canonical_observations = {(row["table_name"], row["sha256"]): row["observation_id"] for row in previous if row["kind"] == "object"}
         published_observations = {row["observation_id"] for row in previous if row["kind"] == "observation"}
-        inputs, unselected = discover(storage, bucket, config, names, load_retired(), canonical_keys, canonical_observations, published_observations)
+        retired_before = {row["observation_id"]: row["retirement_record_json"] for row in previous if row["kind"] == "observation" and row["retired"]}
+        inputs, unselected = discover(
+            storage, bucket, config, names, load_retired(), canonical_keys, canonical_observations, published_observations, retired_before=retired_before
+        )
         if inventory is not None:
             bronze_pin.verify_replay(inventory, inputs)
         if args.diagnose:
@@ -1297,6 +1390,8 @@ def main(argv: list[str] | None = None) -> int:
         "unselected": unloaded,
         "passed": passed,
     }
+    if freshness := freshness_report(inputs):
+        report["freshness"] = freshness
     REPORT_ROOT.mkdir(parents=True, exist_ok=True)
     (REPORT_ROOT / f"report_{stamp}.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
     sys.stdout.write(json.dumps(report, sort_keys=True) + "\n")

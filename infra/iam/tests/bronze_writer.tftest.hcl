@@ -283,12 +283,15 @@ run "bronze_largest_valid_configuration_keeps_inline_policies_under_the_role_quo
       toset(jsondecode(aws_iam_policy.bronze_writer["source_objects_raw"].policy).Statement[0].Resource) == toset(concat([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         "arn:aws:s3:::${var.data_bucket_name}/raw/${collection}/*"
-      ], ["arn:aws:s3:::${var.data_bucket_name}/raw/bronze_objects/sha256/*"])) &&
+        ], [
+        "arn:aws:s3:::${var.data_bucket_name}/raw/bronze_objects/sha256/*",
+        "arn:aws:s3:::${var.data_bucket_name}/raw/ingestion_units/*", "arn:aws:s3:::${var.data_bucket_name}/raw/ingestion_stale/*"
+      ])) &&
       alltrue([for arn in jsondecode(aws_iam_policy.bronze_writer["source_objects_root"].policy).Statement[0].Resource : !strcontains(arn, "/raw/")]) &&
-      toset(jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Condition.StringLike["s3:prefix"]) == toset(flatten([
+      toset(jsondecode(aws_iam_policy.bronze_writer["source_lists"].policy).Statement[0].Condition.StringLike["s3:prefix"]) == toset(concat(flatten([
         for collection in distinct([for table in jsondecode(file("../../config/lakehouse/bronze_tables.json")).tables : table.collection]) :
         ["${collection}/*", "raw/${collection}/*"]
-      ]))
+      ]), ["raw/ingestion_units/*", "raw/ingestion_stale/*"]))
     )
     error_message = "The raw policy must hold every mapped collection under raw, the root policy none of them, and the list policy both roots."
   }
