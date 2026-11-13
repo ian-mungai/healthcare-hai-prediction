@@ -76,6 +76,53 @@ def test_a_wonder_unit_lists_only_its_original_with_the_plan_digest_and_not_the_
     check("manual_units/W1/county_year.csv" not in files, "the derived county_year.csv is rebuilt on the host, not seeded")
 
 
+BROWSER = "data/datasets/historical_acquisition/mmd_browser_history/P/captures/MMD/MMD__S/raw/mmd_data.csv"
+STRUCTURE = "data/datasets/historical_acquisition/structure_history/jobs/J/captures/ADJ/ADJ__S/raw/county_adjacency2010.txt"
+REFERENCES = "data/e2e/mmd_api_comparison/20260925/references/urban.tsv"
+
+
+@pytest.mark.parametrize(
+    ("path", "folder"),
+    [(BROWSER, "mmd_browser_history"), (STRUCTURE, "structure_history"), (REFERENCES, "mmd_references")],
+    ids=["browser_history_capture", "structure_history_capture", "mmd_comparison_reference"],
+)
+def test_the_seed_folder_follows_from_the_fixed_layout_of_each_kind_of_plan_input(path: str, folder: str) -> None:
+    check(build.input_folder(path) == folder, f"{path} takes {build.input_folder(path)}, not {folder}")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "data/other/mmd_browser_history/x/captures/MMD/M/raw/f.csv",
+        "data/datasets/other/jobs/structure_history/J/captures/ADJ/S/raw/f.txt",
+        "data/datasets/historical_acquisition/other/structure_history/jobs/J/captures/ADJ/S/raw/f.txt",
+        "data/datasets/historical_acquisition/structure_history/other/mmd_browser_history/captures/ADJ/S/raw/f.txt",
+        "data/e2e/other/mmd_api_comparison/20260925/references/f.tsv",
+        "data/e2e/mmd_api_comparison/20260925/other/mmd_browser_history/f.tsv",
+        "x/structure_history/f.txt",
+        "/mmd_api_comparison/f.tsv",
+    ],
+    ids=[
+        "marker_below_other_data_folder",
+        "marker_in_a_job_folder",
+        "marker_below_an_unrelated_collection",
+        "second_marker_in_a_structure_path",
+        "marker_below_an_unrelated_e2e_folder",
+        "second_marker_in_a_comparison_path",
+        "marker_in_a_relative_path",
+        "marker_only",
+    ],
+)
+def test_a_marker_text_in_an_unrelated_folder_does_not_choose_a_seed_folder(path: str) -> None:
+    with pytest.raises(ValueError, match="no seed folder"):
+        build.input_folder(path)
+
+
+def test_the_refusal_names_the_path_and_the_layouts_it_knows() -> None:
+    with pytest.raises(ValueError, match=r"data/other/x\.bin.*mmd_browser_history.*mmd_references.*structure_history"):
+        build.input_folder("data/other/x.bin")
+
+
 def test_an_input_of_an_unknown_kind_is_refused() -> None:
     with pytest.raises(ValueError, match="no seed folder"):
         build.build(json.dumps(QUEUE).encode(), SPECS, ["data/other/x.bin"], {}, {})

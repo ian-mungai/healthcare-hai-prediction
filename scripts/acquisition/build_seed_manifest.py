@@ -23,21 +23,34 @@ from scripts.acquisition.check_baseline_run import EXPECTED_NAME, ROOT, SEED_KIN
 from scripts.acquisition.manual_content import MODES, REBUILT_MODES
 from scripts.acquisition.wonder_export_contract import stored_name
 
-FOLDERS = (("/mmd_browser_history/", "mmd_browser_history"), ("/mmd_api_comparison/", "mmd_references"), ("/structure_history/", "structure_history"))
 REPORT = "plan_inputs/data/e2e/mmd_api_comparison/20260925/report.json"
 MMD_PLAN = "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json"
 HUD_PLAN = Path("config/acquisition/hud_xlsx_plan_2010q1_2020q4.json")
 WONDER_PLAN = Path("config/acquisition/wonder_export_plan.json")
 PERIODS = Path("dbt/seeds/geography_file_periods.csv")
 CAPTURES_FOLDER, RAW_FOLDER = "captures", "raw"
+HISTORY = ("data", "datasets", "historical_acquisition")
+# The fixed layout of each kind of plan input below the repository root: browser capture, job capture and MMD comparison file. None stands for any name.
+LAYOUTS = {
+    "mmd_browser_history": (*HISTORY, "mmd_browser_history", None, CAPTURES_FOLDER, None, None, RAW_FOLDER, None),
+    "structure_history": (*HISTORY, "structure_history", "jobs", None, CAPTURES_FOLDER, None, None, RAW_FOLDER, None),
+    "mmd_references": ("data", "e2e", "mmd_api_comparison", None, "references", None),
+}
 
 
 def input_folder(path: str) -> str:
-    """The seed folder of a plan input, by where its path says it was captured."""
-    for marker, folder in FOLDERS:
-        if marker in path:
+    """The seed folder of a plan input: the one whose fixed layout every folder of the path fills, at the position the layout gives it.
+
+    The layouts are ``<history>/mmd_browser_history/<plan>/captures/<source ID>/<snapshot ID>/raw/<file>``,
+    ``<history>/structure_history/jobs/<job>/captures/<source ID>/<snapshot ID>/raw/<file>`` and
+    ``data/e2e/mmd_api_comparison/<date>/references/<file>``. Text in any other folder of the path chooses nothing, and a path in none of them is refused
+    by name.
+    """
+    parts = PurePosixPath(path).parts
+    for folder, layout in LAYOUTS.items():
+        if len(parts) == len(layout) and all(want is None or want == part for want, part in zip(layout, parts, strict=True)):
             return folder
-    raise ValueError(f"{path} has no seed folder")
+    raise ValueError(f"{path} has no seed folder: its layout is none of {', '.join(sorted(LAYOUTS))}")
 
 
 def build(queue_bytes: bytes, specs: dict[str, Any], inputs: list[str], digests: dict[str, str], originals: dict[str, str]) -> bytes:
