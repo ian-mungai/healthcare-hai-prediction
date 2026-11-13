@@ -194,28 +194,6 @@ resource "aws_vpc_endpoint" "athena_glue" {
   })
 }
 
-resource "aws_vpc_security_group_ingress_rule" "athena_glue_from_lakehouse" {
-  count = local.athena_glue_endpoint ? 1 : 0
-
-  security_group_id            = aws_security_group.athena_glue_endpoint[0].id
-  description                  = "Glue HTTPS from the lakehouse job group only"
-  ip_protocol                  = "tcp"
-  from_port                    = 443
-  to_port                      = 443
-  referenced_security_group_id = aws_security_group.job["lakehouse"].id
-}
-
-resource "aws_vpc_security_group_egress_rule" "athena_glue_from_lakehouse" {
-  count = local.athena_glue_endpoint ? 1 : 0
-
-  security_group_id            = aws_security_group.job["lakehouse"].id
-  description                  = "Lakehouse HTTPS to the Glue endpoint"
-  ip_protocol                  = "tcp"
-  from_port                    = 443
-  to_port                      = 443
-  referenced_security_group_id = aws_security_group.athena_glue_endpoint[0].id
-}
-
 # The metadata host task runs on the host in bridge mode, so its Glue calls leave from the host. Private DNS sends them to this endpoint, which must accept
 # the host while the persistent catalog is prepared. The host already sends HTTPS anywhere (network.tf host_https).
 resource "aws_vpc_security_group_ingress_rule" "athena_glue_from_host" {

@@ -59,10 +59,8 @@ run "default_prepares_nothing_persistent" {
       && length(aws_iam_role.openmetadata_host_task) == 0
       && length(aws_iam_role_policy.task_execution_openmetadata) == 0
       && length(aws_ssm_document.openmetadata_ui_forward) == 0
-      && length(aws_vpc_security_group_ingress_rule.host_from_openmetadata_api) == 0
-      && length(aws_vpc_security_group_egress_rule.job_to_openmetadata_api) == 0
     )
-    error_message = "With the flag off the stack holds no persistent catalog role, grant, document or port rule."
+    error_message = "With the flag off the stack holds no persistent catalog role, grant or document."
   }
 
   assert {
@@ -116,27 +114,6 @@ run "execution_role_injects_exactly_the_two_passwords" {
       && alltrue([for statement in jsondecode(aws_iam_role_policy.task_execution_openmetadata[0].policy).Statement : statement.Action == "ssm:GetParameters"])
     )
     error_message = "The host execution role injects exactly the administrator and database passwords, and no bot token."
-  }
-}
-
-run "one_api_port_between_the_lakehouse_jobs_and_the_host" {
-  command = plan
-
-  variables {
-    openmetadata_persistent_prepared = true
-  }
-
-  assert {
-    condition = (
-      aws_vpc_security_group_ingress_rule.host_from_openmetadata_api[0].from_port == 8585
-      && aws_vpc_security_group_ingress_rule.host_from_openmetadata_api[0].to_port == 8585
-      && aws_vpc_security_group_ingress_rule.host_from_openmetadata_api[0].ip_protocol == "tcp"
-      && aws_vpc_security_group_egress_rule.job_to_openmetadata_api[0].from_port == 8585
-      && aws_vpc_security_group_egress_rule.job_to_openmetadata_api[0].to_port == 8585
-      && aws_vpc_security_group_ingress_rule.host_from_openmetadata_api[0].cidr_ipv4 == null
-      && aws_vpc_security_group_egress_rule.job_to_openmetadata_api[0].cidr_ipv4 == null
-    )
-    error_message = "Only the lakehouse job group may reach host port 8585, by security group reference, and no CIDR rule opens it."
   }
 }
 

@@ -82,20 +82,6 @@ data "aws_security_group" "host" {
   }
 }
 
-data "aws_security_group" "task" {
-  vpc_id = data.aws_vpc.platform.id
-
-  filter {
-    name   = "tag:Name"
-    values = [format(local.name, "task")]
-  }
-
-  filter {
-    name   = "tag:Project"
-    values = [local.project_tag]
-  }
-}
-
 # The host's private address is the address of a network interface that the IAM stack creates and boot attaches. The interface
 # carries its own Name, so the host's primary interface (tagged with the host Name) never matches. The lookup fails until the IAM
 # stack has been applied, and its address is exported for the services and jobs stacks, so no person types it.

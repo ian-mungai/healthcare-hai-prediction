@@ -68,17 +68,6 @@ resource "aws_vpc_security_group_ingress_rule" "host_owner" {
   to_port           = each.value.port
 }
 
-resource "aws_vpc_security_group_ingress_rule" "host_from_tasks" {
-  for_each = toset([for port in var.host_task_ports : tostring(port)])
-
-  security_group_id            = aws_security_group.host.id
-  description                  = "Run tasks to host services"
-  ip_protocol                  = "tcp"
-  referenced_security_group_id = aws_security_group.task.id
-  from_port                    = tonumber(each.key)
-  to_port                      = tonumber(each.key)
-}
-
 # The host has no NAT gateway, so it reaches ECR, S3, Secrets Manager, ECS and image registries over public HTTPS.
 #trivy:ignore:AWS-0104
 resource "aws_vpc_security_group_egress_rule" "host_https" {
@@ -90,33 +79,3 @@ resource "aws_vpc_security_group_egress_rule" "host_https" {
   to_port           = 443
 }
 
-resource "aws_security_group" "task" {
-  #checkov:skip=CKV2_AWS_5:Run tasks attach this group when they start; no resource in this stack uses it.
-  name        = format(local.platform_name, "task")
-  description = "Run tasks: no inbound traffic; outbound to HTTPS and to the platform network."
-  vpc_id      = aws_vpc.platform.id
-
-  tags = merge(local.project_tags, {
-    Name = format(local.platform_name, "task")
-  })
-}
-
-# Run tasks have no NAT gateway either; they reach S3, Secrets Manager and ECR over public HTTPS.
-#trivy:ignore:AWS-0104
-resource "aws_vpc_security_group_egress_rule" "task_https" {
-  security_group_id = aws_security_group.task.id
-  description       = "HTTPS to AWS service endpoints"
-  ip_protocol       = "tcp"
-  cidr_ipv4         = "0.0.0.0/0"
-  from_port         = 443
-  to_port           = 443
-}
-
-resource "aws_vpc_security_group_egress_rule" "task_platform" {
-  security_group_id = aws_security_group.task.id
-  description       = "Services on the container host"
-  ip_protocol       = "tcp"
-  cidr_ipv4         = aws_vpc.platform.cidr_block
-  from_port         = 1
-  to_port           = 65535
-}

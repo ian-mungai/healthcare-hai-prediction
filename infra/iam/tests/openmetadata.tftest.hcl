@@ -59,11 +59,6 @@ run "default_prepares_no_catalog_role" {
     condition     = !contains(keys(output.job_roles), "openmetadata_task") && length(output.openmetadata_roles) == 0
     error_message = "The default plan must hold no catalog role."
   }
-
-  assert {
-    condition     = length(aws_vpc_security_group_ingress_rule.openmetadata_ui) == 0 && length(aws_vpc_security_group_egress_rule.openmetadata_marquez) == 0
-    error_message = "The default plan must open no catalog port."
-  }
 }
 
 run "prepared_role_reads_catalog_metadata_only" {
@@ -136,15 +131,6 @@ run "prepared_role_reads_catalog_metadata_only" {
     error_message = "The execution role may inject exactly the one admin password parameter."
   }
 
-  assert {
-    condition = (
-      aws_vpc_security_group_ingress_rule.openmetadata_ui[0].from_port == 8585 &&
-      aws_vpc_security_group_ingress_rule.openmetadata_ui[0].to_port == 8585 &&
-      aws_vpc_security_group_ingress_rule.openmetadata_ui[0].description == "Catalog UI from the container host only" &&
-      length(aws_vpc_security_group_egress_rule.openmetadata_marquez) == 0
-    )
-    error_message = "Only the container host may reach the catalog UI port, and the Marquez port stays closed until asked for."
-  }
 }
 
 run "prepared_forward_document_fixes_port_and_destination" {
@@ -171,25 +157,6 @@ run "prepared_forward_document_fixes_port_and_destination" {
   }
 }
 
-run "marquez_port_is_a_second_switch" {
-  command = plan
-
-  variables {
-    openmetadata_prepared          = true
-    openmetadata_marquez_reachable = true
-  }
-
-  assert {
-    condition = (
-      aws_vpc_security_group_egress_rule.openmetadata_marquez[0].from_port == 5000 &&
-      aws_vpc_security_group_egress_rule.openmetadata_marquez[0].to_port == 5000 &&
-      aws_vpc_security_group_egress_rule.openmetadata_marquez[0].description == "Lakehouse jobs to Marquez on the host" &&
-      aws_vpc_security_group_ingress_rule.host_from_openmetadata_marquez[0].from_port == 5000
-    )
-    error_message = "The lakehouse jobs reach only port 5000 on the host, and the host admits only that."
-  }
-}
-
 run "marquez_switch_needs_the_role" {
   command = plan
 
@@ -198,4 +165,15 @@ run "marquez_switch_needs_the_role" {
   }
 
   expect_failures = [var.openmetadata_marquez_reachable]
+}
+
+run "marquez_switch_opens_no_port" {
+  command = plan
+
+  variables {
+    openmetadata_prepared          = true
+    openmetadata_marquez_reachable = true
+  }
+
+  expect_failures = [check.marquez_port_is_retired]
 }

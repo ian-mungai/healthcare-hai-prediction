@@ -63,14 +63,6 @@ override_data {
   }
 }
 
-override_data {
-  target          = data.aws_security_group.task
-  override_during = plan
-  values = {
-    id = "sg-0000000000000task0"
-  }
-}
-
 # The IAM stack creates the host's network interface; this stack finds it by tag and exports its private address.
 override_data {
   target          = data.aws_network_interface.host_address
@@ -100,10 +92,9 @@ run "lookups_from_the_iam_stack" {
       toset([for filter in data.aws_subnet.public["0"].filter : "${filter.name}=${one(filter.values)}"]) == toset(["tag:Name=example_project_public_0_dev", "tag:Project=example_project"]) &&
       toset([for filter in data.aws_subnet.public["1"].filter : "${filter.name}=${one(filter.values)}"]) == toset(["tag:Name=example_project_public_1_dev", "tag:Project=example_project"]) &&
       toset([for filter in data.aws_security_group.host.filter : "${filter.name}=${one(filter.values)}"]) == toset(["tag:Name=example_project_host_dev", "tag:Project=example_project"]) &&
-      toset([for filter in data.aws_security_group.task.filter : "${filter.name}=${one(filter.values)}"]) == toset(["tag:Name=example_project_task_dev", "tag:Project=example_project"]) &&
       data.aws_autoscaling_group.host.name == "example_project_host_dev"
     )
-    error_message = "The platform stack finds the VPC, both subnets, both security groups and the host group by the Name and Project tags the IAM stack sets."
+    error_message = "The platform stack finds the VPC, both subnets, the host security group and the host group by the Name and Project tags the IAM stack sets."
   }
 
   assert {
@@ -112,7 +103,6 @@ run "lookups_from_the_iam_stack" {
       output.public_subnet_ids == ["subnet-0123456789abcdef0", "subnet-0fedcba9876543210"] &&
       output.host_subnet_id == "subnet-0123456789abcdef0" &&
       output.host_security_group_id == "sg-0000000000000host0" &&
-      output.task_security_group_id == "sg-0000000000000task0" &&
       output.host_autoscaling_group_name == "example_project_host_dev"
     )
     error_message = "The outputs the control-plane stack reads keep their names and values."

@@ -1,5 +1,5 @@
 variable "serve_prepared" {
-  description = "Prepare the task role of the serve job that deploys a registered model version beside the production model. It reuses the training network, the training images and the MLflow login of the execution role, so apply it with training_prepared. Off by default."
+  description = "Prepare the task role of the serve job that deploys a registered model version beside the production model. It reuses the training images and the MLflow login of the execution role, so apply it with training_prepared. Off by default."
   type        = bool
   default     = false
   nullable    = false

@@ -65,13 +65,6 @@ override_data {
   }
 }
 
-override_data {
-  target = data.aws_security_group.task
-  values = {
-    id = "sg-0000000000000task0"
-  }
-}
-
 variables {
   aws_profile         = "example_project_dev"
   environment         = "dev"

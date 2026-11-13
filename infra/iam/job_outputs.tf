@@ -9,10 +9,9 @@ output "job_roles" {
 }
 
 output "job_network" {
-  description = "Private class groups and the single endpoint subnet. Application definitions must disable public IPs."
+  description = "The single endpoint subnet and whether the private endpoints are on."
   value = {
-    subnet_id          = aws_subnet.public[0].id
-    security_group_ids = { for key in local.job_classes : key => aws_security_group.job[key].id }
-    endpoints_enabled  = var.job_endpoints_enabled
+    subnet_id         = aws_subnet.public[0].id
+    endpoints_enabled = var.job_endpoints_enabled
   }
 }

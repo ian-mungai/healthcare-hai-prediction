@@ -61,14 +61,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.task
-  override_during = plan
-  values = {
-    id = "sg-0000000000000task0"
-  }
-}
-
-override_resource {
   target          = aws_internet_gateway.platform
   override_during = plan
   values = {
@@ -148,35 +140,12 @@ run "security_groups" {
   }
 
   assert {
-    condition = alltrue([
-      for rule in [aws_vpc_security_group_egress_rule.host_https, aws_vpc_security_group_egress_rule.task_https] :
-      rule.cidr_ipv4 == "0.0.0.0/0" && rule.ip_protocol == "tcp" && rule.from_port == 443 && rule.to_port == 443
-    ])
-    error_message = "Internet egress is HTTPS only."
-  }
-
-  assert {
     condition = (
-      aws_vpc_security_group_egress_rule.host_https.security_group_id == aws_security_group.host.id &&
-      aws_vpc_security_group_egress_rule.task_https.security_group_id == aws_security_group.task.id &&
-      aws_vpc_security_group_egress_rule.task_platform.security_group_id == aws_security_group.task.id &&
-      aws_vpc_security_group_egress_rule.task_platform.cidr_ipv4 == "10.40.0.0/16" &&
-      aws_security_group.task.name == "example_project_task_dev" && aws_security_group.task.tags["Name"] == "example_project_task_dev" &&
-      aws_security_group.task.tags["Project"] == "example_project"
+      aws_vpc_security_group_egress_rule.host_https.cidr_ipv4 == "0.0.0.0/0" && aws_vpc_security_group_egress_rule.host_https.ip_protocol == "tcp" &&
+      aws_vpc_security_group_egress_rule.host_https.from_port == 443 && aws_vpc_security_group_egress_rule.host_https.to_port == 443 &&
+      aws_vpc_security_group_egress_rule.host_https.security_group_id == aws_security_group.host.id
     )
-    error_message = "Run tasks reach only HTTPS endpoints and the platform network, and their group carries the tags the platform stack looks it up by."
-  }
-
-  assert {
-    condition = (
-      toset([for rule in aws_vpc_security_group_ingress_rule.host_from_tasks : rule.from_port]) == toset([6379, 8181]) &&
-      alltrue([
-        for rule in aws_vpc_security_group_ingress_rule.host_from_tasks :
-        rule.security_group_id == aws_security_group.host.id && rule.referenced_security_group_id == aws_security_group.task.id &&
-        rule.cidr_ipv4 == null && rule.ip_protocol == "tcp" && rule.from_port == rule.to_port
-      ])
-    )
-    error_message = "Only the run-task group reaches the host, and only on the Polaris and Redis ports."
+    error_message = "Internet egress of the host is HTTPS only."
   }
 }
 

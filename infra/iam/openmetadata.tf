@@ -1,12 +1,12 @@
 variable "openmetadata_prepared" {
-  description = "Prepare the role, grants and private ports of the on-demand OpenMetadata catalog task. Off by default. It reuses the job network, so apply it with job_endpoints_enabled."
+  description = "Prepare the role, grants and forward document of the on-demand OpenMetadata catalog task. Off by default. Apply it with job_endpoints_enabled."
   type        = bool
   default     = false
   nullable    = false
 }
 
 variable "openmetadata_marquez_reachable" {
-  description = "Open port 5000 between the lakehouse job group and the container host, so the catalog task can read Marquez. Off by default. Marquez itself must also listen on the host's private address (a change in the services stack)."
+  description = "Kept so the prepared inputs file stays valid. It opens no port, because no job security group remains, and true fails the plan check. Off by default."
   type        = bool
   default     = false
   nullable    = false
@@ -14,6 +14,13 @@ variable "openmetadata_marquez_reachable" {
   validation {
     condition     = !var.openmetadata_marquez_reachable || var.openmetadata_prepared
     error_message = "Opening the Marquez port needs openmetadata_prepared."
+  }
+}
+
+check "marquez_port_is_retired" {
+  assert {
+    condition     = !var.openmetadata_marquez_reachable
+    error_message = "No job security group remains, so no rule can open port 5000 to Marquez: leave openmetadata_marquez_reachable false."
   }
 }
 
@@ -70,18 +77,6 @@ resource "aws_iam_role_policy" "openmetadata_parameter" {
   policy = templatefile("${path.module}/owner_policies/openmetadata_parameter.json", local.openmetadata_policy_inputs)
 }
 
-# The owner reaches the catalog UI through a Session Manager port forward on the container host to the task's private address. Only the host may open that port.
-resource "aws_vpc_security_group_ingress_rule" "openmetadata_ui" {
-  count = var.openmetadata_prepared ? 1 : 0
-
-  security_group_id            = aws_security_group.job["lakehouse"].id
-  description                  = "Catalog UI from the container host only"
-  ip_protocol                  = "tcp"
-  from_port                    = 8585
-  to_port                      = 8585
-  referenced_security_group_id = aws_security_group.host.id
-}
-
 # The owner forwards a local port to the catalog task through this project session document and no other. The port is fixed in the document and the caller chooses
 # only the destination address, which must lie in the platform network. The document exists only while the catalog is prepared, and the project user's policy names
 # it by ARN, so the grant does nothing while the flag is false. The general AWS remote-host document is not granted.
@@ -115,39 +110,6 @@ resource "aws_ssm_document" "catalog_forward" {
       localPortNumber = "{{ localPortNumber }}"
     }
   })
-}
-
-resource "aws_vpc_security_group_egress_rule" "host_to_openmetadata_ui" {
-  count = var.openmetadata_prepared ? 1 : 0
-
-  security_group_id            = aws_security_group.host.id
-  description                  = "Port forward from the host to the catalog UI"
-  ip_protocol                  = "tcp"
-  from_port                    = 8585
-  to_port                      = 8585
-  referenced_security_group_id = aws_security_group.job["lakehouse"].id
-}
-
-resource "aws_vpc_security_group_egress_rule" "openmetadata_marquez" {
-  count = var.openmetadata_prepared && var.openmetadata_marquez_reachable ? 1 : 0
-
-  security_group_id            = aws_security_group.job["lakehouse"].id
-  description                  = "Lakehouse jobs to Marquez on the host"
-  ip_protocol                  = "tcp"
-  from_port                    = 5000
-  to_port                      = 5000
-  referenced_security_group_id = aws_security_group.host.id
-}
-
-resource "aws_vpc_security_group_ingress_rule" "host_from_openmetadata_marquez" {
-  count = var.openmetadata_prepared && var.openmetadata_marquez_reachable ? 1 : 0
-
-  security_group_id            = aws_security_group.host.id
-  description                  = "Marquez from the lakehouse jobs only"
-  ip_protocol                  = "tcp"
-  from_port                    = 5000
-  to_port                      = 5000
-  referenced_security_group_id = aws_security_group.job["lakehouse"].id
 }
 
 output "openmetadata_roles" {

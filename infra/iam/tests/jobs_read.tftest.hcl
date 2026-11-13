@@ -47,18 +47,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.job["offline"]
-  override_during = plan
-  values          = { id = "sg-00000000000000002" }
-}
-
-override_resource {
-  target          = aws_security_group.job["lakehouse"]
-  override_during = plan
-  values          = { id = "sg-00000000000000003" }
-}
-
-override_resource {
   target          = aws_security_group.job["endpoints"]
   override_during = plan
   values          = { id = "sg-00000000000000004" }
@@ -110,12 +98,6 @@ override_resource {
   target          = aws_route_table.public
   override_during = plan
   values          = { id = "rtb-0123456789abcdef0" }
-}
-
-override_resource {
-  target          = aws_security_group.task
-  override_during = plan
-  values          = { id = "sg-00000000000000006" }
 }
 
 variables {
@@ -241,53 +223,14 @@ run "closed_read_endpoints" {
 
   assert {
     condition = (
-      toset(keys(aws_vpc_security_group_egress_rule.job_s3)) == toset(["offline", "lakehouse"]) &&
-      alltrue([for rule in aws_vpc_security_group_egress_rule.job_s3 : rule.ip_protocol == "tcp" && rule.from_port == 443 && rule.to_port == 443 && rule.prefix_list_id == aws_vpc_endpoint.job_s3[0].prefix_list_id && rule.cidr_ipv4 == null && rule.cidr_ipv6 == null]) &&
-      alltrue([for rule in aws_vpc_security_group_egress_rule.job_shared_endpoints : rule.referenced_security_group_id == aws_security_group.job["endpoints"].id && rule.from_port == 443 && rule.to_port == 443 && rule.cidr_ipv4 == null && rule.cidr_ipv6 == null]) &&
-      aws_vpc_security_group_egress_rule.job_ssm[0].security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_ingress_rule.job_ssm["lakehouse"].referenced_security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_ingress_rule.job_ssm["lakehouse"].security_group_id == aws_security_group.job["ssm_endpoint"].id
-    )
-    error_message = "Offline jobs reach only S3 and image/log endpoints. Only the lakehouse group reaches SSM."
-  }
-
-  assert {
-    condition = (
-      toset([for rule in aws_vpc_security_group_ingress_rule.job_shared_endpoints : rule.referenced_security_group_id]) == toset([
-        aws_security_group.job["offline"].id, aws_security_group.job["lakehouse"].id, aws_security_group.host.id, aws_security_group.task.id
-      ]) &&
+      toset(keys(aws_security_group.job)) == toset(["endpoints", "ssm_endpoint"]) &&
+      toset([for rule in aws_vpc_security_group_ingress_rule.job_shared_endpoints : rule.referenced_security_group_id]) == toset([aws_security_group.host.id]) &&
       alltrue([for rule in aws_vpc_security_group_ingress_rule.job_shared_endpoints : rule.security_group_id == aws_security_group.job["endpoints"].id && rule.ip_protocol == "tcp" && rule.from_port == 443 && rule.to_port == 443 && rule.cidr_ipv4 == null && rule.cidr_ipv6 == null]) &&
-      toset([for rule in aws_vpc_security_group_ingress_rule.job_ssm : rule.referenced_security_group_id]) == toset([
-        aws_security_group.job["lakehouse"].id, aws_security_group.host.id, aws_security_group.task.id
-      ]) &&
-      alltrue([for rule in aws_vpc_security_group_ingress_rule.job_ssm : rule.security_group_id == aws_security_group.job["ssm_endpoint"].id && rule.ip_protocol == "tcp" && rule.from_port == 443 && rule.to_port == 443 && rule.cidr_ipv4 == null && rule.cidr_ipv6 == null])
-    )
-    error_message = "Private DNS must preserve host and foundation task HTTPS access. Only lakehouse jobs, the host and foundation tasks reach SSM."
-  }
-
-  assert {
-    condition = (
-      aws_vpc_security_group_egress_rule.job_catalog.security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_egress_rule.job_catalog.referenced_security_group_id == aws_security_group.host.id &&
-      aws_vpc_security_group_egress_rule.job_catalog.from_port == 8181 && aws_vpc_security_group_egress_rule.job_catalog.to_port == 8181 &&
-      aws_vpc_security_group_ingress_rule.host_from_job_catalog.security_group_id == aws_security_group.host.id &&
-      aws_vpc_security_group_ingress_rule.host_from_job_catalog.referenced_security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_ingress_rule.host_from_job_catalog.from_port == 8181 && aws_vpc_security_group_ingress_rule.host_from_job_catalog.to_port == 8181 &&
+      toset([for rule in aws_vpc_security_group_ingress_rule.job_ssm : rule.referenced_security_group_id]) == toset([aws_security_group.host.id]) &&
+      alltrue([for rule in aws_vpc_security_group_ingress_rule.job_ssm : rule.security_group_id == aws_security_group.job["ssm_endpoint"].id && rule.ip_protocol == "tcp" && rule.from_port == 443 && rule.to_port == 443 && rule.cidr_ipv4 == null && rule.cidr_ipv6 == null]) &&
       alltrue([for group in aws_security_group.job : length(group.ingress) == 0 && length(group.egress) == 0])
     )
-    error_message = "The reciprocal catalog rules permit only lakehouse jobs on TCP 8181. No default or public group rule is added."
-  }
-
-  assert {
-    condition = (
-      aws_vpc_security_group_egress_rule.job_redis.security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_egress_rule.job_redis.referenced_security_group_id == aws_security_group.host.id &&
-      aws_vpc_security_group_egress_rule.job_redis.ip_protocol == "tcp" && aws_vpc_security_group_egress_rule.job_redis.from_port == 6379 && aws_vpc_security_group_egress_rule.job_redis.to_port == 6379 &&
-      aws_vpc_security_group_ingress_rule.host_from_job_redis.security_group_id == aws_security_group.host.id &&
-      aws_vpc_security_group_ingress_rule.host_from_job_redis.referenced_security_group_id == aws_security_group.job["lakehouse"].id &&
-      aws_vpc_security_group_ingress_rule.host_from_job_redis.ip_protocol == "tcp" && aws_vpc_security_group_ingress_rule.host_from_job_redis.from_port == 6379 && aws_vpc_security_group_ingress_rule.host_from_job_redis.to_port == 6379
-    )
-    error_message = "The features job applies Feast to the host Redis, so the lakehouse group and the host also hold the reciprocal rules for TCP 6379 and nothing wider."
+    error_message = "The two endpoint groups accept HTTPS from the host alone and carry no inline rule. No awsvpc job group, run-task group or training group exists."
   }
 }
 
@@ -301,8 +244,7 @@ run "endpoints_disabled" {
   assert {
     condition = (
       length(aws_vpc_endpoint.job_s3) == 0 && length(aws_vpc_endpoint.job_interface) == 0 && length(aws_vpc_endpoint.job_ssm) == 0 &&
-      length(aws_vpc_security_group_egress_rule.job_s3) == 0 && length(aws_vpc_security_group_egress_rule.job_shared_endpoints) == 0 &&
-      length(aws_vpc_security_group_ingress_rule.job_shared_endpoints) == 0 && length(aws_vpc_security_group_egress_rule.job_ssm) == 0 &&
+      length(aws_vpc_security_group_ingress_rule.job_shared_endpoints) == 0 &&
       length(aws_vpc_security_group_ingress_rule.job_ssm) == 0 && length(aws_iam_role.job) == 5
     )
     error_message = "Disabling the optional endpoints removes their resources and routes while retaining the five role definitions."

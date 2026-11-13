@@ -27,12 +27,6 @@ mock_provider "aws" {
 }
 
 override_resource {
-  target          = aws_security_group.job["lakehouse"]
-  override_during = plan
-  values          = { id = "sg-0000000000000lake0" }
-}
-
-override_resource {
   target          = aws_security_group.athena_glue_endpoint[0]
   override_during = plan
   values          = { id = "sg-0000000000000glue0" }
@@ -454,16 +448,8 @@ run "glue_endpoint_reaches_only_the_layer_writer_path" {
   }
 
   assert {
-    condition = (
-      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].security_group_id == "sg-0000000000000glue0" &&
-      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].referenced_security_group_id == "sg-0000000000000lake0" &&
-      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].from_port == 443 &&
-      aws_vpc_security_group_ingress_rule.athena_glue_from_lakehouse[0].to_port == 443 &&
-      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].security_group_id == "sg-0000000000000lake0" &&
-      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].referenced_security_group_id == "sg-0000000000000glue0" &&
-      aws_vpc_security_group_egress_rule.athena_glue_from_lakehouse[0].to_port == 443
-    )
-    error_message = "Only the lakehouse job group reaches the Glue endpoint, on port 443, and the endpoint group accepts nothing else."
+    condition     = length(aws_vpc_security_group_ingress_rule.athena_glue_from_host) == 0
+    error_message = "Without the persistent catalog no group reaches the Glue endpoint: no job group exists, and the host joins only for the catalog ingestion."
   }
 
   assert {

@@ -47,18 +47,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.job["offline"]
-  override_during = plan
-  values          = { id = "sg-00000000000000002" }
-}
-
-override_resource {
-  target          = aws_security_group.job["lakehouse"]
-  override_during = plan
-  values          = { id = "sg-00000000000000003" }
-}
-
-override_resource {
   target          = aws_security_group.job["endpoints"]
   override_during = plan
   values          = { id = "sg-00000000000000004" }
@@ -112,12 +100,6 @@ override_resource {
   values          = { id = "rtb-0123456789abcdef0" }
 }
 
-override_resource {
-  target          = aws_security_group.task
-  override_during = plan
-  values          = { id = "sg-00000000000000006" }
-}
-
 variables {
   aws_profile         = "example_project_dev"
   environment         = "dev"
@@ -145,10 +127,9 @@ run "silver_first_run_iam_step_gives_the_task_its_image_pull_path" {
       output.job_network.endpoints_enabled == true &&
       length(aws_vpc_endpoint.job_s3) == 1 && length(aws_vpc_endpoint.job_ssm) == 1 &&
       toset(keys(aws_vpc_endpoint.job_interface)) == toset(["ecr.api", "ecr.dkr", "logs"]) &&
-      contains(keys(aws_vpc_security_group_egress_rule.job_shared_endpoints), "lakehouse") &&
-      contains(keys(aws_vpc_security_group_egress_rule.job_s3), "lakehouse")
+      toset(keys(aws_vpc_security_group_ingress_rule.job_shared_endpoints)) == toset(["host"])
     )
-    error_message = "With the endpoints flag the lakehouse class reaches ECR, the log service, Parameter Store and S3 without a public address."
+    error_message = "With the endpoints flag the host reaches ECR, the log service, Parameter Store and S3 through the private endpoints."
   }
 
   assert {
@@ -181,7 +162,7 @@ run "the_two_layer_flags_alone_leave_the_task_without_an_image_pull_path" {
   assert {
     condition = (
       output.job_network.endpoints_enabled == false && length(aws_vpc_endpoint.job_interface) == 0 && length(aws_vpc_endpoint.job_s3) == 0 &&
-      length(aws_vpc_security_group_egress_rule.job_shared_endpoints) == 0
+      length(aws_vpc_security_group_ingress_rule.job_shared_endpoints) == 0
     )
     error_message = "Without the endpoints flag no private path to ECR, logs or S3 exists, so the first silver task could not pull its image. The runbook sets the flag in the same step."
   }

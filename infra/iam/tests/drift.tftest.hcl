@@ -47,18 +47,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.job["offline"]
-  override_during = plan
-  values          = { id = "sg-00000000000000002" }
-}
-
-override_resource {
-  target          = aws_security_group.job["lakehouse"]
-  override_during = plan
-  values          = { id = "sg-00000000000000003" }
-}
-
-override_resource {
   target          = aws_security_group.job["endpoints"]
   override_during = plan
   values          = { id = "sg-00000000000000004" }
@@ -110,12 +98,6 @@ override_resource {
   target          = aws_route_table.public
   override_during = plan
   values          = { id = "rtb-0123456789abcdef0" }
-}
-
-override_resource {
-  target          = aws_security_group.task
-  override_during = plan
-  values          = { id = "sg-00000000000000006" }
 }
 
 variables {

@@ -14,13 +14,8 @@ output "host_subnet_id" {
 }
 
 output "host_security_group_id" {
-  description = "Container host group: inbound only from the run-task group on the service ports and from the owner addresses."
+  description = "Container host group: inbound only from the owner addresses."
   value       = data.aws_security_group.host.id
-}
-
-output "task_security_group_id" {
-  description = "Run-task group: no inbound rules; outbound HTTPS and TCP inside the platform network."
-  value       = data.aws_security_group.task.id
 }
 
 output "ecr_repository_urls" {

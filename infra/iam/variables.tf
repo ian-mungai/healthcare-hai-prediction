@@ -460,17 +460,6 @@ variable "host_ingress_ports" {
   }
 }
 
-variable "host_task_ports" {
-  description = "TCP ports on the host that the run tasks reach: the Polaris catalog and Redis."
-  type        = list(number)
-  default     = [6379, 8181]
-
-  validation {
-    condition     = alltrue([for port in var.host_task_ports : port >= 1 && port <= 65535 && floor(port) == port])
-    error_message = "Each port must be a whole number from 1 to 65535."
-  }
-}
-
 variable "budget_limit_usd" {
   description = "Quarterly amount for the resources that carry the Project tag; the owner tracks it and the alerts only inform."
   type        = number

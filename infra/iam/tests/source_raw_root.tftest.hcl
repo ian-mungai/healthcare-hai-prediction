@@ -240,7 +240,7 @@ run "publisher_exports_are_absent_by_default" {
   assert {
     condition = (
       !contains(keys(output.job_roles), "publisher_task") && output.publisher_role == null &&
-      toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+      toset(keys(output.job_network)) == toset(["subnet_id", "endpoints_enabled"])
     )
     error_message = "By default no publisher role or network is exported and the private job network is unchanged."
   }
@@ -257,7 +257,7 @@ run "publisher_exports_leave_the_target_role_set_untouched" {
     condition = (
       !contains(keys(output.job_roles), "publisher_task") &&
       toset(keys(output.job_roles)) == toset(["execution", "offline_task", "seal_task", "read_task", "try_writer"]) &&
-      toset(keys(output.job_network.security_group_ids)) == toset(["offline", "lakehouse"])
+      toset(keys(output.job_network)) == toset(["subnet_id", "endpoints_enabled"])
     )
     error_message = "Enabling the publisher must not add a key to job_roles or job_network, which the closed target schema reads."
   }

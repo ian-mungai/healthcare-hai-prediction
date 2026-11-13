@@ -29,13 +29,12 @@ output "host_autoscaling_group_name" {
 }
 
 output "platform_network" {
-  description = "The network the platform stack finds by tag: the VPC, the two public subnets and the host and run-task security groups."
+  description = "The network the platform stack finds by tag: the VPC, the two public subnets and the host security group."
   value = {
     vpc_id                 = aws_vpc.platform.id
     cidr_block             = aws_vpc.platform.cidr_block
     public_subnet_ids      = aws_subnet.public[*].id
     host_security_group_id = aws_security_group.host.id
-    task_security_group_id = aws_security_group.task.id
   }
 }
 

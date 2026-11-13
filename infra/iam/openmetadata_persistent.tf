@@ -1,5 +1,5 @@
 variable "openmetadata_persistent_prepared" {
-  description = "Prepare the persistent OpenMetadata catalog on the container host: the bootstrap task role, the execution grants for its two passwords, port 8585 between the lakehouse job group and the host, and the Session Manager document for the UI. Off by default. It does not need the finite catalog task."
+  description = "Prepare the persistent OpenMetadata catalog on the container host: the bootstrap task role, the execution grants for its two passwords, and the Session Manager document for the UI. Off by default. It does not need the finite catalog task."
   type        = bool
   default     = false
   nullable    = false
@@ -105,29 +105,6 @@ resource "aws_iam_role_policy" "job_execution_openmetadata_ingestion_token" {
       Resource = [local.openmetadata_parameter_arn["ingestion"]]
     }]
   })
-}
-
-# The lakehouse job group may call the catalog API on the host. No CIDR rule opens it.
-resource "aws_vpc_security_group_egress_rule" "job_to_openmetadata_api" {
-  count = var.openmetadata_persistent_prepared ? 1 : 0
-
-  security_group_id            = aws_security_group.job["lakehouse"].id
-  description                  = "Lakehouse jobs to the persistent catalog API on the host"
-  ip_protocol                  = "tcp"
-  from_port                    = 8585
-  to_port                      = 8585
-  referenced_security_group_id = aws_security_group.host.id
-}
-
-resource "aws_vpc_security_group_ingress_rule" "host_from_openmetadata_api" {
-  count = var.openmetadata_persistent_prepared ? 1 : 0
-
-  security_group_id            = aws_security_group.host.id
-  description                  = "Persistent catalog API from the lakehouse jobs only"
-  ip_protocol                  = "tcp"
-  from_port                    = 8585
-  to_port                      = 8585
-  referenced_security_group_id = aws_security_group.job["lakehouse"].id
 }
 
 # The owner reaches the catalog UI on the host through this Session Manager document and no other. The destination port is fixed.

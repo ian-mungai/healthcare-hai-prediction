@@ -61,14 +61,6 @@ override_resource {
 }
 
 override_resource {
-  target          = aws_security_group.task
-  override_during = plan
-  values = {
-    id = "sg-0000000000000task0"
-  }
-}
-
-override_resource {
   target          = aws_internet_gateway.platform
   override_during = plan
   values = {
