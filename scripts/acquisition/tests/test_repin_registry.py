@@ -62,11 +62,10 @@ def tree(root: Path) -> dict:
     legacy = {"catalog_version": 1, "plans": {canonical_hash(plan_a): [], canonical_hash(plan_b): []}, "records": {"config/acquisition/decision.json": []}}
     (config / "legacy_versions.json").write_bytes(dump(legacy, sort=False))
     (config / "legacy_versions.lock.json").write_bytes(dump({"catalog_sha256": canonical_hash(legacy)}))
-    policies = {"version": 1, "entries": [{"id": "r1", "plan_sha256": canonical_hash(plan_a)}]}
+    entry = {"id": "r1", "plan_sha256": canonical_hash(plan_a)}
+    policies = {"version": 1, "entries": [entry]}
     (config / "projection_policies.json").write_bytes(dump(policies))
-    (config / "projection_policies.lock.json").write_bytes(
-        dump({"policies_sha256": lock_value(policies), "entries": {"r1": lock_value(policies["entries"][0])}})
-    )
+    (config / "projection_policies.lock.json").write_bytes(dump({"policies_sha256": lock_value(policies), "entries": {"r1": lock_value(entry)}}))
     new_dir = root / "new_registry"
     new_dir.mkdir()
     for name in NAMES:
