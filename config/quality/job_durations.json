@@ -33,10 +33,40 @@
       "basis": "estimate, 22 measured Oct 30 2026 for the remaining manual hooks plus about 2 for the seven linters"
     },
     {
-      "job": "Repository Hooks (samples)",
-      "measured_minutes": 18,
+      "job": "Repository Hooks (lock)",
+      "measured_minutes": 5,
+      "timeout_minutes": 12,
+      "basis": "estimate, the lock export and its planted defects; measure it on the first complete hosted run"
+    },
+    {
+      "job": "Repository Hooks (samples, shard 1 of 4)",
+      "measured_minutes": 12,
       "timeout_minutes": 30,
-      "basis": "measured Nov 6 2026: hosted pull request runs reached the 20-minute limit twice in the `test-checks` hook, at about 18 minutes"
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+    },
+    {
+      "job": "Repository Hooks (samples, shard 2 of 4)",
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+    },
+    {
+      "job": "Repository Hooks (samples, shard 3 of 4)",
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+    },
+    {
+      "job": "Repository Hooks (samples, shard 4 of 4)",
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+    },
+    {
+      "job": "Repository Hooks (samples)",
+      "measured_minutes": 4,
+      "timeout_minutes": 10,
+      "basis": "estimate, about 2 minutes of setup and the combining step"
     },
     {
       "job": "Core Static Checks",

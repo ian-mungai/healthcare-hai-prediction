@@ -3,8 +3,9 @@
 The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push this run covers the rest:
 
 - ``range`` scope (the default): ``scripts/run_ci.sh`` with ``CI_SCOPE=range`` from the merge base of the pushed head with ``origin/main`` to the head, the
-  commit-message and removed-name checks of the hosted hooks job, the three hosted hook partitions (scripts/quality/ci_hooks.py) and the acquisition
-  gate (the ``acquisition-checks`` hook with its own path filter, as scripts/acquisition/run_checks_ci.sh runs it), all over the same range.
+  commit-message and removed-name checks of the hosted hooks job, the hosted hook partitions (scripts/quality/ci_hooks.py; the samples partition runs its
+  shards at once and combines them) and the acquisition gate (the ``acquisition-checks`` hook with its own path filter, as
+  scripts/acquisition/run_checks_ci.sh runs it), all over the same range.
 - ``full`` scope: ``scripts/run_ci.sh`` with ``CI_SCOPE=full`` (it holds the hook partitions and the acquisition suite) when the range changes a path in
   ``pre_push.full_paths`` (the selector, its configuration, the CI scripts and group bodies, the acquisition CI entry scripts, the workflow and the
   pre-commit configuration), when ``origin/main`` or the merge base cannot be found, or with ``--full``.
@@ -12,7 +13,7 @@ The commit stage holds only fast hooks (.pre-commit-config.yaml). Before a push 
   range. Hosted CI runs it in the code hook partition, which a small change leaves out, so a small change runs it here only. The hook skips itself
   unless the range changes uv.lock, a requirements file or the allowlist.
 - A ``range`` of a small change (``pre_push.small_change``: at most ``max_files`` files and ``max_changed_lines`` changed lines, none on the ``not_paths``
-  list, none a CI file) leaves out the acquisition hook and the three hook partitions. Hosted CI runs them.
+  list, none a CI file) leaves out the acquisition hook and the hook partitions. Hosted CI runs them.
 
 Before any of these steps the changed-file checks run (scripts/quality/ci_changed_files.py: Ruff, mypy, SQLFluff, the Docker-call guard and the guard of the
 check group files). A failed check stops the run before the long groups.

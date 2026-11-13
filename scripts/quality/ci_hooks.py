@@ -10,13 +10,22 @@ import re
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
-from scripts.quality import ci_groups, core_commands
+from scripts.quality import case_shards, ci_groups, core_commands
 from scripts.quality.repo_checks import load_yaml
+
+# A hook group in ``hook_shards`` of config/quality/ci_groups.json runs as that many shards. Each shard's hook entry reads its shard and its folder from these
+# variables (pre-commit passes the environment through), and the suite names the cases that the shards split.
+SHARD_VARIABLE = "CHECKS_SHARD"
+SHARD_DIRECTORY_VARIABLE = "CHECKS_SHARD_DIRECTORY"
+SHARD_SUITES = {"samples": "run_checks_e2e"}
+# What pre-commit prints for a hook whose file filter matches no file of the checked range.
+SKIPPED_MARKER = "(no files to check)Skipped"
 
 
 def groups(root: Path) -> dict[str, list[str]]:
@@ -81,8 +90,13 @@ def group_deadline_seconds(root: Path, group: str) -> int:
     workflow = load_yaml((root / ".github/workflows/ci.yml").read_text())
     if not isinstance(workflow, dict):
         raise ValueError(".github/workflows/ci.yml must contain a mapping")
-    rows = workflow["jobs"]["hooks"]["strategy"]["matrix"]["include"]
-    seconds = next(int(row["timeout"]) * 60 - 120 for row in rows if row["group"] == group)
+    # A sharded group runs as the job ``hook_<group>``; every other group is a row of the matrix of the job ``hooks``.
+    sharded = workflow["jobs"].get(f"hook_{group}") if group in SHARD_SUITES else None
+    if sharded is not None:
+        seconds = int(sharded["timeout-minutes"]) * 60 - 120
+    else:
+        rows = workflow["jobs"]["hooks"]["strategy"]["matrix"]["include"]
+        seconds = next(int(row["timeout"]) * 60 - 120 for row in rows if row["group"] == group)
     if seconds <= 0:
         raise ValueError(f"hook job {group} must allow more than the two-minute evidence margin")
     now = int(time.time())
@@ -90,9 +104,18 @@ def group_deadline_seconds(root: Path, group: str) -> int:
     return max(0, seconds - (now - started))
 
 
-def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end: str) -> int:
-    """Run unchanged hook entries within the workflow's group deadline and retain failures, including partial timeout output."""
+def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end: str, shard: str = "") -> int:
+    """Run unchanged hook entries within the workflow's group deadline and retain failures, including partial timeout output.
+
+    With ``shard`` (K/N of a sharded group) the hook entry runs only that shard of its cases and writes its manifest to ``output``.
+    """
     output.mkdir(parents=True, exist_ok=True)
+    environment = os.environ.copy()
+    for name in (SHARD_VARIABLE, SHARD_DIRECTORY_VARIABLE):
+        environment.pop(name, None)
+    if shard:
+        environment[SHARD_VARIABLE] = shard
+        environment[SHARD_DIRECTORY_VARIABLE] = str(output)
     ranged = usable(root, start) and usable(root, end)
     selection = ["--from-ref", start, "--to-ref", end] if ranged else ["--all-files"]
     budget = group_deadline_seconds(root, group)
@@ -101,13 +124,13 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
     for hook in hooks:
         remaining = deadline - time.monotonic()
         command = [hook, *selection, "--hook-stage", "manual", "--show-diff-on-failure"]
-        sys.stdout.write(f"Hook group {group}: {hook}\n")
+        sys.stdout.write(f"Hook group {group}{f' shard {shard}' if shard else ''}: {hook}\n")
         sys.stdout.flush()
         started = time.monotonic()
         try:
             if remaining <= 0:
                 raise TimeoutExpired(["pre-commit", "run", *command], budget)
-            result = run_command(str(root / ".venv/bin/pre-commit"), ["run", *command], cwd=root, env=os.environ.copy(), timeout=remaining)
+            result = run_command(str(root / ".venv/bin/pre-commit"), ["run", *command], cwd=root, env=environment, timeout=remaining)
         except TimeoutExpired as error:
             stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or ""
             stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
@@ -126,10 +149,14 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
         (output / f"{hook}.log").write_text(result.stdout + result.stderr)
         sys.stdout.write(result.stdout)
         sys.stderr.write(result.stderr)
-        results.append({"hook": hook, "exit": result.returncode, "seconds": round(time.monotonic() - started, 3), "command": command})
+        row = {"hook": hook, "exit": result.returncode, "seconds": round(time.monotonic() - started, 3), "command": command}
+        if shard and result.returncode == 0 and not (output / "manifest.json").exists() and SKIPPED_MARKER in result.stdout:
+            row["skipped"] = True
+        results.append(row)
     failed = len(results) != len(hooks) or any(row["exit"] != 0 for row in results)
     report = {
         "group": group,
+        **({"shard": shard} if shard else {}),
         "selection": selection,
         "deadline_seconds": budget,
         "hooks": results,
@@ -143,6 +170,61 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
     return int(failed)
 
 
+def shard_folders(directory: Path, count: int) -> list[Path]:
+    return [directory / f"shard_{index}" for index in range(1, count + 1)]
+
+
+def shard_skipped(folder: Path) -> bool:
+    """Whether the shard's report says that pre-commit skipped its hook because no file of the checked range matches the hook's filter."""
+    try:
+        report = json.loads((folder / "report.json").read_text(encoding="utf-8"))
+        return (
+            not (folder / "manifest.json").exists()
+            and bool(report["hooks"])
+            and all(row.get("skipped") is True and row["exit"] == 0 for row in report["hooks"])
+        )
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def combine(group: str, count: int, directory: Path) -> int:
+    """Require every shard of a sharded group to have run exactly its cases, once each in all, or every shard to have skipped. Writes combined.json."""
+    from scripts.quality import run_checks_e2e  # the case list of the suite that the shards split
+
+    folders = shard_folders(directory, count)
+    skipped = [shard_skipped(folder) for folder in folders]
+    directory.mkdir(parents=True, exist_ok=True)
+    if all(skipped):
+        result: dict[str, Any] = {"group": group, "shards": count, "skipped": True, "problems": [], "status": "pass"}
+        (directory / "combined.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+        sys.stdout.write(f"Hook group {group}: every one of the {count} shards skipped, because no file of the checked range matches the hook's filter.\n")
+        return 0
+    if any(skipped):
+        problems = [
+            f"shard {index}/{count} skipped its hook but another shard ran: the shards must all run or all skip"
+            for index, flag in enumerate(skipped, 1)
+            if flag
+        ]
+        result = {"group": group, "shards": count, "problems": problems, "status": "fail"}
+        (directory / "combined.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    else:
+        suite = SHARD_SUITES[group]
+        result = case_shards.combine(suite, run_checks_e2e.inventory(), count, directory, case_shards.saved_costs(suite))
+    for problem in result["problems"]:
+        sys.stderr.write(f"Hook group {group}: {problem}\n")
+    if result["status"] == "pass":
+        sys.stdout.write(f"Hook group {group}: all {count} shards ran every case once.\n")
+    return int(result["status"] != "pass")
+
+
+def run_shards(root: Path, group: str, hooks: list[str], output: Path, start: str, end: str, count: int) -> int:
+    """Run every shard of a sharded group at once, each in its own folder under ``output``, and then combine them."""
+    with ThreadPoolExecutor(max_workers=count) as pool:
+        futures = [pool.submit(run, root, group, hooks, folder, start, end, f"{index}/{count}") for index, folder in enumerate(shard_folders(output, count), 1)]
+        codes = [future.result() for future in futures]
+    return int(any(codes)) | combine(group, count, output)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
@@ -151,16 +233,41 @@ def main() -> int:
     parser.add_argument("--from", dest="start", default="")
     parser.add_argument("--to", dest="end", default="")
     parser.add_argument("--output-directory", type=Path)
+    parser.add_argument(
+        "--shard", help="run only shard K/N of a sharded group (hook_shards in config/quality/ci_groups.json); its folder is shard_K under the output directory"
+    )
+    parser.add_argument("--combine", action="store_true", help="check the shard folders under the output directory of a sharded group instead of running it")
+    parser.add_argument("--count", type=int, help="with --combine: the number of shards that the workflow ran")
     args = parser.parse_args()
     try:
         partitions = groups(args.root)
         if args.group not in partitions:
             raise ValueError(f"unknown hook group {args.group!r}, choose one of {', '.join(partitions)}")
+        configured = json.loads((args.root / "config/quality/ci_groups.json").read_text()).get("hook_shards", {}).get(args.group, 0)
     except (ValueError, KeyError) as error:
         parser.error(str(error))
     if args.list:
         sys.stdout.write(json.dumps(partitions[args.group]) + "\n")
         return 0
+    if (args.shard or args.combine or args.count is not None) and not configured:
+        parser.error(f"hook group {args.group} is not sharded: add it to hook_shards in config/quality/ci_groups.json first")
+    if args.combine and (args.shard or args.count is None):
+        parser.error("--combine requires --count and takes no --shard")
+    if args.count is not None and not args.combine:
+        parser.error("--count belongs to --combine")
+    if args.combine and args.count != configured:
+        parser.error(f"the shard count {args.count} differs from hook_shards {configured} of group {args.group}")
+    if args.shard:
+        found = re.fullmatch(r"([1-9][0-9]*)/([1-9][0-9]*)", args.shard)
+        if not found or int(found[2]) != configured or int(found[1]) > configured:
+            parser.error(f"--shard must be K/{configured} with 1 <= K <= {configured} for group {args.group}, not {args.shard!r}")
+    if configured:
+        base = args.output_directory or args.root / "data/e2e/hooks" / args.group
+        if args.combine:
+            return combine(args.group, configured, base)
+        if args.shard:
+            return run(args.root, args.group, partitions[args.group], base / f"shard_{args.shard.split('/')[0]}", args.start, args.end, args.shard)
+        return run_shards(args.root, args.group, partitions[args.group], base, args.start, args.end, configured)
     output = args.output_directory or args.root / "data/e2e/hooks" / args.group / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     return run(args.root, args.group, partitions[args.group], output, args.start, args.end)
 

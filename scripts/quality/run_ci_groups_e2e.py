@@ -58,7 +58,7 @@ from unittest import mock
 
 from scripts.lakehouse import feature_shards
 from scripts.process import clear_git_environment, find_program, run_command
-from scripts.quality import ci_groups, ci_hooks, core_commands, scratch_marker
+from scripts.quality import case_shards, ci_groups, ci_hooks, core_commands, scratch_marker
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
 from scripts.quality.scratch_worktree import ScratchWorktrees
@@ -2309,7 +2309,9 @@ WORKER_KINDS = (
     "hook_privacy",
     "hook_documentation",
     "hook_code",
+    "hook_lock",
     "hook_samples",
+    "hook_samples_combine",
     "acquisition_shard",
     "acquisition_combine",
 )
@@ -2740,6 +2742,239 @@ def hook_delegation_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+HOOK_GROUPS = ("privacy", "documentation", "code", "lock", "samples")
+HOOK_SAMPLE_SHARDS = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")).get("hook_shards", {}).get("samples", 4)
+HOOK_SHARD_LABELS = [f"repository hooks: samples shard {index}/{HOOK_SAMPLE_SHARDS}" for index in range(1, HOOK_SAMPLE_SHARDS + 1)]
+HOOK_COMBINE_LABEL = f"repository hooks: samples combine/{HOOK_SAMPLE_SHARDS}"
+HOOK_EXCLUSIVE_LABELS = [*HOOK_SHARD_LABELS, "repository hooks: lock"]
+CHECKS_SUITE = "run_checks_e2e"
+CHECKS_SHARD_BUDGET_SECONDS = 1500
+
+# A pre-commit stand-in for the sharded samples group: it records each call with the shard environment that the hook entry reads, takes a second, and then
+# behaves as the real test-checks entry does for its shard (a manifest of every selected case), except as the files in its folder say.
+HOOK_SHARD_STUB = """#!@PYTHON@
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, "@ROOT@")
+from scripts.quality import case_shards, run_checks_e2e
+
+folder = Path("@FOLDER@")
+shard = os.environ.get("CHECKS_SHARD", "")
+directory = os.environ.get("CHECKS_SHARD_DIRECTORY", "")
+started = time.time()
+time.sleep(1)
+with (folder / "calls.jsonl").open("a") as handle:
+    handle.write(json.dumps({"argv": sys.argv[1:], "shard": shard, "directory": directory, "start": started, "end": time.time()}) + "\\n")
+if (folder / "skip").exists():
+    sys.stdout.write("Each check blocks its bad sample and passes its good one...(no files to check)Skipped\\n")
+    raise SystemExit(0)
+inventory = run_checks_e2e.inventory()
+selected = case_shards.select(inventory, shard, case_shards.saved_costs("@SUITE@"))
+failing = (folder / "fail").read_text().strip() if (folder / "fail").exists() else ""
+rows = [{"case": name, "ok": shard != failing, "seconds": 1.0} for name in selected]
+manifest = case_shards.write_manifest(Path(directory), "@SUITE@", shard, inventory, selected, rows)
+raise SystemExit(1 if manifest["status"] == "fail" else 0)
+"""
+
+
+def checks_listing(*arguments: str) -> list[str]:
+    run = run_command(str(PYTHON), ["-m", "scripts.quality.run_checks_e2e", "--list-cases", *arguments], cwd=ROOT, timeout=120)
+    try:
+        names = json.loads(run.stdout)
+    except json.JSONDecodeError:
+        return []
+    return names if run.returncode == 0 and isinstance(names, list) else []
+
+
+def planted_shard_folders(base: Path, inventory: list[str], count: int) -> None:
+    """The folders of a complete, passing run of every shard: the manifest that each shard's test-checks run writes."""
+    costs = case_shards.saved_costs(CHECKS_SUITE)
+    for index in range(1, count + 1):
+        selected = case_shards.select(inventory, f"{index}/{count}", costs)
+        case_shards.write_manifest(
+            base / f"shard_{index}", CHECKS_SUITE, f"{index}/{count}", inventory, selected, [{"case": name, "ok": True, "seconds": 1.0} for name in selected]
+        )
+
+
+def hook_shard_combine_cases(scratch: Path, inventory: list[str], count: int) -> list[dict[str, Any]]:
+    """The combining step of the samples group fails for a missing or doubled case, a missing or failed shard, or shards that disagree about skipping."""
+    costs = case_shards.saved_costs(CHECKS_SUITE)
+    results: list[dict[str, Any]] = []
+
+    def combine(label: str, damage: Callable[[Path], None], expect_pass: bool, marker: str, arguments: tuple[str, ...] = ()) -> None:
+        base = scratch / f"hook_shard_combine_{label}"
+        planted_shard_folders(base, inventory, count)
+        damage(base)
+        outcome = run_command(
+            str(PYTHON),
+            ["-m", "scripts.quality.ci_hooks", "--group", "samples", "--combine", "--count", str(count), "--output-directory", str(base), *arguments],
+            cwd=ROOT,
+            timeout=120,
+        )
+        output = outcome.stdout + outcome.stderr
+        passed = outcome.returncode == 0 if expect_pass else outcome.returncode != 0 and marker in output
+        results.append(
+            {"case": f"hook_samples_combine_{label}", "passed": passed and "Traceback" not in output, "exit": outcome.returncode, "output": output[-400:]}
+        )
+
+    def rewrite(shard: int, change: Callable[[list[str], list[dict[str, Any]]], tuple[list[str], list[dict[str, Any]]]]) -> Callable[[Path], None]:
+        def damage(base: Path) -> None:
+            selected = case_shards.select(inventory, f"{shard}/{count}", costs)
+            rows = [{"case": name, "ok": True, "seconds": 1.0} for name in selected]
+            chosen, kept = change(selected, rows)
+            case_shards.write_manifest(base / f"shard_{shard}", CHECKS_SUITE, f"{shard}/{count}", inventory, chosen, kept)
+
+        return damage
+
+    def skip_shards(first: int) -> Callable[[Path], None]:
+        def damage(base: Path) -> None:
+            for index in range(first, count + 1):
+                (base / f"shard_{index}" / "manifest.json").unlink()
+                report = {"group": "samples", "status": "pass", "hooks": [{"hook": "test-checks", "exit": 0, "skipped": True}]}
+                (base / f"shard_{index}" / "report.json").write_text(json.dumps(report))
+
+        return damage
+
+    def nothing_damaged(base: Path) -> None:
+        return None
+
+    combine("complete_run_passes", nothing_damaged, True, "")
+    combine("a_missing_case_fails", rewrite(2, lambda chosen, rows: (chosen, rows[1:])), False, "shard 2/4")
+    combine("a_doubled_case_fails", rewrite(3, lambda chosen, rows: (chosen, [*rows, rows[0]])), False, "shard 3/4")
+    combine(
+        "a_case_of_another_shard_fails",
+        rewrite(1, lambda chosen, rows: (chosen, [*rows, {"case": inventory[0], "ok": True, "seconds": 1.0}])),
+        False,
+        "shard 1/4",
+    )
+    combine("a_failed_case_fails", rewrite(4, lambda chosen, rows: (chosen, [{**rows[0], "ok": False}, *rows[1:]])), False, "shard 4/4")
+    combine("a_missing_shard_fails", lambda base: shutil.rmtree(base / "shard_3"), False, "shard 3/4")
+    combine("an_empty_shard_folder_fails", lambda base: (base / "shard_2" / "manifest.json").unlink(), False, "shard 2/4")
+    combine("every_shard_skipped_passes", skip_shards(1), True, "")
+    combine("one_shard_ran_and_the_others_skipped_fails", skip_shards(2), False, "skipped")
+    combine("a_count_other_than_the_configuration_fails", nothing_damaged, False, "count", ("--count", "3"))
+    return results
+
+
+def hook_shard_run_cases(scratch: Path, count: int) -> list[dict[str, Any]]:
+    """The real group CLI with a recording pre-commit stand-in: one shard on its own, and the whole samples group (every shard at once, then the combine)."""
+    results: list[dict[str, Any]] = []
+    for label, arguments, skip, fail in (
+        ("one_shard", ("--shard", f"2/{count}"), False, ""),
+        ("every_shard_at_once_then_combine", (), False, ""),
+        ("a_failed_shard_fails_the_group", (), False, f"3/{count}"),
+        ("every_shard_skipped_passes", (), True, ""),
+        ("a_shard_that_is_not_in_the_configuration_is_refused", ("--shard", f"2/{count + 1}"), False, ""),
+    ):
+        root = scratch / f"hook_shard_run_{label}"
+        for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, root / name)
+        binary = root / ".venv/bin/pre-commit"
+        binary.parent.mkdir(parents=True, exist_ok=True)
+        binary.write_text(
+            HOOK_SHARD_STUB.replace("@PYTHON@", str(PYTHON)).replace("@ROOT@", str(ROOT)).replace("@FOLDER@", str(root)).replace("@SUITE@", CHECKS_SUITE)
+        )
+        binary.chmod(0o755)
+        if skip:
+            (root / "skip").touch()
+        if fail:
+            (root / "fail").write_text(fail)
+        output = root / "output"
+        outcome = run_command(
+            str(PYTHON),
+            ["-m", "scripts.quality.ci_hooks", "--root", str(root), "--group", "samples", *arguments, "--output-directory", str(output)],
+            cwd=ROOT,
+            timeout=300,
+        )
+        calls = [json.loads(line) for line in (root / "calls.jsonl").read_text().splitlines()] if (root / "calls.jsonl").exists() else []
+        combined_path = output / "combined.json"
+        combined = json.loads(combined_path.read_text()) if combined_path.exists() else {}
+        entry = ["run", "test-checks", "--all-files", "--hook-stage", "manual", "--show-diff-on-failure"]
+        if label == "one_shard":
+            checks = {
+                "one_call_with_the_unchanged_entry": [call["argv"] for call in calls] == [entry],
+                "the_shard_environment": [(call["shard"], call["directory"]) for call in calls] == [(f"2/{count}", str(output / "shard_2"))],
+                "its_manifest_and_report": (output / "shard_2/manifest.json").exists() and (output / "shard_2/report.json").exists(),
+                "no_combine": not combined_path.exists(),
+                "exit_zero": outcome.returncode == 0,
+            }
+        elif label == "a_shard_that_is_not_in_the_configuration_is_refused":
+            checks = {
+                "refused": outcome.returncode != 0 and "shard" in outcome.stderr,
+                "nothing_ran": not calls,
+                "no_traceback": "Traceback" not in outcome.stderr,
+            }
+        else:
+            starts = sorted(call["start"] for call in calls)
+            ends = sorted(call["end"] for call in calls)
+            checks = {
+                "every_shard_once": sorted(call["shard"] for call in calls) == [f"{index}/{count}" for index in range(1, count + 1)],
+                "all_shards_overlap": len(calls) == count and starts[-1] < ends[0],
+                "own_folders": sorted(call["directory"] for call in calls) == [str(output / f"shard_{index}") for index in range(1, count + 1)],
+                "exit_matches": (outcome.returncode != 0) == bool(fail),
+                "combined_status": combined.get("status", "") == ("fail" if fail else "pass") or (skip and outcome.returncode == 0),
+                "no_traceback": "Traceback" not in outcome.stderr,
+            }
+            if skip:
+                checks["says_skipped"] = "skipped" in (outcome.stdout + outcome.stderr).lower()
+        results.append(
+            {
+                "case": f"hook_samples_group_{label}",
+                "passed": all(checks.values()),
+                "checks": checks,
+                "exit": outcome.returncode,
+                "error": outcome.stderr[-400:],
+            }
+        )
+    return results
+
+
+def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The test-checks hook is four shards that together run every run_checks_e2e case once, beside a lock group, and a combining step proves it."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    count = config.get("hook_shards", {}).get("samples", 0)
+    inventory = checks_listing()
+    selections = [checks_listing("--shard", f"{index}/{count}") for index in range(1, count + 1)] if count else []
+    flat = [name for names in selections for name in names]
+    costs = json.loads((ROOT / "config/quality/shard_costs.json").read_text(encoding="utf-8")).get("suites", {}).get(CHECKS_SUITE, {})
+    loads = [sum(costs.get(name, 0) for name in names) for names in selections]
+    results = [
+        {
+            "case": "hook_samples_is_four_test_checks_shards_and_the_lock_group_is_its_own",
+            "passed": count == 4 and config["hook_groups"].get("samples") == ["test-checks"] and config["hook_groups"].get("lock") == ["test-lock"],
+            "shards": count,
+            "groups": {name: config["hook_groups"].get(name) for name in ("samples", "lock")},
+        },
+        {
+            "case": "every_run_checks_case_lands_in_exactly_one_shard",
+            "passed": len(inventory) > 676 and len(set(inventory)) == len(inventory) and bool(flat) and sorted(flat) == sorted(inventory) and all(selections),
+            "inventory": len(inventory),
+            "selected": len(flat),
+            "per_shard": [len(names) for names in selections],
+        },
+        {
+            "case": "saved_costs_cover_every_case_and_keep_each_shard_inside_the_budget",
+            "passed": bool(inventory)
+            and set(costs) == set(inventory)
+            and bool(loads)
+            and max(loads) <= CHECKS_SHARD_BUDGET_SECONDS
+            and max(loads) <= 1.25 * min(loads),
+            "unpriced": len(set(inventory) - set(costs)),
+            "unknown": len(set(costs) - set(inventory)),
+            "shard_seconds": [round(load) for load in loads],
+        },
+    ]
+    if count and inventory:
+        results += hook_shard_combine_cases(scratch, inventory, count)
+    results += hook_shard_run_cases(scratch, count)
+    return results
+
+
 def hook_partition_cases(scratch: Path) -> list[dict[str, Any]]:
     """The real hook runner rejects missing and repeated gates and preserves hook-stage and range arguments."""
     root = scratch / "hook_partition"
@@ -3036,7 +3271,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     )
     actual: list[str] = []
     exits = []
-    for group in ("privacy", "documentation", "code", "samples"):
+    for group in HOOK_GROUPS:
         listed = run_command(str(PYTHON), ["-m", "scripts.quality.ci_hooks", "--group", group, "--list"], cwd=ROOT, timeout=60)
         exits.append(listed.returncode)
         try:
@@ -3046,7 +3281,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     results.append(
         {
             "case": "hook_groups_cover_every_manual_hook_exactly_once",
-            "passed": exits == [0, 0, 0, 0] and sorted(actual) == expected,
+            "passed": exits == [0] * len(HOOK_GROUPS) and sorted(actual) == expected,
             "missing": sorted(set(expected) - set(actual)),
             "repeated": sorted(name for name in set(actual) if actual.count(name) > 1),
             "exits": exits,
@@ -3056,6 +3291,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
         *results,
         *feature_combination_cases(scratch),
         *hook_partition_cases(scratch),
+        *hook_shard_cases(scratch),
         *hook_delegation_cases(scratch),
         hook_timeout_case(scratch),
         *feature_case_timing_cases(scratch),
@@ -3171,7 +3407,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     """Run the dispatcher with native event stand-ins, unchanged orchestration commands and two shared workers that must rendezvous."""
     name = f"dispatcher_scheduling_{part}_{'staged' if staged else 'samples_failure' if fail_samples else 'success'}"
     events = out / f"{name}_events"
-    exclusive = ["repository hooks: samples"] if part == "all" else []
+    exclusive = HOOK_EXCLUSIVE_LABELS if part == "all" else []
     peers = ["probe: python_lint", "probe: configuration_checks"]
     probe = scheduling_probe(work, events, exclusive, peers)
     quality = out / f"{name}_quality"
@@ -3204,7 +3440,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
                 "CI_PART": part,
                 "SCHEDULING_EVENTS": str(events),
                 "SCHEDULING_PROBE": str(probe),
-                "SCHEDULING_FAIL": "repository hooks: samples" if fail_samples else "",
+                "SCHEDULING_FAIL": HOOK_SHARD_LABELS[2] if fail_samples else "",
                 "QUALITY_ARTIFACT_DIR": str(quality),
             },
             prepare=prepare,
@@ -3217,9 +3453,11 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     shared = [
         row
         for row in ordinary
-        if not row["label"].startswith("launcher E2E") and row["label"] not in {"probe: lakehouse_gold_writer_setup", "repository hooks: samples"}
+        if not row["label"].startswith("launcher E2E")
+        and row["label"] not in {"probe: lakehouse_gold_writer_setup", HOOK_COMBINE_LABEL, *HOOK_EXCLUSIVE_LABELS}
     ]
-    samples = [row for row in rows if row["label"] == "repository hooks: samples"]
+    samples = [row for row in rows if row["label"] in HOOK_EXCLUSIVE_LABELS]
+    combine = [row for row in rows if row["label"] == HOOK_COMBINE_LABEL]
     wanted: list[list[str]] = []
     for module, *arguments in ORCHESTRATION_COMMANDS:
         flags = [arguments.pop(0)] if arguments[:1] == ["-B"] else []
@@ -3238,10 +3476,10 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     ]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
-        expected += ["probe: lakehouse_features_store"]
+        expected += ["probe: lakehouse_features_store", "lakehouse_features: feature sources check", "lakehouse_features: feature columns check"]
         expected += [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
         expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)]
-        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "samples")]
+        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "lock")] + [*HOOK_SHARD_LABELS, HOOK_COMBINE_LABEL]
         expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
         expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)] + ["probe: acquisition combine"]
     peer_rows = [row for row in rows if row["label"] in peers]
@@ -3251,16 +3489,26 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
         "intended_exit": code != 0 if fail_samples else code == 0,
         "orchestration_commands_exactly_once_with_unchanged_argv": actual == ([] if staged or fail_samples else wanted),
         "selected_commands_exactly_once": True if fail_samples else sorted(labels) == sorted(expected),
-        "samples_has_no_peer_overlap": all(not intervals_overlap(sample, row) for sample in samples for row in rows if row is not sample),
-        "gold_writer_precedes_samples": not writer or not samples or writer[0]["end"] <= samples[0]["start"],
-        "shared_work_follows_samples": not samples or fail_samples or all(samples[0]["end"] <= row["start"] for row in shared),
+        "samples_have_no_peer_overlap": all(not intervals_overlap(sample, row) for sample in samples for row in rows if row not in samples),
+        "the_shards_and_the_lock_run_at_once": part != "all"
+        or len(samples) == len(HOOK_EXCLUSIVE_LABELS)
+        and all(intervals_overlap(left, right) for left in samples for right in samples if left is not right),
+        "gold_writer_precedes_samples": not writer or not samples or writer[0]["end"] <= min(row["start"] for row in samples),
+        "the_combine_runs_once_after_every_shard": part != "all"
+        or fail_samples
+        and not combine
+        or len(combine) == 1
+        and all(row["end"] <= combine[0]["start"] for row in samples),
+        "shared_work_follows_samples_and_the_combine": not samples
+        or fail_samples
+        or all(max(row["end"] for row in [*samples, *combine]) <= row["start"] for row in shared),
         "failed_samples_stop_the_shared_work": not fail_samples or not shared,
         "remaining_shared_workers_overlap": fail_samples
         or len(peer_rows) == 2
         and all(row["barrier_met"] for row in peer_rows)
         and intervals_overlap(*peer_rows),
         "samples_failure_is_preserved": not fail_samples
-        or re.search(r"^\| repository hooks: samples \| .* \| 3 \|$", summary, re.MULTILINE) is not None
+        or re.search(rf"^\| {re.escape(HOOK_SHARD_LABELS[2])} \| .* \| 3 \|$", summary, re.MULTILINE) is not None
         and PASS_LINES["all"] not in log,
     }
     return {"case": name, "passed": all(checks.values()), "checks": checks, "exit": code, "events": rows, "output": log[-500:]}
@@ -3825,6 +4073,8 @@ def local_plan_of(log: str) -> dict[str, Any]:
             f"{suite}:{count}" for suite, count in re.findall(r"^TIMED lakehouse_features: combine (sources|columns)/(\d+) ", log, re.MULTILINE)
         ),
         "hook_groups": set(re.findall(r"^TIMED repository hooks: (\w+) ", log, re.MULTILINE)),
+        "hook_shards": set(f"{group}:{shard}" for group, shard in re.findall(r"^TIMED repository hooks: (\w+) shard (\d+/\d+) ", log, re.MULTILINE)),
+        "hook_combines": set(f"{group}:{count}" for group, count in re.findall(r"^TIMED repository hooks: (\w+) combine/(\d+) ", log, re.MULTILINE)),
         "launcher_shards": set(re.findall(r"^TIMED launcher E2E shard (\d+/\d+) ", log, re.MULTILINE)),
         "groups": groups,
         "units": units,
@@ -3846,6 +4096,8 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
     feature_shards: set[str] = set()
     feature_combines: set[str] = set()
     hook_groups: set[str] = set()
+    hook_shards: set[str] = set()
+    hook_combines: set[str] = set()
     launcher_shards: set[str] = set()
     for definition in workflow["jobs"].values():
         for entry in matrix_entries(definition):
@@ -3871,6 +4123,12 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
                     if found:
                         groups.add("repository_hooks")
                         hook_groups.add(found[1])
+                        shard = re.search(r"--shard '(\d+/\d+)'", command)
+                        if shard:
+                            hook_shards.add(f"{found[1]}:{shard[1]}")
+                        count = re.search(r"--combine --count (\d+)", command)
+                        if count:
+                            hook_combines.add(f"{found[1]}:{count[1]}")
                 feature_combines |= {
                     f"{suite}:{count}" for suite, count in re.findall(r"feature_shards combine --suite (sources|columns) --count (\d+)", command)
                 }
@@ -3882,6 +4140,8 @@ def github_plan_of(workflow: dict[str, Any]) -> dict[str, Any]:
         "feature_shards": feature_shards,
         "feature_combines": feature_combines,
         "hook_groups": hook_groups,
+        "hook_shards": hook_shards,
+        "hook_combines": hook_combines,
         "launcher_shards": launcher_shards,
     }
 
@@ -3890,7 +4150,18 @@ def mirror_differences(github: dict[str, Any], local: dict[str, Any]) -> dict[st
     """What differs between the GitHub jobs and the full local run; empty when the local run mirrors GitHub."""
     differences = {
         name: {"github": sorted(github[name]), "local": sorted(local[name])}
-        for name in ("groups", "units", "shards", "combine_counts", "feature_shards", "feature_combines", "hook_groups", "launcher_shards")
+        for name in (
+            "groups",
+            "units",
+            "shards",
+            "combine_counts",
+            "feature_shards",
+            "feature_combines",
+            "hook_groups",
+            "hook_shards",
+            "hook_combines",
+            "launcher_shards",
+        )
         if github[name] != local[name]
     }
     if local["shard_runs"] != len(local["shards"]) or local["combine_runs"] != 1:
@@ -3919,6 +4190,13 @@ def planted_workflows() -> dict[str, dict[str, Any]]:
     hooks = copy.deepcopy(workflow_document())
     hooks["jobs"]["hooks"]["strategy"]["matrix"]["include"].pop()
     drifts["hook_group"] = hooks
+    hook_shard = copy.deepcopy(workflow_document())
+    hook_shard["jobs"]["hook_samples"]["strategy"]["matrix"]["shard"].pop()
+    drifts["hook_samples_shard"] = hook_shard
+    hook_combine = copy.deepcopy(workflow_document())
+    for step in hook_combine["jobs"]["hook_samples_combine"]["steps"]:
+        step["run"] = str(step.get("run", "")).replace("--combine --count 4", "--combine --count 3")
+    drifts["hook_samples_combine_count"] = hook_combine
     launcher = copy.deepcopy(workflow_document())
     launcher["jobs"]["launcher"]["strategy"]["matrix"]["shard"].pop()
     drifts["launcher_shard"] = launcher
@@ -4635,7 +4913,7 @@ def pre_push_scheduling_case(scratch: Path, scope: str, fail_local: bool = False
     checks = {
         "real_scope_and_non_small_plan": planned["scope"] == scope
         and executed_plan.get("scope") == scope
-        and (scope == "full" or "acquisition" in names and len(hook_calls) == (0 if fail_local else 4)),
+        and (scope == "full" or "acquisition" in names and len(hook_calls) == (0 if fail_local else len(HOOK_GROUPS))),
         "executed_plan_matches_cli_plan": json.dumps(steps, sort_keys=True).replace(executed_plan.get("output", "<missing>"), "<output>")
         == json.dumps(planned["steps"], sort_keys=True).replace(planned.get("output", "<missing>"), "<output>"),
         "intended_exit": code != 0 if fail_local else code == 0,

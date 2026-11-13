@@ -267,7 +267,10 @@ run_item() {
   if [[ -n "${!group_variable:-}" ]]; then
     run_group "${!group_variable}" "${!entry_variable:-$1}" "${!argument_variable:-}"
   else
-    "$1"
+    case "$1" in
+      hook_samples_[0-9]*) hook_samples_shard "${1#hook_samples_}" ;;
+      *) "$1" ;;
+    esac
   fi
 }
 printf '\n| Step | Seconds |\n| --- | ---: |\n' >>"$summary"
@@ -448,7 +451,18 @@ hook_partition() {
 hook_privacy() { hook_partition privacy; }
 hook_documentation() { hook_partition documentation; }
 hook_code() { hook_partition code; }
-hook_samples() { hook_partition samples; }
+hook_lock() { hook_partition lock; }
+# The test-checks hook is hook_sample_shards shards (hook_shards in config/quality/ci_groups.json): the item hook_samples_<K> runs shard K of them (run_item), each in its own folder under
+# $quality_output/hooks/samples, and hook_samples_combine requires every case of the suite to have run once in all.
+hook_sample_shards="$("$python_bin" -c 'import json; print(json.load(open("config/quality/ci_groups.json"))["hook_shards"]["samples"])')"
+hook_samples_shard() {
+  timed "repository hooks: samples shard $1/$hook_sample_shards" "$python_bin" -m scripts.quality.ci_hooks --group samples --shard "$1/$hook_sample_shards" \
+    --from "${RANGE_START:-}" --to "${RANGE_END:-}" --output-directory "$quality_output/hooks/samples"
+}
+hook_samples_combine() {
+  timed "repository hooks: samples combine/$hook_sample_shards" "$python_bin" -m scripts.quality.ci_hooks --group samples --combine --count "$hook_sample_shards" \
+    --output-directory "$quality_output/hooks/samples"
+}
 combine_feature_sources() { run_group lakehouse_features lakehouse_features_combine "sources/$feature_sources_shards"; }
 combine_feature_columns() { run_group lakehouse_features lakehouse_features_combine "columns/$feature_columns_shards"; }
 
@@ -456,6 +470,7 @@ combine_feature_columns() { run_group lakehouse_features lakehouse_features_comb
 alone_items=" lakehouse_gold_writer_setup "
 alone=()
 exclusive=()
+exclusive_after=()
 shared=()
 for group in ${run_groups[@]+"${run_groups[@]}"}; do
   if [[ "$group" == "launcher" || "$group" == "acquisition" || "$group" == "repository_hooks" ]]; then
@@ -518,7 +533,11 @@ fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
   shared+=(hook_privacy hook_documentation hook_code)
-  exclusive+=(hook_samples)
+  for ((hook_index = 1; hook_index <= hook_sample_shards; hook_index++)); do
+    exclusive+=("hook_samples_$hook_index")
+  done
+  exclusive+=(hook_lock)
+  exclusive_after+=(hook_samples_combine)
 fi
 
 run_timed_item() {
@@ -554,7 +573,7 @@ write_worker_state() {
     umask 077
     {
       declare -f
-      declare -p python_bin repo_root scratch quality_output e2e_output acquisition_dir acquisition_shards feature_sources_shards feature_columns_shards
+      declare -p python_bin repo_root scratch quality_output e2e_output acquisition_dir acquisition_shards feature_sources_shards feature_columns_shards hook_sample_shards
       for name in $(compgen -v item_); do declare -p "$name"; done
     } >"$worker_state"
   )
@@ -627,7 +646,7 @@ run_items() {
   done
 }
 # A kind of worker without a limit stops the run before the first worker starts.
-for item in ${alone[@]+"${alone[@]}"} ${exclusive[@]+"${exclusive[@]}"} ${shared[@]+"${shared[@]}"}; do
+for item in ${alone[@]+"${alone[@]}"} ${exclusive[@]+"${exclusive[@]}"} ${exclusive_after[@]+"${exclusive_after[@]}"} ${shared[@]+"${shared[@]}"}; do
   set_worker_limit "$item"
 done
 if is_selected lakehouse_features; then
@@ -650,14 +669,20 @@ if ((${#failed[@]})); then
   printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
   exit 1
 fi
+# The exclusive items (the test-checks shards and the lock group) run at once, with no other work beside them, and then their combining steps run.
 if ((${#exclusive[@]})); then
-  for item in "${exclusive[@]}"; do
-    run_items "$item"
+  run_items "${exclusive[@]}"
+  if ((${#failed[@]})); then
+    printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
+    exit 1
+  fi
+  if ((${#exclusive_after[@]})); then
+    run_items "${exclusive_after[@]}"
     if ((${#failed[@]})); then
       printf '\nLocal CI failed in: %s\n' "${failed[*]}" >&2
       exit 1
     fi
-  done
+  fi
 fi
 if ((${#shared[@]})); then
   run_items "${shared[@]}"

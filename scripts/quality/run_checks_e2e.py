@@ -16,13 +16,14 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 from scripts.process import clear_git_environment, run_command
-from scripts.quality import scratch_marker
+from scripts.quality import case_shards, scratch_marker
 from scripts.quality.hook_stage import hook_stage
 from scripts.quality.repo_checks import load_yaml
 
@@ -4657,25 +4658,88 @@ def run_worktree_checks_case() -> tuple[bool, str]:
     return result.returncode == 0, result.stdout + result.stderr
 
 
+SUITE = "run_checks_e2e"
+RUNNERS: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = (
+    ("commit-range", run_range_case),
+    ("workflow ranges", run_workflow_range_case),
+    ("verbose commit", run_verbose_case),
+    ("privacy scope", run_privacy_scope_case),
+    PRIVACY_WORK_RUNNER,
+    ("account exemption plant", run_account_plant_case),
+    ("writing samples", run_writing_case),
+    ("writing kinds", run_writing_kinds_case),
+    ("allowlist expiry", run_allowlist_expiry_case),
+    ("planted regressions of the removed-name and importer checks", run_planted_regression_case),
+    ("importer check on a pushed range", run_importer_range_case),
+    ("typecheck import closure", run_typecheck_import_case),
+    ("typecheck pending manifest", run_typecheck_manifest_case),
+    ("typecheck cold caches", run_typecheck_cold_case),
+    ("source lint coverage", run_lint_coverage_case),
+    ("head and pinned-tools checks", run_worktree_checks_case),
+)
+
+
+def inventory() -> list[str]:
+    """The name of every case of a complete run, in run order: each hook sample, then each extra runner. The shards of a sharded run split this list."""
+    names = [case.name for case in CASES] + [label for label, _ in RUNNERS]
+    if len(names) != len(set(names)):
+        raise ValueError("the case and runner names must be unique")
+    return names
+
+
 def main() -> int:
     """Run every case and report the ones whose hook did not behave as expected."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--hook-probe", action="store_true", help="run only the clean sample, for the commit-hook E2E")
     parser.add_argument("--hook", help="iteration run: only the cases of this hook, with no extra runners (not commit evidence)")
     parser.add_argument("--case", action="append", default=[], help="with --hook: only the cases whose name contains this text (repeatable)")
+    parser.add_argument(
+        "--list-cases", action="store_true", help="print the JSON list of the case names of a complete run (of one shard with --shard) and stop"
+    )
+    parser.add_argument(
+        "--shard", help="run only shard K/N of the complete run (also CHECKS_SHARD): the cases of case_shards, packed by the saved costs in shard_costs.json"
+    )
+    parser.add_argument("--shard-directory", type=Path, help="with --shard: the folder for the shard's manifest.json (also CHECKS_SHARD_DIRECTORY)")
     args = parser.parse_args()
+    # The hook entry reads the shard from the environment (pre-commit passes the environment through). The cases run pre-commit again, so they never inherit it.
+    shard = args.shard or os.environ.pop("CHECKS_SHARD", "") or None
+    directory = args.shard_directory or (Path(os.environ["CHECKS_SHARD_DIRECTORY"]) if os.environ.get("CHECKS_SHARD_DIRECTORY") else None)
+    os.environ.pop("CHECKS_SHARD", None)
+    os.environ.pop("CHECKS_SHARD_DIRECTORY", None)
+    if shard and (args.hook_probe or args.hook or args.case):
+        parser.error("--shard runs part of the complete run: it cannot combine with --hook-probe, --hook or --case")
+    names = inventory()
+    selected: list[str] | None = None
+    if shard:
+        try:
+            selected = case_shards.select(names, shard, case_shards.saved_costs(SUITE))
+        except ValueError as error:
+            parser.error(str(error))
+        if not args.list_cases and directory is None:
+            parser.error("--shard requires --shard-directory (or CHECKS_SHARD_DIRECTORY)")
+    if args.list_cases:
+        sys.stdout.write(json.dumps(selected if selected is not None else names) + "\n")
+        return 0
     clear_git_environment()
+    chosen = set(selected) if selected is not None else None
     cases = (
         CASES[:1]
         if args.hook_probe
-        else [case for case in CASES if args.hook in (None, case.hook) and (not args.case or any(text in case.name for text in args.case))]
+        else [
+            case
+            for case in CASES
+            if (chosen is None or case.name in chosen) and args.hook in (None, case.hook) and (not args.case or any(text in case.name for text in args.case))
+        ]
     )
     if not PRE_COMMIT.exists() or not (ROOT / ".tools" / "bin" / "gitleaks").exists():
         sys.stderr.write("setup missing: create .venv from the host group of uv.lock and run scripts/quality/install_tools.py (README, Install)\n")
         return 1
     failures = 0
+    rows: list[dict[str, Any]] = []
     for case in cases:
+        started = time.monotonic()
         ok, output = run_case(case)
+        rows.append({"case": case.name, "ok": ok, "seconds": round(time.monotonic() - started, 3)})
         expected = "pass" if case.expect_pass else "block"
         sys.stdout.write(f"{'ok' if ok else 'WRONG':<6} {case.hook:<19} {case.name} (expected {expected})\n")
         if not ok:
@@ -4684,34 +4748,23 @@ def main() -> int:
     extra = 0
     runners: tuple[tuple[str, Callable[[], tuple[bool, str]]], ...] = ()
     if not args.hook_probe and args.hook is None:
-        runners = (
-            ("commit-range", run_range_case),
-            ("workflow ranges", run_workflow_range_case),
-            ("verbose commit", run_verbose_case),
-            ("privacy scope", run_privacy_scope_case),
-            PRIVACY_WORK_RUNNER,
-            ("account exemption plant", run_account_plant_case),
-            ("writing samples", run_writing_case),
-            ("writing kinds", run_writing_kinds_case),
-            ("allowlist expiry", run_allowlist_expiry_case),
-            ("planted regressions of the removed-name and importer checks", run_planted_regression_case),
-            ("importer check on a pushed range", run_importer_range_case),
-            ("typecheck import closure", run_typecheck_import_case),
-            ("typecheck pending manifest", run_typecheck_manifest_case),
-            ("typecheck cold caches", run_typecheck_cold_case),
-            ("source lint coverage", run_lint_coverage_case),
-            ("head and pinned-tools checks", run_worktree_checks_case),
-        )
+        runners = tuple(runner for runner in RUNNERS if chosen is None or runner[0] in chosen)
     elif args.hook == "privacy-scan" and not args.case:
         runners = (PRIVACY_WORK_RUNNER,)
     for label, runner in runners:
         extra += 1
+        started = time.monotonic()
         ok, output = runner()
+        rows.append({"case": label, "ok": ok, "seconds": round(time.monotonic() - started, 3)})
         sys.stdout.write(f"{'ok' if ok else 'WRONG':<6} {label}\n")
         if not ok:
             failures += 1
             sys.stdout.write(output)
     sys.stdout.write(f"{len(cases) + extra - failures} of {len(cases) + extra} cases behaved as expected\n")
+    if selected is not None and directory is not None:
+        manifest = case_shards.write_manifest(directory, SUITE, shard or "", names, selected, rows)
+        sys.stdout.write(f"shard {shard}: {manifest['status']}; manifest {directory / 'manifest.json'}\n")
+        failures += int(manifest["status"] == "fail" and not failures)
     return 1 if failures else 0
 
 

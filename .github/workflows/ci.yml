@@ -212,8 +212,8 @@ jobs:
             timeout: 30  # max 1.9 min
           - group: code
             timeout: 40  # max 22 min, about 24 estimated with the seven linters
-          - group: samples
-            timeout: 30  # about 18 min measured, two hosted runs reached 20
+          - group: lock
+            timeout: 12  # estimate: the lock export and its planted defects
     steps:
       - name: Record hook job start
         run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
@@ -280,6 +280,115 @@ jobs:
         with:
           name: hooks_${{ matrix.group }}_${{ github.run_id }}_${{ github.run_attempt }}
           path: data/e2e/hooks/
+          if-no-files-found: warn
+          retention-days: 14
+
+  # The test-checks hook runs as four shards that split the cases of scripts/quality/run_checks_e2e.py by their saved costs (config/quality/shard_costs.json): the
+  # complete run took about 18 minutes on a hosted runner and over 60 minutes on a busy Mac. Each shard writes the manifest of the cases it ran. The combining job
+  # below is the "Repository Hooks (samples)" gate: it fails when a shard job did not succeed, a case ran in no shard or in two, or a case failed.
+  hook_samples:
+    name: Repository Hooks (samples, shard ${{ matrix.shard }} of 4)
+    needs: plan
+    if: ${{ needs.plan.outputs.reuse != 'true' }}
+    runs-on: ubuntu-24.04
+    # Estimate (no hosted run of the shards yet): about a quarter of the 18 minutes of cases plus about 6 minutes of setup. Resize from the first complete hosted run.
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - name: Record hook job start
+        run: echo "JOB_STARTED=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          # The two acquisition config files over 5 MB are stored with Git LFS (.gitattributes).
+          lfs: true
+
+      - *setup_tf
+
+      - *setup_py
+
+      - *setup_node
+
+      - *setup_go
+
+      - *setup_dbt_cache
+
+      - *setup_tf_cache
+
+      - *setup_deps
+
+      - name: Run this shard of the test-checks hook
+        env:
+          RANGE_START: ${{ needs.plan.outputs.check_start }}
+          RANGE_END: ${{ needs.plan.outputs.check_end }}
+        run: .venv/bin/python -m scripts.quality.ci_hooks --group 'samples' --shard '${{ matrix.shard }}/4' --from "$RANGE_START" --to "$RANGE_END"
+
+      - name: Retain the shard manifest and hook evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hook_samples_shard_${{ matrix.shard }}_${{ github.run_id }}_${{ github.run_attempt }}
+          path: data/e2e/hooks/
+          if-no-files-found: warn
+          retention-days: 14
+
+  hook_samples_combine:
+    name: Repository Hooks (samples)
+    needs: [plan, hook_samples]
+    # Runs after a failed shard too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict.
+    if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
+    runs-on: ubuntu-24.04
+    # Estimate: about 2 minutes of setup and the combining step. Resize from the first complete hosted run.
+    timeout-minutes: 10
+    steps:
+      - name: Require every shard job to have succeeded
+        env:
+          SHARDS: ${{ needs.hook_samples.result }}
+        run: |
+          if [[ "$SHARDS" != "success" ]]; then
+            echo "The test-checks shard jobs finished with result '$SHARDS', not 'success'; the gate fails." | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - *setup_py
+
+      - name: Install shared dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python scripts/quality/install_tools.py --tool uv
+          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
+          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+
+      - name: Download the shard manifests of this run
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: hook_samples_shard_*_${{ github.run_id }}_${{ github.run_attempt }}
+          path: data/e2e/hooks
+          merge-multiple: true
+
+      - name: Combine the manifests and require every case in exactly one shard
+        run: .venv/bin/python -m scripts.quality.ci_hooks --group 'samples' --combine --count 4
+
+      - name: Retain the combined evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: hook_samples_combined_${{ github.run_id }}_${{ github.run_attempt }}
+          path: data/e2e/hooks/samples/combined.json
           if-no-files-found: warn
           retention-days: 14
 
