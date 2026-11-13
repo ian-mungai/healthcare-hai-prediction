@@ -13,18 +13,19 @@ It writes nothing.
 
 ``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|bronze|all [--dry-run] [--bucket NAME]`` registers the tables
 that are already published, without Spark and without Polaris. The bronze layer has no publish step, so it has no publish-time registration and no
-``check``: ``register`` is its only route, for the tables that ``config/lakehouse/bronze_tables.json`` lists (not ``column_map`` and not the
-``bronze_dictionary`` namespace). It reads each table's metadata files in S3 and registers the snapshot that the main branch of the newest metadata file
-points to, never a staged or audit branch snapshot. A table whose metadata cannot be resolved without doubt is refused and named: no file, two files
-with one version number, a file name that is not numbered, a location that is not the table folder, a main that is missing or not a branch, or a type
-the mirror cannot map. The registration records the run ``registered_from_s3``. A later publish replaces it, and a registration that a publish wrote is
-kept. A rerun with unchanged metadata writes nothing. ``--dry-run`` plans and writes nothing. The caller needs Glue write access (the administrator
-profile; the project user has none) and read access to the bucket.
+``check``: ``register`` is its only route, for the tables that ``config/lakehouse/bronze_tables.json`` lists and the bronze tables that silver's dbt
+sources name (so every silver input resolves; not the ``bronze_dictionary`` namespace). It reads each table's metadata files in S3 and registers the
+snapshot that the main branch of the newest metadata file points to, never a staged or audit branch snapshot. A table whose metadata cannot be resolved
+without doubt is refused and named: no file, two files with one version number, a file name that is not numbered, a location that is not the table folder,
+a main that is missing or not a branch, or a type the mirror cannot map. The registration records the run ``registered_from_s3``. A later publish replaces
+it, and a registration that a publish wrote is kept. A rerun with unchanged metadata writes nothing. ``--dry-run`` plans and writes nothing. The caller
+needs Glue write access (the administrator profile; the project user has none) and read access to the bucket.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 import re
@@ -40,9 +41,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CONFIG = REPO_ROOT / "config/lakehouse/athena_mirror.json"
 # The layers with a publish contract and a publish_runs table: their publishes register tables and ``check`` compares them with Polaris.
 PUBLISHED_LAYERS = ("silver", "gold", "features")
-# Bronze has no publish step, so no hook and no check. Its tables are the ones that ``config/lakehouse/bronze_tables.json`` lists, registered by ``register``.
+# Bronze has no publish step, so no hook and no check. Its tables are the ones that ``config/lakehouse/bronze_tables.json`` lists and the ones that silver's
+# dbt sources read, registered by ``register``.
 MIRRORED_LAYERS = ("bronze", *PUBLISHED_LAYERS)
 BRONZE_TABLES = REPO_ROOT / "config/lakehouse/bronze_tables.json"
+SILVER_BRONZE_SOURCES = REPO_ROOT / "dbt/models/silver/staging/_bronze__sources.yml"
 # The publish contract of each mirrored layer: the features publish is the gold engine with its own contract (scripts/features/features_publish.py).
 LAYER_CONTRACTS = {
     "silver": REPO_ROOT / "data_contracts/lakehouse/silver_publish.json",
@@ -508,10 +511,26 @@ def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3
     return {"status": "failed" if failed else "ok" if changed else "unchanged", "tables": outcomes}
 
 
+def silver_bronze_sources(path: Path = SILVER_BRONZE_SOURCES) -> set[str]:
+    """Every bronze table that a silver dbt model reads, from the dbt sources file. A source that the mirror cannot name by its table name is refused."""
+    yaml = importlib.import_module("yaml")
+
+    tables: set[str] = set()
+    for source in yaml.safe_load(path.read_text())["sources"]:
+        if source.get("schema") != "bronze":
+            raise MirrorError(f"the dbt source {source['name']} is not in the bronze schema: the mirror lists bronze tables only")
+        for table in source["tables"]:
+            if "identifier" in table or not TABLE_NAME.fullmatch(str(table["name"])):
+                raise MirrorError(f"the dbt source table {table['name']} has an identifier or a name that is not a plain table name: register cannot name it")
+            tables.add(str(table["name"]))
+    return tables
+
+
 def layer_tables(layer: str) -> list[str]:
-    """The tables a layer mirrors: the tables of its publish contract, and for bronze the tables of the bronze table list."""
+    """The tables a layer mirrors: the tables of its publish contract, and for bronze the listed bronze tables plus the bronze sources of silver."""
     if layer == "bronze":
-        return sorted(str(item["table"]) for item in json.loads(BRONZE_TABLES.read_text())["tables"])
+        listed = {str(item["table"]) for item in json.loads(BRONZE_TABLES.read_text())["tables"]}
+        return sorted(listed | silver_bronze_sources())
     return list(layer_plan(layer).tables)
 
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib
 import io
 import json
 import re
@@ -1032,15 +1033,33 @@ def case_s3_register_maps_iceberg_types_to_glue_types() -> Check:
     }
 
 
+def listed_bronze_names() -> set[str]:
+    return {item["table"] for item in json.loads((REPO_ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"]}
+
+
+def silver_bronze_sources() -> set[str]:
+    """Every bronze table that a silver dbt model reads, from the dbt sources file."""
+    yaml = importlib.import_module("yaml")
+
+    document = yaml.safe_load((REPO_ROOT / "dbt/models/silver/staging/_bronze__sources.yml").read_text())
+    return {
+        str(table.get("identifier") or table["name"])
+        for source in document["sources"]
+        if source.get("schema", source["name"]) == "bronze"
+        for table in source["tables"]
+    }
+
+
 def bronze_names() -> list[str]:
-    return sorted(item["table"] for item in json.loads((REPO_ROOT / "config/lakehouse/bronze_tables.json").read_text())["tables"])
+    return sorted(listed_bronze_names() | silver_bronze_sources())
 
 
 def case_bronze_tables_are_the_listed_bronze_tables() -> Check:
     names = glue_mirror.layer_tables("bronze")
     return {
-        "every_listed_table": names == bronze_names() and len(names) == len(set(names)) and len(names) > 300,
-        "no_column_map_table": "column_map" not in names,
+        "every_listed_table_and_silver_source": names == bronze_names() and len(names) == len(set(names)) and listed_bronze_names() <= set(names),
+        "the_four_bookkeeping_sources_are_in": {"column_map", "file_metadata", "file_preambles", "stored_copies"} <= set(names),
+        "no_other_table_than_the_two_files_name": set(names) == listed_bronze_names() | silver_bronze_sources(),
         "every_name_is_plain": all(glue_mirror.TABLE_NAME.fullmatch(name) for name in names),
         "other_layers_still_follow_their_contract": glue_mirror.layer_tables("gold") == list(glue_mirror.layer_plan("gold").tables),
     }
@@ -1087,6 +1106,42 @@ def case_register_command_covers_bronze_and_check_refuses_it() -> Check:
         "bronze_registered_by_the_command": code == 0 and f"bronze.{first}: created" in out.getvalue(),
         "check_has_no_bronze_head_and_exits_two": refused == 2 and "publish_runs" in err.getvalue(),
         "no_publish_hook_for_bronze": glue_mirror.PUBLISHED_LAYERS == ("silver", "gold", "features"),
+    }
+
+
+def case_every_silver_bronze_source_is_registered() -> Check:
+    sources = silver_bronze_sources()
+    names = set(glue_mirror.layer_tables("bronze"))
+    return {
+        "silver_reads_bronze_tables": len(sources) > 50,
+        "every_silver_bronze_source_is_in_the_registration_list": sources <= names,
+        "the_four_outside_the_table_list_are_named": sources - listed_bronze_names() == {"column_map", "file_metadata", "file_preambles", "stored_copies"},
+        "the_dictionary_namespace_is_not_in_the_list": not any(name.startswith("bronze_dictionary") for name in names),
+        "every_name_is_plain": all(glue_mirror.TABLE_NAME.fullmatch(name) for name in names),
+    }
+
+
+def case_silver_sources_that_the_list_cannot_name_are_refused() -> Check:
+    def read(text: str) -> str:
+        with tempfile.TemporaryDirectory(prefix="glue_mirror_") as directory:
+            path = Path(directory) / "sources.yml"
+            path.write_text(text)
+            try:
+                return ",".join(sorted(glue_mirror.silver_bronze_sources(path)))
+            except glue_mirror.MirrorError as error:
+                return f"refused: {error}"
+
+    plain = "sources:\n  - name: bronze\n    schema: bronze\n    tables:\n      - name: alpha\n      - name: beta\n"
+    return {
+        "a_plain_source_lists_its_tables": read(plain) == "alpha,beta",
+        "a_table_with_an_identifier_is_refused": read(plain + "      - name: gamma\n        identifier: gamma_physical\n").startswith("refused: "),
+        "a_source_in_another_schema_is_refused": read(plain + "  - name: other\n    schema: elsewhere\n    tables:\n      - name: delta\n").startswith(
+            "refused: "
+        ),
+        "a_source_without_a_schema_is_refused": read("sources:\n  - name: bronze\n    tables:\n      - name: alpha\n").startswith("refused: "),
+        "a_name_that_is_not_plain_is_refused": read("sources:\n  - name: bronze\n    schema: bronze\n    tables:\n      - name: Bad-Name\n").startswith(
+            "refused: "
+        ),
     }
 
 
@@ -1140,6 +1195,8 @@ CASES: dict[str, Callable[[], Check]] = {
     "s3_register_command_reports_and_exits": case_s3_register_command_reports_and_exits,
     "s3_register_maps_iceberg_types_to_glue_types": case_s3_register_maps_iceberg_types_to_glue_types,
     "bronze_tables_are_the_listed_bronze_tables": case_bronze_tables_are_the_listed_bronze_tables,
+    "every_silver_bronze_source_is_registered": case_every_silver_bronze_source_is_registered,
+    "silver_sources_that_the_list_cannot_name_are_refused": case_silver_sources_that_the_list_cannot_name_are_refused,
     "s3_register_registers_bronze_in_its_own_database": case_s3_register_registers_bronze_in_its_own_database,
     "register_command_covers_bronze_and_check_refuses_it": case_register_command_covers_bronze_and_check_refuses_it,
 }
