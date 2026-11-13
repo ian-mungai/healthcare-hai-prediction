@@ -155,7 +155,7 @@ def configure_airflow(folder: str) -> None:
 class Observer:
     """Records the error each launch step raises (the task SDK keeps only the task's state) and lets it go on."""
 
-    NAMES = ("launch_step", "preflight_step", "job_step", "evidence_step", "settle_launch")
+    NAMES = ("launch_step", "preflight_step", "job_step", "evidence_step")
 
     def __init__(self) -> None:
         self.errors: list[str] = []
@@ -398,7 +398,6 @@ def form_check(_rig: Any) -> None:
         "serving_deploy_dag": {"run_id": run},
         "metadata_ingest_dag": {"run_id": run},
         "bronze_chain_dag": {"run_id": run},
-        "launch_settle_dag": {"run_id": other, "launch_run": run, "job": "silver", "statement": c.SETTLE_STATEMENT},
     }
     wrong: tuple[dict[str, Any], ...] = ({}, {"run_id": "latest"}, {"run_id": "x" + run}, {"run_id": 20261104}, {"run_id": run, "mode": "mock"})
 
@@ -650,10 +649,6 @@ def cases_catalog() -> dict[str, Scenario]:
     def no_launch(rig: Any) -> None:
         require(not rig.ecs.tasks and not rig.records.objects, f"a refused run started a task or wrote a launch record: {sorted(rig.records.objects)}")
 
-    def settled(rig: Any) -> None:
-        end = rig.end(c.SILVER_RUN, "silver")
-        require(end is not None and end["outcome"] in ("cancelled", "failed_closed"), f"the unfinished launch has no end record after the settle: {end}")
-
     refused: RefusedRun = {"run_state": "failed", "states": {"preflight": "failed", "job": "upstream_failed", "evidence": "upstream_failed", "gate": "failed"}}
 
     def other_capacity() -> Any:
@@ -783,28 +778,10 @@ def cases_catalog() -> dict[str, Scenario]:
             "launch record store refused the call: NoSuchBucket",
         ),
     )
-    settle = Scenario(
-        "launch_settle_dag_settles_an_unfinished_launch",
-        (Step("launch_settle_dag", c.settle_params(), 0, states={"settle": DONE_STATE}, end="settled"),),
-        settle_rig,
-        after=settled,
-    )
     del b
     form = Scenario("trigger_forms_validate_in_airflow", (), make_rig, after=form_check)
     conformance = Scenario("bridge_refuses_what_aws_refuses", (), make_rig, after=bridge_conformance)
-    return {item.name: item for item in (pipeline, *refusals, *planted_cases, settle, form, conformance)}
-
-
-def settle_rig() -> Any:
-    """A rig with a silver launch whose scheduler died after the task started, the task stopped and the send window of its claim over."""
-    cases = rig_modules().cases
-    rig = make_rig()
-    rig.time.now = time.time() - 700.0
-    rig.ecs.clock = lambda: rig.time.now
-    cases.unfinished_silver_launch(rig)
-    rig.ecs.clock = time.time
-    rig.time.now = time.time()
-    return rig
+    return {item.name: item for item in (pipeline, *refusals, *planted_cases, form, conformance)}
 
 
 def versions() -> dict[str, str]:
