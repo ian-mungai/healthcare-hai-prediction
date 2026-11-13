@@ -5,7 +5,7 @@ are real mode, the previous job's success (``after``), the training parameters, 
 code digest and the run's code run. Each gate refuses before any record or ECS call. The bound inputs of a run (the code digest, the request hash and the
 input run) go into the spec, and the launch library holds every later attempt of the run and job to them.
 The host table (``config/orchestration/host_jobs.json``) may give a job its own containers and log container, where its host task definition differs from the
-Fargate one (the metadata job).
+job table's containers (the metadata job).
 Host launch capacity binding (owner A, Nov 10 2026): the gates refuse while the usable-memory inputs are not set. After the staged-input reads, the
 preflight describes the latest active revision of the job's host definition once and refuses it unless its capacity label is bound to the current
 inputs (``checked_revision``). The spec names that exact revision and the launch library runs it, so a revision registered later never runs in its place.
