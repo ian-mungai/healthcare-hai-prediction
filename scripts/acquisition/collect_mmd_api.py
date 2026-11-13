@@ -13,9 +13,9 @@ from scripts.acquisition.capture import base_receipt, receipt_validator, validat
 from scripts.acquisition.cli_tools import executable, run_argv
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.mmd_api_contract import (
+    CURRENT_PLANS,
     FIELDS,
     PLAN_PATH,
-    PLANS,
     condition_for,
     current_code_hashes,
     digest,
@@ -258,7 +258,7 @@ def task_inputs() -> list[dict]:
 
     A capture also reads the plan template and, for each planned year, the baseline file named in the comparison report.
     """
-    plans = [load_plan(sha) for sha in PLANS]
+    plans = [load_plan(sha) for sha in CURRENT_PLANS]
     for plan in plans:
         for item in read_json(Path(current(plan["comparison_report"])))["years"]:
             Path(current(item["original_path"])).read_bytes()

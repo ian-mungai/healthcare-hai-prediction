@@ -1287,7 +1287,7 @@ def planned(unit: dict, run: Run) -> tuple[dict, dict]:
 
 def mmd_selection(unit: dict, run: Run) -> tuple[str, int]:
     """The measure and year of an MMD capture; a browser export is matched by its recorded condition, domain and year."""
-    from scripts.acquisition.mmd_api_contract import PLANS, condition_for, load_plan, plan_for
+    from scripts.acquisition.mmd_api_contract import CURRENT_PLANS, condition_for, load_plan, plan_for
 
     receipt = stored_receipt(unit, run)
     detail = json.loads(receipt["lineage"]["extraction_or_query"])
@@ -1297,7 +1297,7 @@ def mmd_selection(unit: dict, run: Run) -> tuple[str, int]:
         chosen = receipt["acquisition"]["export_selections"]
         labels = (chosen["condition"], chosen["domain"])
         if "mmd_conditions" not in run.cache:
-            run.cache["mmd_conditions"] = [item for sha in PLANS for item in load_plan(sha)["conditions"]]
+            run.cache["mmd_conditions"] = [item for sha in CURRENT_PLANS for item in load_plan(sha)["conditions"]]
         conditions = run.cache["mmd_conditions"]
         matches = [item["measure_id"] for item in conditions if (item["condition_label"], item["domain_label"]) == labels]
         require(len(matches) == 1 and chosen["geography"] == "County", "MMD browser export does not match exactly one planned county condition")

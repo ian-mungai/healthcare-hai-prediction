@@ -13,7 +13,7 @@ from pathlib import Path
 
 from scripts.acquisition.capture import receipt_validator, validate_receipt
 from scripts.acquisition.collect_mmd_api import execute
-from scripts.acquisition.mmd_api_contract import PLAN_PATH, PLANS, load_plan, verify_capture
+from scripts.acquisition.mmd_api_contract import CURRENT_PLANS, PLAN_PATH, load_plan, verify_capture
 from scripts.acquisition.s3_store import StorageError, encoded_json, fingerprint, write_once
 from scripts.acquisition.source_registry import load_registry, read_json, require
 
@@ -46,7 +46,7 @@ def with_retries(action: Callable[[], object], retries: list[dict], label: str, 
 
 def approved_conditions() -> list[dict]:
     """Combine the conditions of every hash-locked plan; each measure appears in exactly one."""
-    conditions = [c for sha in PLANS for c in load_plan(sha)["conditions"]]
+    conditions = [c for sha in CURRENT_PLANS for c in load_plan(sha)["conditions"]]
     require(len({c["measure_id"] for c in conditions}) == len(conditions), "Condition is not in exactly one approved plan")
     return conditions
 
@@ -139,7 +139,7 @@ def main() -> None:
     require(args.max_new is None or args.max_new > 0, "--max-new must be positive")
     result: dict = {
         "started_at_utc": datetime.now(UTC).isoformat(),
-        "plan_sha256": sorted(PLANS),
+        "plan_sha256": sorted(CURRENT_PLANS),
         "browser_completed": [],
         "api_previously_completed": [],
         "newly_stored": [],

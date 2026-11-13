@@ -11,16 +11,25 @@ from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
-from scripts.acquisition.data_paths import current
-from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, load_registry_additions
+from scripts.acquisition.data_paths import current, moved
+from scripts.acquisition.registry_additions import ADDITIONS_LOCK_PATH, ADDITIONS_PATH, load_registry_additions
 from scripts.acquisition.source_registry import canonical_hash, load_registry, read_json, require
 
 PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260925/collection_plan.json")
 PLAN_SHA256 = "20a7da69c4fcb9c375a5b983961d2d4d750ca59b2121545a3622cd99d8558115"
 ADDITIONS_PLAN_PATH = Path("data/datasets/historical_acquisition/mmd_api_history/20260926/collection_plan_additions.json")
 ADDITIONS_PLAN_SHA256 = "afc4a6f2a71d1a451dfeb2e05c16738fc31600e4153445fe60a9055a6f6e0af5"
+# The plans before the registry rewrite. Captures made under them record these hashes and stay valid, so the rewrite added the new plans and kept these.
+# Their bytes and the unredacted publisher page they pin sit in the local archive of the rewrite; a file that is missing or differs is refused.
+LEGACY_PLAN_SHA256 = "97f72f7b82b39bfbb8afec75778fe335aceb59f57c0b5fa72c773517377fbfe4"
+LEGACY_ADDITIONS_PLAN_SHA256 = "1525659d4da7ffd41ce12e4513dc2e04b0e4122a93b21439af2653e19f8656a8"
+LEGACY_ARCHIVE = Path("data/acquisition_planning/acquisition_legacy_20261009/pre_registry_rewrite_20261112/mmd_api_history")
+LEGACY_MOVES = {"data/e2e/mmd_api_comparison/20260925/references/map.html": str(LEGACY_ARCHIVE / "references/map.html")}
 # Each capture records the hash of the plan that authorized it, so adding a plan never touches earlier captures.
-PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
+CURRENT_PLANS = {PLAN_SHA256: PLAN_PATH, ADDITIONS_PLAN_SHA256: ADDITIONS_PLAN_PATH}
+LEGACY_PLANS = {LEGACY_PLAN_SHA256: LEGACY_ARCHIVE / "collection_plan.json", LEGACY_ADDITIONS_PLAN_SHA256: LEGACY_ARCHIVE / "collection_plan_additions.json"}
+PLANS = {**CURRENT_PLANS, **LEGACY_PLANS}
+ADDITIONS_PLANS = {ADDITIONS_PLAN_SHA256, LEGACY_ADDITIONS_PLAN_SHA256}
 FIELDS = {"agecat", "condition", "dencat", "dual", "eligcat", "fips", "fltr", "geography", "measure", "racecat", "rate", "sexcat", "year"}
 ENDPOINT = "https://data.cms.gov/data-api/v1/mmd-tool/"
 PAGE_SIZE = 500000
@@ -66,10 +75,11 @@ def load_plan(plan_sha256: str = PLAN_SHA256) -> dict:
     require(plan["endpoint"] == ENDPOINT and plan["model_eligible"] is False, "MMD scope changed")
     require(plan["registry_sha256"] == canonical_hash(load_registry(expected_sha256=plan["registry_sha256"])), "MMD registry changed")
     require(digest(Path(plan["comparison_report"]).read_bytes()) == plan["comparison_report_sha256"], "AMI parity evidence changed")
+    moves = {**LEGACY_MOVES, **moved()} if plan_sha256 in LEGACY_PLANS else None
     for ref in plan["references"].values():
-        path = Path(current(ref["path"]))
+        path = Path(current(ref["path"], moves))
         require(not path.is_symlink() and digest(path.read_bytes()) == ref["sha256"], "MMD reference changed")
-    if plan_sha256 == ADDITIONS_PLAN_SHA256:
+    if plan_sha256 in ADDITIONS_PLANS:
         verify_additions(plan)
     return plan
 
@@ -78,11 +88,13 @@ def verify_additions(plan: dict) -> None:
     """Bind user-added conditions to the locked, still-valid registry additions and their holds."""
     from scripts.acquisition.source_registry import registry_version_paths
 
-    additions_lock = ADDITIONS_LOCK_PATH
+    additions_file, additions_lock = ADDITIONS_PATH, ADDITIONS_LOCK_PATH
     if plan["registry_sha256"] != canonical_hash(load_registry()):
-        additions_lock = registry_version_paths(plan["registry_sha256"])["additions_lock"]
+        older = registry_version_paths(plan["registry_sha256"])
+        additions_file, additions_lock = older["additions"], older["additions_lock"]
     require(digest(additions_lock.read_bytes()) == plan["registry_additions_lock_sha256"], "Registry additions lock changed")
-    added = {control["id"]: control for control in load_registry_additions(load_registry(expected_sha256=plan["registry_sha256"]))}
+    registry = load_registry(expected_sha256=plan["registry_sha256"])
+    added = {control["id"]: control for control in load_registry_additions(registry, additions_file, additions_lock)}
     require(
         all(
             c["measure_id"] in added
@@ -96,7 +108,7 @@ def verify_additions(plan: dict) -> None:
 
 def plan_for(measure_id: str) -> tuple[str, dict]:
     """Return the hash and contents of the single approved plan that lists this measure."""
-    found = [(sha, plan) for sha in PLANS for plan in [load_plan(sha)] if any(c["measure_id"] == measure_id for c in plan["conditions"])]
+    found = [(sha, plan) for sha in CURRENT_PLANS for plan in [load_plan(sha)] if any(c["measure_id"] == measure_id for c in plan["conditions"])]
     require(bool(found), "Condition is not in the approved locked registry")
     require(len(found) == 1, "Condition is not in exactly one approved plan")
     return found[0]
