@@ -1928,11 +1928,14 @@ def column_change_cases(report: Report, schema: dict[str, Any]) -> None:
 
 
 def single_path_value_cases(report: Report, layer_run: Any) -> None:
-    """F14 and F15: the single path's value ``all`` through the callers that give it. The owner command lists start a features task with the override
-    generator and no set argument, and the layer driver runs every phase module with the task's environment, where ``FEATURE_SET`` is ``all``."""
-    lists = json.loads((ROOT / "config/aws/owner_command_lists.json").read_text())
-    texts = [value for value in lists.values() if isinstance(value, str)] if isinstance(lists, dict) else []
-    command = [found for text in texts for found in re.findall(r"-m scripts\.orchestration\.job_overrides (--job features [^\n]*?) > ", text)]
+    """F14 and F15: the single path's value ``all`` through the callers that give it. The override generator starts a features task with no set argument
+    (the arguments the owner command list gave before the Fargate layer lists were removed), and the layer driver runs every phase module with the task's
+    environment, where ``FEATURE_SET`` is ``all``."""
+    arguments = (
+        "--job features --run <RUN_ID> --code-run <RUN_ID> --code-sha256 <CODE_SHA256> --polaris-uri http://<HOST_PRIVATE_IP>:8181/api/catalog"
+        " --input-run <GOLD_RUN_ID>"
+    )
+    command = [f"{arguments} --dry-run", arguments]
     filled = [re.sub(r"<[A-Z0-9_]+>", lambda found: OWNER_PLACEHOLDERS.get(found.group(0), found.group(0)), text) for text in command]
     job_overrides: Any = importlib.import_module("scripts.orchestration.job_overrides")
     outcomes = []
@@ -1946,7 +1949,7 @@ def single_path_value_cases(report: Report, layer_run: Any) -> None:
     report.case(
         "F14",
         "FS2",
-        "the owner command lists' features override commands (no set argument, dry run and real) give every features container FEATURE_SET=all",
+        "the features override commands (no set argument, dry run and real) give every features container FEATURE_SET=all",
         len(outcomes) == 2 and all(outcomes),
         commands=len(outcomes),
         passed=sum(outcomes),
