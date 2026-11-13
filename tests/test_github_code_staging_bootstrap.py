@@ -24,7 +24,8 @@ class Github:
     """A stand-in of GitHub's environment, branch policy and variable calls, and of ``terraform output``. It records every call in order."""
 
     def __init__(self, contract: Any = CONTRACT, signed_in: bool = True) -> None:
-        self.contract, self.signed_in, self.calls = contract, signed_in, []
+        self.contract, self.signed_in = contract, signed_in
+        self.calls: list[list[str]] = []
         self.environment: dict[str, Any] | None = None
         self.policies: list[dict[str, Any]] = []
         self.variables: dict[str, str] = {}
@@ -53,7 +54,7 @@ class Github:
     def api(self, args: list[str]) -> tuple[int, str]:
         method = args[args.index("-X") + 1] if "-X" in args else "GET"
         path = next(item for item in args[1:] if item.startswith("repos/"))
-        body = json.loads(Path(args[args.index("--input") + 1]).read_text()) if "--input" in args else None
+        body: dict[str, Any] = json.loads(Path(args[args.index("--input") + 1]).read_text()) if "--input" in args else {}
         if path.endswith("/deployment-branch-policies"):
             if method == "POST":
                 self.policies.append({"id": self.next_id, "name": body["name"], "type": body["type"]})
