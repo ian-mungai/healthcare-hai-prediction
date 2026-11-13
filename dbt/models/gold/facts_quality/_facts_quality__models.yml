@@ -3,9 +3,10 @@ version: 2
 models:
   - name: fct_cc_window_hold
     description: >-
-      Business process: Care Compare measure rows held out of the measurement windows. Grain: one row per held Care Compare row group and hold reason.
-      Dimensions: dim_hospital. Measures: none. The silver model int_cc_window_holds with every column unchanged and one surrogate key per dimension it
-      joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: Care Compare measure rows held out of the measurement windows. Grain: one row per bronze table, hold reason, held entity, held
+      measure and window. Dimensions: dim_hospital. Measures: none. The silver model int_cc_window_holds with every column unchanged and one surrogate key
+      per dimension it joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to
+      it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -434,9 +435,9 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_hai_window_hold
     description: >-
-      Business process: HAI rows held out of the measurement windows. Grain: one row per held HAI row group and hold reason. Dimensions: dim_hospital.
-      Measures: none. The silver model int_hai_window_holds with every column unchanged and one surrogate key per dimension it joins. The key is hold_key.
-      Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: HAI rows held out of the measurement windows. Grain: one row per bronze table, hold reason, held entity, held measure and window.
+      Dimensions: dim_hospital. Measures: none. The silver model int_hai_window_holds with every column unchanged and one surrogate key per dimension it
+      joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -908,9 +909,10 @@ models:
             expression: typeof(footnote) = 'VARCHAR'
   - name: fct_validation_program_hold
     description: >-
-      Business process: HAC Reduction and VBP rows held out of the program years. Grain: one row per held program row group and hold reason. Dimensions:
-      dim_hospital. Measures: none. The silver model int_validation_program_holds with every column unchanged and one surrogate key per dimension it joins.
-      The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that contributed to it.
+      Business process: HAC Reduction and VBP rows held out of the program years. Grain: one row per bronze table, hold reason, held hospital (CCN) and
+      program fiscal year. Dimensions: dim_hospital. Measures: none. The silver model int_validation_program_holds with every column unchanged and one
+      surrogate key per dimension it joins. The key is hold_key. Keeps every row of the silver hold model exactly, with the checksums of the files that
+      contributed to it.
     meta:
       classification: Public
       fact_type: periodic_snapshot

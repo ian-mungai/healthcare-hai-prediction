@@ -3,9 +3,9 @@ version: 2
 models:
   - name: fct_cmi_observation
     description: >-
-      Business process: CMS case-mix index publication per hospital. Grain: one row per hospital (CCN), case-mix index file and the rule year and stage its
-      copy carries. Dimensions: dim_hospital, dim_release. Measures: cases, cmi, relative_weights, transfer_adjusted_cases, transfer_adjusted_cmi. Every
-      column of int_cmi_hospital_rows stays unchanged, keyed by cmi_row_key, then 2 surrogate keys.
+      Business process: CMS case-mix index publication per hospital. Grain: one row per hospital (CCN) line of a case-mix index file and sheet, for each
+      rule year and stage its copy carries. Dimensions: dim_hospital, dim_release. Measures: cases, cmi, relative_weights, transfer_adjusted_cases,
+      transfer_adjusted_cmi. Every column of int_cmi_hospital_rows stays unchanged, keyed by cmi_row_key, then 2 surrogate keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1508,9 +1508,9 @@ models:
               typeof(role_text) = 'VARCHAR' and typeof(flags_published) = 'BOOLEAN'
   - name: fct_impact_hold
     description: >-
-      Business process: IPPS impact file rows held out of the hospital values. Grain: one row per impact file release and hospital (CCN) that appears in
-      more than one row. Dimensions: dim_hospital, dim_release. Measures: none. Every column of int_impact_holds stays unchanged, keyed by hold_key, then 2
-      surrogate keys. A hold fact: it keeps the silver hold model's rows exactly.
+      Business process: IPPS impact file rows held out of the hospital values. Grain: one row per impact file release (file and sheet) and hospital (CCN)
+      that appears in more than one row. Dimensions: dim_hospital, dim_release. Measures: none. Every column of int_impact_holds stays unchanged, keyed by
+      hold_key, then 2 surrogate keys. A hold fact: it keeps the silver hold model's rows exactly.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1560,9 +1560,9 @@ models:
               typeof(rule_fiscal_year) = 'INTEGER'
   - name: fct_ipps_impact_value
     description: >-
-      Business process: IPPS impact file publication per hospital. Grain: one row per impact file release, hospital (CCN) and mapped field. Dimensions:
-      dim_hospital, dim_release. Measures: value_number. Every column of int_impact_hospital_values stays unchanged, keyed by value_key, then 2 surrogate
-      keys.
+      Business process: IPPS impact file publication per hospital. Grain: one row per impact file release (file and sheet), hospital (CCN) and mapped
+      field. Dimensions: dim_hospital, dim_release. Measures: value_number. Every column of int_impact_hospital_values stays unchanged, keyed by
+      value_key, then 2 surrogate keys.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -2031,9 +2031,9 @@ models:
               and typeof(rnahw_text) = 'VARCHAR' and typeof(ccn_published) = 'VARCHAR'
   - name: fct_onc_attestation
     description: >-
-      Business process: hospital EHR incentive program attestation. Grain: one row per hospital Medicare or Medicaid EHR incentive attestation. Dimensions:
-      dim_hospital, dim_release, dim_zip. Measures: none. Every column of int_onc_attestation_rows stays unchanged, keyed by attestation_key, then 3
-      surrogate keys.
+      Business process: hospital EHR incentive program attestation. Grain: one row per hospital Medicare or Medicaid EHR incentive attestation of a
+      program year, kept apart by its source row in a stored ONC file. Dimensions: dim_hospital, dim_release, dim_zip. Measures: none. Every column of
+      int_onc_attestation_rows stays unchanged, keyed by attestation_key, then 3 surrogate keys.
     meta:
       classification: Public
       fact_type: transaction
@@ -2179,9 +2179,9 @@ models:
               typeof(start_date) = 'DATE' and typeof(end_date) = 'DATE' and typeof(program_year) = 'INTEGER'
   - name: fct_ownership_change
     description: >-
-      Business process: hospital change of ownership. Grain: one row per change of ownership event, taken from the latest release that lists it. Dimensions:
-      dim_enrollment, dim_hospital, dim_owner_organization, dim_release. Measures: none. Every column of int_change_of_ownership_rows stays unchanged, keyed
-      by event_key, then 7 surrogate keys.
+      Business process: hospital change of ownership. Grain: one row per change of ownership event (buyer enrollment, seller enrollment, effective date
+      and type), taken from the latest release that lists it. Dimensions: dim_enrollment, dim_hospital, dim_owner_organization, dim_release. Measures:
+      none. Every column of int_change_of_ownership_rows stays unchanged, keyed by event_key, then 7 surrogate keys.
     meta:
       classification: Public
       fact_type: transaction
@@ -2297,9 +2297,9 @@ models:
               typeof(ccn_seller_published) = 'VARCHAR'
   - name: fct_ownership_change_hold
     description: >-
-      Business process: change of ownership rows held out of the ownership changes. Grain: one row per change of ownership event and release that the kept
-      row does not use. Dimensions: none. Measures: none. Every column of int_change_of_ownership_holds stays unchanged, keyed by hold_key; no surrogate
-      keys. A hold fact: it keeps the silver hold model's rows exactly.
+      Business process: change of ownership rows held out of the ownership changes. Grain: one row per change of ownership event, release that the kept
+      row does not use and hold reason. Dimensions: none. Measures: none. Every column of int_change_of_ownership_holds stays unchanged, keyed by
+      hold_key; no surrogate keys. A hold fact: it keeps the silver hold model's rows exactly.
     meta:
       classification: Public
       fact_type: transaction

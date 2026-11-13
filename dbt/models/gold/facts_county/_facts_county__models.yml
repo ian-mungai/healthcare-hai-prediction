@@ -78,9 +78,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_bls_county_series
     description: >-
-      Business process: BLS Local Area Unemployment Statistics published per county. Grain: one row per county, series and month or annual average of a
-      stored LAUS file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_bls_county_series stays unchanged, every silver
-      column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
+      Business process: BLS Local Area Unemployment Statistics published per county. Grain: one row per county, series, data year and month or annual
+      average of a stored LAUS file. Dimensions: dim_county, dim_release. Measures: value_number. Every column of int_bls_county_series stays unchanged,
+      every silver column unchanged, then the surrogate keys; silver test assert_income_labor_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -434,9 +434,9 @@ models:
             expression: typeof(zip_published) = 'VARCHAR'
   - name: fct_hud_zip_county_hold
     description: >-
-      Business process: HUD ZIP-to-county crosswalk rows held out of the crosswalk. Grain: one row per held crosswalk row whose code is not a county.
-      Dimensions: dim_release, dim_zip. Measures: none. Every column of int_hud_zip_county_holds stays unchanged, every silver column unchanged, then the
-      surrogate keys; silver test assert_geography_values_cast checks the published values.
+      Business process: HUD ZIP-to-county crosswalk rows held out of the crosswalk. Grain: one row per source row of a stored HUD crosswalk file and
+      quarter whose code is not a county. Dimensions: dim_release, dim_zip. Measures: none. Every column of int_hud_zip_county_holds stays unchanged,
+      every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -777,9 +777,9 @@ models:
             expression: typeof(data_value_published) = 'VARCHAR'
   - name: fct_ruca_code
     description: >-
-      Business process: Rural-Urban Commuting Area code assignments. Grain: one row per census tract or ZIP code and vintage of a stored RUCA file.
-      Dimensions: dim_county, dim_release. Measures: none. Every column of int_ruca_codes stays unchanged, every silver column unchanged, then the surrogate
-      keys; silver test assert_geography_values_cast checks the published values.
+      Business process: Rural-Urban Commuting Area code assignments. Grain: one row per census tract or ZIP code and vintage of a stored RUCA file, and of
+      its workbook sheet where the file has one. Dimensions: dim_county, dim_release. Measures: none. Every column of int_ruca_codes stays unchanged,
+      every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
