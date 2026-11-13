@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib
 import json
 import shutil
 import sys
@@ -115,6 +116,15 @@ def _hashes(checkout: Path) -> dict[str, dict[str, str]]:
         "sources": {name: runner.digest(checkout / name) for name in runner.SOURCES if (checkout / name).exists()},
         "dag_files": {path.name: runner.digest(path) for path in sorted((checkout / "dags").glob("*.py"))},
     }
+
+
+def test_the_rig_builds_and_the_launch_environment_sets_every_required_setting() -> None:
+    steps = importlib.import_module("orchestration.airflow_steps")
+    rig = real_image_dags.make_rig()
+    environment = real_image_dags.launch_environment(rig, "http://127.0.0.1:1", "/example/scratch")
+    check(all(name in environment for name in steps.SETTINGS), "every required launch setting is set")
+    check(environment[steps.HOST_JOB_CAP_SETTING] == str(real_image_dags.rig_modules().cases.JOB_MEMORY), "the host job cap is the job memory")
+    check("HAI_LAUNCH_HOST_CAP_PARAMETER" not in environment, "the retired cap parameter name is gone")
 
 
 def test_the_inventory_comes_from_the_dag_folder() -> None:
