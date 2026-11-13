@@ -34,10 +34,22 @@ def bundle(root: Path, *, mutate: Callable[[dict], None] | None = None) -> Path:
         build.rewrite_hosts(approved, trimmed) if not mutate else build.rewrite_hosts(approved, build.encode_queue(source_active_only(queue)))
     )
     (root / "hosts_approval.json").write_text(json.dumps({"hosts_sha256": hosts_digest(HOSTS), "approved_by": "owner"}))
+    (root / "capture_specs.json").write_bytes(specs_for(trimmed))
     (root / PLAN_INPUT).parent.mkdir(parents=True)
     (root / PLAN_INPUT).write_text('{"a": 1}\n')
     (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
     return root
+
+
+def specs_for(trimmed: bytes) -> bytes:
+    queue = json.loads(trimmed)
+    document = {
+        "kind": "capture_specs",
+        "queue_sha256": hashlib.sha256(trimmed).hexdigest(),
+        "units": len(queue["queue"]),
+        "specs": {u["snapshot_id"]: {"mode": "file"} for u in queue["queue"]},
+    }
+    return json.dumps(document).encode()
 
 
 def source_active_only(queue: dict) -> dict:
@@ -99,3 +111,23 @@ def test_uncovered_host_is_refused(tmp_path: Path) -> None:
     (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
     found = " ".join(check_run.problems(root))
     check("other.example.invalid" in found, "uncovered host")
+
+
+def test_specs_that_name_another_queue_or_miss_a_unit_are_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    document = json.loads((root / "capture_specs.json").read_text())
+    document["queue_sha256"] = "0" * 64
+    del document["specs"]["a"]
+    (root / "capture_specs.json").write_text(json.dumps(document))
+    (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
+    found = " ".join(check_run.problems(root))
+    check("capture specification belongs to another queue" in found and "has no capture specification: a" in found, "specs binding")
+
+
+def test_specs_with_a_bucket_key_or_local_path_are_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    document = json.loads((root / "capture_specs.json").read_text())
+    document["specs"]["a"]["note"] = "s3://example/key"
+    (root / "capture_specs.json").write_text(json.dumps(document))
+    (root / "inputs.lock.json").write_bytes(check_run.build_lock(root))
+    check(any("capture specification holds" in p for p in check_run.problems(root)), "environment value")

@@ -18,6 +18,7 @@ from scripts.acquisition.s3_store import encoded_json
 
 ROOT = Path("config/acquisition/baseline_run")
 LOCK_NAME = "inputs.lock.json"
+ENVIRONMENT_MARKERS = ("s3://", "arn:aws", "/Users/", "/private/", "/var/folders/")
 
 
 def file_entries(root: Path) -> list[dict]:
@@ -89,11 +90,30 @@ def queue_problems(root: Path) -> list[str]:
     return problems
 
 
+def specs_problems(root: Path) -> list[str]:
+    """Return why the capture specification does not belong to the queue, misses a unit, names a unit twice or holds a bucket, key or local path."""
+    body = (root / "queue.json").read_bytes()
+    text = (root / "capture_specs.json").read_text(encoding="utf-8")
+    document = json.loads(text)
+    ids = {unit["snapshot_id"] for unit in json.loads(body)["queue"]}
+    problems = []
+    if document["queue_sha256"] != hashlib.sha256(body).hexdigest():
+        problems.append("the capture specification belongs to another queue")
+    problems += [f"unit has no capture specification: {snapshot}" for snapshot in sorted(ids - document["specs"].keys())]
+    problems += [f"capture specification names a unit the queue lacks: {snapshot}" for snapshot in sorted(document["specs"].keys() - ids)]
+    if document["units"] != len(document["specs"]):
+        problems.append("the capture specification unit count differs from its entries")
+    if any(marker in text for marker in ENVIRONMENT_MARKERS):
+        problems.append("the capture specification holds a bucket path, object key or local path")
+    return problems
+
+
 def problems(root: Path = ROOT) -> list[str]:
     """Return every problem of the bundle at ROOT, or an empty list."""
     found = lock_problems(root)
     try:
         found += queue_problems(root)
+        found += specs_problems(root)
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:
         found.append(f"the queue or hosts files are unusable: {error}")

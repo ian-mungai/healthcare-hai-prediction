@@ -1,6 +1,11 @@
 {
-  "bundle_sha256": "0896112864d691d040dc34a1d4c9459c1d662ba90f04b54f86aa6b127e8bb91e",
+  "bundle_sha256": "4dfc645537e3428f83aa509ef22c2f53ea59f2007190f63ee0bd0a23279a7631",
   "files": [
+    {
+      "bytes": 1039786,
+      "path": "capture_specs.json",
+      "sha256": "811129cc32fdf46a724063dc0023ce8b9354b73de1527c81144d5df9cb8020f8"
+    },
     {
       "bytes": 112,
       "path": "hosts_approval.json",
