@@ -119,6 +119,46 @@ def ledger() -> dict[str, bool]:
     return results
 
 
+def ledger_history() -> dict[str, bool]:
+    """Ledger lines written while the ecs target and the Fargate providers existed still read, and no new line can carry those values."""
+    import tempfile
+
+    from scripts.orchestration.ledger import Ledger, LedgerError
+
+    results: dict[str, bool] = {}
+    history = load("ledger_history_lines.json")
+    for case, lines in history.items():
+        with tempfile.TemporaryDirectory(prefix="ledger_history_") as folder:
+            store = Ledger(Path(folder))
+            run = lines[0]["run_id"]
+            (Path(folder) / f"{run}.jsonl").write_text("".join(json.dumps(line, sort_keys=True) + "\n" for line in lines))
+            try:
+                read = store.read(run)
+            except LedgerError:
+                read = []
+            results[f"old ledger history reads: {case}"] = read == lines
+            results[f"old ledger history groups by submission: {case}"] = bool(read) and sum(len(group) for group in store.submissions(run).values()) == len(
+                lines
+            )
+    with tempfile.TemporaryDirectory(prefix="ledger_write_") as folder:
+        store = Ledger(Path(folder))
+        for case, lines in history.items():
+            for line in lines:
+                refused = False
+                try:
+                    store.append({key: value for key, value in line.items() if key not in ("schema_version", "at")})
+                except LedgerError:
+                    refused = True
+                results[f"new write refused: {case} {line['event']}"] = refused if _legacy(line) else True
+    return results
+
+
+def _legacy(line: dict[str, Any]) -> bool:
+    """Whether a history line names the ecs target or a Fargate provider."""
+    placements = line.get("execution", {}).get("placements", [])
+    return line.get("target") == "ecs" or "ecs_task_arn" in line or any(item["capacity_provider"] in ("FARGATE", "FARGATE_SPOT") for item in placements)
+
+
 def requests() -> dict[str, bool]:
     """Accepted requests validate; each caller override is refused for its intended reason."""
     check = validator("submission_request.schema.json")
@@ -196,7 +236,14 @@ def main() -> int:
     contract_files = sorted(path for path in CONTRACTS.rglob("*") if path.is_file())
     code_files = [ROOT / "orchestration" / "interface.py", ROOT / "orchestration" / "fake.py", Path(__file__)]
     hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in [*contract_files, *code_files]}
-    sections = {"schemas": schemas, "launch specifications": templates, "ledger": ledger, "submission requests": requests, "fake submissions": fake}
+    sections = {
+        "schemas": schemas,
+        "launch specifications": templates,
+        "ledger": ledger,
+        "ledger history": ledger_history,
+        "submission requests": requests,
+        "fake submissions": fake,
+    }
     results = {}
     for name, section in sections.items():
         checks = section()
