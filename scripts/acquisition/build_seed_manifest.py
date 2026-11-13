@@ -29,6 +29,7 @@ MMD_PLAN = "plan_inputs/data/datasets/historical_acquisition/mmd_api_history/202
 HUD_PLAN = Path("config/acquisition/hud_xlsx_plan_2010q1_2020q4.json")
 WONDER_PLAN = Path("config/acquisition/wonder_export_plan.json")
 PERIODS = Path("dbt/seeds/geography_file_periods.csv")
+CAPTURES_FOLDER, RAW_FOLDER = "captures", "raw"
 
 
 def input_folder(path: str) -> str:
@@ -57,15 +58,25 @@ def build(queue_bytes: bytes, specs: dict[str, Any], inputs: list[str], digests:
     return (json.dumps(document, indent=1, sort_keys=True) + "\n").encode()
 
 
+def capture_release(path: str) -> str | None:
+    """The release (snapshot ID) of a plan input stored by the capture step, or None when the path has another layout.
+
+    The capture step writes the original to ``<job>/captures/<source ID>/<snapshot ID>/raw/<file name>`` (``capture.py``: ``snapshot_root / "raw"``).
+    """
+    parts = PurePosixPath(path).parts
+    return parts[-3] if len(parts) >= 5 and parts[-5] == CAPTURES_FOLDER and parts[-2] == RAW_FOLDER else None
+
+
 def period_digests(inputs: list[str], rows: Sequence[Mapping[str, str]]) -> dict[str, str]:
     """The SHA-256 of each plan input that a geography file period row names: the row's release is the input's capture folder and its file name is the input's.
 
-    Two rows with different digests for one input are refused.
+    Only the capture folder position of the path counts: another folder that carries a release ID selects nothing. Two rows with different digests for one
+    input are refused.
     """
     found: dict[str, str] = {}
     for path in inputs:
-        name, parts = PurePosixPath(path).name, PurePosixPath(path).parts
-        digests = {row["member_sha256"] for row in rows if row["file_name"] == name and row["release_id"] in parts}
+        name, release = PurePosixPath(path).name, capture_release(path)
+        digests = {row["member_sha256"] for row in rows if release is not None and row["file_name"] == name and row["release_id"] == release}
         if len(digests) > 1:
             raise ValueError(f"{path} has more than one digest in {PERIODS}")
         found |= {name: digests.pop()} if digests else {}

@@ -98,6 +98,25 @@ def test_a_period_row_gives_the_digest_of_the_input_whose_capture_folder_is_its_
     check(found == {"county_adjacency2010.txt": "1" * 64}, f"found {found}")
 
 
+def test_a_release_named_by_another_folder_of_the_path_than_the_capture_folder_selects_no_digest() -> None:
+    rows = [{"member_sha256": "1" * 64, "release_id": "ADJ__A", "file_name": "county_adjacency2010.txt"}]
+    other_capture = "x/jobs/ADJ__A/captures/ADJ/ADJ__B/raw/county_adjacency2010.txt"
+    check(build.period_digests([other_capture], rows) == {}, "the job folder names release A but the capture folder is release B")
+    check(
+        build.period_digests(["ADJ__A/captures/ADJ/ADJ__B/raw/county_adjacency2010.txt"], rows) == {}, "the first folder of the path is not the capture folder"
+    )
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["x/captures/ADJ/ADJ__A/county_adjacency2010.txt", "x/jobs/ADJ__A/raw/county_adjacency2010.txt", "x/ADJ/ADJ__A/raw/county_adjacency2010.txt"],
+    ids=["no_raw_folder", "no_captures_folder", "capture_folder_not_below_captures"],
+)
+def test_a_path_that_is_not_laid_out_as_captures_source_release_raw_file_selects_no_digest(path: str) -> None:
+    rows = [{"member_sha256": "1" * 64, "release_id": "ADJ__A", "file_name": "county_adjacency2010.txt"}]
+    check(build.period_digests([path], rows) == {}, f"{path} is not a capture path")
+
+
 def test_two_period_rows_with_different_digests_for_one_input_are_refused() -> None:
     rows = [{"member_sha256": digest, "release_id": "ADJ__A", "file_name": "county_adjacency2010.txt"} for digest in ("1" * 64, "2" * 64)]
     with pytest.raises(ValueError, match="more than one digest"):
