@@ -114,3 +114,33 @@ def test_a_flag_with_a_date_suffix_that_the_secret_scan_reads_as_a_key_is_shorte
     check(trimmed["queue"][0]["flags"] == ["browser_export_moved_to_api:parity_verified", "other"], "flag shortened")
     expected = {"browser_export_moved_to_api:parity_verified": {"dated_suffixes_removed": ["2" * 8 + "_" + "3" * 8], "units": 1}}
     check(trimmed["derived_from"]["flag_rewrites"] == expected, "rewrite recorded without the long flag")
+
+
+def test_a_reference_download_unit_leaves_the_queue_and_its_budgets_and_is_recorded() -> None:
+    queue = source_queue()
+    queue["queue"].append({**unit("g", "approved_manual"), "mode": "reference_download", "bytes": 7, "route": "manual_browser_download"})
+    queue["budgets"] = {
+        "acquisition_units": 4,
+        "recorded_bytes": 37,
+        "pages_recorded": 4,
+        "max_primary_attempts": 8,
+        "units_by_route": {"manual_browser_download": 1, "publisher_url": 3},
+        "bls_calls": 1,
+    }
+    body = (json.dumps(queue, indent=1, sort_keys=True) + "\n").encode()
+    trimmed = json.loads(build.trim_queue(body, hashlib.sha256(body).hexdigest()))
+    check([u["snapshot_id"] for u in trimmed["queue"]] == ["a", "b", "c"], "the reference unit is not kept")
+    check(trimmed["entries"] == 3 and trimmed["dispositions"] == {"api": 1, "approved_manual": 1, "direct_download": 1}, "header counts follow")
+    expected = {
+        "acquisition_units": 3,
+        "recorded_bytes": 30,
+        "pages_recorded": 3,
+        "max_primary_attempts": 6,
+        "units_by_route": {"publisher_url": 3},
+        "bls_calls": 1,
+    }
+    check(trimmed["budgets"] == expected, f"budgets follow: {trimmed['budgets']}")
+    derived = trimmed["derived_from"]
+    check(derived["dropped_by_mode"] == {"reference_download": 1}, "dropped mode recorded")
+    check(derived["dropped_mode_snapshot_ids_sha256"] == hashlib.sha256(b"g").hexdigest(), "dropped mode id digest")
+    check("reference_download" in derived["rule"], "rule names the mode")

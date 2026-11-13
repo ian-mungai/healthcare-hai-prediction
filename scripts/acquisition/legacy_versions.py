@@ -58,6 +58,14 @@ def plan_matches(plan: dict, recorded: str) -> bool:
         return False
 
 
+def predecessor_plan(plan: dict, recorded: str) -> dict | None:
+    """The archived predecessor of this plan that RECORDED names, as the plan it was; None unless the catalog and the archived bytes prove it."""
+    if not plan_matches(plan, recorded) or recorded == canonical_hash(plan):
+        return None
+    entry = next(item for item in catalog()["plans"][canonical_hash(plan)] if item["canonical_sha256"] == recorded)
+    return parse_json(predecessor_bytes(entry), "legacy plan")
+
+
 def with_predecessors(plans: dict[str, dict]) -> dict[str, dict]:
     """Plans keyed by canonical hash, plus each verified predecessor hash pointing to its current plan."""
     keyed = dict(plans)

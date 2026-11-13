@@ -1,6 +1,6 @@
 {
  "kind": "capture_specs",
- "queue_sha256": "266636d543d29c9676c5580a0d0ae0ee01b463a921c183b38aca5ba351d06fde",
+ "queue_sha256": "83b0ceb797adfc0d1c1dbf8177d61bf55119f9411a829159bc799ce9bac970b3",
  "specs": {
   "ACS__20260924T060531Z__67bd8d2981a640baa3b3810d488ed076": {
    "expected_format": "txt",
@@ -7065,10 +7065,6 @@
     "observations.csv"
    ]
   },
-  "BLS_REFERENCE__20261002T211028Z__482ac767f4dfeef1d08d6fa10da3d9a7": {
-   "mode": "reference_download",
-   "stored_data_files": []
-  },
   "CA__20260924T175703Z__920da05d227140a482a324e7d5324b7c": {
    "expected_format": "docx",
    "mode": "file",
@@ -14079,14 +14075,6 @@
     "crosswalk.csv"
    ]
   },
-  "HUD_REFERENCE__20261002T211322Z__764db46bb2ee0ad7fdf961b17bf0a901": {
-   "mode": "reference_download",
-   "stored_data_files": []
-  },
-  "HUD_REFERENCE__20261002T211330Z__5ad8ab8ffd5e57d4bf61708afb889585": {
-   "mode": "reference_download",
-   "stored_data_files": []
-  },
   "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429": {
    "mode": "hud_xlsx",
    "stored_data_files": [
@@ -20540,14 +20528,6 @@
     "county_year.csv",
     "wonder_D76_1999_2005.txt"
    ]
-  },
-  "WONDER_REFERENCE__20261002T211231Z__d49be113e476d1d7208cd7da07085356": {
-   "mode": "reference_download",
-   "stored_data_files": []
-  },
-  "WONDER_REFERENCE__20261002T211247Z__758620ebcfa1a157981d536e8532b7de": {
-   "mode": "reference_download",
-   "stored_data_files": []
   },
   "main-cmi-ipps__20260924T171042Z__e81eb7b87bab4755a8d043bfded5f567": {
    "archive_members": [
@@ -41288,5 +41268,5 @@
    ]
   }
  },
- "units": 1888
+ "units": 1883
 }

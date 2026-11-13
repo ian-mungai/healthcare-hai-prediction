@@ -1,15 +1,15 @@
 {
  "budgets": {
-  "acquisition_units": 1888,
+  "acquisition_units": 1883,
   "bls_calls": 260,
   "bls_minimum_windows": 1,
   "bls_rolling_24h_limit": 450,
   "byte_cap": 137438953472,
-  "max_primary_attempts": 3776,
-  "pages_recorded": 1888,
-  "recorded_bytes": 13839027088,
+  "max_primary_attempts": 3766,
+  "pages_recorded": 1883,
+  "recorded_bytes": 13837632101,
   "units_by_route": {
-   "manual_browser_download": 71,
+   "manual_browser_download": 66,
    "publisher_api": 1124,
    "publisher_url": 693
   }
@@ -22,6 +22,10 @@
    "not_used_by_bronze": 1198,
    "superseded_duplicate": 6
   },
+  "dropped_by_mode": {
+   "reference_download": 5
+  },
+  "dropped_mode_snapshot_ids_sha256": "ff8ea1750a7983c5b817bfa905c122246ea7b53d92cca36c09ee4c3ec02e2960",
   "dropped_snapshot_ids_sha256": "f69ef20aa7f33f34f96e1ed40fefb6fb5d6a2282905d45e7d3089abc7d2f6056",
   "entries": 3096,
   "flag_rewrites": {
@@ -40,15 +44,15 @@
    "data/redownload_checks/20261111_run3_scope_v2/exclusions.json": "1d2ac92554cd59edd3e6c3f5a666b110764d9eb972363510f29c252288f28368"
   },
   "path": "data/redownload_checks/20261111_run3_scope_v2/queue.json",
-  "rule": "keep disposition in api, direct_download, approved_manual",
+  "rule": "keep disposition in api, direct_download, approved_manual; drop mode reference_download (owner, Nov 12 2026: the documents are not seeded or captured)",
   "sha256": "c1b0e0032d9417fd9e008b07dfa701169fc9063702dc95792a7009373344fd42"
  },
  "dispositions": {
   "api": 1124,
-  "approved_manual": 71,
+  "approved_manual": 66,
   "direct_download": 693
  },
- "entries": 1888,
+ "entries": 1883,
  "execution_status": "frozen_offline_no_requests_made",
  "kind": "bootstrap_capture_queue",
  "loaded_files_no_unit_covers": [
@@ -23738,21 +23742,6 @@
    "url": "https://www.census.gov/geographies/reference-files/time-series/geo/county-adjacency.2025.html"
   },
   {
-   "bytes": 18263,
-   "disposition": "approved_manual",
-   "flags": [
-    "amendment2_stored_after_queue_freeze_20261002"
-   ],
-   "mode": "reference_download",
-   "pages": 1,
-   "receipt": "data/datasets/historical_acquisition/reference_downloads/files/482ac767f4dfeef1d08d6fa10da3d9a7ce3685dc552b17f244e02bf26db17d5b/capture/receipt.json",
-   "receipt_sha256": "c6be25f0fbf744d8734b7078b3293b7bf75e65bf5caf81ab22defc1e7f67a127",
-   "route": "manual_browser_download",
-   "snapshot_id": "BLS_REFERENCE__20261002T211028Z__482ac767f4dfeef1d08d6fa10da3d9a7",
-   "source_id": "BLS",
-   "url": "https://download.bls.gov/pub/time.series/la/la.txt"
-  },
-  {
    "bytes": 96225,
    "disposition": "direct_download",
    "flags": [
@@ -24366,36 +24355,6 @@
    "snapshot_id": "HHS_CAPACITY__20261002T184717Z__c6f7d34fc1cd4018b17e9698f8838950",
    "source_id": "HHS_CAPACITY",
    "url": "https://healthdata.gov/api/views/anag-cw7u/columns.json"
-  },
-  {
-   "bytes": 116840,
-   "disposition": "approved_manual",
-   "flags": [
-    "amendment2_stored_after_queue_freeze_20261002"
-   ],
-   "mode": "reference_download",
-   "pages": 1,
-   "receipt": "data/datasets/historical_acquisition/reference_downloads/files/764db46bb2ee0ad7fdf961b17bf0a901d98b920b4cd64aee4ae9408b8f0a3967/capture/receipt.json",
-   "receipt_sha256": "ad9a23e4bc90db3b47f3950154afc7a16224ccf60d8d765a5bd4a7b99e2a1674",
-   "route": "manual_browser_download",
-   "snapshot_id": "HUD_REFERENCE__20261002T211322Z__764db46bb2ee0ad7fdf961b17bf0a901",
-   "source_id": "HUD",
-   "url": "https://www.huduser.gov/portal/datasets/usps_crosswalk.html"
-  },
-  {
-   "bytes": 470662,
-   "disposition": "approved_manual",
-   "flags": [
-    "amendment2_stored_after_queue_freeze_20261002"
-   ],
-   "mode": "reference_download",
-   "pages": 1,
-   "receipt": "data/datasets/historical_acquisition/reference_downloads/files/5ad8ab8ffd5e57d4bf61708afb8895854ed5729c03a9bb71e848f6e48cf56a45/capture/receipt.json",
-   "receipt_sha256": "01ebf7c62139df8cf0ecc31a518c871f9e9dc6802de8aeaaeb242daee797c9ac",
-   "route": "manual_browser_download",
-   "snapshot_id": "HUD_REFERENCE__20261002T211330Z__5ad8ab8ffd5e57d4bf61708afb889585",
-   "source_id": "HUD",
-   "url": "https://www.huduser.gov/portal/periodicals/cityscpe/vol20num2/ch16.pdf"
   },
   {
    "bytes": 8691,
@@ -25041,36 +25000,6 @@
    "snapshot_id": "SVI__20261002T211509Z__ef98e4e676f645f4a7c42af56863bfe7",
    "source_id": "SVI",
    "url": "https://www.atsdr.cdc.gov/place-health/media/pdfs/2024/10/SVI2022Documentation.pdf"
-  },
-  {
-   "bytes": 394653,
-   "disposition": "approved_manual",
-   "flags": [
-    "amendment2_stored_after_queue_freeze_20261002"
-   ],
-   "mode": "reference_download",
-   "pages": 1,
-   "receipt": "data/datasets/historical_acquisition/reference_downloads/files/d49be113e476d1d7208cd7da070853562c76b399debf68bf36a032c9852ec236/capture/receipt.json",
-   "receipt_sha256": "0c5cfc2d9d289266506131f52ce8504cc09413b4e8557e7b63b107bc4efb27bf",
-   "route": "manual_browser_download",
-   "snapshot_id": "WONDER_REFERENCE__20261002T211231Z__d49be113e476d1d7208cd7da07085356",
-   "source_id": "WONDER",
-   "url": "https://wonder.cdc.gov/wonder/help/ucd.html"
-  },
-  {
-   "bytes": 394569,
-   "disposition": "approved_manual",
-   "flags": [
-    "amendment2_stored_after_queue_freeze_20261002"
-   ],
-   "mode": "reference_download",
-   "pages": 1,
-   "receipt": "data/datasets/historical_acquisition/reference_downloads/files/758620ebcfa1a157981d536e8532b7dedb5f845852d56abede7567ac70d3fc60/capture/receipt.json",
-   "receipt_sha256": "8b99ec5a7a3ccfdc57f9d57ec4b36670954c6cdb6039ae5a68049469bdda3950",
-   "route": "manual_browser_download",
-   "snapshot_id": "WONDER_REFERENCE__20261002T211247Z__758620ebcfa1a157981d536e8532b7de",
-   "source_id": "WONDER",
-   "url": "https://wonder.cdc.gov/wonder/help/ucd-expanded.html"
   }
  ]
 }

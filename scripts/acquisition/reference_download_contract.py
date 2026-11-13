@@ -14,7 +14,7 @@ from scripts.acquisition.bls_api_contract import digest
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.history_routes import lineage_bindings
-from scripts.acquisition.legacy_versions import plan_matches
+from scripts.acquisition.legacy_versions import predecessor_plan
 from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require, require_collection_scope
 from scripts.acquisition.transport import CaptureError
 
@@ -25,6 +25,8 @@ ROLES = {"dictionary", "methodology", "layout"}
 REQUIRED = {"source_id", "role", "title", "publisher", "origin_url", "file_name", "media_type"}
 OPTIONAL = {"release_binding"}
 MAX_BYTES = 64 * 1024**2
+# Version 2 holds no file: the five documents left the bootstrap (owner, Nov 12 2026). Captures of version 1 files name the archived version 1 plan.
+PLAN_VERSIONS = (1, 2)
 
 
 def collector_code_hashes(entry: str = CODE_ENTRY) -> dict[str, str]:
@@ -107,7 +109,9 @@ def load_plan(path: Path | None = None) -> dict:
     path = PLAN_PATH if path is None else path
     plan = read_json(path)
     require(read_json(path.with_suffix(".lock.json"))["plan_sha256"] == canonical_hash(plan), "Reference plan lock differs")
-    require(plan["version"] == 1 and plan["model_eligible"] is False and bool(plan["files"]), "Reference plan hold differs")
+    require(
+        plan["version"] in PLAN_VERSIONS and plan["model_eligible"] is False and (plan["version"] == 2 or bool(plan["files"])), "Reference plan hold differs"
+    )
     registry = load_registry(expected_sha256=plan["registry_sha256"])
     require(plan["registry_sha256"] == canonical_hash(registry), "Reference registry differs")
     for entry in plan["files"]:
@@ -125,8 +129,9 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only, "Reference downloads are stored complete or not at all")
-    plan = load_plan()
-    require(plan_matches(plan, lineage["plan_sha256"]), "Reference capture plan differs")
+    current = load_plan()
+    plan = current if canonical_hash(current) == lineage["plan_sha256"] else predecessor_plan(current, lineage["plan_sha256"])
+    require(plan is not None, "Reference capture plan differs")
     require(lineage["registry_sha256"] == plan["registry_sha256"], "Reference registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "Reference schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "Reference modeling hold differs")

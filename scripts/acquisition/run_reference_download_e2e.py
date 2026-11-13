@@ -13,6 +13,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.acquisition import bls_api_contract as bls_contract
+from scripts.acquisition import legacy_versions
 from scripts.acquisition import reference_download_contract as contract
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.run_bls_api_e2e import inventory
@@ -154,6 +155,7 @@ def exercise(root: Path) -> list[dict]:
             lambda: require("terms_sha256" not in json.loads(verify_local(receipt_path)["lineage"]["extraction_or_query"]), "Binding leaked"),
         )
         staging_scenarios(scenario, plan, entries, root, client)
+        successor_scenarios(scenario, plan, root, receipt_path)
         storage_scenarios(scenario, plan, entries, root, run, downloads)
 
         def tampered_plan() -> None:
@@ -186,6 +188,51 @@ def exercise(root: Path) -> list[dict]:
 
         scenario("failing_file_held_others_stored", independent)
     return scenarios
+
+
+def successor_scenarios(scenario: Any, plan: dict, root: Path, receipt_path: Path) -> None:
+    """A version 2 plan holds no file. A capture of a version 1 file keeps verifying through the catalogued, archived predecessor, and only through it."""
+    successor = {"version": 2, "model_eligible": False, "registry_sha256": plan["registry_sha256"], "files": []}
+    folder = root / "successor"
+    folder.mkdir()
+    archived, plan_path = folder / "archive" / "plan_v1.json", folder / "plan.json"
+    archived.parent.mkdir()
+    write_once(archived, encoded_json(plan))
+    write_once(plan_path, encoded_json(successor))
+    write_once(plan_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(successor)}))
+    entry = {"archive_path": str(archived), "sha256": fingerprint(archived)[0], "canonical_sha256": canonical_hash(plan)}
+    catalog = {"catalog_version": 1, "plans": {canonical_hash(successor): [entry]}, "records": {}}
+    write_once(folder / "catalog.json", encoded_json(catalog))
+    write_once(folder / "catalog.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+    scenario("version_2_plan_without_files_loads", lambda: require(contract.load_plan(plan_path)["files"] == [], "Version 2 plan differs"))
+    scenario("version_1_plan_without_files_refused", lambda: contract.load_plan(_edited(folder, successor | {"version": 1})), "hold differs")
+
+    def keeps_verifying() -> None:
+        with (
+            patch.object(contract, "PLAN_PATH", plan_path),
+            patch.object(legacy_versions, "CATALOG_PATH", folder / "catalog.json"),
+            patch.object(legacy_versions, "CATALOG_LOCK_PATH", folder / "catalog.lock.json"),
+            patch.object(legacy_versions, "ARCHIVE", folder / "archive"),
+        ):
+            legacy_versions._catalog.cache_clear()
+            verify_local(receipt_path)
+
+    scenario("old_capture_verifies_through_archived_predecessor", keeps_verifying)
+
+    def refused_without_the_archive() -> None:
+        archived.write_bytes(archived.read_bytes() + b" ")
+        keeps_verifying()
+
+    scenario("old_capture_refused_when_the_archived_predecessor_changed", refused_without_the_archive, "plan differs")
+    legacy_versions._catalog.cache_clear()
+
+
+def _edited(folder: Path, plan: dict) -> Path:
+    """Write PLAN and its lock beside the others and return the plan's path."""
+    path = folder / f"edited_{plan['version']}.json"
+    write_once(path, encoded_json(plan))
+    write_once(path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(plan)}))
+    return path
 
 
 def planning_scenarios(scenario: Any, downloads: Path) -> None:
