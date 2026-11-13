@@ -74,6 +74,10 @@ ALL_COLUMNS_REASON = (
 DEMO_DESIGN = "Business process: demo amounts reported per county. Grain: one row per county and data year. Dimensions: none. Measures: amount, rate."
 PLAIN_DESIGN = "Business process: plain records. Grain: one row per record. Dimensions: none. Measures: none."
 NEW_DESIGN = "Business process: new records. Grain: one row per record. Dimensions: none. Measures: none."
+RELATIONSHIP_COLUMN = (
+    "    columns:\n      - name: county_sk\n        data_tests:\n          - relationships:\n              arguments:\n"
+    "                to: ref('hai', 'dim_county')\n                field: county_sk\n      - name: amount\n"
+)
 LINEAGE_ENTRY = "  - name: stg_bronze__file_copies\n    description: Staged lineage.\n    meta:\n      classification: Public\n"
 LINEAGE_SELECT = "select _object_key as object_key, count(distinct _member_sha256) as checksum_count, count(*) as row_count"
 LINEAGE_FROM = "from {{ source('bronze', 'raw_owner') }}\ngroup by _object_key\n"
@@ -204,6 +208,10 @@ class Case:
 
 def replacing(path: str, old: str, new: str) -> tuple[tuple[str, str, str], ...]:
     return ((path, old, new),)
+
+
+PACKAGE_REF_RELATIONSHIP = replacing(FACTS, "    columns:\n      - name: amount\n", RELATIONSHIP_COLUMN)
+DIM_COUNTY_DESIGN = replacing(FACTS, "Dimensions: none. Measures: amount", "Dimensions: dim_county. Measures: amount")
 
 
 def model_entry(name: str, class_name: str) -> str:
@@ -1265,6 +1273,43 @@ def make_cases() -> list[Case]:
             "[fact-design]",
             "gold fact fct_demo counts 3 measures but it has 2 additivity columns",
             replacing(FACTS, "Measures: amount, rate.", "Measures: the 3 additivity columns."),
+        ),
+        Case(
+            "fact_design_blank_process",
+            "[fact-design]",
+            "gold fact fct_demo description must state its business process, grain, dimensions and measures",
+            replacing(FACTS, "demo amounts reported per county", " "),
+        ),
+        Case(
+            "fact_design_blank_grain",
+            "[fact-design]",
+            "gold fact fct_demo description must state its business process, grain, dimensions and measures",
+            replacing(FACTS, "county and data year", " "),
+        ),
+        Case(
+            "fact_design_grain_names_input_model_row",
+            "[fact-design]",
+            "gold fact fct_demo grain must name what one row records, not a row of its input",
+            replacing(FACTS, "one row per county and data year", "one row per int_public row"),
+        ),
+        Case(
+            "fact_design_grain_names_input_row_of_model",
+            "[fact-design]",
+            "gold fact fct_demo grain must name what one row records, not a row of its input",
+            replacing(FACTS, "one row per county and data year", "one row per input row of int_public"),
+        ),
+        Case(
+            "fact_design_package_ref_dimensions_differ",
+            "[fact-design]",
+            "gold fact fct_demo lists dimensions none but its relationships tests name dim_county",
+            PACKAGE_REF_RELATIONSHIP,
+        ),
+        Case("fact_design_package_ref_control", "model metadata ok", "", code=0, edits=PACKAGE_REF_RELATIONSHIP + DIM_COUNTY_DESIGN),
+        Case(
+            "fact_design_unsupported_relationship_target",
+            "[fact-design]",
+            "gold fact fct_demo has a relationships test with the unsupported target dim_county",
+            replacing(FACTS, "    columns:\n      - name: amount\n", RELATIONSHIP_COLUMN.replace("ref('hai', 'dim_county')", "dim_county")),
         ),
         Case("fact_missing_type", "[fact-type]", "gold fact fct_demo has no meta.fact_type", replacing(FACTS, "      fact_type: periodic_snapshot\n", "")),
         Case(

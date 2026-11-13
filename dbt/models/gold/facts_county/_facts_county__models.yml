@@ -228,9 +228,9 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_hpsa_component
     description: >-
-      Business process: HRSA primary-care shortage area designations. Grain: one row per published designation component of a stored HPSA file. Dimensions:
-      dim_county, dim_release. Measures: hpsa_score. Every column of int_hpsa_components stays unchanged, every silver column unchanged, then the surrogate
-      keys; the published text stays beside each number.
+      Business process: HRSA primary-care shortage area designations. Grain: one row per published designation component row of a stored HPSA file, where
+      an exact repeat of an earlier row stays and carries hold_reason exact_repeat. Dimensions: dim_county, dim_release. Measures: hpsa_score. Every
+      column of int_hpsa_components stays unchanged, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -343,9 +343,10 @@ models:
             expression: typeof(county_token) = 'VARCHAR'
   - name: fct_hsa_zip_cases
     description: >-
-      Business process: Medicare hospital service area case counts. Grain: one row per provider, beneficiary ZIP code and data year of a stored service area
-      file. Dimensions: dim_release, dim_zip. Measures: total_cases, total_charges, total_days_of_care. Every column of int_hsa_zip_cases stays unchanged,
-      every silver column unchanged, then the surrogate keys; silver test assert_geography_values_cast checks the published values.
+      Business process: Medicare hospital service area case counts. Grain: one row per published provider and beneficiary ZIP code observation within a
+      stored service area file and data year, with each suppressed-ZIP observation kept apart by its source row. Dimensions: dim_release, dim_zip.
+      Measures: total_cases, total_charges, total_days_of_care. Every column of int_hsa_zip_cases stays unchanged, every silver column unchanged, then the
+      surrogate keys; silver test assert_geography_values_cast checks the published values.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -568,9 +569,10 @@ models:
             expression: typeof(value_published) = 'VARCHAR'
   - name: fct_mua_component
     description: >-
-      Business process: HRSA medically underserved area and population designations. Grain: one row per published designation component of a stored MUA
-      file. Dimensions: dim_county, dim_release. Measures: imu_score. Every column of int_mua_components stays unchanged, every silver column unchanged,
-      then the surrogate keys; the published text stays beside each number.
+      Business process: HRSA medically underserved area and population designations. Grain: one row per published designation component row of a stored
+      MUA file, where an exact repeat of an earlier row stays and carries hold_reason exact_repeat. Dimensions: dim_county, dim_release. Measures:
+      imu_score. Every column of int_mua_components stays unchanged, every silver column unchanged, then the surrogate keys; the published text stays
+      beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot
@@ -1324,9 +1326,10 @@ models:
             expression: typeof(missing_token) = 'VARCHAR'
   - name: fct_wonder_county_deaths
     description: >-
-      Business process: CDC WONDER all-cause death counts per county. Grain: one row per county, year and export of a stored WONDER file. Dimensions:
-      dim_county, dim_release. Measures: crude_rate, crude_rate_lower_95, crude_rate_standard_error, crude_rate_upper_95, deaths, population. Every column
-      of int_wonder_county_deaths stays unchanged, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
+      Business process: CDC WONDER all-cause death counts per county. Grain: one row per county, year and export of a stored WONDER file, where a county
+      and year that a wider export of the same database repeats stays and carries hold_reason repeated_in_wider_export. Dimensions: dim_county,
+      dim_release. Measures: crude_rate, crude_rate_lower_95, crude_rate_standard_error, crude_rate_upper_95, deaths, population. Every column of
+      int_wonder_county_deaths stays unchanged, every silver column unchanged, then the surrogate keys; the published text stays beside each number.
     meta:
       classification: Public
       fact_type: periodic_snapshot

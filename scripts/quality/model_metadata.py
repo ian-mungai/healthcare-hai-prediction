@@ -63,8 +63,10 @@ FACT_DESIGN = re.compile(
     r"^Business process: (?P<process>[^.]+)\. Grain: one row per (?P<grain>[^.]+)\. Dimensions: (?P<dimensions>[^.]+)\. Measures: (?P<measures>[^.]+)\."
 )
 MEASURE_COUNT = re.compile(r"^the (\d+) additivity columns$")
-INPUT_ROW_GRAIN = re.compile(r"^(?:each )?row of ")
-RELATIONSHIP_TARGET = re.compile(r"""ref\(\s*['"](\w+)['"]\s*\)""")
+INPUT_ROW_GRAIN = re.compile(
+    r"^(?:each )?row of |\binput rows?\b|\b(?:stg|int|dim|fct|bridge)_\w+\s+rows?\b|\brows? of (?:stg|int|dim|fct|bridge)_\w+", re.IGNORECASE
+)
+RELATIONSHIP_TARGET = re.compile(r"""^\s*ref\(\s*(?:['"][\w-]+['"]\s*,\s*)?['"](\w+)['"]\s*\)\s*$""")
 DISABLED_MODEL = re.compile(r"\{\{-?\s*config\([^)]*\benabled\s*=\s*false\b")
 NUMERIC_TYPES = frozenset({"TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "HUGEINT", "FLOAT", "REAL", "DOUBLE", "DECIMAL"})
 OTHER_TYPES = frozenset({"VARCHAR", "BOOLEAN", "DATE", "TIMESTAMP", "TIME"})
@@ -178,6 +180,7 @@ class Entry:
     column_lines: dict[str, int] = field(default_factory=dict)
     description: str = ""
     dimensions: tuple[str, ...] = ()
+    unsupported_targets: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -370,15 +373,17 @@ def read_properties(root: Path, directories: dict[str, list[Path]]) -> Propertie
                 lines = {c.data["name"]: c.line for c in columns}
                 description = model.data.get("description")
                 text = description if isinstance(description, str) else ""
-                dimensions = relationship_targets([column.data for column in columns])
-                found.models[name] = Entry(name, where, model.line, meta_of(model.data), column_meta, lines, text, dimensions)
+                dimensions, unsupported = relationship_targets([column.data for column in columns])
+                found.models[name] = Entry(name, where, model.line, meta_of(model.data), column_meta, lines, text, dimensions, unsupported)
         found.seeds |= {seed.data["name"] for seed in items_of(document, composed, "seeds", where)}
     return found
 
 
-def relationship_targets(columns: list[dict[str, Any]]) -> tuple[str, ...]:
-    """Return the models that the relationships tests of these columns name, in column order."""
+def relationship_targets(columns: list[dict[str, Any]]) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """Return the models that the relationships tests of these columns name, in column order, and the targets that are neither
+    ref('model') nor ref('package', 'model')."""
     targets: list[str] = []
+    unsupported: list[str] = []
     for column in columns:
         for test in [*(column.get("data_tests") or []), *(column.get("tests") or [])]:
             relationship = test.get("relationships") if isinstance(test, dict) else None
@@ -386,10 +391,12 @@ def relationship_targets(columns: list[dict[str, Any]]) -> tuple[str, ...]:
                 continue
             arguments = relationship.get("arguments")
             target = (arguments if isinstance(arguments, dict) else relationship).get("to")
-            found = RELATIONSHIP_TARGET.search(target) if isinstance(target, str) else None
-            if found and found.group(1) not in targets:
+            found = RELATIONSHIP_TARGET.match(target) if isinstance(target, str) else None
+            if found is None:
+                unsupported.append(str(target))
+            elif found.group(1) not in targets:
                 targets.append(found.group(1))
-    return tuple(targets)
+    return tuple(targets), tuple(unsupported)
 
 
 def listed(text: str) -> list[str]:
@@ -400,10 +407,12 @@ def listed(text: str) -> list[str]:
 def fact_design_problems(model: str, entry: Entry) -> list[str]:
     """Return why a gold fact description does not state the four-step design, in the order of the design."""
     design = FACT_DESIGN.match(entry.description.strip())
-    if design is None:
+    if design is None or not all(design[part].strip() for part in ("process", "grain", "dimensions", "measures")):
         return [f"gold fact {model} description must state its business process, grain, dimensions and measures"]
     problems = []
-    if INPUT_ROW_GRAIN.match(design["grain"]):
+    for target in entry.unsupported_targets:
+        problems.append(f"gold fact {model} has a relationships test with the unsupported target {target}; name it as ref('model') or ref('package', 'model')")
+    if INPUT_ROW_GRAIN.search(design["grain"]):
         problems.append(f"gold fact {model} grain must name what one row records, not a row of its input")
     dimensions = listed(design["dimensions"])
     if sorted(dimensions) != sorted(entry.dimensions):
