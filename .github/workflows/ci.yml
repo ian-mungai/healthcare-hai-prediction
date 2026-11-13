@@ -56,7 +56,7 @@ jobs:
           fi
           printf 'start=%s\nend=%s\n' "$RANGE_START" "$RANGE_END" >> "$GITHUB_OUTPUT"
 
-      # A pull request is path selected: its range of changed paths selects the check groups. A push to main and a manual run are full runs (owner decision 162), and
+      # A pull request is path selected: its range of changed paths selects the check groups. A push to main and a manual run are full runs, and
       # no run is scheduled.
       - name: Choose the scope
         id: scope

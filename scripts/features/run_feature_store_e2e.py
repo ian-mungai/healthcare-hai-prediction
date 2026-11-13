@@ -1,4 +1,4 @@
-"""End-to-end cases of the feature store package, lane A: the schema and generated files, the publish contract, the gold pin, the build, the
+"""End-to-end cases of the feature store package: the schema and generated files, the publish contract, the gold pin, the build, the
 validation and the export. Each case plants one defect or condition and requires the check that owns it to fail or pass, and the report lists
 the failure-mode IDs the case proves.
 
@@ -13,7 +13,7 @@ Modes:
 - ``static``: pure Python, no dbt, no DuckDB, no Docker (CI group ``lakehouse_features``). The schema generator and its checks with planted defects,
   the publish contract, the gold pin with a stand-in Spark, the pin and plan refusals.
 - ``build_local``: the host half of the offline cases. It builds the synthetic fixture in the SQLFluff tool environment (dbt and DuckDB, no Docker),
-  runs ``features_build`` and ``feature_validation`` exactly as the containers do, plants the defects of design 1.3 and requires each to fail its own
+  runs ``features_build`` and ``feature_validation`` exactly as the containers do, plants its defects and requires each to fail its own
   check, mutates the validation to prove each case would notice a weakened check, and exports the build through the shared consumer. About three
   minutes.
 - ``masks_local``: the three generated matrix queries and their mask validation on synthetic rows using the accepted spine source labels. It needs
@@ -23,7 +23,7 @@ Modes:
   reports the case as blocked and fails. Run it under ``.venv/bin/python`` (the launcher needs it); its build children run in the tool environment.
 
 Report: ``data/e2e/feature_store/<UTC stamp>/report.json`` with case ID, failure-mode IDs, verdict (``pass``, ``fail`` or ``pending`` for a case whose
-code lives in another lane), counts, hashes and timings; never a row value.
+launcher jobs or configuration are missing), counts, hashes and timings; never a row value.
 """
 
 from __future__ import annotations
@@ -66,7 +66,7 @@ GOLD_RUN = "20261014T040000Z-0000ab01"
 # The values a case puts into an owner command list in place of its placeholders.
 OWNER_PLACEHOLDERS = {"<RUN_ID>": RUN, "<CODE_SHA256>": "ab" * 32, "<HOST_PRIVATE_IP>": "10.0.1.20", "<GOLD_RUN_ID>": GOLD_RUN}
 SUITE_FOLDER = "data_contracts/great_expectations/features"
-# The launcher jobs the publish_offline mode needs from the launcher lane (see the report): none of these exist before lane B adds them.
+# The launcher jobs the publish_offline mode needs: the mode stays pending until the launcher defines them.
 Step = dict[str, Any]
 ZERO_COUNT = 'select count(*) from feature_matrix_county_measures where "{column}" = 0'
 PARQUET_VALUE = "select c001__value__number from read_parquet('{file}') where c001__value__number is not null order by 1 limit 1"
@@ -85,7 +85,7 @@ class Report:
         return ok
 
     def pending(self, case: str, modes: str, name: str, owner: str, reason: str) -> None:
-        """A case whose code is in another lane: reported as pending, never as passed."""
+        """A case whose launcher jobs or configuration are missing: reported as pending, never as passed."""
         self.steps.append({"case": case, "failure_modes": modes, "name": name, "verdict": "pending", "owner": owner, "reason": reason})
 
     @property
@@ -411,7 +411,7 @@ def plan_cases(report: Report) -> None:
         "E05",
         "A7, A17",
         "the broker refuses a real features run without a matching approval record; fixture renders carry no AWS profile",
-        "lane B",
+        "launcher features jobs",
         "launcher files",
     )
 
@@ -1417,8 +1417,8 @@ def settings_cases(report: Report) -> None:
             "E30",
             "D13, B9",
             "feature_store.yaml database numbers and unset-variable refusal",
-            "lane C",
-            "feature_store/feature_store.yaml is written by lane C",
+            "feature store configuration",
+            "feature_store/feature_store.yaml is missing",
         )
 
 
@@ -3104,7 +3104,7 @@ def publish_exports(base: Path, report_folder: Path) -> dict[str, Any]:
 
 
 def publish_offline(report: Report, report_folder: Path) -> None:
-    """The Spark case suite on the exports of runs A, B and V2. The job ``features_publish_e2e`` belongs to the launcher lane; without it the mode fails."""
+    """The Spark case suite on the exports of runs A, B and V2. The launcher must define the job ``features_publish_e2e``; without it the mode fails."""
     from orchestration import launcher
 
     if "features_publish_e2e" not in getattr(launcher, "SPARK_JOBS", {}):
