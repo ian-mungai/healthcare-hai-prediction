@@ -22,6 +22,8 @@ from scripts.acquisition.transport import canonical_url
 # The stored artifacts a fresh download repeats and a restore compares: a capture's data or API pages or, only when it holds none, its reference documents.
 DATA_ROLES = frozenset({"data", "api_page"})
 REFERENCE_ROLES = frozenset({"dictionary", "methodology", "layout"})
+# A collector's capture compares the files it derives. The raw API pages it keeps stay stored as evidence and decide no outcome.
+COLLECTOR_ROLES = frozenset({"data"})
 CLAIMS = frozenset({"exact_match", "changed_needs_review"})
 KNOWN_OUTCOMES = CLAIMS | {"blocked", "unavailable"}
 CHARGE_KINDS = frozenset({"received_bytes", "injected_received_bytes", "persisted_copy_bytes"})
@@ -79,6 +81,13 @@ def compared_roles(stored: list[dict]) -> frozenset[str]:
     return DATA_ROLES if any(item["role"] in DATA_ROLES for item in stored) else REFERENCE_ROLES
 
 
+def is_collector(unit: dict, run: Any) -> bool:
+    """Whether the capture path runs this unit through a collector adapter: the table ``handle`` and ``preflight`` read for this run."""
+    from scripts.acquisition.redownload import collector_adapters, handler_mode
+
+    return handler_mode(unit) in collector_adapters(run)
+
+
 def repeated_artifacts(stored: list[dict]) -> list[dict]:
     """The stored artifacts a fresh capture repeats. The capture path and the restore recheck both choose through ``compared_roles``."""
     roles = compared_roles(stored)
@@ -94,20 +103,21 @@ def require_distinct(document: dict) -> None:
     )
 
 
-def data_artifacts(document: dict, stored: dict) -> dict[str, dict]:
-    """The artifacts of ``document`` in the roles the stored capture's own artifacts choose."""
+def data_artifacts(document: dict, stored: dict, roles: frozenset[str] | None = None) -> dict[str, dict]:
+    """The artifacts of ``document`` in ``roles``, or in the roles the stored capture chooses. Coverage and the container check keep the second."""
     require_distinct(document)
     require_distinct(stored)
-    roles = compared_roles(stored["artifacts"])
-    return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in roles}
+    chosen = compared_roles(stored["artifacts"]) if roles is None else roles
+    return {item["stored_file_name"]: item for item in document["artifacts"] if item["role"] in chosen}
 
 
-def compared(unit: dict, document: dict, stored: dict) -> dict[str, dict]:
-    """The artifacts that decide a unit's outcome. An MMD capture is decided by its one derived file, whatever the stored export is called."""
+def compared(unit: dict, run: Any, document: dict, stored: dict) -> dict[str, dict]:
+    """The artifacts that decide a unit's outcome, the ones its capture path compared. An MMD capture is decided by its one derived file, whatever the stored
+    export is called."""
     if is_mmd(unit):
         derived = [item for item in document["artifacts"] if item["role"] == "data"]
         return {"data": derived[0]} if len(derived) == 1 else {}
-    return data_artifacts(document, stored)
+    return data_artifacts(document, stored, COLLECTOR_ROLES if is_collector(unit, run) else None)
 
 
 def members_of(entries: list[dict]) -> dict[tuple[str, ...], dict]:
@@ -166,7 +176,7 @@ def same_data(unit: dict, run: Any, stored: dict, receipt: dict, entries: list[d
     """The comparison again, from the stored capture and the bytes just read. An archive compares member by member, as its container is never stored."""
     from scripts.acquisition.redownload import compare_files, ensure_stored, receipt_file, same_content
 
-    old, new = compared(unit, stored, stored), compared(unit, receipt, stored)
+    old, new = compared(unit, run, stored, stored), compared(unit, run, receipt, stored)
     if set(old) != set(new):
         return False
     for name, artifact in new.items():

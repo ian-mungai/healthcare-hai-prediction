@@ -1559,7 +1559,7 @@ def record_diagnostic(run: Run, identity: str, error: Exception) -> None:
 def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -> dict:
     """Run a collector's capture path in the fresh root and compare its derived data with the stored data."""
     receipt = receipt_file(unit, run)
-    original = [item for item in read_json(receipt)["artifacts"] if item["role"] == "data"]
+    original = [item for item in read_json(receipt)["artifacts"] if item["role"] in restored_outcomes.COLLECTOR_ROLES]
     stored = {(item["role"], item["stored_file_name"]): item["sha256"] for item in original}
     stored_paths = {(item["role"], item["stored_file_name"]): receipt.parent / item["storage_path"] for item in original if "storage_path" in item}
     require(len(stored) == len(original) and bool(stored), "Stored data artifact identities are empty or duplicated")
@@ -1583,7 +1583,7 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
         record_diagnostic(run, unit["snapshot_id"], error)
         return {"attempts": 1, "outcome": "blocked", "reason": "collector_validation_failed", "error_category": error_category(error)}
     controls.validate_path(receipt_path, run.state_root)
-    fresh = [item for item in read_json(receipt_path)["artifacts"] if item["role"] == "data"]
+    fresh = [item for item in read_json(receipt_path)["artifacts"] if item["role"] in restored_outcomes.COLLECTOR_ROLES]
     identities = {(item["role"], item["stored_file_name"]): item["sha256"] for item in fresh}
     fresh_paths = {(item["role"], item["stored_file_name"]): receipt_path.parent / item["storage_path"] for item in fresh if "storage_path" in item}
     differing, excluded = [], set()
@@ -1615,7 +1615,7 @@ def collector_unit(unit: dict, run: Run, adapter: Callable[[dict, Run], Path]) -
 def handle(unit: dict, run: Run) -> dict:
     """Every unit's one entry point. The bound config is checked at the code root again right before the unit uses it, so no handler can skip it."""
     verify_config_inputs(run)
-    adapters = ADAPTERS if run.adapters is None else run.adapters
+    adapters = collector_adapters(run)
     mode = handler_mode(unit)
     if mode in adapters:
         return collector_unit(unit, run, adapters[mode])
@@ -1625,6 +1625,11 @@ def handle(unit: dict, run: Run) -> dict:
         return page_unit(unit, run)
     require(mode == "file", "Unit has no reviewed handler")
     return file_unit(unit, run)
+
+
+def collector_adapters(run: Run) -> dict[str, Callable[[dict, Run], Path]]:
+    """The collector adapters this run's units go through: the reviewed table or the run's own. The restore recheck reads the same table."""
+    return ADAPTERS if run.adapters is None else run.adapters
 
 
 def handler_mode(unit: dict) -> str:
@@ -1647,7 +1652,7 @@ def file_inputs(unit: dict, run: Run) -> tuple[dict, str, str | None]:
 
 def preflight(run: Run) -> dict:
     """Resolve every active unit's handler and planned inputs offline; any unresolved unit stops the run."""
-    adapters = ADAPTERS if run.adapters is None else run.adapters
+    adapters = collector_adapters(run)
     counts: Counter[str] = Counter()
     for unit in (item for item in load_queue(run) if item["disposition"] in ACTIVE):
         mode = handler_mode(unit)
