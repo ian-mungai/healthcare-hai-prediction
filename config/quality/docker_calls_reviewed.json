@@ -103,10 +103,10 @@
         "scripts/acquisition/restored_outcomes.py": "sha256:33b424b46638bdf87fe24db0424aad9aa230716c78c38c04d2bb3075fb57fabf",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/storage_controls.py": "sha256:ab2bb075930f286e5aaa9e483d71a386f02c24573978814a6476a3d598d36efd",
+        "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
         "scripts/acquisition/stored_mirror.py": "sha256:cad53677b58f4d25bb08ab304c7b1bdd6dc7222615ff5c5cedd3ee71da175e9c",
-        "scripts/acquisition/task_role.py": "sha256:a904aa19f84e9019db6c7e3f3a00f7813eca145c97eee3d2d795d2d27fb66ecc",
+        "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
         "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
         "scripts/infrastructure/render_project_config.py": "sha256:07163d494396f00ca10a96d4dc15c09c8f5191f765d9af31bc3c1ff11f3b0a39"
@@ -141,10 +141,10 @@
         "scripts/acquisition/restored_outcomes.py": "sha256:33b424b46638bdf87fe24db0424aad9aa230716c78c38c04d2bb3075fb57fabf",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/storage_controls.py": "sha256:ab2bb075930f286e5aaa9e483d71a386f02c24573978814a6476a3d598d36efd",
+        "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/store_onc_mu.py": "sha256:f15198e842566749b6f6a5ce2806bbe89a223c551fd0de3aece73df54e9c1cea",
         "scripts/acquisition/stored_mirror.py": "sha256:cad53677b58f4d25bb08ab304c7b1bdd6dc7222615ff5c5cedd3ee71da175e9c",
-        "scripts/acquisition/task_role.py": "sha256:a904aa19f84e9019db6c7e3f3a00f7813eca145c97eee3d2d795d2d27fb66ecc",
+        "scripts/acquisition/task_role.py": "sha256:9ec213a0c92dabdf0b35b21812a85f44ef253a7b5b3c893b9046145eccb0f8ca",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
         "scripts/acquisition/wonder_export_contract.py": "sha256:3892930b40f84e1c9387997e478f2e60555539a250e747b2004d0deaf6887643",
         "scripts/infrastructure/render_project_config.py": "sha256:07163d494396f00ca10a96d4dc15c09c8f5191f765d9af31bc3c1ff11f3b0a39"
@@ -265,7 +265,7 @@
         "scripts/acquisition/redownload_controls.py": "sha256:97a2b284d4483404d909be8771b788b62fe1ac16784b9ef9b36e257fb93d9da7",
         "scripts/acquisition/single_copy.py": "sha256:1d725bd840efe76d518cb279c3adf8aa36d6c26fcec74b915b03342dca960fb8",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499",
-        "scripts/acquisition/storage_controls.py": "sha256:ab2bb075930f286e5aaa9e483d71a386f02c24573978814a6476a3d598d36efd",
+        "scripts/acquisition/storage_controls.py": "sha256:8f6bc06d68f5f81523b2730ed7009c8fd462967cbdd97d33dab346db3daed1c4",
         "scripts/acquisition/transport.py": "sha256:52c542240d2ea9a1e4ad7ce69ed3455082a17698c2014fb01a2669fa2ba8d0e5",
         "scripts/infrastructure/render_project_config.py": "sha256:07163d494396f00ca10a96d4dc15c09c8f5191f765d9af31bc3c1ff11f3b0a39",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -293,11 +293,11 @@
     },
     {
       "path": "scripts/acquisition/tests/test_offline_e2e.py",
-      "line": 100,
+      "line": 101,
       "code_sha256": "c778c734aa2a198b9557d74507cafc1069d4045bcfc914d4e529fd92e245b12e",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "e49c12c1989d394ec2dd6205acebdbf86875b69054e5be451d8534a50c7fdfe8",
+      "file_sha256": "dcdcbacaec566a6d6d1250357ba28b6a751667033d8e594abe0f08d141fc4f8a",
       "dependencies": {
         "scripts/acquisition/collection_layout.py": "sha256:dcc4c7e6a949f3e8c98200df56a1cde91884e5543b601d967d1f5054e8686621",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
