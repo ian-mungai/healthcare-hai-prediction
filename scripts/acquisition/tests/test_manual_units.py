@@ -24,8 +24,8 @@ from urllib.response import addinfourl
 
 import pytest
 
+from scripts.acquisition import completion_record, hud_xlsx_contract, manual_content, manual_units, stale_record, transport, wonder_export_contract
 from scripts.acquisition import hud_api_contract as hud_api
-from scripts.acquisition import hud_xlsx_contract, manual_content, manual_units, stale_record, transport, wonder_export_contract
 from scripts.acquisition.run_hud_xlsx_e2e import rows as hud_rows
 from scripts.acquisition.run_hud_xlsx_e2e import workbook as hud_workbook
 from scripts.acquisition.run_wonder_export_e2e import FLOOR
@@ -40,6 +40,7 @@ ACS_URL = "https://data.census.gov/api/access/table/download?download_id=synthet
 OTHER_URL = "https://data.example.gov/files/book.xlsx"
 ROBOTS = {"www.huduser.gov": "https://www.huduser.gov/robots.txt", "wonder.cdc.gov": "https://wonder.cdc.gov/robots.txt"}
 START = datetime(2026, 11, 13, 2, 0, 0, tzinfo=UTC)
+COLLECTION = "example_publisher/example_collection"
 RUN_1 = "20261113T020000Z-aaaaaaaa"
 HUD_NAMES = ["ZIP-COUNTY_032010.xlsx", "ZIP-COUNTY_062010.xlsx", "ZIP-COUNTY_092010.xlsx"]
 
@@ -138,6 +139,7 @@ class Bucket:
         self.versions: dict[str, list[tuple[str, bytes]]] = {}
         self.calls: list[tuple[str, str]] = []
         self.inject: list[str] = []
+        self.unreadable: set[str] = set()
 
     def seed(self, key: str, body: bytes) -> dict[str, Any]:
         self.versions.setdefault(key, []).append((f"v{len(self.versions.get(key, [])) + 1}", body))
@@ -161,6 +163,8 @@ class Bucket:
                 raise StorageError("put-object", "PreconditionFailed")
             self.seed(key, Path(options["--body"]).read_bytes())
             return {"VersionId": "v1"}
+        if key in self.unreadable:
+            raise StorageError(operation, "AccessDenied")
         stored = self.versions.get(key)
         if not stored:
             raise StorageError(operation, "404")
@@ -181,19 +185,49 @@ class Bucket:
 class Sink:
     """The normal capture path as the run loop supplies it: stores the data objects and writes the completion record."""
 
-    def __init__(self, bucket: Bucket, root: str, unit_key: Any) -> None:
-        self.bucket, self.root, self.unit_key = bucket, root, unit_key
+    def __init__(self, bucket: Bucket, root: str, unit_key: Any, clock: Clock) -> None:
+        self.bucket, self.root, self.unit_key, self.clock = bucket, root, unit_key, clock
         self.captured: list[tuple[str, dict[str, bytes]]] = []
 
     def __call__(self, unit: dict, spec: dict, files: dict[str, Path]) -> dict:
         bodies = {name: path.read_bytes() for name, path in sorted(files.items())}
         self.captured.append((unit["snapshot_id"], bodies))
-        payload = hashlib.sha256(json.dumps({n: hashlib.sha256(b).hexdigest() for n, b in bodies.items()}, sort_keys=True).encode()).hexdigest()
-        for name, body in bodies.items():
-            self.bucket.seed(f"{self.root}bronze_objects/{unit['snapshot_id']}/{name}", body)
-        key = f"{self.root}ingestion_units/{self.unit_key(unit)}/{payload}.json"
-        self.bucket.seed(key, b"{}")
-        return {"completion_key": key, "payload_sha256": payload}
+        objects = [(f"{self.root}bronze_objects/{unit['snapshot_id']}/{name}", name, body) for name, body in bodies.items()]
+        key, record = seed_completion(self.bucket, self.root, self.unit_key(unit), unit, retrieved_at=stamp(self.clock.now()), objects=objects)
+        return {"completion_key": key, "payload_sha256": record["payload_sha256"]}
+
+
+def stamp(moment: datetime) -> str:
+    return moment.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def seed_completion(
+    bucket: Bucket, root: str, key: str, unit: dict, *, retrieved_at: str, objects: list[tuple[str, str, bytes]], run_id: str = RUN_1, **changes: Any
+) -> tuple[str, dict[str, Any]]:
+    """Store a unit's data objects and a valid completion record that names them, and return the record's key and body.
+
+    ``objects`` are (object key, stored file name, bytes). ``changes`` replace record fields, such as ``source_id`` or ``collection``.
+    """
+    named = [bucket.seed(name_key, body) | {"role": "data", "stored_file_name": name} for name_key, name, body in objects]
+    receipt = bucket.seed(f"{root}receipts/{unit['snapshot_id']}/{run_id}.json", f"receipt {run_id}".encode())
+    manifest = bucket.seed(f"{root}manifests/{unit['snapshot_id']}/{run_id}.json", f"manifest {run_id}".encode())
+    fields: dict[str, Any] = {
+        "key": key,
+        "source_id": unit["source_id"],
+        "collection": COLLECTION,
+        "mode": unit["mode"],
+        "run_id": run_id,
+        "code_sha256": "c" * 64,
+        "bundle_sha256": "b" * 64,
+        "retrieved_at_utc": retrieved_at,
+        "receipt": receipt,
+        "manifests": [manifest],
+        "data_objects": named,
+    }
+    record = completion_record.build(**(fields | changes))
+    stored_key = completion_record.record_key(root, key, record["payload_sha256"])
+    bucket.seed(stored_key, completion_record.encode(record))
+    return stored_key, record
 
 
 def unit_key_of(unit: dict) -> str:
@@ -237,7 +271,7 @@ class World:
             "scratch": self.scratch,
             "capture": self.sink,
             "unit_key": unit_key_of,
-            "collection": lambda unit: "example_publisher/example_collection",
+            "collection": lambda unit: COLLECTION,
             "handlers": (self.site,),
             "scopes": self.plans,
             "on_request": lambda: self.counter.append(1),
@@ -286,7 +320,7 @@ def world(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> World:
         "batches": [{"database": "D158", "years": [2024, 2024], "sha256": hashlib.sha256(export).hexdigest(), "bytes": len(export)}],
     }
     monkeypatch.setattr(transport.time, "sleep", clock.sleep)
-    return World(clock, site, bucket, Sink(bucket, root, unit_key_of), root, tmp_path / "scratch", manual_content.Scopes(hud_plan, wonder_plan), [])
+    return World(clock, site, bucket, Sink(bucket, root, unit_key_of, clock), root, tmp_path / "scratch", manual_content.Scopes(hud_plan, wonder_plan), [])
 
 
 def serve_workbook(world: World, body: bytes | None = None) -> None:
@@ -908,3 +942,245 @@ def test_a_url_that_is_not_a_plain_public_https_address_is_refused_before_any_re
     with pytest.raises(manual_units.ManualUnitError, match="HTTPS|Credentials"):
         world.run([unit])
     check(world.site.seen == [] and world.bucket.writes() == [], "no request, not even robots.txt")
+
+
+OLDER = "2026-10-10T01:02:03Z"
+NEWER = "2026-10-20T04:05:06Z"
+OBJECT_NAMES = (HUD_NAMES[0], "crosswalk.csv")
+ISO_FORMS = ["2026-09-24T01:47:28Z", "2026-09-24T01:47:28+00:00", "2026-09-24T01:47:28.123456+00:00", "2026-09-24T01:47:28.5Z", "2026-09-23T18:47:28-07:00"]
+
+
+def object_key(unit: dict, tag: str, name: str, prefix: str = "raw/") -> str:
+    return f"{prefix}example_publisher/example_collection/datasets/d/{unit['snapshot_id']}/{tag}_{name}"
+
+
+def completion_for(world: World, unit: dict, tag: str, retrieved_at: str, *, prefix: str = "raw/", **changes: Any) -> tuple[str, dict[str, Any]]:
+    """A valid completion record of the unit, with its two data objects stored, named by the one-letter ``tag``."""
+    objects = [(object_key(unit, tag, name, prefix), name, f"{tag} {name}".encode()) for name in OBJECT_NAMES]
+    return seed_completion(
+        world.bucket, world.root, unit_key_of(unit), unit, retrieved_at=retrieved_at, objects=objects, run_id=f"20261010T000000Z-{tag * 8}", **changes
+    )
+
+
+def artifact_of(unit: dict, tag: str, name: str, retrieved_at: str, read_root: str = "raw/", prefix: str = "raw/") -> dict[str, Any]:
+    """What a stale record must say about one stored object, written out from the bytes the test stored."""
+    body = f"{tag} {name}".encode()
+    return {
+        "key": object_key(unit, tag, name, prefix),
+        "version_id": "v1",
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "byte_count": len(body),
+        "role": "data",
+        "stored_file_name": name,
+        "retrieved_at_utc": retrieved_at,
+        "read_root": read_root,
+    }
+
+
+def refused_run(world: World, unit: dict, run_id: str = RUN_1) -> manual_units.Report:
+    world.site.serve(HUD_URL, Reply(403))
+    return world.run([unit], run_id)
+
+
+def stopped_without_a_record(world: World, unit: dict, match: str) -> None:
+    with pytest.raises(manual_units.ManualUnitError, match=match) as error:
+        refused_run(world, unit)
+    check(unit_key_of(unit) in str(error.value), "the refusal names the unit")
+    check(world.stale_records(unit) == [] and world.bucket.writes() == [], "no stale record and no write: the unit never fell back to another pointer")
+
+
+def test_a_unit_with_no_completion_record_keeps_the_specification_pointer(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    other = world.add(hud_unit(1), {})
+    completion_for(world, other, "x", NEWER)
+    report = refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(
+        record["last_capture"] == manual_units.pointers(world.specs[unit["snapshot_id"]]) and record["last_capture_verified"] is True,
+        f"{record['last_capture']}",
+    )
+    check(report.stale_units[0]["last_retrieved_at_utc"] == "2026-09-24T01:47:28Z", f"list {report.stale_units}")
+
+
+def test_a_unit_with_one_completion_record_names_its_objects_and_not_the_specification_pointer(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", NEWER)
+    report = refused_run(world, unit)
+    record = only_stale(world, unit)
+    expected = sorted((artifact_of(unit, "a", name, NEWER) for name in OBJECT_NAMES), key=lambda item: item["key"])
+    check(record["last_capture"] == expected, f"last capture {record['last_capture']}")
+    check(record["last_capture_verified"] is True and report.missing_units == [], "its objects verified by HEAD")
+    check(report.stale_units[0]["last_retrieved_at_utc"] == NEWER, f"list {report.stale_units}")
+
+
+@pytest.mark.parametrize("newer", ["a", "b"])
+def test_with_two_completion_records_the_newest_by_time_decides_whatever_the_key_order(world: World, newer: str) -> None:
+    [unit] = hud_units(world, 1)
+    times = {"a": OLDER, "b": OLDER} | {newer: NEWER}
+    for tag in "ab":
+        completion_for(world, unit, tag, times[tag])
+    refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(
+        record["last_capture"] == sorted((artifact_of(unit, newer, name, NEWER) for name in OBJECT_NAMES), key=lambda item: item["key"]),
+        f"{record['last_capture']}",
+    )
+
+
+def test_the_newest_completion_record_is_found_by_the_instant_and_not_by_the_text_of_its_time(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", "2026-10-20T04:05:06Z")
+    completion_for(world, unit, "b", "2026-10-19T22:00:00-07:00")
+    refused_run(world, unit)
+    check({item["key"].rsplit("/", 1)[-1][:2] for item in only_stale(world, unit)["last_capture"]} == {"b_"}, "the record 55 minutes later in UTC decides")
+
+
+@pytest.mark.parametrize(
+    "second", ["2026-10-20T04:05:06Z", "2026-10-20T04:05:06+00:00", "2026-10-19T21:05:06-07:00"], ids=["same_text", "offset", "other_zone"]
+)
+def test_two_completion_records_with_the_same_time_stop_the_unit(world: World, second: str) -> None:
+    [unit] = hud_units(world, 1)
+    first, _ = completion_for(world, unit, "a", NEWER)
+    other, _ = completion_for(world, unit, "b", second)
+    with pytest.raises(manual_units.ManualUnitError, match="same retrieved_at_utc") as error:
+        refused_run(world, unit)
+    check(first in str(error.value) and other in str(error.value) and unit_key_of(unit) in str(error.value), "names the unit and both records")
+    check(world.stale_records(unit) == [] and world.bucket.writes() == [], "no stale record and no write")
+
+
+def forged_not_json(world: World, unit: dict) -> None:
+    world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), "f" * 64), b"not json")
+
+
+def forged_payload(world: World, unit: dict) -> None:
+    _, record = completion_for(world, unit, "z", NEWER)
+    forged = record | {"payload_sha256": "e" * 64}
+    world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), "e" * 64), completion_record.encode(forged))
+
+
+def forged_renamed(world: World, unit: dict) -> None:
+    _, record = completion_for(world, unit, "z", NEWER)
+    world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), "d" * 64), completion_record.encode(record))
+
+
+def forged_other_unit(world: World, unit: dict) -> None:
+    other = world.add(hud_unit(1), {})
+    other_key, record = completion_for(world, other, "z", NEWER)
+    world.bucket.seed(completion_record.record_key(world.root, unit_key_of(unit), record["payload_sha256"]), completion_record.encode(record))
+    check(other_key != "", "the other unit's own record stays where it is")
+
+
+def forged_source(world: World, unit: dict) -> None:
+    completion_for(world, unit, "z", NEWER, source_id="WONDER")
+
+
+def forged_collection(world: World, unit: dict) -> None:
+    completion_for(world, unit, "z", NEWER, collection="other/wrong")
+
+
+def unreadable(world: World, unit: dict) -> None:
+    key, _ = completion_for(world, unit, "z", NEWER)
+    world.bucket.unreadable.add(key)
+
+
+FORGED = {
+    "not_json": (forged_not_json, "not JSON"),
+    "wrong_payload_digest": (forged_payload, "payload digest"),
+    "stored_under_another_key": (forged_renamed, "key names"),
+    "record_of_another_unit": (forged_other_unit, "key names"),
+    "other_source": (forged_source, "does not belong to unit"),
+    "other_collection": (forged_collection, "does not belong to unit"),
+    "unreadable": (unreadable, "could not be read: AccessDenied"),
+}
+
+
+@pytest.mark.parametrize("valid_record_too", [False, True], ids=["alone", "beside_a_valid_record"])
+@pytest.mark.parametrize(("plant", "reason"), FORGED.values(), ids=FORGED)
+def test_a_forged_or_unreadable_completion_record_stops_the_unit_and_never_falls_back(world: World, plant: Any, reason: str, valid_record_too: bool) -> None:
+    [unit] = hud_units(world, 1)
+    if valid_record_too:
+        completion_for(world, unit, "a", OLDER)
+    plant(world, unit)
+    stopped_without_a_record(world, unit, f"completion record.*{reason}")
+
+
+@pytest.mark.parametrize("value", ISO_FORMS, ids=["z", "offset", "microseconds_and_offset", "fraction_and_z", "other_offset"])
+def test_a_completion_record_time_in_any_iso_form_is_stored_in_the_record_form(world: World, value: str) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", value)
+    report = refused_run(world, unit)
+    times = {item["retrieved_at_utc"] for item in only_stale(world, unit)["last_capture"]}
+    check(times == {"2026-09-24T01:47:28Z"}, f"stored {times}")
+    check(report.stale_units[0]["last_retrieved_at_utc"] == "2026-09-24T01:47:28Z", f"list {report.stale_units}")
+
+
+@pytest.mark.parametrize("value", ["not a time", "2026-09-24T01:47:28", "2026-09-24"], ids=["text", "no_offset", "date_only"])
+def test_a_completion_record_time_that_is_no_zoned_time_stops_the_unit(world: World, value: str) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", value)
+    stopped_without_a_record(world, unit, "retrieved_at_utc")
+
+
+@pytest.mark.parametrize(
+    ("prefix", "read_root"),
+    [("raw/", "raw/"), ("ingestion_test/t1/bronze_objects/", ""), ("", "")],
+    ids=["raw_root", "test_folder", "bucket_root"],
+)
+def test_the_read_root_of_each_completion_object_is_the_root_its_key_sits_under(world: World, prefix: str, read_root: str) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", NEWER, prefix=prefix)
+    refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(
+        record["last_capture"] == sorted((artifact_of(unit, "a", name, NEWER, read_root, prefix) for name in OBJECT_NAMES), key=lambda item: item["key"]),
+        f"{record}",
+    )
+
+
+@pytest.mark.parametrize("fault", ["absent", "wrong_digest", "wrong_length"])
+def test_the_head_check_applies_to_the_completion_objects_and_a_failure_lists_the_unit_as_missing(world: World, fault: str) -> None:
+    [unit] = hud_units(world, 1)
+    key = object_key(unit, "g", "data.bin")
+    real = (
+        world.bucket.seed(key, b"body")
+        if fault != "absent"
+        else {"key": key, "version_id": "v1", "sha256": hashlib.sha256(b"body").hexdigest(), "byte_count": 4}
+    )
+    changes: dict[str, dict[str, Any]] = {"wrong_digest": {"sha256": "0" * 64}, "wrong_length": {"byte_count": 5}}
+    named = changes.get(fault, {})
+    completion_for(world, unit, "g", NEWER, data_objects=[real | named | {"role": "data", "stored_file_name": "data.bin"}])
+    report = refused_run(world, unit)
+    record = only_stale(world, unit)
+    check([item["key"] for item in record["last_capture"]] == [key], f"names the completion's object, not the specification's: {record['last_capture']}")
+    check(
+        record["last_capture_verified"] is False and [item["snapshot_id"] for item in report.missing_units] == [unit["snapshot_id"]],
+        f"missing {report.missing_units}",
+    )
+
+
+def test_a_unit_the_run_loop_captured_and_that_later_goes_stale_names_that_capture(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    serve_workbook(world)
+    world.run([unit])
+    [stored] = world.bucket.names(f"{world.root}ingestion_units/")
+    captured_at = json.loads(world.bucket.versions[stored][-1][1])["retrieved_at_utc"]
+    world.clock.advance(hours=21)
+    refused_run(world, unit, "20261114T000000Z-bbbbbbbb")
+    record = only_stale(world, unit)
+    check([item["stored_file_name"] for item in record["last_capture"]] == sorted(OBJECT_NAMES), f"{record['last_capture']}")
+    check(
+        {item["read_root"] for item in record["last_capture"]} == {""} and all("bronze_objects/" in item["key"] for item in record["last_capture"]),
+        "the capture",
+    )
+    check(
+        {item["retrieved_at_utc"] for item in record["last_capture"]} == {captured_at} and record["last_capture_verified"] is True, f"{record['last_capture']}"
+    )
+
+
+def test_a_stale_record_of_another_identity_still_stops_the_unit_when_a_completion_record_exists(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_for(world, unit, "a", NEWER)
+    seed_stale_record(world, unit, snapshot_id="HUD__other")
+    with pytest.raises(manual_units.ManualUnitError, match="newest stale record") as error:
+        refused_run(world, unit)
+    check(unit_key_of(unit) in str(error.value) and world.site.seen == [] and world.bucket.writes() == [], "refused before any request or write")

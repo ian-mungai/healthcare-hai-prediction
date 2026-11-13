@@ -9,6 +9,8 @@ generic agent header of the reviewed transport.
 * Every request to a manual host is at least 5 s after the last one, retries and redirects included, one at a time. A redirect destination is checked
   against robots.txt before it is requested. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
 * A unit with a stale record younger than 20 hours is skipped, so a repeat run on the same day sends nothing.
+* A stale record names, as the last capture, the data objects of the unit's newest completion record, and the specification's pointer only when the
+  unit has no completion record. A completion record that is unreadable or refused stops the unit.
 """
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from urllib.robotparser import RobotFileParser
 
-from scripts.acquisition import manual_content, stale_record, transport
+from scripts.acquisition import completion_record, manual_content, raw_root, stale_record, transport
 from scripts.acquisition.manual_content import ContentRefusal, ManualUnitError, Scopes
 from scripts.acquisition.s3_store import StorageError
 
@@ -81,15 +83,20 @@ def stamp(moment: datetime) -> str:
     return moment.astimezone(UTC).strftime(TIME_FORMAT)
 
 
-def record_time(value: object) -> str:
-    """A recorded time in the stale record's form, whichever ISO 8601 form with an offset a specification or earlier receipt gave it."""
+def record_instant(value: object) -> datetime:
+    """A recorded time as one instant, whichever ISO 8601 form with an offset a specification, receipt or completion record gave it."""
     try:
         moment = datetime.fromisoformat(str(value))
     except ValueError:
         moment = None
     if moment is None or moment.tzinfo is None:
         raise ManualUnitError("A last capture pointer needs retrieved_at_utc as an ISO 8601 time with a UTC offset")
-    return stamp(moment)
+    return moment
+
+
+def record_time(value: object) -> str:
+    """A recorded time in the stale record's form."""
+    return stamp(record_instant(value))
 
 
 class Observer(urllib.request.BaseHandler):
@@ -319,6 +326,72 @@ def pointers(spec: Mapping[str, Any]) -> list[dict[str, Any]]:
     return found
 
 
+def scratch_for(context: Context, unit_key: str) -> Path:
+    folder = context.scratch / "records" / unit_key[:16]
+    folder.mkdir(parents=True, exist_ok=True)
+    return folder
+
+
+def read_completion(key: str, unit: dict, context: Context, local: Path) -> tuple[datetime, dict[str, Any]]:
+    """One completion record of the unit, read, checked against its key and the unit, with its retrieval time as an instant. A fault stops the unit."""
+    unit_key = context.unit_key(unit)
+    try:
+        context.client.call("s3api", "get-object", ["--key", key, str(local)])
+    except StorageError as error:
+        raise ManualUnitError(f"The completion record {key} of unit {unit_key} could not be read: {error.code}") from error
+    try:
+        record = completion_record.parse(local.read_bytes(), key=key, root=context.root)
+        moment = record_instant(record["retrieved_at_utc"])
+    except (completion_record.RecordError, ManualUnitError) as error:
+        raise ManualUnitError(f"The completion record {key} of unit {unit_key} is refused: {error}") from error
+    expected = unit_identity(unit, context)
+    differing = [name for name in ("collection", "source_id") if record[name] != expected[name]]
+    if differing:
+        raise ManualUnitError(f"The completion record {key} does not belong to unit {unit_key}: its {', '.join(differing)} differ")
+    return moment, record
+
+
+def newest_completion(unit: dict, context: Context) -> dict[str, Any] | None:
+    """The unit's newest completion record by retrieval time, or None when it has none. Every record is read, so one that is refused stops the unit.
+
+    Two records with the same retrieval time have no newest, so the unit stops too.
+    """
+    unit_key = context.unit_key(unit)
+    listing = context.client.call("s3api", "list-objects-v2", ["--prefix", completion_record.unit_prefix(context.root, unit_key)])
+    keys = sorted(item["Key"] for item in listing.get("Contents", []))
+    folder = scratch_for(context, unit_key)
+    found = sorted(
+        ((*read_completion(key, unit, context, folder / f"completion_{number}.json"), key) for number, key in enumerate(keys)), key=lambda item: item[0]
+    )
+    if len(found) > 1 and found[-1][0] == found[-2][0]:
+        raise ManualUnitError(f"Unit {unit_key} has two completion records with the same retrieved_at_utc: {found[-2][2]} and {found[-1][2]}")
+    return found[-1][1] if found else None
+
+
+def completion_pointers(record: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """The data objects of a completion record, in the stale record's artifact form."""
+    retrieved = record_time(record["retrieved_at_utc"])
+    return [
+        {
+            "key": item["key"],
+            "version_id": item["version_id"],
+            "sha256": item["sha256"],
+            "byte_count": item["byte_count"],
+            "role": item["role"],
+            "stored_file_name": item["stored_file_name"],
+            "retrieved_at_utc": retrieved,
+            "read_root": raw_root.RAW_ROOT if item["key"].startswith(raw_root.RAW_ROOT) else "",
+        }
+        for item in record["data_objects"]
+    ]
+
+
+def last_capture(unit: dict, spec: Mapping[str, Any], context: Context) -> list[dict[str, Any]]:
+    """The objects a stale record names: those of the unit's newest completion record, and the specification's pointer only when it has none."""
+    completion = newest_completion(unit, context)
+    return pointers(spec) if completion is None else completion_pointers(completion)
+
+
 def verified(client: Any, found: Sequence[Mapping[str, Any]]) -> bool:
     """True when a HEAD of every named version matches its recorded checksum and length. No pointer means nothing to load, so not verified."""
     for item in found:
@@ -361,7 +434,7 @@ def unit_identity(unit: dict, context: Context) -> dict[str, str]:
 
 def mark_stale(unit: dict, spec: dict, reason: str, http_status: int | None, context: Context) -> dict[str, Any]:
     """Write the unit's create-once stale record for this run and return the record that is stored."""
-    found = pointers(spec)
+    found = last_capture(unit, spec, context)
     key = context.unit_key(unit)
     record = stale_record.build(
         **unit_identity(unit, context),
@@ -391,9 +464,7 @@ def newest_stale(unit: dict, context: Context) -> dict[str, Any] | None:
     keys = sorted(item["Key"] for item in listing.get("Contents", []))
     if not keys:
         return None
-    folder = context.scratch / "records" / unit_key[:16]
-    folder.mkdir(parents=True, exist_ok=True)
-    local = folder / "newest.json"
+    local = scratch_for(context, unit_key) / "newest.json"
     context.client.call("s3api", "get-object", ["--key", keys[-1], str(local)])
     newest = stale_record.parse(local.read_bytes(), key=keys[-1], root=context.root)
     expected = unit_identity(unit, context)

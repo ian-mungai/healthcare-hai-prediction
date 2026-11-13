@@ -19,7 +19,7 @@ import pytest
 from scripts.acquisition.source_registry import REPO_ROOT
 
 CASES = Path(__file__).resolve().parent / "tests" / "test_manual_units.py"
-MODULES = ("manual_units.py", "manual_content.py", "stale_record.py")
+MODULES = ("manual_units.py", "manual_content.py", "stale_record.py", "completion_record.py")
 
 
 class Collector:
