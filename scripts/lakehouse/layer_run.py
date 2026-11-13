@@ -20,7 +20,8 @@ folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/r
 
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
 its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
-write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin, and the pin must name exactly the
+write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin (a model set lists only the folder of each
+domain matrix it read, never the whole features prefix, so sibling sets that publish beside it change nothing it checks), and the pin must name exactly the
 configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold) or the gold publish contract (features). Two extra
 checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload``, ``maintain``
 and ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the
@@ -318,7 +319,18 @@ def staged_objects(client: Any, bucket: str, run: str) -> dict[str, dict[str, An
 
 
 def input_prefix(job: Job) -> str:
+    """The prefix of the layer's input. A model set reads the domain matrices of its base run, which share the features prefix with the tables that its sibling
+    sets write, so ``input_prefixes`` narrows it."""
     return f"lakehouse/{'features' if job.model_set else INPUT_LAYER[job.layer]}/"
+
+
+def input_prefixes(job: Job) -> list[str]:
+    """The prefixes whose versions the run read: the input layer's prefix, or for a model set the folder of each domain matrix of the base run."""
+    if not job.model_set:
+        return [input_prefix(job)]
+    from scripts.features import features_input
+
+    return [f"{input_prefix(job)}{table}/" for table in features_input.base_tables()]
 
 
 def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
@@ -341,6 +353,19 @@ def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
     return version_listing.canonical_digest(prefix, entries())
 
 
+def input_record(job: Job, client: Any, bucket: str) -> dict[str, Any]:
+    """The listing the pin records and publish compares. A layer has one listing of its input prefix. A model set has one listing per domain matrix folder,
+    and a folder without an object is refused: the pin would then guard nothing there."""
+    prefixes = input_prefixes(job)
+    if not job.model_set:
+        return input_listing(client, bucket, prefixes[0])
+    listings = {prefix: input_listing(client, bucket, prefix) for prefix in prefixes}
+    empty = [prefix for prefix, listing in listings.items() if not listing["versions"]]
+    if empty:
+        raise StepError(f"the input folders {empty} hold no object: the input listing would guard nothing there")
+    return {"prefixes": listings}
+
+
 def claim_run(job: Job, bucket: str, client: Any) -> None:
     """Take the run ID, once. The first pin of a real run writes ``state/pinned.json`` under the run's prefix only if no such object exists, so a second
     task for the same run ID is refused here, before it unpacks, pins or writes anything shared. An interrupted run is not resumed: it restarts under a new
@@ -359,12 +384,18 @@ def claim_run(job: Job, bucket: str, client: Any) -> None:
 
 
 def check_input_versions(job: Job, bucket: str, client: Any) -> None:
-    """The input prefix holds the same versions as when the pin phase listed it: nothing added, replaced or deleted during the run."""
+    """The input prefixes hold the same versions as when the pin phase listed them: nothing added, replaced or deleted during the run."""
     recorded = identity(job).get("input_listing")
     if not recorded:
         raise StepError("the pin phase recorded no listing of the input versions")
-    if input_listing(client, bucket, input_prefix(job)) != recorded:
-        raise StepError(f"an input version changed during the run: the listing of {recorded['prefix']} differs from the one taken at the pin")
+    current = input_record(job, client, bucket)
+    if current == recorded:
+        return
+    if job.model_set:
+        before = recorded.get("prefixes", {})
+        moved = sorted(prefix for prefix, listing in current["prefixes"].items() if before.get(prefix) != listing)
+        raise StepError(f"an input version changed during the run: the listing of {', '.join(moved)} differs from the one taken at the pin")
+    raise StepError(f"an input version changed during the run: the listing of {recorded['prefix']} differs from the one taken at the pin")
 
 
 def check_pin_tables(job: Job) -> None:
@@ -932,7 +963,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
                 claim_run(job, args.bucket, client)
             evidence = {
                 "input_objects": staged_objects(client, args.bucket, job.staged_run),
-                "input_listing": input_listing(client, args.bucket, input_prefix(job)),
+                "input_listing": input_record(job, client, args.bucket),
             }
         bundle(job, args.archive or args.work / "code.tar.gz", args.code_sha256, evidence)
         pin(job)

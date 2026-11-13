@@ -33,6 +33,7 @@ from unittest import mock
 
 import duckdb
 
+from scripts.features import features_input
 from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
 from scripts.process import run_command
@@ -45,6 +46,8 @@ FEATURES_RUN = "20261030T030405Z-2c3d4e5f"
 CODE_RUN = "20261029T230000Z-c0dec0de"  # the run whose staged code every layer task fetches: not the layer run's own ID
 CODE_RUN_EXPECTED = [CODE_RUN]  # the prefix the stand-in bucket serves; the walk cases set it to the run the launch names
 BUCKET = "hai-test-bucket"
+BASE_RUN = "20261030T031500Z-3d4e5f60"  # the committed base run that the six model sets read
+SET_RUNS = {f"m{number}": f"20261030T0401{number:02d}Z-4e5f607{number}" for number in range(1, 7)}  # one run of each model set, pinned together
 CHAIN = {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}
 INPUT_OF = {"silver": None, "gold": SILVER_RUN, "features": GOLD_RUN}
 CATALOG: list[Path] = []  # the throwaway catalog folder of the case being run
@@ -70,14 +73,16 @@ def fail(module: str) -> None:
     raise StepError(f"{module} exited 1")
 
 
-def contract(layer: str, mode: str = "real") -> tuple[str, Any]:
+def contract(layer: str, mode: str = "real", feature_set: str = "") -> tuple[str, Any]:
     """The namespace of the mode and the publish contract of the layer, as the real publish modules read them."""
     from scripts.features import features_publish
     from scripts.lakehouse import gold_publish, silver_publish
 
-    plan = {"silver": lambda: silver_publish.publish_plan(mode), "gold": gold_publish.load_plan, "features": lambda: features_publish.publish_plan(mode)}[
-        layer
-    ]()
+    plan = {
+        "silver": lambda: silver_publish.publish_plan(mode),
+        "gold": gold_publish.load_plan,
+        "features": lambda: features_publish.publish_plan(mode, feature_set=feature_set),
+    }[layer]()
     return plan.namespaces[mode], plan
 
 
@@ -254,12 +259,11 @@ def build(job: Job, module: str, arguments: Sequence[str | Path], environment: d
 
     folder = job.folder
     source = provenance.tree_digest(folder / "snapshot")
-    pin_name = {"silver": "pins.json", "gold": "silver_pins.json", "features": "gold_pins.json"}[job.layer]
-    expected_input = sha_of(folder / pin_name)
+    expected_input = sha_of(folder / job.pin_name)
     if option(arguments, "--source-sha256") != source or option(arguments, "--input-sha256") != expected_input:
         fail(module)
     if job.layer != "silver":
-        extract = folder / ("silver_input" if job.layer == "gold" else "gold_input") / "manifest.json"
+        extract = folder / job.input_name / "manifest.json"
         if option(arguments, "--extract-sha256") != sha_of(extract):
             fail(module)
     if job.layer == "silver" and job.mode == "real" and (environment or {}).get(provenance.VARIABLE_REQUIRED) != "1":
@@ -288,7 +292,7 @@ def export(job: Job, module: str, arguments: Sequence[str | Path]) -> None:
     export_dir = publish / "export"
     export_dir.mkdir(exist_ok=True)
     tables = {}
-    names = sorted(contract(job.layer, job.mode)[1].tables) + (["outside_table"] if "foreign_table" in DEFECTS else [])
+    names = sorted(contract(job.layer, job.mode, job.feature_set)[1].tables) + (["outside_table"] if "foreign_table" in DEFECTS else [])
     for index, table in enumerate(names):
         rows = export_rows(index)
         (export_dir / f"{table}.json").write_text(json.dumps(rows))
@@ -330,7 +334,9 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
         source = option(arguments, "--source-run") if "--source-run" in [str(item) for item in arguments] else ""
         if source and not any(row["run_id"] == source for row in runs):
             fail(module)
-        if job.layer == "features":
+        if job.model_set:
+            require(source == BASE_RUN and any(row["run_id"] == source for row in runs), f"a model set pins the committed base run: {source}")
+        elif job.layer == "features":
             # The chain rule of features_input: the AWS features job pins only the newest committed gold run.
             if "--newest-only" not in [str(item) for item in arguments]:
                 raise StepError("the features pin of the chain must pass --newest-only")
@@ -338,17 +344,17 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
             if newest != [source]:
                 raise StepError(f"gold run {source} is not the newest committed gold run ({''.join(newest) or 'none'})")
         target = Path(option(arguments, "--record")) if "--record" in [str(item) for item in arguments] else folder / "gold_pins.json"
-        pinned = sorted(contract("silver" if job.layer == "gold" else "gold", job.mode)[1].tables)
+        pinned = features_input.base_tables() if job.model_set else sorted(contract("silver" if job.layer == "gold" else "gold", job.mode)[1].tables)
         if "pin_tables" in DEFECTS:
             pinned = pinned[1:]
         if "pin_source" in DEFECTS:
             source = "20260101T000000Z-deadbeef"
         target.write_text(json.dumps({"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}) + "\n")
     elif step == "read":
-        if option(arguments, "--expected-pin-sha256") != sha_of(folder / "gold_pins.json"):
+        if option(arguments, "--expected-pin-sha256") != sha_of(folder / job.pin_name):
             fail(module)
-        (folder / "gold_input").mkdir(exist_ok=True)
-        (folder / "gold_input/manifest.json").write_text(json.dumps({"run_id": job.run}) + "\n")
+        (folder / job.input_name).mkdir(exist_ok=True)
+        (folder / job.input_name / "manifest.json").write_text(json.dumps({"run_id": job.run}) + "\n")
     elif step == "record":
         Path(option(arguments, "--record")).write_text(json.dumps({"run_id": job.run}) + "\n")
     else:
@@ -372,7 +378,7 @@ def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Pat
         fail(module)
     if step == "backup" and job.mode == "real" and read_json(layer_run.BUCKET_FILE) != {"data_bucket_name": BUCKET}:
         fail(module)
-    namespace, plan = contract(job.layer, job.mode)
+    namespace, plan = contract(job.layer, job.mode, job.feature_set)
     manifest = read_json(publish / "export/manifest.json")
     if step == "candidates":
         if set(manifest["tables"]) != set(plan.tables):
@@ -410,6 +416,7 @@ def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Pat
         data = json.dumps({"run_id": job.run, "tables": sorted(manifest["tables"])}).encode()
         name = f"backup_{job.run}"
         STORED[f"{plan.backup_prefix}{name}"] = data + (b" altered" if "backup_object" in DEFECTS else b"")
+        bucket_write(f"{plan.backup_prefix}{name}")
         record = {
             "run_id": job.run,
             "read_back": True,
@@ -438,10 +445,12 @@ def commit(job: Job, publish: Path, namespace: str) -> None:
         if not committed:
             tables[f"{namespace}.{name}"] = wanted
             shared_write("table", table=f"{namespace}.{name}", action=action)
+            bucket_write(f"lakehouse/{namespace}/{name}/data/{job.run}.parquet")
     (CATALOG[0] / "tables.json").write_text(json.dumps(tables, sort_keys=True))
     if not committed:
         (CATALOG[0] / "publish_runs.json").write_text(json.dumps([*runs, {"layer": job.layer, "run_id": job.run}]))
         shared_write("publish_runs", layer=job.layer, run=job.run)
+        bucket_write(f"lakehouse/{namespace}/publish_runs/data/{job.run}.parquet")
     receipt = {"run_id": job.run, "backup_sha256": sha_of(publish / "backup.json"), "snapshot_set": snapshot_set, "state": "committed"}
     (publish / "commit.json").write_text(json.dumps(receipt, sort_keys=True) + "\n")
 
@@ -450,7 +459,7 @@ def plan_state(job: Job, arguments: Sequence[str | Path]) -> None:
     """Stand-in for the read-only catalog module: it reads the model and the export and writes nothing to the catalog."""
     if "plan_unreadable" in DEFECTS:
         fail("scripts.lakehouse.publish_plan")
-    namespace, plan = contract(job.layer, job.mode)
+    namespace, plan = contract(job.layer, job.mode, job.feature_set)
     tables_now = model("tables.json", {})
     runs = model("publish_runs.json", [])
     tables: dict[str, Any] = {}
@@ -479,12 +488,18 @@ LIST_PAGE = 2  # versions per page of the stand-in listing, small so that every 
 
 
 def reset_input_versions() -> None:
+    features = [*features_input.base_tables(), "label_matrix_hai_outcomes", "int_hospital_spine", "publish_runs"]
     INPUT_VERSIONS[:] = [
         {"Key": f"lakehouse/{layer}/{table}/data/{number}.parquet", "VersionId": f"v{number}", "ETag": f'"{layer}{table}{number}"', "Size": 100 + number}
-        for layer in ("bronze", "silver", "gold")
-        for table in ("a", "b")
+        for layer, tables in (("bronze", ("a", "b")), ("silver", ("a", "b")), ("gold", ("a", "b")), ("features", features))
+        for table in tables
         for number in (1, 2)
     ]
+
+
+def bucket_write(key: str) -> None:
+    """A stand-in publish step writes an object to the bucket: a new version of the key, which every later listing of its prefix holds."""
+    INPUT_VERSIONS.append({"Key": key, "VersionId": f"w{len(INPUT_VERSIONS)}", "ETag": f'"{key}"', "Size": 1})
 
 
 STATE: dict[str, bytes] = {}  # the run state objects the driver writes at pin
@@ -612,7 +627,15 @@ class Case:
         return path
 
     def phase(
-        self, layer: str, phase: str, *, label: str = "w", digest: str | None = None, extra: Sequence[str] = (), environment: dict[str, str] | None = None
+        self,
+        layer: str,
+        phase: str,
+        *,
+        label: str = "w",
+        digest: str | None = None,
+        extra: Sequence[str] = (),
+        environment: dict[str, str] | None = None,
+        run: str = "",
     ) -> int:
         work = self.work(layer, label)
         arguments = [
@@ -620,7 +643,7 @@ class Case:
             "--layer",
             layer,
             "--run",
-            CHAIN[layer],
+            run or CHAIN[layer],
             "--work",
             str(work),
             "--code-sha256",
@@ -642,6 +665,11 @@ class Case:
         self.out += out.getvalue()
         self.err += err.getvalue()
         return code
+
+    def set_phase(self, feature_set: str, phase: str) -> int:
+        """One phase of a model set run: its own run ID and work folder, the committed base run as its input."""
+        extra = ["--feature-set", feature_set, "--input-run", BASE_RUN]
+        return self.phase("features", phase, label=feature_set, run=SET_RUNS[feature_set], extra=extra)
 
     def chain(self, layer: str, *, label: str = "w", extra: Sequence[str] = ()) -> list[int]:
         codes = []
@@ -812,6 +840,69 @@ def features_up_to(case: Case, last: str) -> None:
         if phase == last:
             return
         require(case.phase("features", phase) == 0, (phase, case.err))
+
+
+def sets_up_to(case: Case, names: Sequence[str], last: str = "publish") -> None:
+    """The base run is committed and each named model set has run its phases before ``last``, as six sibling tasks do before any of them publishes."""
+    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([{"layer": "features", "run_id": BASE_RUN}]))
+    for name in names:
+        for phase in layer_run.PHASES["features"]:
+            if phase == last:
+                break
+            require(case.set_phase(name, phase) == 0, (name, phase, case.err))
+
+
+def committed_sets() -> list[str]:
+    return [row["run_id"] for row in model("publish_runs.json", []) if row["run_id"] in SET_RUNS.values()]
+
+
+def case_sibling_model_sets_publish_side_by_side(case: Case) -> None:
+    names = sorted(SET_RUNS)
+    sets_up_to(case, names)
+    for name in names:
+        require(case.set_phase(name, "publish") == 0, (name, case.err))
+    require(committed_sets() == [SET_RUNS[name] for name in names], committed_sets())
+    require(case.err == "", case.err)
+
+
+def case_model_set_publish_ignores_unrelated_features_paths(case: Case) -> None:
+    sets_up_to(case, ["m1"])
+    for key in (
+        "lakehouse/features/label_matrix_hai_outcomes/data/new.parquet",
+        "lakehouse/features/int_hospital_spine/data/new.parquet",
+        "lakehouse/features/publish_runs/data/new.parquet",
+        "lakehouse/features/catalog_backups/backup_other",
+        "lakehouse/features/feature_matrix_m2/data/new.parquet",
+    ):
+        bucket_write(key)
+    INPUT_VERSIONS.append({"Key": "lakehouse/features/feature_matrix_m3/data/1.parquet", "VersionId": "v8", "DeleteMarker": True, "ETag": '""', "Size": 0})
+    require(case.set_phase("m1", "publish") == 0, case.err)
+    require(committed_sets() == [SET_RUNS["m1"]], committed_sets())
+
+
+def changed_base_table(change: Callable[[], None], text: str) -> Callable[[Case], None]:
+    def run(case: Case) -> None:
+        sets_up_to(case, ["m1"])
+        change()
+        before = len(writes())
+        require(case.set_phase("m1", "publish") != 0 and "input version changed" in case.err and text in case.err, case.err)
+        require(len(writes()) == before and not committed_sets(), "a changed input stops publish before any catalog write")
+
+    return run
+
+
+def case_model_set_publish_rerun_commits_nothing_more(case: Case) -> None:
+    sets_up_to(case, ["m1"])
+    require(case.set_phase("m1", "publish") == 0, case.err)
+    committed = [item for item in writes() if item["kind"] in ("table", "publish_runs")]
+    require(case.set_phase("m1", "publish") == 0, case.err)
+    require([item for item in writes() if item["kind"] in ("table", "publish_runs")] == committed and committed_sets() == [SET_RUNS["m1"]], "no second commit")
+
+
+def case_model_set_pin_refuses_a_base_table_without_objects(case: Case) -> None:
+    INPUT_VERSIONS[:] = [item for item in INPUT_VERSIONS if "/feature_matrix_hospital/" not in item["Key"]]
+    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([{"layer": "features", "run_id": BASE_RUN}]))
+    require(case.set_phase("m1", "pin") != 0 and "feature_matrix_hospital" in case.err and "no object" in case.err, case.err)
 
 
 def case_features_h3_table_list(case: Case) -> None:
@@ -1145,6 +1236,27 @@ CASES: dict[str, Callable[[Case], None]] = {
     "gold maintenance is the last gold phase and runs under the chain rule": case_gold_maintenance_runs_last_under_the_chain_rule,
     "gold maintenance refuses a run without an accepted publish": case_gold_maintenance_needs_an_accepted_publish,
     "features refuses a gold run that is not the newest committed one": case_features_pins_only_the_newest_gold_run,
+    "model sets that run side by side each publish": case_sibling_model_sets_publish_side_by_side,
+    "a model set publish ignores changes to paths it did not read": case_model_set_publish_ignores_unrelated_features_paths,
+    "a new object under a table the model set read stops publish": changed_base_table(
+        lambda: bucket_write("lakehouse/features/feature_matrix_hospital/data/new.parquet"), "feature_matrix_hospital"
+    ),
+    "a replaced object of a table the model set read stops publish": changed_base_table(
+        lambda: INPUT_VERSIONS.__setitem__(
+            next(index for index, item in enumerate(INPUT_VERSIONS) if "/feature_matrix_operations/" in item["Key"]),
+            INPUT_VERSIONS[next(index for index, item in enumerate(INPUT_VERSIONS) if "/feature_matrix_operations/" in item["Key"])]
+            | {"VersionId": "v9", "ETag": '"replaced"'},
+        ),
+        "feature_matrix_operations",
+    ),
+    "a delete marker under a table the model set read stops publish": changed_base_table(
+        lambda: INPUT_VERSIONS.append(
+            {"Key": "lakehouse/features/feature_matrix_care_compare/data/1.parquet", "VersionId": "v7", "DeleteMarker": True, "ETag": '""', "Size": 0}
+        ),
+        "feature_matrix_care_compare",
+    ),
+    "a model set publish rerun after its own commit passes and commits nothing more": case_model_set_publish_rerun_commits_nothing_more,
+    "a model set pin refuses a base table that holds no object": case_model_set_pin_refuses_a_base_table_without_objects,
     "features H3: a pin that misses a gold table is refused": case_features_h3_table_list,
     "features H3: a pin with an extra table is refused": case_features_h3_extra_table,
     "features H3: a pin of another gold run is refused": case_features_h3_other_source,
