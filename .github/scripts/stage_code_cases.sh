@@ -223,6 +223,17 @@ nothing_secret_is_printed() {
 }
 check "the output names the run only: no bucket and no archive content" nothing_secret_is_printed
 
+# The archive carries what Git LFS stores (uv.lock, and the baseline run registry once it is tracked). A checkout without lfs: true leaves pointer files in the clone,
+# and the pushed commit's archive would then hold pointer files. The workflow file is the contract, so these cases read it.
+workflow=".github/workflows/stage_code.yml"
+checkout_step() { awk '/uses: actions\/checkout@/ { found = 1 } found && /^      - name:/ && seen { exit } found { seen = 1; print }' "$workflow"; }
+
+the_checkout_fetches_lfs_files() { checkout_step | grep -q '^          lfs: true$'; }
+check "the workflow checks out the pushed commit with its Git LFS files" the_checkout_fetches_lfs_files
+
+the_checkout_is_the_first_step() { [[ "$(grep -m1 -E '^      - name:' "$workflow")" == *"Checkout"* ]]; }
+check "the checkout runs before any step that reads the repository" the_checkout_is_the_first_step
+
 if [[ "$failures" -ne 0 ]]; then
   echo "$failures stage_code case(s) failed." >&2
   exit 1

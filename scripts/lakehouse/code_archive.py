@@ -18,6 +18,7 @@ import hashlib
 import io
 import json
 import re
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -34,6 +35,8 @@ LOCK = "dbt/package-lock.yml"
 RECORD = "config/lakehouse/dbt_package_archive.json"
 ARCHIVE_FOLDER = "data/analytics/dbt/package_archive"
 LIMIT = 512 * 1024 * 1024
+POINTER_HEAD = b"version https://git-lfs.github.com/spec/v1\n"
+POINTER_LIMIT = 1024
 
 
 class ArchiveError(ValueError):
@@ -45,6 +48,15 @@ def git(arguments: list[str], root: Path) -> str:
     if done.returncode:
         raise ArchiveError(f"git {arguments[0]} failed: {done.stderr.strip()[-300:]}")
     return done.stdout.strip()
+
+
+def refuse_pointers(tar: tarfile.TarFile, members: list[tarfile.TarInfo]) -> None:
+    """Refuse a member that is a Git LFS pointer file: a checkout without its LFS objects makes ``git archive`` export the pointer in place of the file."""
+    for member in members:
+        if member.isfile() and member.size <= POINTER_LIMIT:
+            data = tar.extractfile(member)
+            if data is not None and (head := data.read()).startswith(POINTER_HEAD) and b"\noid sha256:" in head:
+                raise ArchiveError(f"{member.name} is a Git LFS pointer file, not the file: check out with the Git LFS objects (actions/checkout lfs: true)")
 
 
 def compose(git_tar: Path, packages: Path, output: Path) -> str:
@@ -100,11 +112,14 @@ def build(output: Path, revision: str = "HEAD", root: Path = ROOT) -> dict[str, 
         packages = folder / PACKAGES
         archive = root / json.loads(record.read_text())["archive"]["path"]
         dbt_package_archive.install(root, folder / Path(LOCK).name, record, archive, packages, hashlib.sha256(record.read_bytes()).hexdigest())
+        built = folder / "code.tar.gz"
+        revision_id = compose(git_tar, packages, built)
+        digest = hashlib.sha256(built.read_bytes()).hexdigest()
+        (folder / "code.sha256").write_text(digest + "\n")
+        check(built, folder / "code.sha256")
         output.mkdir(parents=True)
-        revision_id = compose(git_tar, packages, output / "code.tar.gz")
-    digest = hashlib.sha256((output / "code.tar.gz").read_bytes()).hexdigest()
-    (output / "code.sha256").write_text(digest + "\n")
-    check(output / "code.tar.gz", output / "code.sha256")
+        shutil.copyfile(built, output / "code.tar.gz")
+        shutil.copyfile(folder / "code.sha256", output / "code.sha256")
     return {"revision": revision_id, "sha256": digest, "folder": str(output)}
 
 
@@ -121,7 +136,9 @@ def check(archive: Path, digest_file: Path | None = None, expected: str = "") ->
     with tarfile.open(fileobj=io.BytesIO(data)) as tar:
         if not REVISION.fullmatch(str(tar.pax_headers.get("comment", ""))):
             raise ArchiveError("the archive carries no commit ID (it must come from git archive)")
-        names = {member.name.rstrip("/") for member in tar.getmembers()}
+        members = tar.getmembers()
+        refuse_pointers(tar, members)
+        names = {member.name.rstrip("/") for member in members}
         if f"{PROJECT}/dbt_project.yml" not in names:
             raise ArchiveError(f"the archive has no {PROJECT}/dbt_project.yml")
         lock = tar.extractfile(LOCK)

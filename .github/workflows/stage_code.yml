@@ -33,11 +33,13 @@ jobs:
       CODE_RUN_PARAMETER: ${{ vars.CODE_RUN_PARAMETER }}
       COMMIT: ${{ github.sha }}
     steps:
+      # lfs: true leaves the Git LFS objects in the clone (uv.lock, the baseline run registry), so the archive holds real files. The builder refuses a pointer file.
       - name: Checkout the pushed commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
+          lfs: true
 
       - name: Setup Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
