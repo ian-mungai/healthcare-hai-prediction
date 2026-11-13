@@ -1259,8 +1259,8 @@ def case_s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing(
     after = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in before}
     return {
         "nothing_changed_for_the_four": before == after and not [w for w in glue.writes() if w[2] != "good"],
-        "older_is_refused_as_not_an_ancestor": outcomes["older"].startswith("failed")
-        and "not an ancestor" in outcomes["older"]
+        "older_is_refused_as_not_listed": outcomes["older"].startswith("failed")
+        and "not listed" in outcomes["older"]
         and "nothing was changed" in outcomes["older"],
         "newer_is_refused_as_newer": outcomes["newer"].startswith("failed") and "newer" in outcomes["newer"] and "nothing was changed" in outcomes["newer"],
         "divergent_is_refused_as_not_an_ancestor": outcomes["divergent"].startswith("failed") and "not an ancestor" in outcomes["divergent"],
@@ -1287,6 +1287,49 @@ def case_s3_register_identical_writes_nothing_and_an_ancestor_moves_up() -> Chec
         and ("update_table", "hai_mirror_gold", "published") not in glue.calls,
         "an_ancestor_registration_moves_up": report["tables"]["climb"] == "updated" and held["hai_snapshot_id"] == "20",
         "the_run_stays_a_registration_run": held["hai_run_id"] == glue_mirror.S3_RUN_ID,
+    }
+
+
+def case_s3_register_refuses_a_parent_that_the_metadata_does_not_list() -> Check:
+    s3 = FakeS3()
+    # direct: main 20 names parent 10, but the snapshot list holds 20 only
+    s3.put(
+        metadata_key("direct", 1),
+        metadata_document("direct", 20, changes={"snapshots": [{"snapshot-id": 20, "sequence-number": 2, "timestamp-ms": 2000, "parent-snapshot-id": 10}]}),
+    )
+    # indirect: main 30 names the listed 20, which names the unlisted 10
+    s3.put(
+        metadata_key("indirect", 1),
+        metadata_document(
+            "indirect",
+            30,
+            changes={
+                "snapshots": [
+                    {"snapshot-id": 20, "sequence-number": 2, "timestamp-ms": 2000, "parent-snapshot-id": 10},
+                    {"snapshot-id": 30, "sequence-number": 3, "timestamp-ms": 3000, "parent-snapshot-id": 20},
+                ]
+            },
+        ),
+    )
+    # listed: the same shape with the held snapshot 10 in the list, which is the ordinary ancestor case
+    s3.put(metadata_key("listed", 1), metadata_document("listed", 30, history=[10, 20]))
+    glue = FakeGlue()
+    for table in ("direct", "indirect", "listed"):
+        held_registration(glue, table, "10")
+    before = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in ("direct", "indirect")}
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = glue_mirror.main(
+            ["register", "--source", "s3", "--layer", "gold", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled(), tables=["direct", "indirect", "listed"]
+        )
+    after = {table: json.dumps(glue.tables[("hai_mirror_gold", table)], sort_keys=True) for table in before}
+    text = out.getvalue()
+    return {
+        "nothing_changed_for_the_two_unlisted": before == after and not [w for w in glue.writes() if w[2] in before],
+        "direct_is_refused_by_name": "gold.direct: failed" in text and "not listed" in text and "nothing was changed" in text,
+        "indirect_is_refused_by_name": "gold.indirect: failed" in text and "snapshot 10" in text,
+        "a_listed_ancestor_still_moves_up": "gold.listed: updated" in text,
+        "the_command_exits_one": code == 1,
     }
 
 
@@ -1345,6 +1388,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "s3_register_never_replaces_a_publish_that_lands_during_its_reads": case_s3_register_never_replaces_a_publish_that_lands_during_its_reads,
     "s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing": case_s3_register_refuses_an_older_or_unrelated_snapshot_and_changes_nothing,
     "s3_register_identical_writes_nothing_and_an_ancestor_moves_up": case_s3_register_identical_writes_nothing_and_an_ancestor_moves_up,
+    "s3_register_refuses_a_parent_that_the_metadata_does_not_list": case_s3_register_refuses_a_parent_that_the_metadata_does_not_list,
     "s3_register_registers_bronze_in_its_own_database": case_s3_register_registers_bronze_in_its_own_database,
     "register_command_covers_bronze_and_check_refuses_it": case_register_command_covers_bronze_and_check_refuses_it,
 }

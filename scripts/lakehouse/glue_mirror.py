@@ -277,14 +277,17 @@ class S3Source:
         return snapshot
 
     def relation(self, table: str, held: int, wanted: int) -> str:
-        """How the snapshot ``held`` stands to ``wanted`` in the newest metadata file: same, ancestor, newer or unrelated.
+        """How the snapshot ``held`` stands to ``wanted`` in the newest metadata file: same, ancestor, newer, unlisted or unrelated.
 
-        An ancestor is on the parent chain of ``wanted``. Newer is a snapshot that the file lists with a higher sequence number than ``wanted``. Any other
-        snapshot, including one that the file does not list, is unrelated: it cannot be shown to be older.
+        An ancestor is a snapshot that the file lists and that is on the parent chain of ``wanted``. A snapshot that the file does not list is unlisted, even
+        when a parent pointer names it: it cannot be shown to be older. Newer is a listed snapshot with a higher sequence number than ``wanted``. Any other
+        listed snapshot is unrelated.
         """
         if held == wanted:
             return "same"
         entries = {item.get("snapshot-id"): item for item in self.document(self.files(table)[0][1]).get("snapshots") or [] if isinstance(item, dict)}
+        if held not in entries:
+            return "unlisted"
         step: Any = wanted
         seen: set[Any] = set()
         while step is not None and step not in seen:
@@ -292,8 +295,7 @@ class S3Source:
             step = entries.get(step, {}).get("parent-snapshot-id")
             if step == held:
                 return "ancestor"
-        theirs, ours = entries.get(held, {}), entries.get(wanted, {})
-        if theirs and ours and theirs.get("sequence-number", 0) > ours.get("sequence-number", 0):
+        if entries[held].get("sequence-number", 0) > entries.get(wanted, {}).get("sequence-number", 0):
             return "newer"
         return "unrelated"
 
@@ -554,7 +556,9 @@ def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3
         if relation == "same":
             return "unchanged"
         if relation != "ancestor":
-            why = "is newer than" if relation == "newer" else "is not an ancestor of"
+            why = {"newer": "is newer than", "unlisted": "is not listed in the newest metadata, so it cannot be shown to be an ancestor of"}.get(
+                relation, "is not an ancestor of"
+            )
             raise MirrorError(f"the registration holds snapshot {theirs}, which {why} snapshot {snapshot_id} that register would write: nothing was changed")
         return None
 
