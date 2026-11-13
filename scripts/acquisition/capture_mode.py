@@ -102,6 +102,8 @@ class CaptureRun:
     hosts_approval: Path | None = None
     opener: Any = None
     adapters: Mapping[str, Callable[..., Path]] = field(default_factory=dict)
+    task_keys: Callable[[str], Any] | None = None
+    api_request: Callable | None = None
     recheck: bool = False
     byte_cap: int = BYTE_CAP
     stale_retry: timedelta = STALE_RETRY
@@ -121,6 +123,113 @@ def validator_of(run: CaptureRun) -> Any:
     if "validator" not in run.cache:
         run.cache["validator"] = receipt_validator()
     return run.cache["validator"]
+
+
+def client_for(run: CaptureRun, handler: str) -> Any:
+    """What a keyed collector reads its key through: a reader of that collector's key only, storing through the run's one storage client."""
+    if run.task_keys is None:
+        raise ContractFailure("keys_not_enabled")
+    reader = run.task_keys(handler)
+    reader.storage = run.storage
+    return reader
+
+
+def planned_item(run: CaptureRun, handler: str, spec: Mapping[str, Any]) -> tuple[dict, dict]:
+    """The locked plan and the one planned item the specification names. No stored receipt is read."""
+    identity = spec.get("plan_item")
+    if not (isinstance(identity, str) and identity):
+        raise SpecError("A collector unit needs a plan_item in its specification")
+    if f"plans:{handler}" not in run.cache:
+        run.cache[f"plans:{handler}"] = redownload.load_plans_of(handler)
+    group = redownload.PLANNED[handler][2]
+    matches = [
+        (plan, plan if group is None else item)
+        for plan in run.cache[f"plans:{handler}"]
+        for item in ([plan] if group is None else plan[group])
+        if item["id"] == identity
+    ]
+    if len(matches) != 1:
+        raise SpecError("The plan_item matches no planned item or several")
+    return matches[0]
+
+
+def adapt_bls(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import bls_api_transport as api
+    from scripts.acquisition import collect_bls_api as collector
+
+    plan, batch = planned_item(run, "bls_api_v2", spec)
+    try:
+        result = collector.execute(plan, batch, folder, True, False, client_for(run, "bls_api_v2"), {}, run.api_request or api.request_live)
+    except api.QuotaPause:
+        raise ContractFailure("bls_quota") from None
+    return Path(result["receipt_path"])
+
+
+def adapt_census_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import census_acs_api_transport as api
+    from scripts.acquisition import collect_census_acs_api as collector
+
+    plan, batch = planned_item(run, "census_acs_api", spec)
+    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_api"), {}, run.api_request or api.request_live)["receipt_path"])
+
+
+def adapt_census_detailed(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import collect_census_acs_detailed as collector
+
+    plan, batch = planned_item(run, "census_acs_detailed", spec)
+    request = run.api_request or collector.live_request
+    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "census_acs_detailed"), {}, request)["receipt_path"])
+
+
+def adapt_hud_api(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import collect_hud_api as collector
+    from scripts.acquisition import hud_api_transport as api
+
+    plan, batch = planned_item(run, "hud_api", spec)
+    return Path(collector.execute(plan, batch, folder, True, False, client_for(run, "hud_api"), {}, run.api_request or api.request_live)["receipt_path"])
+
+
+def adapt_mmd(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import collect_mmd_api as collector
+
+    mmd = spec["mmd"]
+    return Path(collector.execute(mmd["measure_id"], mmd["year"], True, False, root=folder, client=run.storage)["receipt_path"])
+
+
+def adapt_cms_owners(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import store_cms_owners as collector
+
+    plan, release = planned_item(run, "cms_owners_org", spec)
+    return Path(collector.execute(plan, release, folder, True, False, None, {}, opener, Limits(attempts=MAX_ATTEMPTS))["receipt_path"])
+
+
+def adapt_hcai_util(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import store_hcai_util as collector
+
+    plan, entry = planned_item(run, "hcai_util_workbook", spec)
+    return Path(collector.execute(plan, entry, folder, True, False, None, {}, opener, Limits(attempts=MAX_ATTEMPTS))["receipt_path"])
+
+
+def adapt_onc_mu(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
+    from scripts.acquisition import store_onc_mu as collector
+
+    plan, _ = planned_item(run, "onc_mu_hospital", spec)
+    # The plan raises the time and size bounds for this one large file; only the attempt count is lowered.
+    limits = Limits(attempts=MAX_ATTEMPTS, timeout_seconds=120, max_seconds=plan["limits"]["max_seconds"], max_bytes=plan["limits"]["max_bytes"])
+    return Path(collector.execute(plan, folder, True, False, None, {}, opener, limits)["receipt_path"])
+
+
+ADAPTERS: dict[str, Callable[..., Path]] = {
+    "bls_api_v2": adapt_bls,
+    "census_acs_api": adapt_census_api,
+    "census_acs_detailed": adapt_census_detailed,
+    "hud_api": adapt_hud_api,
+    "mmd_api": adapt_mmd,
+    "cms_owners_org": adapt_cms_owners,
+    "hcai_util_workbook": adapt_hcai_util,
+    "onc_mu_hospital": adapt_onc_mu,
+}
+PAUSING = frozenset({"bls_quota", "http_429"})
 
 
 def base_text(digest_hex: str) -> str:
@@ -432,7 +541,10 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, counters: Counter
         if shutil.disk_usage(run.scratch).free <= 2 * unit["bytes"] + 2**30:
             raise ContractFailure("not_enough_disk_space")
         registry = registry_of(run, unit)
-        receipt_path = run.adapters[handler](unit, spec, folder, run, opener) if handler in run.adapters else capture_file(unit, spec, folder, run, opener)
+        adapter = {**ADAPTERS, **run.adapters}.get(handler)
+        if adapter is None:
+            require(handler == "file", "The unit has no reviewed handler")
+        receipt_path = adapter(unit, spec, folder, run, opener) if adapter else capture_file(unit, spec, folder, run, opener)
         receipt = read_json(receipt_path)
         if receipt["snapshot_status"] != "acquired_unvalidated":
             raise ContractFailure((receipt["quality_profile"]["checks_failed"] or ["capture_failed"])[0])
@@ -536,6 +648,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
     paused: set[str] = set()
     tried: set[str] = set()
     manual: list[str] = []
+    keys_off: list[str] = []
     for unit in units:
         if unit["disposition"] not in redownload.ACTIVE:
             continue
@@ -544,6 +657,10 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             continue
         source = unit["source_id"]
         if source in paused:
+            continue
+        handler = redownload.handler_mode(unit)
+        if handler in redownload.SECRET_MODES and run.task_keys is None and handler not in run.adapters:
+            keys_off.append(unit["snapshot_id"])
             continue
         spec = specs.get(unit["snapshot_id"])
         try:
@@ -570,7 +687,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             result = attempt(run, unit, spec, key, counters, opener, state)
         except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
             result = Result(key, unit, "failed", failure_reason(error))
-        if result.status in {"failed", "refused"} and first:
+        if result.status in {"failed", "refused"} and (first or result.reason in PAUSING):
             paused.add(source)
         if result.status in {"unchanged", "changed"}:
             counters[result.status] += 1
@@ -591,7 +708,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
         "started_at_utc": started.isoformat(),
         "finished_at_utc": run.clock().isoformat(),
         "counters": {name: counters[name] for name in COUNTERS},
-        "units": {**done, "paused_sources": sorted(paused), "manual_not_attempted": manual},
+        "units": {**done, "paused_sources": sorted(paused), "manual_not_attempted": manual, "keyed_not_attempted": keys_off},
     }
     save_state(run, state)
     save_run_record(run, run_record)

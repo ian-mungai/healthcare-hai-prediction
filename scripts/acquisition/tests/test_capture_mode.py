@@ -14,7 +14,19 @@ from typing import Any
 import pytest
 
 from scripts.acquisition import capture_mode as mode
-from scripts.acquisition import collection_layout, s3_store, transport
+from scripts.acquisition import (
+    collect_bls_api,
+    collect_census_acs_api,
+    collect_census_acs_detailed,
+    collect_hud_api,
+    collect_mmd_api,
+    collection_layout,
+    s3_store,
+    store_cms_owners,
+    store_hcai_util,
+    store_onc_mu,
+    transport,
+)
 from scripts.acquisition import completion_record as record
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition.s3_store import encoded_json
@@ -504,3 +516,80 @@ def test_the_evidence_step_fails_when_a_version_is_removed_or_a_delete_marker_ap
     check(mode.check_run(client, result, before) == [], "without it the step passes")
     padded = before + [{"key": f"{ROOT}earlier", "version_id": "v0", "etag": "x", "kind": "version"}]
     check(any("removed or replaced" in problem for problem in mode.check_run(client, result, padded)), "a missing earlier version fails")
+
+
+ADAPTER_MODULES = {
+    "bls_api_v2": collect_bls_api,
+    "census_acs_api": collect_census_acs_api,
+    "census_acs_detailed": collect_census_acs_detailed,
+    "hud_api": collect_hud_api,
+    "mmd_api": collect_mmd_api,
+    "cms_owners_org": store_cms_owners,
+    "hcai_util_workbook": store_hcai_util,
+    "onc_mu_hospital": store_onc_mu,
+}
+
+
+SWITCH_AT = {"onc_mu_hospital": 3, "mmd_api": 3}
+
+
+@pytest.mark.parametrize("handler", sorted(ADAPTER_MODULES))
+def test_each_collector_adapter_asks_its_collector_for_a_local_capture_and_never_stores_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, handler: str
+) -> None:
+    from scripts.acquisition import task_role
+
+    calls: list[tuple] = []
+
+    def execute(*arguments: Any, **options: Any) -> dict:
+        calls.append((arguments, options))
+        return {"receipt_path": str(tmp_path / "receipt.json")}
+
+    monkeypatch.setattr(ADAPTER_MODULES[handler], "execute", execute)
+    monkeypatch.setattr(mode, "planned_item", lambda run, name, spec: ({"id": "p", "limits": {"max_seconds": 60, "max_bytes": 1000}}, {"id": "i"}))
+    chosen = storage(Bucket())
+    run = mode.CaptureRun(
+        tmp_path / "q.json",
+        tmp_path / "s.json",
+        ROOT,
+        "run01",
+        chosen,
+        tmp_path / "scratch",
+        CODE,
+        BUNDLE,
+        task_keys=lambda name: task_role.TaskKeys(name, {"AWS_REGION": "us-west-2"}),
+    )
+    unit = {"mode": handler}
+    spec = {"mode": handler, "plan_item": "i", "mmd": {"measure_id": "M", "year": 2020}}
+    path = mode.ADAPTERS[handler](unit, spec, tmp_path / "unit", run, "the-opener")
+    check(path == tmp_path / "receipt.json", "the collector's local receipt is returned")
+    arguments, options = calls[0]
+    at = SWITCH_AT.get(handler, 4)
+    check(arguments[at - 1] is True and arguments[at] is False, f"the network is on and storing is off: {arguments}")
+    if handler in {"bls_api_v2", "census_acs_api", "census_acs_detailed", "hud_api"}:
+        check(arguments[5].storage is chosen, "a keyed collector reads its key through the run's storage")
+    if handler in {"cms_owners_org", "hcai_util_workbook", "onc_mu_hospital"}:
+        check("the-opener" in arguments, "the counting transport is the one passed on")
+
+
+def test_a_keyed_unit_is_not_attempted_when_the_keys_switch_is_off(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    world.units[0]["mode"] = "bls_api_v2"
+    for spec in specs.values():
+        spec |= {"mode": "bls_api_v2", "plan_item": "b1"}
+    world.write_inputs(specs)
+    result = world.run()
+    check(result["units"]["keyed_not_attempted"] == [world.units[0]["snapshot_id"]] and world.site.requests == 0, str(result["units"]))
+
+
+def test_a_plan_item_names_exactly_one_planned_item(monkeypatch: pytest.MonkeyPatch) -> None:
+    from scripts.acquisition import redownload
+
+    plans = [{"id": "plan", "batches": [{"id": "b1"}, {"id": "b2"}]}]
+    monkeypatch.setattr(redownload, "load_plans_of", lambda handler: plans)
+    run = mode.CaptureRun(Path("q"), Path("s"), ROOT, "run01", None, Path("scratch"), CODE, BUNDLE)
+    check(mode.planned_item(run, "hud_api", {"plan_item": "b2"}) == (plans[0], {"id": "b2"}), "the named batch of its plan")
+    for spec in ({"plan_item": "none"}, {}):
+        with pytest.raises(mode.SpecError):
+            mode.planned_item(run, "hud_api", spec)
