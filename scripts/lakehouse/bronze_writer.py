@@ -49,7 +49,6 @@ class Binding:
     task_role: str
     definition: str
     pair: str
-    capacity_provider: str
     layer_state: str = "off"
     qualification_passed: bool = False
     activation_approved: bool = False
@@ -148,8 +147,6 @@ def _admission(binding: Binding, job: str, definitions: dict[str, Any], authorit
     actual = {key: getattr(binding, key) for key in ("principal", "task_role", "definition", "pair")}
     if actual != expected:
         raise BindingError("catalog pair, principal, task role and definition must match the job identity")
-    if binding.capacity_provider != "FARGATE":
-        raise BindingError("bronze jobs require the FARGATE on-demand capacity provider")
     if read_only:
         return
     if not binding.namespace_creation_approved:

@@ -26,7 +26,6 @@
     "removal": {"module": "scripts.lakehouse.bronze", "class": "lakehouse_write"},
     "checksums": {"module": "scripts.lakehouse.checksums", "class": "lakehouse_read"}
   },
-  "capacity_provider": "FARGATE",
   "retry_after_start": false,
   "production_layer_default": "off",
   "journal_owner": "launcher",

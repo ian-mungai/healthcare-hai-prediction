@@ -46,7 +46,6 @@ def binding(subject: ModuleType, *, mode: str = "aws_qualify", **changes: Any) -
         "task_role": "job_write_e2e_task" if testing else "job_write_bronze_task",
         "definition": "test_writer" if testing else "bronze_writer",
         "pair": "e2e" if testing else "bronze",
-        "capacity_provider": "FARGATE",
         "layer_state": "off",
         "qualification_passed": False,
         "activation_approved": False,
@@ -317,7 +316,12 @@ def scope_denial(subject: ModuleType, journal: ModuleType, out: Path) -> dict[st
     for changes in ({"principal": "root"}, {"pair": "reader"}, {"task_role": "job_write_bronze_task"}, {"definition": "bronze_writer"}):
         rejected(subject, "bronze", "identity", **changes)
     rejected(subject, "bronze", "AWS", target="mac")
-    rejected(subject, "bronze", "FARGATE", capacity_provider="FARGATE_SPOT")
+    try:
+        subject.Binding.from_document({**asdict(binding(subject)), "capacity_provider": "any_provider"})
+    except subject.BindingError as error:
+        require("unknown fields" in str(error), f"a binding with a capacity provider was refused for another cause: {error}")
+    else:
+        raise ValueError("a binding that names a capacity provider was accepted")
     rejected(subject, "bronze", "source collection", source_collection="other/collection")
     rejected(subject, "bronze", "namespace creation", namespace_creation_approved=False)
     rejected(subject, "checksum_fixture", "fixture action")
