@@ -38,13 +38,24 @@ class Selection:
     named: dict[str, dict[Identity, dict[str, Any]]] = field(default_factory=lambda: defaultdict(dict))
     superseded: dict[str, dict[Identity, dict[str, str]]] = field(default_factory=lambda: defaultdict(dict))
     aliases: dict[str, dict[Identity, set[str | None]]] = field(default_factory=lambda: defaultdict(dict))
+    confirmed: dict[str, set[tuple[Identity, str | None]]] = field(default_factory=lambda: defaultdict(set))
+
+    def declare(self, collection: str, identity: Identity, declaration: dict[str, Any]) -> None:
+        """Add one record declaration of an object. Every declaration of one object must agree on digest and length, so no role overwrites another's."""
+        found = self.named[collection].get(identity)
+        if found is None:
+            self.named[collection][identity] = {**declaration, "roles": {declaration["role"]}}
+        elif (found["sha256"], found["byte_count"]) != (declaration["sha256"], declaration["byte_count"]):
+            raise BronzeError(f"{declaration['record']}: the record names {identity[0]} with a SHA-256 or length that differs from another declaration of it")
+        else:
+            found["roles"].add(declaration["role"])
 
     def confirm(self, collection: str, identity: Identity, stored: dict[str, Any]) -> bool:
-        """Whether this manifest entry is the one the record names: the named object with the role the record gives it.
+        """Whether this manifest entry is a named object with a role the record declares for it.
 
         Every entry for a named object must agree with the record on digest and length, or the run stops. An entry for the same object under another role is a
-        legitimate alias (the storage writer lists a data object again as transport evidence): it confirms nothing, and the run stops after the listing if no
-        entry carries the declared role.
+        legitimate alias (the storage writer lists a data object again as transport evidence): it confirms nothing, and ``unconfirmed`` names the object when no
+        entry carries a declared role.
         """
         expected = self.named[collection].get(identity)
         if expected is None:
@@ -52,10 +63,21 @@ class Selection:
         found = stored["object"]
         if (expected["sha256"], expected["byte_count"]) != (found.get("sha256"), found.get("byte_count")):
             raise BronzeError(f"{expected['record']}: the record's SHA-256, length or role for {identity[0]} differs from its manifest")
-        if expected["role"] not in {None, stored.get("role")}:
-            self.aliases[collection].setdefault(identity, set()).add(stored.get("role"))
-            return False
-        return True
+        role = stored.get("role")
+        if None in expected["roles"] or role in expected["roles"]:
+            self.confirmed[collection].add((identity, None if None in expected["roles"] else role))
+            return True
+        self.aliases[collection].setdefault(identity, set()).add(role)
+        return False
+
+    def unconfirmed(self, collection: str) -> list[Identity]:
+        """The named objects some declared role of which no manifest entry carries."""
+        missing = []
+        for identity, info in self.named[collection].items():
+            wanted = {None} if None in info["roles"] else info["roles"]
+            if any((identity, role) not in self.confirmed[collection] for role in wanted):
+                missing.append(identity)
+        return sorted(missing)
 
 
 def moment(value: Any, key: str) -> datetime:
@@ -207,7 +229,8 @@ def select(storage: Storage, bucket: str, tables: dict[str, list[str]], manifest
             if done is not None:
                 refuse_older_pointer(done, late, unit, names)
             chosen = late
-            take_stale(storage, bucket, selection, collection, late, names, manifests_of)
+            parts = completion_record.key_payload(done[0], RAW_ROOT, unit) if done is not None else None
+            take_stale(storage, bucket, selection, collection, late, names, manifests_of, parts[1] if parts else None)
         for entry in found:
             if entry is not chosen:
                 for identity in named_objects(entry[2]):
@@ -235,14 +258,18 @@ def take_completion(storage: Storage, bucket: str, selection: Selection, collect
     parts = completion_record.key_payload(key, RAW_ROOT, record["unit_key"])
     for item in (*record["data_objects"], *record["other_objects"]):
         guard_key(item["key"], key)
-        selection.named[collection][(item["key"], item["version_id"])] = {
-            "sha256": item["sha256"],
-            "byte_count": item["byte_count"],
-            "role": item["role"],
-            "record": key,
-            "reversion_run": parts[1] if parts else None,
-            "label": label("current", None, None, record["retrieved_at_utc"]),
-        }
+        selection.declare(
+            collection,
+            (item["key"], item["version_id"]),
+            {
+                "sha256": item["sha256"],
+                "byte_count": item["byte_count"],
+                "role": item["role"],
+                "record": key,
+                "reversion_run": parts[1] if parts else None,
+                "label": label("current", None, None, record["retrieved_at_utc"]),
+            },
+        )
 
 
 def take_stale(
@@ -253,7 +280,9 @@ def take_stale(
     late: tuple[str, str, dict],
     names: str,
     manifests_of: ManifestLister,
+    reversion_run: str | None = None,
 ) -> None:
+    """Take a stale record's last capture. A pointer to the objects of the unit's newest completion carries that completion's reversion run, if it is one."""
     key, version, record = late
     missing = f"{names}: the last capture of unit {record['unit_key']} is missing or unverified ({key}), so nothing can be loaded"
     if not record["last_capture_verified"] or not record["last_capture"]:
@@ -265,13 +294,22 @@ def take_stale(
         if not holders:
             raise BronzeError(missing)
         selection.manifests[collection].update(holders)
-        selection.named[collection].setdefault(
-            (pointer["key"], pointer["version_id"]),
-            {
-                "sha256": pointer["sha256"],
-                "byte_count": pointer["byte_count"],
-                "role": None,
-                "record": key,
-                "label": label("stale", record["reason"], {"key": key, "version_id": version}, pointer["retrieved_at_utc"]),
-            },
-        )
+        identity = (pointer["key"], pointer["version_id"])
+        if identity not in selection.named[collection]:
+            selection.declare(
+                collection,
+                identity,
+                {
+                    "sha256": pointer["sha256"],
+                    "byte_count": pointer["byte_count"],
+                    "role": None,
+                    "record": key,
+                    "reversion_run": reversion_run,
+                    "label": label("stale", record["reason"], {"key": key, "version_id": version}, pointer["retrieved_at_utc"]),
+                },
+            )
+        elif (selection.named[collection][identity]["sha256"], selection.named[collection][identity]["byte_count"]) != (
+            pointer["sha256"],
+            pointer["byte_count"],
+        ):
+            raise BronzeError(f"{key}: the stale record names {identity[0]} with a SHA-256 or length that differs from another declaration of it")

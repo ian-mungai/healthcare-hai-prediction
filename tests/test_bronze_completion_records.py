@@ -938,6 +938,74 @@ def test_a_record_role_that_no_manifest_entry_for_the_object_carries_is_refused_
     )
 
 
+def alias_record(lake: Lake, stored: dict[str, Any], *, field: str | None) -> str:
+    """A record that names the one data object twice: as data, with a field changed or not, then as transport evidence with the manifest's true facts."""
+
+    def twice(body: dict) -> None:
+        body["other_objects"] = [{"role": "transport_audit", **plain(stored["objects"][0])}]
+        if field == "sha256":
+            body["data_objects"][0]["sha256"] = digest(b"a different record claim")
+        elif field == "byte_count":
+            body["data_objects"][0]["byte_count"] = 99
+
+    return write_completion(lake, stored, UNIT_A, NEW, change=twice, rekey=True)
+
+
+@pytest.mark.parametrize("field", ["sha256", "byte_count"])
+def test_a_record_that_names_one_object_twice_with_contradictory_digest_or_length_is_refused_in_discovery_and_the_inventory(tmp_path: Path, field: str) -> None:
+    lake = Lake()
+    stored = capture(lake, root="raw/", snapshot="CA__collision", files=[("data", "data.csv", ROWS_NEW)], alias=TRANSPORT)
+    key = alias_record(lake, stored, field=field)
+    check(refused(lambda: discover(lake, tmp_path), key, "differs"), "discovery refuses the contradictory declarations and names the record")
+    check(refused(lambda: bronze_pin.build_inventory(lake, BUCKET, config(tmp_path), ["hospitals"]), key, "differs"), "so does the inventory builder")
+
+
+def test_a_record_that_names_one_object_twice_with_the_same_digest_and_length_still_loads_it_once(tmp_path: Path) -> None:
+    lake = Lake()
+    stored = capture(lake, root="raw/", snapshot="CA__twice", files=[("data", "data.csv", ROWS_NEW)], alias=TRANSPORT)
+    alias_record(lake, stored, field=None)
+    inputs = discover(lake, tmp_path)
+    check(loaded_keys(inputs) == {stored["objects"][0]["key"]} and len(inputs) == 1, "consistent declarations of one object load it once")
+
+
+def test_a_data_declaration_is_checked_against_the_data_entry_when_a_transport_entry_lists_other_facts(tmp_path: Path) -> None:
+    lake = Lake()
+    stored = capture(
+        lake, root="raw/", snapshot="CA__entries", files=[("data", "data.csv", ROWS_NEW)], alias=TRANSPORT | {"object": {"sha256": digest(b"other")}}
+    )
+    key = write_completion(lake, stored, UNIT_A, NEW)
+    check(refused(lambda: discover(lake, tmp_path), key, "differs from its manifest"), "every manifest entry for a named object must agree with the record")
+
+
+def test_a_stale_pointer_to_the_newest_completion_that_is_a_reversion_loads_its_rebound_observations_as_stale(tmp_path: Path) -> None:
+    lake = Lake()
+    first, _, previous = first_then_second(lake, tmp_path)
+    write_completion(lake, first, UNIT_A, NEW, run=REVERTED)
+    current_inputs, _, live = publish(lake, tmp_path, previous)
+    write_stale(lake, UNIT_A, "20261114T000000Z-aaaaaaaa", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
+    inputs, _, after = publish(lake, tmp_path, live)
+    check(
+        loaded_keys(inputs) == {item["key"] for item in first["objects"]} and {item["freshness"] for item in inputs} == {"stale"},
+        "the pointer loads with the stale label",
+    )
+    check(
+        {item["observation_id"] for item in inputs} == {item["observation_id"] for item in current_inputs},
+        "it keeps the rebound observations the reversion loaded",
+    )
+    check(publish(lake, tmp_path, after)[2] == after, "a rerun publishes the same generation")
+
+
+def test_a_stale_pointer_to_a_plain_completion_naming_retired_objects_is_still_refused(tmp_path: Path) -> None:
+    lake = Lake()
+    first, _, previous = first_then_second(lake, tmp_path)
+    write_completion(lake, first, UNIT_A, NEW)
+    write_stale(lake, UNIT_A, "20261114T000000Z-bbbbbbbb", LATER, [pointer(item, NEW, "raw/") for item in first["objects"]])
+    check(
+        refused(lambda: publish(lake, tmp_path, previous), "an earlier generation retired"),
+        "a plain completion cannot bring retired objects back through a stale pointer",
+    )
+
+
 def test_a_stored_object_no_record_names_stops_the_table_and_retires_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     lake = Lake()
     capture(lake, root="", snapshot="CA__legacy", files=[("data", "data.csv", ROWS_LEGACY), ("dictionary", "notes.csv", NOTES)])

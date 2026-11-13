@@ -539,7 +539,6 @@ def discover(
         named_manifests = selection.manifests[collection] if selection is not None else {}
         unnamed: dict[str, list[str]] = {}
         superseded_copies: list[tuple[dict[str, Any], str, str, str | None]] = []
-        seen: set[tuple[str, str]] = set()
         listed = {identity: digest for identity, digest in retired.checksums.items() if identity[0].startswith(prefixes)}
         matched: set[tuple[str, str]] = set()
         stored_manifests = {identity: raw for prefix in prefixes for identity, raw in manifests_of(prefix).items()} | named_manifests
@@ -554,8 +553,8 @@ def discover(
             for entry_index, stored in enumerate(manifest["objects"]):
                 role = stored.get("role")
                 identity = (stored["object"].get("key", ""), stored["object"].get("version_id", ""))
-                if selection is not None and (manifest_key, manifest_version) in named_manifests and selection.confirm(collection, identity, stored):
-                    seen.add(identity)
+                if selection is not None and (manifest_key, manifest_version) in named_manifests:
+                    selection.confirm(collection, identity, stored)
                 is_retired = identity in listed
                 if is_retired:
                     if listed[identity] != stored["object"].get("sha256"):
@@ -623,7 +622,7 @@ def discover(
         stale = sorted(identity[0] for identity in set(listed) - matched)
         if stale:
             raise BronzeError(f"{stale[0]}: the retired list entry matches no manifest object ({len(stale)} such entries)")
-        unlisted = sorted(set(named) - seen)
+        unlisted = selection.unconfirmed(collection) if selection is not None else []
         if unlisted:
             absent = unlisted[0]
             if selection is not None and absent in selection.aliases[collection]:
@@ -1420,19 +1419,23 @@ def main(argv: list[str] | None = None) -> int:
         metadata = bronze_metadata.build(names, inputs, unselected, previous, everything)
         bronze_metadata.validate_successor(previous, metadata)
         load_inputs = [item for item in inputs if item["table"] in repair_names] if repair_names else inputs
-        summary = {} if args.copies_only or (args.bootstrap_all and not repair_names) else load_objects(spark, load_inputs, storage, config["namespace"])
-        pruned = {} if args.bootstrap_all else prune(spark, config, names, inputs, config["namespace"])
-        copies = write_copies(spark, config["namespace"], names, inputs, unselected)
+        # A retry whose complete metadata generation equals the published one changes nothing: a plain load writes no table and loads no data.
+        unchanged = bool(previous) and previous[0]["generation"] == metadata[0]["generation"] and not (args.copies_only or args.bootstrap_all or repair_names)
+        summary = (
+            {} if unchanged or args.copies_only or (args.bootstrap_all and not repair_names) else load_objects(spark, load_inputs, storage, config["namespace"])
+        )
+        pruned = {} if unchanged or args.bootstrap_all else prune(spark, config, names, inputs, config["namespace"])
+        copies = 0 if unchanged else write_copies(spark, config["namespace"], names, inputs, unselected)
         checks = verify(spark, config, inputs, config["namespace"])
         # Dictionaries follow every passing load, so they never describe an older bronze table [91].
         if all(check["passed"] for check in checks.values()):
             dictionary_names = sorted(set(repair_names) & checks.keys()) if args.bootstrap_all else sorted(checks)
             dictionaries = (
                 dictionary.build(spark, config, dictionary_names, config["namespace"], dictionary_namespace=args.dictionary_namespace)
-                if dictionary_names
+                if dictionary_names and not unchanged
                 else {}
             )
-            generation = bronze_metadata.publish(spark, config["namespace"], metadata)
+            generation = str(metadata[0]["generation"]) if unchanged else bronze_metadata.publish(spark, config["namespace"], metadata)
             index_path = REPORT_ROOT / "object_index" / f"{generation}.json"
             index_sha256 = bronze_metadata.write_bootstrap(metadata, index_path)
             metadata_index = {"generation": generation, "path": str(index_path), "sha256": index_sha256}

@@ -530,6 +530,29 @@ def test_an_unchanged_run_on_the_newest_payload_writes_nothing_and_a_second_reve
     check(last["counters"]["changed"] == 1 and len(world.records()) == 5, "and A once more")
 
 
+def test_a_reversion_run_that_dies_before_its_run_record_leaves_a_retry_that_writes_no_second_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    world, key, _ = flipped_world(tmp_path)
+    real = mode.save_run_record
+
+    def die(run: Any, run_record: dict) -> None:
+        raise Crash
+
+    monkeypatch.setattr(mode, "save_run_record", die)
+    with pytest.raises(Crash):
+        world.run(recheck=True)
+    monkeypatch.setattr(mode, "save_run_record", real)
+    reverted = set(world.records())
+    check(len(reverted) == 3, "the dead run stored its reversion record")
+    before_names = set(world.bucket.names())
+    result = world.run(recheck=True)
+    check(
+        set(world.records()) == reverted and result["counters"]["unchanged"] == 1 and result["counters"]["objects_created"] == 0,
+        f"the retry is unchanged: {result['counters']}",
+    )
+    check(new_kinds(world, before_names) == Counter({"run": 2}), f"the retry writes only its own run records: {new_kinds(world, before_names)}")
+    check(newest_key(world, key) in reverted, "the newest record is still the dead run's reversion record")
+
+
 def test_a_reversion_to_a_record_that_does_not_verify_is_refused_and_writes_no_record(tmp_path: Path) -> None:
     world, _, _ = flipped_world(tmp_path)
     key, body = next((name, item) for name, item in world.records().items() if item["run_id"] == "run01")
