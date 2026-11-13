@@ -170,6 +170,13 @@
         "sha256": "0fd7af8a45922119a6d85034389e23fc31e103e1507358f14704ce8daa6642d7",
         "canonical_sha256": "72c2f5b5e38e6b07dfee74216b9cfd4be4b19673513919032d53bf9a1ba4af1c"
       }
+    ],
+    "dec1ca5e7eab908bf64a25296a2ce17cb931695588c836700ef375e387de6fe5": [
+      {
+        "archive_path": "data/acquisition_planning/acquisition_legacy_20261009/pre_nber_201710_plan_20261113/nber_hospital_compare_plan.json",
+        "sha256": "56a10255ace05f6b75968ab8915b68d80f1bbd4a9447af4aa4afda1e23061b7e",
+        "canonical_sha256": "685c1f6bb0476572022736c6dd07735c20b66d86063d20c9bc5b72663eec8f63"
+      }
     ]
   },
   "records": {

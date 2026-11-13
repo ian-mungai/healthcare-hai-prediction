@@ -16,8 +16,8 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
+from scripts.acquisition import legacy_versions, store_nber_hc
 from scripts.acquisition import nber_hc_contract as contract
-from scripts.acquisition import store_nber_hc
 from scripts.acquisition.build_nber_hc_plan import build
 from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.run_bls_api_e2e import inventory
@@ -34,6 +34,9 @@ GENERAL, FOOTNOTES = "Hospital General Information.csv", "Footnote Crosswalk.csv
 NEWEST = {"2017/10": (2017, 9, 28), "2018/07": (2018, 6, 19), "2018/10": (2018, 9, 27), "2019/03": (2019, 3, 4)}
 DATES = {folder: "-".join(f"{part:02}" for part in day) for folder, day in NEWEST.items()}
 NBER = "https://data.nber.org/compare/hospital/"
+# The plan before 2017/10 was added: its canonical hash and the SHA-256 of its file bytes, which the legacy catalog binds as the predecessor.
+EARLIER_PLAN = "685c1f6bb0476572022736c6dd07735c20b66d86063d20c9bc5b72663eec8f63"
+EARLIER_PLAN_FILE_SHA256 = "56a10255ace05f6b75968ab8915b68d80f1bbd4a9447af4aa4afda1e23061b7e"
 
 
 class Response(io.BytesIO):
@@ -95,12 +98,16 @@ def bodies() -> dict[str, bytes]:
     return {zip_url(folder): make_zip(folder, names) for folder, names in CONTENT.items()}
 
 
+def plan_inputs(served: dict[str, bytes], folders: tuple[str, ...]) -> list[dict]:
+    return [
+        {"folder": folder, "sha256": hashlib.sha256(served[zip_url(folder)]).hexdigest(), "bytes": len(served[zip_url(folder)]), "release_date": DATES[folder]}
+        for folder in folders
+    ]
+
+
 def synthetic_plan(root: Path, served: dict[str, bytes]) -> tuple[dict, Path, str]:
     """A locked plan for three synthetic releases and the gate, built through the production plan builder."""
-    inputs = [
-        {"folder": folder, "sha256": hashlib.sha256(served[zip_url(folder)]).hexdigest(), "bytes": len(served[zip_url(folder)]), "release_date": DATES[folder]}
-        for folder in ("2017/10", "2018/07", "2018/10")
-    ]
+    inputs = plan_inputs(served, ("2017/10", "2018/07", "2018/10"))
     gate_body = served[zip_url("2019/03")]
     gate_sha256 = hashlib.sha256(gate_body).hexdigest()
     gate = {"sha256": gate_sha256, "bytes": len(gate_body)}
@@ -193,6 +200,11 @@ def exercise(root: Path) -> list[dict]:
             members = {r["folder"]: r["members"] for r in real["releases"]}
             require(members["2017/10"] == {HAI: contract.HAI_ID}, f"2017/10 maps more than its HAI member: {members['2017/10']}")
             require(members["2018/07"] == {TIMELY: contract.TIMELY_ID}, f"2018/07 members differ: {members['2018/07']}")
+            entries = legacy_versions.catalog()["plans"].get(canonical_hash(real), [])
+            require(
+                [(e["canonical_sha256"], e["sha256"]) for e in entries] == [(EARLIER_PLAN, EARLIER_PLAN_FILE_SHA256)],
+                f"The earlier plan is not the catalogued predecessor of the committed plan: {entries}",
+            )
 
         scenario("committed_plan_binds_registry_gate_and_all_three_releases", real_plan)
 
@@ -278,6 +290,7 @@ def exercise(root: Path) -> list[dict]:
             require("mirror" in " ".join(receipt["governance"]["use_restrictions"]).lower(), "Mirror caveat missing")
 
         scenario("receipt_names_nber_url_and_cms_publisher", receipt_names_sources)
+        predecessor_scenarios(scenario, root, served, gate_sha, web)
         scenario("capture_and_version_verified_storage", lambda: execute(plan, october, run, True, True, client, OUTPUTS, web, LIMITS))
 
         def mapped_only() -> None:
@@ -439,6 +452,47 @@ def gate_scenarios(scenario: Any, plan: dict, root: Path, served: dict[str, byte
         require(results == [] and all("not captured" in h["reason"] for h in held), f"Offline run differs: {held}")
 
     scenario("offline_default_downloads_nothing", gate_offline)
+
+
+def predecessor_scenarios(scenario: Any, root: Path, served: dict[str, bytes], gate_sha: str, web: Web) -> None:
+    """A receipt captured under the plan from before a release was added keeps verifying through the catalogued predecessor, and only through it."""
+    folder = root / "predecessor"
+    folder.mkdir()
+    gate = {"sha256": gate_sha, "bytes": len(served[zip_url("2019/03")])}
+    earlier = build(plan_inputs(served, ("2018/07", "2018/10")), gate, [])
+    earlier_path, archived = folder / "earlier_plan.json", folder / "archive" / "earlier_plan.json"
+    archived.parent.mkdir()
+    for path in (earlier_path, archived):
+        write_once(path, encoded_json(earlier))
+    write_once(earlier_path.with_suffix(".lock.json"), encoded_json({"plan_sha256": canonical_hash(earlier)}))
+    release = next(r for r in earlier["releases"] if r["folder"] == "2018/10")
+    with patch.object(contract, "PLAN_PATH", earlier_path):
+        execute(earlier, release, folder / "run", True, False, None, OUTPUTS, web, LIMITS)
+        receipt_path = folder / "run" / "batches" / release["id"] / "capture/receipt.json"
+        scenario("receipt_verifies_under_the_plan_it_was_captured_under", lambda: verify_local(receipt_path))
+    scenario("receipt_under_earlier_plan_refused_when_no_predecessor_is_catalogued", lambda: verify_local(receipt_path), "plan differs")
+    entry = {"archive_path": str(archived), "sha256": fingerprint(archived)[0], "canonical_sha256": canonical_hash(earlier)}
+    catalog = {"catalog_version": 1, "plans": {canonical_hash(contract.load_plan()): [entry]}, "records": {}}
+    write_once(folder / "catalog.json", encoded_json(catalog))
+    write_once(folder / "catalog.lock.json", encoded_json({"catalog_sha256": canonical_hash(catalog)}))
+
+    def through_catalog() -> None:
+        with (
+            patch.object(legacy_versions, "CATALOG_PATH", folder / "catalog.json"),
+            patch.object(legacy_versions, "CATALOG_LOCK_PATH", folder / "catalog.lock.json"),
+            patch.object(legacy_versions, "ARCHIVE", folder / "archive"),
+        ):
+            legacy_versions._catalog.cache_clear()
+            verify_local(receipt_path)
+
+    scenario("receipt_under_earlier_plan_verifies_through_the_catalogued_predecessor", through_catalog)
+
+    def archived_bytes_changed() -> None:
+        archived.write_bytes(archived.read_bytes() + b" ")
+        through_catalog()
+
+    scenario("receipt_under_earlier_plan_refused_when_the_archived_predecessor_changed", archived_bytes_changed, "plan differs")
+    legacy_versions._catalog.cache_clear()
 
 
 def member_scenarios(scenario: Any, plan: dict, plan_path: Path, release: dict, root: Path, served: dict[str, bytes]) -> None:
