@@ -303,4 +303,3 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
             raise LaunchRefused(str(error)) from None
         result |= {"report": accepted["report"], "passed": True}
     return result
-

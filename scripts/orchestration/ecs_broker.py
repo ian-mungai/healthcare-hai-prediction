@@ -221,7 +221,6 @@ class EcsBroker:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(self.jobs[job]["deadline_seconds"]))
         return values
 
-
     def input_of(self, request: SubmissionRequest, job: str) -> str | None:
         """The run a job publishes from: the one named in the request, or the one the job's first step was given."""
         with self.ledger.locked(request.run_id):
