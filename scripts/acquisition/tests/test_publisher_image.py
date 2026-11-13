@@ -112,24 +112,24 @@ def test_the_publisher_dependencies_are_declared_for_a_hash_locked_install() -> 
 
 
 def environment_names_the_task_definition_sets() -> set[str]:
+    """The names the publisher task definition puts in its containers: its fixed settings and the run variables the launch fills in."""
     text = (ROOT / "infra/jobs/publisher.tf").read_text(encoding="utf-8")
-    return set(re.findall(r'name\s*=\s*"([A-Z][A-Z0-9_]+)"', text))
+    run_variables = re.findall(r"^\s*(?:fetch|run)\s*=\s*\[(.*?)\]", text, re.M)
+    return set(re.findall(r'name\s*=\s*"([A-Z][A-Z0-9_]+)"', text)) | {name for names in run_variables for name in re.findall(r'"([A-Z][A-Z0-9_]+)"', names)}
 
 
 def test_every_variable_the_task_code_reads_is_set_by_the_task_definition() -> None:
-    from scripts.acquisition import collection_layout, raw_root, stored_mirror, task_role, transport
+    from scripts.acquisition import collection_layout, publisher_run, raw_root, stored_mirror, task_role, transport
 
-    needed = {
-        transport.APPROVED_HOSTS_VARIABLE,
-        transport.APPROVED_HOSTS_APPROVAL_VARIABLE,
-        collection_layout.CAPTURE_ROOT_VARIABLE,
-        *stored_mirror.REQUIRED_ENVIRONMENT,
-        task_role.BUCKET_VARIABLE,
-        task_role.KEYS_VARIABLE,
-    }
-    missing = sorted(needed - environment_names_the_task_definition_sets())
+    # The host run names its approved hosts files itself, from the tracked bundle in the code archive (capture_mode.execute sets and restores the two
+    # variables), and has no staged mirror. The task definition therefore sets the run's own required variables and the two optional ones it reads.
+    needed = {*publisher_run.REQUIRED, collection_layout.CAPTURE_ROOT_VARIABLE, task_role.BUCKET_VARIABLE, task_role.KEYS_VARIABLE}
+    sets = environment_names_the_task_definition_sets()
+    missing = sorted(needed - sets)
     check(missing == [], f"the task definition does not set {missing}")
-    check(raw_root.READ_RAW_VARIABLE not in environment_names_the_task_definition_sets(), "the publisher task reads no bronze root variable")
+    staged = {transport.APPROVED_HOSTS_VARIABLE, transport.APPROVED_HOSTS_APPROVAL_VARIABLE, stored_mirror.MIRROR_VARIABLE, stored_mirror.INDEX_VARIABLE}
+    check(not staged & sets, f"the task definition sets staged-flow variables the host run replaced: {sorted(staged & sets)}")
+    check(raw_root.READ_RAW_VARIABLE not in sets, "the publisher task reads no bronze root variable")
 
 
 def dockerfile_lines() -> list[str]:
