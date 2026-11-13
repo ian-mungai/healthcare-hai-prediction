@@ -1855,6 +1855,41 @@ def test_a_stored_member_map_edited_in_place_differs_from_the_digest_its_manifes
     )
 
 
+@pytest.mark.parametrize("datasets", [2, 3])
+def test_a_valid_archive_with_several_dataset_manifests_is_skipped_on_its_next_run(tmp_path: Path, datasets: int) -> None:
+    members = [{"member_chain": [f"table{index}.csv"], "role": "data", "dataset_id": f"table{index}"} for index in range(datasets)]
+    world = World(tmp_path, ["multi.zip"], {"multi.zip": members})
+    body = io.BytesIO()
+    with zipfile.ZipFile(body, "w") as stored:
+        for index in range(datasets):
+            stored.writestr(f"table{index}.csv", f"id,value\n1,{index}\n".encode())
+    world.bodies[world.units[0]["url"]] = body.getvalue()
+    first = world.run()
+    check(len(first["units"]["completed"]) == 1 and mode.check_run(storage(world.bucket), first, []) == [], f"run 1 completes: {first['units']}")
+    ((_, record_body),) = world.records().items()
+    check(len(record_body["manifests"]) == datasets, "each dataset folder has its own manifest, each listing the one member map")
+    before, asked = listed(world), world.site.requests
+    second = world.run()
+    check(world.site.requests == asked and second["counters"]["skipped_complete"] == 1, f"run 2 skips the unit: {second['units']}")
+    check(mode.check_run(storage(world.bucket), second, before) == [], "the evidence step passes run 2")
+
+
+def test_a_manifest_that_lists_a_second_distinct_member_map_is_refused(tmp_path: Path) -> None:
+    world = archive_world(tmp_path)
+    world.run()
+    ((key, body),) = world.records().items()
+
+    def add(manifest: dict) -> None:
+        (inventory,) = [item for item in manifest["objects"] if item.get("role") == "archive_inventory"]
+        manifest["objects"].append(copy.deepcopy(inventory) | {"object": inventory["object"] | {"version_id": "another-version"}})
+
+    forge_manifest(world, key, body, add)
+    asked = world.site.requests
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and world.site.requests == asked, f"a second member map is not a skip: {result['counters']}")
+    check(len(result["units"]["refused"]) == 1, f"the unit is refused: {result['units']}")
+
+
 @pytest.mark.parametrize("direction", ["map_dropped_from_the_specification", "map_added_to_the_specification"])
 def test_a_record_stored_with_a_member_map_and_a_unit_without_one_do_not_match_in_either_direction(tmp_path: Path, direction: str) -> None:
     world = archive_world(tmp_path) if direction == "map_dropped_from_the_specification" else World(tmp_path, ["a.csv"])

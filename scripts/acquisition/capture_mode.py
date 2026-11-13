@@ -675,7 +675,9 @@ def object_set_problems(record: Mapping[str, Any], entries: Iterable[Mapping[str
 
 def member_problems(storage: Any, entries: list[dict[str, Any]], reviewed: list[dict[str, Any]] | None) -> list[str]:
     """Problems with the archive member map the manifests bind: the stored map and the stored members must be the specification's reviewed member map."""
-    inventories = [entry["object"] for entry in entries if entry["role"] == "archive_inventory"]
+    # Each dataset folder's manifest lists the archive's one member map, so repeated listings of the same stored object count once.
+    distinct = {json.dumps(entry["object"], sort_keys=True) for entry in entries if entry["role"] == "archive_inventory"}
+    inventories = [json.loads(text) for text in sorted(distinct)]
     if not reviewed:
         return ["the manifests list an archive member map that the specification does not name"] if inventories else []
     if len(inventories) != 1:
