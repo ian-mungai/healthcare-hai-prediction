@@ -2297,8 +2297,9 @@ models:
               typeof(ccn_seller_published) = 'VARCHAR'
   - name: fct_ownership_change_hold
     description: >-
-      Business process: change of ownership rows held out of the ownership changes. Grain: one row per change of ownership event, release that the kept
-      row does not use and hold reason. Dimensions: none. Measures: none. Every column of int_change_of_ownership_holds stays unchanged, keyed by
+      Business process: change of ownership rows held out of the ownership changes. Grain: one row per change of ownership event, release and hold reason,
+      where repeated_in_release marks a repeated row of the event in the kept release and differs_from_latest_release marks another release whose
+      published values differ from the kept row. Dimensions: none. Measures: none. Every column of int_change_of_ownership_holds stays unchanged, keyed by
       hold_key; no surrogate keys. A hold fact: it keeps the silver hold model's rows exactly.
     meta:
       classification: Public
