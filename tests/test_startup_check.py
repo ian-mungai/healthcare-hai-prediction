@@ -33,6 +33,7 @@ def drive(monkeypatch: pytest.MonkeyPatch, work: Path, phase: str, layer: str = 
     monkeypatch.setattr(layer_run.task_capacity, "apply", lambda _profile: None)
     monkeypatch.setattr(layer_run, "task_deadline", lambda _job: contextlib.nullcontext())
     monkeypatch.setattr(layer_run, "check_code_run", lambda _job: None)
+    monkeypatch.setattr(layer_run, "check_feature_set", lambda _job: None)
     monkeypatch.setattr(layer_run, "dispatch", dispatch)
     arguments = [phase, "--layer", layer, "--run", RUN, "--code-run-id", RUN, "--work", str(work), "--code-sha256", DIGEST, "--input-run", RUN]
     try:
