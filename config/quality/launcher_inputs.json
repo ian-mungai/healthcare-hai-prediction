@@ -488,6 +488,7 @@
     "config/acquisition/census_acs_api_plan_dp02pr.json",
     "config/acquisition/census_acs_detailed_code_versions.json",
     "config/acquisition/census_acs_detailed_plan.json",
+    "config/acquisition/census_acs_tables_code_versions.json",
     "config/acquisition/census_acs_tables_plan.json",
     "config/acquisition/cms_owners_code_versions.json",
     "config/acquisition/cms_owners_plan.json",

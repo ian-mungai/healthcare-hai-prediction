@@ -19,6 +19,7 @@ ENTRIES = {
     "bls_api": ("bls_api", "scripts.acquisition.collect_bls_api"),
     "census_acs_api": ("census_acs_api", "scripts.acquisition.collect_census_acs_api"),
     "census_acs_detailed": ("census_acs_detailed", "scripts.acquisition.collect_census_acs_detailed"),
+    "census_acs_tables": ("census_acs_tables", "scripts.acquisition.collect_census_acs_tables"),
     "hud_api": ("hud_api", "scripts.acquisition.collect_hud_api"),
     "hud_api_workbook": ("hud_api", "scripts.acquisition.store_hud_xlsx"),
     "mmd_api": ("mmd_api", "scripts.acquisition.collect_mmd_api"),
