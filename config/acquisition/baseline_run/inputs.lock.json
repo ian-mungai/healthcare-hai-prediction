@@ -1,5 +1,5 @@
 {
-  "bundle_sha256": "4dfc645537e3428f83aa509ef22c2f53ea59f2007190f63ee0bd0a23279a7631",
+  "bundle_sha256": "1140b955889243daabc7194cd7d564e554ced987275b1daa546a04f249da9bc4",
   "files": [
     {
       "bytes": 1039786,
@@ -10,6 +10,26 @@
       "bytes": 112,
       "path": "hosts_approval.json",
       "sha256": "86a0b3ece35500ae245fea9b134cfd4d4c230c8615c7646e653c6d928004d262"
+    },
+    {
+      "bytes": 5203,
+      "path": "plan_inputs/data/acquisition_planning/registry_legacy_20260929/registry_additions.json",
+      "sha256": "b62976df10a5a77643086a11594c7c0a3ad62667b9a9affbdfcc9019c863d5c2"
+    },
+    {
+      "bytes": 422,
+      "path": "plan_inputs/data/acquisition_planning/registry_legacy_20260929/registry_additions_lock.json",
+      "sha256": "4dedf75b265fccc4c1e42c8dd3323a6d4a180b60c3276a1d5304dd017b346066"
+    },
+    {
+      "bytes": 18411194,
+      "path": "plan_inputs/data/acquisition_planning/registry_legacy_20260929/source_registry.json",
+      "sha256": "7644cdef45cba6223ad5eb43e47d74acf7342c6632e8442874bbf4238f34cc1c"
+    },
+    {
+      "bytes": 11169,
+      "path": "plan_inputs/data/acquisition_planning/registry_legacy_20260929/source_registry_lock.json",
+      "sha256": "e42b4042495a2fb9460945200f9bda041ab0bb06a4bbe48bab7345755e7f59dc"
     },
     {
       "bytes": 1062646,

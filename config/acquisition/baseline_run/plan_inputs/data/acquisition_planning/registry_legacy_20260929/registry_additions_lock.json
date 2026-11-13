@@ -1,0 +1,10 @@
+{
+  "additions_sha256": "b7ca376a91803d604fa6bd901e1438313c77ed7fb3c36382dbcab57773f8e8dd",
+  "base_registry_sha256": "b6fc32e32463261633e3c66c375ecb868709bb2cc1cf12ece28edfc95fc6a53e",
+  "control_ids": [
+    "C258.80",
+    "C258.81"
+  ],
+  "lock_version": 1,
+  "review_rule": "Review additions and lock diffs together against the recorded user decision. This lock detects drift; it is not a signature or new approval."
+}

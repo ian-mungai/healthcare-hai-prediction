@@ -1,3 +1,4 @@
 config/acquisition/planning_v1/acquisition_plans_v1.json filter=lfs diff=lfs merge=lfs -text
 config/acquisition/source_registry.json filter=lfs diff=lfs merge=lfs -text
 uv.lock filter=lfs diff=lfs merge=lfs -text
+config/acquisition/baseline_run/plan_inputs/data/acquisition_planning/registry_legacy_20260929/source_registry.json filter=lfs diff=lfs merge=lfs -text
