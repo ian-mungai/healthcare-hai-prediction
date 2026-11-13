@@ -8,6 +8,8 @@ import hashlib
 import io
 import json
 import zipfile
+from collections import Counter
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +31,7 @@ from scripts.acquisition import (
     transport,
 )
 from scripts.acquisition import completion_record as record
+from scripts.acquisition import ingestion_intent as intent
 from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload_route as route
 from scripts.acquisition.run_cms_owners_e2e import synthetic_plan as owners_plan
@@ -40,6 +43,8 @@ from scripts.acquisition.tests.test_task_owners import ACCOUNT, BUCKET, TaskS3, 
 from tests.support import check
 
 ROOT = "raw/"
+INTENTS = f"{ROOT}ingestion_intents/"
+DATASETS = f"{ROOT}cms/hospital_cost_reports/datasets/"
 SOURCE = "CMS_HCRIS_PUF"
 CODE, BUNDLE = "c" * 64, "b" * 64
 BASE_TIME = datetime.datetime(2026, 11, 12, 20, 0, tzinfo=datetime.UTC)
@@ -57,12 +62,17 @@ class Bucket(TaskS3):
         self.versions: list[dict] = []
         self.delete_markers: list[dict] = []
         self.crash_on_prefix: str | None = None
+        self.before_put: dict[str, Callable[[], None]] = {}
+        self.unreadable_prefix: str | None = None
+        self.listed: list[str] = []
         self.clock = 0
 
     def put_object(self, **arguments: Any) -> dict:
         if self.crash_on_prefix and arguments["Key"].startswith(self.crash_on_prefix):
             self.crash_on_prefix = None
             raise Crash
+        for prefix in [name for name in self.before_put if arguments["Key"].startswith(name)]:
+            self.before_put.pop(prefix)()
         if arguments["Key"] in self.objects:
             raise self.missing("PutObject", "PreconditionFailed")
         answer = super().put_object(**arguments)
@@ -76,7 +86,13 @@ class Bucket(TaskS3):
             raise self.missing("HeadObject", "404")
         return answer
 
+    def get_object(self, **arguments: Any) -> dict:
+        if self.unreadable_prefix and arguments["Key"].startswith(self.unreadable_prefix):
+            raise self.missing("GetObject", "AccessDenied")
+        return super().get_object(**arguments)
+
     def list_objects_v2(self, **arguments: Any) -> dict:
+        self.listed.append(arguments["Prefix"])
         found = [item for item in self.versions if item["Key"].startswith(arguments["Prefix"])]
         return {"Contents": [{"Key": item["Key"], "LastModified": item["LastModified"]} for item in found], "IsTruncated": False}
 
@@ -200,6 +216,41 @@ class World:
     def records(self) -> dict[str, dict]:
         return {key: json.loads(self.bucket.objects[key][1]) for key in sorted(self.bucket.names(f"{ROOT}ingestion_units/"))}
 
+    def intents(self) -> dict[str, dict]:
+        return {key: json.loads(self.bucket.objects[key][1]) for key in sorted(self.bucket.names(INTENTS))}
+
+    def unit_key(self, index: int = 0) -> str:
+        unit = self.units[index]
+        return mode.unit_key_of(unit, read_json(self.folder / "capture_specs.json")["specs"][unit["snapshot_id"]])
+
+
+def plant(bucket: Bucket, key: str, body: bytes) -> None:
+    bucket.put_object(
+        Bucket=BUCKET, ExpectedBucketOwner=ACCOUNT, Key=key, Body=io.BytesIO(body), IfNoneMatch="*", ChecksumSHA256="x", ServerSideEncryption="AES256"
+    )
+
+
+def unplant(bucket: Bucket, key: str) -> None:
+    bucket.objects.pop(key)
+    bucket.versions[:] = [item for item in bucket.versions if item["Key"] != key]
+
+
+def kind_of(key: str) -> str:
+    """What a stored object is: an intent, a run object, a completion record, audit evidence, a receipt, a manifest or a data object."""
+    for prefix, kind in ((INTENTS, "intent"), (f"{ROOT}ingestion_runs/", "run"), (f"{ROOT}ingestion_units/", "record")):
+        if key.startswith(prefix):
+            return kind
+    if "/audit/" in key:
+        return "audit"
+    return next(
+        (kind for tail, kind in (("/receipt.json", "receipt"), ("/manifest.json", "manifest")) if key.endswith(tail)),
+        "data" if "/datasets/" in key else "other",
+    )
+
+
+def new_kinds(world: World, before: set[str]) -> Counter:
+    return Counter(kind_of(key) for key in world.bucket.names() - before)
+
 
 @pytest.fixture
 def three(tmp_path: Path) -> World:
@@ -222,6 +273,13 @@ def test_run_one_creates_one_completion_record_per_unit(three: World) -> None:
         check(all(item["key"] in three.bucket.objects for item in record.objects_named(parsed)), "every named object exists")
     first = f"{ROOT}ingestion_runs/run01/"
     check(three.bucket.names(first) == {f"{first}run.json", f"{first}state/000001.json"}, "one run record and one state object")
+    intents = three.intents()
+    check(counters["intents_created"] == 3 and len(intents) == 3, f"one intent per captured unit: {sorted(intents)}")
+    by_unit = {body["unit_key"]: body for body in found.values()}
+    for key, body in intents.items():
+        parsed_intent = intent.parse(three.bucket.objects[key][1], key=key, root=ROOT)
+        check(parsed_intent["generation"] == 1 and parsed_intent["run_id"] == "run01", f"the first attempt of a unit is generation 1: {parsed_intent}")
+        check(body["snapshot_id"] in by_unit[body["unit_key"]]["receipt"]["key"], "the unit's record names objects stored under its intent's snapshot ID")
     check(mode.verify_records(storage(three.bucket), ROOT) == [], "the evidence check passes")
 
 
@@ -244,7 +302,7 @@ def test_run_two_sends_nothing_and_writes_only_its_run_record(three: World) -> N
     result = three.run()
     check(mode.check_run(storage(three.bucket), result, listed) == [], "the evidence step passes for run two")
     counters = result["counters"]
-    zero = ("http_requests", "bytes_downloaded", "units_attempted", "objects_created", "bls_ledger_entries_added", "skipped_recent_stale")
+    zero = ("http_requests", "bytes_downloaded", "units_attempted", "objects_created", "intents_created", "bls_ledger_entries_added", "skipped_recent_stale")
     check(all(counters[name] == 0 for name in zero) and counters["skipped_complete"] == 3, str(counters))
     check(three.site.requests == asked, "the second run made no request")
     added = {item["Key"] for item in three.bucket.versions} - set(before)
@@ -305,33 +363,152 @@ def crashed_world(tmp_path: Path, dated: bool) -> tuple[World, set[str]]:
     return world, data
 
 
-def one_orphan_receipt(world: World, before: set[str]) -> bool:
-    return len({key for key in world.bucket.names() if key.endswith("/receipt.json")} - before) == 1
-
-
-def test_a_crash_after_the_data_objects_and_before_the_record_adds_no_data_version_for_a_dated_unit(tmp_path: Path) -> None:
-    world, data = crashed_world(tmp_path, dated=True)
-    receipts = {key for key in world.bucket.names() if key.endswith("/receipt.json")}
+@pytest.mark.parametrize("dated", [True, False], ids=["dated", "undated"])
+def test_a_crash_after_the_data_objects_and_before_the_record_adds_no_data_version_and_orphans_only_receipt_manifest_and_audit(
+    tmp_path: Path, dated: bool
+) -> None:
+    world, data = crashed_world(tmp_path, dated=dated)
+    before = set(world.bucket.names())
     result = world.run()
-    check(world.bucket.names(f"{ROOT}cms/hospital_cost_reports/datasets/") == data, "the retry created no data object")
-    check(one_orphan_receipt(world, receipts), "one more receipt, and the earlier one is the orphan")
-    check(len(world.records()) == 1 and result["counters"]["units_attempted"] == 1, "one record after the retry")
-
-
-def test_known_gap_an_undated_unit_leaves_one_extra_data_copy_after_a_crash_that_no_record_names(tmp_path: Path) -> None:
-    """Not the design property: an undated receipt keys its data by the capture ID, new per attempt, so a crash leaves one extra copy."""
-    world, data = crashed_world(tmp_path, dated=False)
-    receipts = {key for key in world.bucket.names() if key.endswith("/receipt.json")}
-    world.run()
-    extra = world.bucket.names(f"{ROOT}cms/hospital_cost_reports/datasets/") - data
-    check(len(extra) == 1, f"at most one extra data copy per crashed unit: {sorted(extra)}")
-    (only,) = world.records().values()
+    check(world.bucket.names(DATASETS) == data, "the retry created no data object")
+    check(all(len([item for item in world.bucket.versions if item["Key"] == key]) == 1 for key in data), "each data object keeps its one version")
+    expected = Counter({"audit": 1, "manifest": 1, "receipt": 1, "record": 1, "run": 2})
     check(
-        not extra & {item["key"] for item in record.objects_named(only)} or extra <= {item["key"] for item in only["data_objects"]},
-        "the record names the retry's copy",
+        new_kinds(world, before) == expected, f"the retry adds its audit evidence, receipt, manifest, record and run objects only: {new_kinds(world, before)}"
     )
-    check(not data & {item["key"] for item in record.objects_named(only)}, "no record names the crashed attempt's copy")
-    check(one_orphan_receipt(world, receipts), "one orphan receipt")
+    check(result["counters"]["units_attempted"] == 1 and result["counters"].get("intents_created") == 0, str(result["counters"]))
+    (crashed,) = world.intents().values()
+    check(crashed["run_id"] == "run01", "the one intent is the crashed attempt's, reused by the retry")
+    (only,) = world.records().values()
+    check(crashed["snapshot_id"] in only["receipt"]["key"], "the record names the receipt stored under the reused snapshot ID")
+    check(
+        all(crashed["snapshot_id"] in item["key"] for item in only["data_objects"] if "capture_id=" in item["key"]),
+        "undated data stays under the reused capture ID",
+    )
+
+
+def test_a_crash_retry_of_an_archive_unit_stores_no_new_member_version(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
+    world.bodies[world.units[0]["url"]] = archive(pdf(1), b"id,value\n1,2\n")
+    world.bucket.crash_on_prefix = f"{ROOT}ingestion_units/"
+    with pytest.raises(Crash):
+        world.run()
+    members = {key for key in world.bucket.names(f"{ROOT}cms/") if "/datasets/" in key or "/references/" in key}
+    check(len(members) >= 2, f"the crash left the data member and the reference: {sorted(members)}")
+    before = set(world.bucket.names())
+    result = world.run()
+    check(
+        {key for key in world.bucket.names(f"{ROOT}cms/") if "/datasets/" in key or "/references/" in key} == members, "the retry stored no new member object"
+    )
+    check(result["counters"]["units_attempted"] == 1 and result["counters"]["intents_created"] == 0 and len(world.records()) == 1, str(result["counters"]))
+    check(new_kinds(world, before)["data"] == 0, f"{new_kinds(world, before)}")
+
+
+def test_a_crash_retry_of_a_collector_unit_with_an_api_page_stores_no_new_data_or_page_version(tmp_path: Path) -> None:
+    world, page = api_world(tmp_path)
+    adapters = {"hud_api": api_adapter(page)}
+    world.bucket.crash_on_prefix = f"{ROOT}ingestion_units/"
+    with pytest.raises(Crash):
+        world.run(adapters=adapters)
+    stored = world.bucket.names(DATASETS)
+    check(len(stored) == 2, f"the crash left the data file and the API page: {sorted(stored)}")
+    result = world.run(adapters=adapters)
+    check(world.bucket.names(DATASETS) == stored, "the retry stored no new data or page object")
+    check(result["counters"]["intents_created"] == 0 and len(world.records()) == 1, str(result["counters"]))
+
+
+def test_the_intent_is_written_before_any_data_object(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.bucket.crash_on_prefix = INTENTS
+    with pytest.raises(Crash):
+        world.run()
+    check(world.bucket.names() == set(), f"a crash on the intent write left nothing stored: {sorted(world.bucket.names())}")
+    world.run()
+    check(len(world.intents()) == 1 and len(world.records()) == 1, "the retry wrote its intent and then its record")
+
+
+def test_two_racing_runs_of_one_unit_resolve_to_one_intent(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    key, target = world.unit_key(), intent.intent_key(ROOT, world.unit_key(), 1)
+    other = "CMS_HCRIS_PUF__20260101T000000Z__" + "a" * 32
+    rival = intent.encode(intent.build(unit_key=key, generation=1, snapshot_id=other, run_id="rival_run"))
+    world.bucket.before_put[INTENTS] = lambda: plant(world.bucket, target, rival)
+    result = world.run()
+    check(world.bucket.names(INTENTS) == {target}, f"one intent: {sorted(world.bucket.names(INTENTS))}")
+    check(result["counters"]["intents_created"] == 0 and result["counters"]["units_attempted"] == 1, str(result["counters"]))
+    (only,) = world.records().values()
+    check(all(f"capture_id={other}" in item["key"] for item in only["data_objects"]), "the loser stored its data under the winner's snapshot ID")
+    check(other in only["receipt"]["key"], "and its receipt too")
+
+
+def test_a_monthly_run_after_a_completed_record_with_a_changed_payload_uses_the_next_generation_and_a_fresh_snapshot_id(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv"])
+    world.run()
+    key = world.unit_key()
+    (first,) = world.intents().values()
+    world.bodies[world.units[0]["url"]] = csv_body(7)
+    changed = world.run(recheck=True)
+    check(changed["counters"]["changed"] == 1 and changed["counters"]["intents_created"] == 1, str(changed["counters"]))
+    check(sorted(world.bucket.names(INTENTS)) == [intent.intent_key(ROOT, key, 1), intent.intent_key(ROOT, key, 2)], "one intent per generation")
+    second = world.intents()[intent.intent_key(ROOT, key, 2)]
+    check(second["generation"] == 2 and second["snapshot_id"] != first["snapshot_id"], f"a fresh snapshot ID: {first['snapshot_id']} {second['snapshot_id']}")
+    by_snapshot = {
+        name: [body for body in world.records().values() if name in body["receipt"]["key"]] for name in (first["snapshot_id"], second["snapshot_id"])
+    }
+    check(all(len(found) == 1 for found in by_snapshot.values()), "each generation has its own record and objects")
+    check(
+        all(f"capture_id={second['snapshot_id']}" in item["key"] for item in by_snapshot[second["snapshot_id"]][0]["data_objects"]),
+        "the new data is a new object",
+    )
+    again = world.run(recheck=True)
+    check(
+        again["counters"]["unchanged"] == 1 and again["counters"]["intents_created"] == 0 and len(world.intents()) == 2, "an unchanged recheck writes no intent"
+    )
+
+
+FORGERIES: dict[str, Callable[[dict], Any]] = {
+    "not_json": lambda body: b"{not json",
+    "extra_field": lambda body: body | {"note": "x"},
+    "another_unit": lambda body: body | {"unit_key": "e" * 64},
+    "another_generation": lambda body: body | {"generation": 2},
+    "another_source": lambda body: body | {"snapshot_id": "OTHER_SOURCE__20260101T000000Z__" + "e" * 32},
+    "malformed_snapshot": lambda body: body | {"snapshot_id": "not a snapshot id"},
+}
+
+
+def refused_without_a_trace(world: World, reason: str, before: set[str]) -> None:
+    result = world.run()
+    check([item["reason"] for item in result["units"]["refused"]] == [reason], f"the unit is refused with its reason: {result['units']}")
+    check(result["units"]["failed"] == [] and result["units"]["completed"] == [], "it is neither failed nor completed")
+    check(result["units"]["paused_sources"] == [], "the source is not paused: its download passed its contract")
+    check(result["counters"]["objects_created"] == 0 and result["counters"]["intents_created"] == 0, str(result["counters"]))
+    added = {f"{ROOT}ingestion_runs/run02/run.json", f"{ROOT}ingestion_runs/run02/state/000001.json"}
+    check(world.bucket.names() - before == added, f"only the run's own objects were added: {sorted(world.bucket.names() - before - added)}")
+    check(world.records() == {}, "no record was written")
+
+
+@pytest.mark.parametrize("forgery", sorted(FORGERIES))
+def test_a_forged_intent_stops_the_unit_visibly_and_never_gets_a_new_snapshot_id(tmp_path: Path, forgery: str) -> None:
+    world, _ = crashed_world(tmp_path, dated=False)
+    (target,) = world.bucket.names(INTENTS)
+    version, body, fields = world.bucket.objects[target]
+    forged = FORGERIES[forgery](json.loads(body))
+    world.bucket.objects[target] = (version, forged if isinstance(forged, bytes) else encoded_json(forged), fields)
+    refused_without_a_trace(world, "intent_forged", set(world.bucket.names()))
+
+
+def test_an_unreadable_intent_stops_the_unit_visibly(tmp_path: Path) -> None:
+    world, _ = crashed_world(tmp_path, dated=False)
+    world.bucket.unreadable_prefix = INTENTS
+    refused_without_a_trace(world, "intent_unreadable", set(world.bucket.names()))
+
+
+def test_the_skip_listing_never_reads_the_intent_prefix_and_an_intent_alone_is_not_a_skip(tmp_path: Path) -> None:
+    world, _ = crashed_world(tmp_path, dated=False)
+    world.bucket.listed.clear()
+    result = world.run()
+    check(result["counters"]["skipped_complete"] == 0 and result["counters"]["units_attempted"] == 1, str(result["counters"]))
+    check(world.bucket.listed != [] and not any(prefix.startswith(INTENTS) for prefix in world.bucket.listed), f"listed prefixes: {world.bucket.listed}")
 
 
 def test_scratch_holds_at_most_one_units_files_at_a_time(three: World) -> None:
@@ -354,23 +531,26 @@ def test_a_source_pauses_when_its_first_unit_fails_its_contract(tmp_path: Path) 
     check(len(state) == 1, f"the changed state was saved once: {sorted(state)}")
 
 
+MEMBERS = [
+    {"member_chain": ["release/data.csv"], "role": "data", "dataset_id": "synthetic_table"},
+    {"member_chain": ["release/dictionary.pdf"], "role": "reference", "dataset_id": "synthetic_table"},
+]
+
+
+def archive(reference: bytes, data: bytes) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as handle:
+        handle.writestr("release/data.csv", data)
+        handle.writestr("release/dictionary.pdf", reference)
+    return buffer.getvalue()
+
+
+def pdf(number: int) -> bytes:
+    return b"%PDF-1.7\nexample documentation " + str(number).encode() + b"\n%%EOF"
+
+
 def test_a_data_change_in_a_later_run_counts_as_changed_and_a_reference_change_as_unchanged(tmp_path: Path) -> None:
-    def archive(reference: bytes, data: bytes) -> bytes:
-        buffer = io.BytesIO()
-        with zipfile.ZipFile(buffer, "w") as handle:
-            handle.writestr("release/data.csv", data)
-            handle.writestr("release/dictionary.pdf", reference)
-        return buffer.getvalue()
-
-    members = [
-        {"member_chain": ["release/data.csv"], "role": "data", "dataset_id": "synthetic_table"},
-        {"member_chain": ["release/dictionary.pdf"], "role": "reference", "dataset_id": "synthetic_table"},
-    ]
-
-    def pdf(number: int) -> bytes:
-        return b"%PDF-1.7\nexample documentation " + str(number).encode() + b"\n%%EOF"
-
-    world = World(tmp_path, ["a.zip"], {"a.zip": members})
+    world = World(tmp_path, ["a.zip"], {"a.zip": MEMBERS})
     url = world.units[0]["url"]
     world.bodies[url] = archive(pdf(1), b"id,value\n1,2\n")
     first = world.run()
@@ -395,15 +575,7 @@ def test_the_listing_diff_fails_on_any_extra_version_or_delete_marker(three: Wor
     allowed = {f"{ROOT}ingestion_runs/run02/run.json"}
     check(mode.diff_versions(before, after, allowed) == [], "run two differs by exactly its run record")
     check(mode.diff_versions(before, after, set()) != [], "an unexpected new object fails")
-    three.bucket.put_object(
-        Bucket=BUCKET,
-        ExpectedBucketOwner=ACCOUNT,
-        Key=f"{ROOT}stray.json",
-        Body=io.BytesIO(b"{}"),
-        IfNoneMatch="*",
-        ChecksumSHA256="x",
-        ServerSideEncryption="AES256",
-    )
+    plant(three.bucket, f"{ROOT}stray.json", b"{}")
     extra = mode.list_versions(client, [ROOT])
     check(any("stray.json" in problem for problem in mode.diff_versions(after, extra, set())), "an extra version fails")
     three.bucket.delete_markers.append({"Key": f"{ROOT}cms/marker", "VersionId": "m1"})
@@ -479,9 +651,7 @@ def stale_world(tmp_path: Path) -> tuple[World, str]:
     world = World(tmp_path, ["a.csv"])
     key = mode.unit_key_of(world.units[0], read_json(tmp_path / "capture_specs.json")["specs"][world.units[0]["snapshot_id"]])
     stale = record.stale_prefix(ROOT, key) + "run00.json"
-    world.bucket.put_object(
-        Bucket=BUCKET, ExpectedBucketOwner=ACCOUNT, Key=stale, Body=io.BytesIO(b"{}"), IfNoneMatch="*", ChecksumSHA256="x", ServerSideEncryption="AES256"
-    )
+    plant(world.bucket, stale, b"{}")
     return world, stale
 
 
@@ -529,6 +699,36 @@ def test_the_evidence_step_fails_when_a_version_is_removed_or_a_delete_marker_ap
     check(mode.check_run(client, result, before) == [], "without it the step passes")
     padded = before + [{"key": f"{ROOT}earlier", "version_id": "v0", "etag": "x", "kind": "version"}]
     check(any("removed or replaced" in problem for problem in mode.check_run(client, result, padded)), "a missing earlier version fails")
+
+
+def test_the_evidence_step_accounts_for_intent_objects(three: World) -> None:
+    client = storage(three.bucket)
+    before = mode.list_versions(client, mode.evidence_prefixes(ROOT))
+    result = three.run()
+    check(result["counters"]["intents_created"] == 3 and mode.check_run(client, result, before) == [], "three intents, all named by the counters, pass")
+    stray = intent.intent_key(ROOT, "d" * 64, 1)
+    plant(three.bucket, stray, intent.encode(intent.build(unit_key="d" * 64, generation=1, snapshot_id=SOURCE + "__20260101T000000Z__" + "d" * 32, run_id="x")))
+    check(any("new intents" in problem for problem in mode.check_run(client, result, before)), "an intent the counters do not name fails")
+    unplant(three.bucket, stray)
+    check(mode.check_run(client, result, before) == [], "without it the step passes")
+    zero = intent.intent_key(ROOT, "d" * 64, 0)
+    low = {
+        "kind": intent.KIND,
+        "schema_version": 1,
+        "unit_key": "d" * 64,
+        "generation": 0,
+        "snapshot_id": SOURCE + "__20260101T000000Z__" + "d" * 32,
+        "run_id": "x",
+    }
+    plant(three.bucket, zero, encoded_json(low))
+    check(any(zero in problem for problem in mode.check_run(client, result, before)), "an intent of generation zero fails")
+    unplant(three.bucket, zero)
+    first = sorted(three.bucket.names(INTENTS))[0]
+    version, _, fields = three.bucket.objects[first]
+    three.bucket.objects[first] = (version, b"{not json", fields)
+    check(any(first in problem for problem in mode.check_run(client, result, before)), "a malformed new intent fails")
+    unplant(three.bucket, first)
+    check(any("has no intent" in problem for problem in mode.check_run(client, result, before)), "a completed unit without its intent fails")
 
 
 ADAPTER_MODULES = {

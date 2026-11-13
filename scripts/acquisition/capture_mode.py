@@ -2,9 +2,11 @@
 
 The run reads the tracked queue and ``capture_specs.json``, never a stored receipt. For each unit it lists ``<root>ingestion_units/<unit_key>/`` before any
 request. A verified record there means no request. Otherwise the unit is downloaded into its own working folder, stored through the project's storage path,
-read back by version and closed by one create-once completion record. The working folder is deleted after the record, or after a failure. The first
-attempted unit of a source that fails its contract pauses that source for the run. The run writes one run record and, only when something was attempted, one
-state object under ``<root>ingestion_runs/<run_id>/``. It sits beside the earlier redownload and compare paths in ``redownload.py``, which later work removes.
+read back by version and closed by one create-once completion record. Before it stores anything, the unit claims a create-once intent that names the
+snapshot ID its objects are stored under, so a retry after a crash stores under the same keys (``ingestion_intent.py``). The working folder is deleted
+after the record, or after a failure. The first attempted unit of a source that fails its contract pauses that source for the run. The run writes one
+run record and, only when something was attempted, one state object under ``<root>ingestion_runs/<run_id>/``. It sits beside the earlier redownload and
+compare paths in ``redownload.py``, which later work removes.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition import completion_record as records
+from scripts.acquisition import ingestion_intent as intents
 from scripts.acquisition import redownload, redownload_route, task_role, transport
 from scripts.acquisition.capture import capture, receipt_validator
 from scripts.acquisition.collection_layout import capture_root, load_routes
@@ -45,6 +48,7 @@ COUNTERS = (
     "bytes_downloaded",
     "units_attempted",
     "objects_created",
+    "intents_created",
     "bls_ledger_entries_added",
     "skipped_complete",
     "skipped_recent_stale",
@@ -59,6 +63,14 @@ class ContractFailure(ValueError):
 
 class SpecError(ValueError):
     """A unit's specification cannot decide its request identity."""
+
+
+class IntentRefused(Exception):
+    """A stored intent that cannot be trusted. The unit is refused with this fixed reason and never gets a new snapshot ID."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
 
 
 def count_request(handler: Any, request: Any) -> Any:
@@ -230,6 +242,7 @@ ADAPTERS: dict[str, Callable[..., Path]] = {
     "onc_mu_hospital": adapt_onc_mu,
 }
 PAUSING = frozenset({"bls_quota", "http_429"})
+INTENT_REASONS = frozenset({"intent_forged", "intent_unreadable"})
 
 
 def base_text(digest_hex: str) -> str:
@@ -357,13 +370,54 @@ def verify_object(storage: Any, item: Mapping[str, Any]) -> str | None:
     return None
 
 
-def read_record(storage: Any, key: str, root: str) -> dict[str, Any]:
-    """Read one stored record at its current version and refuse it unless it is exactly the schema and names its own key."""
+def read_stored(storage: Any, key: str) -> bytes:
+    """The bytes of one stored object at its current version."""
     reply = storage.call("s3api", "head-object", ["--key", key])
     with tempfile.TemporaryDirectory(prefix="record_read_") as folder:
         local = Path(folder) / "record.json"
         storage.call("s3api", "get-object", ["--key", key, "--version-id", str(reply["VersionId"]), str(local)])
-        return records.parse(local.read_bytes(), key=key, root=root)
+        return local.read_bytes()
+
+
+def read_record(storage: Any, key: str, root: str) -> dict[str, Any]:
+    """Read one stored record at its current version and refuse it unless it is exactly the schema and names its own key."""
+    return records.parse(read_stored(storage, key), key=key, root=root)
+
+
+def read_intent(storage: Any, key: str, root: str, source_id: str | None = None) -> dict[str, Any]:
+    """Read one stored intent at its current version. A malformed or copied intent and an unreadable one are refused with their own fixed reasons."""
+    try:
+        return intents.parse(read_stored(storage, key), key=key, root=root, source_id=source_id)
+    except intents.IntentError:
+        raise IntentRefused("intent_forged") from None
+    except StorageError:
+        raise IntentRefused("intent_unreadable") from None
+
+
+def create_new(storage: Any, key: str, body: bytes) -> bool:
+    """Create one object if no object has its key. False means another writer's object is already there; it is never replaced."""
+    digest = hashlib.sha256(body).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="run_object_") as folder:
+        local = Path(folder) / "object.json"
+        local.write_bytes(body)
+        arguments = ["--key", key, "--body", str(local), "--if-none-match", "*", "--checksum-algorithm", "SHA256", "--checksum-sha256", base_text(digest)]
+        try:
+            storage.call("s3api", "put-object", [*arguments, "--server-side-encryption", "AES256", "--metadata", json.dumps({"sha256": digest})])
+        except StorageError as conflict:
+            if conflict.code not in redownload.CREATE_CONFLICTS:
+                raise
+            return False
+    return True
+
+
+def claim_intent(run: CaptureRun, unit: dict, key: str, generation: int, snapshot_id: str, counters: Counter) -> str:
+    """The snapshot ID this attempt stores under: its own when it wrote the intent, else the one an earlier attempt's intent already names."""
+    target = intents.intent_key(run.root, key, generation)
+    body = intents.encode(intents.build(unit_key=key, generation=generation, snapshot_id=snapshot_id, run_id=run.run_id))
+    if create_new(run.storage, target, body):
+        counters["intents_created"] += 1
+        return snapshot_id
+    return read_intent(run.storage, target, run.root, unit["source_id"])["snapshot_id"]
 
 
 def verify_record(storage: Any, key: str, root: str) -> list[str]:
@@ -389,11 +443,26 @@ def evidence_prefixes(root: str) -> list[str]:
     return sorted({root, task_role.BLS_LEDGER_PREFIX})
 
 
+def intent_problems(storage: Any, root: str, run_record: Mapping[str, Any], new_intents: list[str]) -> list[str]:
+    """Problems with the intents of a run: a new intent that does not read as its key says, and a unit it stored whose intent is missing."""
+    problems = []
+    for key in new_intents:
+        try:
+            read_intent(storage, key, root)
+        except IntentRefused as refusal:
+            problems.append(f"{key}: {refusal.reason}")
+    for item in [*run_record["units"]["completed"], *run_record["units"]["changed"]]:
+        generation = len(list_objects(storage, records.unit_prefix(root, item["unit_key"])))
+        if not list_objects(storage, intents.intent_key(root, item["unit_key"], generation)):
+            problems.append(f"unit {item['unit_key']} has no intent for generation {generation}")
+    return problems
+
+
 def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -> list[str]:
     """The host evidence step: verify the records by version and diff the version listings before and after the run.
 
-    The run may add exactly its run record (and its state object when it attempted units) beside the objects its own counters name, and nothing may
-    be removed, replaced or marked deleted.
+    The run may add exactly its run record (and its state object when it attempted units) beside the objects and intents its own counters name, and
+    nothing may be removed, replaced or marked deleted. Each unit the run stored has its intent.
     """
     root, run_id, counters = run_record["root"], run_record["run_id"], run_record["counters"]
     after = list_versions(storage, evidence_prefixes(root))
@@ -407,10 +476,14 @@ def check_run(storage: Any, run_record: Mapping[str, Any], before: list[dict]) -
     if records.run_record_key(root, run_id) not in own_keys:
         problems.append("the run record is not new")
     ledger = sum(item["key"].startswith(task_role.BLS_LEDGER_PREFIX) for item in new)
-    created = len(new) - len(own_keys) - ledger
+    new_intents = sorted(item["key"] for item in new if item["key"].startswith(f"{root}{intents.INTENTS_FOLDER}"))
+    created = len(new) - len(own_keys) - ledger - len(new_intents)
     if created != counters["objects_created"] or ledger != counters["bls_ledger_entries_added"]:
         said = (counters["objects_created"], counters["bls_ledger_entries_added"])
         problems.append(f"the listing holds {created} new objects and {ledger} ledger entries; the counters say {said[0]} and {said[1]}")
+    if len(new_intents) != counters["intents_created"]:
+        problems.append(f"the listing holds {len(new_intents)} new intents; the counters say {counters['intents_created']}")
+    problems.extend(intent_problems(storage, root, run_record, new_intents))
     problems.extend(verify_records(storage, root))
     if not run_record["recheck"]:
         for item in run_record["units"]["completed"]:
@@ -557,6 +630,13 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, counters: Counter
         if run.recheck and (found := list_objects(run.storage, target)):
             problems = verify_record(run.storage, found[0]["Key"], run.root)
             return Result(key, unit, "refused", problems[0]) if problems else Result(key, unit, "unchanged")
+        generation = len(list_objects(run.storage, records.unit_prefix(run.root, key))) + 1
+        try:
+            snapshot_id = claim_intent(run, unit, key, generation, receipt["snapshot_id"], counters)
+        except IntentRefused as refusal:
+            return Result(key, unit, "refused", refusal.reason)
+        if snapshot_id != receipt["snapshot_id"]:
+            receipt_path.write_bytes(encoded_json(receipt | {"snapshot_id": snapshot_id}))
         stored = upload_snapshot(receipt_path, [], run.storage, {}, registry, validator_of(run), archive_mapping=mapping)
         counters["objects_created"] += stored["objects_created"]
         receipt_object, manifests, data, other = stored_objects(read_json(Path(stored["reconciliation_path"])))
@@ -691,7 +771,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
             result = attempt(run, unit, spec, key, counters, opener, state)
         except (CaptureError, StorageError, RegistryError, ValueError, OSError, KeyError) as error:
             result = Result(key, unit, "failed", failure_reason(error))
-        if result.status in {"failed", "refused"} and (first or result.reason in PAUSING):
+        if result.status in {"failed", "refused"} and result.reason not in INTENT_REASONS and (first or result.reason in PAUSING):
             paused.add(source)
         if result.status in {"unchanged", "changed"}:
             counters[result.status] += 1
