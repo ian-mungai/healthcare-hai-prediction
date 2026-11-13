@@ -2965,9 +2965,12 @@ def live_pids(pids: set[int]) -> list[int]:
     return sorted(row.pid for row in list_processes() if row.pid in pids and "Z" not in row.state)
 
 
-def hook_shard_interrupt_case(scratch: Path, count: int) -> dict[str, Any]:
-    """Ctrl-C at the group CLI stops every shard and every descendant of each within a bound (four inert workloads, each with a child and a grandchild)."""
-    root = scratch / "hook_shard_interrupt"
+def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool) -> dict[str, Any]:
+    """Ctrl-C at the group CLI stops every shard and every descendant of each within a bound (four inert workloads, each with a child and a grandchild).
+
+    Nested: the CLI runs under another ``run_command`` and inherits PROCESS_LAUNCH_SESSION, as it does in the gate. Terminal: the CLI is a top-level caller.
+    """
+    root = scratch / ("hook_shard_interrupt_nested" if nested else "hook_shard_interrupt_terminal")
     records = root / "records"
     records.mkdir(parents=True)
     for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
@@ -2990,22 +2993,25 @@ def hook_shard_interrupt_case(scratch: Path, count: int) -> dict[str, Any]:
                     continue
             if len(rows) == 3 * count:
                 seen["cli"] = rows[0]["cli"]
-                os.killpg(seen["cli"], signal.SIGINT)
+                os.kill(seen["cli"], signal.SIGINT)
                 return
             time.sleep(0.02)
 
     sender = threading.Thread(target=interrupt_when_ready, name="hook_shard_interrupt_sender")
     sender.start()
-    # run_command names its session to the program with PROCESS_LAUNCH_SESSION, which makes the CLI's own launches nested (stopped as a group).
-    # The env program removes the variable, so the CLI is the top-level caller that a terminal user is.
-    command = ["-u", "PROCESS_LAUNCH_SESSION", str(PYTHON), "-m", "scripts.quality.ci_hooks", "--root", str(root), "--group", "samples"]
-    command += ["--output-directory", str(root / "output")]
+    # run_command names its session to the program with PROCESS_LAUNCH_SESSION, which makes the CLI's own launches nested. The env program removes the variable,
+    # so the CLI is the top-level caller that a terminal user is.
+    command = ["-m", "scripts.quality.ci_hooks", "--root", str(root), "--group", "samples", "--output-directory", str(root / "output")]
     environment = {key: value for key, value in os.environ.items() if key != "JOB_STARTED"}
     started = time.monotonic()
     timed_out = False
     exit_code: int | None = None
     try:
-        exit_code = run_command("/usr/bin/env", command, cwd=ROOT, env=environment, timeout=HOOK_INTERRUPT_BOUND_SECONDS + 5).returncode
+        if nested:
+            exit_code = run_command(str(PYTHON), command, cwd=ROOT, env=environment, timeout=HOOK_INTERRUPT_BOUND_SECONDS + 5).returncode
+        else:
+            terminal = ["-u", "PROCESS_LAUNCH_SESSION", str(PYTHON), *command]
+            exit_code = run_command("/usr/bin/env", terminal, cwd=ROOT, env=environment, timeout=HOOK_INTERRUPT_BOUND_SECONDS + 5).returncode
     except TimeoutExpired:
         timed_out = True
     finally:
@@ -3028,7 +3034,7 @@ def hook_shard_interrupt_case(scratch: Path, count: int) -> dict[str, Any]:
         "no_process_survives": not survivors,
     }
     return {
-        "case": "hook_samples_interrupt_stops_every_shard_and_descendant",
+        "case": f"hook_samples_{'nested' if nested else 'terminal'}_interrupt_stops_every_shard_and_descendant",
         "passed": all(checks.values()),
         "checks": checks,
         "survivors": survivors,
@@ -3147,7 +3153,7 @@ def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
     results += hook_shard_run_cases(scratch, count)
     results += hook_shard_input_cases(scratch)
     if count:
-        results.append(hook_shard_interrupt_case(scratch, count))
+        results += [hook_shard_interrupt_case(scratch, count, nested=True), hook_shard_interrupt_case(scratch, count, nested=False)]
     return results
 
 

@@ -129,7 +129,8 @@ def run(root: Path, group: str, hooks: list[str], output: Path, start: str, end:
         try:
             if remaining <= 0:
                 raise TimeoutExpired(["pre-commit", "run", *command], budget)
-            result = run_command(str(root / ".venv/bin/pre-commit"), ["run", *command], cwd=root, env=environment, timeout=remaining)
+            # A shard runs beside the other shards: its own session lets a stop reach its descendants, nested in another launch or not.
+            result = run_command(str(root / ".venv/bin/pre-commit"), ["run", *command], cwd=root, env=environment, timeout=remaining, own_session=bool(shard))
         except TimeoutExpired as error:
             stdout = error.stdout.decode(errors="replace") if isinstance(error.stdout, bytes) else error.stdout or ""
             stderr = error.stderr.decode(errors="replace") if isinstance(error.stderr, bytes) else error.stderr or ""
