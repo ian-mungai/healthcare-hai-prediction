@@ -113,6 +113,17 @@ def feast_is_upgraded() -> Problems:
     return problems
 
 
+def training_soupsieve_is_fixed() -> Problems:
+    """Soupsieve 4.0 (GHSA-4j63-6c4x-wfg4, GHSA-mmhr-3c5m-f64f) in the training image group, and no 3.0.4 anywhere in the lock."""
+    problems: Problems = []
+    found = lock_env.versions(lock_env.export("training")).get("soupsieve", set())
+    if found != {"4.0"}:
+        problems.append(f"training: soupsieve is {sorted(found)}; 4.0 is required")
+    if re.search(r'name = "soupsieve"\nversion = "3\.0\.4"', (ROOT / "uv.lock").read_text(encoding="utf-8")):
+        problems.append("uv.lock still holds soupsieve 3.0.4")
+    return problems
+
+
 def orchestration_pins_airflow() -> Problems:
     """The orchestration group pins the Airflow release and its two release packages exactly as config/orchestration/platform.json records them."""
     platform = json.loads((ROOT / "config/orchestration/platform.json").read_text(encoding="utf-8"))["airflow"]
@@ -296,6 +307,7 @@ CASES: tuple[tuple[str, Callable[[], Problems]], ...] = (
     ("every export is pinned with hashes", exports_are_pinned),
     ("exports repeat and split the dvc build tools", exports_repeat),
     ("feast is upgraded", feast_is_upgraded),
+    ("the training image group pins soupsieve 4.0", training_soupsieve_is_fixed),
     ("orchestration pins the Airflow release", orchestration_pins_airflow),
     ("the real lock passes its checks", real_lock_passes),
     ("planted defects are reported", planted_defects),

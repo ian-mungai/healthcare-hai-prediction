@@ -1062,7 +1062,7 @@ training = [
   "protobuf==7.36.2; sys_platform == 'linux'",
   "python-dotenv==1.2.4; sys_platform == 'linux'",
   "s3transfer==0.19.3; sys_platform == 'linux'",
-  "soupsieve==3.0.4; sys_platform == 'linux'",
+  "soupsieve==4.0; sys_platform == 'linux'",
   "sqlparse==0.6.0; sys_platform == 'linux'",
 ]
 
