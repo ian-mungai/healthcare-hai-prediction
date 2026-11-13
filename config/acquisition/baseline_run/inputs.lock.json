@@ -1,5 +1,5 @@
 {
-  "bundle_sha256": "1f85e38a4f1ce2b8f1373b38d788ee43d9ae7863ee522ee26e0510ee288c9c2c",
+  "bundle_sha256": "7c69508ce4e507a7d3a75d09995ef3352ebbd031cd89d677ec64216c171a00fa",
   "files": [
     {
       "bytes": 1039090,
@@ -120,6 +120,11 @@
       "bytes": 108,
       "path": "queue.lock.json",
       "sha256": "816faa07769213bdf9fbede8c6538b95211d7ac57ecbab449e311778767e9b28"
+    },
+    {
+      "bytes": 2650,
+      "path": "required_secrets.json",
+      "sha256": "e940c7354d39f80b059811277019a126460cd3990e596d3d7c2bbf2b4171fd64"
     }
   ]
 }

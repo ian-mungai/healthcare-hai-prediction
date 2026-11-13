@@ -1,8 +1,9 @@
 """Offline check of the tracked baseline run inputs bundle, run by CI on every pull request that touches it.
 
 It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums), the capture specification, the hosts file with
-its approval, that every expected plan input has exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches
-its manifest: the files the queue's manual units store, the digests, the Git LFS rule. It makes no request and reads only the bundle and seed folders.
+its approval and the required secrets list against the secrets the collector plans and the key reader name. It also checks that every expected plan input has
+exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches its manifest: the files the queue's manual units
+store, the digests, the Git LFS rule. It makes no request and reads only the bundle, the seed folder and the collector plans.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from scripts.acquisition.api_keys import SHARED_KEYS
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
 from scripts.acquisition.s3_store import encoded_json
 from scripts.process import run_command
@@ -26,6 +28,11 @@ EXPECTED_NAME = "expected_plan_inputs.json"
 SEED_MANIFEST = "manifest.json"
 SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md"})
 SEED_KIND = "bootstrap_seed_manifest"
+SECRETS_NAME = "required_secrets.json"
+SECRETS_KIND = "bootstrap_required_secrets"
+CONFIG = Path("config/acquisition")
+# The collector mode of a queue unit to the secret its collector reads.
+MODE_SECRETS = {"bls_api_v2": "bls_api_key", "hud_api": "hud_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key"}
 ENVIRONMENT_MARKERS = ("s3://", "arn:aws", "/Users/", "/private/", "/var/folders/")
 
 
@@ -194,6 +201,38 @@ def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
     return [f"{path} is not stored through Git LFS" for path in paths if str(folder / path) not in stored]
 
 
+def secrets_read_by_code(config: Path = CONFIG) -> set[str]:
+    """The secret names the ingestion code reads: the shared publisher keys of the key reader and the credential every tracked collector plan names."""
+    names = set(SHARED_KEYS)
+    for path in sorted(config.glob("*.json")):
+        try:
+            document = json.loads(path.read_text(encoding="utf-8"))
+        except ValueError:
+            continue
+        if isinstance(document, dict) and isinstance(document.get("credential_reference"), str):
+            names.add(document["credential_reference"])
+    return names
+
+
+def secret_problems(root: Path, names: set[str]) -> list[str]:
+    """Return why the required secrets list differs from NAMES, the secrets the code reads, or from the queue: names only, each provisioned, units counted."""
+    document = json.loads((root / SECRETS_NAME).read_text(encoding="utf-8"))
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    units = Counter(MODE_SECRETS[spec["mode"]] for spec in specs.values() if spec["mode"] in MODE_SECRETS)
+    problems = [f"{SECRETS_NAME} is not a {SECRETS_KIND}"] if document.get("kind") != SECRETS_KIND else []
+    listed = Counter(item["name"] for item in document["secrets"])
+    problems += [f"{name} is listed twice" for name, count in sorted(listed.items()) if count > 1]
+    problems += [f"{SECRETS_NAME} lacks {name}, which the code reads" for name in sorted(names - listed.keys())]
+    problems += [f"{SECRETS_NAME} names {name}, which no code reads" for name in sorted(listed.keys() - names)]
+    for item in document["secrets"]:
+        for field in ("read_by", "used_for", "provision"):
+            if not (isinstance(item.get(field), str) and item[field].strip()):
+                problems.append(f"{item['name']} has no {'provisioning' if field == 'provision' else field} text")
+        if item.get("queue_units", units[item["name"]]) != units[item["name"]]:
+            problems.append(f"{item['name']} says {item['queue_units']} queue units, the queue has {units[item['name']]}")
+    return problems
+
+
 def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: bool = False) -> list[str]:
     """Return every problem of the bundle at ROOT and the seed folder at SEED_ROOT, or an empty list."""
     found = lock_problems(root)
@@ -203,6 +242,7 @@ def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: b
         found += specs_problems(root)
         found += home_problems(root, manifest)
         found += seed_problems(root, seed_root, manifest, require_files=require_files)
+        found += secret_problems(root, secrets_read_by_code())
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:
         found.append(f"the queue, seed or hosts files are unusable: {error}")

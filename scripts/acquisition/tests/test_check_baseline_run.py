@@ -37,6 +37,7 @@ def bundle(root: Path, *, mutate: Callable[[dict], None] | None = None) -> Path:
     (root / "hosts_approval.json").write_text(json.dumps({"hosts_sha256": hosts_digest(HOSTS), "approved_by": "owner"}))
     (root / "capture_specs.json").write_bytes(specs_for(trimmed))
     write_homes(root, homes_document())
+    write_secrets(root, secrets_document())
     write_seed(root, seed_document(queue_sha256=hashlib.sha256(trimmed).hexdigest()))
     (root / PLAN_INPUT).parent.mkdir(parents=True)
     (root / PLAN_INPUT).write_text('{"a": 1}\n')
@@ -85,6 +86,16 @@ def write_seed(root: Path, document: dict, *, files: dict[str, bytes] | None = N
     for name, body in (files if files is not None else {"example/seeded.csv": SEED_BODY}).items():
         (folder / name).parent.mkdir(parents=True, exist_ok=True)
         (folder / name).write_bytes(body)
+
+
+def secrets_document(names: list[str] | None = None) -> dict:
+    """A required secrets list naming the secrets the code reads (or NAMES), each with where it is read, what it is for and how the owner provisions it."""
+    chosen = sorted(check_run.secrets_read_by_code()) if names is None else names
+    return {"kind": "bootstrap_required_secrets", "secrets": [{"name": n, "read_by": "x", "used_for": "y", "provision": "z"} for n in chosen]}
+
+
+def write_secrets(root: Path, document: dict) -> None:
+    (root / "required_secrets.json").write_text(json.dumps(document, indent=1, sort_keys=True))
 
 
 def relock(root: Path) -> None:
@@ -271,3 +282,27 @@ def test_every_path_of_the_committed_seed_manifest_is_stored_through_git_lfs() -
 
 def test_the_committed_bundle_and_seed_pass_the_whole_check() -> None:
     check(check_run.problems() == [], f"{check_run.problems()[:3]}")
+
+
+def test_the_secrets_the_code_reads_are_the_shared_publisher_keys() -> None:
+    check(check_run.secrets_read_by_code() == {"bls_api_key", "census_api_key", "hud_api_key"}, f"{sorted(check_run.secrets_read_by_code())}")
+
+
+def test_a_secrets_list_that_lacks_a_secret_the_code_reads_or_names_another_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    write_secrets(root, secrets_document(["bls_api_key", "census_api_key", "unread_key"]))
+    relock(root)
+    found = " ".join(seed_problems(root))
+    check("required_secrets.json lacks hud_api_key, which the code reads" in found, found)
+    check("required_secrets.json names unread_key, which no code reads" in found, found)
+
+
+def test_a_secret_entry_without_its_provisioning_or_listed_twice_is_refused(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    document = secrets_document()
+    document["secrets"][0]["provision"] = " "
+    document["secrets"].append(dict(document["secrets"][1]))
+    write_secrets(root, document)
+    relock(root)
+    found = " ".join(seed_problems(root))
+    check("bls_api_key has no provisioning text" in found and "census_api_key is listed twice" in found, found)
