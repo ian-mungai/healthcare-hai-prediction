@@ -8,6 +8,8 @@ import io
 import json
 import os
 import re
+import shutil
+import socket
 import sys
 import tempfile
 from collections.abc import Callable
@@ -21,6 +23,7 @@ from scripts.acquisition import api_keys
 from scripts.acquisition import bls_api_contract as bls_contract
 from scripts.acquisition import census_acs_tables_contract as contract
 from scripts.acquisition import census_acs_tables_transport as transport
+from scripts.acquisition import transport as common_transport
 from scripts.acquisition.bls_api_transport import RetryableRequest
 from scripts.acquisition.build_census_acs_tables_plan import build
 from scripts.acquisition.collect_census_acs_tables import derived_name, execute, run_all, verify_local
@@ -116,8 +119,10 @@ class Reply:
         return self.kind if name == "Content-Type" else default
 
     def read(self, size: int = -1) -> bytes:
-        body, self.body = self.body, b""
-        return body[:size] if size >= 0 else body
+        """The next SIZE bytes; the rest stays for the next read, as a real reply does."""
+        count = len(self.body) if size < 0 else size
+        chunk, self.body = self.body[:count], self.body[count:]
+        return chunk
 
 
 def connection_class(answer: Callable[[str], Reply | Exception], sent: list[str]) -> type:
@@ -201,7 +206,10 @@ def exercise(root: Path) -> list[dict]:
         csv_scenarios(scenario, plan)
         response_scenarios(scenario, plan)
         replay_scenarios(scenario, run, plan)
+        binding_scenarios(scenario, root, run, plan)
         transport_scenarios(scenario, root, plan)
+        deadline_scenarios(scenario, plan)
+        drip_scenario(scenario, plan)
 
         def unreviewed_current() -> None:
             with patch.object(contract, "collector_code_hashes", return_value={"changed": "0" * 64}):
@@ -490,6 +498,196 @@ def replay_scenarios(scenario: Callable[..., None], run: Path, plan: dict) -> No
         ("unreviewed_code", "Unreviewed Census tables"),
     ]:
         scenario(f"resealed_{kind}_is_refused_on_replay", lambda kind=kind: corrupt(kind), error)
+
+
+def binding_scenarios(scenario: Callable[..., None], root: Path, run: Path, plan: dict) -> None:
+    """Round 1 review: a cached capture or completion record must belong to the selected unit and every receipt field must match it."""
+    first, other = plan["batches"][:2]
+
+    def substituted() -> None:
+        folder, client = root / "substituted", FakeS3()
+        execute(plan, other, folder, True, False, client, OUTPUTS, Requests())
+        shutil.copytree(folder / "batches" / other["id"] / "capture", folder / "batches" / first["id"] / "capture")
+        try:
+            execute(plan, first, folder, False, True, client, OUTPUTS, None)
+        finally:
+            require(not client.objects, "A capture of another unit was stored")
+
+    scenario("a_capture_of_another_unit_in_this_units_cache_is_refused_and_stores_nothing", substituted, "differs from the selected unit")
+
+    def completion_rows_changed() -> None:
+        folder, client = root / "completion", FakeS3()
+        execute(plan, first, folder, True, True, client, OUTPUTS, Requests())
+        done_path = folder / "batches" / first["id"] / "completed.json"
+        done = read_json(done_path)
+        done["rows"] += 100
+        done_path.write_bytes(encoded_json(done))
+        execute(plan, first, folder, False, True, client, OUTPUTS, None)
+
+    scenario("a_completion_record_with_another_row_count_than_its_receipt_is_refused", completion_rows_changed, "completion row count differs")
+
+    def completion_names_another_unit() -> None:
+        folder, client = root / "completion_unit", FakeS3()
+        execute(plan, first, folder, True, True, client, OUTPUTS, Requests())
+        done_path = folder / "batches" / first["id"] / "completed.json"
+        done = read_json(done_path)
+        done["id"] = other["id"]
+        done_path.write_bytes(encoded_json(done))
+        execute(plan, first, folder, False, True, client, OUTPUTS, None)
+
+    scenario("a_completion_record_of_another_unit_is_refused", completion_names_another_unit, "completion receipt differs")
+
+    def edited(name: str, change: Callable[[dict], None]) -> Callable[[], Any]:
+        def action() -> Any:
+            target_root = run.parent / f"receipt_edit_{name}"
+            shutil.copytree(run, target_root)
+            target = target_root / "batches" / first["id"] / "capture"
+            receipt = read_json(target / "receipt.json")
+            change(receipt)
+            (target / "receipt.json").write_bytes(encoded_json(receipt))
+            return verify_local(target / "receipt.json")
+
+        return action
+
+    def another_window(receipt: dict) -> None:
+        receipt["measurement_periods"][0].update(start_date="2006-01-01", end_date="2010-12-31")
+
+    def another_endpoint(receipt: dict) -> None:
+        receipt["acquisition"]["resolved_url"] = "https://api.census.gov/data/1999/acs/acs5"
+
+    def another_governance(receipt: dict) -> None:
+        receipt["governance"]["access_class"] = "restricted"
+
+    def another_release(receipt: dict) -> None:
+        receipt["release"]["observed_history"] = "2006 S1701 all-fields county request"
+
+    def another_snapshot(receipt: dict) -> None:
+        receipt["snapshot_id"] = receipt["snapshot_id"][:-8] + "0" * 8
+
+    def another_headers(receipt: dict) -> None:
+        receipt["schema_profile"]["native_headers"] = receipt["schema_profile"]["native_headers"][::-1]
+
+    def another_method(receipt: dict) -> None:
+        receipt["acquisition"]["request_method"] = "POST"
+
+    def another_route(receipt: dict) -> None:
+        lineage = json.loads(receipt["lineage"]["extraction_or_query"])
+        lineage["route_id"] = "ACS:tables_api:subject:S1701:2012"
+        receipt["lineage"]["extraction_or_query"] = json.dumps(lineage)
+
+    for name, change, error in [
+        ("measurement_period", another_window, "measurement period differs"),
+        ("resolved_url", another_endpoint, "resolved URL differs"),
+        ("governance", another_governance, "governance differs"),
+        ("release_text", another_release, "release text differs"),
+        ("snapshot_id", another_snapshot, "snapshot ID differs"),
+        ("native_headers", another_headers, "native headers differ"),
+        ("request_method", another_method, "request method differs"),
+        ("route_id", another_route, "route differs"),
+    ]:
+        scenario(f"a_receipt_with_another_{name}_is_refused_on_replay", edited(name, change), error)
+
+    def cached_dictionary_url_changed() -> None:
+        folder = root / "cache_url"
+        execute(plan, first, folder, True, False, FakeS3(), OUTPUTS, Requests())
+        path = folder / "batches" / first["id"] / "transport/request.json"
+        envelope = read_json(path)
+        envelope["dictionary_url"] = envelope["dictionary_url"].replace("S1701", "S2701")
+        path.write_bytes(encoded_json(envelope))
+        transport.fetch(plan, first, folder, False, None)
+
+    scenario("a_cached_envelope_that_names_another_dictionary_is_refused", cached_dictionary_url_changed, "cache differs")
+
+
+def deadline_scenarios(scenario: Callable[..., None], plan: dict) -> None:
+    """Round 1 review: a name lookup that outlasts the request deadline fails the attempt before anything is sent, for the dictionary and the keyed request."""
+    batch = plan["batches"][0]
+
+    def stalled(action: Callable[[FakeS3], Any]) -> None:
+        clock, sent, closed = [0.0], [], []
+        client = live_client()
+
+        class Sock:
+            def setsockopt(self, *_args: object) -> None:
+                return None
+
+            def settimeout(self, _seconds: float) -> None:
+                return None
+
+            def sendall(self, _data: bytes) -> None:
+                sent.append(1)
+
+            def makefile(self, _mode: str) -> io.BytesIO:
+                body = dictionary(batch["table"])
+                return io.BytesIO(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " + str(len(body)).encode() + b"\r\n\r\n" + body)
+
+            def close(self) -> None:
+                closed.append(1)
+
+        class TLS:
+            def wrap_socket(self, sock: Sock, **_options: object) -> Sock:
+                return sock
+
+        def resolve(*_args: object, **_options: object) -> list:
+            clock[0] += 121.0
+            return [(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("93.184.216.34", 443))]
+
+        environment = {k: v for k, v in os.environ.items() if k != "HAI_CAPTURE_ROOT"}
+        original_close = common_transport.PublicHTTPSConnection.close
+        connections: list[int] = []
+
+        def counted_close(self: Any) -> None:
+            connections.append(1)
+            original_close(self)
+
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(common_transport.time, "monotonic", lambda: clock[0]),
+            patch.object(socket, "getaddrinfo", resolve),
+            patch.object(socket, "create_connection", lambda *_args: Sock()),
+            patch.object(common_transport.ssl, "create_default_context", TLS),
+            patch.object(common_transport.PublicHTTPSConnection, "close", counted_close),
+            patch.object(api_keys, "read", key_reader(client)),
+        ):
+            try:
+                action(client)
+            finally:
+                require(not sent, "A request was sent after the deadline passed")
+                require(bool(connections), "The connection was not closed")
+
+    scenario(
+        "a_dictionary_lookup_that_outlasts_the_deadline_fails_before_anything_is_sent",
+        lambda: stalled(lambda _client: transport.request_dictionary(contract.dictionary_url(batch))),
+        "network failure",
+    )
+    scenario(
+        "a_keyed_lookup_that_outlasts_the_deadline_fails_before_anything_is_sent",
+        lambda: stalled(lambda client: transport.live_request(plan, batch, client)),
+        "network failure",
+    )
+
+
+def drip_scenario(scenario: Callable[..., None], plan: dict) -> None:
+    """A reply that arrives a little at a time cannot outlast the request deadline: the reply is read in pieces with the time check between them."""
+    batch = plan["batches"][0]
+
+    def dripping() -> None:
+        clock, sent = [0.0], list[str]()
+
+        class Drip(Reply):
+            def read(self, size: int = -1) -> bytes:
+                clock[0] += 50.0
+                return b"["
+
+        environment = {k: v for k, v in os.environ.items() if k != "HAI_CAPTURE_ROOT"}
+        with (
+            patch.dict(os.environ, environment, clear=True),
+            patch.object(transport.time, "monotonic", lambda: clock[0]),
+            patch.object(http.client, "HTTPSConnection", connection_class(lambda _path: Drip(200, b""), sent)),
+        ):
+            transport.request_dictionary(contract.dictionary_url(batch))
+
+    scenario("a_reply_that_drips_past_the_deadline_is_refused_before_it_is_read_to_the_end", dripping, "network failure")
 
 
 def transport_scenarios(scenario: Callable[..., None], root: Path, plan: dict) -> None:

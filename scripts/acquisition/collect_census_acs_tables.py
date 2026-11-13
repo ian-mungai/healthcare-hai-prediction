@@ -27,15 +27,6 @@ from scripts.infrastructure.render_project_config import load_configuration
 LOGGER = logging.getLogger(__name__)
 ROOT = REPO_ROOT / "data/datasets/historical_acquisition/census_acs_tables"
 FOOTNOTE = re.compile(r"_[0-9A-Z]+[EM]A$")
-GOVERNANCE = {
-    "access_class": "public",
-    "contains_phi": False,
-    "contains_pii": False,
-    "credential_reference": "census_api_key",
-    "credentials_required": True,
-    "license_or_terms_url": None,
-    "use_restrictions": ["Public aggregate data only; all source/measure, geography, revision and modeling holds remain."],
-}
 
 
 def derived_name(batch: dict) -> str:
@@ -52,18 +43,6 @@ def finish_receipt(receipt: dict, snapshot: Path, source: dict) -> Path:
     contract.verify_capture(receipt, source, json.loads(receipt["lineage"]["extraction_or_query"]), snapshot, False)
     write_once(path, encoded_json(receipt))
     return path
-
-
-def period(year: int) -> dict:
-    """The five-year survey window ending in the table year."""
-    return {
-        "label": "Five-year survey estimate window",
-        "start_date": f"{year - 4}-01-01",
-        "end_date": f"{year}-12-31",
-        "period_type": "multi_year",
-        "source_basis": "field_observed",
-        "target_alignment": "unknown",
-    }
 
 
 def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
@@ -89,16 +68,15 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
     metadata = {
         "publisher": "U.S. Census Bureau",
         "release": {
-            "advertised_history": f"{batch['year'] - 4}-{batch['year']} ACS 5-Year Estimates, {batch['product']} tables",
+            **contract.release_text(batch),
             "dataset_version": None,
-            "observed_history": f"{batch['year']} {batch['table']} all-fields county request; all review holds preserved",
             "publisher_release_label": None,
             "publisher_updated_at": None,
             "release_date": None,
             "revision_status": "unknown",
         },
-        "measurement_periods": [period(batch["year"])],
-        "governance": GOVERNANCE,
+        "measurement_periods": [contract.period(batch["year"])],
+        "governance": contract.GOVERNANCE,
     }
     stamp = datetime.fromisoformat(envelope["retrieved_at_utc"]).strftime("%Y%m%dT%H%M%SZ")
     receipt = base_receipt(source, metadata, f"Census_ACS_Tables__{stamp}__{batch['id'][:32]}", validator)
@@ -110,7 +88,7 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
         http_status=200,
         request_method="GET",
         request_parameters=contract.request_for(batch),
-        tool_name="census_acs_tables_collector",
+        tool_name=contract.TOOL_NAME,
         tool_version="1.0.0",
         pagination={
             "required": False,
@@ -147,8 +125,8 @@ def make_receipt(plan: dict, batch: dict, envelope: dict, root: Path) -> Path:
     receipt["lineage"]["extraction_or_query"] = json.dumps(
         {
             "mode": "census_acs_tables",
-            "route_id": f"ACS:tables_api:{batch['product']}:{batch['table']}:{batch['year']}",
-            "scope": f"{batch['year']} {batch['table']} five-year county table",
+            "route_id": contract.route_id(batch),
+            "scope": contract.scope_text(batch),
             "batch_id": batch["id"],
             "plan_sha256": canonical_hash(plan),
             "registry_sha256": canonical_hash(registry),
@@ -210,6 +188,7 @@ def verify_storage(path: Path, receipt: dict, settings: dict) -> None:
 def store(plan: dict, identity: str, receipt_path: Path, upload: bool, client: AwsCli | None, outputs: dict) -> dict:
     """Store one verified snapshot once; a completed one only re-verifies."""
     receipt = verify_local(receipt_path)
+    require(json.loads(receipt["lineage"]["extraction_or_query"])["batch_id"] == identity, "Census tables capture differs from the selected unit")
     done_path = receipt_path.parent.parent / "completed.json"
     if done_path.exists():
         done = read_json(done_path)
@@ -219,6 +198,7 @@ def store(plan: dict, identity: str, receipt_path: Path, upload: bool, client: A
         require(
             done["status"] == "stored" and done["model_eligible"] is False and plan_matches(plan, done["plan_sha256"]), "Census tables completion hold differs"
         )
+        require(done["rows"] == receipt["schema_profile"]["row_count"], "Census tables completion row count differs")
         settings = client.configuration if client is not None else load_configuration(REPO_ROOT / ".env")[0]
         verify_storage(receipt_path, receipt, settings)
         return done

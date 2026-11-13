@@ -28,6 +28,16 @@ GEOGRAPHY = ("GEO_ID", "NAME")
 PUERTO_RICO = "72"
 CONNECTICUT = "09"
 LABEL_ROW = ("Geography", "Geographic Area Name")
+GOVERNANCE = {
+    "access_class": "public",
+    "contains_phi": False,
+    "contains_pii": False,
+    "credential_reference": "census_api_key",
+    "credentials_required": True,
+    "license_or_terms_url": None,
+    "use_restrictions": ["Public aggregate data only; all source/measure, geography, revision and modeling holds remain."],
+}
+TOOL_NAME = "census_acs_tables_collector"
 PRODUCTS = {"subject": ("/subject", "ACSST5Y"), "profile": ("/profile", "ACSDP5Y"), "detailed": ("", "ACSDT5Y")}
 # Product, then table, to the stored vintages (owner decision "ACS API vintages: the stored set only", Nov 12 2026).
 SCOPE = {
@@ -87,6 +97,36 @@ def batch_id(batch: dict) -> str:
 def queue_snapshot_id(batch: dict) -> str:
     """The deterministic snapshot ID of a queue entry: the plan version and the first 32 characters of the batch ID, no time."""
     return f"Census_ACS_Tables__v1__{batch['id'][:32]}"
+
+
+def period(year: int) -> dict:
+    """The five-year survey window ending in the table year."""
+    return {
+        "label": "Five-year survey estimate window",
+        "start_date": f"{year - 4}-01-01",
+        "end_date": f"{year}-12-31",
+        "period_type": "multi_year",
+        "source_basis": "field_observed",
+        "target_alignment": "unknown",
+    }
+
+
+def release_text(batch: dict) -> dict:
+    """The two release statements a capture of this unit makes."""
+    return {
+        "advertised_history": f"{batch['year'] - 4}-{batch['year']} ACS 5-Year Estimates, {batch['product']} tables",
+        "observed_history": f"{batch['year']} {batch['table']} all-fields county request; all review holds preserved",
+    }
+
+
+def route_id(batch: dict) -> str:
+    """The route a capture of this unit records in its lineage."""
+    return f"ACS:tables_api:{batch['product']}:{batch['table']}:{batch['year']}"
+
+
+def scope_text(batch: dict) -> str:
+    """The scope a capture of this unit records in its lineage."""
+    return f"{batch['year']} {batch['table']} five-year county table"
 
 
 def scope_batches(scope: dict | None = None) -> list[dict]:
@@ -200,7 +240,7 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "Census tables schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "Census tables modeling hold differs")
     require_code(lineage["code_sha256"])
-    require(receipt["governance"]["credential_reference"] == "census_api_key", "Census tables credential reference differs")
+    require(receipt["governance"] == GOVERNANCE and receipt["source"]["source_record_id"] == "ACS", "Census tables governance differs")
     matches = [b for b in plan["batches"] if b["id"] == lineage["batch_id"]]
     require(len(matches) == 1, "Census tables capture batch not in its plan")
     batch = matches[0]
@@ -208,6 +248,20 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(
         acq["requested_url"] == batch["endpoint"] and acq["request_parameters"] == request_for(batch) and acq["http_status"] == 200,
         "Census tables request differs",
+    )
+    require(acq["resolved_url"] == batch["endpoint"], "Census tables resolved URL differs")
+    require(
+        acq["request_method"] == "GET" and acq["transport_mode"] == "api_response" and acq["tool_name"] == TOOL_NAME, "Census tables request method differs"
+    )
+    require(receipt["measurement_periods"] == [period(batch["year"])], "Census tables measurement period differs")
+    require(all(receipt["release"][k] == v for k, v in release_text(batch).items()), "Census tables release text differs")
+    require(
+        receipt["snapshot_id"].startswith("Census_ACS_Tables__") and receipt["snapshot_id"].endswith(f"__{batch['id'][:32]}"),
+        "Census tables snapshot ID differs",
+    )
+    require(
+        lineage["route_id"] == route_id(batch) and lineage["scope"] == scope_text(batch) and lineage["mode"] == "census_acs_tables",
+        "Census tables route differs",
     )
     roles = {a["role"]: a for a in receipt["artifacts"]}
     require(
@@ -227,7 +281,10 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
         proof["statistics"] == statistics
         and proof["sha256"] == digest(raw)
         and proof["dictionary_sha256"] == digest(stored_dictionary)
-        and proof["request"] == request_for(batch),
+        and proof["request"] == request_for(batch)
+        and proof["retrieved_at_utc"] == acq["retrieved_at_utc"],
         "Census tables proof differs",
     )
-    require(receipt["schema_profile"]["row_count"] == statistics["rows"], "Census tables schema profile differs")
+    profile, headers = receipt["schema_profile"], derived.decode().split("\n", 1)[0].split(",")
+    require(profile["native_headers"] == headers and profile["schema_fingerprint_sha256"] == canonical_hash(headers), "Census tables native headers differ")
+    require(profile["row_count"] == statistics["rows"] == profile["parsed_row_count"], "Census tables schema profile differs")
