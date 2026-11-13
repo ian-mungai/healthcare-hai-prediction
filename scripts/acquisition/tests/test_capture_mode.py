@@ -28,7 +28,10 @@ from scripts.acquisition import (
     transport,
 )
 from scripts.acquisition import completion_record as record
+from scripts.acquisition import onc_mu_contract as onc_contract
 from scripts.acquisition import redownload_route as route
+from scripts.acquisition.run_onc_mu_e2e import body as onc_body
+from scripts.acquisition.run_onc_mu_e2e import locked as onc_locked
 from scripts.acquisition.s3_store import encoded_json
 from scripts.acquisition.source_registry import REPO_ROOT, read_json
 from scripts.acquisition.tests.test_task_owners import ACCOUNT, BUCKET, TaskS3, Web, opener, storage
@@ -601,3 +604,58 @@ def test_a_plan_item_names_exactly_one_planned_item(monkeypatch: pytest.MonkeyPa
     for spec in ({"plan_item": "none"}, {}):
         with pytest.raises(mode.SpecError):
             mode.planned_item(run, "hud_api", spec)
+
+
+def test_a_real_collector_capture_runs_through_capture_mode_and_a_second_run_sends_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The ONC collector, its locked plan and its contract run for real; only the publisher and the bucket are stand-ins."""
+    data = onc_body()
+    plan, plan_path = onc_locked(tmp_path, data)
+    versions = tmp_path / "onc_versions.json"
+    s3_store.write_once(versions, encoded_json({"versions": [{"code_sha256": onc_contract.collector_code_hashes()}]}))
+    monkeypatch.setattr(onc_contract, "PLAN_PATH", plan_path)
+    monkeypatch.setattr(onc_contract, "VERSIONS_PATH", versions)
+    (tmp_path / "world").mkdir()
+    world = World(tmp_path / "world", ["x.csv"])
+    unit = world.units[0] | {"url": plan["url"], "source_id": onc_contract.SOURCE_ID, "mode": "onc_mu_hospital", "bytes": len(data)}
+    world.units[0] = unit
+    world.bodies.clear()
+    world.bodies[plan["url"]] = data
+    world.write_inputs({unit["snapshot_id"]: {"mode": "onc_mu_hospital", "plan_item": plan["id"], "stored_data_files": []}})
+    first = world.run()
+    check(first["counters"]["units_attempted"] == 1 and len(first["units"]["completed"]) == 1, f"{first['units']} {first['counters']}")
+    (only,) = world.records().values()
+    check(only["mode"] == "onc_mu_hospital" and len(only["data_objects"]) >= 1, "the record names the collector's data")
+    check(mode.verify_records(storage(world.bucket), ROOT) == [], "the record verifies by version")
+    again = world.run()
+    check(again["counters"]["skipped_complete"] == 1 and again["counters"]["http_requests"] == 0, str(again["counters"]))
+
+
+def test_an_mmd_unit_is_keyed_by_its_measure_and_year_and_needs_no_plan_item() -> None:
+    unit = unit_of("m.csv") | {"mode": "mmd_api"}
+    first = {"mode": "mmd_api", "mmd": {"measure_id": "C258.07", "year": 2012}}
+    second = {"mode": "mmd_api", "mmd": {"measure_id": "C258.07", "year": 2013}}
+    check(mode.unit_key_of(unit, first) != mode.unit_key_of(unit, second), "the year is part of the identity")
+    for spec in ({"mode": "mmd_api"}, {"mode": "mmd_api", "mmd": {"measure_id": "C258.07"}}):
+        with pytest.raises(mode.SpecError):
+            mode.unit_key_of(unit, spec)
+    flagged = unit_of("n.csv") | {"flags": ["browser_export_moved_to_api:parity_verified"]}
+    check(
+        mode.unit_key_of(flagged, {"mode": "file", "mmd": first["mmd"]}) != mode.unit_key_of(flagged, {"mode": "file", "mmd": second["mmd"]}),
+        "a flagged file unit is an MMD unit",
+    )
+
+
+def test_a_stale_expected_digest_in_a_receipt_template_is_ignored_and_a_reference_only_unit_still_gets_a_record(tmp_path: Path) -> None:
+    world = World(tmp_path, ["a.csv", "doc.pdf"])
+    specs = read_json(tmp_path / "capture_specs.json")["specs"]
+    first, second = specs.values()
+    first["receipt_template"]["expected_sha256"] = "0" * 64
+    second["receipt_template"]["role"] = "methodology"
+    second["expected_format"] = "pdf"
+    world.write_inputs(specs)
+    world.bodies[world.units[1]["url"]] = b"%PDF-1.7\nexample documentation\n%%EOF"
+    result = world.run()
+    check(len(result["units"]["completed"]) == 2, f"{result['units']}")
+    by_name = {item["data_objects"][0]["stored_file_name"] if item["data_objects"] else "": item for item in world.records().values()}
+    check(set(by_name) == {"a.csv", ""}, f"the reference-only unit names no data object: {sorted(by_name)}")
+    check([item["role"] for item in by_name[""]["other_objects"]] == ["methodology"], "its document is named with its role")

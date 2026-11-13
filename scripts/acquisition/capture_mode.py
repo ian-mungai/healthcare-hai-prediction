@@ -266,15 +266,15 @@ def unit_identity(unit: dict, spec: Mapping[str, Any]) -> dict[str, Any]:
     if spec.get("mode") != unit["mode"]:
         raise SpecError("The unit's specification names another mode")
     selection: dict[str, Any] = {"pages": unit["pages"], "members": member_map_id(spec)}
-    if handler in COLLECTOR_MODES:
+    if handler == "mmd_api":
+        mmd = spec.get("mmd")
+        if not (isinstance(mmd, dict) and isinstance(mmd.get("measure_id"), str) and isinstance(mmd.get("year"), int)):
+            raise SpecError("An MMD unit needs its measure and year in its specification")
+        selection["mmd"] = {"measure_id": mmd["measure_id"], "year": mmd["year"]}
+    elif handler in COLLECTOR_MODES:
         if not (isinstance(spec.get("plan_item"), str) and spec["plan_item"]):
             raise SpecError("A collector unit needs a plan_item in its specification")
         selection["plan_item"] = spec["plan_item"]
-        if handler == "mmd_api":
-            mmd = spec.get("mmd")
-            if not (isinstance(mmd, dict) and isinstance(mmd.get("measure_id"), str) and isinstance(mmd.get("year"), int)):
-                raise SpecError("An MMD unit needs its measure and year in its specification")
-            selection["mmd"] = {"measure_id": mmd["measure_id"], "year": mmd["year"]}
     request = {"method": "POST" if handler == "bls_api_v2" else "GET", "url": canonical_url(unit["url"])}
     return {"source_id": unit["source_id"], "mode": handler, "request": request, "selection": selection}
 
@@ -494,6 +494,7 @@ def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
     fmt = spec.get("expected_format")
     if not isinstance(fmt, str):
         raise SpecError("A file unit needs an expected_format in its specification")
+    template = {name: value for name, value in template.items() if name != "expected_sha256"}
     plan = template | {"route_id": redownload.route_id_of(unit, registry), "file_name": download_name(unit, spec), "expected_format": fmt}
     if spec.get("reviewed_unsigned_redirect"):
         from scripts.acquisition.history_redirects import install_redirect
