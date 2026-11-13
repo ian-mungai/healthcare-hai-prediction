@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -43,11 +44,16 @@ def test_the_block_passes_the_script_no_option_because_it_takes_everything_from_
 
 
 TOOLS = ("git", "grep", "head", "sed", "zsh")
+ISOLATION = ("GIT_CONFIG_NOSYSTEM", "GIT_CONFIG_GLOBAL")
 
 
 def stand_in(tmp_path: Path, env_text: str, signed_in: bool = True) -> Path:
-    """A repository folder whose .venv python and ``gh`` are stand-ins, and a child environment that reaches no other ``gh``, login or token."""
-    run_command("git", ["init", "-q", str(tmp_path)], check=True)
+    """A repository folder whose .venv python and ``gh`` are stand-ins, and a child environment that reaches no other ``gh``, GitHub login, token or Git
+    configuration. The environment isolates PATH, the ``gh`` login and the Git configuration files. It does not isolate the network."""
+    for name in ("home", "xdg", "empty_gh_config"):
+        (tmp_path / name).mkdir()
+    (tmp_path / "empty_gitconfig").write_text("")
+    run_command("git", ["init", "-q", str(tmp_path)], env={"PATH": os.environ["PATH"], **git_isolation(tmp_path)}, check=True)
     (tmp_path / ".env").write_text(env_text)
     (tmp_path / ".venv/bin").mkdir(parents=True)
     tool = tmp_path / ".venv/bin/python"
@@ -72,16 +78,28 @@ def stand_in(tmp_path: Path, env_text: str, signed_in: bool = True) -> Path:
         wrapper = tmp_path / "tool_bin" / name
         wrapper.write_text(f'#!/bin/sh\nexec "{found}" "$@"\n')
         wrapper.chmod(0o755)
-    (tmp_path / "home").mkdir()
-    (tmp_path / "empty_gh_config").mkdir()
     (tmp_path / "block.zsh").write_text(block())
     return tmp_path
 
 
+def git_isolation(folder: Path) -> dict[str, str]:
+    """Git reads no system or global configuration: the system file is off, the global file is an empty one and HOME and XDG_CONFIG_HOME are empty folders."""
+    return {
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_CONFIG_GLOBAL": str(folder / "empty_gitconfig"),
+        "HOME": str(folder / "home"),
+        "XDG_CONFIG_HOME": str(folder / "xdg"),
+    }
+
+
+def child_environment(folder: Path) -> dict[str, str]:
+    """The child's whole environment: only the stand-in ``gh`` and the wrapped tools on PATH, an empty GitHub configuration folder, no token and no Git
+    configuration outside the repository. It sets no network limit."""
+    return {"PATH": f"{folder / 'gh_bin'}:{folder / 'tool_bin'}", "GH_CONFIG_DIR": str(folder / "empty_gh_config"), **git_isolation(folder)}
+
+
 def run_block(folder: Path) -> CompletedProcess[str]:
-    """Run the block in zsh with only the stand-in ``gh`` on PATH, an empty GitHub configuration folder and no token."""
-    environment = {"PATH": f"{folder / 'gh_bin'}:{folder / 'tool_bin'}", "HOME": str(folder / "home"), "GH_CONFIG_DIR": str(folder / "empty_gh_config")}
-    return run_command(str(ZSH), ["block.zsh"], cwd=folder, env=environment, timeout=60)
+    return run_command(str(ZSH), ["block.zsh"], cwd=folder, env=child_environment(folder), timeout=60)
 
 
 FULL = f'PROJECT_NAME={PROJECT}\nAWS_REGION="{REGION}"\nAWS_PROFILE={PROFILE}\nS3_BUCKET={BUCKET}\nOTHER=1\n'
@@ -114,3 +132,20 @@ def test_a_missing_env_name_stops_the_block_before_the_script_runs_and_names_the
     done = run_block(folder)
     check(done.returncode != 0 and "S3_BUCKET" in done.stderr, f"it stopped and named the name: {done.returncode} {done.stderr}")
     check(not (folder / "calls.txt").exists(), "the script did not run")
+
+
+@pytest.mark.skipif(ZSH is None, reason="zsh is not installed")
+def test_the_child_reads_no_system_or_global_git_setting_even_where_one_is_planted(tmp_path: Path) -> None:
+    folder = stand_in(tmp_path, FULL)
+    system = tmp_path / "planted_system_config"
+    system.write_text("[probe]\n\tsystem = planted\n")
+    (folder / "home/.gitconfig").write_text("[probe]\n\thome = planted\n")
+    (folder / "xdg/git").mkdir(parents=True)
+    (folder / "xdg/git/config").write_text("[probe]\n\txdg = planted\n")
+    planted = {**child_environment(folder), "GIT_CONFIG_SYSTEM": str(system)}
+    listing = ["-c", "git config --list --show-origin"]
+    child = run_command(str(ZSH), listing, cwd=folder, env=planted, timeout=60)
+    check(child.returncode == 0 and "probe." not in child.stdout, f"the child read a planted setting: {child.stdout} {child.stderr}")
+    control = {name: value for name, value in planted.items() if name not in ISOLATION}
+    seen = run_command(str(ZSH), listing, cwd=folder, env=control, timeout=60).stdout
+    check(all(marker in seen for marker in ("probe.system=planted", "probe.home=planted", "probe.xdg=planted")), f"the planted settings are not real: {seen}")
