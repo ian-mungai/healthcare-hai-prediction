@@ -17,7 +17,16 @@ DIGEST = "ab" * 32
 INVENTORY = "cd" * 32
 SERVING_REQUEST = {"hai_type": "HAI_1", "candidate_version": "3", "percent": 10, "deploy_mode": "canary"}
 # Every DAG step launches on AWS, so the training parameters name the aws MLflow lane (lead decision, Nov 7 2026).
-TRAIN_PARAMS = {"run_id": RUN, "mode": "real", "features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "aws"}
+TRAIN_PARAMS = {
+    "run_id": RUN,
+    "mode": "real",
+    "features_run": "latest",
+    "population": "primary",
+    "hai_types": ["HAI_1"],
+    "trigger": "manual",
+    "mlflow": "aws",
+    "model": "m2",
+}
 
 
 def collections_of_table_map() -> dict[str, str]:
