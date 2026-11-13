@@ -1184,3 +1184,153 @@ def test_a_stale_record_of_another_identity_still_stops_the_unit_when_a_completi
     with pytest.raises(manual_units.ManualUnitError, match="newest stale record") as error:
         refused_run(world, unit)
     check(unit_key_of(unit) in str(error.value) and world.site.seen == [] and world.bucket.writes() == [], "refused before any request or write")
+
+
+DICTIONARY = ("dictionary", "files/data_dictionary.pdf")
+
+
+def other_key(unit: dict[str, Any], tag: str, path: str, prefix: str = "raw/") -> str:
+    return f"{prefix}example_publisher/example_collection/references/d/{unit['snapshot_id']}/{tag}_{path}"
+
+
+def other_body(tag: str, role: str, path: str) -> bytes:
+    return f"{tag} {role} {path}".encode()
+
+
+def completion_with_others(
+    world: World, unit: dict[str, Any], tag: str, retrieved_at: str, others: list[tuple[str, str]], *, prefix: str = "raw/", **changes: Any
+) -> tuple[str, dict[str, Any]]:
+    """A valid completion record of the unit with its two data objects and the given (role, path) other objects, every one stored."""
+    named = [world.bucket.seed(other_key(unit, tag, path, prefix), other_body(tag, role, path)) | {"role": role} for role, path in others]
+    return completion_for(world, unit, tag, retrieved_at, prefix=prefix, other_objects=named, **changes)
+
+
+def other_artifact_of(unit: dict[str, Any], tag: str, role: str, path: str, retrieved_at: str, read_root: str = "raw/", prefix: str = "raw/") -> dict[str, Any]:
+    """What a stale record must say about one stored other object: its role, and the key's last segment as its stored file name."""
+    body = other_body(tag, role, path)
+    return {
+        "key": other_key(unit, tag, path, prefix),
+        "version_id": "v1",
+        "sha256": hashlib.sha256(body).hexdigest(),
+        "byte_count": len(body),
+        "role": role,
+        "stored_file_name": other_key(unit, tag, path, prefix).rsplit("/", 1)[-1],
+        "retrieved_at_utc": retrieved_at,
+        "read_root": read_root,
+    }
+
+
+def expected_capture(
+    unit: dict[str, Any], tag: str, others: list[tuple[str, str]], retrieved_at: str, read_root: str = "raw/", prefix: str = "raw/"
+) -> list[dict[str, Any]]:
+    data = [artifact_of(unit, tag, name, retrieved_at, read_root, prefix) for name in OBJECT_NAMES]
+    more = [other_artifact_of(unit, tag, role, path, retrieved_at, read_root, prefix) for role, path in others]
+    return sorted(data + more, key=lambda item: item["key"])
+
+
+def test_a_completion_record_with_a_dictionary_names_the_data_and_the_dictionary_objects_with_their_roles(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", NEWER, [DICTIONARY])
+    report = refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(record["last_capture"] == expected_capture(unit, "a", [DICTIONARY], NEWER), f"last capture {record['last_capture']}")
+    check({item["role"] for item in record["last_capture"]} == {"data", "dictionary"}, "both roles")
+    check(
+        [item["stored_file_name"] for item in record["last_capture"] if item["role"] == "dictionary"] == ["data_dictionary.pdf"],
+        "the dictionary's stored file name is the key's last segment",
+    )
+    check(record["last_capture_verified"] is True and report.missing_units == [], "verified")
+    check(report.stale_units[0]["last_retrieved_at_utc"] == NEWER, f"list {report.stale_units}")
+
+
+def test_the_head_check_reads_the_exact_version_of_every_listed_object_the_dictionary_included(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", NEWER, [DICTIONARY])
+    world.bucket.calls.clear()
+    refused_run(world, unit)
+    heads = [key for operation, key in world.bucket.calls if operation == "head-object"]
+    check(sorted(heads) == sorted(item["key"] for item in only_stale(world, unit)["last_capture"]), f"heads {heads}")
+    check(other_key(unit, "a", DICTIONARY[1]) in heads, "the dictionary was checked")
+
+
+@pytest.mark.parametrize("role", ["dictionary", "methodology", "reference", "api_page", "evidence"])
+def test_every_other_object_of_the_newest_completion_is_listed_with_its_own_role(world: World, role: str) -> None:
+    [unit] = hud_units(world, 1)
+    others = [(role, "files/notes.pdf"), ("reference", "lookup.csv")]
+    completion_with_others(world, unit, "a", NEWER, others)
+    refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(record["last_capture"] == expected_capture(unit, "a", others, NEWER), f"last capture {record['last_capture']}")
+    check(record["last_capture_verified"] is True, "verified")
+
+
+@pytest.mark.parametrize(
+    ("prefix", "read_root"),
+    [("raw/", "raw/"), ("ingestion_test/t1/bronze_objects/", ""), ("", "")],
+    ids=["raw_root", "test_folder", "bucket_root"],
+)
+def test_the_read_root_of_each_other_object_is_the_root_its_key_sits_under(world: World, prefix: str, read_root: str) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", NEWER, [DICTIONARY], prefix=prefix)
+    refused_run(world, unit)
+    check(only_stale(world, unit)["last_capture"] == expected_capture(unit, "a", [DICTIONARY], NEWER, read_root, prefix), "roots")
+
+
+@pytest.mark.parametrize("value", ISO_FORMS, ids=["z", "offset", "microseconds_and_offset", "fraction_and_z", "other_offset"])
+def test_the_dictionary_carries_the_completion_time_in_the_record_form(world: World, value: str) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", value, [DICTIONARY])
+    refused_run(world, unit)
+    listed = only_stale(world, unit)["last_capture"]
+    check("dictionary" in {item["role"] for item in listed}, "the dictionary is listed")
+    check({item["retrieved_at_utc"] for item in listed} == {"2026-09-24T01:47:28Z"}, "one stored time form for every object")
+
+
+def test_only_the_newest_completion_lists_its_other_objects_and_an_older_completions_dictionary_is_retired(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", OLDER, [DICTIONARY, ("methodology", "method.pdf")])
+    completion_with_others(world, unit, "b", NEWER, [("reference", "lookup.csv")])
+    refused_run(world, unit)
+    check(only_stale(world, unit)["last_capture"] == expected_capture(unit, "b", [("reference", "lookup.csv")], NEWER), "newest only")
+
+
+def test_a_newest_completion_with_no_other_object_lists_data_objects_only_and_not_an_older_dictionary(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    completion_with_others(world, unit, "a", OLDER, [DICTIONARY])
+    completion_for(world, unit, "b", NEWER)
+    refused_run(world, unit)
+    check(only_stale(world, unit)["last_capture"] == expected_capture(unit, "b", [], NEWER), "data only")
+
+
+@pytest.mark.parametrize("fault", ["absent", "wrong_digest", "wrong_length", "wrong_version"])
+def test_a_missing_or_changed_dictionary_object_lists_the_unit_as_missing_though_its_data_is_there(world: World, fault: str) -> None:
+    [unit] = hud_units(world, 1)
+    path = DICTIONARY[1]
+    body = other_body("a", "dictionary", path)
+    key = other_key(unit, "a", path)
+    real = (
+        world.bucket.seed(key, body)
+        if fault != "absent"
+        else {"key": key, "version_id": "v1", "sha256": hashlib.sha256(body).hexdigest(), "byte_count": len(body)}
+    )
+    changes: dict[str, dict[str, Any]] = {
+        "wrong_digest": {"sha256": "0" * 64},
+        "wrong_length": {"byte_count": len(body) + 1},
+        "wrong_version": {"version_id": "v9"},
+    }
+    named = real | changes.get(fault, {}) | {"role": "dictionary"}
+    completion_for(world, unit, "a", NEWER, other_objects=[named])
+    report = refused_run(world, unit)
+    record = only_stale(world, unit)
+    check(key in [item["key"] for item in record["last_capture"]], "the dictionary is named")
+    check(record["last_capture_verified"] is False, "not verified")
+    check([item["snapshot_id"] for item in report.missing_units] == [unit["snapshot_id"]], f"missing {report.missing_units}")
+    check(report.stale_units == [], f"a missing unit is not also stale: {report.stale_units}")
+
+
+def test_an_other_object_whose_key_has_no_last_segment_stops_the_unit_by_name_and_never_falls_back(world: World) -> None:
+    [unit] = hud_units(world, 1)
+    key = f"raw/example_publisher/example_collection/references/d/{unit['snapshot_id']}/folder/"
+    named = world.bucket.seed(key, b"folder marker") | {"role": "dictionary"}
+    completion_for(world, unit, "a", NEWER, other_objects=[named])
+    stopped_without_a_record(world, unit, "no stored file name")

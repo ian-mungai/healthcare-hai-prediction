@@ -9,8 +9,8 @@ generic agent header of the reviewed transport.
 * Every request to a manual host is at least 5 s after the last one, retries and redirects included, one at a time. A redirect destination is checked
   against robots.txt before it is requested. After 2 units of a host end with 401, 403 or 429 the run stops asking that host.
 * A unit with a stale record younger than 20 hours is skipped, so a repeat run on the same day sends nothing.
-* A stale record names, as the last capture, the data objects of the unit's newest completion record, and the specification's pointer only when the
-  unit has no completion record. A completion record that is unreadable or refused stops the unit.
+* A stale record names, as the last capture, the data and other objects of the unit's newest completion record, and the specification's pointer only
+  when the unit has no completion record. A completion record that is unreadable or refused stops the unit.
 """
 
 from __future__ import annotations
@@ -348,6 +348,9 @@ def read_completion(key: str, unit: dict, context: Context, local: Path) -> tupl
     differing = [name for name in ("collection", "source_id") if record[name] != expected[name]]
     if differing:
         raise ManualUnitError(f"The completion record {key} does not belong to unit {unit_key}: its {', '.join(differing)} differ")
+    nameless = [item["key"] for item in record["other_objects"] if not item["key"].rsplit("/", 1)[-1]]
+    if nameless:
+        raise ManualUnitError(f"The completion record {key} of unit {unit_key} is refused: {nameless[0]} has no stored file name")
     return moment, record
 
 
@@ -369,7 +372,10 @@ def newest_completion(unit: dict, context: Context) -> dict[str, Any] | None:
 
 
 def completion_pointers(record: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """The data objects of a completion record, in the stale record's artifact form."""
+    """The data and other objects of a completion record, in the stale record's artifact form.
+
+    Another object carries no stored file name in the completion record, so the last segment of its key stands for it.
+    """
     retrieved = record_time(record["retrieved_at_utc"])
     return [
         {
@@ -378,11 +384,11 @@ def completion_pointers(record: Mapping[str, Any]) -> list[dict[str, Any]]:
             "sha256": item["sha256"],
             "byte_count": item["byte_count"],
             "role": item["role"],
-            "stored_file_name": item["stored_file_name"],
+            "stored_file_name": item["stored_file_name"] if "stored_file_name" in item else item["key"].rsplit("/", 1)[-1],
             "retrieved_at_utc": retrieved,
             "read_root": raw_root.RAW_ROOT if item["key"].startswith(raw_root.RAW_ROOT) else "",
         }
-        for item in record["data_objects"]
+        for item in [*record["data_objects"], *record["other_objects"]]
     ]
 
 
