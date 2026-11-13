@@ -43,11 +43,6 @@ output "ec2_capacity_provider_name" {
   value       = aws_ecs_capacity_provider.host.name
 }
 
-output "fargate_capacity_provider_names" {
-  description = "Fargate capacity providers for run tasks: Spot first, on-demand as the fallback. The cluster default is Spot."
-  value       = ["FARGATE_SPOT", "FARGATE"]
-}
-
 output "host_autoscaling_group_name" {
   description = "Auto Scaling group of the container host, created by the IAM stack: 0 or 1 instances; set the desired capacity to turn the host on or off."
   value       = data.aws_autoscaling_group.host.name

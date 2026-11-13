@@ -222,12 +222,12 @@ run "cluster_capacity" {
   assert {
     condition = (
       aws_ecs_cluster.platform.name == "example_project_cluster_dev" &&
-      toset(aws_ecs_cluster_capacity_providers.platform.capacity_providers) == toset(["example_project_host_dev", "FARGATE", "FARGATE_SPOT"]) &&
-      one(aws_ecs_cluster_capacity_providers.platform.default_capacity_provider_strategy).capacity_provider == "FARGATE_SPOT" &&
+      toset(aws_ecs_cluster_capacity_providers.platform.capacity_providers) == toset(["example_project_host_dev"]) &&
+      one(aws_ecs_cluster_capacity_providers.platform.default_capacity_provider_strategy).capacity_provider == "example_project_host_dev" &&
       aws_ecs_capacity_provider.host.name == "example_project_host_dev" &&
       one(aws_ecs_capacity_provider.host.auto_scaling_group_provider).auto_scaling_group_arn == data.aws_autoscaling_group.host.arn
     )
-    error_message = "The cluster offers the host (the IAM stack's group), Fargate Spot and on-demand Fargate, with Spot as the default for run tasks."
+    error_message = "The cluster offers only the host (the IAM stack's group) as a capacity provider and as the default for run tasks: no Fargate provider remains."
   }
 }
 
