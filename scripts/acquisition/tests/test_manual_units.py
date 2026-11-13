@@ -10,8 +10,10 @@ import hashlib
 import io
 import json
 import re
+import urllib.parse
 import urllib.request
 import zipfile
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from email.message import Message
@@ -577,7 +579,7 @@ def test_a_stale_record_is_exactly_the_agreed_schema_and_never_replaced(world: W
     fields |= {"code_sha256", "bundle_sha256", "last_capture_verified", "last_capture"}
     check(set(raw) == fields, f"fields {sorted(set(raw) ^ fields)}")
     check(raw["kind"] == "ingestion_unit_stale" and raw["schema_version"] == 1 and raw["run_id"] == RUN_1, "identity fields")
-    check(raw["attempted_at_utc"] == "2026-11-13T02:00:05Z" or raw["attempted_at_utc"].startswith("2026-11-13T02:00:"), f"time {raw['attempted_at_utc']}")
+    check(raw["attempted_at_utc"] == "2026-11-13T02:00:05Z", f"robots at 0 s, the unit 5 s later: {raw['attempted_at_utc']}")
     artifact = raw["last_capture"][0]
     check(
         set(artifact) == {"key", "version_id", "sha256", "byte_count", "role", "stored_file_name", "retrieved_at_utc", "read_root"},
@@ -594,8 +596,6 @@ def test_a_stale_record_is_exactly_the_agreed_schema_and_never_replaced(world: W
     ):
         with pytest.raises(stale_record.StaleRecordError):
             stale_record.parse(bad)
-    world.bucket.versions[key].append(("v9", b"x"))
-    check(world.bucket.versions[key][0][1] != b"x", "the first version is untouched by the fake's own tamper")
 
 
 def test_a_mode_without_a_content_contract_is_refused_before_any_request(world: World) -> None:
@@ -638,3 +638,19 @@ def test_the_observer_reads_retry_after_the_way_the_transport_does_and_counts_ea
     answer = Answer(io.BytesIO(b""), headers, HUD_URL, 429)
     check(observer.https_response(request, answer) is answer, "the answer is passed on unchanged")
     check(observer.retry_after_too_long(transport.Limits().max_retry_delay) is too_long, f"Retry-After {value!r} against the 30 s limit")
+
+
+def test_every_manual_unit_of_the_tracked_bundle_is_runnable_and_bound_to_a_locked_plan() -> None:
+    folder = Path(__file__).resolve().parents[3] / "config/acquisition/baseline_run"
+    queue = json.loads((folder / "queue.json").read_text())["queue"]
+    specs = json.loads((folder / "capture_specs.json").read_text())["specs"]
+    scopes = manual_content.Scopes()
+    units = [unit for unit in queue if unit["disposition"] == "approved_manual" and unit["mode"] != "reference_download"]
+    check(Counter(unit["source_id"] for unit in units) == {"HUD": 44, "ACS": 16, "WONDER": 6}, "the manual set is HUD 44, ACS 16 and WONDER 6")
+    hud_files = {batch["file_name"] for batch in scopes.plan("hud_xlsx")["batches"]}
+    wonder_files = {wonder_export_contract.stored_name(batch) for batch in scopes.plan("wonder_export")["batches"]}
+    for unit in units:
+        mode, name = manual_content.plan_unit(unit, specs[unit["snapshot_id"]])
+        check(mode != "hud_xlsx" or name in hud_files, f"{name} is a planned HUD workbook")
+        check(mode != "wonder_export" or name in wonder_files, f"{name} is a planned WONDER export")
+        check(manual_units.is_manual_host(urllib.parse.urlsplit(unit["url"]).hostname or ""), f"{unit['url']} is on a manual host")
