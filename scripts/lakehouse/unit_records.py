@@ -37,15 +37,24 @@ class Selection:
     manifests: dict[str, dict[Identity, bytes]] = field(default_factory=lambda: defaultdict(dict))
     named: dict[str, dict[Identity, dict[str, Any]]] = field(default_factory=lambda: defaultdict(dict))
     superseded: dict[str, dict[Identity, dict[str, str]]] = field(default_factory=lambda: defaultdict(dict))
+    aliases: dict[str, dict[Identity, set[str | None]]] = field(default_factory=lambda: defaultdict(dict))
 
     def confirm(self, collection: str, identity: Identity, stored: dict[str, Any]) -> bool:
-        """Whether a record names this manifest entry. A named object whose digest, length or role differs from its manifest entry stops the run."""
+        """Whether this manifest entry is the one the record names: the named object with the role the record gives it.
+
+        Every entry for a named object must agree with the record on digest and length, or the run stops. An entry for the same object under another role is a
+        legitimate alias (the storage writer lists a data object again as transport evidence): it confirms nothing, and the run stops after the listing if no
+        entry carries the declared role.
+        """
         expected = self.named[collection].get(identity)
         if expected is None:
             return False
         found = stored["object"]
-        if (expected["sha256"], expected["byte_count"]) != (found.get("sha256"), found.get("byte_count")) or expected["role"] not in {None, stored.get("role")}:
+        if (expected["sha256"], expected["byte_count"]) != (found.get("sha256"), found.get("byte_count")):
             raise BronzeError(f"{expected['record']}: the record's SHA-256, length or role for {identity[0]} differs from its manifest")
+        if expected["role"] not in {None, stored.get("role")}:
+            self.aliases[collection].setdefault(identity, set()).add(stored.get("role"))
+            return False
         return True
 
 

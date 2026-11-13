@@ -562,9 +562,10 @@ def discover(
             raise BronzeError(f"{stale[0]}: the retired list entry matches no manifest object ({len(stale)} such entries)")
         unlisted = sorted(set(named) - seen)
         if unlisted:
-            raise BronzeError(
-                f"{named[unlisted[0]]['record']}: the record names {unlisted[0][0]}, which no manifest it names lists ({len(unlisted)} such objects)"
-            )
+            absent = unlisted[0]
+            if selection is not None and absent in selection.aliases[collection]:
+                raise BronzeError(f"{named[absent]['record']}: the record's SHA-256, length or role for {absent[0]} differs from its manifest")
+            raise BronzeError(f"{named[absent]['record']}: the record names {absent[0]}, which no manifest it names lists ({len(unlisted)} such objects)")
         if unnamed:
             table_name, keys = min(unnamed.items())
             raise BronzeError(f"{table_name}: {len(keys)} stored objects are named by no completion or stale record, for example {sorted(keys)[0]}")

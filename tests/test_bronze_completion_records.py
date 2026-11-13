@@ -78,8 +78,20 @@ class Lake:
         path.write_bytes(self.objects[(key, version_id)])
 
 
-def capture(lake: Lake, *, root: str, snapshot: str, files: list[tuple[str, str, bytes]], collection: str = COLLECTION) -> dict[str, Any]:
-    """Store data and other objects, a receipt and a manifest the way the acquisition storage step does. Return what a record would name."""
+def capture(
+    lake: Lake,
+    *,
+    root: str,
+    snapshot: str,
+    files: list[tuple[str, str, bytes]],
+    collection: str = COLLECTION,
+    alias: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Store data and other objects, a receipt and a manifest the way the acquisition storage step does. Return what a record would name.
+
+    With ``alias`` the manifest also lists each data object again under ``alias["role"]``, as the storage writer does for a response body it keeps as
+    transport evidence, and ``alias["object"]`` changes fields of that second entry's object.
+    """
     objects, entries = [], []
     for role, name, data in files:
         sha = digest(data)
@@ -89,6 +101,8 @@ def capture(lake: Lake, *, root: str, snapshot: str, files: list[tuple[str, str,
         entries.append(
             {"role": role, "dataset_id": "ca", "object": {"bucket": BUCKET, "key": key, "version_id": version, "sha256": sha, "byte_count": len(data)}}
         )
+        if alias is not None and role == "data":
+            entries.append({"role": alias["role"], "dataset_id": "ca", "object": {**entries[-1]["object"], **alias.get("object", {})}})
     base = f"{root}{collection}/manifests/release_date=2026-01-01/{snapshot}/ca"
     receipt_bytes = canonical({"snapshot_id": snapshot})
     receipt = {
@@ -839,6 +853,40 @@ def test_a_reversion_record_under_another_runs_name_is_refused_by_name(tmp_path:
     check(
         refused(lambda: discover(lake, tmp_path), wrong, "differs from the unit and payload its key names"),
         "a record copied under another run's name is refused",
+    )
+
+
+TRANSPORT = {"role": "transport_audit"}
+
+
+def test_a_data_object_the_manifest_also_lists_as_transport_evidence_loads_once_through_its_record(tmp_path: Path) -> None:
+    lake = Lake()
+    stored = capture(lake, root="raw/", snapshot="CA__a", files=[("data", "data.csv", ROWS_NEW), ("dictionary", "notes.csv", NOTES)], alias=TRANSPORT)
+    write_completion(lake, stored, UNIT_A, NEW)
+    inputs = discover(lake, tmp_path, BOTH)
+    check(loaded_keys(inputs) == {item["key"] for item in stored["objects"]} and len(inputs) == 2, "the data object loads once, and so does the dictionary")
+    inputs_after, _, rows = publish(lake, tmp_path, [])
+    check(len(inputs_after) == 2 and publish(lake, tmp_path, rows)[2] == rows, "the publication and its rerun are the same generation")
+
+
+@pytest.mark.parametrize("field", ["sha256", "byte_count"])
+def test_a_transport_alias_of_a_named_object_that_disagrees_on_digest_or_length_is_refused(tmp_path: Path, field: str) -> None:
+    lake = Lake()
+    other = digest(b"another") if field == "sha256" else 99
+    stored = capture(lake, root="raw/", snapshot="CA__a", files=[("data", "data.csv", ROWS_NEW)], alias=TRANSPORT | {"object": {field: other}})
+    key = write_completion(lake, stored, UNIT_A, NEW)
+    check(
+        refused(lambda: discover(lake, tmp_path), key, "differs from its manifest"), "an entry for the named object with another digest or length stops the run"
+    )
+
+
+def test_a_record_role_that_no_manifest_entry_for_the_object_carries_is_refused_beside_a_transport_alias(tmp_path: Path) -> None:
+    lake = Lake()
+    stored = capture(lake, root="raw/", snapshot="CA__a", files=[("data", "data.csv", ROWS_NEW), ("dictionary", "notes.csv", NOTES)], alias=TRANSPORT)
+    key = write_completion(lake, stored, UNIT_A, NEW, change=lambda body: body["other_objects"][0].update(role="reference"))
+    check(
+        refused(lambda: discover(lake, tmp_path, BOTH), key, "differs from its manifest"),
+        "the alias on the data object does not excuse a wrong role on the dictionary",
     )
 
 
