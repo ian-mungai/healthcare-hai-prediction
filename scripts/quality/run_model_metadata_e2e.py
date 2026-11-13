@@ -5,7 +5,8 @@ with this repository's hook configuration, the checker and a small dbt project, 
 runs the ``model-metadata`` hook through ``pre-commit``, so a hook that is not wired in cannot pass. It then runs the checker directly,
 because pre-commit reports every failed hook as exit 1 and the checker's own exit code (0, 1 or 2) is part of the contract. A blocking
 case passes only when both outputs cite its rule and its cause. ``--checker`` and ``--hook-config`` run the cases against another copy of
-the checker or of the hook configuration, for example a mutant, and ``--case`` runs only the named cases. The report goes to
+the checker or of the hook configuration, for example a mutant, and ``--case`` runs only the named cases. The worker crash cases send SIGKILL, because
+macOS writes a crash report for a SIGSEGV; the real SIGSEGV case has a platform and runs only on Linux. The report goes to
 data/e2e/model_metadata/<UTC>_<pid>/report.json with the revision, the SHA-256 of the checker and the hook configuration and the tool versions.
 """
 
@@ -31,7 +32,7 @@ from typing import Any
 import yaml
 
 from scripts.process import LaunchCancelled, LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, clear_git_environment, run_command
-from scripts.quality import dbt_manifest_labels, label_guard_fixtures
+from scripts.quality import dbt_manifest_labels, label_guard_fixtures, model_metadata
 from scripts.quality.hook_stage import hook_stage
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -181,13 +182,15 @@ BASE = {
     BRONZE_MAP: json.dumps(BRONZE, indent=2) + "\n",
 }
 WORKER_FAULTS = {
-    "crash_at_exit": "atexit.register(lambda: os.kill(os.getpid(), signal.SIGSEGV))",
-    "crash_at_start": "os.kill(os.getpid(), signal.SIGSEGV)",
+    "exit_skips_finalization": "atexit.register(lambda: os.kill(os.getpid(), signal.SIGKILL))",
+    "killed_at_start": "os.kill(os.getpid(), signal.SIGKILL)",
+    "segfault_at_start": "os.kill(os.getpid(), signal.SIGSEGV)",
     "exit_with_message": "sys.stderr.write('injected worker failure\\n'); os._exit(3)",
     "exit_with_undecodable_message": "os.write(2, b'injected worker failure \\xff\\n'); os._exit(3)",
 }
 ALL_FILES_SCOPE = "all"
 STAGED_SCOPE = "staged"
+CORE_DUMP_SIGNALS = ("SIGSEGV", "SIGBUS", "SIGILL", "SIGABRT", "SIGFPE", "SIGQUIT", "SIGTRAP", "SIGSYS")
 CANNOT_RUN_DETAILS = ("Fix:", "ask the owner", "scripts/quality/model_metadata.py")
 
 
@@ -204,6 +207,29 @@ class Case:
     rename: tuple[tuple[str, str], ...] = ()
     located: str = ""
     worker_fault: str = ""
+    platform: str = ""
+
+
+def cases_for(cases: list[Case], platform: str) -> list[Case]:
+    """The cases that run on ``platform`` (a ``sys.platform`` value): a case with a platform prefix runs only there."""
+    return [case for case in cases if not case.platform or platform.startswith(case.platform)]
+
+
+def crash_signal_cases() -> list[tuple[str, bool]]:
+    """No case that runs on macOS sends a core-dump signal (ReportCrash writes a report); the worker message names signals 6, 9 and 11 with no process."""
+    cases = make_cases()
+    on_mac = [case for case in cases_for(cases, "darwin") if case.worker_fault]
+    on_linux = [case.name for case in cases_for(cases, "linux")]
+    segfault = [case for case in cases if case.worker_fault and "SIGSEGV" in WORKER_FAULTS[case.worker_fault]]
+    return [
+        ("crash_faults_on_macos_send_no_core_dump_signal", not any(name in WORKER_FAULTS[case.worker_fault] for case in on_mac for name in CORE_DUMP_SIGNALS)),
+        ("crash_segfault_case_runs_only_on_linux", len(segfault) == 1 and segfault[0].platform == "linux" and segfault[0].name in on_linux),
+        *[
+            (f"crash_worker_message_names_signal_{number}", f"was stopped by signal {number};" in model_metadata.worker_failure(-number, ""))
+            for number in (6, 9, 11)
+        ],
+        ("crash_worker_message_names_exit_code", "exited with code 3" in model_metadata.worker_failure(3, "")),
+    ]
 
 
 def replacing(path: str, old: str, new: str) -> tuple[tuple[str, str, str], ...]:
@@ -919,8 +945,9 @@ def make_cases() -> list[Case]:
     )
     return [
         Case("control", code=0),
-        Case("worker_crash_at_exit_keeps_its_result", code=0, worker_fault="crash_at_exit"),
-        Case("worker_killed_names_its_signal", "cannot run", "stopped by signal 11", code=2, worker_fault="crash_at_start"),
+        Case("worker_exit_skips_finalization", code=0, worker_fault="exit_skips_finalization"),
+        Case("worker_killed_names_its_signal", "cannot run", "stopped by signal 9", code=2, worker_fault="killed_at_start"),
+        Case("worker_segfault_names_its_signal", "cannot run", "stopped by signal 11", code=2, worker_fault="segfault_at_start", platform="linux"),
         Case(
             "worker_exit_names_code_and_stderr",
             "cannot run",
@@ -2022,12 +2049,19 @@ def main() -> int:
     if not PRE_COMMIT.exists():
         sys.stderr.write("setup missing: create .venv from the host group of uv.lock (README, Install)\n")
         return 1
-    cases = [case for case in make_cases() if not args.case or case.name in args.case]
-    unknown = sorted(set(args.case) - {case.name for case in cases})
+    selected = [case for case in make_cases() if not args.case or case.name in args.case]
+    unknown = sorted(set(args.case) - {case.name for case in selected})
     if unknown:
         sys.stderr.write(f"unknown cases: {', '.join(unknown)}\n")
         return 1
-    guards = [] if args.case else [*guard_cases(), *manifest_cases(), *unit_test_exemption_cases()]
+    cases = cases_for(selected, sys.platform)
+    for case in selected:
+        if case not in cases:
+            sys.stdout.write(f"skipped {case.name}: it runs only on {case.platform}, because a real SIGSEGV makes macOS write a crash report\n")
+    if not cases:
+        sys.stderr.write("no case to run on this platform\n")
+        return 1
+    guards = [] if args.case else [*guard_cases(), *manifest_cases(), *unit_test_exemption_cases(), *crash_signal_cases()]
     for name, passed in guards:
         sys.stdout.write(f"{'ok' if passed else 'WRONG':<6} {name}\n")
     leftover = [] if args.case else repository_label_problems()
