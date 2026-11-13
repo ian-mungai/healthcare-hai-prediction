@@ -881,3 +881,36 @@ def test_a_real_grouped_plan_item_resolves_and_its_collector_runs_through_captur
     result = world.run()
     check(len(result["units"]["completed"]) == 1, f"{result['units']} {result['counters']}")
     check(mode.verify_records(storage(world.bucket), ROOT) == [], "the record verifies by version")
+
+
+def hcai_world(tmp_path: Path, binding: str | None, source: str = "HCAI_UTIL") -> World:
+    """A one-unit world whose unit is a reference document of the given source, as the held-source specifications are."""
+    world = World(tmp_path, ["doc.pdf"])
+    unit = world.units[0] | {"source_id": source}
+    world.units = [unit]
+    world.bodies[unit["url"]] = b"%PDF-1.7\nexample documentation\n%%EOF"
+    spec = spec_of("doc.pdf")
+    spec["expected_format"] = "pdf"
+    spec["receipt_template"] |= {"role": "methodology", "source_id": source}
+    if binding is not None:
+        spec["release_binding"] = binding
+    world.write_inputs({unit["snapshot_id"]: spec})
+    return world
+
+
+def test_a_held_source_unit_captures_through_its_release_binding(tmp_path: Path) -> None:
+    world = hcai_world(tmp_path, "access_release")
+    result = world.run()
+    check(len(result["units"]["completed"]) == 1, f"the unit captured through the binding: {result['units']}")
+    (only,) = world.records().values()
+    receipt = json.loads(world.bucket.objects[only["receipt"]["key"]][1])
+    expected = hashlib.sha256(s3_store.ACCESS_RELEASE_PATH.read_bytes()).hexdigest()
+    bound = json.loads(receipt["lineage"]["extraction_or_query"]).get("access_release_sha256")
+    check(bound == expected, f"the receipt binds the tracked release record: {bound}")
+
+
+@pytest.mark.parametrize("case", ["unknown_binding", "binding_on_a_source_that_is_not_held"])
+def test_a_spec_with_an_unusable_release_binding_is_refused_before_any_request(tmp_path: Path, case: str) -> None:
+    world = hcai_world(tmp_path, "no_such_binding") if case == "unknown_binding" else hcai_world(tmp_path, "access_release", source=SOURCE)
+    result = world.run()
+    check([item["reason"] for item in result["units"]["failed"]] == ["spec_incomplete"] and world.site.requests == 0, f"{result['units']}")

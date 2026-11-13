@@ -558,6 +558,17 @@ def download_name(unit: Mapping[str, Any], spec: Mapping[str, Any]) -> str:
     return tail if tail and tail[0].isalnum() else "download_" + tail
 
 
+def release_bindings(unit: Mapping[str, Any], spec: Mapping[str, Any], registry: Mapping[str, Any]) -> dict[str, str]:
+    """The receipt lineage bindings a held source's specification names, through the tracked release record. An unusable binding is a specification error."""
+    from scripts.acquisition import history_routes
+
+    source = next(item for item in registry["sources"] if item["source_id"] == unit["source_id"])
+    try:
+        return history_routes.lineage_bindings(source, {"release_binding": spec["release_binding"]})
+    except CaptureError:
+        raise SpecError("The release binding is unknown or the source is not held") from None
+
+
 def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: Any) -> Path:
     """Download one file unit into the unit's working folder and return its local receipt. The plan comes from the specification, not a stored receipt."""
     registry = registry_of(run, unit)
@@ -569,6 +580,8 @@ def capture_file(unit: dict, spec: dict, folder: Path, run: CaptureRun, opener: 
         raise SpecError("A file unit needs an expected_format in its specification")
     template = {name: value for name, value in template.items() if name != "expected_sha256"}
     plan = template | {"route_id": redownload.route_id_of(unit, registry), "file_name": download_name(unit, spec), "expected_format": fmt}
+    if "release_binding" in spec:
+        plan |= {"lineage_bindings": release_bindings(unit, spec, registry)}
     if spec.get("reviewed_unsigned_redirect"):
         from scripts.acquisition.history_redirects import install_redirect
 
