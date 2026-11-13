@@ -84,6 +84,11 @@ def batch_id(batch: dict) -> str:
     return canonical_hash({"endpoint": endpoint(batch["product"], batch["year"]), "parameters": request_for(batch)})
 
 
+def queue_snapshot_id(batch: dict) -> str:
+    """The deterministic snapshot ID of a queue entry: the plan version and the first 32 characters of the batch ID, no time."""
+    return f"Census_ACS_Tables__v1__{batch['id'][:32]}"
+
+
 def scope_batches(scope: dict | None = None) -> list[dict]:
     """The table-vintage units of a scope table: product, table and year only, in product, table and year order."""
     scope = SCOPE if scope is None else scope

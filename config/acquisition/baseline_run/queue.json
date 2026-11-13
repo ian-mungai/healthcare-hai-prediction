@@ -1,20 +1,29 @@
 {
  "budgets": {
-  "acquisition_units": 1883,
+  "acquisition_units": 2040,
   "bls_calls": 260,
   "bls_minimum_windows": 1,
   "bls_rolling_24h_limit": 450,
   "byte_cap": 137438953472,
-  "max_primary_attempts": 3766,
-  "pages_recorded": 1883,
-  "recorded_bytes": 13837632101,
+  "max_primary_attempts": 4080,
+  "pages_recorded": 2040,
+  "recorded_bytes": 25102495052,
   "units_by_route": {
-   "manual_browser_download": 66,
-   "publisher_api": 1124,
+   "manual_browser_download": 50,
+   "publisher_api": 1297,
    "publisher_url": 693
   }
  },
  "derived_from": {
+  "acs_api_swap": {
+   "added": 173,
+   "added_snapshot_ids_sha256": "8e092010501f125cb59a943f8ac4d78c332385908d69b3b146f148b816e6972f",
+   "dropped": 16,
+   "dropped_snapshot_ids_sha256": "f36ea26e30158f416fdf6830e0038d23a0175f99da106eed111758e5ba708787",
+   "kept_units_sha256": "c1c87002edaf489203fc847dacf8318f99f29cd5227d97bbc7f1a41a0858f487",
+   "plan_sha256": "845ed760aee05f28143a963e301e64180b92bd4ffe4696c1d453fbc92275b191",
+   "rule": "drop the manual ACS export units and add one API unit per table and stored vintage of the Census table plan, after the last ACS file unit"
+  },
   "dropped_by_disposition": {
    "derived_replay_only": 1,
    "dropped": 1,
@@ -48,11 +57,11 @@
   "sha256": "c1b0e0032d9417fd9e008b07dfa701169fc9063702dc95792a7009373344fd42"
  },
  "dispositions": {
-  "api": 1124,
-  "approved_manual": 66,
+  "api": 1297,
+  "approved_manual": 50,
   "direct_download": 693
  },
- "entries": 1883,
+ "entries": 2040,
  "execution_status": "frozen_offline_no_requests_made",
  "kind": "bootstrap_capture_queue",
  "loaded_files_no_unit_covers": [
@@ -5871,19 +5880,6 @@
    "url": "https://healthdata.gov/api/views/anag-cw7u/rows.csv?accessType=DOWNLOAD"
   },
   {
-   "bytes": 27391989,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/b8cbd8c197a3743348331b2fac5c885149b22dd618f3680ca28d455e1910d284/captures/ACS/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/receipt.json",
-   "receipt_sha256": "e05107c31516c0fee900667315a97a2820899ece5cc0e9243ef7c0479e54dfea",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=423b3f92b6a12e13f41f6e8df33b12e424a407364dfb08f6486e5133c02e983c"
-  },
-  {
    "bytes": 1265802,
    "disposition": "direct_download",
    "flags": [],
@@ -5908,32 +5904,6 @@
    "snapshot_id": "ACS__20260924T185756Z__026d9ae41bb64ff9b1e94ed0a8c24170",
    "source_id": "ACS",
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/2009_5yr_Summary_FileTemplates.zip"
-  },
-  {
-   "bytes": 45530553,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/1310c8e9320c9cda234feef32cfd6ce89e7f76c30430da178fc07cc26de8014e/captures/ACS/ACS__20260924T185837Z__7b995ff1e0d047f59ff0d49776626354/receipt.json",
-   "receipt_sha256": "09fdbd2dd5192665f5b21e0d479f5102200bd4f03e1242ce0345a45631d36196",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T185837Z__7b995ff1e0d047f59ff0d49776626354",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=30711852185498748b5b040e321afcc64afae05b7305602195d49294e5916274"
-  },
-  {
-   "bytes": 33161028,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/c29618d3a5b97a350c52ee2114fa3ad262e252a6ee5289234ad38547fe131782/captures/ACS/ACS__20260924T190038Z__127149f40156423db1a747b35dd6f7c5/receipt.json",
-   "receipt_sha256": "2a5ccf14fe67b3b594ef9ff599b93c24f18d9f48f68b3d5758015880ba70fb5f",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T190038Z__127149f40156423db1a747b35dd6f7c5",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=113b19f8efd2cc48160015a8963fb78595286a913eae851682d02efff6a4a762"
   },
   {
    "bytes": 2977875,
@@ -6001,19 +5971,6 @@
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/California/All_Geographies_Not_Tracts_Block_Groups/g20095ca.txt"
   },
   {
-   "bytes": 24844190,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/292832e50c5118d595db5b28eb66e34d3a440367c1f6afe73fa4e6302c7113dc/captures/ACS/ACS__20260924T190510Z__fac30496470f4d748666bbc3369ea60e/receipt.json",
-   "receipt_sha256": "2b19cc2430462c481be6004b1a0b4ec484c64803b1e1baf62c5e56aef31326e4",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T190510Z__fac30496470f4d748666bbc3369ea60e",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=be6a5acf03670a4a05854f5696894670fafce791feb152807e5d8b44763e63cb"
-  },
-  {
    "bytes": 2499147,
    "disposition": "direct_download",
    "flags": [],
@@ -6077,19 +6034,6 @@
    "snapshot_id": "ACS__20260924T190658Z__f9ae72509cb4427fa6ae1f8c303921c6",
    "source_id": "ACS",
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Florida/All_Geographies_Not_Tracts_Block_Groups/g20095fl.txt"
-  },
-  {
-   "bytes": 34562206,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/46d7eeaef50fe64b7906673e4b3d992e425ec5c724e52ea9e38e438bc33ce59c/captures/ACS/ACS__20260924T190708Z__899b8534ee5348f394d3d50dd8cf7c29/receipt.json",
-   "receipt_sha256": "c3fe854094ab9be03dedbcf2940b30f7592027807792b88fa0caa6ed4480f323",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T190708Z__899b8534ee5348f394d3d50dd8cf7c29",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=588407efe5273f5769ecca836ed8367578be8e0e952d6c79231da964b5587c63"
   },
   {
    "bytes": 4039625,
@@ -6248,19 +6192,6 @@
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Massachusetts/All_Geographies_Not_Tracts_Block_Groups/g20095ma.txt"
   },
   {
-   "bytes": 46630923,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/681c3f88a8a1e2a731fa99e1656c1beaf08331ee6a90fde9032896e508a10397/captures/ACS/ACS__20260924T191135Z__9d0cefca154347209bfbfa2e3b20fa40/receipt.json",
-   "receipt_sha256": "779f0ed25567542aa3a7711d014315f0e16f6243e4dce0ddd1449367fece0599",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T191135Z__9d0cefca154347209bfbfa2e3b20fa40",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=2a0b3012e8081dbc98d46cb63684fb7761374cb02ff5e7d90d737498fe424eb3"
-  },
-  {
    "bytes": 6490780,
    "disposition": "direct_download",
    "flags": [],
@@ -6311,19 +6242,6 @@
    "snapshot_id": "ACS__20260924T191252Z__c80f6087c9b842ab889f857e7945ffc3",
    "source_id": "ACS",
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Missouri/All_Geographies_Not_Tracts_Block_Groups/g20095mo.txt"
-  },
-  {
-   "bytes": 47612503,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/8467a146d45184042e5c54790f4f0f2d60c970a4326c3f01fafb05c33a83fec9/captures/ACS/ACS__20260924T191318Z__6b0103420ba84541b62938d92c84fb95/receipt.json",
-   "receipt_sha256": "42e3575b910fa65697b38230e0f5019f561782834d6a4a8ab244a1cbd64b6038",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T191318Z__6b0103420ba84541b62938d92c84fb95",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=16df84ed69e483c9668aff9ddf2f62e7c7ea24a7fd20bd0416e614e8e9675a22"
   },
   {
    "bytes": 1190141,
@@ -6677,110 +6595,6 @@
    "url": "https://www2.census.gov/programs-surveys/acs/summary_file/2009/data/5_year_seq_by_state/Wyoming/All_Geographies_Not_Tracts_Block_Groups/g20095wy.txt"
   },
   {
-   "bytes": 50448679,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/dad3d356237589123bde9405f8e2c541027238b5f447469ab45455c54d6795b7/captures/ACS/ACS__20260924T192650Z__4d44e84edf4740e49e832050f5429392/receipt.json",
-   "receipt_sha256": "6b16ca9c9474c87316a2b263bc91017f911615c30daf0cc818dd25f6aa26a6fb",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T192650Z__4d44e84edf4740e49e832050f5429392",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=1c8d1faf2eda67ee8a27e373efeffe97fa7fba1022ae00189d1a9b8fd15f99fd"
-  },
-  {
-   "bytes": 25305749,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/b19bfeaa8603985bfb60f143aecfc3c3b1e824491aa870049fba9efe9cd1d36a/captures/ACS/ACS__20260924T192654Z__23567bfadd2a41d89885888ce5b8bbfb/receipt.json",
-   "receipt_sha256": "7174f136ba1dffb9892dbf78323e2a30976cc5e7eb5bb7d1133ed762de49a379",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T192654Z__23567bfadd2a41d89885888ce5b8bbfb",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=10e728bdedcbe8cf0e27677cefd417e3fe6c995a7c168280def73000a1e229bf"
-  },
-  {
-   "bytes": 3184736,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/ef5d6cbf62a8b1fc272c38e9a2481960dbf0d9acc311cf2281e6724e33344e8b/captures/ACS/ACS__20260924T192700Z__cce484fbeb53456eb49c0b72ac82f537/receipt.json",
-   "receipt_sha256": "0d4a01e68a4a16b661b657918251cfe23dc014b05b47e2b98a60651c64287974",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T192700Z__cce484fbeb53456eb49c0b72ac82f537",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=7ed27bf43ef8952f14e41e45a5a402041f9c15262ef2a51abd9111f192408728"
-  },
-  {
-   "bytes": 419239,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/1434d1685c78657279a422f80fe97c66ca4f66f5cf7aa605e72aff798e7f7332/captures/ACS/ACS__20260924T192841Z__30325a2934d347e89f603a350fa70868/receipt.json",
-   "receipt_sha256": "f508424478e7cb3beef9a164422d599ed87e6576f3c4ee087fc052724e36e9ef",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T192841Z__30325a2934d347e89f603a350fa70868",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=64788448aab319191b8a91b882fb4531278bb2daf93140aea4797a463e389291"
-  },
-  {
-   "bytes": 1010561,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/23c8da1b3263ae719b16c5c5b976fdadf5116f8b0f217292edcec5b125249536/captures/ACS/ACS__20260924T193212Z__25ed613b01c343499985458ab1c76a6e/receipt.json",
-   "receipt_sha256": "d9895dc2b046c736933770f5c76610f163affd0d6b247a30986f70238fc12577",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T193212Z__25ed613b01c343499985458ab1c76a6e",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=3a2b5a4f080caa4be12079c2a995445e5579956c77a2bf9d0ea0842ff2dfc498"
-  },
-  {
-   "bytes": 2489364,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/eb975956e554170f29941cc199abf4345da5dea649ef7c9d85b2b308d2a26581/captures/ACS/ACS__20260924T194107Z__9c51567bd7fb44afb04652d8669b0de5/receipt.json",
-   "receipt_sha256": "d3af837a4b348bff012261a18b78855cef3a2febbbd775a61311213f6ce0f36b",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T194107Z__9c51567bd7fb44afb04652d8669b0de5",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=4ce6b1c36a7f0c4edecc43405d904e152d407ba3df36e3211b9ba0fb653fbdcf"
-  },
-  {
-   "bytes": 370618,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/dab4e46d768e78ae23b2ff91d244bab4d9a9ca0e39f687e1a07dfd36aab61a32/captures/ACS/ACS__20260924T194324Z__ea85ede4bca74d659fe9fd5fb0443d53/receipt.json",
-   "receipt_sha256": "fb84befcd5da78cd142ce0ef258e6a8e82b91edf49810e228bfcac3e560cbb82",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T194324Z__ea85ede4bca74d659fe9fd5fb0443d53",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=7b9a8701bd60277c30f4458e7629c28aa331883b4204d76d44350b3d26e6d165"
-  },
-  {
-   "bytes": 660016,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/fb519696c78caa506ac1223babef064e6d0841f0f03c27d7a248f134a16c5ac3/captures/ACS/ACS__20260924T194327Z__be898bbe1f9a48749ae40afc8cd044e2/receipt.json",
-   "receipt_sha256": "5fb3235e5a303874b36d7084c2121566d7ac74add6955ed2aae872d80af870c0",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T194327Z__be898bbe1f9a48749ae40afc8cd044e2",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=eeca181590de26e0042399f83adbd82e7c4085200d15b3ffd9ab9d2647a3f905"
-  },
-  {
    "bytes": 711054,
    "disposition": "api",
    "flags": [
@@ -6794,19 +6608,6 @@
    "snapshot_id": "MMD__20260924T194708Z__4e8d841538264038beb2c357d5539c2a",
    "source_id": "MMD",
    "url": "https://data.cms.gov/mmd-population/map.html"
-  },
-  {
-   "bytes": 1348167,
-   "disposition": "approved_manual",
-   "flags": [],
-   "mode": "file",
-   "pages": 1,
-   "receipt": "data/historical_acquisition/acs_browser_history/883639f34b12e5e89bad5d9a8c9496f013b0e9bf7bda7d37ae19be1c27ef6323/captures/ACS/ACS__20260924T194542Z__7eafa1866e274f4b9d80c0e45e65bb65/receipt.json",
-   "receipt_sha256": "9c72104bf70ac50c70892f62d2f766abc2775245b1788957141226ad0a76bc50",
-   "route": "manual_browser_download",
-   "snapshot_id": "ACS__20260924T194542Z__7eafa1866e274f4b9d80c0e45e65bb65",
-   "source_id": "ACS",
-   "url": "https://data.census.gov/api/access/table/download?download_id=0b0ad48e66b528f0248f03ac03fa324329a488c2d83ff24ef43319741265d4dc"
   },
   {
    "bytes": 1084409,
@@ -6833,6 +6634,2255 @@
    "snapshot_id": "ACS__20260924T230448Z__3981fb08a53543049ab5185642e022db",
    "source_id": "ACS",
    "url": "https://www.census.gov/content/dam/Census/programs-surveys/acs/data/ACS_datasets_migration.xlsx"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__30d0d043cf85c02e4960ec0b87f5d368",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2ce5e4ea49994c7acc9737a7a4656b98",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__fa82486ca04da40e068e31a3506f3fd2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__cafc4bf8619c0f4c6c4ff64fbfca5ed4",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__efbd15fb9626d61357c3e157255da2a5",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__03b04cd559a1d0d0c98e71d9ec92ba9d",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2ec2fccabeae084bbe5a1949e210e30d",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6c3782158495d4b89d94bfe852b09699",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8099b41a22c321f332d7e3a5980f1839",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f351debc6f55c9055c21ba638af7dc59",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f6188a9c3b073cf69f23b2a8ec8a6cd0",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c26bf9f41ad8c63d35bca3967e1984f7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f9b2eb6786f98eca4e8507486f0c2b97",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0207b7f393581b22e7780a56b022777b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c556f3d35987162027388497c190d766",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c424ab8f68b2bda3457d5c8883bf0314",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__420939651110cb78bf2476a597118a5e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0a11e571261088b68e2c305b4c3af94c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__b27d0e6e0dd270dd79dc7422207a9edd",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5bc6682602ecd3d64a0051e3e3e9ae3c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f5d991b8de93faec9a44113667b73759",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__844562da44311b696e2c6f85d1da97e7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__48e3cd22d141c3bc5dfc624286ae5203",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__97db59624b3ca6863fcbeddd748c0a1a",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2aa437076036af25ece9d15ec1386eda",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__51303782f88d24ae78969cc476005467",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__b827e986795184d9b2b3ff2fd1800ae7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__248a9f721de7a5c2c6689c8a78996528",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e7dab05f9c26d83c3cde98d69b09420a",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9b97183a915fa86aaece275c43d3cf51",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__897dc6c716ada176c2e09b6887814e58",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__add30775aa6c44d25e5e22be685cb603",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__45acca9160e92ef2852bb4e12c647feb",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__4ca5f415fbd92b990e4fac445abb9adc",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0df387aeee14f6a39f46f071a7cacf16",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__fc0347ad70a45da45e2734367b03bee6",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6269ac00d8d72757b46587d861cab9d2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__cf9ec407c3c2afc3d49ca047e67dc362",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d97defa36e4bd249c9bd0f7c28440e00",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__21e02082a8e2d6de43b44fb497b6e51c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d1e9b3cfa5806a9a22cf976282240135",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ae7e539a48585abfd466c6f187f216ec",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__95dbdfa956cb6a6a2147a55c6208c6b2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__310284a93acecd9acfcd1c58e7135b99",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8cc9c8cef598859ab14dfd50fb366ab6",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5b50af69e3db255662675cf93339d666",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0d7bcfa879fe64799699df4ea5ac67b7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__451ed71cc378f68b6d7b0386ea1c0d6e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d52408b900c94c19f5cf334ded50ac50",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__3e70b788e55ec69e5fedc485771325a3",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__dd128157b5aceddd8acff472523946a8",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0021e8b5a5a95434bee3e03fd95f9090",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a82f5a67291637a4f8fd1fc023e159ee",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2ce2f07399f526319aa9c3f8eb4a61dd",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6401c9473586b5e352cff3adfc3db1a4",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__24b4a53d3a3220863de7a8a163e4d8f4",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__4f8bec508181b5544fd01d2c3a520e9b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__bad1d7bdcdc1767018215ef629722a1c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__1b69e02fcf620f02863478480666c505",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__216aa8e0fbd1df6a47e41358fe6e66f7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__93020980aa45a15ffc94b74cec85c90c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5cae645602099f07ff44d69ac44adba5",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__87aa82b5fc883279cc4c6ae5d8077079",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d763e5ad119059dc7542e0fcfa943192",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d56323a821155fc1646d42d581d0a132",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__45aa23dcf1522c596438200b061c1ca1",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0c3e9b09856937697cfea34930d94dd8",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__083826f4b47bb8ccf4cfb7e248723149",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ca7252889e3e3a8e120a3661a031f058",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__cd035079caf92c1e6c84702f15707325",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e73f49181dc028acbc3f15a0ab4b7585",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/subject"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9a129cfb1f7f8832a5d5da3079faed78",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ad05e18ae6c6fe64eb1a7ec1a72fba87",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c5e260f22bc4450398e06c4646e08d4b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__90a0b0afc67e7f1c0191cd1be434d9e3",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__af4f167b07cc4d9560cd85b645c97833",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__50a9228dd5f4d49fd6863455f34b2659",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d1a4bb91b5ce73f3f189c1d1a33af997",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8238ad0fcaad3092e483a035ccedf1d0",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ab009f6fb1ee05664370127e033db12d",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__4c216827ebd519d80bf65b42a88a3e1e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__11c5761a85427bd3031589c6825383f5",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__97b2c44639c1edc74899b7cf78538574",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__0b94ef8ab0dacba29711d00e0c8e500e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__fd9b84cc40e0358ec0951f5c83be1091",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__1158c846fe3fe24460074a07a121fa77",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a144afbf1ca45274e60595d273cb9059",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__7197881f7a4ba5fa57a0d5df567eabad",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6e92656ef88b03be9d169894a0e0a495",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__85ac9e2bd6c48d9b2e6c81bfda9599c0",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2ae64358133c10e55b9e4035d5571552",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__1b0478e1ea9f88e1a544bfa7412c8486",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__4fba589cd63af74db2bfb40707782bda",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5991920287c3a906871550b66db4a05e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__7dd1529d7da9e30909c33724c9adc3b2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c68b28687204e8ff35a950fdda502d17",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6955f69229797120595de4881ea883fe",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__2ae1e096aab4ee21473fcdd9187312b9",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e50e74aedd70c1efc01942f3e63ac519",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__63a18629011bac0eaad528d53c8e64d9",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__279a7505f116457eebb962481c3fc43b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a791e10152f95874562b7b81604e0d07",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__1dd5c632818ab768b06762cc2c4d4207",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e8a8f75fb2df3699764803be4b6d8835",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__49d8f1f75a945bb4b05c6b1aede130af",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__664b6cc370ef1c135dab0550ca3234ef",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e996629b9825eda56bb088b7d07e21d3",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d22f8681ec2e21a2a68c12a39a65e6cb",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f758ad057efb5e19ca967a2367cf0bfc",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9809248f8fd3814f82c8db856806c196",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__7ad5de1e8efe7e267df538eb03b0c54c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5fc5e938cc1a134b126e74e529c1eee5",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ef161370acf6b2fc4892d65a85a51638",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__10595a3b48d0fc29a46d28d84b4f1119",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__bb8ce078517473c9584bd9761989f857",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__4bcc847021b24b7e8a9a1cef35d044fb",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__90381f7228ed81f2844ede0f95350c6c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__32463d2e94f3e6d1a8d436a0da0c2800",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e2bb5c028aa21e3e707c75b66b8c141d",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__7c522df9a1a3ff0be4d0cf284c8faa40",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__46001ac9cdde49c5d18d69a141e84273",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6ac81e65f6e2bfa750620f68855bc00a",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9d299148088c1be060f5e866b03ede2a",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__802c5e83c72eb9c4b3ebbb662dc4388b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c90c2cfe3edf768d662bfa5e4768e75f",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2018/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__3347d27d6be8aa8746cba6497efb0c1a",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2019/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9d072455edc6030643ba1d58173350c4",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2020/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__976e4f9696725b1a5f7b2fce11aaa002",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2021/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9a5876b84bae0377d19023758522fb20",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2022/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__9eb74a30d1e150331db8bef752176c9f",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2023/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8497e356d563a9546ee10b30bdd1e446",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2024/acs/acs5/profile"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a72ff330079b7f5f0ffb7ce56c34ad10",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__76d90ea2add2d79eeba0e58d02892ffc",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__aaf21dace81a31b422971f16d85b1784",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__3919b7f4de409a63d2f8ae731c1782fe",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8035d54b015d5b15956c1d1ce0d60a91",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a28af659d514da54192b4d98ac1e01b2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__7a2adf1d1315f93c546cc8a6839db10c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__6fea415874fbdf8f64a78b7e6cf5a617",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__647b7c1f050241fac1adcd13a2a1f0e3",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__52dde34badb9e61f84d504f038194471",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__85848a38640c4585454b4d9af42e1218",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__86305467d0ca2c5bd33b4df0e138614f",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__c7e19ce694f4671ecf3a3ca56fbd4795",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__b3a7df19474940fd108c8345a9227221",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e25cb835ac612edbdeccb1f90e557fce",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f81e4472c556002a3217fc1c5ee220e8",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d8107e4685c32682c57d18fb35586d92",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__fed9f2c844c87ecc902415c959157451",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f66994298490dcb90b7af5c88e5160b5",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__d68cde614f62b5d5f243a38870fbf810",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__076b79fa539f41dfa405792ddc0e9751",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__57d945c07a6f6cb2e0317b6ca8960379",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__efba53f886c33dfd17ed98a4445b1c54",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__01e30a8b7d1737e627f6df8efc6d9a00",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__5e53fb2abdfe6edc94445cd7f0d4e7ae",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e2749250edda26afd24c46178c041566",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__64f576d0cfeeabadafa624e5f2b0f68f",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a5ed32360cb7f3205b5d114a1997c506",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__8ff0bf056b8b35af9d75e9846caf1e61",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__e85b8237bf8f55eaa4915a3aaefe58e7",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__edc740ef6709d2a6626d9c9a52b25653",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__f817c3e4f214025261fe7dfc053fa6ff",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__630ec867a22af4adba60d80eb24aae91",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2010/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__18d98cc12ed0d2f27188ed275509c74c",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2011/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__db2e3bbb593198a01887e61d1f0a6716",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2012/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__59e9cad60d6519532a6dc5f2a613a12e",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2013/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__a7aae42b1cde82211e78052d5887afa2",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2014/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__b64f9ada152227ae65d57a3e8c2258cc",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2015/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__ef7ae26cc4e86c7b3660fdc664bcaa8b",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__059c7fae6d52d78a865b4b104863ffdd",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__16be61d377a7c4e7114b16e44ceb6b20",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2016/acs/acs5"
+  },
+  {
+   "bytes": 67108864,
+   "disposition": "api",
+   "flags": [
+    "browser_export_moved_to_census_api"
+   ],
+   "mode": "census_acs_tables",
+   "pages": 1,
+   "route": "publisher_api",
+   "snapshot_id": "Census_ACS_Tables__v1__b5fdf6639e8422e71080303e657d65c3",
+   "source_id": "ACS",
+   "url": "https://api.census.gov/data/2017/acs/acs5"
   },
   {
    "bytes": 706484,

@@ -35,7 +35,13 @@ SECRETS_NAME = "required_secrets.json"
 SECRETS_KIND = "bootstrap_required_secrets"
 CONFIG = Path("config/acquisition")
 # The collector mode of a queue unit to the secret its collector reads.
-MODE_SECRETS = {"bls_api_v2": "bls_api_key", "hud_api": "hud_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key"}
+MODE_SECRETS = {
+    "bls_api_v2": "bls_api_key",
+    "hud_api": "hud_api_key",
+    "census_acs_api": "census_api_key",
+    "census_acs_detailed": "census_api_key",
+    "census_acs_tables": "census_api_key",
+}
 ENVIRONMENT_MARKERS = ("s3://", "arn:aws", "/Users/", "/private/", "/var/folders/")
 
 

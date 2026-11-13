@@ -25,7 +25,13 @@ from scripts.sdk_logs import quiet_sdk_logs
 
 KEYS_VARIABLE = "HAI_TASK_KEYS"
 BUCKET_VARIABLE = "DATA_BUCKET_NAME"
-KEY_OF_MODE = {"bls_api_v2": "bls_api_key", "census_acs_api": "census_api_key", "census_acs_detailed": "census_api_key", "hud_api": "hud_api_key"}
+KEY_OF_MODE = {
+    "bls_api_v2": "bls_api_key",
+    "census_acs_api": "census_api_key",
+    "census_acs_detailed": "census_api_key",
+    "census_acs_tables": "census_api_key",
+    "hud_api": "hud_api_key",
+}
 CHUNK = 1024 * 1024
 # One create-once object per counted BLS request, shared by every task on the one key. The role cannot delete, so a task can never hand a request back.
 BLS_LEDGER_PREFIX = f"{RAW_ROOT}run3_ledger/bls/"

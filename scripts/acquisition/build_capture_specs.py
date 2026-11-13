@@ -3,9 +3,10 @@
 A bootstrap capture compares nothing with an old download, but it still needs facts the stored files hold: the stored data file names a collector must
 produce, the expected format, reviewed unsigned redirect and receipt template of a file unit, the reviewed archive member map, the planned item of a
 collector unit (its batch, release, year or file ID, or an MMD unit's measure and year) and the newest stored capture of a manual HUD or WONDER unit (object
-keys and versions, without the bucket). The result has one entry per queue unit and no bucket name or local path. The stored files are local only, so hosted
-CI cannot run this script. A receipt template carries the free text of old job plans: legacy agent-home pointers are rewritten as in the registry, phone
-examples of a public dataset profile are redacted, and the document header counts both.
+keys and versions, without the bucket). A Census table unit has no stored receipt: its spec comes from the locked plan. A previous specification can
+supply the specs of units that stay, for a queue that changed only in swapped units. The result has one entry per queue unit and no bucket name or local
+path. The stored files are local only, so hosted CI cannot run this script. A receipt template carries the free text of old job plans: legacy agent-home
+pointers are rewritten as in the registry, phone examples of a public dataset profile are redacted, and the document header counts both.
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition import census_acs_tables_contract as tables_contract
 from scripts.acquisition.check_baseline_run import SEED_MODES
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.history_routes import RELEASE_BINDINGS
@@ -34,6 +36,7 @@ PLAN_ITEM_KEYS = {
     "onc_mu_hospital": "file_id",
 }
 MMD_API_FLAG = "browser_export_moved_to_api"
+TABLES_MODE = "census_acs_tables"
 # A job plan binds a held source's reference document to a dated release record by that file's SHA-256. The specification names the record instead:
 # a stored hash would bind the record the old capture used, which a clean checkout does not hold, and the hash text trips the secret scan.
 BINDING_NAMES = {key: name for name, (key, _path) in RELEASE_BINDINGS.items()}
@@ -164,8 +167,20 @@ def last_capture(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any] 
     return {"read_root": root, "artifacts": sorted(artifacts, key=lambda item: (item["role"], item["key"]))}
 
 
-def derive_unit(unit: dict[str, Any], base: Path, conditions: list[dict[str, Any]] | None = None, counts: Counter | None = None) -> dict[str, Any]:
-    """The specification of one unit from its stored files under BASE."""
+def tables_spec(unit: dict[str, Any], plan: dict[str, Any] | None) -> dict[str, Any]:
+    """The specification of a Census table unit: the plan batch its snapshot ID names, with the one stored data file the collector writes."""
+    found = [batch for batch in (plan or {"batches": []})["batches"] if tables_contract.queue_snapshot_id(batch) == unit["snapshot_id"]]
+    if len(found) != 1:
+        raise ValueError(f"Unit {unit['snapshot_id']} names no batch of the Census table plan")
+    return {"mode": unit["mode"], "plan_item": found[0]["id"], "stored_data_files": [found[0]["file_name"]]}
+
+
+def derive_unit(
+    unit: dict[str, Any], base: Path, conditions: list[dict[str, Any]] | None = None, counts: Counter | None = None, tables_plan: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """The specification of one unit from its stored files under BASE (a Census table unit: from TABLES_PLAN)."""
+    if unit["mode"] == TABLES_MODE:
+        return tables_spec(unit, tables_plan)
     receipt_path = base / current(unit["receipt"])
     if not receipt_path.is_file():
         raise ValueError(f"Unit {unit['snapshot_id']} has no stored receipt")
@@ -202,11 +217,25 @@ def derive_unit(unit: dict[str, Any], base: Path, conditions: list[dict[str, Any
     return spec
 
 
-def derive(units: list[dict[str, Any]], base: Path, queue_sha256: str, conditions: list[dict[str, Any]] | None = None) -> bytes:
-    """The capture specification bytes for UNITS: one entry per snapshot ID, sorted, bound to the queue's digest. CONDITIONS: the MMD plans'."""
+def derive(
+    units: list[dict[str, Any]],
+    base: Path,
+    queue_sha256: str,
+    conditions: list[dict[str, Any]] | None = None,
+    tables_plan: dict[str, Any] | None = None,
+    previous: dict[str, Any] | None = None,
+) -> bytes:
+    """The capture specification bytes for UNITS: one entry per snapshot ID, sorted, bound to the queue's digest.
+
+    CONDITIONS: the MMD plans'. TABLES_PLAN: the locked Census table plan. PREVIOUS: an earlier specification whose specs stay for the units it names.
+    """
     counts: Counter = Counter()
-    specs = {unit["snapshot_id"]: derive_unit(unit, base, conditions, counts) for unit in sorted(units, key=lambda item: item["snapshot_id"])}
-    rewrites = {"pointers": counts["pointers"], "phone_examples": counts["phone_examples"]}
+    kept = (previous or {}).get("specs", {})
+    specs = {
+        unit["snapshot_id"]: kept[unit["snapshot_id"]] if unit["snapshot_id"] in kept else derive_unit(unit, base, conditions, counts, tables_plan)
+        for unit in sorted(units, key=lambda item: item["snapshot_id"])
+    }
+    rewrites = (previous or {}).get("template_rewrites") or {"pointers": counts["pointers"], "phone_examples": counts["phone_examples"]}
     document = {"kind": "capture_specs", "queue_sha256": queue_sha256, "units": len(specs), "template_rewrites": rewrites, "specs": specs}
     return (json.dumps(document, indent=1, sort_keys=True) + "\n").encode()
 
@@ -220,10 +249,12 @@ def main() -> None:
     parser.add_argument(
         "--mmd-plan", type=Path, action="append", default=[], help="an MMD collection plan whose conditions match the browser exports (repeatable)"
     )
+    parser.add_argument("--previous", type=Path, help="an earlier capture specification whose specs stay for the units it names")
     args = parser.parse_args()
     body = args.queue.read_bytes()
     conditions = [item for plan in args.mmd_plan for item in read_json(plan)["conditions"]]
-    result = derive(json.loads(body)["queue"], args.mirror, hashlib.sha256(body).hexdigest(), conditions)
+    previous = read_json(args.previous) if args.previous else None
+    result = derive(json.loads(body)["queue"], args.mirror, hashlib.sha256(body).hexdigest(), conditions, tables_contract.load_plan(), previous)
     args.output.write_bytes(result)
     sys.stdout.write(json.dumps({"units": json.loads(result)["units"], "bytes": len(result), "sha256": hashlib.sha256(result).hexdigest()}) + "\n")
 
