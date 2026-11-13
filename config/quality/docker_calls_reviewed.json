@@ -348,7 +348,7 @@
         "scripts/lakehouse/register_aws_catalog.py": "sha256:517c5c0320e329bce1aff3ca3a691a0f6d4cffc587c7bf498d8e8db0425e2f90",
         "scripts/lakehouse/run_catalog_registration_e2e.py": "sha256:be3dbc19ed1ec3c3e91b79a0eac4e0ac6604dd7b67dff3903864aa119daa0616",
         "scripts/lakehouse/run_gold_publish_launcher_cases.py": "sha256:5af80ef76101a1cc28be668fc7588a7362712da1067adcfcebb671afc84c3743",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:21a81bfb62ac8708ea073b9fcc7aa6171909315f0962253493d9eeb92da8d311",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:c65b868d174645b3e87053a480d1a256bbe1c7340061819538dab35984117fa7",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
       "reason": "Runs the owner's route probe command text from cutover_route.probe_command with /bin/sh in a scratch folder, after replacing every 'docker ' with the shell function stand_in_tool defined in STAND_IN_TOOL. The stand-in prints a network name, sleeps or records an rm call and kills its own sleep. PATH is /usr/bin:/bin and the timeout is 20 seconds. It does not call Docker."
@@ -418,11 +418,11 @@
     },
     {
       "path": "scripts/lakehouse/run_launcher_e2e.py",
-      "line": 2623,
+      "line": 2737,
       "code_sha256": "31df13bbd38b806ec10b83328e469066a44abb27722e6e02f3effa919c07c797",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "21a81bfb62ac8708ea073b9fcc7aa6171909315f0962253493d9eeb92da8d311",
+      "file_sha256": "c65b868d174645b3e87053a480d1a256bbe1c7340061819538dab35984117fa7",
       "dependencies": {
         "orchestration/code_digest.py": "sha256:e7d13924ff9d5b109b081ef39ba847b2f66e18a608bf4b94971d7c9537fc4c56",
         "orchestration/launcher.py": "sha256:30808be7f72b5b9015d466dbe9f2dfde6ea9945de11af37028cca7ab0802e946",
@@ -465,7 +465,7 @@
       "file_sha256": "5924bdf54a728adfe6e15b9809aef38c32d32090d1a7b8d74a66db8c90c89923",
       "dependencies": {
         "orchestration/launcher.py": "sha256:30808be7f72b5b9015d466dbe9f2dfde6ea9945de11af37028cca7ab0802e946",
-        "scripts/lakehouse/run_launcher_e2e.py": "sha256:21a81bfb62ac8708ea073b9fcc7aa6171909315f0962253493d9eeb92da8d311",
+        "scripts/lakehouse/run_launcher_e2e.py": "sha256:c65b868d174645b3e87053a480d1a256bbe1c7340061819538dab35984117fa7",
         "scripts/lakehouse/run_lock.py": "sha256:a789adcdb7a6618854bd441a94fef1123603da96d4a0c6c6bd008b7d48066f7b",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
       },
