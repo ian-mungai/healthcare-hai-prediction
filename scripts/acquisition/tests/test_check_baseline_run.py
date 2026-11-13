@@ -246,6 +246,7 @@ def test_missing_seed_files_pass_unless_required_and_a_held_one_passes_always(tm
 def test_the_seed_holds_exactly_the_stored_files_of_the_manual_units(tmp_path: Path) -> None:
     def manual(queue: dict) -> None:
         queue["queue"][2]["route"] = "manual_browser_download"
+        queue["queue"][2]["mode"] = "hud_xlsx"
 
     root = bundle(tmp_path / "b", mutate=manual)
     specs = json.loads((root / "capture_specs.json").read_text())
@@ -306,3 +307,12 @@ def test_a_secret_entry_without_its_provisioning_or_listed_twice_is_refused(tmp_
     relock(root)
     found = " ".join(seed_problems(root))
     check("bls_api_key has no provisioning text" in found and "census_api_key is listed twice" in found, found)
+
+
+def test_a_manual_unit_that_moves_to_an_api_has_no_seed_files(tmp_path: Path) -> None:
+    root = bundle(tmp_path / "b")
+    specs = json.loads((root / "capture_specs.json").read_text())
+    specs["specs"]["c"]["stored_data_files"] = ["acs.zip"]
+    (root / "capture_specs.json").write_text(json.dumps(specs))
+    relock(root)
+    check(seed_problems(root) == [], "a manual unit of mode file (an ACS file) is not seeded")

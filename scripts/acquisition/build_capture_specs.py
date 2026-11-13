@@ -2,10 +2,10 @@
 
 A bootstrap capture compares nothing with an old download, but it still needs facts the stored files hold: the stored data file names a collector must
 produce, the expected format, reviewed unsigned redirect and receipt template of a file unit, the reviewed archive member map, the planned item of a
-collector unit (its batch, release, year or file ID, or an MMD unit's measure and year) and the newest stored capture of a manual unit (object keys and
-versions, without the bucket). The result has one entry per queue unit and no bucket name or local path. The stored files are local only, so hosted CI cannot
-run this script. A receipt template carries the free text of old job plans: legacy agent-home pointers are rewritten as in the registry, phone examples of a
-public dataset profile are redacted, and the document header counts both.
+collector unit (its batch, release, year or file ID, or an MMD unit's measure and year) and the newest stored capture of a manual HUD or WONDER unit (object
+keys and versions, without the bucket). The result has one entry per queue unit and no bucket name or local path. The stored files are local only, so hosted
+CI cannot run this script. A receipt template carries the free text of old job plans: legacy agent-home pointers are rewritten as in the registry, phone
+examples of a public dataset profile are redacted, and the document header counts both.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.check_baseline_run import SEED_MODES
 from scripts.acquisition.data_paths import current
 from scripts.acquisition.rewrite_registry_provenance import PHONE_PLACEHOLDER, POINTER_FROM, POINTER_TO
 
@@ -103,7 +104,7 @@ def mmd_selection(unit: dict[str, Any], receipt: dict[str, Any], conditions: lis
 
 
 def last_capture(receipt_path: Path, receipt: dict[str, Any]) -> dict[str, Any] | None:
-    """The newest stored capture of a manual unit from its reconciliation file: each object's role, key, version, digest and size, or None without records."""
+    """The newest stored capture of a manual HUD or WONDER unit from its reconciliation file: role, key, version, digest and size of each object, or None."""
     record = receipt_path.parent / "s3_collections_reconciliation.json"
     if not record.is_file():
         return None
@@ -153,7 +154,7 @@ def derive_unit(unit: dict[str, Any], base: Path, conditions: list[dict[str, Any
         if not isinstance(item, str) or not item:
             raise ValueError(f"Unit {unit['snapshot_id']} has no planned item ID ({PLAN_ITEM_KEYS[unit['mode']]}) in its receipt lineage")
         spec["plan_item"] = item
-    if manual and (capture := last_capture(receipt_path, receipt)):
+    if manual and unit["mode"] in SEED_MODES and (capture := last_capture(receipt_path, receipt)):
         spec["last_capture"] = capture
     members = archive_members(receipt_path.parent)
     if members:

@@ -11,10 +11,10 @@ stores them (`.gitattributes`), and `scripts/quality/repo_checks.py` declares th
 | `mmd_browser_history/` | the 12 MMD browser-history CSV captures (plan inputs) | the comparison report in the bundle |
 | `mmd_references/` | `codebook_crosswalk.csv`, `countynames.tsv`, `urban.tsv`, which the MMD collector reads to build its requests and derived CSV files | the MMD plan |
 | `structure_history/` | `county_adjacency2010.txt`. Held until the removed-names hook reads Latin-1 files | none yet |
-| `manual_units/<snapshot ID>/` | the stored data files of the 66 manual units (44 HUD, 16 ACS, 6 WONDER) | the HUD plan for the 44 workbooks, none for the other files |
+| `manual_units/<snapshot ID>/` | the stored data files of the 50 manual units (44 HUD, 6 WONDER) | the HUD plan for the 44 workbooks, none for the other files |
 
 An entry without a digest is pending: add the digest when the file is added. The check refuses a present file without a digest, a file with another digest and a file
-the manifest does not list. The five reference documents are not part of the seed, and no seed file is pinned in S3.
+the manifest does not list. The five reference documents and the 16 ACS units are not part of the seed (the ACS units move to the Census API collector), and no seed file is pinned in S3.
 
 ```sh
 python -m scripts.acquisition.check_baseline_run                 # manifest, queue binding, digests of present files, LFS rule

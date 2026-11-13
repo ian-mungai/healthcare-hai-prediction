@@ -1,9 +1,9 @@
 """One-time development step: list the files of the bootstrap seed folder in its manifest.
 
 The seed folder holds what a run in an empty environment cannot fetch: the plan inputs that are data files (12 browser-history CSVs, 3 MMD references and the
-2010 county adjacency file) and the stored data files of the queue's manual units. The manifest lists each file with the folder it takes and, where a tracked
-source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references from the MMD plan and the HUD workbooks from the HUD plan. Every
-other file has no digest until the files are added; the check then refuses a present file without one.
+2010 county adjacency file) and the stored data files of the queue's manual HUD and WONDER units (the ACS units move to the Census API). The manifest lists
+each file with the folder it takes and, where a tracked source holds one, its SHA-256: the browser CSVs from the comparison report, the MMD references from the
+MMD plan and the HUD workbooks from the HUD plan. Every other file has no digest until the files are added; the check then refuses a present file without one.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ import sys
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from scripts.acquisition.check_baseline_run import EXPECTED_NAME, ROOT, SEED_KIND, SEED_MANIFEST, SEED_ROOT, file_entries
+from scripts.acquisition.check_baseline_run import EXPECTED_NAME, ROOT, SEED_KIND, SEED_MANIFEST, SEED_MODES, SEED_ROOT, file_entries
 
 FOLDERS = (("/mmd_browser_history/", "mmd_browser_history"), ("/mmd_api_comparison/", "mmd_references"), ("/structure_history/", "structure_history"))
 HOLDS = {"county_adjacency2010.txt": "pending: a Latin-1 file waits on the removed-names hook fix"}
@@ -33,15 +33,18 @@ def input_folder(path: str) -> str:
 
 
 def build(queue_bytes: bytes, specs: dict[str, Any], inputs: list[str], digests: dict[str, str], workbooks: dict[str, str]) -> bytes:
-    """The manifest bytes for the plan INPUTS held in the seed and the manual units' stored files in SPECS. DIGESTS and WORKBOOKS map file names to SHA-256."""
-    files = []
+    """The manifest bytes for the plan INPUTS held in the seed and the stored files of the manual HUD and WONDER units in SPECS.
+
+    DIGESTS and WORKBOOKS map file names to SHA-256.
+    """
+    files: list[dict[str, Any]] = []
     for path in inputs:
         name = PurePosixPath(path).name
         files.append(
             {"path": f"{input_folder(path)}/{name}", "sha256": digests.get(name), "plan_input": path} | ({"hold": HOLDS[name]} if name in HOLDS else {})
         )
     for unit in json.loads(queue_bytes)["queue"]:
-        if unit["disposition"] == "approved_manual":
+        if unit["disposition"] == "approved_manual" and unit["mode"] in SEED_MODES:
             for name in specs["specs"][unit["snapshot_id"]]["stored_data_files"]:
                 files.append({"path": f"manual_units/{unit['snapshot_id']}/{name}", "sha256": workbooks.get(name), "unit": unit["snapshot_id"]})
     document = {"kind": SEED_KIND, "queue_sha256": hashlib.sha256(queue_bytes).hexdigest(), "files": sorted(files, key=lambda item: item["path"])}

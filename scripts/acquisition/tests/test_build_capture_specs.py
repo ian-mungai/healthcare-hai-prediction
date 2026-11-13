@@ -148,7 +148,8 @@ def collector_units(root: Path) -> list[dict]:
     ]
     held = {"snapshot_id": "H1", "mode": "hud_xlsx", "disposition": "approved_manual"}
     units.append(held | {"receipt": stored(root, "H1", {"acquisition": {"retrieved_at_utc": "2026-09-28T21:36:18Z"}}, objects=objects)})
-    units.append({"snapshot_id": "H2", "mode": "file", "disposition": "approved_manual", "receipt": stored(root, "H2", {})})
+    units.append({"snapshot_id": "H2", "mode": "file", "disposition": "approved_manual", "receipt": stored(root, "H2", {}, objects=objects)})
+    units.append(held | {"snapshot_id": "H4", "receipt": stored(root, "H4", {})})
     units.append(
         held | {"snapshot_id": "H3", "receipt": stored(root, "H3", {}, objects=[{**objects[0], "object": {**objects[0]["object"], "key": "raw/h3.xlsx"}}])}
     )
@@ -205,7 +206,10 @@ def test_a_manual_unit_names_its_newest_stored_capture_and_one_without_records_h
         ],
     }
     check(result["H1"]["last_capture"] == expected, f"last capture: {result['H1'].get('last_capture')}")
-    check("last_capture" not in result["H2"] and "receipt_template" not in result["H2"], "no reconciliation, and a manual file unit has no template")
+    check("last_capture" not in result["H4"], "no reconciliation, no field")
+    check(
+        "last_capture" not in result["H2"] and "receipt_template" not in result["H2"], "an ACS file unit moves to the Census API: no last capture, no template"
+    )
     check(result["H3"]["last_capture"]["read_root"] == "raw/", "a capture under raw/")
     check(BUCKET not in json.dumps(result), "no bucket name")
 

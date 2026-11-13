@@ -130,8 +130,8 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
 
     require(not evidence_only, "Reference downloads are stored complete or not at all")
     current = load_plan()
-    plan = current if canonical_hash(current) == lineage["plan_sha256"] else predecessor_plan(current, lineage["plan_sha256"])
-    require(plan is not None, "Reference capture plan differs")
+    plan = current if canonical_hash(current) == lineage["plan_sha256"] else predecessor_plan(current, lineage["plan_sha256"]) or {}
+    require(bool(plan), "Reference capture plan differs")
     require(lineage["registry_sha256"] == plan["registry_sha256"], "Reference registry differs")
     require(lineage["schema_sha256"] == canonical_hash(receipt_validator().schema), "Reference schema differs")
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "Reference modeling hold differs")

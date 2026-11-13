@@ -2,8 +2,8 @@
 
 It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums), the capture specification, the hosts file with
 its approval and the required secrets list against the secrets the collector plans and the key reader name. It also checks that every expected plan input has
-exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches its manifest: the files the queue's manual units
-store, the digests, the Git LFS rule. It makes no request and reads only the bundle, the seed folder and the collector plans.
+exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches its manifest: the files the queue's manual HUD and
+WONDER units store, the digests, the Git LFS rule. It makes no request and reads only the bundle, the seed folder and the collector plans.
 """
 
 from __future__ import annotations
@@ -28,6 +28,8 @@ EXPECTED_NAME = "expected_plan_inputs.json"
 SEED_MANIFEST = "manifest.json"
 SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md"})
 SEED_KIND = "bootstrap_seed_manifest"
+# The manual units whose stored files the seed holds. The ACS units are manual too, but they move to the Census API collector (owner, Nov 12 2026).
+SEED_MODES = ("hud_xlsx", "wonder_export")
 SECRETS_NAME = "required_secrets.json"
 SECRETS_KIND = "bootstrap_required_secrets"
 CONFIG = Path("config/acquisition")
@@ -142,19 +144,19 @@ def home_problems(root: Path, manifest: dict) -> list[str]:
 
 
 def expected_seed_files(root: Path) -> dict[str, str]:
-    """The seed path of every stored data file of a manual unit, to its unit: ``manual_units/<unit>/<file name>``."""
+    """The seed path of every stored data file of a manual HUD or WONDER unit, to its unit: ``manual_units/<unit>/<file name>``."""
     queue = json.loads((root / "queue.json").read_bytes())["queue"]
     specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
     return {
         f"manual_units/{unit['snapshot_id']}/{name}": unit["snapshot_id"]
         for unit in queue
-        if unit["disposition"] == "approved_manual"
+        if unit["disposition"] == "approved_manual" and unit["mode"] in SEED_MODES
         for name in specs[unit["snapshot_id"]]["stored_data_files"]
     }
 
 
 def seed_problems(root: Path, seed_root: Path, manifest: dict, *, require_files: bool = False) -> list[str]:
-    """Return why the seed folder differs from its manifest or the queue: another queue, wrong files for the manual units, bad paths, digests."""
+    """Return why the seed folder differs from its manifest or the queue: another queue, wrong files for the manual HUD and WONDER units, bad paths, digests."""
     problems = []
     if manifest.get("kind") != SEED_KIND:
         problems.append(f"the seed manifest is not a {SEED_KIND}")
