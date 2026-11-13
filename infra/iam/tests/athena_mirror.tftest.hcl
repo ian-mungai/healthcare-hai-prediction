@@ -191,14 +191,16 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
-      s.Effect == "Allow" && !anytrue([for a in s.Action : endswith(a, "*")]) && !anytrue([for r in s.Resource : r == "*"])
+      !anytrue([for a in s.Action : endswith(a, "*")]) && !anytrue([for r in s.Resource : r == "*"])
     ])
     error_message = "The reader policy has no wildcard action and no all-resources grant."
   }
 
   assert {
-    condition     = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for a in s.Action : a if startswith(a, "glue:")]])) == toset(["glue:GetDatabase", "glue:GetTable"])
-    error_message = "The reader may read Glue registrations and nothing else in Glue."
+    condition = toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for a in s.Action : a if startswith(a, "glue:")]])) == toset([
+      "glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"
+    ])
+    error_message = "The reader may read and list Glue registrations and nothing else in Glue, so SHOW TABLES works."
   }
 
   assert {
@@ -209,25 +211,41 @@ run "reader_policy_reads_the_mirror_and_writes_only_its_results" {
   assert {
     condition = (
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:glue:") && !endswith(r, ":catalog")]])) == toset([
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
         "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
         "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+        "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
+        "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
       ])
     )
-    error_message = "The owner's Athena review stays on gold: Glue reads are limited to the gold mirror database and its tables. The features mirror serves the catalog, and both layers' folders do not fit one inline policy."
+    error_message = "Glue reads reach the silver, gold and features mirror databases and their tables, and no other database."
   }
 
   assert {
     condition = (
-      length(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if startswith(r, "arn:aws:s3:::") && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]])) == length(keys(jsondecode(file("${path.module}/../../data_contracts/lakehouse/gold_contract.json")).publish.tables)) &&
-      alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : alltrue([for r in s.Resource : can(regex("^arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/[a-z_]+/[*]$", r))]) if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]) &&
-      !strcontains(aws_iam_role_policy.athena_reader[0].policy, "features") &&
-      contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state/*") &&
-      !contains(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]), "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*") &&
-      !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([for r in s.Resource : startswith(r, "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs")])]) &&
+      toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource if s.Effect == "Allow" && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")])) == toset([
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
+      ]) &&
       toset(flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : [for r in s.Resource : r if contains(s.Action, "s3:PutObject")]])) == toset(["arn:aws:s3:::example-project-ci-bucket/athena/results/*"]) &&
       !anytrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : contains(s.Action, "s3:DeleteObject")])
     )
-    error_message = "Data reads reach only the published gold contract tables, one folder each, never features, publish_runs or the whole namespace. Writes reach only the results prefix and nothing deletes."
+    error_message = "Data reads reach only the three published layer folders and writes reach only the results prefix. Nothing deletes."
+  }
+
+  assert {
+    condition = (
+      length([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s if s.Effect == "Deny"]) == 1 &&
+      [for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s if s.Effect == "Deny"][0].Action == ["s3:GetObject"] &&
+      toset([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s if s.Effect == "Deny"][0].Resource) == toset([
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/publish_runs/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
+        "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
+      ])
+    )
+    error_message = "One explicit deny keeps the publish_runs bookkeeping table of each layer unreadable, even though its folder sits inside the layer folder."
   }
 }
 
@@ -240,21 +258,31 @@ run "reader_policy_names_no_principal_and_no_wider_resource" {
 
   assert {
     condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
-      s.Effect == "Allow" && !contains(keys(s), "Principal") && !contains(keys(s), "NotPrincipal") && !contains(keys(s), "NotAction") && !contains(keys(s), "NotResource")
+      contains(["Allow", "Deny"], s.Effect) && !contains(keys(s), "Principal") && !contains(keys(s), "NotPrincipal") && !contains(keys(s), "NotAction") && !contains(keys(s), "NotResource")
     ])
-    error_message = "The reader policy is an identity policy with Allow statements only and names no principal."
+    error_message = "The reader policy is an identity policy with Allow and Deny statements only and names no principal."
   }
 
   assert {
-    condition = toset([for r in flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]) : r if !strcontains(r, "/lakehouse/gold/")]) == toset([
+    condition = toset([for r in flatten([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : s.Resource]) : r]) == toset([
       "arn:aws:athena:eu-west-1:111111111111:workgroup/hai_mirror",
       "arn:aws:glue:eu-west-1:111111111111:catalog",
+      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_silver",
+      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_silver/*",
       "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_gold",
       "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_gold/*",
+      "arn:aws:glue:eu-west-1:111111111111:database/hai_mirror_features",
+      "arn:aws:glue:eu-west-1:111111111111:table/hai_mirror_features/*",
       "arn:aws:s3:::example-project-ci-bucket",
       "arn:aws:s3:::example-project-ci-bucket/athena/results/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/silver/publish_runs/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/publish_runs/*",
+      "arn:aws:s3:::example-project-ci-bucket/lakehouse/features/publish_runs/*",
     ])
-    error_message = "The reader policy reaches exactly the mirror workgroup, database, results prefix and bucket, plus the contract table folders."
+    error_message = "The reader policy reaches exactly the mirror workgroup, the three mirror databases, the results prefix, the bucket and the three layer folders with their publish_runs denials."
   }
 }
 
@@ -333,22 +361,31 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
   }
 
   assert {
-    condition = !anytrue([
-      for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([
-        for r in s.Resource : startswith("arn:aws:s3:::example-project-ci-bucket/lakehouse/gold/dim_state_unpublished/data/a.parquet", trimsuffix(r, "*"))
-        if contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")
+    condition = alltrue([
+      for path in [
+        "lakehouse/gold_e2e/dim_state/data/a.parquet",
+        "lakehouse/silver_e2e/hospital/data/a.parquet",
+        "lakehouse/features_e2e/feature_matrix_hospital/data/a.parquet",
+        "lakehouse/bronze/hospital/data/a.parquet",
+        "lakehouse/goldfish/dim_state/data/a.parquet",
+        "bronze_objects/sha256/a",
+        ] : !anytrue([
+          for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([
+            for r in s.Resource : startswith("arn:aws:s3:::example-project-ci-bucket/${path}", trimsuffix(r, "*"))
+          ]) if s.Effect == "Allow" && contains(s.Action, "s3:GetObject") && !contains(s.Action, "s3:PutObject")
       ])
     ])
-    error_message = "A folder that only shares a contract table name as a prefix, such as dim_state_unpublished, is not readable. Each grant ends at the directory boundary."
+    error_message = "Test namespaces, bronze, a folder that only starts with a layer name and the rest of the bucket are not readable. Each layer grant ends at the directory boundary."
   }
 
   assert {
-    condition = !anytrue([
-      for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement : anytrue([
-        for p in s.Condition.StringLike["s3:prefix"] : startswith("lakehouse/gold/dim_state_unpublished/", trimsuffix(p, "*")) && p != "athena/results/*"
-      ]) if contains(s.Action, "s3:ListBucket")
+    condition = alltrue([
+      for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
+      !contains(s.Action, "s3:ListBucket") || alltrue([
+        for p in s.Condition.StringLike["s3:prefix"] : contains(["athena/results/*", "lakehouse/silver/*", "lakehouse/gold/*", "lakehouse/features/*"], p)
+      ])
     ])
-    error_message = "Listing a non-contract sibling folder that shares a table name prefix is not allowed either."
+    error_message = "Listing the bucket needs a prefix limited to the results folder and the three layer folders."
   }
 
   assert {
@@ -359,15 +396,6 @@ run "reader_policy_lists_no_uploads_and_stays_small" {
   assert {
     condition     = length(replace(replace(aws_iam_role_policy.athena_reader[0].policy, " ", ""), "\n", "")) < 10240
     error_message = "The reader policy stays inside the 10240 character limit of an inline role policy."
-  }
-
-  assert {
-    condition = alltrue([for s in jsondecode(aws_iam_role_policy.athena_reader[0].policy).Statement :
-      !contains(s.Action, "s3:ListBucket") || (
-        alltrue([for p in s.Condition.StringLike["s3:prefix"] : p == "athena/results/*" || can(regex("^lakehouse/gold/[a-z_]+/[*]$", p))]) && !contains(s.Condition.StringLike["s3:prefix"], "lakehouse/gold/publish_runs*")
-      )
-    ])
-    error_message = "Listing the bucket needs a prefix limited to the results folder and the contract tables."
   }
 }
 

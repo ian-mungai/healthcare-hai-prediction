@@ -461,8 +461,14 @@ def case_closed_diagnostic_pipe_does_not_escape() -> Check:
 
 def case_disabled_touches_nothing() -> Check:
     glue = FakeGlue()
-    report = glue_mirror.mirror(glue_mirror.load_config(), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
-    return {"tracked_default_is_off": glue_mirror.load_config().enabled is False, "no_call": glue.calls == [], "skipped": report.get("status") == "skipped"}
+    report = glue_mirror.mirror(replace(glue_mirror.load_config(), enabled=False), "gold", "real", ids([PILOT]), FakeSource({PILOT: FIRST}), glue)
+    return {"no_call": glue.calls == [], "skipped": report.get("status") == "skipped"}
+
+
+def case_tracked_config_turns_the_mirror_on() -> Check:
+    config = glue_mirror.load_config()
+    wanted, reason = glue_mirror.tables_to_mirror(config, "gold", "real", [PILOT])
+    return {"tracked_config_is_on": config.enabled is True, "a_real_gold_publish_mirrors": wanted == [PILOT] and reason == ""}
 
 
 def case_test_namespace_touches_nothing() -> Check:
@@ -660,7 +666,8 @@ def case_reader_access_is_one_role_for_one_user() -> Check:
     roles = re.findall(r'resource "aws_iam_role" "(\w+)"', stack)
     return {
         "reader_policy_names_no_principal": not re.search(r'"(Principal|NotPrincipal|NotAction|NotResource)"', template),
-        "reader_policy_only_allows": template.count('"Effect": "Allow"') == template.count('"Effect"'),
+        "reader_policy_only_allows_and_denies_the_runs_table": template.count('"Effect": "Allow"') + 1 == template.count('"Effect"')
+        and re.search(r'"Sid": "DenyPublishRunsBookkeeping",\s*"Effect": "Deny",\s*"Action": \["s3:GetObject"\]', template) is not None,
         "reader_role_used_only_by_its_stack_file": users == ["infra/iam/athena_mirror.tf"],
         "no_attachment_or_managed_policy": attachments == [],
         "one_role_reaches_the_reader_policy": roles == ["athena_reader"],
@@ -707,6 +714,312 @@ def case_check_compares_the_two_pointers() -> Check:
     }
 
 
+S3_SILVER = "silver"
+S3_FIELDS = [
+    {"id": 1, "name": "county_sk", "required": False, "type": "string"},
+    {"id": 2, "name": "visits", "required": False, "type": "long"},
+    {"id": 3, "name": "amount", "required": False, "type": "decimal(12, 2)"},
+    {"id": 4, "name": "loaded_at", "required": False, "type": "timestamptz"},
+    {"id": 5, "name": "tags", "required": False, "type": {"type": "list", "element-id": 6, "element": "string", "element-required": False}},
+    {"id": 7, "name": "pair", "required": False, "type": {"type": "struct", "fields": [{"id": 8, "name": "a", "required": False, "type": "int"}]}},
+]
+S3_COLUMNS = [
+    ("county_sk", "string"),
+    ("visits", "bigint"),
+    ("amount", "decimal(12,2)"),
+    ("loaded_at", "timestamp"),
+    ("tags", "array<string>"),
+    ("pair", "struct<a:int>"),
+]
+
+
+def metadata_name(version: int, tag: str = "0") -> str:
+    return f"{version:05d}-{tag * 8}-0000-4000-8000-{tag * 12}.metadata.json"
+
+
+def metadata_key(table: str, version: int, tag: str = "0", layer: str = "gold") -> str:
+    return f"lakehouse/{layer}/{table}/metadata/{metadata_name(version, tag)}"
+
+
+def metadata_document(
+    table: str, main: int | None, branches: dict[str, int] | None = None, layer: str = "gold", changes: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """An Iceberg v2 metadata file: ``main`` is the snapshot of the main branch, ``branches`` the other refs."""
+    refs: dict[str, Any] = {name: {"snapshot-id": snapshot, "type": "branch"} for name, snapshot in (branches or {}).items()}
+    snapshots = sorted({snapshot for snapshot in [main, *(branches or {}).values()] if snapshot is not None})
+    if main is not None:
+        refs["main"] = {"snapshot-id": main, "type": "branch"}
+    document: dict[str, Any] = {
+        "format-version": 2,
+        "table-uuid": "11111111-1111-4111-8111-111111111111",
+        "location": f"s3://{BUCKET}/lakehouse/{layer}/{table}",
+        "current-snapshot-id": -1 if main is None else main,
+        "refs": refs,
+        "snapshots": [{"snapshot-id": snapshot} for snapshot in snapshots],
+        "current-schema-id": 1,
+        "schemas": [{"schema-id": 0, "type": "struct", "fields": []}, {"schema-id": 1, "type": "struct", "fields": S3_FIELDS}],
+    }
+    document.update(changes or {})
+    return document
+
+
+class FakeS3:
+    """The two read calls the S3 source may use. There is no write call: any other attribute raises, so a write fails the case."""
+
+    def __init__(self, objects: dict[str, bytes] | None = None, delay: float = 0.0) -> None:
+        self.objects = objects or {}
+        self.calls: list[tuple[str, str]] = []
+        self.delay = delay
+
+    def put(self, key: str, document: Any) -> None:
+        self.objects[key] = document if isinstance(document, bytes) else json.dumps(document).encode()
+
+    def get_paginator(self, operation: str) -> Any:
+        if operation != "list_objects_v2":
+            raise AssertionError(operation)
+        outer = self
+
+        class Pages:
+            def paginate(self, Bucket: str, Prefix: str) -> list[dict[str, Any]]:
+                if Bucket != BUCKET:
+                    raise AssertionError(Bucket)
+                outer.calls.append(("list_objects_v2", Prefix))
+                time.sleep(outer.delay)
+                keys = sorted(key for key in outer.objects if key.startswith(Prefix))
+                return [{"Contents": [{"Key": key} for key in keys[index : index + 2]]} for index in range(0, len(keys), 2)] or [{}]
+
+        return Pages()
+
+    def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        if Bucket != BUCKET:
+            raise AssertionError(Bucket)
+        self.calls.append(("get_object", Key))
+        if Key not in self.objects:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "stand-in"}}, "get_object")
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+
+def s3_with(tables: Sequence[str], main: int = 10, layer: str = "gold") -> FakeS3:
+    s3 = FakeS3()
+    for table in tables:
+        s3.put(metadata_key(table, 1, layer=layer), metadata_document(table, main, layer=layer))
+    return s3
+
+
+def register(s3: FakeS3, glue: FakeGlue, tables: Sequence[str], layer: str = "gold", dry_run: bool = False, config: Any = None) -> dict[str, Any]:
+    return glue_mirror.register_from_s3(config or enabled(), layer, list(tables), s3, BUCKET, glue, dry_run=dry_run)
+
+
+def case_s3_register_creates_each_table_at_its_main_snapshot() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT, SECOND_TABLE])
+    report = register(s3, glue, [PILOT, SECOND_TABLE])
+    held = table_of(glue)
+    parameters = held["Parameters"]
+    return {
+        "both_created": report.get("status") == "ok" and report["tables"] == {PILOT: "created", SECOND_TABLE: "created"},
+        "points_at_the_newest_file_of_main": parameters["metadata_location"] == f"s3://{BUCKET}/{metadata_key(PILOT, 1)}",
+        "records_snapshot_and_s3_origin": parameters["hai_snapshot_id"] == "10" and parameters["hai_run_id"] == "registered_from_s3",
+        "marked_as_a_mirror_of_iceberg": parameters["hai_mirror"] == "true" and parameters["table_type"] == "ICEBERG",
+        "columns_come_from_the_current_schema": [(c["Name"], c["Type"]) for c in held["StorageDescriptor"]["Columns"]] == S3_COLUMNS,
+        "location_is_the_table_folder": held["StorageDescriptor"]["Location"] == f"s3://{BUCKET}/lakehouse/gold/{PILOT}",
+        "s3_was_only_read": {call for call, _ in s3.calls} <= {"list_objects_v2", "get_object"},
+    }
+
+
+def case_s3_register_picks_the_newest_main_never_a_branch() -> Check:
+    glue, s3 = FakeGlue(), FakeS3()
+    s3.put(metadata_key(PILOT, 1), metadata_document(PILOT, 10))
+    s3.put(metadata_key(PILOT, 2), metadata_document(PILOT, 20, {"audit": 19}))
+    s3.put(metadata_key(PILOT, 3), metadata_document(PILOT, 20, {"audit": 30, "staged": 31}))
+    s3.put(metadata_key(SECOND_TABLE, 1), metadata_document(SECOND_TABLE, 10))
+    s3.put(metadata_key(SECOND_TABLE, 2), metadata_document(SECOND_TABLE, 10, {"staged": 40}))
+    register(s3, glue, [PILOT, SECOND_TABLE])
+    pilot, second = table_of(glue)["Parameters"], table_of(glue, SECOND_TABLE)["Parameters"]
+    return {
+        "snapshot_is_main_not_a_branch": pilot["hai_snapshot_id"] == "20" and second["hai_snapshot_id"] == "10",
+        "file_is_the_newest_with_that_main": pilot["metadata_location"].endswith(metadata_name(3)) and second["metadata_location"].endswith(metadata_name(2)),
+        "no_branch_snapshot_is_recorded": not {"19", "30", "31", "40"} & {pilot["hai_snapshot_id"], second["hai_snapshot_id"]},
+    }
+
+
+def case_s3_register_refuses_a_table_it_cannot_resolve() -> Check:
+    names = ["dup", "empty", "oddname", "nomain", "emptytable", "moved", "mismatch", "badjson", "missingsnap", "futuretype", "tagmain"]
+    s3 = FakeS3()
+    s3.put(metadata_key("dup", 1, "a"), metadata_document("dup", 10))
+    s3.put(metadata_key("dup", 1, "b"), metadata_document("dup", 11))
+    s3.put(metadata_key("oddname", 1), metadata_document("oddname", 10))
+    s3.put("lakehouse/gold/oddname/metadata/v2.metadata.json", metadata_document("oddname", 11))
+    s3.put(metadata_key("nomain", 1), metadata_document("nomain", None, {"audit": 5}, changes={"current-snapshot-id": 5}))
+    s3.put(metadata_key("emptytable", 1), metadata_document("emptytable", None))
+    s3.put(metadata_key("moved", 1), metadata_document("moved", 10, changes={"location": f"s3://{BUCKET}/lakehouse/gold/another_table"}))
+    s3.put(metadata_key("mismatch", 1), metadata_document("mismatch", 10, changes={"current-snapshot-id": 11}))
+    s3.put(metadata_key("badjson", 1), b"{not json")
+    s3.put(metadata_key("missingsnap", 1), metadata_document("missingsnap", 10, changes={"snapshots": []}))
+    s3.put(
+        metadata_key("futuretype", 1),
+        metadata_document("futuretype", 10, changes={"schemas": [{"schema-id": 1, "fields": [{"id": 1, "name": "x", "type": "variant"}]}]}),
+    )
+    s3.put(metadata_key("tagmain", 1), metadata_document("tagmain", 10, changes={"refs": {"main": {"snapshot-id": 10, "type": "tag"}}}))
+    s3.put(metadata_key("good", 1), metadata_document("good", 10))
+    glue = FakeGlue()
+    report = register(s3, glue, [*names, "good"])
+    outcomes = report["tables"]
+    return {
+        "every_unresolvable_table_failed": all(outcomes[name].startswith("failed") for name in names),
+        "the_resolvable_table_is_still_registered": outcomes["good"] == "created",
+        "only_the_good_table_was_written": glue.writes() == [("create_table", "hai_mirror_gold", "good")],
+        "duplicate_version_is_named": "same version" in outcomes["dup"],
+        "report_is_failed": report["status"] == "failed",
+    }
+
+
+def case_s3_register_is_idempotent_and_follows_a_new_commit() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT, SECOND_TABLE])
+    register(s3, glue, [PILOT, SECOND_TABLE])
+    writes_after_first = list(glue.writes())
+    again = register(s3, glue, [PILOT, SECOND_TABLE])
+    s3.put(metadata_key(PILOT, 2), metadata_document(PILOT, 20))
+    moved = register(s3, glue, [PILOT, SECOND_TABLE])
+    parameters = table_of(glue)["Parameters"]
+    return {
+        "rerun_changes_nothing": glue.writes()[: len(writes_after_first)] == writes_after_first
+        and again["tables"] == {PILOT: "unchanged", SECOND_TABLE: "unchanged"},
+        "rerun_status_is_unchanged": again["status"] == "unchanged",
+        "new_commit_updates_only_its_table": moved["tables"] == {PILOT: "updated", SECOND_TABLE: "unchanged"},
+        "update_moves_the_pointer_and_keeps_the_old_one": parameters["metadata_location"].endswith(metadata_name(2))
+        and parameters["previous_metadata_location"].endswith(metadata_name(1)),
+    }
+
+
+def case_s3_register_keeps_a_registration_a_publish_wrote() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT])
+    glue_mirror.mirror(enabled(), "gold", "real", ids([PILOT], 5), FakeSource({PILOT: FIRST}), glue, RUN_ID)
+    before = dict(table_of(glue)["Parameters"])
+    glue.calls.clear()
+    report = register(s3, glue, [PILOT])
+    return {
+        "nothing_written": glue.writes() == [] and table_of(glue)["Parameters"] == before,
+        "reported_as_kept_with_the_run": report["tables"][PILOT].startswith("kept") and RUN_ID in report["tables"][PILOT],
+        "status_is_unchanged": report["status"] == "unchanged",
+    }
+
+
+def case_s3_register_dry_run_writes_nothing() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT])
+    report = register(s3, glue, [PILOT], dry_run=True)
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        code = glue_mirror.main(
+            ["register", "--source", "s3", "--layer", "gold", "--dry-run", "--bucket", BUCKET], glue=glue, s3=s3, config=enabled(), tables=[PILOT]
+        )
+    return {
+        "plans_a_create": report["tables"] == {PILOT: "created"},
+        "no_write_issued": glue.writes() == [] and glue.tables == {},
+        "cli_says_nothing_was_written": code == 0 and f"gold.{PILOT}: created (dry run, nothing written)" in out.getvalue(),
+    }
+
+
+def case_s3_register_obeys_the_switch_and_the_layer_scope() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT])
+    off = register(s3, glue, [PILOT], config=replace(glue_mirror.load_config(), enabled=False))
+    quiet = glue.calls == [] and s3.calls == []
+    bronze = register(s3, glue, [PILOT], layer="bronze")
+    plans = {layer: glue_mirror.layer_plan(layer) for layer in glue_mirror.MIRRORED_LAYERS}
+    return {
+        "off_touches_nothing": off["status"] == "skipped" and quiet,
+        "bronze_touches_nothing": bronze["status"] == "skipped" and glue.calls == [] and s3.calls == [],
+        "runs_table_is_not_in_any_layer_contract": all("publish_runs" not in plan.tables for plan in plans.values()),
+    }
+
+
+def case_s3_register_stays_inside_the_layer_folder() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT, "dim_unlisted"])
+    s3.put(metadata_key(PILOT, 1, layer="gold_e2e"), metadata_document(PILOT, 99, layer="gold_e2e"))
+    register(s3, glue, [PILOT])
+    listed = [prefix for call, prefix in s3.calls if call == "list_objects_v2"]
+    return {
+        "lists_only_the_gold_table_folder": listed == [f"lakehouse/gold/{PILOT}/metadata/"],
+        "unlisted_table_is_not_registered": ("hai_mirror_gold", "dim_unlisted") not in glue.tables,
+        "test_namespace_is_never_read": table_of(glue)["Parameters"]["hai_snapshot_id"] == "10",
+        "bad_table_name_is_refused": register(s3, FakeGlue(), ["../gold_e2e/x"])["tables"]["../gold_e2e/x"].startswith("failed"),
+    }
+
+
+def case_s3_register_obeys_one_deadline() -> Check:
+    glue, s3 = FakeGlue(), FakeS3(delay=0.6)
+    s3.put(metadata_key(PILOT, 1), metadata_document(PILOT, 10))
+    started = time.monotonic()
+    report = register(s3, glue, [PILOT, SECOND_TABLE], config=short(0.3))
+    returned_after = time.monotonic() - started
+    time.sleep(1.5)
+    return {
+        "returned_at_the_deadline": returned_after < 0.8,
+        "failed_and_names_the_deadline": report["status"] == "failed" and "deadline" in json.dumps(report),
+        "no_write_followed_the_late_read": glue.writes() == [],
+    }
+
+
+def case_s3_register_command_reports_and_exits() -> Check:
+    glue, s3 = FakeGlue(), s3_with([PILOT])
+    s3.put(metadata_key("broken", 1), b"[]")
+
+    def run(arguments: Sequence[str], tables: Sequence[str]) -> tuple[int, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            try:
+                code = glue_mirror.main(list(arguments), glue=glue, s3=s3, config=enabled(), tables=list(tables))
+            except SystemExit as error:
+                code = int(error.code or 0)
+        return code, out.getvalue() + err.getvalue()
+
+    good, good_text = run(["register", "--source", "s3", "--layer", "gold", "--bucket", BUCKET], [PILOT])
+    bad, bad_text = run(["register", "--source", "s3", "--layer", "gold", "--bucket", BUCKET], [PILOT, "broken"])
+    no_source, _ = run(["register", "--layer", "gold", "--bucket", BUCKET], [PILOT])
+    other_source, _ = run(["register", "--source", "polaris", "--layer", "gold", "--bucket", BUCKET], [PILOT])
+    no_bucket, no_bucket_text = run(["register", "--source", "s3", "--layer", "gold"], [PILOT])
+    return {
+        "success_exits_zero_and_names_the_table": good == 0 and f"gold.{PILOT}: created" in good_text,
+        "a_refused_table_exits_one_and_says_why": bad == 1 and "gold.broken: failed" in bad_text and f"gold.{PILOT}: unchanged" in bad_text,
+        "source_is_required": no_source == 2,
+        "only_the_s3_source_exists": other_source == 2,
+        "bucket_is_required": no_bucket == 2 and "bucket" in no_bucket_text,
+    }
+
+
+def case_s3_register_maps_iceberg_types_to_glue_types() -> Check:
+    mapped = {
+        kind: glue_mirror.glue_type(kind)
+        for kind in ("boolean", "int", "long", "float", "double", "date", "string", "uuid", "binary", "fixed[16]", "timestamp", "timestamptz", "decimal(10, 2)")
+    }
+    nested = glue_mirror.glue_type({"type": "map", "key-id": 1, "key": "string", "value-id": 2, "value": {"type": "list", "element-id": 3, "element": "long"}})
+    refused = []
+    for kind in ("variant", {"type": "weird"}, "decimal(x)"):
+        try:
+            glue_mirror.glue_type(kind)
+        except glue_mirror.MirrorError:
+            refused.append(True)
+    return {
+        "scalars": mapped
+        == {
+            "boolean": "boolean",
+            "int": "int",
+            "long": "bigint",
+            "float": "float",
+            "double": "double",
+            "date": "date",
+            "string": "string",
+            "uuid": "string",
+            "binary": "binary",
+            "fixed[16]": "binary",
+            "timestamp": "timestamp",
+            "timestamptz": "timestamp",
+            "decimal(10, 2)": "decimal(10,2)",
+        },
+        "nested_map_of_lists": nested == "map<string,array<bigint>>",
+        "unknown_types_are_refused": refused == [True, True, True],
+    }
+
+
 CASES: dict[str, Callable[[], Check]] = {
     "first_publish_registers": case_first_publish_registers,
     "repeat_is_a_no_op": case_repeat_is_a_no_op,
@@ -716,6 +1029,7 @@ CASES: dict[str, Callable[[], Check]] = {
     "hook_never_fails_the_publish": case_hook_never_fails_the_publish,
     "hook_repeat_is_a_no_op": case_hook_repeat_is_a_no_op,
     "disabled_touches_nothing": case_disabled_touches_nothing,
+    "tracked_config_turns_the_mirror_on": case_tracked_config_turns_the_mirror_on,
     "test_namespace_touches_nothing": case_test_namespace_touches_nothing,
     "bronze_and_other_layers_touch_nothing": case_bronze_and_other_layers_touch_nothing,
     "second_gold_table_is_mirrored": case_second_gold_table_is_mirrored,
@@ -744,6 +1058,17 @@ CASES: dict[str, Callable[[], Check]] = {
     "config_scope_is_silver_gold_and_features_only": case_config_scope_is_silver_gold_and_features_only,
     "reader_access_is_one_role_for_one_user": case_reader_access_is_one_role_for_one_user,
     "check_compares_the_two_pointers": case_check_compares_the_two_pointers,
+    "s3_register_creates_each_table_at_its_main_snapshot": case_s3_register_creates_each_table_at_its_main_snapshot,
+    "s3_register_picks_the_newest_main_never_a_branch": case_s3_register_picks_the_newest_main_never_a_branch,
+    "s3_register_refuses_a_table_it_cannot_resolve": case_s3_register_refuses_a_table_it_cannot_resolve,
+    "s3_register_is_idempotent_and_follows_a_new_commit": case_s3_register_is_idempotent_and_follows_a_new_commit,
+    "s3_register_keeps_a_registration_a_publish_wrote": case_s3_register_keeps_a_registration_a_publish_wrote,
+    "s3_register_dry_run_writes_nothing": case_s3_register_dry_run_writes_nothing,
+    "s3_register_obeys_the_switch_and_the_layer_scope": case_s3_register_obeys_the_switch_and_the_layer_scope,
+    "s3_register_stays_inside_the_layer_folder": case_s3_register_stays_inside_the_layer_folder,
+    "s3_register_obeys_one_deadline": case_s3_register_obeys_one_deadline,
+    "s3_register_command_reports_and_exits": case_s3_register_command_reports_and_exits,
+    "s3_register_maps_iceberg_types_to_glue_types": case_s3_register_maps_iceberg_types_to_glue_types,
 }
 
 

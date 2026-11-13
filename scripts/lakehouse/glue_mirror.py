@@ -10,6 +10,14 @@ OpenMetadata 2.0.7 has no Iceberg connector. The mirror never raises and stops a
 
 ``python -m scripts.lakehouse.glue_mirror check --layer silver|gold|features`` compares each registration with Polaris and exits 1 on any difference.
 It writes nothing.
+
+``python -m scripts.lakehouse.glue_mirror register --source s3 --layer silver|gold|features|all [--dry-run] [--bucket NAME]`` registers the tables that are
+already published, without Spark and without Polaris. It reads each table's metadata files in S3 and registers the snapshot that the main branch of the
+newest metadata file points to, never a staged or audit branch snapshot. A table whose metadata cannot be resolved without doubt is refused and named: no
+file, two files with one version number, a file name that is not numbered, a location that is not the table folder, a main that is missing or not a branch,
+or a type the mirror cannot map. The registration records the run ``registered_from_s3``. A later publish replaces it, and a registration that a publish
+wrote is kept. A rerun with unchanged metadata writes nothing. ``--dry-run`` plans and writes nothing. The caller needs Glue write access (the
+administrator profile; the project user has none) and read access to the bucket.
 """
 
 from __future__ import annotations
@@ -43,6 +51,26 @@ READ_SECONDS = 20
 CALL_ATTEMPTS = 2
 TABLE_NAME = re.compile(r"[a-z][a-z0-9_]{0,127}")
 LOCATION_CUT = "/metadata/"
+S3_RUN_ID = "registered_from_s3"
+METADATA_FILE = re.compile(r"(?P<version>[0-9]{5,})-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.metadata\.json")
+SCALAR_TYPES = {
+    "boolean": "boolean",
+    "int": "int",
+    "long": "bigint",
+    "float": "float",
+    "double": "double",
+    "date": "date",
+    "time": "string",
+    "timestamp": "timestamp",
+    "timestamptz": "timestamp",
+    "timestamp_ns": "timestamp",
+    "timestamptz_ns": "timestamp",
+    "string": "string",
+    "uuid": "string",
+    "binary": "binary",
+}
+DECIMAL_TYPE = re.compile(r"decimal\((?P<precision>[0-9]+),\s*(?P<scale>[0-9]+)\)")
+FIXED_TYPE = re.compile(r"fixed\[[0-9]+\]")
 
 
 class MirrorError(RuntimeError):
@@ -142,6 +170,134 @@ class SparkSource:
         return [(str(name), "timestamp" if kind == "timestamp_ntz" else str(kind)) for name, kind in self.spark.table(self.fq(table)).dtypes]
 
 
+def glue_type(kind: Any) -> str:
+    """The Glue column type of an Iceberg type; a type the mirror cannot map is refused."""
+    if isinstance(kind, str):
+        if kind in SCALAR_TYPES:
+            return SCALAR_TYPES[kind]
+        decimal = DECIMAL_TYPE.fullmatch(kind)
+        if decimal:
+            return f"decimal({decimal['precision']},{decimal['scale']})"
+        if FIXED_TYPE.fullmatch(kind):
+            return "binary"
+    elif isinstance(kind, dict):
+        try:
+            if kind["type"] == "list":
+                return f"array<{glue_type(kind['element'])}>"
+            if kind["type"] == "map":
+                return f"map<{glue_type(kind['key'])},{glue_type(kind['value'])}>"
+            if kind["type"] == "struct":
+                return "struct<" + ",".join(f"{field['name']}:{glue_type(field['type'])}" for field in kind["fields"]) + ">"
+        except KeyError as error:
+            raise MirrorError(f"an Iceberg type lacks its {error} entry") from error
+    raise MirrorError(f"the Iceberg type {kind!r} has no Glue type")
+
+
+class S3Source:
+    """The table side read from the metadata files in S3, with no Spark and no Polaris. It only reads.
+
+    The folder of a table is exactly ``lakehouse/<namespace>/<table>``. Its metadata files are the numbered ``<version>-<uuid>.metadata.json`` files in
+    ``metadata/``; the highest version is the newest. The committed snapshot is the one that the main branch of the newest file points to. The file for a
+    snapshot is the newest one whose main branch points to it, the same rule as the Polaris query. Anything that leaves the answer open is a ``MirrorError``.
+    """
+
+    def __init__(self, s3: Any, bucket: str, namespace: str) -> None:
+        self.s3 = s3
+        self.bucket = bucket
+        self.namespace = namespace
+        self.listed: dict[str, list[tuple[int, str]]] = {}
+        self.documents: dict[str, dict[str, Any]] = {}
+
+    def folder(self, table: str) -> str:
+        if not TABLE_NAME.fullmatch(table):
+            raise MirrorError(f"{table!r} is not a plain table name")
+        return f"lakehouse/{self.namespace}/{table}"
+
+    def files(self, table: str) -> list[tuple[int, str]]:
+        """The metadata files of the table, newest first."""
+        if table not in self.listed:
+            prefix = f"{self.folder(table)}/metadata/"
+            found: list[tuple[int, str]] = []
+            for page in self.s3.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix):
+                for item in page.get("Contents", []):
+                    name = item["Key"][len(prefix) :]
+                    if not name.endswith(".metadata.json"):
+                        continue
+                    match = METADATA_FILE.fullmatch(name)
+                    if match is None:
+                        raise MirrorError(f"{table}: {name} is not a numbered metadata file name")
+                    found.append((int(match["version"]), item["Key"]))
+            if not found:
+                raise MirrorError(f"{table}: no metadata file under {prefix}")
+            if len({version for version, _ in found}) != len(found):
+                raise MirrorError(f"{table}: two metadata files carry the same version number")
+            self.listed[table] = sorted(found, reverse=True)
+        return self.listed[table]
+
+    def document(self, key: str) -> dict[str, Any]:
+        if key not in self.documents:
+            try:
+                document = json.loads(self.s3.get_object(Bucket=self.bucket, Key=key)["Body"].read())
+            except ValueError as error:
+                raise MirrorError(f"{key.rsplit('/', 1)[-1]} is not JSON") from error
+            if not isinstance(document, dict):
+                raise MirrorError(f"{key.rsplit('/', 1)[-1]} is not a metadata document")
+            self.documents[key] = document
+        return self.documents[key]
+
+    @staticmethod
+    def main_snapshot(document: Mapping[str, Any]) -> int | None:
+        """The snapshot of the main branch, or None when the document has no branch named main."""
+        main = (document.get("refs") or {}).get("main")
+        if not isinstance(main, dict) or main.get("type", "branch") != "branch" or not isinstance(main.get("snapshot-id"), int):
+            return None
+        return int(main["snapshot-id"])
+
+    def committed(self, table: str) -> int:
+        """The snapshot of the main branch in the newest metadata file, after the checks that tie the file to this table."""
+        document = self.document(self.files(table)[0][1])
+        if document.get("location") != f"s3://{self.bucket}/{self.folder(table)}":
+            raise MirrorError(f"{table}: the metadata names another table location")
+        snapshot = self.main_snapshot(document)
+        if snapshot is None:
+            raise MirrorError(f"{table}: the newest metadata file has no main branch")
+        if document.get("current-snapshot-id") != snapshot:
+            raise MirrorError(f"{table}: the current snapshot is not the snapshot of main")
+        if snapshot not in [item.get("snapshot-id") for item in document.get("snapshots") or [] if isinstance(item, dict)]:
+            raise MirrorError(f"{table}: the snapshot of main is not in the snapshot list")
+        return snapshot
+
+    def pointer(self, table: str, snapshot_id: int) -> str | None:
+        for _, key in self.files(table):
+            if self.main_snapshot(self.document(key)) == snapshot_id:
+                return f"s3://{self.bucket}/{key}"
+        return None
+
+    def columns(self, table: str) -> list[tuple[str, str]]:
+        document = self.document(self.files(table)[0][1])
+        schemas = {schema.get("schema-id"): schema for schema in document.get("schemas") or [] if isinstance(schema, dict)}
+        schema = schemas.get(document.get("current-schema-id")) or document.get("schema")
+        if not isinstance(schema, dict) or not schema.get("fields"):
+            raise MirrorError(f"{table}: the metadata has no current schema")
+        return [(str(field["name"]), glue_type(field["type"])) for field in schema["fields"]]
+
+
+class DryRunGlue:
+    """The Glue client of a dry run: reads go through, a write is dropped. The mirror then reports what it would have done."""
+
+    def __init__(self, glue: Any) -> None:
+        self.glue = glue
+
+    def get_table(self, **arguments: Any) -> Any:
+        return self.glue.get_table(**arguments)
+
+    def create_table(self, **arguments: Any) -> dict[str, Any]:
+        return {}
+
+    def update_table(self, **arguments: Any) -> dict[str, Any]:
+        return {}
+
+
 def load_config(path: Path = CONFIG) -> MirrorConfig:
     document = json.loads(path.read_text())
     layers = {name: Layer(item["namespace"], item["database"]) for name, item in document["layers"].items()}
@@ -203,6 +359,12 @@ def glue_client() -> Any:
     import boto3
 
     return boto3.Session(region_name=os.environ["AWS_REGION"]).client("glue", config=client_config())
+
+
+def s3_client() -> Any:
+    import boto3
+
+    return boto3.Session(region_name=os.environ["AWS_REGION"]).client("s3", config=client_config())
 
 
 def register(config: MirrorConfig, spec: Layer, table: str, snapshot_id: int, run_id: str, source: Source, glue: Any, budget: Budget) -> str:
@@ -308,6 +470,38 @@ def check(config: MirrorConfig, layer: str, snapshots: Mapping[str, int], source
     return {"ok": all(outcome == "match" for outcome in outcomes.values()), "tables": outcomes}
 
 
+def register_from_s3(config: MirrorConfig, layer: str, tables: Sequence[str], s3: Any, bucket: str, glue: Any, dry_run: bool = False) -> dict[str, Any]:
+    """Register the published tables of one layer from their metadata files in S3. Never raises: each table's outcome is in the report.
+
+    The tables are the ones the layer's publish contract names. One absolute deadline bounds every S3 read and Glue call. A table that cannot be resolved
+    is reported failed and the others go on. A registration that a publish wrote stays as it is. With ``dry_run`` nothing is written.
+    """
+    wanted, reason = tables_to_mirror(config, layer, "real", tables)
+    if not wanted:
+        return {"status": "skipped", "reason": reason, "tables": {}}
+    spec = config.layers[layer]
+    budget = Budget(config.mirror_seconds)
+    source = S3Source(s3, bucket, spec.namespace)
+    outcomes: dict[str, str] = {}
+    snapshots: dict[str, int] = {}
+    for table in wanted:
+        try:
+            held = budget.run(f"reading the registration of {table}", current, glue, spec.database, table) if TABLE_NAME.fullmatch(table) else None
+            run = (held or {}).get("Parameters", {}).get("hai_run_id")
+            if held is not None and held.get("Parameters", {}).get(config.marker) == "true" and run != S3_RUN_ID:
+                outcomes[table] = f"kept: registered by publish run {run}"
+                continue
+            snapshots[table] = budget.run(f"reading the metadata of {table}", source.committed, table)
+        except Exception as error:
+            outcomes[table] = "failed: " + (str(error) if isinstance(error, MirrorError) else explain(error))
+    if snapshots:
+        report = mirror(config, layer, "real", snapshots, source, DryRunGlue(glue) if dry_run else glue, S3_RUN_ID, budget)
+        outcomes.update(report["tables"])
+    failed = any(outcome.startswith("failed") for outcome in outcomes.values())
+    changed = any(outcome in ("created", "updated") for outcome in outcomes.values())
+    return {"status": "failed" if failed else "ok" if changed else "unchanged", "tables": outcomes}
+
+
 def layer_plan(layer: str) -> Any:
     """The publish plan of a mirrored layer, read from its own contract."""
     from scripts.lakehouse import gold_publish
@@ -326,6 +520,28 @@ def committed_set(spark: Any, layer: str) -> tuple[dict[str, int], str]:
     return {str(name): int(snapshot) for name, snapshot in dict(head["snapshot_set"]).items()}, str(head["run_id"])
 
 
+def register_main(args: argparse.Namespace, parser: argparse.ArgumentParser, glue: Any, s3: Any, config: MirrorConfig, tables: Sequence[str] | None) -> int:
+    """The ``register`` command: one report line per table, exit 1 when any table failed."""
+    bucket = args.bucket or os.environ.get("DATA_BUCKET_NAME", "")
+    if not bucket:
+        parser.error("register needs the data bucket: pass --bucket or set DATA_BUCKET_NAME")
+    layers = list(MIRRORED_LAYERS) if args.layer == "all" else [args.layer]
+    s3 = s3 or s3_client()
+    glue = glue or glue_client()
+    failed = False
+    for layer in layers:
+        report = register_from_s3(config, layer, tables if tables is not None else list(layer_plan(layer).tables), s3, bucket, glue, dry_run=args.dry_run)
+        if report["status"] == "skipped":
+            sys.stdout.write(f"{layer}: skipped: {report['reason']}\n")
+        for table, outcome in report["tables"].items():
+            note = " (dry run, nothing written)" if args.dry_run and outcome in ("created", "updated") else ""
+            sys.stdout.write(f"{layer}.{table}: {outcome}{note}\n")
+        failed = failed or report["status"] == "failed"
+    if failed:
+        sys.stderr.write("glue mirror register: at least one table was refused or failed; the others are registered, rerun after the cause is fixed\n")
+    return 1 if failed else 0
+
+
 def main(
     argv: Sequence[str] | None = None,
     source: Source | None = None,
@@ -333,13 +549,24 @@ def main(
     config: MirrorConfig | None = None,
     snapshots: Mapping[str, int] | None = None,
     run_id: str | None = None,
+    s3: Any = None,
+    tables: Sequence[str] | None = None,
 ) -> int:
-    """The ``check`` command. Without a source and a Glue client it builds them: Spark on the Polaris catalog and boto3 under the task's own role."""
+    """The ``check`` and ``register`` commands. ``check`` without a source and a Glue client builds them: Spark on the Polaris catalog and boto3."""
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("command", choices=("check",))
-    parser.add_argument("--layer", required=True, choices=MIRRORED_LAYERS)
+    parser.add_argument("command", choices=("check", "register"))
+    parser.add_argument("--layer", required=True, choices=(*MIRRORED_LAYERS, "all"))
+    parser.add_argument("--source", choices=("s3",), help="register reads the table metadata from this source: the metadata files in S3")
+    parser.add_argument("--bucket", help="register: the data bucket (default: DATA_BUCKET_NAME)")
+    parser.add_argument("--dry-run", action="store_true", help="register: plan and write nothing")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     config = config or load_config()
+    if args.command == "register":
+        if args.source is None:
+            parser.error("register needs --source s3")
+        return register_main(args, parser, glue, s3, config, tables)
+    if args.layer == "all" or args.source or args.dry_run or args.bucket:
+        parser.error("check takes one --layer and no --source, --bucket or --dry-run")
     spark = None
     try:
         if source is None or snapshots is None or run_id is None:

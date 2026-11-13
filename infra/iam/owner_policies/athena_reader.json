@@ -10,21 +10,27 @@
     {
       "Sid": "ReadMirrorRegistrations",
       "Effect": "Allow",
-      "Action": ["glue:GetDatabase", "glue:GetTable"],
+      "Action": ["glue:GetDatabase", "glue:GetDatabases", "glue:GetTable", "glue:GetTables"],
       "Resource": ${GLUE_ARNS}
     },
     {
-      "Sid": "ReadListedTableFolders",
+      "Sid": "ReadPublishedLayerFolders",
       "Effect": "Allow",
       "Action": ["s3:GetObject"],
       "Resource": ${TABLE_OBJECT_ARNS}
     },
     {
-      "Sid": "ListListedTableFoldersAndResults",
+      "Sid": "ListPublishedLayerFoldersAndResults",
       "Effect": "Allow",
       "Action": ["s3:ListBucket"],
       "Resource": ["${BUCKET_ARN}"],
       "Condition": {"StringLike": {"s3:prefix": ${LIST_PREFIXES}}}
+    },
+    {
+      "Sid": "DenyPublishRunsBookkeeping",
+      "Effect": "Deny",
+      "Action": ["s3:GetObject"],
+      "Resource": ${DENIED_OBJECT_ARNS}
     },
     {
       "Sid": "LocateBucket",

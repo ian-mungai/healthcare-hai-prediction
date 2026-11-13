@@ -8,25 +8,25 @@ locals {
   athena_results_path  = "${local.athena_mirror_config.workgroup.results_prefix}*"
   athena_workgroup_arn = "arn:aws:athena:${var.aws_region}:${var.expected_account_id}:workgroup/${local.athena_mirror_config.workgroup.name}"
   athena_table_arns    = { for layer, spec in local.athena_layers : layer => "${local.athena_account_arn}:table/${spec.database}/*" }
-  # The reader reads the folders of the tables that the gold publish contract names, and nothing else of the namespace: not publish_runs, not a table
-  # that is not in the contract and not a folder that only starts with a table name. Each pattern ends at the directory boundary, <table>/*. If Polaris
-  # puts another name on a table folder, the live query is denied and the owner binds the real folder, not every suffix.
+  # The reader reads the three published layer folders, one grant each, and nothing else of the bucket: not a test namespace, not bronze and not a folder
+  # that only starts with a layer name. Each grant ends at the directory boundary, lakehouse/<layer>/*. The bookkeeping table publish_runs of each layer sits
+  # inside its layer folder and stays unreadable by an explicit deny, which wins over the layer grant. 255 per-table folders would not fit one inline role
+  # policy, which is why the grant is per layer.
   athena_contracts = {
     silver   = "${path.module}/../../data_contracts/lakehouse/silver_publish.json"
     gold     = "${path.module}/../../data_contracts/lakehouse/gold_contract.json"
     features = "${path.module}/../../data_contracts/lakehouse/features_publish.json"
   }
-  athena_contract_tables = { for layer, spec in local.athena_layers : layer => sort(keys(jsondecode(file(local.athena_contracts[layer])).publish.tables)) }
-  # The owner's Athena review stays on gold. Both layers' table folders do not fit one inline role policy, and the features mirror is for the catalog.
-  athena_reader_layers = { for layer, spec in local.athena_layers : layer => spec if layer == "gold" }
-  athena_table_folders = flatten([for layer, spec in local.athena_reader_layers : [for table in local.athena_contract_tables[layer] : "lakehouse/${spec.namespace}/${table}/*"]])
+  athena_layer_folders = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/*"]
+  athena_runs_folders  = [for layer, spec in local.athena_layers : "lakehouse/${spec.namespace}/${jsondecode(file(local.athena_contracts[layer])).publish.runs_table}/*"]
   athena_mirror_arns   = concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]]))
   athena_glue_endpoint = var.athena_mirror_prepared && var.job_endpoints_enabled
   athena_reader_policy = templatefile("${path.module}/owner_policies/athena_reader.json", {
     WORKGROUP_ARN      = local.athena_workgroup_arn
-    GLUE_ARNS          = jsonencode(concat([local.athena_catalog_arn], flatten([for layer, spec in local.athena_reader_layers : ["${local.athena_account_arn}:database/${spec.database}", local.athena_table_arns[layer]]])))
-    TABLE_OBJECT_ARNS  = jsonencode([for folder in local.athena_table_folders : "${local.bronze_bucket_arn}/${folder}"])
-    LIST_PREFIXES      = jsonencode(concat(local.athena_table_folders, [local.athena_results_path]))
+    GLUE_ARNS          = jsonencode(local.athena_mirror_arns)
+    TABLE_OBJECT_ARNS  = jsonencode([for folder in local.athena_layer_folders : "${local.bronze_bucket_arn}/${folder}"])
+    DENIED_OBJECT_ARNS = jsonencode([for folder in local.athena_runs_folders : "${local.bronze_bucket_arn}/${folder}"])
+    LIST_PREFIXES      = jsonencode(concat(local.athena_layer_folders, [local.athena_results_path]))
     BUCKET_ARN         = local.bronze_bucket_arn
     RESULTS_OBJECT_ARN = "${local.bronze_bucket_arn}/${local.athena_results_path}"
   })
@@ -97,7 +97,7 @@ resource "aws_iam_role" "athena_reader" {
   count = var.athena_mirror_prepared && var.athena_owner_user != "" ? 1 : 0
 
   name                 = format(local.platform_name, "athena_reader")
-  description          = "Athena review of the gold mirror for the owner's user only."
+  description          = "Athena review of the silver, gold and features mirror for the owner's user only."
   max_session_duration = 3600
   tags                 = local.project_tags
   assume_role_policy = jsonencode({
@@ -113,14 +113,14 @@ resource "aws_iam_role" "athena_reader" {
 resource "aws_iam_role_policy" "athena_reader" {
   count = var.athena_mirror_prepared && var.athena_owner_user != "" ? 1 : 0
 
-  name   = "gold_mirror_review"
+  name   = "mirror_review"
   role   = aws_iam_role.athena_reader[0].name
   policy = local.athena_reader_policy
 
   lifecycle {
     precondition {
       condition     = length(replace(replace(local.athena_reader_policy, " ", ""), "\n", "")) <= 10240
-      error_message = "The reader policy is over the 10240 character limit of an inline role policy. Move the table folders into a managed policy."
+      error_message = "The reader policy is over the 10240 character limit of an inline role policy. Move the layer folders into a managed policy."
     }
   }
 }
