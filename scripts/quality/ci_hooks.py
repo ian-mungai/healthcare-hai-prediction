@@ -7,7 +7,9 @@ import hashlib
 import json
 import os
 import re
+import signal
 import sys
+import threading
 import time
 from collections import Counter
 from datetime import UTC, datetime
@@ -220,11 +222,33 @@ def combine(group: str, count: int, directory: Path) -> int:
 def run_shards(root: Path, group: str, hooks: list[str], output: Path, start: str, end: str, count: int) -> int:
     """Run every shard of a sharded group at once, each in its own folder under ``output``, and then combine them.
 
-    The pool is a ``LaunchPool``: Ctrl-C stops every shard's session with its descendants before the interrupt goes on.
+    The pool is a ``LaunchPool``: Ctrl-C stops every shard's session with its descendants before the interrupt goes on. TERM and HUP take the same path (the
+    pool handles only SIGINT): the first of them raises the interrupt, and the CLI then exits 128 plus the signal number (143 and 129).
     """
-    with LaunchPool(max_workers=count) as pool:
-        futures = [pool.submit(run, root, group, hooks, folder, start, end, f"{index}/{count}") for index, folder in enumerate(shard_folders(output, count), 1)]
-        codes = [future.result() for future in futures]
+    received: list[int] = []
+
+    def terminated(number: int, _frame: object) -> None:
+        if not received:
+            received.append(number)
+            raise KeyboardInterrupt
+
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        previous = {number: signal.signal(number, terminated) for number in (signal.SIGTERM, signal.SIGHUP)}
+    try:
+        with LaunchPool(max_workers=count) as pool:
+            futures = [
+                pool.submit(run, root, group, hooks, folder, start, end, f"{index}/{count}") for index, folder in enumerate(shard_folders(output, count), 1)
+            ]
+            codes = [future.result() for future in futures]
+    except KeyboardInterrupt:
+        if not received:
+            raise
+        sys.stderr.write(f"Hook group {group}: stopped every shard after signal {signal.Signals(received[0]).name}.\n")
+        return 128 + received[0]
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
     return int(any(codes)) | combine(group, count, output)
 
 

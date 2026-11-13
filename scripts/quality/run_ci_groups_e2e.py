@@ -2965,12 +2965,13 @@ def live_pids(pids: set[int]) -> list[int]:
     return sorted(row.pid for row in list_processes() if row.pid in pids and "Z" not in row.state)
 
 
-def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool) -> dict[str, Any]:
-    """Ctrl-C at the group CLI stops every shard and every descendant of each within a bound (four inert workloads, each with a child and a grandchild).
+def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool, number: int = signal.SIGINT) -> dict[str, Any]:
+    """Ctrl-C, TERM or HUP at the group CLI stops every shard and every descendant within a bound (four inert workloads, each with a child and a grandchild).
 
     Nested: the CLI runs under another ``run_command`` and inherits PROCESS_LAUNCH_SESSION, as it does in the gate. Terminal: the CLI is a top-level caller.
     """
-    root = scratch / ("hook_shard_interrupt_nested" if nested else "hook_shard_interrupt_terminal")
+    signal_name = signal.Signals(number).name.lower()
+    root = scratch / f"hook_shard_interrupt_{'nested' if nested else 'terminal'}_{signal_name}"
     records = root / "records"
     records.mkdir(parents=True)
     for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
@@ -2993,7 +2994,7 @@ def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool) -> dict[s
                     continue
             if len(rows) == 3 * count:
                 seen["cli"] = rows[0]["cli"]
-                os.kill(seen["cli"], signal.SIGINT)
+                os.kill(seen["cli"], number)
                 return
             time.sleep(0.02)
 
@@ -3026,15 +3027,17 @@ def hook_shard_interrupt_case(scratch: Path, count: int, nested: bool) -> dict[s
     for pid in survivors:
         with contextlib.suppress(ProcessLookupError):
             os.kill(pid, signal.SIGKILL)
+    expected_status: dict[int, int | None] = {signal.SIGTERM: 143, signal.SIGHUP: 129}
     checks = {
         "every_workload_started": len(list(records.glob("pid_*.json"))) == 3 * count,
         "interrupt_sent": "cli" in seen,
         "cli_ended_inside_the_bound": not timed_out and elapsed <= HOOK_INTERRUPT_BOUND_SECONDS,
         "cli_failed": exit_code is not None and exit_code != 0,
+        "exit_status": exit_code == expected_status.get(number, exit_code),
         "no_process_survives": not survivors,
     }
     return {
-        "case": f"hook_samples_{'nested' if nested else 'terminal'}_interrupt_stops_every_shard_and_descendant",
+        "case": f"hook_samples_{'nested' if nested else 'terminal'}_{signal_name}_stops_every_shard_and_descendant",
         "passed": all(checks.values()),
         "checks": checks,
         "survivors": survivors,
@@ -3153,7 +3156,9 @@ def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
     results += hook_shard_run_cases(scratch, count)
     results += hook_shard_input_cases(scratch)
     if count:
-        results += [hook_shard_interrupt_case(scratch, count, nested=True), hook_shard_interrupt_case(scratch, count, nested=False)]
+        results += [
+            hook_shard_interrupt_case(scratch, count, nested, number) for number in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP) for nested in (True, False)
+        ]
     return results
 
 
