@@ -1927,6 +1927,18 @@ def column_change_cases(report: Report, schema: dict[str, Any]) -> None:
     )
 
 
+FEATURES_CONTAINER_SETS = {
+    "fetch": [],
+    "pin": ["all"],
+    "build": ["all"],
+    "validate": ["all"],
+    "export": ["all"],
+    "publish": ["all"],
+    "upload": ["all"],
+    "feast": ["all"],
+}
+
+
 def single_path_value_cases(report: Report, layer_run: Any) -> None:
     """F14 and F15: the single path's value ``all`` through the callers that give it. The override generator starts a features task with no set argument
     (the arguments the owner command list gave before the Fargate layer lists were removed), and the layer driver runs every phase module with the task's
@@ -1944,12 +1956,12 @@ def single_path_value_cases(report: Report, layer_run: Any) -> None:
         with contextlib.redirect_stdout(printed), contextlib.redirect_stderr(refused):
             code = job_overrides.main(text.split())
         containers = json.loads(printed.getvalue())["containerOverrides"] if code == 0 else []
-        values = {item["value"] for entry in containers for item in entry["environment"] if item["name"] == "FEATURE_SET"}
-        outcomes.append(code == 0 and values == {"all"} and len(containers) == 8 and "<" not in text)
+        given = {entry["name"]: [item["value"] for item in entry["environment"] if item["name"] == "FEATURE_SET"] for entry in containers}
+        outcomes.append(code == 0 and given == FEATURES_CONTAINER_SETS and len(containers) == 8 and "<" not in text)
     report.case(
         "F14",
         "FS2",
-        "the features override commands (no set argument, dry run and real) give every features container FEATURE_SET=all",
+        "the features override commands (no set argument, dry run and real) give the seven phase containers FEATURE_SET=all and the fetch container none",
         len(outcomes) == 2 and all(outcomes),
         commands=len(outcomes),
         passed=sum(outcomes),
