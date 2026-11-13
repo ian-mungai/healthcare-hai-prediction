@@ -184,6 +184,13 @@ def publisher_values(request: object) -> dict[str, str]:
     return {"PUBLISHER_RUN_KIND": kind, "HAI_CAPTURE_ROOT": root, "PUBLISHER_LAUNCH_SHA256": hashlib.sha256(canonical.encode()).hexdigest()}
 
 
+def require_publisher_request(request: SubmissionRequest) -> dict[str, str]:
+    """The checked publisher values of a request whose run ID is a run ID. Nothing here reads the cloud, so a malformed request is refused at once."""
+    if not RUN_ID.fullmatch(request.run_id):
+        raise LaunchRefused("publisher_request_has_wrong_run_id")
+    return publisher_values(request.publisher)
+
+
 def derived_run_id(parent_run: str, layer: str) -> str:
     """The run ID of a chain layer: the parent's time stamp and eight hex digits of a hash. ``dags/bronze_chain_dag.py`` derives the same IDs."""
     return f"{parent_run[:16]}-{hashlib.sha256(f'{layer}:{parent_run}'.encode()).hexdigest()[:8]}"
@@ -498,6 +505,8 @@ class Preflight:
             return None
         if request.mode != JOB_MODE:
             raise LaunchRefused(f"{request.template} runs on AWS in real mode only")
+        if self.jobs[job].get("needs_publisher_run_request"):
+            require_publisher_request(request)  # first: a malformed request is refused before any hold, cap, staged-input or launch-record read
         # Both settings come from the environment: they are checked before every gate that reads the cloud, so neither is masked by a read.
         cap = self.host_cap(job, self.require_capacity(job))
         self.require_no_hold(job)
@@ -558,7 +567,7 @@ class Preflight:
                     raise LaunchRefused(f"{label}_request_not_configured")
                 values |= self.read(reader, request.run_id)
         if row.get("needs_publisher_run_request"):
-            values |= publisher_values(request.publisher)
+            values |= require_publisher_request(request)
         if DEADLINE_VARIABLE in names:
             values[DEADLINE_VARIABLE] = str(int(self.clock()) + int(row["deadline_seconds"]))
         return values

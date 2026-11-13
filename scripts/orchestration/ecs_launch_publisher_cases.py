@@ -186,6 +186,11 @@ def publisher_request_refusals() -> None:
         error = refuses(LaunchRefused, partial(rig.spec, request=request))
         require(str(error) == reason, f"{label}: expected {reason}, got {error}")
         require(rig.ecs.count("run_task") == 0 and not rig.records.objects, f"{label}: nothing is recorded or launched")
+    for label, run_id in (("a run id that is not a run id", "run_a"), ("a run id with a line break", RUN + "\n"), ("no run id", "")):
+        rig = Rig()
+        error = refuses(LaunchRefused, partial(publisher_spec, REQUEST, run_id, 1, CODE, NEED, 0.0))
+        require(str(error) == "publisher_request_has_wrong_run_id", f"{label}: {error}")
+        require(rig.ecs.count("run_task") == 0 and not rig.records.objects, f"{label}: nothing is recorded or launched")
     error = refuses(LaunchRefused, lambda: publisher_spec(REQUEST, RUN, 1, {"run_id": "latest", "sha256": "c" * 64}, NEED, 0.0))
     require(str(error) == "publisher_code_has_wrong_values", f"a code archive without a run and digest is refused: {error}")
 

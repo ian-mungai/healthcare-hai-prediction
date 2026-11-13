@@ -21,7 +21,6 @@ SEED = Path("config/acquisition/bootstrap_seed")
 PLAN_INPUTS = "plan_inputs"
 MANIFEST = "manifest.json"
 SEED_KIND = "bootstrap_seed_manifest"
-SHOWN = 12
 DIGEST = re.compile(r"[0-9a-f]{64}")
 POINTER_HEAD = b"version https://"
 POINTER_BYTES = 1024
@@ -32,9 +31,8 @@ class InputsError(ValueError):
 
 
 def named(problems: list[str]) -> str:
-    """The problems as one sentence part: the first ones, then how many more."""
-    shown = "; ".join(problems[:SHOWN])
-    return shown + (f"; and {len(problems) - SHOWN} more" if len(problems) > SHOWN else "")
+    """The problems as one sentence part. Every problem is named, because a cut list hides which files to fix."""
+    return "; ".join(problems)
 
 
 def plan_path(path: object) -> PurePosixPath | None:

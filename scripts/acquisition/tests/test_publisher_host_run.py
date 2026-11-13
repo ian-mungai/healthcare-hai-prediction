@@ -281,6 +281,26 @@ def test_every_problem_of_the_seed_is_named_at_once(host: Host, monkeypatch: pyt
     check("mmd_data.csv is an unresolved LFS pointer" in text and "county_adjacency2010.txt differs" in text, f"all three files are named: {text}")
 
 
+def test_every_one_of_sixteen_unusable_seed_files_is_named(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    document = json.loads((host.seed / "manifest.json").read_text())
+    paths = [f"mmd_browser_history/seed{number:02d}.csv" for number in range(16)]
+    document["files"] = [{"path": path, "plan_input": f"data/seeds/{number}.csv", "sha256": "a" * 64} for number, path in enumerate(paths)]
+    (host.seed / "manifest.json").write_text(json.dumps(document))
+    text = refused(monkeypatch, host, "seed00.csv is missing")
+    check(all(f"{path} is missing" in text for path in paths), f"each of the sixteen files is named: {text}")
+    check("more" not in text, f"the message does not cut the list: {text}")
+
+
+def test_every_missing_expected_plan_input_is_named(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    document = json.loads((host.bundle / "expected_plan_inputs.json").read_text())
+    names = [f"data/nowhere/missing{number:02d}.json" for number in range(16)]
+    document["expected_plan_inputs"] += names
+    (host.bundle / "expected_plan_inputs.json").write_text(json.dumps(document))
+    host.relock()
+    text = refused(monkeypatch, host, "missing00.json is not in the code root")
+    check(all(f"{name} is not in the code root" in text for name in names), f"each expected input is named: {text}")
+
+
 def test_a_seed_manifest_of_another_queue_or_another_kind_is_refused(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.write_manifest(queue_sha256="0" * 64)
     refused(monkeypatch, host, "seed manifest belongs to another queue")

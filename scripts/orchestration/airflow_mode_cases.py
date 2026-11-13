@@ -63,7 +63,8 @@ import runpy
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
+from dataclasses import replace
 from functools import partial
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
@@ -2226,6 +2227,56 @@ def publisher_request_is_checked_and_bound() -> None:
         require("bound" in str(error) and rig.tasks_started() == 1, f"another root on a retry was not refused: {error}")
 
 
+def publisher_request_is_refused_before_any_cloud_read() -> None:
+    """A malformed publisher request ends in a refusal with no cloud call at all: no launch hold read, no host cap read, no staged-input read, no launch
+    record and no ECS call, and an unreadable code binding cannot hold the refusal back for the bounded wait."""
+    prior = {"inputs_sha256": "a" * 64, "prior_state": None}
+    forms: tuple[tuple[str, dict[str, Any], dict[str, Any] | None], ...] = (
+        ("a retry kind", {"run_kind": "retry"}, None),
+        ("an empty kind", {"run_kind": ""}, None),
+        ("a root without its slash", {"capture_root": "raw"}, None),
+        ("a test folder without a run id", {"capture_root": "ingestion_test/t1/"}, None),
+        ("a run id that is not a run id", {"run_id": "run_a"}, None),
+        ("a run id with a line break", {"run_id": PUBLISHER_RUN + "\n"}, None),
+        ("an inputs archive and a prior state", {}, {"kind": "bootstrap", "capture_root": "raw/", **prior}),
+        ("an extra key", {}, {"kind": "bootstrap", "capture_root": "raw/", "hosts": "all"}),
+        ("no root", {}, {"kind": "bootstrap"}),
+    )
+    for unreadable in (False, True):
+        for label, changes, record in forms:
+            rig = Rig()
+            holds: list[str] = []
+
+            def hold(holds: list[str] = holds) -> str:
+                holds.append("the launch hold was read")
+                return "clear"
+
+            rig.preflight.host_launch_hold = hold
+
+            def denied(**_arguments: Any) -> dict[str, Any]:
+                raise client_error("AccessDenied", "GetObject")
+
+            started = rig.time.now
+            binding = mock.patch.object(rig.stage, "get_object", denied) if unreadable else nullcontext()
+            with binding, world(rig, "ingestion_dag", dict(PUBLISHER_PARAMS) | changes) as current:
+                if record is None:
+                    refuses(LaunchRefused, partial(current.step, "publisher_run"))
+                else:
+                    request = replace(step_request_of(current), publisher=record)
+                    refuses(LaunchRefused, partial(rig.preflight.prepare, request))
+            where = f"{label}, binding {'unreadable' if unreadable else 'readable'}"
+            require(not holds and rig.cap_reads == 0, f"{where}: the refusal came after a hold or cap read: {holds}, {rig.cap_reads}")
+            require(not rig.aws_calls(), f"{where}: the refusal came after cloud calls: {rig.aws_calls()}")
+            require(rig.time.now == started, f"{where}: the refusal waited {rig.time.now - started} virtual seconds")
+            require(not rig.records.objects and not rig.ecs.calls, f"{where}: a launch record or an ECS call followed")
+
+
+def step_request_of(current: World) -> SubmissionRequest:
+    """The request that the current task of the publisher step would send."""
+    current.enter("publisher_run")
+    return current.runtime.step_request("publisher_run", current.context)
+
+
 def publisher_host_definition_matches_the_job_table() -> None:
     """The host table, the job table and the pinned publisher host definition name the same containers and variables as the launch request sets."""
     table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
@@ -2280,6 +2331,7 @@ CASES: dict[str, Callable[[], None]] = {
     "ingestion_dag_runs_the_publisher_on_the_host": ingestion_dag_runs_the_publisher_on_the_host,
     "ingestion_dag_form_refuses_a_capture_root_it_does_not_list": ingestion_dag_form_refuses_a_capture_root_it_does_not_list,
     "publisher_request_is_checked_and_bound": publisher_request_is_checked_and_bound,
+    "publisher_request_is_refused_before_any_cloud_read": publisher_request_is_refused_before_any_cloud_read,
     "publisher_host_definition_matches_the_job_table": publisher_host_definition_matches_the_job_table,
     "publisher_host_definition_passes_the_launch_preflight": publisher_host_definition_passes_the_launch_preflight,
     "serving_request_is_checked": serving_request_is_checked,

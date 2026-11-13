@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from orchestration.ecs_launch import JobSpec, LaunchRefused, Resources
-from orchestration.ecs_preflight import publisher_values
+from orchestration.ecs_preflight import RUN_ID, publisher_values
 
 JOB = "publisher"
 # The job's own deadline: one day, the publisher downloads every Run 3 source once.
@@ -30,6 +30,8 @@ def publisher_spec(request: Any, run_id: str, attempt: int, code: Mapping[str, s
     """The launch request of one publisher attempt. ``request`` is the run kind and the capture root. ``code`` holds the run's code archive ``run_id`` and
     ``sha256``. ``need`` is the host room the job takes; it comes from the publisher's host task definition. ``now`` (epoch seconds) dates
     ``HAI_DEADLINE_UTC``, which only a new task reads: a reattached attempt keeps the recorded deadline of the launch it joins."""
+    if not RUN_ID.fullmatch(run_id):
+        raise LaunchRefused("publisher_request_has_wrong_run_id")
     code_run, code_digest = code.get("run_id", ""), code.get("sha256", "")
     if not CODE_RUN.fullmatch(code_run) or not DIGEST.fullmatch(code_digest):
         raise LaunchRefused("publisher_code_has_wrong_values")
