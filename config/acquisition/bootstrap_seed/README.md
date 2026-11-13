@@ -1,8 +1,6 @@
 # Bootstrap seed
 
-The files a bootstrap run in an empty environment cannot fetch from a publisher or from S3: public captures that only a person could download. Git LFS
-stores them (`.gitattributes`), and `scripts/quality/repo_checks.py` declares this folder as the one data folder besides the test fixtures and the dbt seeds
-(owner decision, Nov 12 2026). No file of the folder is added yet. They are added after the owner's read-only download of the stored copies from S3.
+The files a bootstrap run in an empty environment cannot fetch from a publisher or from S3: public captures that only a person could download. Git LFS stores them (`.gitattributes`). `scripts/quality/repo_checks.py` declares this folder as the one data folder besides the test fixtures and the dbt seeds. It admits data files there and no other kind of file: the writing, front matter and link checks still read the Markdown here. No file of the folder is added yet. They are added after the owner's read-only download of the stored copies from S3.
 
 `manifest.json` lists every expected file, the queue it belongs to and a SHA-256 where a tracked source holds one:
 
@@ -13,8 +11,7 @@ stores them (`.gitattributes`), and `scripts/quality/repo_checks.py` declares th
 | `structure_history/` | `county_adjacency2010.txt`. Held until the removed-names hook reads Latin-1 files | none yet |
 | `manual_units/<snapshot ID>/` | the stored data files of the 50 manual units (44 HUD, 6 WONDER) | the HUD plan for the 44 workbooks, none for the other files |
 
-An entry without a digest is pending: add the digest when the file is added. The check refuses a present file without a digest, a file with another digest and a file
-the manifest does not list. The five reference documents and the 16 ACS units are not part of the seed (the ACS units move to the Census API collector), and no seed file is pinned in S3.
+An entry without a digest is pending: add the digest when the file is added. The check refuses a present file without a digest, a file with another digest and a file the manifest does not list. The five reference documents and the 16 ACS units are not part of the seed. The ACS units move to the Census API collector. No seed file is pinned in S3.
 
 ```sh
 python -m scripts.acquisition.check_baseline_run                 # manifest, queue binding, digests of present files, LFS rule

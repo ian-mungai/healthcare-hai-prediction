@@ -42,10 +42,12 @@ ASK = "if the rule seems wrong here, stop and ask the repository owner. There ar
 
 CREDENTIAL_NAMES = ("*.tfstate", "*.tfstate.backup", "*.tfplan", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa", "id_ecdsa", "id_ed25519", "credentials")
 DATA_EXTENSIONS = {".csv", ".tsv", ".parquet", ".xlsx", ".xls", ".jsonl", ".ndjson", ".avro", ".db", ".sqlite"}
-# Folders declared for data files: synthetic test fixtures, the reviewed dbt seeds (which include the formula recipes of the feature
-# phase), which hold file labels and checksums from the S3 manifests and rule definitions, never source data values, and the one bootstrap
-# seed folder (owner, Nov 12 2026): public publisher captures that no host can fetch, stored through Git LFS for a run in an empty environment.
-DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/", "config/acquisition/bootstrap_seed/")
+# Folders declared for data files: synthetic test fixtures and the reviewed dbt seeds (which include the formula recipes of the feature
+# phase), which hold file labels and checksums from the S3 manifests and rule definitions, never source data values.
+DATA_FOLDERS = ("tests/fixtures/", "dbt/seeds/")
+# The one bootstrap seed folder (owner, Nov 12 2026): public publisher captures that no host can fetch, stored through Git LFS for a run in an
+# empty environment. Only the data-files rule admits data there; the Markdown checks still read its documents.
+SEED_FOLDER = "config/acquisition/bootstrap_seed/"
 DATA_FILES = ("config/lakehouse/identity_classification.csv",)
 MAX_BYTES = 5 * 1024 * 1024
 
@@ -390,7 +392,7 @@ def data_files(paths: list[str]) -> list[Finding]:
     """Block data files outside the declared folders and files and any file over 5 MB unless Git LFS stores it."""
     findings = []
     for path in paths:
-        if Path(path).suffix.lower() in DATA_EXTENSIONS and not (path.startswith(DATA_FOLDERS) or path in DATA_FILES):
+        if Path(path).suffix.lower() in DATA_EXTENSIONS and not (path.startswith((*DATA_FOLDERS, SEED_FOLDER)) or path in DATA_FILES):
             fix = f"keep data in S3. Put synthetic samples in {', '.join(DATA_FOLDERS)}. Never commit real personal data"
             findings.append(Finding(path, "data file outside the declared folder", f"{POLICY}: data files", fix))
         if os.path.getsize(path) > MAX_BYTES and "filter: lfs" not in git("check-attr", "filter", "--", path):
