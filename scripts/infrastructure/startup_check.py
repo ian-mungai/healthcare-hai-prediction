@@ -182,6 +182,7 @@ KNOWN_MODES = frozenset(
         "bls_api_v2",
         "census_acs_api",
         "census_acs_detailed",
+        "census_acs_tables",
         "cms_owners_org",
         "file",
         "hcai_util_workbook",
