@@ -109,6 +109,11 @@ run "read_roles_without_writers" {
   }
 
   assert {
+    condition     = aws_iam_role.job["execution"].description == "Private read jobs: execution."
+    error_message = "The surviving execution role keeps its live description: a deletion-only change must not update a live role."
+  }
+
+  assert {
     condition     = aws_iam_role.job["try_writer"].description == "Upper bound for staged try outputs."
     error_message = "The try output role description must name its output writes only."
   }

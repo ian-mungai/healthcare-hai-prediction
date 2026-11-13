@@ -1318,6 +1318,11 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
             "problems": launcher_inputs.problems(ROOT, tracked, committed)[:6],
         },
         {
+            "case": "launcher_list_names_only_tracked_files",
+            "passed": not [path for path in committed["files"] if path not in tracked],
+            "untracked": [path for path in committed["files"] if path not in tracked][:6],
+        },
+        {
             "case": "launcher_list_names_an_exact_read_beside_an_ignored_folder",
             "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
             "problems": exact[:4],
