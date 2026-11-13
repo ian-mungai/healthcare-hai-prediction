@@ -132,8 +132,8 @@ if [[ ! "$worker_grace" =~ ^[1-9][0-9]*$ ]] || [[ -n "$worker_override" && ! "$w
   printf 'CI_WORKER_GRACE_SECONDS and CI_WORKER_LIMIT_SECONDS must be whole numbers above 0, not %s and %s\n' "$worker_grace" "${worker_override:-unset}" >&2
   exit 2
 fi
-# stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (TERM, KILL after the grace period, then a
-# confirmation of at most 5 s). Fails with status 70 (UNCONFIRMED_EXIT_STATUS of scripts/process.py) when a member survives KILL or when the sessions cannot be listed; the
+# stop_sessions <grace seconds> <session>...: stop every member of the worker sessions with scripts/process.py stop_sessions (every member is frozen with SIGSTOP, then
+# KILLed, with no grace period; the grace seconds only size the alarm below; then a confirmation of at most 5 s). Fails with status 70 (UNCONFIRMED_EXIT_STATUS of scripts/process.py) when a member survives KILL or when the sessions cannot be listed; the
 # leaders' groups are still stopped then. An alarm ends the step
 # after the grace period plus 25 s (the listing and the confirmation of both phases and of the fallback), so the exit trap cannot wait on it forever: the alarm raises an error
 # in the step, which unwinds through the listing (the stalled lister and the process that holds its pipes are killed), prints the failure and exits 70.
