@@ -35,7 +35,7 @@ LOCK = "dbt/package-lock.yml"
 RECORD = "config/lakehouse/dbt_package_archive.json"
 ARCHIVE_FOLDER = "data/analytics/dbt/package_archive"
 LIMIT = 512 * 1024 * 1024
-POINTER_HEAD = b"version https://git-lfs.github.com/spec/v1\n"
+POINTER = re.compile(rb"version https://git-lfs\.github\.com/spec/v1\noid sha256:[0-9a-f]{64}\nsize [0-9]+\n")
 POINTER_LIMIT = 1024
 
 
@@ -55,7 +55,7 @@ def refuse_pointers(tar: tarfile.TarFile, members: list[tarfile.TarInfo]) -> Non
     for member in members:
         if member.isfile() and member.size <= POINTER_LIMIT:
             data = tar.extractfile(member)
-            if data is not None and (head := data.read()).startswith(POINTER_HEAD) and b"\noid sha256:" in head:
+            if data is not None and POINTER.fullmatch(data.read()):
                 raise ArchiveError(f"{member.name} is a Git LFS pointer file, not the file: check out with the Git LFS objects (actions/checkout lfs: true)")
 
 

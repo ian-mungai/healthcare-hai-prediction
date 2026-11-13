@@ -169,25 +169,47 @@ def case_a_checkout_without_lfs_objects_is_refused_before_anything_is_written(wo
     require(not (work / "out").exists(), "a refused build left its output folder")
 
 
-def case_the_check_refuses_an_archive_that_holds_a_pointer_file(work: Path, environment: Mapping[str, str]) -> None:
+def check_with_registry(work: Path, environment: Mapping[str, str], content: bytes) -> str:
+    """Build the real archive, swap the registry member for ``content`` and return the digest ``code_archive.check`` accepts it with, or raise its refusal."""
     origin = make_origin(work, environment)
     build(ci_checkout(origin, work / "ci", environment, lfs=True), work / "out", environment)
-    pointer = POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize 4001\n"
     swapped = work / "swapped.tar"
     with tarfile.open(work / "out/code.tar.gz") as source, tarfile.open(swapped, "w", format=tarfile.PAX_FORMAT, pax_headers=source.pax_headers) as target:
         for member in source.getmembers():
             if member.name == REGISTRY:
-                member.size = len(pointer)
-                target.addfile(member, io.BytesIO(pointer))
+                member.size = len(content)
+                target.addfile(member, io.BytesIO(content))
             else:
                 target.addfile(member, source.extractfile(member) if member.isfile() else None)
     digest = hashlib.sha256(swapped.read_bytes()).hexdigest()
+    return code_archive.check(swapped, expected=digest)
+
+
+def case_the_check_refuses_an_archive_that_holds_a_pointer_file(work: Path, environment: Mapping[str, str]) -> None:
     try:
-        code_archive.check(swapped, expected=digest)
+        check_with_registry(work, environment, POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize 4001\n")
     except code_archive.ArchiveError as error:
         require("LFS pointer" in str(error) and REGISTRY in str(error), str(error))
     else:
         raise AssertionError("the check accepted an archive that holds a Git LFS pointer file")
+
+
+def case_the_check_accepts_ordinary_text_that_only_resembles_a_pointer(work: Path, environment: Mapping[str, str]) -> None:
+    text = POINTER_HEAD + b"oid sha256: documents the object identifier\nThis is an ordinary text example, not a Git LFS pointer.\n"
+    require(code_archive.SHA256.fullmatch(check_with_registry(work, environment, text)) is not None, "the check refused ordinary text")
+
+
+def case_the_check_accepts_files_that_miss_part_of_the_pointer_form_or_add_content(work: Path, environment: Mapping[str, str]) -> None:
+    form = POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize 4001\n"
+    for content in (
+        form + b"This file documents the pointer format and is not a pointer.\n",
+        POINTER_HEAD + b"oid sha256:" + b"0" * 63 + b"\nsize 4001\n",
+        POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\n",
+        POINTER_HEAD + b"oid sha256:" + b"0" * 64 + b"\nsize four\n",
+    ):
+        with tempfile.TemporaryDirectory(prefix="code_archive_variant_", dir=work) as scratch:
+            variant = Path(scratch).resolve()
+            require(code_archive.SHA256.fullmatch(check_with_registry(variant, environment, content)) is not None, f"the check refused {content!r}")
 
 
 CASES: dict[str, Callable[[Path, Mapping[str, str]], None]] = {
@@ -195,6 +217,8 @@ CASES: dict[str, Callable[[Path, Mapping[str, str]], None]] = {
     "the archive carries the baseline run folder with the real registry": case_the_archive_carries_the_baseline_run_folder_with_the_real_registry,
     "a checkout without LFS objects is refused before anything is written": case_a_checkout_without_lfs_objects_is_refused_before_anything_is_written,
     "the check refuses an archive that holds a pointer file": case_the_check_refuses_an_archive_that_holds_a_pointer_file,
+    "the check accepts ordinary text that only resembles a pointer": case_the_check_accepts_ordinary_text_that_only_resembles_a_pointer,
+    "the check accepts files that miss part of the pointer form or add content": case_the_check_accepts_files_that_miss_part_of_the_pointer_form_or_add_content,
 }
 
 
