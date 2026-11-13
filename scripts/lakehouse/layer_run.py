@@ -21,7 +21,7 @@ folder of every module, and the run folder is ``<work>/code/data/analytics/dbt/r
 ``publish`` runs the publish steps of the layer and the acceptance checks of the first publish (rows and content fingerprints of every table against
 its candidate snapshot before the commit, the commit record against the candidates, the backup and the reconcile record after it). Before any catalog
 write it also checks the input. The version listing of the layer's input prefix must be the one taken at the pin (a model set lists only the folder of each
-domain matrix it read, never the whole features prefix, so sibling sets that publish beside it change nothing it checks), and the pin must name exactly the
+table of its base run, never the whole features prefix, so sibling sets that publish beside it change nothing it checks), and the pin must name exactly the
 configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold) or the gold publish contract (features). Two extra
 checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload``, ``maintain``
 and ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the
@@ -325,12 +325,16 @@ def input_prefix(job: Job) -> str:
 
 
 def input_prefixes(job: Job) -> list[str]:
-    """The prefixes whose versions the run read: the input layer's prefix, or for a model set the folder of each domain matrix of the base run."""
+    """The prefixes whose versions the run read: the input layer's prefix, or for a model set the folder of each table of its base run.
+
+    The build reads the domain matrices, and the Feast step verifies the head of every table that the base run published (the spine, the support and label
+    tables, the build inputs) and reads the label schema. The base run publishes every table of the features contract. The tables of the model sets are not in
+    it, so the tables that sibling sets publish stay outside, as do the publish ledger and the catalog backups."""
     if not job.model_set:
         return [input_prefix(job)]
-    from scripts.features import features_input
+    from scripts.features import features_publish
 
-    return [f"{input_prefix(job)}{table}/" for table in features_input.base_tables()]
+    return [f"{input_prefix(job)}{table}/" for table in sorted(features_publish.publish_plan(job.mode).tables)]
 
 
 def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
@@ -354,8 +358,8 @@ def input_listing(client: Any, bucket: str, prefix: str) -> dict[str, Any]:
 
 
 def input_record(job: Job, client: Any, bucket: str) -> dict[str, Any]:
-    """The listing the pin records and publish compares. A layer has one listing of its input prefix. A model set has one listing per domain matrix folder,
-    and a folder without an object is refused: the pin would then guard nothing there."""
+    """The listing the pin records and publish compares. A layer has one listing of its input prefix. A model set has one listing per table folder of its
+    base run, and a folder without an object is refused: the pin would then guard nothing there."""
     prefixes = input_prefixes(job)
     if not job.model_set:
         return input_listing(client, bucket, prefixes[0])

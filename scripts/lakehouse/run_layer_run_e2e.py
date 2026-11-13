@@ -33,7 +33,7 @@ from unittest import mock
 
 import duckdb
 
-from scripts.features import features_input
+from scripts.features import features_input, features_publish
 from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
 from scripts.process import run_command
@@ -488,7 +488,7 @@ LIST_PAGE = 2  # versions per page of the stand-in listing, small so that every 
 
 
 def reset_input_versions() -> None:
-    features = [*features_input.base_tables(), "label_matrix_hai_outcomes", "int_hospital_spine", "publish_runs"]
+    features = [*sorted(features_publish.publish_plan("real").tables), "publish_runs"]
     INPUT_VERSIONS[:] = [
         {"Key": f"lakehouse/{layer}/{table}/data/{number}.parquet", "VersionId": f"v{number}", "ETag": f'"{layer}{table}{number}"', "Size": 100 + number}
         for layer, tables in (("bronze", ("a", "b")), ("silver", ("a", "b")), ("gold", ("a", "b")), ("features", features))
@@ -868,8 +868,6 @@ def case_sibling_model_sets_publish_side_by_side(case: Case) -> None:
 def case_model_set_publish_ignores_unrelated_features_paths(case: Case) -> None:
     sets_up_to(case, ["m1"])
     for key in (
-        "lakehouse/features/label_matrix_hai_outcomes/data/new.parquet",
-        "lakehouse/features/int_hospital_spine/data/new.parquet",
         "lakehouse/features/publish_runs/data/new.parquet",
         "lakehouse/features/catalog_backups/backup_other",
         "lakehouse/features/feature_matrix_m2/data/new.parquet",
@@ -897,6 +895,14 @@ def case_model_set_publish_rerun_commits_nothing_more(case: Case) -> None:
     committed = [item for item in writes() if item["kind"] in ("table", "publish_runs")]
     require(case.set_phase("m1", "publish") == 0, case.err)
     require([item for item in writes() if item["kind"] in ("table", "publish_runs")] == committed and committed_sets() == [SET_RUNS["m1"]], "no second commit")
+
+
+def case_model_set_pin_lists_every_base_table_and_no_set_table(case: Case) -> None:
+    sets_up_to(case, ["m1"], last="build")
+    listed = read_json(case.root / "m1_features/code/data/analytics/dbt/runs" / SET_RUNS["m1"] / "layer_run.json")["input_listing"]["prefixes"]
+    wanted = {f"lakehouse/features/{table}/" for table in features_publish.publish_plan("real").tables}
+    require(set(listed) == wanted, sorted(set(listed) ^ wanted))
+    require(not any("feature_matrix_m" in prefix for prefix in listed), "a model set table is not an input of a sibling")
 
 
 def case_model_set_pin_refuses_a_base_table_without_objects(case: Case) -> None:
@@ -1255,6 +1261,19 @@ CASES: dict[str, Callable[[Case], None]] = {
         ),
         "feature_matrix_care_compare",
     ),
+    "a new object under the label table metadata stops model set publish": changed_base_table(
+        lambda: bucket_write("lakehouse/features/label_matrix_hai_outcomes/metadata/new.metadata.json"), "label_matrix_hai_outcomes"
+    ),
+    "a new object under a spine table stops model set publish": changed_base_table(
+        lambda: bucket_write("lakehouse/features/int_hospital_spine/data/new.parquet"), "int_hospital_spine"
+    ),
+    "a new object under a support table stops model set publish": changed_base_table(
+        lambda: bucket_write("lakehouse/features/feature_bridge_mup_measures/metadata/new.metadata.json"), "feature_bridge_mup_measures"
+    ),
+    "a new object under the build inputs table stops model set publish": changed_base_table(
+        lambda: bucket_write("lakehouse/features/feature_build_inputs/data/new.parquet"), "feature_build_inputs"
+    ),
+    "a model set pin lists every table of the base run and no model set table": case_model_set_pin_lists_every_base_table_and_no_set_table,
     "a model set publish rerun after its own commit passes and commits nothing more": case_model_set_publish_rerun_commits_nothing_more,
     "a model set pin refuses a base table that holds no object": case_model_set_pin_refuses_a_base_table_without_objects,
     "features H3: a pin that misses a gold table is refused": case_features_h3_table_list,
