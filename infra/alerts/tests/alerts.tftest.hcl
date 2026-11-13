@@ -192,7 +192,8 @@ run "reject_the_alerts_topic_of_another_account" {
   command = plan
 
   variables {
-    alerts_topic_arn = "arn:aws:sns:eu-west-1:222222222222:example_project_alerts_dev"
+    alerts_topic_arn    = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+    expected_account_id = join("", ["222222", "222222"])
   }
 
   expect_failures = [var.alerts_topic_arn]
