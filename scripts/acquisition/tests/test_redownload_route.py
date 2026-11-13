@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
 
 import pytest
 
@@ -16,9 +18,9 @@ def unit(snapshot: str, disposition: str = "direct_download", host: str = "data.
     return {"snapshot_id": snapshot, "disposition": disposition, "url": f"https://{host}/{snapshot}.csv"}
 
 
-def write_state(folder: Path, units: list[dict], removed: list[str]) -> dict[str, Path]:
+def write_state(folder: Path, units: list[dict], removed: list[str], queue_extra: dict | None = None) -> dict[str, Path]:
     queue = folder / "queue.json"
-    body = json.dumps({"queue": units}).encode()
+    body = json.dumps({"queue": units} | (queue_extra or {})).encode()
     queue.write_bytes(body)
     lock = folder / "queue.lock.json"
     lock.write_text(json.dumps({"queue_sha256": hashlib.sha256(body).hexdigest()}))
@@ -70,6 +72,26 @@ def test_a_removed_file_cannot_still_be_a_run_3_unit(tmp_path: Path) -> None:
 def test_the_capture_root_must_be_raw(tmp_path: Path) -> None:
     paths = write_state(tmp_path, [unit("S__1")], [])
     check(any("raw/" in item for item in problems(paths, root="")), "root layout blocks run 3")
+
+
+TEST_ROOT = "ingestion_test/20261112T220000Z-abcd1234/"
+
+
+def test_the_capture_root_may_be_one_test_folder_and_nothing_else(tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], [])
+    check(problems(paths, root=TEST_ROOT) == [], "a run-ID test folder passes the route check")
+    for root in ("ingestion_test/", "ingestion_test/x/", TEST_ROOT.rstrip("/"), TEST_ROOT + "raw/", "elsewhere/"):
+        check(any("capture root" in item for item in problems(paths, root=root)), f"{root!r} blocks run 3")
+
+
+def test_the_run_3_gate_passes_with_a_test_folder_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    paths = write_state(tmp_path, [unit("S__1")], [], {"run": 3})
+    files = SimpleNamespace(plan=paths["plan"], confirmation=paths["confirmation"], hosts=paths["hosts"], hosts_approval=paths["hosts_approval"])
+    run = SimpleNamespace(queue_path=paths["queue"], person_lane=False, stored_root=None, route=files)
+    for name in (redownload.APPROVED_HOSTS_VARIABLE, redownload.APPROVED_HOSTS_APPROVAL_VARIABLE):
+        monkeypatch.setenv(name, "placeholder")
+    monkeypatch.setenv("HAI_CAPTURE_ROOT", TEST_ROOT)
+    redownload.route_gate(cast("redownload.Run", run))
 
 
 def test_a_queue_that_differs_from_its_lock_blocks_run_3(tmp_path: Path) -> None:

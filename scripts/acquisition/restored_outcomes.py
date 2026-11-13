@@ -13,6 +13,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.acquisition.collection_layout import capture_root
+from scripts.acquisition.raw_root import RAW_ROOT, is_test_root
 from scripts.acquisition.s3_store import fingerprint
 from scripts.acquisition.source_registry import RegistryError, read_json, require
 from scripts.acquisition.transport import canonical_url
@@ -26,8 +28,12 @@ CHARGE_KINDS = frozenset({"received_bytes", "injected_received_bytes", "persiste
 
 
 def read_object(client: Any, item: dict, folder: Path, *, earlier_capture: bool = False) -> Path:
-    """One object by exact key and version, kept only if its bytes match the record. Only the stored capture's record may name a key outside the raw root."""
-    require(earlier_capture or str(item["key"]).startswith("raw/"), "Restored outcome names a capture outside the raw root")
+    """One object by exact key and version, kept only if its bytes match the record. Only the stored capture's record may name a key elsewhere."""
+    root = capture_root()
+    require(
+        earlier_capture or str(item["key"]).startswith(root if is_test_root(root) else RAW_ROOT),
+        "Restored outcome names a capture outside the selected capture root",
+    )
     path = folder / f"object_{len(list(folder.iterdir())):06}"
     client.call("s3api", "get-object", ["--key", item["key"], "--version-id", item["version_id"], "--checksum-mode", "ENABLED", str(path)])
     require(fingerprint(path) == (item["sha256"], item["byte_count"]), "Restored outcome names an object whose bytes differ")

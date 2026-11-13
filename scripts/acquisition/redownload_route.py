@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from scripts.acquisition.collection_layout import RAW_ROOT, capture_root
+from scripts.acquisition.raw_root import is_test_root
 from scripts.acquisition.s3_store import encoded_json, write_once
 from scripts.acquisition.source_registry import RegistryError
 from scripts.acquisition.transport import SIGNED_REDIRECT_ROUTES, UNSIGNED_REDIRECT_ROUTES, CaptureError, hosts_digest
@@ -157,8 +158,8 @@ def host_problems(queue_body: bytes, hosts_path: Path, approval_path: Path) -> l
 def check(queue_path: Path, plan_path: Path, confirmation_path: Path, root: str, hosts_path: Path, hosts_approval_path: Path) -> list[str]:
     """Return every reason run 3 cannot start yet; an empty list means the route is ready."""
     problems: list[str] = []
-    if root != RAW_ROOT:
-        problems.append(f"the capture root must be {RAW_ROOT} on this route")
+    if root != RAW_ROOT and not is_test_root(root):
+        problems.append(f"the capture root must be {RAW_ROOT} or one ingestion_test/<run ID>/ folder on this route")
     queue_body = queue_path.read_bytes()
     lock = json.loads(queue_path.with_name("queue.lock.json").read_text(encoding="utf-8"))
     if hashlib.sha256(queue_body).hexdigest() != lock["queue_sha256"]:
