@@ -29,7 +29,7 @@ FORBIDDEN_CREDENTIAL_VARIABLES = (
 def refusal_code(error: BaseException, fallback: str) -> str:
     """The code of a refusal, read from its one plain string argument. The text conversion of the error is never called, because a subclass can write
     to a log or a stream when it converts, so only an argument that is a built-in string is taken, and anything else gives ``fallback``."""
-    arguments = BaseException.args.__get__(error)
+    arguments = BaseException.__dict__["args"].__get__(error)
     code = arguments[0] if len(arguments) == 1 else None
     return code if type(code) is str and re.fullmatch(r"[a-z_]{1,64}", code) else fallback
 

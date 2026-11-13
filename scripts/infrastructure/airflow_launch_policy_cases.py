@@ -306,7 +306,7 @@ def job_cases() -> list[Case]:
     add("list the versions as an object", "s3:ListBucketVersions", f"{bucket}/lakehouse/", False, {"s3:prefix": ("lakehouse/",)})
     add("list the lakehouse objects without versions", "s3:ListBucket", bucket, False, {"s3:prefix": ("lakehouse/",)})
     add("list the multipart uploads of the lakehouse", "s3:ListBucketMultipartUploads", bucket, False, {"s3:prefix": ("lakehouse/",)})
-    groups_context = {"aws:RequestedRegion": (REGION,)}
+    groups_context: Context = {"aws:RequestedRegion": (REGION,)}
     add("describe the auto scaling groups", "autoscaling:DescribeAutoScalingGroups", "*", True, groups_context)
     add("describe the auto scaling groups in another region", "autoscaling:DescribeAutoScalingGroups", "*", False, {"aws:RequestedRegion": ("us-east-1",)})
     add("describe the auto scaling groups with no region", "autoscaling:DescribeAutoScalingGroups", "*", False)

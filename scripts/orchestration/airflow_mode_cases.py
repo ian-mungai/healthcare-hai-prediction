@@ -77,7 +77,7 @@ from botocore.exceptions import ClientError
 from orchestration.ecs_adapter import HOST, EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, Launcher, LaunchRefused, LaunchUnavailable, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
-from orchestration.ecs_preflight import InputNotReady
+from orchestration.ecs_preflight import HeldCapProbe, InputNotReady
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import training_run_id
 from scripts.orchestration.ecs_adapter_cases import require
@@ -420,16 +420,17 @@ def world(rig: Rig, dag_id: str, params: dict[str, Any]) -> Iterator[World]:
             runtime = importlib.import_module("orchestration.dag_runtime")
             steps = importlib.import_module("orchestration.airflow_steps")
             current = World(rig, runtime, dag_id, params)
+
+            def accepted_report(access: Any, layer: str, run: str) -> dict[str, Any]:
+                rig.reports.append(f"report {layer} {run}")
+                return {"report": "stand_in", "passed": True}
+
             with (
                 mock.patch.object(runtime, "get_current_context", lambda: current.context),
                 mock.patch.object(steps, "services", lambda: rig.services),
                 mock.patch.object(steps.layer_report, "save_before_listing", lambda access, layer, run: rig.reports.append(f"listing {layer} {run}")),
                 mock.patch.object(steps.layer_report, "save_closing_evidence", lambda access, layer, run: rig.reports.append(f"closing {layer} {run}")),
-                mock.patch.object(
-                    steps.layer_report,
-                    "accept",
-                    lambda access, layer, run: rig.reports.append(f"report {layer} {run}") or {"report": "stand_in", "passed": True},
-                ),
+                mock.patch.object(steps.layer_report, "accept", accepted_report),
             ):
                 yield current
     finally:
@@ -967,10 +968,10 @@ def check_production_cap_setting() -> None:
                     not rig.aws_calls() and rig.tasks_started() == 0 and not rig.records.calls,
                     f"the cap {cap} above the host room reached the cloud: {rig.aws_calls()}",
                 )
-    for cap in (None, "", "0", "-1", "23552.5", "many", "0x5c00"):
+    for bad_cap in (None, "", "0", "-1", "23552.5", "many", "0x5c00"):
         with tempfile.TemporaryDirectory() as scratch:
-            error = refuses(Exception, partial(production_services, RecordingSsm(), launch_environment(scratch, cap)))
-        require(CAP_SETTING in str(error), f"the launch services build did not name {CAP_SETTING} for the cap {cap!r}: {type(error).__name__}: {error}")
+            error = refuses(Exception, partial(production_services, RecordingSsm(), launch_environment(scratch, bad_cap)))
+        require(CAP_SETTING in str(error), f"the launch services build did not name {CAP_SETTING} for the cap {bad_cap!r}: {type(error).__name__}: {error}")
 
 
 def production_cap_comes_from_the_environment() -> None:
@@ -1251,6 +1252,8 @@ def the_fit_probe_never_offers_more_than_the_cap() -> None:
     cap = JOB_MEMORY - 1024
     rig, _ = held_rig([CLEAR], cap=str(cap))
     probe = rig.launcher.probe
+    if not isinstance(probe, HeldCapProbe):
+        raise AssertionError(f"the launcher's fit probe is {type(probe).__name__}, not the probe that holds the cap")
     free = probe.inner.free().memory_mib
     require(free > cap, f"the stand-in host has no more free memory than the cap {cap}: {free}")
     require(probe.free().memory_mib == cap, f"the fit probe offers {probe.free().memory_mib} MiB, not the cap {cap}")

@@ -334,7 +334,11 @@ def test_every_fixed_phrase_the_checks_use_is_on_the_list() -> None:
     used = {
         node.args[0].value
         for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "phrase" and isinstance(node.args[0], ast.Constant)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "phrase"
+        and isinstance(node.args[0], ast.Constant)
+        and isinstance(node.args[0].value, str)
     }
     check(used <= startup_check.PHRASES, f"phrases used but not listed: {sorted(used - startup_check.PHRASES)}")
     check(used | {startup_check.SPILL_CODE} >= startup_check.PHRASES, f"phrases listed but never used: {sorted(startup_check.PHRASES - used)}")

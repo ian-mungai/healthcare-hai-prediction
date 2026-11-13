@@ -42,7 +42,7 @@ def mmd_tree(monkeypatch: pytest.MonkeyPatch, root: Path, leave_out: str = "") -
         "references": {"one": {"path": str(paths["reference"]), "sha256": "0" * 64}},
         "registry_sha256": registry,
     }
-    contents = {
+    contents: dict[str, str | dict[str, Any]] = {
         "plan": body,
         "additions_plan": body,
         "report": {"years": [{"original_path": str(paths["original"])}]},
@@ -54,7 +54,8 @@ def mmd_tree(monkeypatch: pytest.MonkeyPatch, root: Path, leave_out: str = "") -
     for name, path in paths.items():
         if name != leave_out:
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(contents[name] if isinstance(contents[name], str) else json.dumps(contents[name]))
+            content = contents[name]
+            path.write_text(content if isinstance(content, str) else json.dumps(content))
     monkeypatch.setattr(
         mmd_api_contract, "PLANS", {mmd_api_contract.PLAN_SHA256: paths["plan"], mmd_api_contract.ADDITIONS_PLAN_SHA256: paths["additions_plan"]}
     )
@@ -144,8 +145,17 @@ def test_outside_a_task_the_publisher_discovers_no_plan_and_checks_no_file(monke
     mmd_tree(monkeypatch, tmp_path / "code", leave_out="plan")
     seen: list[str] = []
     real_read_json, real_queue_files = startup_check.read_json, startup_check.queue_files
-    monkeypatch.setattr(startup_check, "read_json", lambda path: seen.append(f"read_json {path}") or real_read_json(path))
-    monkeypatch.setattr(startup_check, "queue_files", lambda *arguments, **keywords: seen.append("queue_files") or real_queue_files(*arguments, **keywords))
+
+    def recorded_read_json(path: str | Path) -> Any:
+        seen.append(f"read_json {path}")
+        return real_read_json(path)
+
+    def recorded_queue_files(*arguments: Any, **keywords: Any) -> Any:
+        seen.append("queue_files")
+        return real_queue_files(*arguments, **keywords)
+
+    monkeypatch.setattr(startup_check, "read_json", recorded_read_json)
+    monkeypatch.setattr(startup_check, "queue_files", recorded_queue_files)
     with pytest.raises(Reached):
         run_job(monkeypatch, tmp_path / "workspace")
     check(seen == [] and network.seen == [], f"the startup check discovered plans or connected outside a task: {seen} {network.seen}")

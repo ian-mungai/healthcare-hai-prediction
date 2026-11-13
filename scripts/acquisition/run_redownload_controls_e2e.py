@@ -675,7 +675,7 @@ def exercise(scenario: Any, root: Path, fixture_type: Any, web_type: Any) -> Non
         run.state_root.rename(run.state_root.with_name("run_saved"))
         key = publisher_run.restore_state(cloud, run.state_root, settings | {"PUBLISHER_PRIOR_STATE": json.dumps(saved)})
         require(key == saved["key"], "The task did not restore the named prior state")
-        return key
+        return saved["key"]
 
     def history_digests(run: Any) -> list[str]:
         return [item["controls_sha256"] for item in read_json(run.state_root / "run.json").get("controls_history", [])]

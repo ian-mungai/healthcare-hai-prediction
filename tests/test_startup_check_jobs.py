@@ -8,6 +8,7 @@ import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -102,7 +103,7 @@ run_feast = run_features_phase("feast")
 
 
 # Each job: its runner, the environment it needs and the connect that fails, as (host, port) with the cause named in the log.
-JOBS = {
+JOBS: dict[str, tuple[Callable[[pytest.MonkeyPatch, Path], int], dict[str, Any], tuple[str, int], str]] = {
     "bronze_load": (run_bronze, {"polaris": True}, (POLARIS_HOST, 8181), "polaris_unreachable"),
     "train_extract": (run_training("extract"), {"polaris": True}, (POLARIS_HOST, 8181), "polaris_unreachable"),
     "train_train": (run_training("train"), {"mlflow": MLFLOW_URI}, (MLFLOW_HOST, 5000), "mlflow_unreachable"),

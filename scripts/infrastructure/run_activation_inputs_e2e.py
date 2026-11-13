@@ -876,11 +876,7 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
     checks["the procedure lists wrapper, services_apply and policy commands"] = bool(kinds["wrapper"] and kinds["services_apply"] and kinds["policies"])
     services_apply = importlib.import_module("scripts.infrastructure.services_apply")
     policies = importlib.import_module("infra.iam.scripts.manage_policies")
-    literals = {
-        match[1]: match[2]
-        for line in kinds["assignments"]
-        if (match := re.match(r"(export )?([A-Z_]+)=([^\s\"$()]+)$", line)) is not None and (match := (match[1], match[2], match[3])) is not None
-    }
+    literals = {match[2]: match[3] for line in kinds["assignments"] if (match := re.match(r"(export )?([A-Z_]+)=([^\s\"$()]+)$", line)) is not None}
     checks["the procedure names the inputs files, the interpreter and the wrapper as literals"] = {
         "SERVICES_INPUTS",
         "JOBS_INPUTS",

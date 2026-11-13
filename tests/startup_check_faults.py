@@ -37,7 +37,7 @@ def refuse(*_arguments: object, **_keywords: object) -> bool:
     raise LeakyRefusal("task_credential_source_refused")
 
 
-def spill(*_arguments: object) -> None:
+def spill(host: str, port: int, timeout: float) -> None:
     logging.getLogger("dependency").warning("connect %s", MARKER)
     warnings.warn(MARKER, stacklevel=1)
     sys.stderr.write(MARKER + "\n")
@@ -46,12 +46,12 @@ def spill(*_arguments: object) -> None:
     faulthandler.dump_traceback()
 
 
-def interrupt(*_arguments: object) -> None:
+def interrupt(host: str, port: int, timeout: float) -> None:
     raise KeyboardInterrupt(MARKER)
 
 
 def show_locals(kind: type[BaseException], error: BaseException, trace: types.TracebackType | None) -> None:
-    sys.stderr.write(MARKER + "".join(traceback.format_exception(kind, error, trace, capture_locals=True)))
+    sys.stderr.write(MARKER + "".join(traceback.TracebackException(kind, error, trace, capture_locals=True).format()))
 
 
 def show_thread(arguments: threading.ExceptHookArgs) -> None:

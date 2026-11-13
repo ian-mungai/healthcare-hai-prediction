@@ -923,7 +923,7 @@ def contract_needs(mode: str) -> list[Need]:
 
 
 # The file lists the publisher owns, by collector mode: what the mode's locked plans read at the code root while they load.
-MODE_FILES = {"mmd_api": mmd_needs, **{mode: partial(contract_needs, mode) for mode in PLAN_PATHS}}
+MODE_FILES: dict[str, Callable[[], list[Need]]] = {"mmd_api": mmd_needs, **{mode: partial(contract_needs, mode) for mode in PLAN_PATHS}}
 CONFIG_PREFIX = "config/acquisition/"
 
 

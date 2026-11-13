@@ -351,7 +351,7 @@ def write_replacing(path: Path, body: bytes) -> None:
 def require_passing_review(run: Run, frozen: Mapping[str, Any]) -> str:
     """A passing review bound to the complete frozen controls, continuation field included. Read only; returns the digest the review binds."""
     review_path = run_records(run)[1]
-    sha = digest(encoded_json(frozen))
+    sha = digest(encoded_json(dict(frozen)))
     review = read_json(review_path) if review_path.is_file() else {}
     require(review.get("status") == "passed" and review.get("reviewed_controls_sha256") == sha, "Passing independent review missing or stale")
     return sha
