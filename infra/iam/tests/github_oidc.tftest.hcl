@@ -96,7 +96,7 @@ run "repository_without_a_slash_is_refused" {
   expect_failures = [var.github_repository]
 }
 
-run "enabled_provider_and_three_separate_roles" {
+run "enabled_provider_and_four_separate_roles" {
   command = plan
 
   variables {
@@ -113,7 +113,8 @@ run "enabled_provider_and_three_separate_roles" {
 
   assert {
     condition = (
-      join(",", sort(keys(aws_iam_role.github))) == "deploy,image_push,terraform_plan" &&
+      join(",", sort(keys(aws_iam_role.github))) == "code_staging,deploy,image_push,terraform_plan" &&
+      aws_iam_role.github["code_staging"].name == "example_project_gh_code_staging_dev" &&
       aws_iam_role.github["image_push"].name == "example_project_gh_image_push_dev" &&
       aws_iam_role.github["deploy"].name == "example_project_gh_deploy_dev" &&
       aws_iam_role.github["terraform_plan"].name == "example_project_gh_terraform_plan_dev"
@@ -147,6 +148,11 @@ run "trust_binds_this_repository_and_named_environments" {
       jsondecode(aws_iam_role.github["deploy"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:model-api-deploy"]
     )
     error_message = "Push and deploy roles must trust one protected environment of this repository each."
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role.github["code_staging"].assume_role_policy).Statement[0].Condition.StringEquals["token.actions.githubusercontent.com:sub"] == ["repo:ian-mungai/healthcare-hai-prediction:environment:code-staging"]
+    error_message = "The code staging role must trust the one code-staging environment of this repository, which has no approval step and runs from main only."
   }
 
   assert {
@@ -274,11 +280,11 @@ run "no_delivery_role_can_apply_or_write_state" {
       alltrue([
         for key, role in aws_iam_role_policy.github :
         !contains(flatten([for statement in jsondecode(role.policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:DeleteObject") &&
-        (key == "terraform_plan" || !contains(flatten([for statement in jsondecode(role.policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:PutObject"))
+        (key == "terraform_plan" || key == "code_staging" || !contains(flatten([for statement in jsondecode(role.policy).Statement : tolist(statement.Action) if statement.Effect == "Allow"]), "s3:PutObject"))
       ]) &&
       !contains(output.github_oidc_boundary_allowed_actions, "s3:DeleteObject")
     )
-    error_message = "GitHub Terraform is plan-only: no apply role exists, no delivery role or boundary deletes an object, and only the plan role writes (the saved plan, see the saved plan runs)."
+    error_message = "GitHub Terraform is plan-only: no apply role exists, no delivery role or boundary deletes an object, and only the plan role (the saved plan) and the code staging role (the code archive, see its runs) write."
   }
 }
 
@@ -580,7 +586,8 @@ run "every_delivery_role_carries_its_own_boundary" {
   # characters of one managed policy, so the deploy role has a boundary of its own (owner decision D18).
   assert {
     condition = (
-      length(aws_iam_role.github) == 3 &&
+      length(aws_iam_role.github) == 4 &&
+      aws_iam_role.github["code_staging"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_code_staging_boundary" &&
       aws_iam_role.github["image_push"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary" &&
       aws_iam_role.github["terraform_plan"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_delivery_boundary" &&
       aws_iam_role.github["deploy"].permissions_boundary == "arn:aws:iam::111111111111:policy/example_project_deploy_boundary"
@@ -689,7 +696,7 @@ run "the_delivery_boundary_holds_no_action_beyond_the_delivery_work" {
   }
 
   assert {
-    condition = length(setintersection(toset(output.github_oidc_boundary_allowed_actions), toset([
+    condition = length(setintersection(toset(concat(output.github_oidc_boundary_actions.delivery, output.github_oidc_boundary_actions.deploy)), toset([
       "ecr:CreateRepository", "ecr:DeleteRepository", "ecr:BatchDeleteImage", "ecr:PutLifecyclePolicy", "ecr:SetRepositoryPolicy",
       "ecs:CreateService", "ecs:DeleteService", "ecs:RunTask", "ecs:StopTask", "ecs:DeleteCluster", "ecs:DeregisterTaskDefinition",
       "s3:DeleteObjectVersion", "s3:PutBucketPolicy", "s3:PutLifecycleConfiguration", "s3:GetObjectVersion",
@@ -764,7 +771,7 @@ run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" {
 
   assert {
     condition = alltrue([
-      for name in ["delivery", "deploy"] :
+      for name in ["delivery", "deploy", "code_staging"] :
       output.github_oidc_boundary_size[name].actual == output.github_oidc_boundary_size[name].at_bounds
     ])
     error_message = "The names at the validation bounds must be the names the size check uses for its bound, or the check measures something else."
@@ -772,7 +779,7 @@ run "the_delivery_boundary_fits_the_policy_limit_at_the_name_bounds" {
 
   assert {
     condition = alltrue([
-      for name in ["delivery", "deploy"] :
+      for name in ["delivery", "deploy", "code_staging"] :
       output.github_oidc_boundary_size[name].at_bounds <= output.github_oidc_boundary_size.limit
     ]) && output.github_oidc_boundary_size.limit == 6144
     error_message = "Each delivery boundary must stay inside the 6,144 characters of a managed policy at the longest names the variables accept."
@@ -943,9 +950,9 @@ run "the_delivery_boundary_writes_only_saved_plans" {
     condition = (
       contains(output.github_oidc_boundary_allowed_actions, "s3:PutObject") &&
       join(",", [for resource in output.github_oidc_boundary_allowed_resources : resource if strcontains(resource, "terraform_plans")]) == "arn:aws:s3:::example-data-bucket/terraform_plans/*" &&
-      length([for allow in output.github_oidc_boundary_write_resources : allow if !strcontains(allow, "terraform_plans")]) == 0
+      length([for allow in output.github_oidc_boundary_write_resources : allow if !strcontains(allow, "terraform_plans") && !strcontains(allow, "/inputs/code.")]) == 0
     )
-    error_message = "The delivery boundary lets a delivery role put objects under terraform_plans/ and nowhere else."
+    error_message = "The delivery boundaries let a delivery role put objects under terraform_plans/ and the code archive names of a run, and nowhere else."
   }
 }
 
@@ -1095,10 +1102,84 @@ run "each_delivery_policy_is_attached_to_its_own_role" {
 
   assert {
     condition = (
+      aws_iam_role_policy.github["code_staging"].role == "example_project_gh_code_staging_dev" &&
       aws_iam_role_policy.github["image_push"].role == "example_project_gh_image_push_dev" &&
       aws_iam_role_policy.github["deploy"].role == "example_project_gh_deploy_dev" &&
       aws_iam_role_policy.github["terraform_plan"].role == "example_project_gh_terraform_plan_dev"
     )
     error_message = "The push, deploy and plan policies are attached to the push, deploy and plan roles, each to its own and to no other."
+  }
+}
+
+# Owner decision "Ingestion code and inputs staged on AWS, never locally": each push to main stages the commit's code archive as a code run and names it in one
+# parameter. The role may create the two code files of a run once and put one parameter. It reads, lists and deletes nothing, and it cannot write the binding
+# record of a run (code_run.json), the inputs archive or the request.
+run "the_code_staging_role_creates_code_files_once_and_names_one_parameter" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement) == 2 &&
+      jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement[0].Action == ["s3:PutObject"] &&
+      jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement[0].Resource == ["arn:aws:s3:::example-data-bucket/lakehouse/run_stage/*/inputs/code.*"] &&
+      jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement[0].Condition == { StringEquals = { "s3:if-none-match" = "*" } } &&
+      jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement[1].Action == ["ssm:PutParameter"] &&
+      jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement[1].Resource == ["arn:aws:ssm:us-west-2:111111111111:parameter/example_project/current_code_run"]
+    )
+    error_message = "The code staging role must create objects named code.* under run_stage inputs only when none exists, and put the one current code run parameter."
+  }
+
+  assert {
+    condition = (
+      alltrue([for statement in jsondecode(aws_iam_role_policy.github["code_staging"].policy).Statement : statement.Effect == "Allow"]) &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "Get") &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "List") &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "Delete") &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "inputs/code_run") &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "iam:") &&
+      !strcontains(aws_iam_role_policy.github["code_staging"].policy, "secretsmanager:")
+    )
+    error_message = "The code staging role holds no read, list, delete, binding record or IAM action."
+  }
+}
+
+run "the_code_staging_boundary_allows_exactly_the_role_work" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = (
+      join(",", output.github_oidc_boundary_actions.code_staging) == "s3:PutObject,ssm:PutParameter" &&
+      join(",", output.github_oidc_boundary_resources.code_staging) == "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/*/inputs/code.*,arn:aws:ssm:us-west-2:111111111111:parameter/example_project/current_code_run"
+    )
+    error_message = "The code staging boundary allows the two code file puts and the one parameter put, and nothing else."
+  }
+
+  assert {
+    condition     = length(output.github_oidc_grants_outside_boundary) == 0 && length(output.github_oidc_actions_outside_boundary) == 0
+    error_message = "The code staging role's grants must be inside its boundary, or the boundary refuses them."
+  }
+}
+
+run "no_other_delivery_role_can_put_a_parameter_or_a_code_file" {
+  command = plan
+
+  variables {
+    github_oidc_enabled = true
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["image_push", "deploy", "terraform_plan"] :
+      !strcontains(aws_iam_role_policy.github[key].policy, "ssm:PutParameter") && !strcontains(aws_iam_role_policy.github[key].policy, "/inputs/code.")
+    ]) && !contains(output.github_oidc_boundary_actions.delivery, "ssm:PutParameter") && !contains(output.github_oidc_boundary_actions.deploy, "ssm:PutParameter")
+    error_message = "Only the code staging role and its own boundary may put the code run parameter or a code file."
   }
 }

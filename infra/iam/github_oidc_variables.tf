@@ -1,5 +1,5 @@
 variable "github_oidc_enabled" {
-  description = "Create the GitHub OpenID Connect provider and the three delivery roles. Off by default: with it off the stack plans no change. The owner turns it on in a reviewed commit that changes this default."
+  description = "Create the GitHub OpenID Connect provider and the four delivery roles. Off by default: with it off the stack plans no change. The owner turns it on in a reviewed commit that changes this default."
   type        = bool
   default     = false
   nullable    = false

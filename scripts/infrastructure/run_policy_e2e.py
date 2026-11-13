@@ -33,6 +33,7 @@ BOUNDARY_DIRECTORY = REPO_ROOT / "infra" / "iam" / "boundary"
 BOUNDARY_FILE = "healthcare_hai_prediction_role_boundary_policy.json"
 DELIVERY_BOUNDARY_FILE = "healthcare_hai_prediction_delivery_boundary_policy.json"
 DEPLOY_BOUNDARY_FILE = "healthcare_hai_prediction_deploy_boundary_policy.json"
+CODE_STAGING_BOUNDARY_FILE = "healthcare_hai_prediction_code_staging_boundary_policy.json"
 VARIABLES = REPO_ROOT / "infra" / "iam" / "variables.tf"
 GITHUB_OIDC = REPO_ROOT / "infra" / "iam" / "github_oidc.tf"
 IAM_DIRECTORY = REPO_ROOT / "infra" / "iam"
@@ -225,7 +226,7 @@ def plan_read_statements(documents: dict[str, dict[str, Any]]) -> list[dict[str,
 
 
 def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
-    """The policies of the three GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
+    """The policies of the four GitHub delivery roles, keyed ``delivery/<role>/<policy>``, with the values the IAM stack passes.
 
     The statements follow ``github_statements`` in infra/iam/github_oidc.tf. The deploy role's service and task role names are the test inputs
     ``policy_cases.DEPLOY_SERVICE`` and ``policy_cases.DEPLOY_STREAMLIT``. No delivery role applies Terraform or holds an attached policy. The plan role
@@ -261,6 +262,11 @@ def load_delivery(documents: dict[str, dict[str, Any]]) -> dict[str, dict[str, A
             {"Sid": "UpdateNamedServices", "Effect": "Allow", "Action": ["ecs:UpdateService"],
              "Resource": [policy_cases.DEPLOY_SERVICE, policy_cases.DEPLOY_STREAMLIT]},
         ],
+        "code_staging": [
+            {"Sid": "StageCodeFilesOnce", "Effect": "Allow", "Action": ["s3:PutObject"],
+             "Resource": [f"{policy_cases.BUCKET}/lakehouse/run_stage/*/inputs/code.*"], "Condition": {"StringEquals": {"s3:if-none-match": "*"}}},
+            {"Sid": "NameCurrentCodeRun", "Effect": "Allow", "Action": ["ssm:PutParameter"], "Resource": [policy_cases.CODE_RUN_PARAMETER]},
+        ],
         "terraform_plan": [
             {"Sid": "NeverReadObjectsExceptStateKeys", "Effect": "Deny", "NotResource": list(policy_cases.STATE_KEYS),
              "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetObjectAttributes", "s3:GetObjectTagging"]},
@@ -285,6 +291,9 @@ def load_all() -> dict[str, dict[str, Any]]:
     documents[TASK_EXECUTION] = render_task_execution(OWNER_DIRECTORY)
     documents[policy_cases.DELIVERY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DELIVERY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
     documents[policy_cases.DEPLOY_BOUNDARY] = render_template((BOUNDARY_DIRECTORY / DEPLOY_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES)
+    documents[policy_cases.CODE_STAGING_BOUNDARY] = render_template(
+        (BOUNDARY_DIRECTORY / CODE_STAGING_BOUNDARY_FILE).read_text(encoding="utf-8"), policy_cases.VALUES
+    )
     documents["owner_serving_execution"] = render_template((OWNER_DIRECTORY / "serving_execution.json").read_text(encoding="utf-8"), policy_cases.VALUES)
     return {**documents, **load_roles(), **load_delivery(documents)}
 
@@ -314,7 +323,7 @@ def evaluate_cases(documents: dict[str, dict[str, Any]], cases: list[policy_case
 
 # Owner decision D18: GitHub plans and the owner applies, so the roles are these three. A role that applies, or a policy attached beside the inline
 # policy, would hold permissions the coverage cases never see, and the boundary could cap them without anyone noticing.
-DELIVERY_ROLES = frozenset({"image_push", "deploy", "terraform_plan"})
+DELIVERY_ROLES = frozenset({"image_push", "deploy", "terraform_plan", "code_staging"})
 ATTACHMENT_RESOURCE = re.compile(r'^resource "(aws_iam_(?:role_policy_attachments?_exclusive|role_policy_attachment|policy_attachment))" "(\w+)"', re.MULTILINE)
 
 

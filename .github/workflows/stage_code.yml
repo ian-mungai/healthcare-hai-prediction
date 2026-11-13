@@ -1,0 +1,81 @@
+name: Stage code
+
+# Stages the code archive of each commit on main as a code run in the project bucket and names that run in one parameter (owner decision "Ingestion code and
+# inputs staged on AWS, never locally"). The monthly publisher run and its daily retries bind to the current code run by its digest, so no owner step and no
+# local staging is needed. Off until the owner sets the repository variable OIDC_DELIVERY_ENABLED to true (project guide: OIDC delivery). The code-staging
+# environment has no approval step and may run from main only. The staging role may create the two code files of a run once and put the one parameter.
+on:
+  push:
+    branches:
+      - main
+
+permissions: {}
+
+# Runs wait for each other, so two runs never write at once. The order they run in is not the order of the commits: a rerun of an older push can run after a
+# newer one. So the parameter moves only when the pushed commit is still the head of main (see stage_code.sh); an older run stages its files and names nothing.
+concurrency:
+  group: stage-code
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    name: Stage the code archive
+    if: ${{ vars.OIDC_DELIVERY_ENABLED == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment: code-staging
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      DATA_BUCKET: ${{ secrets.TERRAFORM_STATE_BUCKET }}
+      CODE_RUN_PARAMETER: ${{ vars.CODE_RUN_PARAMETER }}
+      COMMIT: ${{ github.sha }}
+    steps:
+      - name: Checkout the pushed commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - name: Setup Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+
+      - name: Install the build dependencies
+        run: |
+          python -m venv .venv
+          .venv/bin/python scripts/quality/install_tools.py --tool uv
+          .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
+          .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
+
+      # The dbt packages are installed from the pinned archive, which Git does not track and which is rebuilt from the recorded URLs and checked by SHA-256.
+      - name: Fetch the pinned dbt package archive
+        run: |
+          .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
+
+      - name: Build the code archive of the commit
+        run: |
+          .venv/bin/python -m scripts.lakehouse.code_archive build --output "$RUNNER_TEMP/code" --revision "$COMMIT"
+          echo "STAMP=$(TZ=UTC git show --no-patch --format=%cd --date=format-local:%Y%m%dT%H%M%SZ "$COMMIT")" >> "$GITHUB_ENV"
+
+      - name: Assume the code staging role
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_CODE_STAGING }}
+          aws-region: ${{ vars.AWS_REGION }}
+          role-session-name: gh_code_staging
+          mask-aws-account-id: true
+
+      # Read just before the staging, so the newest head is the one compared. The token has the contents read this job already holds.
+      - name: Read the head of main
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "HEAD_OF_MAIN=$(gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha)" >> "$GITHUB_ENV"
+
+      - name: Stage the archive and name the code run
+        run: |
+          bash .github/scripts/stage_code.sh "$RUNNER_TEMP/code/code.tar.gz" "$RUNNER_TEMP/code/code.sha256" "$STAMP" "$COMMIT" "$HEAD_OF_MAIN" | tee -a "$GITHUB_STEP_SUMMARY"

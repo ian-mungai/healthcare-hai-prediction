@@ -2,10 +2,11 @@
 # below has no instance, so the stack plans no change. The owner applies it with the administrator profile like every other
 # role of this stack, because the project profile may not create roles.
 #
-# Three roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
+# Four roles, one per purpose. Each trusts one exact web identity subject of the one repository, with no pattern:
 #   image_push       environment image-push           pushes images to the project repositories
 #   deploy           environment model-api-deploy     registers the next serving task definition revision and updates the named serving services
 #   terraform_plan   pull requests, environment terraform-plan   read-only, plans without a lock
+#   code_staging     environment code-staging              creates the code files of a run once and puts the parameter that names the current code run
 # No role applies Terraform (owner decision D18): GitHub plans with the read-only plan role and the owner applies the saved plan. Each role
 # holds one inline policy and no attached policy, so the coverage checks (scripts/infrastructure/run_policy_e2e.py) see all it can do.
 # A pull request subject reaches only the plan role. The environments carry the owner's approval and the main-only branch rule
@@ -23,8 +24,10 @@ locals {
   github_boundaries = {
     delivery = { file = "healthcare_hai_prediction_delivery_boundary_policy.json", name = "delivery_boundary" }
     deploy   = { file = "healthcare_hai_prediction_deploy_boundary_policy.json", name = "deploy_boundary" }
+    # The code staging role has a boundary of its own: it writes to the data bucket and the parameter store, which the push and plan boundary does not allow.
+    code_staging = { file = "healthcare_hai_prediction_code_staging_boundary_policy.json", name = "code_staging_boundary" }
   }
-  github_role_boundary = { image_push = "delivery", terraform_plan = "delivery", deploy = "deploy" }
+  github_role_boundary = { image_push = "delivery", terraform_plan = "delivery", deploy = "deploy", code_staging = "code_staging" }
   github_boundary_arn  = { for key, boundary in local.github_boundaries : key => "arn:aws:iam::${var.expected_account_id}:policy/${var.project_name}_${boundary.name}" }
 
   # IAM counts at most 6,144 characters, white space left out, in a managed policy, and the boundary holds the names many times. The size is measured for
@@ -96,6 +99,10 @@ locals {
     deploy = {
       subjects    = ["${local.github_subject_base}:environment:model-api-deploy"]
       description = "GitHub Actions deploy: updates the named model API service from the model-api-deploy environment."
+    }
+    code_staging = {
+      subjects    = ["${local.github_subject_base}:environment:code-staging"]
+      description = "GitHub Actions code staging: stages the code archive of each commit on main as a code run and names it in one parameter. The code-staging environment has no approval step and runs from main only."
     }
     terraform_plan = {
       subjects    = ["${local.github_subject_base}:pull_request", "${local.github_subject_base}:environment:terraform-plan"]
@@ -273,6 +280,25 @@ locals {
       ]
     )
 
+    # Owner decision "Ingestion code and inputs staged on AWS, never locally": each push to main stages the commit's code archive as a code run. The role
+    # creates code.tar.gz and code.sha256 of a run once (a second put of the same key is refused) and puts the one parameter that names the current code run.
+    # The pattern code.* does not reach code_run.json, the binding record, so a code run never binds another run. The role reads, lists and deletes nothing.
+    code_staging = [
+      {
+        Sid       = "StageCodeFilesOnce"
+        Effect    = "Allow"
+        Action    = ["s3:PutObject"]
+        Resource  = [local.github_code_files]
+        Condition = { StringEquals = { "s3:if-none-match" = "*" } }
+      },
+      {
+        Sid      = "NameCurrentCodeRun"
+        Effect   = "Allow"
+        Action   = ["ssm:PutParameter"]
+        Resource = [local.github_code_run_parameter]
+      }
+    ]
+
     # Any pull request job of this repository can use the plan role, and the data bucket holds Confidential tables. The explicit Deny
     # covers every object read except the three exact state keys the plan reads, and holds even if an allow above is widened later.
     # The role saves each plan with its digest under terraform_plans/ (owner decision D18) and writes nothing else: the second Deny keeps every
@@ -303,6 +329,9 @@ locals {
       local.github_state_read
     )
   }
+
+  github_code_run_parameter = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter/${var.project_name}/current_code_run"
+  github_code_files         = "${local.github_state_bucket}/lakehouse/run_stage/*/inputs/code.*"
 
   github_policies = {
     for key, statements in local.github_statements : key => jsonencode({ Version = "2012-10-17", Statement = statements })

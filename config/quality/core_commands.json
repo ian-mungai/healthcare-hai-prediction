@@ -71,6 +71,7 @@
     "bash .github/scripts/saved_plan_cases.sh",
     "bash .github/scripts/serving_release_cases.sh",
     "bash .github/scripts/serving_services_cases.sh",
+    "bash .github/scripts/stage_code_cases.sh",
     "bash .github/scripts/workflow_input_cases.sh",
     "process_start_guard",
     "python_subprocess_imports",

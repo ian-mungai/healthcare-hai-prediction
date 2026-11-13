@@ -1613,12 +1613,20 @@ def boundary_scope_cases(case: Callable[..., Case]) -> Iterator[Case]:
 # The three GitHub delivery roles (infra/iam/github_oidc.tf) hold the delivery boundary, a second managed policy beside the role boundary:
 # the role boundary has no room for them (it has no room for the delivery grants in the 6,144 characters IAM allows).
 DELIVERY_BOUNDARY = "delivery_boundary"
-DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan")
+DELIVERY_ROLES = ("image_push", "deploy", "terraform_plan", "code_staging")
 DELIVERY_WIDE = "delivery_wide"
 # The deploy role has a boundary of its own (D18): the serving registration and PassRole grants do not fit beside the push and plan grants in 6,144 characters.
 DEPLOY_BOUNDARY = "deploy_boundary"
 DEPLOY_WIDE = "deploy_wide"
-WIDE_PRINCIPALS = (DELIVERY_WIDE, DEPLOY_WIDE)
+# The code staging role has a boundary of its own too: each push to main stages the commit's code archive as a code run and names it in one parameter.
+CODE_STAGING_BOUNDARY = "code_staging_boundary"
+CODE_STAGING_WIDE = "code_staging_wide"
+CODE_RUN_ID = "20261111T120000Z-0a1b2c3d"
+CODE_STAGE = f"{BUCKET}/lakehouse/run_stage/{CODE_RUN_ID}/inputs"
+CODE_FILES = (f"{CODE_STAGE}/code.tar.gz", f"{CODE_STAGE}/code.sha256")
+CODE_RUN_PARAMETER = arn("ssm", f"parameter/{P}/current_code_run")
+CODE_ONCE = {"s3:if-none-match": "*"}
+WIDE_PRINCIPALS = (DELIVERY_WIDE, DEPLOY_WIDE, CODE_STAGING_WIDE)
 STATE_PREFIX = "terraform_state"
 STATE_STACKS = ("platform", "services", "jobs")
 STATE_KEYS = tuple(f"{BUCKET}/{STATE_PREFIX}/{stack}/terraform.tfstate" for stack in STATE_STACKS)
@@ -1943,7 +1951,9 @@ def coverage_requests(statement: dict[str, Any], tag_context: dict[str, tuple[st
                 if str(as_list(expected)[0]).lower() == "false":
                     positive.append((key, ["sample"]))
                 continue
-            positive.append((key, [str(value).replace("*", "sample").replace("?", "a") for value in as_list(expected)]))
+            # Only a pattern operator reads a wildcard in its value as one. Exact comparison, such as the once condition "*", keeps it as written.
+            matches = operator.startswith(("StringLike", "ArnLike"))
+            positive.append((key, [str(value).replace("*", "sample").replace("?", "a") if matches else str(value) for value in as_list(expected)]))
     combinations: list[dict[str, tuple[str, ...]]] = [{}]
     for key, values in positive:
         combinations = [{**combination, key: (value,)} for combination in combinations for value in values]
@@ -2221,6 +2231,73 @@ def execution_cases() -> Iterator[Case]:
     yield case("no log group create", "logs:CreateLogGroup", LOG_GROUP, False)
 
 
+def code_staging_cases() -> Iterator[Case]:
+    """The code staging role's work and what stays refused for it, for the role itself and for its boundary alone.
+
+    The role creates the two code files of a run once and puts the one parameter that names the current code run. It cannot bind a run to a code run
+    (``code_run.json``), stage inputs or a request, read, list or delete anything, or put another parameter.
+    """
+    role = f"delivery_{DELIVERY_ROLES[3]}"
+    for principal in (role, CODE_STAGING_WIDE):
+        for key in CODE_FILES:
+            name = key.rsplit("/", 1)[-1]
+            yield Case(
+                f"delivery allowed: code staging creates {name} once ({principal})", request("s3:PutObject", key, extra=CODE_ONCE), True, None, principal
+            )
+        yield Case(
+            f"delivery allowed: code staging names the current code run ({principal})", request("ssm:PutParameter", CODE_RUN_PARAMETER), True, None, principal
+        )
+
+        def refused(label: str, action: str, resource: str, extra: dict[str, Any] | None = None, principal: str = principal) -> Case:
+            return Case(f"delivery refused: code staging {label} ({principal})", request(action, resource, extra=extra), False, None, principal)
+
+        yield refused("puts a code file without the once condition", "s3:PutObject", CODE_FILES[0])
+        yield refused("puts a code file with another precondition", "s3:PutObject", CODE_FILES[0], {"s3:if-none-match": "etag-of-an-old-object"})
+        yield refused("puts a code file with a version check", "s3:PutObject", CODE_FILES[0], {"s3:if-match": '"9b2cf535f27731c974343645a3985328"'})
+        for label, name in (
+            ("binds a run to a code run", "code_run.json"),
+            ("stages the inputs archive", "publisher_inputs.tar.gz"),
+            ("stages a publisher request", "publisher_request.json"),
+            ("stages a bronze request", "bronze_request.json"),
+            ("puts a file that only starts like a code file", "codex.tar.gz"),
+            ("puts a file named code with no extension", "code"),
+        ):
+            yield refused(label, "s3:PutObject", f"{CODE_STAGE}/{name}", CODE_ONCE)
+        for label, resource in (
+            ("puts a code file outside the inputs folder", f"{BUCKET}/lakehouse/run_stage/{CODE_RUN_ID}/code.tar.gz"),
+            ("puts a code file in another folder of the lakehouse", f"{BUCKET}/lakehouse/silver/code.tar.gz"),
+            ("puts a code file under raw", f"{BUCKET}/raw/code.tar.gz"),
+            ("puts a code file at the bucket root", f"{BUCKET}/code.tar.gz"),
+            ("puts a code file in the logs bucket", f"{LOGS_BUCKET}/lakehouse/run_stage/{CODE_RUN_ID}/inputs/code.tar.gz"),
+            ("puts a code file in another bucket", f"arn:aws:s3:::other-bucket/lakehouse/run_stage/{CODE_RUN_ID}/inputs/code.tar.gz"),
+        ):
+            yield refused(label, "s3:PutObject", resource, CODE_ONCE)
+        for action in ("s3:GetObject", "s3:GetObjectVersion", "s3:DeleteObject", "s3:DeleteObjectVersion", "s3:PutObjectAcl", "s3:AbortMultipartUpload"):
+            yield refused(f"uses {action} on a code file", action, CODE_FILES[0], CODE_ONCE)
+        for action in ("s3:ListBucket", "s3:ListBucketVersions"):
+            yield refused(f"uses {action} on the bucket", action, BUCKET, {"s3:prefix": "lakehouse/run_stage/"})
+        for label, resource in (
+            ("another parameter of the project", arn("ssm", f"parameter/{P}/host_job_cap")),
+            ("a parameter that only starts like the code run one", arn("ssm", f"parameter/{P}/current_code_run_extra")),
+            ("the code run parameter of another project", arn("ssm", "parameter/other_project/current_code_run")),
+            ("the code run parameter in another account", CODE_RUN_PARAMETER.replace(A, "222222222222")),
+        ):
+            yield refused(f"puts {label}", "ssm:PutParameter", resource)
+        for action in ("ssm:GetParameter", "ssm:GetParameters", "ssm:DeleteParameter", "ssm:LabelParameterVersion", "ssm:AddTagsToResource"):
+            yield refused(f"uses {action} on the code run parameter", action, CODE_RUN_PARAMETER)
+        for action, resource in (
+            ("ecr:PutImage", REPOSITORY),
+            ("ecs:RunTask", arn("ecs", f"task-definition/{P}_{E}_job_publisher_host:1")),
+            ("ecs:UpdateService", DEPLOY_SERVICE),
+            ("iam:PassRole", SERVING_ROLES[0]),
+            ("iam:CreateRole", arn("iam", f"role/{P}_other_{E}", region=False)),
+            ("secretsmanager:GetSecretValue", arn("secretsmanager", "secret:jev_api_key-abcdef")),
+            ("sts:AssumeRole", arn("iam", f"role/{P}_job_publisher_task_{E}", region=False)),
+            ("sns:Publish", arn("sns", f"{P}_alerts_{E}")),
+        ):
+            yield refused(f"uses {action}", action, resource)
+
+
 def serving_execution_cases() -> Iterator[Case]:
     """The dedicated serving execution role: it injects exactly the six serving parameters, pulls two images and writes two log groups.
 
@@ -2282,6 +2359,7 @@ def all_cases(operations: dict[str, list[Request]]) -> Iterator[Case]:
     yield from current
     yield from bounded_role_cases()
     yield from delivery_cases()
+    yield from code_staging_cases()
     yield from serving_execution_cases()
 
 
@@ -2361,16 +2439,21 @@ def principals(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str,
         **delivery,
         DELIVERY_WIDE: [DELIVERY_WIDE_POLICY],
         DEPLOY_WIDE: [DELIVERY_WIDE_POLICY],
+        CODE_STAGING_WIDE: [DELIVERY_WIDE_POLICY],
     }
+
+
+DELIVERY_BOUNDARIES = {"deploy": DEPLOY_BOUNDARY, "code_staging": CODE_STAGING_BOUNDARY}
 
 
 def boundaries(documents: dict[str, dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
     """The permissions boundary of each bounded principal: every role, never the project user. The delivery roles hold the delivery boundary."""
     return {
         **{name: [documents[BOUNDARY]] for name in ("snapshots", "execution", *ROLES, WIDE_ROLE)},
-        **{f"delivery_{name}": [documents[DEPLOY_BOUNDARY if name == "deploy" else DELIVERY_BOUNDARY]] for name in DELIVERY_ROLES},
+        **{f"delivery_{name}": [documents[DELIVERY_BOUNDARIES.get(name, DELIVERY_BOUNDARY)]] for name in DELIVERY_ROLES},
         DELIVERY_WIDE: [documents[DELIVERY_BOUNDARY]],
         DEPLOY_WIDE: [documents[DEPLOY_BOUNDARY]],
+        CODE_STAGING_WIDE: [documents[CODE_STAGING_BOUNDARY]],
     }
 
 
@@ -3191,6 +3274,46 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             lambda documents: documents[DEPLOY_BOUNDARY].update(
                 {"Statement": [item for item in documents[DEPLOY_BOUNDARY]["Statement"] if item["Sid"] != "DenyIam"]}
             ),
+        ),
+        "code staging defect: the boundary lets the role bind a run to a code run": (
+            "delivery refused: code staging binds a run to a code run",
+            delivery_resource("StageCodeFilesOnce", f"{BUCKET}/lakehouse/run_stage/*/inputs/*", CODE_STAGING_BOUNDARY),
+        ),
+        "code staging defect: the boundary lets the role put anywhere in the lakehouse": (
+            "delivery refused: code staging puts a code file in another folder of the lakehouse",
+            delivery_resource("StageCodeFilesOnce", f"{BUCKET}/lakehouse/*", CODE_STAGING_BOUNDARY),
+        ),
+        "code staging defect: the boundary drops the once condition": (
+            "delivery refused: code staging puts a code file without the once condition",
+            lambda documents: delivery_statement(documents, "StageCodeFilesOnce", CODE_STAGING_BOUNDARY).pop("Condition"),
+        ),
+        "code staging defect: the role policy drops the once condition": (
+            "delivery refused: code staging puts a code file without the once condition (delivery_code_staging)",
+            lambda documents: next(item for item in documents["delivery/code_staging/access"]["Statement"] if item["Sid"] == "StageCodeFilesOnce").pop(
+                "Condition"
+            ),
+        ),
+        "code staging defect: the boundary lets the role read a code file": (
+            "delivery refused: code staging uses s3:GetObject on a code file",
+            lambda documents: delivery_statement(documents, "StageCodeFilesOnce", CODE_STAGING_BOUNDARY).update({"Action": ["s3:PutObject", "s3:GetObject"]}),
+        ),
+        "code staging defect: the boundary lets the role put any project parameter": (
+            "delivery refused: code staging puts another parameter of the project",
+            delivery_resource("NameCurrentCodeRun", arn("ssm", f"parameter/{P}/*"), CODE_STAGING_BOUNDARY),
+        ),
+        "code staging defect: the boundary lets the role read the parameter": (
+            "delivery refused: code staging uses ssm:GetParameter on the code run parameter",
+            lambda documents: delivery_statement(documents, "NameCurrentCodeRun", CODE_STAGING_BOUNDARY).update(
+                {"Action": ["ssm:PutParameter", "ssm:GetParameter"]}
+            ),
+        ),
+        "code staging defect: the boundary lacks the code file put": (
+            "delivery allowed: code staging creates code.tar.gz once",
+            delivery_without_action("StageCodeFilesOnce", "s3:PutObject", CODE_STAGING_BOUNDARY),
+        ),
+        "code staging defect: the boundary lacks the parameter put": (
+            "delivery allowed: code staging names the current code run",
+            delivery_without_action("NameCurrentCodeRun", "ssm:PutParameter", CODE_STAGING_BOUNDARY),
         ),
         "delivery defect: the boundary lacks a plan read": (
             "delivery allowed: terraform_plan access Readec2DescribeProjectInfrastructure ec2:DescribeVpcs",

@@ -10,6 +10,7 @@ terraform_checks() {
   timed "terraform_checks: saved plan cases" bash .github/scripts/saved_plan_cases.sh
   timed "terraform_checks: serving release cases" bash .github/scripts/serving_release_cases.sh
   timed "terraform_checks: serving services cases" bash .github/scripts/serving_services_cases.sh
+  timed "terraform_checks: stage code cases" bash .github/scripts/stage_code_cases.sh
   timed "terraform_checks: workflow input cases" bash .github/scripts/workflow_input_cases.sh
   timed "terraform_checks: delivery cases" bash .github/scripts/delivery_cases.sh
   export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$scratch/provider_cache}"
