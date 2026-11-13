@@ -622,8 +622,11 @@ write_worker_state() {
 # saved seconds first, and stays until every worker has ended. It streams a single item, buffers the output of several in the given order, and retains each log and duration.
 # A worker is admitted when no worker runs or when the cores in use plus its own fit the budget; the first waiting worker that cannot be admitted holds back every worker behind it, so no large
 # worker starves. A worker that must follow others (queue_after_<item>, only those in this call) is passed over while they run, and is not started when one of them did not pass.
+# A stop that is not confirmed (a deadline stop, a member left in the session of an ended worker, or the status 70 of a worker's leader) halts the queue at once: the worker keeps its capacity and its
+# place in the live list (the exit trap stops it again), every other running worker is stopped and confirmed, every waiting worker is reported as not started and the run exits with status 70.
+# An ordinary failure of a worker (a failing check) only releases its capacity.
 run_items() {
-  local item index slot candidate dependency after_variable settled pid status items=("$@") count=$# mode=buffer stop_unconfirmed=0 running_cores=0 finished=0 best waiting
+  local item index slot candidate dependency after_variable settled pid status items=("$@") count=$# mode=buffer stop_unconfirmed=0 halt=0 running_cores=0 finished=0 best waiting
   local pids=() starts=() limits=() cores=() weights=() states=() order=() taken=() worker_limit worker_cores worker_weight
   # states: 0 waiting, 1 running, 2 passed, 3 failed, 4 not started
   if ((count == 1)); then mode=stream; fi
@@ -662,7 +665,10 @@ run_items() {
           stop_unconfirmed=1
         fi
         # A worker whose leader (or a launch inside the worker) reports an unconfirmed stop exits with this status.
-        if ((status == unconfirmed_status)); then ci_unconfirmed=1; fi
+        if ((status == unconfirmed_status)); then
+          ci_unconfirmed=1
+          halt=1
+        fi
         states[index]=2
         if ((status != 0)); then
           failed+=("${items[$index]}")
@@ -682,16 +688,41 @@ run_items() {
           failed+=("${items[$index]} (deadline ${limits[$index]} s, stop not confirmed)")
           stop_unconfirmed=1
           ci_unconfirmed=1
+          halt=1
         fi
       else
         continue
       fi
       if ((stop_unconfirmed == 0)); then forget_worker "$pid"; fi
       stop_unconfirmed=0
-      running_cores=$((running_cores - cores[index]))
+      # A worker whose stop is not confirmed keeps its capacity: its members may still run.
+      if ((halt == 0)); then running_cores=$((running_cores - cores[index])); fi
       finished=$((finished + 1))
       printf 'Local CI: %s ended (%s of %s cores in use).\n' "${items[$index]}" "$running_cores" "$core_budget"
     done
+    # A stop that is not confirmed halts the queue: the other running workers are stopped and confirmed, the waiting ones never start.
+    if ((halt)); then
+      printf 'Local CI: a worker stop is not confirmed, so no worker is admitted any more: stopping the running workers.\n' >&2
+      for ((index = 0; index < count; index++)); do
+        if ((states[index] == 0)); then
+          printf 'Local CI: not started: %s (a worker stop is not confirmed).\n' "${items[$index]}" >&2
+          states[index]=4
+          finished=$((finished + 1))
+        elif ((states[index] == 1)); then
+          pid="${pids[$index]}"
+          states[index]=3
+          finished=$((finished + 1))
+          if stop_sessions "$worker_grace" "$pid"; then
+            wait "$pid" 2>/dev/null || true
+            forget_worker "$pid"
+            failed+=("${items[$index]} (stopped: a worker stop is not confirmed)")
+          else
+            failed+=("${items[$index]} (stopped: a worker stop is not confirmed, and its own stop is not confirmed)")
+          fi
+        fi
+      done
+      continue
+    fi
     # A worker that follows a worker that did not pass is not started. A chain of them settles here, before the next admission.
     settled=0
     while ((settled == 0)); do

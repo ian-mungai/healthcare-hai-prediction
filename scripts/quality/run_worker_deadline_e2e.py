@@ -1149,6 +1149,91 @@ def queue_that_waits_for_itself(base: Path) -> dict[str, Any]:
     return case("worker_that_follows_itself_fails_by_name_instead_of_waiting", base, body)
 
 
+def survivor_child(sandbox: Sandbox) -> None:
+    """Make the child of the never-ending worker leave the worker's process group and ignore TERM, so it is a member only the session listing finds."""
+    program = (
+        "import os, signal, time\n"
+        "os.setpgid(0, 0)\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "open(os.environ['STUB_DIR'] + '/child.pid', 'w').write(str(os.getpid()))\n"
+        "time.sleep(60)\n"
+    )
+    (sandbox.stub / "child.py").write_text(program, encoding="utf-8")
+    (sandbox.stub / "ignore_term.sh").write_text(f'#!/bin/bash\nexec {PYTHON} -B "$STUB_DIR/child.py"\n', encoding="utf-8")
+    (sandbox.stub / "ignore_term.sh").chmod(0o755)
+
+
+def halted_checks(run: dict[str, Any], sandbox: Sandbox, failed_line: str) -> dict[str, bool | str | float]:
+    """What a run that cannot confirm a stop must show: status 70, the named failure, and the waiting worker never started."""
+    log = sandbox.stub / "events.log"
+    started = log.read_text(encoding="utf-8") if log.exists() else ""
+    return {
+        "run_did_not_hang": not run["timed_out"],
+        "exit_status_is_70": run["exit"] == 70,
+        "failure_names_the_worker": failed_line in run["text"],
+        "waiting_worker_never_started": "queue_b start" not in started,
+        "waiting_worker_reported_as_not_started": "not started: queue_b" in run["text"],
+        "no_pass_line": "All local CI checks passed" not in run["text"],
+        "seconds": run["seconds"],
+    }
+
+
+def unconfirmed_deadline_admits_nothing(base: Path) -> dict[str, Any]:
+    document, durations = queue_document(1, {"queue_b": (1, 1.0)})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The review reproduction: a worker that holds the whole budget runs past its deadline and keeps a child in another group of its session while the
+        # session cannot be listed, so the stop cannot be confirmed. The worker waiting for the core must not start beside the child.
+        missing_lister_files(sandbox)
+        survivor_child(sandbox)
+        queue_settings(sandbox, seconds={"queue_b": 0.1})
+        run = sandbox.run(groups="python_lint queue_b", timeout=35, CI_WORKER_LIMIT_SECONDS=str(LIMIT_SECONDS))
+        return halted_checks(run, sandbox, f"python_lint (deadline {LIMIT_SECONDS} s, stop not confirmed)")
+
+    return case("unconfirmed_deadline_stop_admits_no_waiting_worker", base, body, config=document, durations=durations)
+
+
+def unconfirmed_leader_admits_nothing(base: Path) -> dict[str, Any]:
+    document, durations = queue_document(1, {"queue_b": (1, 1.0)})
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # The worker ends with a member in another group of its session while the session cannot be listed: its leader returns 70. The waiting worker must
+        # not start although the first worker ended.
+        missing_lister_files(sandbox)
+        (sandbox.stub / "left_member.py").write_text(LEFT_MEMBER, encoding="utf-8")
+        (sandbox.stub / "left_member.sh").write_text(f'#!/bin/bash\nexec {PYTHON} -B "$STUB_DIR/left_member.py" "$STUB_DIR"\n', encoding="utf-8")
+        (sandbox.stub / "left_member.sh").chmod(0o755)
+        queue_settings(sandbox, seconds={"queue_b": 0.1})
+        run = sandbox.run(groups="python_lint queue_b", timeout=35, STUB_PYTHON_LINT="left_member", CI_WORKER_LIMIT_SECONDS="60")
+        return {**halted_checks(run, sandbox, "Local CI failed in: python_lint"), "member_was_left": sandbox.pid("orphan") is not None}
+
+    return case("unconfirmed_leader_status_70_admits_no_waiting_worker", base, body, config=document, durations=durations)
+
+
+def unconfirmed_stop_stops_the_other_workers(base: Path) -> dict[str, Any]:
+    document, durations = queue_document(2, {"queue_a": (1, 6.0), "queue_b": (1, 1.0)})
+    document["worker_limits"]["python_lint"]["minutes"] = LIMIT_SECONDS / 60
+
+    def body(sandbox: Sandbox) -> dict[str, bool | str | float]:
+        # python_lint runs past its deadline (3 s) and its stop cannot be confirmed while queue_a (limit 300 s) still runs: the dispatcher stops queue_a at once
+        # instead of waiting for it, and queue_b never starts.
+        missing_lister_files(sandbox)
+        survivor_child(sandbox)
+        queue_settings(sandbox, never_ends={"queue_a": True}, seconds={"queue_b": 0.1})
+        run = sandbox.run(groups="python_lint queue_a queue_b", timeout=35)
+        before = float((sandbox.stub / "beat_queue_a").read_text(encoding="utf-8")) if (sandbox.stub / "beat_queue_a").exists() else 0.0
+        time.sleep(1)
+        after = float((sandbox.stub / "beat_queue_a").read_text(encoding="utf-8")) if (sandbox.stub / "beat_queue_a").exists() else 0.0
+        return {
+            **halted_checks(run, sandbox, f"python_lint (deadline {LIMIT_SECONDS} s, stop not confirmed)"),
+            "running_worker_was_started": before > 0,
+            "running_worker_is_stopped": after == before,
+            "running_worker_named": "queue_a (stopped" in run["text"],
+        }
+
+    return case("unconfirmed_stop_stops_the_running_workers", base, body, config=document, durations=durations)
+
+
 CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "worker_that_never_ends_fails_with_the_group_name": never_ends_two_workers,
     "worker_that_ignores_term_is_killed_after_the_grace_period": term_ignoring_worker,
@@ -1180,6 +1265,9 @@ CASES: dict[str, Callable[[Path], dict[str, Any]]] = {
     "hook_samples_combine_runs_after_its_shards": hook_combine_waits_for_its_shards,
     "hook_samples_combine_does_not_run_after_a_failed_shard": hook_combine_skipped_after_a_failed_shard,
     "worker_that_follows_itself_fails_by_name_instead_of_waiting": queue_that_waits_for_itself,
+    "unconfirmed_deadline_stop_admits_no_waiting_worker": unconfirmed_deadline_admits_nothing,
+    "unconfirmed_leader_status_70_admits_no_waiting_worker": unconfirmed_leader_admits_nothing,
+    "unconfirmed_stop_stops_the_running_workers": unconfirmed_stop_stops_the_other_workers,
 }
 
 # plant name -> (pairs of text replaced in the dispatcher, {case that must fail: the check that must be false in it}). The first plant is the plain wait
@@ -1254,6 +1342,14 @@ PLANTS: dict[str, tuple[tuple[tuple[str, str], ...], dict[str, str]]] = {
     "combine_without_its_shards": (
         (("'%s' \"${hook_shard_items[*]}\"", "'%s' \"\""),),
         {"hook_samples_combine_runs_after_its_shards": "combine_started_after_every_shard_ended"},
+    ),
+    # The queue goes on after a stop that is not confirmed (the review reproduction): the waiting worker starts beside the surviving member.
+    "admission_after_an_unconfirmed_stop": (
+        (("    if ((halt)); then\n", "    if ((halt == 99)); then\n"), ("if ((halt == 0)); then running_cores=", "if ((1)); then running_cores=")),
+        {
+            "unconfirmed_deadline_stop_admits_no_waiting_worker": "waiting_worker_never_started",
+            "unconfirmed_leader_status_70_admits_no_waiting_worker": "waiting_worker_never_started",
+        },
     ),
     "worker_group_only": (
         (('stop_sessions "$worker_grace" "$pid"', '{ kill -TERM -- "-$pid"; sleep 1; kill -KILL -- "-$pid"; } 2>/dev/null || true'),),
