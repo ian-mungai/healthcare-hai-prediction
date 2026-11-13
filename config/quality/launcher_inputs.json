@@ -1654,6 +1654,7 @@
     "scripts/acquisition/tests/mmd_world.py",
     "scripts/acquisition/tests/task_fixture.py",
     "scripts/acquisition/tests/test_add_reference_plan_version.py",
+    "scripts/acquisition/tests/test_api_outcome_roles.py",
     "scripts/acquisition/tests/test_approved_hosts.py",
     "scripts/acquisition/tests/test_batch_inventory.py",
     "scripts/acquisition/tests/test_build_bootstrap_queue.py",
