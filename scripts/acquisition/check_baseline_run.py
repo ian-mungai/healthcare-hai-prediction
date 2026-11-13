@@ -1,7 +1,8 @@
 """Offline check of the tracked baseline run inputs bundle, run by CI on every pull request that touches it.
 
-It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums) and the hosts file with its approval.
-It makes no request and reads nothing outside the bundle folder.
+It recomputes the inputs lock, then checks the queue (lock, active units only, no duplicate IDs, budget sums), the capture specification, the hosts file with
+its approval, that every expected plan input has exactly one home (a tracked copy or an entry of the bootstrap seed manifest) and that the seed folder matches
+its manifest: the files the queue's manual units store, the digests, the Git LFS rule. It makes no request and reads only the bundle and seed folders.
 """
 
 from __future__ import annotations
@@ -16,9 +17,15 @@ from pathlib import Path
 
 from scripts.acquisition.redownload_route import ACTIVE, host_problems
 from scripts.acquisition.s3_store import encoded_json
+from scripts.process import run_command
 
 ROOT = Path("config/acquisition/baseline_run")
+SEED_ROOT = Path("config/acquisition/bootstrap_seed")
 LOCK_NAME = "inputs.lock.json"
+EXPECTED_NAME = "expected_plan_inputs.json"
+SEED_MANIFEST = "manifest.json"
+SEED_DOCUMENTS = frozenset({SEED_MANIFEST, "README.md"})
+SEED_KIND = "bootstrap_seed_manifest"
 ENVIRONMENT_MARKERS = ("s3://", "arn:aws", "/Users/", "/private/", "/var/folders/")
 
 
@@ -109,61 +116,126 @@ def specs_problems(root: Path) -> list[str]:
     return problems
 
 
-def pin_problems(root: Path) -> list[str]:
-    """Return why a plan input is not accounted for: every expected input has exactly one home, a tracked copy, an S3 pin or a pending note."""
-    document = json.loads((root / "remote_pins.json").read_text(encoding="utf-8"))
-    expected = set(document["expected_plan_inputs"])
+def home_problems(root: Path, manifest: dict) -> list[str]:
+    """Return why a plan input is not accounted for: each expected input has exactly one home, a tracked copy in the bundle or a seed manifest entry."""
+    expected = set(json.loads((root / EXPECTED_NAME).read_text(encoding="utf-8"))["expected_plan_inputs"])
     tracked = {item["path"].removeprefix("plan_inputs/") for item in file_entries(root) if item["path"].startswith("plan_inputs/")}
-    remote = {pin["path"]: pin for pin in document["remote"]}
-    pending = {item["path"] for item in document["pending"]}
+    seeded = Counter(item["plan_input"] for item in manifest["files"] if "plan_input" in item)
     problems = []
     for path in sorted(expected):
-        homes = [name for name, group in (("tracked", tracked), ("pinned", remote.keys()), ("pending", pending)) if path in group]
-        if not homes:
-            problems.append(f"{path} has no tracked copy, S3 pin or pending note")
-        elif len(homes) > 1:
-            problems.append(f"{path} is {' and also '.join(homes)}")
+        if path not in tracked and path not in seeded:
+            problems.append(f"{path} has no tracked copy or seed entry")
+        elif path in tracked and path in seeded:
+            problems.append(f"{path} is tracked and also in the seed manifest")
+        elif seeded[path] > 1:
+            problems.append(f"{path} is in the seed manifest {seeded[path]} times")
     problems += [f"{path} is a tracked plan input the expected list lacks" for path in sorted(tracked - expected)]
-    for path, pin in sorted(remote.items()):
-        key, version = pin.get("s3_key"), pin.get("s3_version_id")
-        sha = pin.get("sha256")
-        complete = isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha) and isinstance(pin.get("bytes"), int) and pin["bytes"] > 0
-        complete = (
-            complete and isinstance(key, str) and bool(key) and "://" not in key and not key.startswith("/") and isinstance(version, str) and bool(version)
-        )
-        if not complete:
-            problems.append(f"the S3 pin is incomplete: {path}")
+    problems += [f"{path} is not an expected plan input" for path in sorted(set(seeded) - expected)]
     return problems
 
 
-def problems(root: Path = ROOT) -> list[str]:
-    """Return every problem of the bundle at ROOT, or an empty list."""
+def expected_seed_files(root: Path) -> dict[str, str]:
+    """The seed path of every stored data file of a manual unit, to its unit: ``manual_units/<unit>/<file name>``."""
+    queue = json.loads((root / "queue.json").read_bytes())["queue"]
+    specs = json.loads((root / "capture_specs.json").read_text(encoding="utf-8"))["specs"]
+    return {
+        f"manual_units/{unit['snapshot_id']}/{name}": unit["snapshot_id"]
+        for unit in queue
+        if unit["disposition"] == "approved_manual"
+        for name in specs[unit["snapshot_id"]]["stored_data_files"]
+    }
+
+
+def seed_problems(root: Path, seed_root: Path, manifest: dict, *, require_files: bool = False) -> list[str]:
+    """Return why the seed folder differs from its manifest or the queue: another queue, wrong files for the manual units, bad paths, digests."""
+    problems = []
+    if manifest.get("kind") != SEED_KIND:
+        problems.append(f"the seed manifest is not a {SEED_KIND}")
+    if manifest.get("queue_sha256") != hashlib.sha256((root / "queue.json").read_bytes()).hexdigest():
+        problems.append("the seed manifest belongs to another queue")
+    entries = manifest["files"]
+    listed = Counter(item["path"] for item in entries)
+    problems += [f"{path} is listed twice" for path, count in sorted(listed.items()) if count > 1]
+    units = {item["path"]: item["unit"] for item in entries if "unit" in item}
+    wanted = expected_seed_files(root)
+    problems += [
+        f"the seed manifest lacks the stored file {Path(path).name} of unit {unit}" for path, unit in sorted(wanted.items()) if units.get(path) != unit
+    ]
+    problems += [f"{path} names a stored file the queue does not expect" for path in sorted(units.keys() - wanted.keys())]
+    for item in entries:
+        path, sha = item["path"], item.get("sha256")
+        if Path(path).is_absolute() or ".." in Path(path).parts or not path:
+            problems.append(f"{path} is not a relative path inside the seed folder")
+            continue
+        if ("plan_input" in item) == ("unit" in item):
+            problems.append(f"{path} must name exactly one of a plan input and a unit")
+        if sha is not None and not (isinstance(sha, str) and re.fullmatch(r"[0-9a-f]{64}", sha)):
+            problems.append(f"{path} has an unusable digest")
+            continue
+        found = seed_root / path
+        if not found.is_file():
+            if require_files and "hold" not in item:
+                problems.append(f"{path} is missing from the seed folder")
+        elif sha is None:
+            problems.append(f"{path} has no recorded digest")
+        elif hashlib.sha256(found.read_bytes()).hexdigest() != sha:
+            problems.append(f"{path} differs from the manifest digest")
+    on_disk = {item.relative_to(seed_root).as_posix() for item in seed_root.rglob("*") if item.is_file()} - SEED_DOCUMENTS
+    problems += [f"{path} is not in the manifest" for path in sorted(on_disk - listed.keys())]
+    return problems
+
+
+def lfs_problems(paths: list[str], folder: Path = SEED_ROOT) -> list[str]:
+    """Return the seed paths that Git does not store through LFS: the attribute lookup needs no file, so it runs before the files exist."""
+    if not paths:
+        return []
+    answer = run_command("git", ["check-attr", "filter", "--", *(str(folder / path) for path in paths)], check=True).stdout
+    stored = {line.rsplit(": filter: ", 1)[0] for line in answer.splitlines() if line.endswith(": filter: lfs")}
+    return [f"{path} is not stored through Git LFS" for path in paths if str(folder / path) not in stored]
+
+
+def problems(root: Path = ROOT, seed_root: Path = SEED_ROOT, *, require_files: bool = False) -> list[str]:
+    """Return every problem of the bundle at ROOT and the seed folder at SEED_ROOT, or an empty list."""
     found = lock_problems(root)
     try:
+        manifest = json.loads((seed_root / SEED_MANIFEST).read_text(encoding="utf-8"))
         found += queue_problems(root)
         found += specs_problems(root)
-        found += pin_problems(root)
+        found += home_problems(root, manifest)
+        found += seed_problems(root, seed_root, manifest, require_files=require_files)
         found += host_problems((root / "queue.json").read_bytes(), root / "publisher_hosts_scope.json", root / "hosts_approval.json")
     except (OSError, ValueError, KeyError, TypeError) as error:
-        found.append(f"the queue or hosts files are unusable: {error}")
+        found.append(f"the queue, seed or hosts files are unusable: {error}")
     return found
 
 
 def main() -> None:
-    """Check the bundle and exit 1 with every problem, or write ``--write-lock`` first when asked to refresh the lock after a reviewed change."""
+    """Check the bundle and the seed and exit 1 with every problem.
+
+    ``--write-lock`` first refreshes the lock after a reviewed change.
+    ``--require-files`` demands every seed file without a hold, for a run that fetched the seed.
+    """
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=ROOT)
+    parser.add_argument("--seed-root", type=Path, default=SEED_ROOT)
     parser.add_argument("--write-lock", action="store_true")
+    parser.add_argument("--require-files", action="store_true")
     args = parser.parse_args()
     if args.write_lock:
         (args.root / LOCK_NAME).write_bytes(build_lock(args.root))
-    found = problems(args.root)
+    found = problems(args.root, args.seed_root, require_files=args.require_files)
+    manifest = json.loads((args.seed_root / SEED_MANIFEST).read_text(encoding="utf-8")) if (args.seed_root / SEED_MANIFEST).is_file() else {"files": []}
+    found += lfs_problems([item["path"] for item in manifest["files"]], args.seed_root)
     if found:
         sys.stderr.write("\n".join(found) + "\n")
         raise SystemExit(1)
-    pending = json.loads((args.root / "remote_pins.json").read_text(encoding="utf-8"))["pending"]
-    sys.stderr.write("".join(f"pending: {item['path']}: {item['reason']}\n" for item in pending))
-    sys.stdout.write(json.dumps({"bundle": "ok", "files": len(file_entries(args.root)), "pending": len(pending)}) + "\n")
+    held = [item for item in manifest["files"] if "hold" in item]
+    sys.stderr.write("".join(f"hold: {item['path']}: {item['hold']}\n" for item in held))
+    present = sum((args.seed_root / item["path"]).is_file() for item in manifest["files"])
+    sys.stdout.write(
+        json.dumps({"bundle": "ok", "files": len(file_entries(args.root)), "seed_files": len(manifest["files"]), "seed_present": present, "held": len(held)})
+        + "\n"
+    )
 
 
 if __name__ == "__main__":

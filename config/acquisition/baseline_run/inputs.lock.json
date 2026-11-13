@@ -1,10 +1,15 @@
 {
-  "bundle_sha256": "9dba3a2f6a46f71ba0551b6844f69e985d61af2e0e973b20792fe4d2199d4ac4",
+  "bundle_sha256": "1f85e38a4f1ce2b8f1373b38d788ee43d9ae7863ee522ee26e0510ee288c9c2c",
   "files": [
     {
       "bytes": 1039090,
       "path": "capture_specs.json",
       "sha256": "6f785eea5ba3d647609f045070c5bf20074d726f23ac6b81448558c03876945c"
+    },
+    {
+      "bytes": 5183,
+      "path": "expected_plan_inputs.json",
+      "sha256": "4373ad5cab8839ce32187dda11d0ed60a8d1daf024aa741b0220f56e4747b94a"
     },
     {
       "bytes": 112,
@@ -115,11 +120,6 @@
       "bytes": 108,
       "path": "queue.lock.json",
       "sha256": "816faa07769213bdf9fbede8c6538b95211d7ac57ecbab449e311778767e9b28"
-    },
-    {
-      "bytes": 13924,
-      "path": "remote_pins.json",
-      "sha256": "d7684424de6f68f6548caf07b9c47082105b7d078085f5376beabda25d3a1025"
     }
   ]
 }

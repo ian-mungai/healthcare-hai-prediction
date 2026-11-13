@@ -1,0 +1,670 @@
+{
+ "files": [
+  {
+   "path": "manual_units/ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d/ACS_history_48d77611deb5b2c1.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T185522Z__c6516a4d3438470c89b33a3c41a6826d"
+  },
+  {
+   "path": "manual_units/ACS__20260924T185837Z__7b995ff1e0d047f59ff0d49776626354/ACS_history_2f5dc77692d1ca3e.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T185837Z__7b995ff1e0d047f59ff0d49776626354"
+  },
+  {
+   "path": "manual_units/ACS__20260924T190038Z__127149f40156423db1a747b35dd6f7c5/ACS_history_557b02dfe51cd611.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T190038Z__127149f40156423db1a747b35dd6f7c5"
+  },
+  {
+   "path": "manual_units/ACS__20260924T190510Z__fac30496470f4d748666bbc3369ea60e/ACS_history_9ec6a199ea7f61f9.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T190510Z__fac30496470f4d748666bbc3369ea60e"
+  },
+  {
+   "path": "manual_units/ACS__20260924T190708Z__899b8534ee5348f394d3d50dd8cf7c29/ACS_history_09c00cf7a3c7d4a3.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T190708Z__899b8534ee5348f394d3d50dd8cf7c29"
+  },
+  {
+   "path": "manual_units/ACS__20260924T191135Z__9d0cefca154347209bfbfa2e3b20fa40/ACS_history_301c1636454ffdc6.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T191135Z__9d0cefca154347209bfbfa2e3b20fa40"
+  },
+  {
+   "path": "manual_units/ACS__20260924T191318Z__6b0103420ba84541b62938d92c84fb95/ACS_history_3e78e3523426110b.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T191318Z__6b0103420ba84541b62938d92c84fb95"
+  },
+  {
+   "path": "manual_units/ACS__20260924T192650Z__4d44e84edf4740e49e832050f5429392/ACS_history_848bedcb5ce598aa.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T192650Z__4d44e84edf4740e49e832050f5429392"
+  },
+  {
+   "path": "manual_units/ACS__20260924T192654Z__23567bfadd2a41d89885888ce5b8bbfb/ACS_history_10e28743423a6b76.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T192654Z__23567bfadd2a41d89885888ce5b8bbfb"
+  },
+  {
+   "path": "manual_units/ACS__20260924T192700Z__cce484fbeb53456eb49c0b72ac82f537/ACS_history_59139bbdf397d3de.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T192700Z__cce484fbeb53456eb49c0b72ac82f537"
+  },
+  {
+   "path": "manual_units/ACS__20260924T192841Z__30325a2934d347e89f603a350fa70868/ACS_history_59ff4077fba433af.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T192841Z__30325a2934d347e89f603a350fa70868"
+  },
+  {
+   "path": "manual_units/ACS__20260924T193212Z__25ed613b01c343499985458ab1c76a6e/ACS_history_bb751e8f8b6cd6a6.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T193212Z__25ed613b01c343499985458ab1c76a6e"
+  },
+  {
+   "path": "manual_units/ACS__20260924T194107Z__9c51567bd7fb44afb04652d8669b0de5/ACS_history_8887b2b2154d63ba.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T194107Z__9c51567bd7fb44afb04652d8669b0de5"
+  },
+  {
+   "path": "manual_units/ACS__20260924T194324Z__ea85ede4bca74d659fe9fd5fb0443d53/ACS_history_af9739cc8ec79683.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T194324Z__ea85ede4bca74d659fe9fd5fb0443d53"
+  },
+  {
+   "path": "manual_units/ACS__20260924T194327Z__be898bbe1f9a48749ae40afc8cd044e2/ACS_history_c3cc4ddf9d231dca.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T194327Z__be898bbe1f9a48749ae40afc8cd044e2"
+  },
+  {
+   "path": "manual_units/ACS__20260924T194542Z__7eafa1866e274f4b9d80c0e45e65bb65/ACS_history_749d959757f6a068.zip",
+   "sha256": null,
+   "unit": "ACS__20260924T194542Z__7eafa1866e274f4b9d80c0e45e65bb65"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429/ZIP-COUNTY_032010.xlsx",
+   "sha256": "8117464845e3c6621abaccf6f3b3706242a2282e173f962fc3b4f27889583945",
+   "unit": "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213618Z__5c452632d2cb94d5ae6fb997a81d2429"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22/ZIP-COUNTY_062010.xlsx",
+   "sha256": "81eb3c61f1cf9d55c7d7558ecf753490d2d8cb8fde9aa375a4ff63128f83bdb3",
+   "unit": "HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213841Z__d61e4af567121f0503691bc22295cf22"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc/ZIP-COUNTY_092010.xlsx",
+   "sha256": "a35e6a351ffa63a5469963aecc628f1a9e7bfe709a87be83eeb20cee77d2856f",
+   "unit": "HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213847Z__f00337180bcc58f76ad664afdce876fc"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121/ZIP-COUNTY_122010.xlsx",
+   "sha256": "2329178ebe65606b005ba8b6d7758957d71eac916b9543208bad9f2dd4388e02",
+   "unit": "HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213851Z__4744e4ad1e26c1f631048ff59ae77121"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20/ZIP-COUNTY_032011.xlsx",
+   "sha256": "fa39b4a50bff865dc9e10be21ef8d2adfe33b68aedfeffd4a7e0f258a88f8882",
+   "unit": "HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213856Z__89c6effe05950b686fa234cef0f14f20"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05/ZIP-COUNTY_062011.xlsx",
+   "sha256": "a64daeaf962f383de4c172cdb1b6130f07182b12a56688bf37b8ee4dc05463e4",
+   "unit": "HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213901Z__8676a359e3fe2340d48e22bf651f6e05"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db/ZIP-COUNTY_092011.xlsx",
+   "sha256": "c58a4b600ae1ea8757816b49815294c75367435ce2de4f195c8e9c29546c004d",
+   "unit": "HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213906Z__e8b5dd28f7393238b318aa581f0942db"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50/ZIP-COUNTY_122011.xlsx",
+   "sha256": "c2958d2172400c0f35397bf4595d43f701b59398e137f84216359f7e98d33295",
+   "unit": "HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213911Z__b76251664d48a5c60c22d6e46249ed50"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b/ZIP-COUNTY_032012.xlsx",
+   "sha256": "396c91b69f245e28038dfc64b70a903206172dec670ce4515b8147f2d57ecf82",
+   "unit": "HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213916Z__018a44840f9cbdd6f243a6b8c199ef2b"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab/ZIP-COUNTY_062012.xlsx",
+   "sha256": "ee8a3a74b429214b85282d512ed9f46eaa2974dcf5df567ece2c4a172d0c3a51",
+   "unit": "HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213921Z__e091d738b1029c54d71b9b2a4f07c9ab"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6/ZIP-COUNTY_092012.xlsx",
+   "sha256": "6b63d421b04284add6b32830bff390b01854d0556f0dbe12e26fb506b00a361e",
+   "unit": "HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213926Z__9aeb026771d066c8726c44e2291437c6"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7/ZIP-COUNTY_122012.xlsx",
+   "sha256": "42d8f610078aa1bb5aaf97afb9c76f75b8dcf84d3a2e34159d53a3bcdd9c2b7e",
+   "unit": "HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213932Z__5b07f2b7fd9afe00e1a36bee264e1aa7"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926/ZIP-COUNTY_032013.xlsx",
+   "sha256": "c46b7db14a6adc5de283580c9b929e021dc62db96753b5f6f2400e5c97b44c48",
+   "unit": "HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213937Z__cff61967891899180a4282c442872926"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c/ZIP-COUNTY_062013.xlsx",
+   "sha256": "a9a37dfc6d291a1677580fc617af6e81961251c8b4036f4381e1c0eff2e5d392",
+   "unit": "HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213944Z__563c87cd5476ee5598e18445b3f1f23c"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4/ZIP-COUNTY_092013.xlsx",
+   "sha256": "b33097bbf6734af1a2863ee3d4d3999c29ca4ee117df92cea3c2356c0fc6e9e8",
+   "unit": "HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213949Z__93107650cf571cec7ffe00f2910d97f4"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a/ZIP-COUNTY_122013.xlsx",
+   "sha256": "558692f821d4b7472fb2a2194fa1f8f77ede83811f97d656c175740c0c8c97e3",
+   "unit": "HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213954Z__6eb775f7cd152ebf5b581a96f17c601a"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d/ZIP-COUNTY_032014.xlsx",
+   "sha256": "57d00dd08fc220e4e4e1e0a4350b44a4e68fee088043c8d3bfd676fecab18a3e",
+   "unit": "HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T213959Z__873937b098e59dec58a0dca23add9a8d"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a/ZIP-COUNTY_062014.xlsx",
+   "sha256": "7b797c72dfea34ea5e4ae153d5d6d7edb2ec346110a7a055908bcb20955f717c",
+   "unit": "HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214003Z__3f4c19435b6824a869860955961fe82a"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26/ZIP-COUNTY_092014.xlsx",
+   "sha256": "700ae05e85d8372cf2778756b1b52dfcdc9349b9971e3888d933140f56e33be2",
+   "unit": "HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214009Z__cb7777aed2095eb78075ba3196c01e26"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b/ZIP-COUNTY_122014.xlsx",
+   "sha256": "f52af475f5df2e8b0b5762703ce346377d111261f442f01c76cecd3c4e73bfa5",
+   "unit": "HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214019Z__13acdea8b05d3be8e74397e193cbd24b"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44/ZIP-COUNTY_032015.xlsx",
+   "sha256": "52026ec31da4d05a53770172aa672c91616e4356761b1d87e326723088f75b93",
+   "unit": "HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214023Z__6697dc875f59f46f99e66cf87a9afc44"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce/ZIP-COUNTY_062015.xlsx",
+   "sha256": "44a1655327ecdcdfc7850b85de022ca2b32976849adbbfb87098903a5d104bad",
+   "unit": "HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214029Z__2b3627c52016f45e6c48d32b638c49ce"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423/ZIP-COUNTY_092015.xlsx",
+   "sha256": "6308d454c37346c6a8d69ea7ce9d1e87104ed39d3b5c487813434cddd57b1d15",
+   "unit": "HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214034Z__39f87705ff1cb7480afe11a5418f9423"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc/ZIP-COUNTY_122015.xlsx",
+   "sha256": "9c8b63a0b31c85efc7f9a428d22a58ae993fc36310d01f03efa833625395e005",
+   "unit": "HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214038Z__457caabe6f082af6130b8d4d79218ffc"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030/ZIP-COUNTY_032016.xlsx",
+   "sha256": "1efb8839003bed30678e133f81bdf7a04752d4855c5b7350047eafb50a68d6fb",
+   "unit": "HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214044Z__3291354dc5212539c13dd1dac989b030"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa/ZIP-COUNTY_062016.xlsx",
+   "sha256": "e60899c2e77016c9078c55198e1a54a79ad803775d49fac2b18d222074f017de",
+   "unit": "HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214103Z__2c84e82b42df7871cfce8689760442fa"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225/ZIP-COUNTY_092016.xlsx",
+   "sha256": "4eec7bae5f5222be89b2a3c55e03ce3d27865cc1550a70c9f0b7f3dccbdf865c",
+   "unit": "HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214108Z__2384e861f2b52593798db99cd66bb225"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92/ZIP-COUNTY_122016.xlsx",
+   "sha256": "429b92b809a1a3762637fffcf678cf444d0e35747e2d35704be02a4ea0aff10f",
+   "unit": "HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214112Z__fb10aba38af5f54e1a126e1368b87b92"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8/ZIP-COUNTY_032017.xlsx",
+   "sha256": "51dcd7a0c1f2b309fe3f4b57c4578100198d30d97cac8d0671bbdd1aeadedc54",
+   "unit": "HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214117Z__8013ebd63e0b15e8b6f73f6570b77ec8"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840/ZIP-COUNTY_062017.xlsx",
+   "sha256": "7db50aa7d762f8ce1bcfa542945a85a8e7a26e5f39cff4dc72570b3ac8d7c12f",
+   "unit": "HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214122Z__db201ed3aeea4e64e84d114c0a524840"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7/ZIP-COUNTY_092017.xlsx",
+   "sha256": "45de538a5fae447ef8e464d874a4090d1019b279c66a4ea8d4bb13c7c8deb57c",
+   "unit": "HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214127Z__b7253ec3b144a8832b311aa5cdb55cf7"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568/ZIP-COUNTY_122017.xlsx",
+   "sha256": "0ad6b9407ab0255bfe7eb09ff625686b483b56cb419c93d7023b41149d553e9d",
+   "unit": "HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214131Z__35b18cbd939062781e59a65bf2f4f568"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e/ZIP-COUNTY_032018.xlsx",
+   "sha256": "60aacaa5adb040819e6e05d5dcd052d6a551fdaaba122d7cae444f8f60494af9",
+   "unit": "HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214135Z__06148523bb89b1191910daf7123b072e"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473/ZIP-COUNTY_062018.xlsx",
+   "sha256": "85cc582b563e47d02f5be83507a39873a4e9c1b60e665d1e133c952c5b297dcc",
+   "unit": "HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214140Z__e9650c319ba89604a78228403b944473"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721/ZIP-COUNTY_092018.xlsx",
+   "sha256": "b098e2d83fd3beaa87e5b3111ea486a3b57e01793ef68ccf8e2fd83006b1cd60",
+   "unit": "HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214147Z__0e037e0026306c51e041d982ed0e8721"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518/ZIP-COUNTY_122018.xlsx",
+   "sha256": "f62e5a4bfc36a652b97c8391b5e83db06997d4c3e50ac6c213d0466dc1e7218c",
+   "unit": "HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214151Z__1a43f55a126594cc5ce6c7f3cf06e518"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0/ZIP-COUNTY_032019.xlsx",
+   "sha256": "f99fd0299c9f0e0630d7deb81b0e1ee0877a031ba0e973cbc18fce3825a6b414",
+   "unit": "HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214157Z__6cfd6d7fd3708f1db2bc773b3f7e70f0"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d/ZIP-COUNTY_062019.xlsx",
+   "sha256": "ab37b0363a7f8b345897d1fcec3039a753316bdbd4a118bcfd23f5e8e6da0312",
+   "unit": "HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214217Z__ac0797c972d850ca4a7937e580c92b7d"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535/ZIP-COUNTY_092019.xlsx",
+   "sha256": "0d76bae690ef485a8272f1c4efcff5d35b6a93c78e40177e3dbfa69da9cc0453",
+   "unit": "HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214221Z__2ae53ea2ca9d81d3fd1cb4c989ecf535"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c/ZIP-COUNTY_122019.xlsx",
+   "sha256": "4253ec8d57f82ae12293e33eee6d12e7d9aff39d1146c5ac93a8f39952fdf06d",
+   "unit": "HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214225Z__3a8f4333328d688b8546d4ac78da4b6c"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce/ZIP-COUNTY_032020.xlsx",
+   "sha256": "bc1dab0973633db5d32a3d9b84cd0d56a8b98ad81c156a52c1345ef2d87920fb",
+   "unit": "HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214230Z__528c502cb9d71a4e53c10152c13644ce"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324/ZIP-COUNTY_062020.xlsx",
+   "sha256": "0592661c5cb861b3fe6671cda4d42c5812e1ab8daba263de053c6b55e0dc0c3c",
+   "unit": "HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214234Z__3a0b3d7ec59704d76e0ea876b069a324"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac/ZIP-COUNTY_092020.xlsx",
+   "sha256": "26d26b37f8ee7edfdd8cfc00985632fd1ebc01c86c706ca8b02bf69836edd9c4",
+   "unit": "HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214238Z__cb6f918d28906d1c6250f980822969ac"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794/ZIP-COUNTY_122020.xlsx",
+   "sha256": "075547b97d23b3f967a8090dc9c91df6fa6d661cfdb05a2ca4ce88500e5a21ca",
+   "unit": "HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794"
+  },
+  {
+   "path": "manual_units/HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794/crosswalk.csv",
+   "sha256": null,
+   "unit": "HUD_XLSX__20260928T214242Z__38a206e8b45d7349fb796cdcbe787794"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60/wonder_D158_2024_2024.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T231726Z__b65a412ad862232069b327283bbcea60"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b/wonder_D76_2020_2020.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T231844Z__ac9e14990649860af8853ca77150cb1b"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0/wonder_D158_2018_2024.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T232425Z__33a43d8d94b6ba991a6eacaa073363c0"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719/wonder_D76_2013_2019.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233544Z__64a6a32a322a3ba8c717d0c7d7b71719"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151/wonder_D76_2006_2012.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233705Z__d1d9b72c1fb31f9cd2ba532c2bf4c151"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b/county_year.csv",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b"
+  },
+  {
+   "path": "manual_units/WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b/wonder_D76_1999_2005.txt",
+   "sha256": null,
+   "unit": "WONDER_EXPORT__20260928T233829Z__56fd478c44c5620cda897363861eb32b"
+  },
+  {
+   "path": "mmd_browser_history/mmd_data.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/a1a45135dc9417f4a0e22c26a73988ecfae66c295fea375e9299bef0093ad168/captures/MMD/MMD__20260924T194708Z__4e8d841538264038beb2c357d5539c2a/raw/mmd_data.csv",
+   "sha256": "a1a45135dc9417f4a0e22c26a73988ecfae66c295fea375e9299bef0093ad168"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2012.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/e3244f7918f5fa47aca9bfbeda7c94456b28117287154ff04920cfdd47ec7dda/captures/MMD/MMD__20260925T144832Z__ea628304d545425c955bc48b5c3967b3/raw/mmd_ffs_county_ami_prevalence_2012.csv",
+   "sha256": "e3244f7918f5fa47aca9bfbeda7c94456b28117287154ff04920cfdd47ec7dda"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2013.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/da2f829935b77a27fdcef85f7d31a57ff529f61c58f23b73bcd340cf22967cc0/captures/MMD/MMD__20260925T144827Z__356b904668ba45928769e770c005d9d0/raw/mmd_ffs_county_ami_prevalence_2013.csv",
+   "sha256": "da2f829935b77a27fdcef85f7d31a57ff529f61c58f23b73bcd340cf22967cc0"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2014.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/53e50263fa71e8a18ee37bc536d0a059295bbb1b772bc60fdbb9a2fb35d14553/captures/MMD/MMD__20260925T144632Z__8b7835f09bd54ddbb32ad233b9945bec/raw/mmd_ffs_county_ami_prevalence_2014.csv",
+   "sha256": "53e50263fa71e8a18ee37bc536d0a059295bbb1b772bc60fdbb9a2fb35d14553"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2015.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/9292107f32d07fc6fd21ff4eb9ccd21a58728564db84d4d835ecc7b772b35999/captures/MMD/MMD__20260925T073951Z__5c1921bd63b2459c9cca4f8bfbc0591c/raw/mmd_ffs_county_ami_prevalence_2015.csv",
+   "sha256": "9292107f32d07fc6fd21ff4eb9ccd21a58728564db84d4d835ecc7b772b35999"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2016.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/b58c5b4d6b9eb903436d7521fb51299a80c3ec8c28f0329b5be2569168844cc2/captures/MMD/MMD__20260925T073538Z__11a6e25aeac64318805daebe425ae46a/raw/mmd_ffs_county_ami_prevalence_2016.csv",
+   "sha256": "b58c5b4d6b9eb903436d7521fb51299a80c3ec8c28f0329b5be2569168844cc2"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2017.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/8ab74d3dbd39e0ce8234c1753707e7ff1b3a4ea67063cd69582e54777dc506a3/captures/MMD/MMD__20260925T073528Z__f49edaf5a7a84b4a8fe7e43b8bbcd7e7/raw/mmd_ffs_county_ami_prevalence_2017.csv",
+   "sha256": "8ab74d3dbd39e0ce8234c1753707e7ff1b3a4ea67063cd69582e54777dc506a3"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2018.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/cd2c83d45687dbc0595985397935d71926c4c3bb12974e6d473627434c7cea45/captures/MMD/MMD__20260925T072503Z__21eb9bc0b7d94598b87607dd83918536/raw/mmd_ffs_county_ami_prevalence_2018.csv",
+   "sha256": "cd2c83d45687dbc0595985397935d71926c4c3bb12974e6d473627434c7cea45"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2019.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/c29d0f0df5106561190adcdda772e17bc2d9b0a1441a82dbc33a6b2183d0918a/captures/MMD/MMD__20260925T072503Z__6b7c539779c54880b826d4a18918824f/raw/mmd_ffs_county_ami_prevalence_2019.csv",
+   "sha256": "c29d0f0df5106561190adcdda772e17bc2d9b0a1441a82dbc33a6b2183d0918a"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2020.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/3ecc09d364efc8ec80716241905afcf704f7902c34a9a434f1cf877e3fffcf46/captures/MMD/MMD__20260925T071712Z__6cf13c27d13742569d7a88bd95930b8e/raw/mmd_ffs_county_ami_prevalence_2020.csv",
+   "sha256": "3ecc09d364efc8ec80716241905afcf704f7902c34a9a434f1cf877e3fffcf46"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2021.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e/captures/MMD/MMD__20260925T064103Z__d5f9f9a323684944ab6248d15d11f05e/raw/mmd_ffs_county_ami_prevalence_2021.csv",
+   "sha256": "6c65677929ca2363c5b0736eb0b9ebf9a45d2f00648225dc5ad60fc2859ba94e"
+  },
+  {
+   "path": "mmd_browser_history/mmd_ffs_county_ami_prevalence_2022.csv",
+   "plan_input": "data/datasets/historical_acquisition/mmd_browser_history/506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b/captures/MMD/MMD__20260925T063516Z__a4cb35210e7847a48e2a051a8734eed6/raw/mmd_ffs_county_ami_prevalence_2022.csv",
+   "sha256": "506bfcb0f81085291d124622536d87420bdb12c8afe5c679fad3360c7c59967b"
+  },
+  {
+   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
+   "path": "mmd_references/codebook_crosswalk.csv",
+   "plan_input": "data/e2e/mmd_api_comparison/20260925/references/codebook_crosswalk.csv",
+   "sha256": "99afeeabc6b1f09111ac0f3c9494606b9d0e32e890bc969dbc3a63112eddb92d"
+  },
+  {
+   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
+   "path": "mmd_references/countynames.tsv",
+   "plan_input": "data/e2e/mmd_api_comparison/20260925/references/countynames.tsv",
+   "sha256": "e716a01b7d137bb1f1c040d5bc5ac995e26c8f49fbb3a5673d197e5eefe8f15f"
+  },
+  {
+   "hold": "pending owner decision: the MMD collector reads this file to build its requests and derived CSV files",
+   "path": "mmd_references/urban.tsv",
+   "plan_input": "data/e2e/mmd_api_comparison/20260925/references/urban.tsv",
+   "sha256": "53a45dbdb034e033bc5e88716efebbdd41d8ae90449582e68e10dbd48cb5e830"
+  },
+  {
+   "hold": "pending: a Latin-1 file waits on the removed-names hook fix",
+   "path": "structure_history/county_adjacency2010.txt",
+   "plan_input": "data/datasets/historical_acquisition/structure_history/jobs/ADJ_history_a781cd426896963a/captures/ADJ/ADJ__20260924T173148Z__54733defc85e43929fcc21fb260cc475/raw/county_adjacency2010.txt",
+   "sha256": null
+  }
+ ],
+ "kind": "bootstrap_seed_manifest",
+ "queue_sha256": "83b0ceb797adfc0d1c1dbf8177d61bf55119f9411a829159bc799ce9bac970b3"
+}
