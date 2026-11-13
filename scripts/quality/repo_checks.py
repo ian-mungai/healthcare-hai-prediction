@@ -74,6 +74,8 @@ SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts"}
 FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
 CLEANUP_RULE = f"{POLICY}: removed and unused code"
+# The collectors' code-version records list the code hashes of stored captures; they are history, like the changelog.
+CODE_VERSION_RECORDS = re.compile(r"config/acquisition/[^/]*_code_versions\.json")
 REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "airflow", "dependency"]
 UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused", "docs-path"]
 CODE_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts", ".sql", ".tf", ".yaml", ".yml", ".toml", ".json", ".ini", ".cfg", ".j2", ".jinja"}
@@ -674,7 +676,7 @@ def reference_files(record_skips: bool = False) -> dict[str, list[str]]:
     """
     files: dict[str, list[str]] = {}
     for path in git("ls-files").splitlines():
-        if path == "CHANGELOG.md" or path.startswith("e2e/") or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
+        if path == "CHANGELOG.md" or path.startswith("e2e/") or CODE_VERSION_RECORDS.fullmatch(path) or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
             continue
         data = Path(path).read_bytes()
         codec = text_codec(data)

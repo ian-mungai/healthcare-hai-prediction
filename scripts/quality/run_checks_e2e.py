@@ -1721,6 +1721,44 @@ def account_cases() -> list[Case]:
     return cases
 
 
+# The collectors' code-version records list the code hashes of stored captures: they are history, so a removed script named only there is gone.
+VERSIONS_RECORD = "config/acquisition/sample_code_versions.json"
+CODE_VERSION_BODY = json.dumps({"versions": [{"files": {f"scripts/{OLD_SCRIPT}": "sha256:" + "0" * 64}}]}, indent=2) + "\n"
+CODE_VERSION_CASES = [
+    Case(
+        "script removed, named only in a code-version record",
+        "removed-names",
+        True,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: CODE_VERSION_BODY},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+    ),
+    Case(
+        "script removed, named in another file of the same folder",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", "config/acquisition/sample_notes.json": CODE_VERSION_BODY},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+    Case(
+        "script removed, named in a code-version record outside the collectors' folder",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", "config/sample_code_versions.json": CODE_VERSION_BODY},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+    Case(
+        "script removed, named in a code-version record and in the docs",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: CODE_VERSION_BODY, "README.md": f"Run `scripts/{OLD_SCRIPT}`.\n"},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+]
+
+
 CASES = [
     Case("clean file", "gitleaks", True, {"notes.md": "Nothing secret here.\n"}),
     Case("GitHub token", "gitleaks", False, {"config.py": f'GITHUB = "{FAKE_PAT}"\n'}),
@@ -2210,6 +2248,7 @@ CASES = [
     *INPUT_CASES,
     *LATIN1_CASES,
     *DELETED_MODULE_CASES,
+    *CODE_VERSION_CASES,
     Case(
         "function removed with its callers",
         IMPORTERS_HOOK,
@@ -3100,6 +3139,15 @@ IMPORTERS_COMMAND = ["-m", "scripts.quality.typecheck_importers"]
 # Each planted regression reverts one rule in the scratch copy of a check: what the rule frees must then be blocked, and what it blocks must then pass.
 # Fields: rule, the cases that show it, the command, the source file, the marker text, its replacement and the exit code the damaged check must give.
 PLANTED_REGRESSIONS = [
+    (
+        "code-version history rule",
+        CODE_VERSION_CASES[:1],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "CODE_VERSION_RECORDS.fullmatch(path)",
+        "False",
+        1,
+    ),
     (
         "liveness of a bound name",
         [case for case in CASES if case.name.startswith("task ID removed, ") and case.expect_pass],
