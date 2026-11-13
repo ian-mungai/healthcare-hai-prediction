@@ -42,25 +42,25 @@
       "job": "Repository Hooks (samples, shard 1 of 4)",
       "measured_minutes": 12,
       "timeout_minutes": 30,
-      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; local Mac run Nov 13 2026 with the other work running (load 3.6 to 20): shards 1035, 1145, 1089 and 1133 s of 718 units; resize from the first complete hosted run"
     },
     {
       "job": "Repository Hooks (samples, shard 2 of 4)",
       "measured_minutes": 12,
       "timeout_minutes": 30,
-      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; local Mac run Nov 13 2026 with the other work running (load 3.6 to 20): shards 1035, 1145, 1089 and 1133 s of 718 units; resize from the first complete hosted run"
     },
     {
       "job": "Repository Hooks (samples, shard 3 of 4)",
       "measured_minutes": 12,
       "timeout_minutes": 30,
-      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; local Mac run Nov 13 2026 with the other work running (load 3.6 to 20): shards 1035, 1145, 1089 and 1133 s of 718 units; resize from the first complete hosted run"
     },
     {
       "job": "Repository Hooks (samples, shard 4 of 4)",
       "measured_minutes": 12,
       "timeout_minutes": 30,
-      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; the Mac run of every shard is in the lane evidence; resize from the first complete hosted run"
+      "basis": "estimate, about a quarter of the 18 minutes of cases (the complete test-checks run, measured Nov 6 2026 on hosted pull request runs) plus about 6 minutes of setup; local Mac run Nov 13 2026 with the other work running (load 3.6 to 20): shards 1035, 1145, 1089 and 1133 s of 718 units; resize from the first complete hosted run"
     },
     {
       "job": "Repository Hooks (samples)",
