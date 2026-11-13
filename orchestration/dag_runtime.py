@@ -11,10 +11,13 @@ There is no other path: the DAGs hold no broker client.
 from __future__ import annotations
 
 import importlib
+import json
 import logging
+import math
 import os
 import re
 from datetime import timedelta
+from pathlib import Path
 from typing import Any
 
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
@@ -48,6 +51,12 @@ LAUNCH_MODULE = "orchestration.airflow_steps"
 POOL_SETTING = "HAI_LAUNCH_POOL"
 POOL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,200}")
 DEFAULT_POOL = "default_pool"
+# The pool has one slot for each POOL_SLOT_CPU_UNITS of CPU the host leaves for jobs (the services stack computes both and renders them into every Airflow
+# container). A job takes the slots of its share of the host: the larger of its CPU share and its memory share of the host job cap.
+POOL_SLOTS_SETTING = "HAI_LAUNCH_POOL_SLOTS"
+POOL_SLOT_CPU_SETTING = "HAI_LAUNCH_POOL_SLOT_CPU_UNITS"
+JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"
+HOST_TABLE = Path(__file__).resolve().parents[1] / "config/orchestration/host_jobs.json"
 
 
 def launch_pool() -> str:
@@ -58,6 +67,37 @@ def launch_pool() -> str:
     if not POOL_NAME.fullmatch(name):
         raise ValueError(f"{POOL_SETTING} must be a pool name of letters, digits, dots, dashes and underscores")
     return name
+
+
+def whole_setting(name: str) -> int:
+    """The positive whole number in the setting ``name``, or a refusal that names the setting."""
+    raw = os.environ.get(name, "")
+    if not raw.isdecimal() or int(raw) < 1:
+        raise ValueError(f"{name} must be a whole number above 0 while {POOL_SLOTS_SETTING} is set")
+    return int(raw)
+
+
+def pool_slots_of(family: str | None) -> int:
+    """The pool slots of a job in ``family``: all of them for a family that reserves the whole job room (``None`` too, as the steps of the other DAGs
+    do), so such a job runs alone; the larger of its CPU slots and its memory slots for a family that reserves its own size, so several run together
+    (``config/orchestration/host_jobs.json``). A deployment that sets no slot count has the one-slot pool: one slot each."""
+    if POOL_SLOTS_SETTING not in os.environ:
+        return 1
+    slots = whole_setting(POOL_SLOTS_SETTING)
+    need = json.loads(HOST_TABLE.read_text())["jobs"][family] if family is not None else {}
+    if not need.get("reserve"):
+        return slots
+    by_cpu = math.ceil(int(need["cpu_units"]) / whole_setting(POOL_SLOT_CPU_SETTING))
+    by_memory = math.ceil(int(need["memory_mib"]) * slots / whole_setting(JOB_CAP_SETTING))
+    return min(slots, max(by_cpu, by_memory))
+
+
+def pool_settings(family: str | None = None) -> dict[str, Any]:
+    """The task settings that put a launching task in the host pool: its name, and its slots where the deployment sets a slot count."""
+    settings: dict[str, Any] = {"pool": launch_pool()}
+    if POOL_SLOTS_SETTING in os.environ:
+        settings["pool_slots"] = pool_slots_of(family)
+    return settings
 
 
 def selections_of(dag_id: str) -> dict[str, str]:
@@ -133,14 +173,15 @@ def collapsed_step(kind: str, template: str) -> Any:
     return run(step_request(template, context), context, selections_of(context["ti"].dag_id))
 
 
-def build_job_chain(template: str, asset: str | None = None) -> Any:
-    """Create preflight, job, evidence and gate for the job that ``template`` names and return the gate operator. The gate carries ``asset``."""
+def build_job_chain(template: str, asset: str | None = None, family: str | None = None) -> Any:
+    """Create preflight, job, evidence and gate for the job that ``template`` names and return the gate operator. The gate carries ``asset``. ``family`` is
+    the host family the DAG launches in when it is not the job's own (a model set's); it sets the slots of the job task."""
 
     @task(task_id="preflight", retries=0, execution_timeout=PREFLIGHT_TIMEOUT)
     def preflight() -> str:
         return str(collapsed_step("preflight", template))
 
-    @task(task_id="job", retries=0, execution_timeout=STEP_TIMEOUT, pool=launch_pool())
+    @task(task_id="job", retries=0, execution_timeout=STEP_TIMEOUT, **pool_settings(family))
     def job() -> str:
         return str(collapsed_step("job", template))
 
@@ -226,7 +267,7 @@ def build_tasks(work_steps: tuple[str, ...], family: str) -> Any:
     def step(name: str, rule: TriggerRule = TriggerRule.ALL_SUCCESS) -> Any:
         outlets = [Asset(ASSETS[name])] if name in ASSETS else []
 
-        @task(task_id=name, trigger_rule=rule, retries=0, execution_timeout=STEP_TIMEOUT, outlets=outlets, pool=launch_pool())
+        @task(task_id=name, trigger_rule=rule, retries=0, execution_timeout=STEP_TIMEOUT, outlets=outlets, **pool_settings())
         def run() -> str:
             return run_step(name)
 

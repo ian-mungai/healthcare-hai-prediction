@@ -22,4 +22,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("promote")
+    build_job_chain("promote", family="promote")

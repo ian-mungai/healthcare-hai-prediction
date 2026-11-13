@@ -38,6 +38,7 @@ from orchestration.ecs_preflight import (
     PreflightSettings,
     S3CodeRuns,
     bronze_request_reader,
+    family_of,
     host_cap_reader,
     load_tables,
     s3_digest_reader,
@@ -255,10 +256,10 @@ def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selectio
     return "succeeded"
 
 
-def job_of(template: str) -> str:
-    """The job a step belongs to. A one-task-per-job DAG names its job by a step of that job."""
-    table, _ = load_tables(ROOT)
-    job = table["steps"].get(template)
+def job_of(template: str, dag_id: str) -> str:
+    """The job a step belongs to. A one-task-per-job DAG names its job by a step of that job; a model set's DAG launches in its set's family."""
+    table, host = load_tables(ROOT)
+    job = family_of(table["steps"], host, template, dag_id) if template in table["steps"] else None
     if job is None or job == GATE:
         raise LaunchRefused(f"{template} starts no ECS job, so it cannot name the job of a DAG")
     return str(job)
@@ -288,7 +289,8 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
     """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job.
 
     A silver or gold job saves the listing of every object version under ``lakehouse/`` here, after the gates and right before the launch. This task holds the
-    slot of the one-slot launch pool, so no other run's job writes meanwhile, and the writes of another run during the wait are in the listing. A listing that
+    slots of the launch pool (a silver or gold job takes every slot), so no other run's job writes meanwhile, and the writes of another run during the wait
+    are in the listing. A listing that
     exists is kept. A listing that fails stops the step before the launch. Right after the launch, still holding the slot, the task saves the closing evidence
     (the listing after the launch, the running tasks of the host family and the host facts), so the job that takes the slot next cannot change it. A closing
     record that fails fails this task, and the evidence task refuses the run."""
@@ -313,7 +315,7 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
     """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed."""
     launch_services = services()
     store = launch_services.preflight.store
-    job = job_of(request.template)
+    job = job_of(request.template, request.dag_id)
     claim = store.run_record(request.run_id, job, "claim")
     end = None
     if claim is not None:

@@ -27,19 +27,26 @@ locals {
 
   airflow_launch_volumes = merge({ for name, path in local.airflow_launch_files : name => "${local.code_path}/${path}" }, { job_scratch = var.airflow_launch_scratch_path })
 
-  # The one-slot Airflow pool that serializes the tasks launching a host job. The migrate container creates it (airflow pools set is an upsert) and every
-  # Airflow container names it in HAI_LAUNCH_POOL, which orchestration/dag_runtime.py reads.
-  airflow_launch_pool = "host_jobs"
-  airflow_launch_host = var.host_private_ip
+  # The Airflow pool that limits the tasks launching a host job to what the host holds. It has one slot for each airflow_pool_slot_cpu_units of the CPU the
+  # services leave for jobs (job_cpu_units, 3072: 24 slots), and a job task takes the slots of its share of the host (orchestration/dag_runtime.py), so a
+  # job that reserves the whole job room runs alone and jobs that reserve less share the host while they fit (the six model sets run in two waves, as the owner decided Nov 13 2026). The migrate container creates the pool (airflow pools set is an upsert)
+  # and every Airflow container names it, its slots and the CPU of one slot (HAI_LAUNCH_POOL, HAI_LAUNCH_POOL_SLOTS, HAI_LAUNCH_POOL_SLOT_CPU_UNITS).
+  airflow_launch_pool         = "host_jobs"
+  airflow_pool_slot_cpu_units = 128
+  airflow_pool_slots          = floor(var.job_cpu_units / local.airflow_pool_slot_cpu_units)
+  airflow_launch_host         = var.host_private_ip
 
   # What orchestration/airflow_steps.py reads to launch a job (its SETTINGS), all from existing variables. None is a secret: the step signs with the task
   # role and reads the record prefix from config/orchestration/ecs_launch.json. A value with no source yet is empty, and the step refuses by the setting's
   # name. The bucket is airflow_launch_bucket_name and the host address host_private_ip, both required once the
   # scheduler runs as the launch role.
   airflow_launch_environment = {
-    AWS_REGION         = var.aws_region
-    HAI_LAUNCH_POOL    = local.airflow_launch_pool
-    HAI_LAUNCH_CLUSTER = var.cluster_name
+    AWS_REGION      = var.aws_region
+    HAI_LAUNCH_POOL = local.airflow_launch_pool
+    # What orchestration/dag_runtime.py weighs a job by: the pool's slots and the CPU units of one slot.
+    HAI_LAUNCH_POOL_SLOTS          = tostring(local.airflow_pool_slots)
+    HAI_LAUNCH_POOL_SLOT_CPU_UNITS = tostring(local.airflow_pool_slot_cpu_units)
+    HAI_LAUNCH_CLUSTER             = var.cluster_name
     # The host auto scaling group that the evidence task of a silver or gold DAG describes for the host check of the acceptance report.
     HAI_LAUNCH_HOST_GROUP    = "${var.project_name}_host_${var.environment}"
     HAI_LAUNCH_FAMILY_PREFIX = "${var.project_name}_${var.environment}_job_"
@@ -59,7 +66,7 @@ locals {
     HAI_LAUNCH_APPLY_LOCK_PARAMETER = var.services_apply_lock_parameter_name
     HAI_LAUNCH_HOST_CAPACITY        = format("usable_memory_mib=%d system_reserve_mib=%d", var.host_usable_memory_mib, var.host_system_reserve_mib)
   }
-  airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} 1 'One host job at a time'"
+  airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} ${local.airflow_pool_slots} 'Host jobs: one slot for each ${local.airflow_pool_slot_cpu_units} CPU units of job room'"
 
   airflow_launch_mounts = concat(
     [for name, path in local.airflow_launch_files : { sourceVolume = name, containerPath = "/opt/hai/${path}", readOnly = true }],

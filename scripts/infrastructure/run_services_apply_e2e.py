@@ -374,6 +374,30 @@ def pending_migration() -> tuple[Store, Clock, Any, list[str]]:
     return store, clock, current, answers
 
 
+def registration_problem_expects_a_model_set_at_its_own_memory() -> None:
+    """A model set family (host table: reserve true) is registered at its own task memory, bound to the services binding with that job memory; the other
+    families keep the whole job room. A set at the whole room, a set bound to the unchanged binding, and another family at the set's memory are each named."""
+    module = importlib.import_module("scripts.infrastructure.services_apply")
+    binding = "job_memory_mib=26816 usable_memory_mib=32768 system_reserve_mib=2048 service_reservations_mib=3904"
+    set_binding = binding.replace("job_memory_mib=26816", "job_memory_mib=4096")
+
+    def definition(label: str, memory: str) -> dict[str, Any]:
+        return {"status": "ACTIVE", "memory": memory, "containerDefinitions": [{"name": "init", "dockerLabels": {"hai.host_capacity": label}}, {"name": "job"}]}
+
+    base = {"example_dev_job_silver_host": definition(binding, "26816"), "example_dev_job_features_host": definition(binding, "26816")}
+    good = {**base, "example_dev_job_features_m1_host": definition(set_binding, "4096"), "example_dev_job_features_m6_host": definition(set_binding, "4096")}
+    require(
+        module.registration_problem(good, binding) is None, f"a registered model set at its own memory is refused: {module.registration_problem(good, binding)}"
+    )
+    for label, bad, named in (
+        ("a set at the whole room", {**good, "example_dev_job_features_m1_host": definition(binding, "26816")}, "features_m1_host"),
+        ("a set bound to the unchanged binding", {**good, "example_dev_job_features_m1_host": definition(binding, "4096")}, "features_m1_host"),
+        ("a base family at the set's memory", {**good, "example_dev_job_silver_host": definition(set_binding, "4096")}, "silver_host"),
+    ):
+        problem = module.registration_problem(bad, binding)
+        require(problem is not None and named in problem, f"{label} was not named: {problem}")
+
+
 def settle_keeps_a_hold_that_only_the_jobs_registration_ends() -> None:
     """``settle`` with keep_hold waits for steady state and then rewrites the hold to the host job cap change form and keeps the lock."""
     clock = Clock()
@@ -522,7 +546,18 @@ def registration_problem_reads_every_host_revision() -> None:
 BINDING = "job_memory_mib=22528 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
 PENDING = MIGRATION + " by services_apply at 2026-11-11T00:00:00Z: jobs apply pending"
 PREFIX = "example_project_dev_job_"
-ALL_FAMILIES = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
+SET_FAMILIES = [f"features_m{number}" for number in range(1, 7)]
+ALL_FAMILIES = ["bronze", "drift", "features", *SET_FAMILIES, "gold", "metadata", "promote", "serve", "silver", "train"]
+
+
+def set_revision(name: str) -> tuple[str, str] | tuple[()]:
+    """The binding and task memory of a family's revision: a family whose host table row says reserve (a model set, drift, promote, serve, metadata and the
+    publisher) carries its own job memory, the others the room."""
+    need = json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["jobs"][name]
+    if not need.get("reserve"):
+        return ()
+    memory = str(need["memory_mib"])
+    return BINDING.replace("job_memory_mib=22528", f"job_memory_mib={memory}"), memory
 
 
 def host_revision(binding: str = BINDING, memory: str = "22528", status: str = "ACTIVE") -> dict[str, Any]:
@@ -692,10 +727,14 @@ def finish_over_ecs(
 def finish_needs_every_expected_host_family() -> None:
     """The real finish command binds to the host families of the frozen selection, the publisher too: one that ECS does not list, one whose revision
     is inactive, a missing publisher and a stale family each refuse, name the family and leave the hold and the lock. The complete set clears both. The
-    default selection is the nine families; a family the frozen selection does not hold does not matter; no rendered inputs refuse."""
+    default selection is the nine families and the six model sets; a family the frozen selection does not hold does not matter; no rendered inputs refuse."""
     names = ["gold", "publisher", "silver"]
     selected = rendered_values({"host_jobs_enabled": True, "host_jobs": ["gold", "silver"], "publisher_job_enabled": True})
-    everything = {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(), f"{PREFIX}publisher_host": host_revision()}
+    everything = {
+        f"{PREFIX}silver_host": host_revision(),
+        f"{PREFIX}gold_host": host_revision(),
+        f"{PREFIX}publisher_host": host_revision(*set_revision("publisher")),
+    }
     for label, families, named in (
         ("only silver registered", {f"{PREFIX}silver_host": host_revision()}, "gold_host"),
         ("an expected family missing", {**everything, f"{PREFIX}gold_host": None}, "gold_host"),
@@ -708,12 +747,12 @@ def finish_needs_every_expected_host_family() -> None:
         require(is_pending(aws.value) and aws.lock == OWN_LOCK, f"finish with {label} changed the hold or the lock: {aws.value!r} {aws.lock!r}")
     code, err, aws = finish_over_ecs(selected, everything, names)
     require(code == 0 and aws.value == "clear" and aws.lock is None, f"finish with every expected family did not clear both: exit {code} {err} {aws.value!r}")
-    nine = {f"{PREFIX}{name}_host": host_revision() for name in ALL_FAMILIES}
+    nine = {f"{PREFIX}{name}_host": host_revision(*set_revision(name)) for name in ALL_FAMILIES}
     default = rendered_values({"host_jobs_enabled": True})
     code, err, aws = finish_over_ecs(default, {**nine, f"{PREFIX}train_host": None}, ALL_FAMILIES)
     require(code == 1 and "train_host" in err and is_pending(aws.value), f"finish with the default selection and one family missing: exit {code} {err}")
     code, err, aws = finish_over_ecs(default, nine, ALL_FAMILIES)
-    require(code == 0 and aws.value == "clear", f"finish with the default selection and all nine registered: exit {code} {err}")
+    require(code == 0 and aws.value == "clear", f"finish with the default selection and all fifteen registered: exit {code} {err}")
     code, err, aws = finish_over_ecs(
         rendered_values({"host_jobs_enabled": True, "host_jobs": ["silver"]}),
         {f"{PREFIX}silver_host": host_revision(), f"{PREFIX}gold_host": host_revision(memory="23552")},
@@ -1347,6 +1386,7 @@ CASES: dict[str, Callable[[], None]] = {
     "finish_clears_the_hold_only_after_the_jobs_registration": finish_clears_the_hold_only_after_the_jobs_registration,
     "a_services_apply_can_continue_under_the_pending_lock": a_services_apply_can_continue_under_the_pending_lock,
     "registration_problem_reads_every_host_revision": registration_problem_reads_every_host_revision,
+    "registration_problem_expects_a_model_set_at_its_own_memory": registration_problem_expects_a_model_set_at_its_own_memory,
     "jobs_registration_reads_the_project_host_families": jobs_registration_reads_the_project_host_families,
     "finish_through_the_command": finish_through_the_command,
     "finish_needs_every_expected_host_family": finish_needs_every_expected_host_family,

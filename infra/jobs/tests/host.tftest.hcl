@@ -105,7 +105,7 @@ run "flag_off" {
   }
 }
 
-run "flag_on_plans_the_nine_host_definitions" {
+run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
   command = plan
 
   variables {
@@ -113,8 +113,11 @@ run "flag_on_plans_the_nine_host_definitions" {
   }
 
   assert {
-    condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"])
-    error_message = "The flag plans exactly one host definition for each of the nine families."
+    condition = toset(keys(aws_ecs_task_definition.host)) == toset([
+      "silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata",
+      "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"
+    ])
+    error_message = "The flag plans exactly one host definition for each of the nine families and for each of the six model sets, which are families of their own."
   }
 
   assert {
@@ -129,7 +132,7 @@ run "flag_on_plans_the_nine_host_definitions" {
   assert {
     condition = alltrue([for family, size in {
       silver   = [3072, 23552], gold = [3072, 23552], features = [3072, 23552], bronze = [3072, 23552], train = [3072, 23552],
-      metadata = [3072, 23552], drift = [3072, 23552], promote = [3072, 23552], serve = [3072, 23552]
+      metadata = [1024, 2048], drift = [2048, 8192], promote = [1024, 4096], serve = [1024, 4096]
       } : (
       aws_ecs_task_definition.host[family].cpu == tostring(size[0]) && aws_ecs_task_definition.host[family].memory == tostring(size[1])
     )])
@@ -150,7 +153,7 @@ run "flag_on_plans_the_nine_host_definitions" {
 
   assert {
     condition = alltrue([for family, json in output.host_container_definitions : (
-      jsondecode(json)[0].name == "init" && jsondecode(json)[0].dockerLabels == { "hai.host_capacity" = var.host_capacity_binding } &&
+      jsondecode(json)[0].name == "init" && jsondecode(json)[0].dockerLabels == { "hai.host_capacity" = replace(var.host_capacity_binding, "/^job_memory_mib=[0-9]+/", "job_memory_mib=${aws_ecs_task_definition.host[family].memory}") } &&
       alltrue([for container in slice(jsondecode(json), 1, length(jsondecode(json))) : !contains(keys(container), "dockerLabels")])
     )])
     error_message = "The init container of every host revision carries the capacity binding it was sized from (label hai.host_capacity), which the launch preflight checks against the current usable memory (owner decision A, Nov 10 2026); no other container carries a label."
@@ -366,10 +369,10 @@ run "every_host_job_gets_the_computed_cap_whatever_its_fargate_shape" {
   }
 
   assert {
-    condition = alltrue([for family in ["silver", "gold", "features", "drift", "metadata"] : (
+    condition = alltrue([for family in ["silver", "gold", "features"] : (
       aws_ecs_task_definition.host[family].cpu == "3072" && aws_ecs_task_definition.host[family].memory == "20480"
     )])
-    error_message = "A host job's size comes from the host room, not from its Fargate twin: one job runs at a time and its engines derive their limits from the task."
+    error_message = "A whole-room job's size comes from the host room, not from its Fargate twin, and its engines derive their limits from the task."
   }
 }
 
@@ -478,14 +481,14 @@ run "run_task_and_dispatch_contract" {
   assert {
     condition = alltrue([for family, task in output.host_run_tasks : (
       task.task_definition == "example_project_dev_job_${family}_host" && task.capacity_provider == "example_project_host_dev" && task.network_mode == "bridge" &&
-      task.propagate_tags == "TASK_DEFINITION" && task.network == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[family].network
+      task.propagate_tags == "TASK_DEFINITION" && task.network == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[startswith(family, "features_m") ? "features" : family].network
     )])
     error_message = "Every host run-task entry names its _host definition, the host capacity provider, bridge mode and the network class of the job table."
   }
 
   assert {
     condition = (
-      toset(keys(output.host_run_tasks)) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)) &&
+      toset(keys(output.host_run_tasks)) == setunion(toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)), toset(["features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"])) &&
       output.host_run_tasks["silver"].container_environment == output.layer_run_tasks["silver"].container_environment &&
       output.host_run_tasks["features"].container_environment == output.layer_run_tasks["features"].container_environment &&
       output.host_run_tasks["bronze"].container_environment == output.bronze_run_task.container_environment &&
@@ -513,7 +516,8 @@ run "run_task_and_dispatch_contract" {
       output.host_dispatch_contract.capacity_provider == "example_project_host_dev" && output.host_dispatch_contract.network_mode == "bridge" &&
       output.host_dispatch_contract.jobs_at_a_time == 1 && output.host_dispatch_contract.cpu_units_cap == 3072 && output.host_dispatch_contract.memory_mib_cap == 23552 &&
       output.host_dispatch_contract.propagate_tags == "TASK_DEFINITION" && toset(output.host_dispatch_contract.families) == toset(keys(aws_ecs_task_definition.host)) &&
-      toset(keys(output.host_dispatch_contract.writers)) == toset(["silver", "gold", "features", "bronze"]) &&
+      toset(keys(output.host_dispatch_contract.writers)) == toset(["silver", "gold", "features", "bronze", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"]) &&
+      output.host_dispatch_contract.writers["features_m4"].parameter_names == output.host_dispatch_contract.writers["features"].parameter_names &&
       jsonencode(output.host_dispatch_contract.writers["gold"].parameter_names) == jsonencode(["/example_project/aws_polaris_gold_client_id", "/example_project/aws_polaris_gold_client_secret"]) &&
       output.host_dispatch_contract.family_networks["silver"] == "lakehouse" && output.host_dispatch_contract.family_networks["train"] == "training"
     )
@@ -537,11 +541,11 @@ run "host_definitions_pass_the_secret_flow_check" {
   }
 
   assert {
-    condition = toset(output.host_secret_flow.containers_checked) == toset([
+    condition = toset(output.host_secret_flow.containers_checked) == toset(concat([
       "host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_gold/maintain", "host_features/pin",
       "host_features/publish", "host_features/feast", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
       "host_promote/promote", "host_serve/serve", "host_metadata/ingest"
-    ])
+    ], flatten([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : ["host_features_${set}/pin", "host_features_${set}/publish", "host_features_${set}/feast"]])))
     error_message = "The containers that receive a secret are the ones the Fargate twins have, and the flow check follows each of them."
   }
 }
@@ -690,9 +694,9 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
 
   assert {
     condition = (
-      aws_ecs_task_definition.host["metadata"].memory == tostring(var.host_job_memory_mib) && aws_ecs_task_definition.host["metadata"].cpu == "3072"
+      aws_ecs_task_definition.host["metadata"].memory == "2048" && aws_ecs_task_definition.host["metadata"].cpu == "1024"
     )
-    error_message = "The metadata job gets the same room as every host job: 3072 CPU units and the memory the services leave (host_job_memory_mib); one job runs at a time."
+    error_message = "The metadata job keeps its own size, 1024 CPU units and 2048 MiB (its row in config/orchestration/host_jobs.json), so it shares the host with other jobs."
   }
 }
 
@@ -1083,4 +1087,109 @@ run "no_host_container_fixes_an_engine_limit" {
     ])])
     error_message = "A host job derives its limits from the CPU units and memory of its task, so no host container fixes an engine limit and no thread count is rewritten."
   }
+}
+
+run "model_sets_reserve_their_own_size_and_every_other_family_the_job_room" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : (
+      aws_ecs_task_definition.host["features_${set}"].cpu == tostring(jsondecode(file("${path.module}/../../config/orchestration/host_jobs.json")).jobs["features_${set}"].cpu_units) &&
+      aws_ecs_task_definition.host["features_${set}"].memory == tostring(jsondecode(file("${path.module}/../../config/orchestration/host_jobs.json")).jobs["features_${set}"].memory_mib)
+    )])
+    error_message = "Each model set reserves exactly the cpu_units and memory_mib of its row in config/orchestration/host_jobs.json, the file the launcher's fit check reads."
+  }
+
+  assert {
+    condition = alltrue([for set, size in {
+      m1 = [512, 4096], m3 = [512, 4096], m5 = [512, 4096], m6 = [512, 4096], m2 = [1024, 13312], m4 = [1024, 13312]
+      } : (
+      aws_ecs_task_definition.host["features_${set}"].cpu == tostring(size[0]) && aws_ecs_task_definition.host["features_${set}"].memory == tostring(size[1])
+    )])
+    error_message = "A model set reserves the size its measured peak asks for: 512 units and 4096 MiB (m1, m3, m5, m6) or 1024 units and 13312 MiB (m2, m4), each peak at most 70% of the reservation."
+  }
+
+  assert {
+    condition = alltrue([for family in ["silver", "gold", "features", "bronze", "train"] : (
+      aws_ecs_task_definition.host[family].cpu == "3072" && aws_ecs_task_definition.host[family].memory == tostring(var.host_job_memory_mib)
+    )])
+    error_message = "Silver, gold, the features base build, bronze and train still reserve the whole job room."
+  }
+
+  assert {
+    condition     = sum([for set in ["m1", "m2", "m3", "m5"] : tonumber(aws_ecs_task_definition.host["features_${set}"].cpu)]) <= 3072 && sum([for set in ["m1", "m2", "m3", "m5"] : tonumber(aws_ecs_task_definition.host["features_${set}"].memory)]) <= 26816
+    error_message = "A first wave of one large set and three small ones must fit the 3072 CPU units and the 26816 MiB job cap of the services default."
+  }
+
+  assert {
+    condition = alltrue([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : (
+      jsondecode(output.host_container_definitions["features_${set}"])[0].dockerLabels == { "hai.host_capacity" = "job_memory_mib=${aws_ecs_task_definition.host["features_${set}"].memory} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120" } &&
+      [for container in jsondecode(output.host_container_definitions["features_${set}"]) : container.name] == [for container in jsondecode(output.host_container_definitions["features"]) : container.name]
+    )])
+    error_message = "A set's init container carries the capacity binding with the set's own job memory, and a set runs the containers of the features job."
+  }
+
+  assert {
+    condition = (
+      length(distinct([for family, path in { for family in ["features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"] : family => output.host_run_tasks[family].scratch["workspace"] } : path])) == 7
+      && output.host_run_tasks["features_m3"].scratch["workspace"] == "/data/job_scratch/features_m3/work"
+      && output.host_run_tasks["features_m3"].task_role_key == output.host_run_tasks["features"].task_role_key
+      && output.host_run_tasks["features_m3"].container_environment == output.host_run_tasks["features"].container_environment
+    )
+    error_message = "Each model set has its own scratch folder (so six wipe nothing of each other) and the role and container variables of the features job."
+  }
+
+  assert {
+    condition     = output.host_dispatch_contract.family_cpu_units["features_m2"] == 1024 && output.host_dispatch_contract.family_cpu_units["features_m1"] == 512 && output.host_dispatch_contract.family_cpu_units["silver"] == 3072 && output.host_dispatch_contract.family_memory_mib["features_m2"] == 13312
+    error_message = "The dispatch contract names each family's own reservation."
+  }
+}
+
+run "the_smaller_jobs_keep_their_own_size_and_binding" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = alltrue([for family in ["drift", "promote", "serve", "metadata"] : (
+      aws_ecs_task_definition.host[family].cpu == tostring(jsondecode(file("${path.module}/../../config/orchestration/host_jobs.json")).jobs[family].cpu_units) &&
+      aws_ecs_task_definition.host[family].memory == tostring(jsondecode(file("${path.module}/../../config/orchestration/host_jobs.json")).jobs[family].memory_mib) &&
+      jsondecode(output.host_container_definitions[family])[0].dockerLabels == { "hai.host_capacity" = "job_memory_mib=${aws_ecs_task_definition.host[family].memory} usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120" }
+    )])
+    error_message = "Drift, promote, serve and metadata reserve their own row of config/orchestration/host_jobs.json and carry the binding with that job memory."
+  }
+
+  assert {
+    condition     = tonumber(aws_ecs_task_definition.host["drift"].cpu) + tonumber(aws_ecs_task_definition.host["metadata"].cpu) <= 3072 && tonumber(aws_ecs_task_definition.host["drift"].memory) + tonumber(aws_ecs_task_definition.host["metadata"].memory) + tonumber(aws_ecs_task_definition.host["features_m2"].memory) <= 26816
+    error_message = "Drift and metadata fit the 3072 CPU units together, and with a large model set they fit the 26816 MiB job cap, so different tests can share the host."
+  }
+}
+
+run "a_model_set_may_not_reserve_more_than_the_job_room" {
+  command = plan
+
+  variables {
+    host_jobs_enabled     = true
+    host_job_memory_mib   = 8192
+    host_capacity_binding = "job_memory_mib=8192 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  expect_failures = [aws_ecs_task_definition.host["features_m2"], aws_ecs_task_definition.host["features_m4"]]
+}
+
+run "a_model_set_needs_the_features_family" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+    host_jobs         = ["features_m1"]
+  }
+
+  expect_failures = [var.host_jobs]
 }

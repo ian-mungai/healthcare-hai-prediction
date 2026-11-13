@@ -89,7 +89,7 @@ locals {
           max-buffer-size       = "16m"
         }
       }
-      }, step.name == "init" ? { dockerLabels = { (local.host_capacity_label) = coalesce(var.host_capacity_binding, "unset") } } : {}
+      }, step.name == "init" ? { dockerLabels = { (local.host_capacity_label) = local.publisher_binding } } : {}
     )
   ]
   # Both folders are on the host scratch volume (60 GiB default, infra/platform). The Fargate-era 200 GiB had no measurement behind it; the run 3
@@ -106,8 +106,8 @@ resource "aws_ecs_task_definition" "publisher_host" {
   family                   = "${var.project_name}_${var.environment}_job_publisher_host"
   requires_compatibilities = ["EC2"]
   network_mode             = "bridge"
-  cpu                      = tostring(local.host_cpu_cap)
-  memory                   = tostring(local.host_memory_cap)
+  cpu                      = tostring(local.publisher_cpu)
+  memory                   = tostring(local.publisher_memory)
   execution_role_arn       = lookup(var.job_role_arns, "execution", "")
   task_role_arn            = lookup(var.job_role_arns, local.publisher_role, "")
   container_definitions    = jsonencode(local.publisher_containers)
@@ -124,6 +124,11 @@ resource "aws_ecs_task_definition" "publisher_host" {
     precondition {
       condition     = try(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0], "") == tostring(var.host_job_memory_mib)
       error_message = "The capacity binding gives another job memory than host_job_memory_mib. Render both from the same services output with render_jobs_config."
+    }
+
+    precondition {
+      condition     = local.publisher_memory <= local.host_memory_cap && local.publisher_cpu <= local.host_cpu_cap
+      error_message = "The publisher may not reserve more than the job room: its row in config/orchestration/host_jobs.json asks for more memory than host_job_memory_mib or more than 3072 CPU units. The launch preflight would refuse every launch of such a revision."
     }
   }
 

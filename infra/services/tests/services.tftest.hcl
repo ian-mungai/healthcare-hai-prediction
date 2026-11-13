@@ -1205,11 +1205,11 @@ run "container_definitions_match_the_approved_versions" {
 
   assert {
     condition = output.execution_digests == {
-      "airflow_apiserver/airflow_apiserver"         = "e1ed8cbf943801ad11efe8bb209a97e0a7723d43a3b91d914f2f5647f47c33d1"
-      "airflow_apiserver/airflow_migrate"           = "168020fbb1fd0178d1053d0cd7d8a5cf625270158e0f7f812439d36073a3f34f"
-      "airflow_dag_processor/airflow_dag_processor" = "388869f675770ee96f7f5a1ff9e2f495b55989540059850d371e9218ddb375cd"
-      "airflow_scheduler/airflow_scheduler"         = "6b5d88381b9ecaebee15b99b1404abf2462588761a41f5a64bc116961be999cb"
-      "airflow_triggerer/airflow_triggerer"         = "15780e35ee2181e950fcf1b62dc2f69ef82bcb17cd0654ddfa007b81cc467195"
+      "airflow_apiserver/airflow_apiserver"         = "35f0fd4450c6a38dfc3969ccb89d1d53cce10700317aec4f1ffbfd7d1ecdcd65"
+      "airflow_apiserver/airflow_migrate"           = "c72f82891b957c7119c4b98d4a2873928f6759ff7c58b31638120c70d0a621f7"
+      "airflow_dag_processor/airflow_dag_processor" = "f7bb21ab7f5b0aee3d56c7a9d70ecba6ff3e0722ce34b7f97616782051954b6e"
+      "airflow_scheduler/airflow_scheduler"         = "a6cf80a5f62d9580b7f41e8c314ae07e1df2062d9491b192f574c7779eb46eed"
+      "airflow_triggerer/airflow_triggerer"         = "dc279aeb11f693bb86ad1fe77e6b105efb106c8ae707b5069fb561689124072e"
       "host_prepare/host_prepare"                   = "4d8c9dad92ef904aa63c94480dd49e17225cbedad17021fb0a5da1b4a25b80ca"
       "marquez/marquez_api"                         = "9df0f81c5440fa10c2df2fc83d01edb1b5e09b06c2f5cbc1930659d87fae1033"
       "marquez/marquez_web"                         = "4ff0cc6590b24265a20486f1b4aeab92bf28afeb6eceb93ea83d022d279743c9"
@@ -2601,9 +2601,21 @@ run "launch_mounts_are_always_present" {
   assert {
     condition = (
       jsondecode(aws_ecs_task_definition.service["airflow_apiserver"].container_definitions)[0].name == "airflow_migrate"
-      && endswith(jsondecode(aws_ecs_task_definition.service["airflow_apiserver"].container_definitions)[0].command[2], "airflow db migrate\nexec airflow pools set host_jobs 1 'One host job at a time'\n")
+      && endswith(jsondecode(aws_ecs_task_definition.service["airflow_apiserver"].container_definitions)[0].command[2], "airflow db migrate\nexec airflow pools set host_jobs 24 'Host jobs: one slot for each 128 CPU units of job room'\n")
     )
-    error_message = "The migrate container creates the one-slot pool of host jobs after the migration."
+    error_message = "The migrate container creates the pool of host jobs after the migration with the slots the job room computes: 3072 job CPU units in slots of 128 units."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_POOL_SLOTS=24")
+          && contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_POOL_SLOT_CPU_UNITS=128")
+        ) if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container names the pool's slot count and the CPU units of one slot, so the DAG files weigh each job by its share of the host."
   }
 }
 

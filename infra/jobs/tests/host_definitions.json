@@ -41,6 +41,108 @@
       "init"
     ]
   },
+  "features_m1": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features_m2": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features_m3": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features_m4": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features_m5": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
+  "features_m6": {
+    "containers": [
+      "init",
+      "fetch",
+      "pin",
+      "build",
+      "validate",
+      "export",
+      "publish",
+      "upload",
+      "feast",
+      "guard"
+    ],
+    "start_with_scratch_wipe": [
+      "init"
+    ]
+  },
   "gold": {
     "containers": [
       "init",

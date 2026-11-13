@@ -4,43 +4,88 @@
   "jobs": {
     "silver": {
       "cpu_units": 3072,
-      "memory_mib": 16384,
+      "memory_mib": 26816,
       "scratch_gib": 55
     },
     "gold": {
       "cpu_units": 3072,
-      "memory_mib": 16384,
+      "memory_mib": 26816,
       "scratch_gib": 55
     },
     "features": {
       "cpu_units": 3072,
-      "memory_mib": 16384,
+      "memory_mib": 26816,
       "scratch_gib": 55
+    },
+    "features_m1": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 512,
+      "memory_mib": 4096,
+      "scratch_gib": 2
+    },
+    "features_m2": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 1024,
+      "memory_mib": 13312,
+      "scratch_gib": 2
+    },
+    "features_m3": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 512,
+      "memory_mib": 4096,
+      "scratch_gib": 2
+    },
+    "features_m4": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 1024,
+      "memory_mib": 13312,
+      "scratch_gib": 2
+    },
+    "features_m5": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 512,
+      "memory_mib": 4096,
+      "scratch_gib": 2
+    },
+    "features_m6": {
+      "like": "features",
+      "reserve": true,
+      "cpu_units": 512,
+      "memory_mib": 4096,
+      "scratch_gib": 2
     },
     "bronze": {
       "cpu_units": 3072,
-      "memory_mib": 16384,
+      "memory_mib": 26816,
       "scratch_gib": 50
     },
     "train": {
       "cpu_units": 3072,
-      "memory_mib": 16384,
+      "memory_mib": 26816,
       "scratch_gib": 50
     },
     "drift": {
       "cpu_units": 2048,
       "memory_mib": 8192,
-      "scratch_gib": 30
+      "scratch_gib": 30,
+      "reserve": true
     },
     "promote": {
       "cpu_units": 1024,
       "memory_mib": 4096,
-      "scratch_gib": 21
+      "scratch_gib": 21,
+      "reserve": true
     },
     "serve": {
       "cpu_units": 1024,
       "memory_mib": 4096,
-      "scratch_gib": 21
+      "scratch_gib": 21,
+      "reserve": true
     },
     "metadata": {
       "cpu_units": 1024,
@@ -52,24 +97,26 @@
           "POLARIS_URI"
         ]
       },
-      "log_container": "ingest"
+      "log_container": "ingest",
+      "reserve": true
     },
     "publisher": {
       "cpu_units": 2048,
       "memory_mib": 8192,
-      "scratch_gib": 30
+      "scratch_gib": 30,
+      "reserve": true
     }
   },
   "dags": {
     "silver_transform_dag": "silver",
     "gold_transform_dag": "gold",
     "features_base_dag": "features",
-    "features_m1_dag": "features",
-    "features_m2_dag": "features",
-    "features_m3_dag": "features",
-    "features_m4_dag": "features",
-    "features_m5_dag": "features",
-    "features_m6_dag": "features",
+    "features_m1_dag": "features_m1",
+    "features_m2_dag": "features_m2",
+    "features_m3_dag": "features_m3",
+    "features_m4_dag": "features_m4",
+    "features_m5_dag": "features_m5",
+    "features_m6_dag": "features_m6",
     "drift_monitoring_dag": "drift",
     "training_dag": "train",
     "model_promotion_dag": "promote",
@@ -78,5 +125,6 @@
     "metadata_ingest_dag": "metadata",
     "bronze_chain_dag": "chain",
     "ingestion_dag": "publisher"
-  }
+  },
+  "reserve_note": "Every family reserves what ECS reserves for its task definition, and the launcher's fit check asks for the same. A family without reserve reserves the whole job room at task level: 3,072 CPU units (job_cpu_units of infra/services) and the host job cap, whose default is 26,816 MiB (host_job_cap_mib of infra/services; the launcher asks for the memory of the revision that runs, which is the cap in force). A family with reserve true reserves its own cpu_units and memory_mib, and infra/jobs/host_sets.tf reads them from this file, so the table and the task definition cannot differ; load_tables refuses a row that breaks either rule. The six model sets (like features: the same containers, their own host definition, launch records and scratch folder) are sized from the measured peaks of the successful runs 20261113T192848Z-* (cgroup memory peak per phase, MiB): m1 1,348 (feast), m3 1,844, m5 1,613, m6 2,215 (publish), m2 8,976 and m4 8,969 (feast), and 413 MiB of scratch at most. Rule (owner A, Nov 13 2026): a reservation is at least the peak divided by 0.7, so a family whose peak is above 70% of its reservation is resized. m1, m3, m5 and m6 reserve 4,096 MiB (peak at most 54%) and 512 units; m2 and m4 reserve 13,312 MiB (peak 67%) and 1,024 units; each set reserves 2 GiB of scratch. JOB_THREADS follows the task CPU (scripts/lakehouse/task_capacity.py). CPU use was not measured, so the CPU of the sets is provisional until a parallel run shows their times. Smaller jobs keep their own sizes (owner A, Nov 3 2026; owner Nov 13 2026, 11:46 AM PST: several jobs must be able to share the host during testing): drift 2,048 units and 8,192 MiB, promote and serve 1,024 units and 4,096 MiB, metadata 1,024 units and 2,048 MiB, publisher 2,048 units and 8,192 MiB, all with reserve true. These five sizes are the Fargate-era table sizes, not host measurements: no peak of them on the host exists yet, so apply the 70% rule when one does. Silver, gold, the features base build, bronze and train keep the whole room: the measured gold build peaked at 16.4 GiB (Fargate) and the features base build at 25.1 GiB on the host, and silver, bronze and train have no host peak yet. The six model sets run in bounded waves (owner A, Nov 13 2026): first m2, m1, m3 and m5 (24 slots), then m4 and m6, because all six together need 43,008 MiB and 4,096 units against the 26,816 MiB and 3,072 units of job room; the second wave starting only after the first has made room is expected, not a failure."
 }

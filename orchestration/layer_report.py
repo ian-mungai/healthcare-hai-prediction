@@ -1,6 +1,6 @@
 """The automatic layer acceptance report of the DAG: the version listing of the job task and the report of the evidence task.
 
-The job task of a silver or gold DAG waits in the one-slot launch pool. When it holds the slot, it saves the listing of every object version under
+The job task of a silver or gold DAG waits in the launch pool for every slot. When it holds them, it saves the listing of every object version under
 ``lakehouse/`` (``save_before_listing``) right before the launch, so the writes of another run during the wait are in the listing and not in the run's writes.
 It saves the closing evidence (``save_closing_evidence``: the listing after the launch, the tasks of the job still running and the host facts) right after the
 launch and before it releases the slot, so a job that takes the slot next cannot change it. The evidence task then reads the run's records from AWS and writes

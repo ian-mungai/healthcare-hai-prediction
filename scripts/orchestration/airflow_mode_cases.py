@@ -60,6 +60,7 @@ import json
 import os
 import re
 import runpy
+import shutil
 import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -171,6 +172,9 @@ def planned_binding(family: str) -> tuple[int, str | None]:
     publisher's), the shared job memory and binding for the other families."""
     name = family.removeprefix("example_dev_job_").removesuffix("_host")
     planned = host_planned_containers()[name]
+    need = json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["jobs"][name]
+    if need.get("reserve"):  # a model set: its row's memory, and the binding with that job memory (infra/jobs/host_sets.tf reads the same row)
+        return need["memory_mib"], BINDING.replace(f"job_memory_mib={JOB_MEMORY}", f"job_memory_mib={need['memory_mib']}")
     return planned.get("memory_mib", JOB_MEMORY), planned.get("init_labels", {"hai.host_capacity": BINDING}).get("hai.host_capacity")
 
 
@@ -523,11 +527,22 @@ def pool_only_when_configured() -> None:
                 runpy.run_path(str(ROOT / "dags" / dag_file))
             pools = {node.task_id: node.settings.get("pool") for node in built}
             require(pools.get(launch_task) == "host_jobs", f"{launch_task} of {dag_file} launches a job outside the pool: {pools}")
+            built.clear()
+            with (
+                mock.patch.dict("os.environ", POOL_ENVIRONMENT, clear=True),
+                mock.patch.dict(sys.modules, {**providers, trigger.__name__: trigger}),
+                mock.patch.object(sys.modules["airflow.sdk"], "task", task),
+                mock.patch.object(runtime, "task", task),
+            ):
+                runpy.run_path(str(ROOT / "dags" / dag_file))
+            slots = {node.task_id: node.settings.get("pool_slots") for node in built}
+            want = {"drift_run": 16, "metadata_run": 8}[launch_task]  # drift 2,048 units, metadata 1,024 units: slots of 128
+            require(slots.get(launch_task) == want, f"{launch_task} of {dag_file} takes the slots {slots}, expected {want}")
     text = (ROOT / "infra/services/airflow.tf").read_text()
     require(
-        re.search(r"airflow pools set \$\{local\.airflow_launch_pool\} 1 ", text) is not None
+        re.search(r"airflow pools set \$\{local\.airflow_launch_pool\} \$\{local\.airflow_pool_slots\} ", text) is not None
         and re.search(r"HAI_LAUNCH_POOL\s*=\s*local\.airflow_launch_pool", text) is not None,
-        "the deployment neither creates the one-slot pool nor names it to the tasks",
+        "the deployment neither creates the pool with its computed slots nor names it to the tasks",
     )
 
 
@@ -1412,7 +1427,7 @@ def five_dags_run_end_to_end() -> None:
         ("silver_transform_dag.py", "silver_transform_dag", {"run_id": silver, "mode": "real"}, "silver", silver),
         ("gold_transform_dag.py", "gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, "gold", gold),
         ("features_base_dag.py", "features_base_dag", {"run_id": features, "mode": "real", "gold_snapshot_run": gold}, "features", features),
-        ("features_m1_dag.py", "features_m1_dag", {"run_id": model_features, "mode": "real", "base_snapshot_run": features}, "features", model_features),
+        ("features_m1_dag.py", "features_m1_dag", {"run_id": model_features, "mode": "real", "base_snapshot_run": features}, "features_m1", model_features),
     )
     for file, dag_id, params, job, run in plan:
         with world(rig, dag_id, params) as current:
@@ -1768,7 +1783,8 @@ def model_dags_are_one_chain_each() -> None:
         named = {container: values["FEATURE_SET"] for container, values in rig.environment(before).items() if "FEATURE_SET" in values}
         require(set(named) == FEATURE_CONTAINERS and set(named.values()) == {model}, f"{dag_id}'s containers did not all get FEATURE_SET={model}: {named}")
         require(rig.environment(before)["pin"]["INPUT_RUN_ID"] == base, f"{dag_id}'s pin container did not get the base run as its input run")
-        require((rig.end(run, "features") or {}).get("outcome") == "succeeded", f"{dag_id} left no success record for its run")
+        require((rig.end(run, f"features_{model}") or {}).get("outcome") == "succeeded", f"{dag_id} left no success record for its run in its own family")
+        require(rig.end(run, "features") is None, f"{dag_id} left a record under the base family")
     require((rig.end(base, "features") or {}).get("outcome") == "succeeded", "a model run changed the base run's record")
 
 
@@ -1898,13 +1914,18 @@ def one_model_failure_stops_only_its_dag() -> None:
         drift_checks == {model: ("upstream_failed" if model == "m3" else "success") for model in MODEL_DAGS.values()},
         f"a failed model run still started its drift check, or a passed one did not: {drift_checks}",
     )
-    ends = {model: (rig.end(model_run(base, model), "features") or {}).get("outcome") for model in MODEL_DAGS.values()}
+    ends = {model: (rig.end(model_run(base, model), f"features_{model}") or {}).get("outcome") for model in MODEL_DAGS.values()}
     require(ends == {model: ("failed" if model == "m3" else "succeeded") for model in MODEL_DAGS.values()}, f"the launch records are {ends}")
     require((rig.end(base, "features") or {}).get("outcome") == "succeeded", "a failed model run changed the base run's record")
+    streams = {call["logStreamName"] for call in rig.logs.calls}
+    require(
+        bool(streams) and all(name.startswith("features/") for name in streams),
+        f"a failed set reads the log streams {sorted(streams)}: the containers log under the stream prefix features, the family's layer",
+    )
 
 
 def model_dags_share_the_host_pool() -> None:
-    """Every model DAG's job task takes the one-slot host jobs pool where the deployment names it, so the six model jobs run one at a time; no other
+    """Every model DAG's job task takes the host jobs pool where the deployment names it, with the slots of its share of the host; no other
     task of the DAG takes it."""
     rig = Rig()
     _, base = base_run_passed(rig)
@@ -1919,6 +1940,173 @@ def model_dags_share_the_host_pool() -> None:
                 pools == {"preflight": None, "job": "host_jobs", "evidence": None, "gate": None, "trigger_drift": None},
                 f"{dag_id}'s tasks take the pools {pools}",
             )
+
+
+# The model sets' reservations from the measured peaks of the runs 20261113T192848Z-* (the memory peak is at most 70% of the reservation; scratch peaked at
+# 413 MiB): m2 and m4 peaked at 8976 MiB in the feast phase, the others at 2215 MiB.
+SET_SIZES = {
+    "m1": {"cpu_units": 512, "memory_mib": 4096, "scratch_gib": 2},
+    "m2": {"cpu_units": 1024, "memory_mib": 13312, "scratch_gib": 2},
+    "m3": {"cpu_units": 512, "memory_mib": 4096, "scratch_gib": 2},
+    "m4": {"cpu_units": 1024, "memory_mib": 13312, "scratch_gib": 2},
+    "m5": {"cpu_units": 512, "memory_mib": 4096, "scratch_gib": 2},
+    "m6": {"cpu_units": 512, "memory_mib": 4096, "scratch_gib": 2},
+}
+# The smaller jobs keep their own sizes (owner A, Nov 3 2026), so they share the host with the model sets: Fargate-era table sizes, not host peaks.
+OWN_SIZES = {
+    "drift": {"cpu_units": 2048, "memory_mib": 8192, "scratch_gib": 30},
+    "promote": {"cpu_units": 1024, "memory_mib": 4096, "scratch_gib": 21},
+    "serve": {"cpu_units": 1024, "memory_mib": 4096, "scratch_gib": 21},
+    "metadata": {"cpu_units": 1024, "memory_mib": 2048, "scratch_gib": 1},
+    "publisher": {"cpu_units": 2048, "memory_mib": 8192, "scratch_gib": 30},
+}
+SET_PEAKS_MIB = {"m1": 1348, "m2": 8976, "m3": 1844, "m4": 8969, "m5": 1613, "m6": 2215}
+# The capacity of the r7g.xlarge host as the services stack computes it: 4096 CPU units less the services' 1024 leave 3072 for jobs; 32768 MiB usable less
+# the 2048 system reserve and the 3904 service reservations leave the 26816 MiB job cap. A pool slot is 128 CPU units, so the pool has 24 slots.
+POOL_ENVIRONMENT = {
+    "HAI_LAUNCH_POOL": "host_jobs",
+    "HAI_LAUNCH_POOL_SLOTS": "24",
+    "HAI_LAUNCH_POOL_SLOT_CPU_UNITS": "128",
+    "HAI_LAUNCH_HOST_JOB_CAP_MIB": "26816",
+}
+JOB_ROOM_CPU = 3072
+JOB_ROOM_MIB = 26816
+
+
+def model_sets_have_their_own_families() -> None:
+    """Each model set is a host family of its own, like the features job, so its launch records, scratch folder and task definition are its own and the family
+    gate lets the six run beside each other. The set families reserve their measured size; the base and every other family reserve the whole job room."""
+    table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
+    require(host["dags"]["features_base_dag"] == "features", f"the base DAG names {host['dags']['features_base_dag']}")
+    for dag_id, model in MODEL_DAGS.items():
+        family = f"features_{model}"
+        require(host["dags"][dag_id] == family, f"{dag_id} names the family {host['dags'][dag_id]}, not {family}")
+        require(table["jobs"][family] == table["jobs"]["features"], f"the {family} row is not the features row")
+        require(
+            re.search(r"max_active_runs\s*=\s*1\b", (ROOT / "dags" / f"{dag_id}.py").read_text()) is not None,
+            f"{dag_id} may run twice at once: the pool no longer keeps two runs of one set apart, so the DAG allows one active run",
+        )
+        need = host["jobs"][family]
+        size = SET_SIZES[model]
+        require({key: need.get(key) for key in size} == size and need.get("reserve") is True, f"{family} does not reserve its own size: {need}")
+        require(
+            SET_PEAKS_MIB[model] <= 0.7 * need["memory_mib"],
+            f"{family} reserves {need['memory_mib']} MiB, but its measured peak {SET_PEAKS_MIB[model]} MiB is above 70% of it",
+        )
+    require(
+        {name for name, need in host["jobs"].items() if need.get("reserve")} == {f"features_{model}" for model in SET_SIZES} | set(OWN_SIZES),
+        "the families that reserve less than the job room are not the model sets and the five smaller jobs (silver, gold, features, bronze, train: the room)",
+    )
+    for name, size in OWN_SIZES.items():
+        require({key: host["jobs"][name].get(key) for key in size} == size, f"{name} does not keep its own size: {host['jobs'][name]}")
+    require(table["steps"]["pin_gold"] == "features", "the step table must keep naming the base family; the DAG picks the set family")
+    note = str(host.get("reserve_note", ""))
+    require(
+        "waves" in note and "expected, not a failure" in note,
+        "the host table does not say that the six model sets run in bounded waves and that this is expected (owner A, Nov 13 2026)",
+    )
+    require(
+        "host_jobs.json" in (ROOT / "infra/jobs/host_sets.tf").read_text() and 'variable "' not in (ROOT / "infra/jobs/host_sets.tf").read_text(),
+        "infra/jobs/host_sets.tf must read the model set sizes from the host table, with no copy of them",
+    )
+
+
+def model_sets_launch_in_their_own_task_definitions() -> None:
+    """Each model run sends RunTask for the host definition of its own family and starts exactly one task there."""
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    for dag_id, model in MODEL_DAGS.items():
+        before = len(rig.ecs.sent)
+        with world(rig, dag_id, {"run_id": model_run(base, model), "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+            current.run_dag(f"{dag_id}.py")
+        sent = rig.ecs.sent[before:]
+        require(len(sent) == 1 and sent[0].rsplit("/", 1)[-1].rsplit(":", 1)[0] == f"example_dev_job_features_{model}_host", f"{dag_id} sent {sent}")
+        claim = rig.launcher.store.run_record(model_run(base, model), f"features_{model}", "claim")
+        need = (claim or {}).get("need")
+        size = SET_SIZES[model]
+        require(
+            need == {"cpu_units": size["cpu_units"], "memory_mib": size["memory_mib"], "scratch_bytes": size["scratch_gib"] * 2**30},
+            f"the claim of {dag_id} asks the host for {need}, not its own reservation",
+        )
+    base_need = ((rig.launcher.store.run_record(base, "features", "claim") or {}).get("need")) or {}
+    require(
+        base_need.get("cpu_units") == 3072 and base_need.get("memory_mib") == JOB_MEMORY,
+        f"the features base claim asks the host for {base_need}, not the whole job room (3072 units and {JOB_MEMORY} MiB)",
+    )
+
+
+def six_model_sets_fit_the_host_in_two_waves() -> None:
+    """The set reservations in waves: all six together do not fit the job room (the large m2 and m4 hold 13312 MiB each), but the pool lets one large and
+    three small sets run together, so the six finish in two waves, and a full-size job takes every slot so it waits for the sets and they wait for it."""
+    with world(Rig(), "silver_transform_dag", SILVER) as current:
+        runtime = current.runtime
+    _, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
+    sets = {model: host["jobs"][f"features_{model}"] for model in MODEL_DAGS.values()}
+    with mock.patch.dict("os.environ", POOL_ENVIRONMENT, clear=True):
+        weights = {model: runtime.pool_slots_of(f"features_{model}") for model in sets}
+        full = runtime.pool_slots_of(None)
+        require(weights == {"m1": 4, "m2": 12, "m3": 4, "m4": 12, "m5": 4, "m6": 4} and full == 24, f"the pool weights are {weights} and {full}")
+        require(sum(weights.values()) > 24 and full + min(weights.values()) > 24, "the pool lets a full-size job run beside a set, or all six sets at once")
+        for model, need in sets.items():
+            require(weights[model] * JOB_ROOM_MIB // 24 >= need["memory_mib"], f"the {model} weight covers less memory than the set reserves")
+            require(weights[model] * JOB_ROOM_CPU // 24 >= need["cpu_units"], f"the {model} weight covers less CPU than the set reserves")
+    waves: list[list[str]] = []
+    for model in sets:  # first fit in DAG order, as the pool admits tasks
+        for wave in waves:
+            if sum(weights[name] for name in wave) + weights[model] <= 24:
+                wave.append(model)
+                break
+        else:
+            waves.append([model])
+    require(len(waves) == 2, f"the six sets need {len(waves)} waves, not two: {waves}")
+    for wave in waves:
+        require(sum(sets[name]["memory_mib"] for name in wave) <= JOB_ROOM_MIB, f"the wave {wave} reserves more memory than the job room")
+        require(sum(sets[name]["cpu_units"] for name in wave) <= JOB_ROOM_CPU, f"the wave {wave} reserves more CPU than the job room")
+    with mock.patch.dict("os.environ", {"HAI_LAUNCH_POOL": "host_jobs"}, clear=True):
+        require(runtime.pool_slots_of("features_m1") == 1, "a deployment with no slot setting must keep the one-slot pool")
+
+
+WEIGHTS = {
+    **{f"features_{model}_dag.py": (12 if model in ("m2", "m4") else 4) for model in ("m1", "m2", "m3", "m4", "m5", "m6")},
+    "model_promotion_dag.py": 8,  # 1,024 units: 8 slots of 128
+    "serving_deploy_dag.py": 8,
+}
+
+
+def model_jobs_weigh_their_pool_slots() -> None:
+    """With the deployment's slot settings, the job task of a model DAG takes the slots of its set (four, or twelve for m2 and m4), the job task of every
+    other host DAG takes the whole pool, and no other task takes slots. Without the settings no task names slots."""
+    rig = Rig()
+    with world(rig, "silver_transform_dag", SILVER) as current:
+        runtime = current.runtime
+        built: list[Operator] = []
+
+        def task(**settings: Any) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+            def decorate(function: Callable[..., Any]) -> Callable[..., Any]:
+                def call() -> SimpleNamespace:
+                    node = Operator(**settings)
+                    built.append(node)
+                    return SimpleNamespace(operator=node)
+
+                return call
+
+            return decorate
+
+        for environment, expected in ((POOL_ENVIRONMENT, True), ({"HAI_LAUNCH_POOL": "host_jobs"}, False)):
+            for dag_file in (*COLLAPSED_FILES, *(f"{dag_id}.py" for dag_id in MODEL_DAGS)):
+                built.clear()
+                with (
+                    mock.patch.dict("os.environ", environment, clear=True),
+                    mock.patch.object(sys.modules["airflow.sdk"], "task", task),
+                    mock.patch.object(runtime, "task", task),
+                ):
+                    runpy.run_path(str(ROOT / "dags" / dag_file))
+                slots = {node.task_id: node.settings.get("pool_slots") for node in built}
+                want = {"job": (WEIGHTS.get(dag_file, 24))} if expected else {}
+                require(
+                    {name: value for name, value in slots.items() if value is not None} == want,
+                    f"{dag_file} with {'' if expected else 'no '}slot settings has the pool slots {slots}, expected {want}",
+                )
 
 
 def graph_rules_cover_the_feature_dags() -> None:
@@ -2023,7 +2211,7 @@ def drift_job_needs_its_model_run_to_pass() -> None:
     params = {"mode": "real", "mlflow": "aws", "model": "m2"}
     with world(rig, "drift_monitoring_dag", {**params, "run_id": drift_run_of(OTHER_RUN), "features_run": OTHER_RUN}) as current:
         error = refuses(LaunchRefused, lambda: current.step("drift_run"))
-    require("needs the features job" in str(error), f"a model run that never passed was not refused by name: {error}")
+    require("needs the features_m2 job" in str(error), f"a model run that never passed was not refused by the job of its set's family: {error}")
     with world(rig, "drift_monitoring_dag", {**params, "run_id": OTHER_RUN, "features_run": run}) as current:
         error = refuses(LaunchRefused, lambda: current.step("drift_run"))
     require("derive" in str(error), f"a drift run that does not derive from its model run was not refused by name: {error}")
@@ -2182,6 +2370,44 @@ def host_table_matches_the_job_table() -> None:
     shipped = {found.group(1) for path in (ROOT / "dags").glob("*.py") if "dag_runtime" in path.read_text() and (found := DAG_ID.search(path.read_text()))}
     require(shipped <= set(host["dags"]), f"DAG files with no family in the host table: {shipped - set(host['dags'])}")
     require(set(host["dags"].values()) <= set(table["jobs"]) | {"chain"}, "a DAG names a family that is not a job")
+
+
+def host_table_agrees_with_the_reservations() -> None:
+    """The launcher's fit check must ask for what ECS reserves. A family without ``reserve`` reserves the whole job room, so its row says 3072 units and
+    the services default job cap; a family with ``reserve`` reserves the row's own size, which infra/jobs/host_sets.tf reads from this same file. A row that
+    disagrees (CPU below the room, a reserve above the room, a missing size) is refused when the table loads."""
+    preflight = importlib.import_module("orchestration.ecs_preflight")
+    _, host = preflight.load_tables(ROOT)
+    cap_found = re.search(r'variable "host_job_cap_mib" \{.*?default\s*=\s*(\d+)', (ROOT / "infra/services/variables.tf").read_text(), re.DOTALL)
+    room_found = re.search(r'variable "job_cpu_units" \{.*?default\s*=\s*(\d+)', (ROOT / "infra/services/host_capacity.tf").read_text(), re.DOTALL)
+    require(cap_found is not None and room_found is not None, "the services job cap or job CPU default was not found")
+    cap, room = int((cap_found or ["", "0"])[1]), int((room_found or ["", "0"])[1])
+    require(
+        room == JOB_ROOM_CPU and cap == JOB_ROOM_MIB,
+        f"the services defaults are {room} units and {cap} MiB, not the job room {JOB_ROOM_CPU} and {JOB_ROOM_MIB}",
+    )
+    for name, need in host["jobs"].items():
+        if not need.get("reserve"):
+            require(
+                (need["cpu_units"], need["memory_mib"]) == (room, cap), f"{name} reserves the whole job room ({room} units, {cap} MiB) but its row says {need}"
+            )
+    mutations: dict[str, Callable[[dict[str, Any]], object]] = {
+        "a whole-room family below the room's CPU": lambda jobs: jobs["features"].update(cpu_units=2048),
+        "a whole-room family with another memory": lambda jobs: jobs["silver"].update(memory_mib=8192),
+        "a reserve above the room's CPU": lambda jobs: jobs["features_m1"].update(cpu_units=4096),
+        "a reserve above the job cap": lambda jobs: jobs["features_m2"].update(memory_mib=30000),
+        "a reserve with no memory": lambda jobs: jobs["features_m3"].pop("memory_mib"),
+    }
+    for label, mutate in mutations.items():
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            shutil.copytree(ROOT / "config/orchestration", root / "config/orchestration")
+            path = root / "config/orchestration/host_jobs.json"
+            document = json.loads(path.read_text())
+            mutate(document["jobs"])
+            path.write_text(json.dumps(document))
+            error = refuses(LaunchRefused, partial(preflight.load_tables, root))
+            require("host_jobs.json" in str(error), f"{label} was not named by the table check: {error}")
 
 
 # The host scratch volume: scratch_volume_gb of infra/platform (60 GiB, PR 83, owner decision of Oct 30 to Nov 3 2026). The filesystem keeps about 5 GiB, so
@@ -2368,10 +2594,14 @@ def host_definitions_hold_the_init_step_and_the_layer_guards() -> None:
     folders, then the containers of the table row (the host table's where it names them), then the guard for the three layer jobs only."""
     table, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
     planned = host_planned_containers()
-    # Nine host twins planned by infra/jobs/host.tf, and the publisher's own host definition (pinned from feat/run3-route-direct's plan).
-    require(set(planned) == set(table["jobs"]) and len(planned) == 10, f"ten host families were expected: {sorted(planned)}")
+    # Nine host twins and the six model sets planned by infra/jobs/host.tf, and the publisher's own host definition (pinned from feat/run3-route-direct's plan).
+    require(set(planned) == set(table["jobs"]) and len(planned) == 16, f"sixteen host families were expected: {sorted(planned)}")
     for job, row in table["jobs"].items():
-        expected = ["init", *(host["jobs"].get(job, {}).get("containers") or row["containers"]), *(["guard"] if job in LAYER_JOBS else [])]
+        expected = [
+            "init",
+            *(host["jobs"].get(job, {}).get("containers") or row["containers"]),
+            *(["guard"] if host["jobs"][job].get("like", job) in LAYER_JOBS else []),
+        ]
         require(planned[job]["containers"] == expected, f"the {job} host definition holds {planned[job]['containers']}, expected {expected}")
         require(
             planned[job]["start_with_scratch_wipe"] == ["init"],
@@ -2559,13 +2789,17 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
     planned = json.loads(PUBLISHER_HOST_DEFINITION.read_text())["publisher"]
     memory, label = planned["memory_mib"], planned["init_labels"]["hai.host_capacity"]
     family = "example_dev_job_publisher_host"
-    require(label == BINDING and memory == JOB_MEMORY, f"the pinned publisher revision is not bound to the rig's capacity: {memory}, {label}")
+    own = OWN_SIZES["publisher"]["memory_mib"]  # the publisher keeps its own size: its row in the host table is the one source
+    require(
+        label == BINDING.replace(f"job_memory_mib={JOB_MEMORY}", f"job_memory_mib={own}") and memory == own,
+        f"the pinned publisher revision is not bound to the rig's capacity at its own memory: {memory}, {label}",
+    )
     rig = Rig()
     revision, job_memory = rig.preflight.checked_revision("publisher", JOB_MEMORY)
     require((revision, job_memory) == (rig.bound[family], memory), f"the planned publisher revision did not pass the check: {revision}, {job_memory}")
     for other_memory, other_label, named in (
         (memory, None, "carries no host capacity binding"),
-        (8192, label, f"8192 MiB of task memory, but its binding gives a job {memory} MiB"),
+        (JOB_MEMORY, label, f"{JOB_MEMORY} MiB of task memory, but its binding gives a job {memory} MiB"),
     ):
         rig = Rig()
         rig.ecs.register(family, other_memory, other_label)
@@ -2632,6 +2866,10 @@ CASES: dict[str, Callable[[], None]] = {
     "base_dag_triggers_six_model_dags": base_dag_triggers_six_model_dags,
     "one_model_failure_stops_only_its_dag": one_model_failure_stops_only_its_dag,
     "model_dags_share_the_host_pool": model_dags_share_the_host_pool,
+    "model_sets_have_their_own_families": model_sets_have_their_own_families,
+    "model_sets_launch_in_their_own_task_definitions": model_sets_launch_in_their_own_task_definitions,
+    "six_model_sets_fit_the_host_in_two_waves": six_model_sets_fit_the_host_in_two_waves,
+    "model_jobs_weigh_their_pool_slots": model_jobs_weigh_their_pool_slots,
     "graph_rules_cover_the_feature_dags": graph_rules_cover_the_feature_dags,
     "model_dags_trigger_their_drift_check": model_dags_trigger_their_drift_check,
     "drift_dag_takes_its_model_and_features_run": drift_dag_takes_its_model_and_features_run,
@@ -2642,6 +2880,7 @@ CASES: dict[str, Callable[[], None]] = {
     "graph_rules_cover_the_model_drift_trigger": graph_rules_cover_the_model_drift_trigger,
     "launch_modules_are_in_the_mount_list": launch_modules_are_in_the_mount_list,
     "host_table_matches_the_job_table": host_table_matches_the_job_table,
+    "host_table_agrees_with_the_reservations": host_table_agrees_with_the_reservations,
     "every_family_fits_the_host_scratch_volume": every_family_fits_the_host_scratch_volume,
     "missing_launch_module_is_named": missing_launch_module_is_named,
     "services_come_from_named_environment": services_come_from_named_environment,

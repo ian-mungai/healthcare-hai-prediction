@@ -55,8 +55,8 @@ run "publisher_is_a_bridge_task_on_the_host_with_its_own_role" {
     error_message = "The publisher is an EC2 bridge task named <project>_<environment>_job_publisher_host with its own task role and no Fargate ephemeral storage."
   }
   assert {
-    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "3072" && aws_ecs_task_definition.publisher_host[0].memory == tostring(var.host_job_memory_mib)
-    error_message = "The publisher gets the 3072 CPU units and the job memory (host_job_memory_mib) that every host job shares, so its task memory is the memory of its binding."
+    condition     = aws_ecs_task_definition.publisher_host[0].cpu == "2048" && aws_ecs_task_definition.publisher_host[0].memory == "8192"
+    error_message = "The publisher keeps its own size, 2048 CPU units and 8192 MiB, the row of config/orchestration/host_jobs.json."
   }
   assert {
     condition = (
@@ -75,14 +75,14 @@ run "publisher_init_container_carries_the_capacity_binding" {
   assert {
     condition = (
       jsondecode(output.publisher_host_container_definitions)[0].name == "init" &&
-      jsondecode(output.publisher_host_container_definitions)[0].dockerLabels == { "hai.host_capacity" = var.host_capacity_binding } &&
+      jsondecode(output.publisher_host_container_definitions)[0].dockerLabels == { "hai.host_capacity" = replace(var.host_capacity_binding, "/^job_memory_mib=[0-9]+/", "job_memory_mib=8192") } &&
       alltrue([for container in slice(jsondecode(output.publisher_host_container_definitions), 1, 3) : !contains(keys(container), "dockerLabels")])
     )
     error_message = "The init container of the publisher revision carries the capacity binding it was sized from (label hai.host_capacity), which the launch preflight checks, exactly as the host jobs do; no other container carries a label."
   }
   assert {
-    condition     = tostring(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0]) == aws_ecs_task_definition.publisher_host[0].memory
-    error_message = "The task memory of the publisher revision is the job memory of its binding, which the launch preflight requires."
+    condition     = tostring(regex("^job_memory_mib=([0-9]+) ", jsondecode(output.publisher_host_container_definitions)[0].dockerLabels["hai.host_capacity"])[0]) == aws_ecs_task_definition.publisher_host[0].memory
+    error_message = "The task memory of the publisher revision is the job memory of its own binding label, which the launch preflight requires."
   }
 }
 
@@ -110,8 +110,8 @@ run "publisher_follows_the_job_room_the_services_stack_gives" {
     host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=27648 system_reserve_mib=2048 service_reservations_mib=5120"
   }
   assert {
-    condition     = aws_ecs_task_definition.publisher_host[0].memory == "20480" && aws_ecs_task_definition.publisher_host[0].cpu == "3072"
-    error_message = "The publisher takes the whole job room and 3072 CPU units, whatever the room is."
+    condition     = aws_ecs_task_definition.publisher_host[0].memory == "8192" && aws_ecs_task_definition.publisher_host[0].cpu == "2048"
+    error_message = "The publisher keeps its own size whatever the room is, as long as it fits in it."
   }
 }
 
@@ -275,5 +275,34 @@ run "the_capture_root_is_declared_once_and_defaults_to_raw" {
       output.publisher_host_run_task.capture_root == "raw/"
     )
     error_message = "Only the run container holds the capture root, once, and its default stays raw/."
+  }
+}
+
+run "publisher_may_not_reserve_more_than_the_host_job_cap" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+    host_job_memory_mib   = 4096
+    host_capacity_binding = "job_memory_mib=4096 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  # The publisher row of config/orchestration/host_jobs.json reserves 8192 MiB. Under a 4096 MiB job cap the launch preflight would refuse every launch of
+  # that revision, so the plan must refuse before the jobs stack registers it, as it does for every other host family.
+  expect_failures = [aws_ecs_task_definition.publisher_host[0]]
+}
+
+run "publisher_fits_a_cap_that_holds_its_row" {
+  command = plan
+
+  variables {
+    publisher_job_enabled = true
+    host_job_memory_mib   = 8192
+    host_capacity_binding = "job_memory_mib=8192 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  }
+
+  assert {
+    condition     = aws_ecs_task_definition.publisher_host[0].memory == "8192" && aws_ecs_task_definition.publisher_host[0].cpu == "2048"
+    error_message = "A cap equal to the publisher row still registers the publisher at its own size."
   }
 }

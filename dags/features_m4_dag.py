@@ -20,6 +20,7 @@ with DAG(
     dag_id="features_m4_dag",
     schedule=None,
     catchup=False,
+    max_active_runs=1,  # two runs of one set would share its family: the host pool no longer keeps them apart
     tags=["orchestration", "features"],
     params={
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
@@ -30,7 +31,7 @@ with DAG(
     user_defined_macros={"model_drift_run_id": model_drift_run_id},
     default_args={"retries": 0},
 ) as dag:
-    gate = build_job_chain("pin_gold")
+    gate = build_job_chain("pin_gold", family="features_m4")
     drift_run = "{{ model_drift_run_id(params.run_id) }}"
     gate >> TriggerDagRunOperator(
         task_id="trigger_drift",

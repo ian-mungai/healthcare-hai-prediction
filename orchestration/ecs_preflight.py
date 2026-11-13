@@ -67,6 +67,9 @@ RETIRED_KEYS = frozenset({"inputs_sha256", "queue_sha256", "resume_sources", "pr
 # The capture root is raw/ or one test folder of one run ID (owner decision D4). The task validates it again.
 CAPTURE_ROOT = re.compile(r"raw/|ingestion_test/[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/")
 DEADLINE_VARIABLE = "HAI_DEADLINE_UTC"
+# The job room that a family without reserve takes at task level: the services defaults job_cpu_units and host_job_cap_mib (a case compares them).
+JOB_ROOM_CPU_UNITS = 3072
+JOB_ROOM_MEMORY_MIB = 26816
 GATE = "@gate"
 CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features")
@@ -465,9 +468,25 @@ def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
     if unknown:
         raise LaunchRefused(f"{JOBS_FILE.name}: steps name unknown jobs {unknown}")
     host: dict[str, Any] = json.loads((root / HOST_FILE).read_text())
+    for name, need in host["jobs"].items():
+        if "like" in need:  # a family with its own host definition, records and scratch folder and the containers of another job
+            if need["like"] not in jobs or name in jobs:
+                raise LaunchRefused(f"{HOST_FILE.name}: {name} is like {need['like']}, which is not a job of {JOBS_FILE.name}, or {name} is one itself")
+            jobs[name] = jobs[need["like"]]
     if set(host["jobs"]) != set(jobs) or not set(host["dags"].values()) <= set(jobs) | {CHAIN}:
         raise LaunchRefused(f"{HOST_FILE.name} names other jobs than {JOBS_FILE.name}")
     for job, need in host["jobs"].items():
+        reserved = (need.get("cpu_units"), need.get("memory_mib"))
+        if need.get("reserve"):
+            ok = all(isinstance(value, int) and value > 0 for value in reserved) and reserved[0] <= JOB_ROOM_CPU_UNITS and reserved[1] <= JOB_ROOM_MEMORY_MIB
+        else:
+            ok = reserved == (JOB_ROOM_CPU_UNITS, JOB_ROOM_MEMORY_MIB)
+        if not ok:
+            rule = "with reserve may reserve at most" if need.get("reserve") else "without reserve reserves exactly"
+            raise LaunchRefused(
+                f"{HOST_FILE.name}: the {job} row says {reserved[0]} units and {reserved[1]} MiB, but a family {rule} "
+                f"{JOB_ROOM_CPU_UNITS} units and {JOB_ROOM_MEMORY_MIB} MiB (the job room)"
+            )
         if "containers" not in need and "log_container" not in need:
             continue
         containers = need.get("containers")
@@ -480,6 +499,16 @@ def load_tables(root: Path) -> tuple[dict[str, Any], dict[str, Any]]:
         ):
             raise LaunchRefused(f"{HOST_FILE.name}: the host containers of the {job} job need a log container and only the variables of its job")
     return document, host
+
+
+def family_of(steps: Mapping[str, str | None], host: Mapping[str, Any], template: str, dag_id: str) -> str | None:
+    """The host family a step of ``dag_id`` launches in: the job of its template, or the DAG's own family when the host table makes that family like the
+    job (a model set's features DAG launches in its set's family, so six sets run beside each other)."""
+    job = steps[template]
+    family = host["dags"].get(dag_id)
+    if job is not None and family not in (None, CHAIN, job) and host["jobs"].get(family, {}).get("like") == job:
+        return str(family)
+    return job
 
 
 class Preflight:
@@ -540,7 +569,7 @@ class Preflight:
     def prepare(self, request: SubmissionRequest) -> JobSpec | None:
         if request.template not in self.steps:
             raise LaunchRefused(f"{request.template} has no ECS job")
-        job = self.steps[request.template]
+        job = family_of(self.steps, self.host, request.template, request.dag_id)
         if job == GATE:
             self.record_chain(request.run_id)
             return None
@@ -554,8 +583,15 @@ class Preflight:
         cap = self.host_cap(job, self.require_capacity(job))
         self.require_no_hold(job)
         row = self.jobs[job]
-        # A model set builds from the passed features job of its base run, and a drift check reads the passed features job of its model run.
-        after = job if request.dag_id in FEATURE_DAGS else "features" if request.dag_id == DRIFT_DAG else row.get("after")
+        # A model set builds from the passed features job of its base run (the base family), and a drift check reads the passed features job of its model run,
+        # which is in the family of its set. A drift check of a model outside the contract has no such job: drift_model refuses it by name below.
+        drift_features = f"features_{(request.training or {}).get('model')}"
+        if request.dag_id in FEATURE_DAGS:
+            after = self.steps[request.template]
+        elif request.dag_id == DRIFT_DAG:
+            after = drift_features if drift_features in self.jobs else None
+        else:
+            after = row.get("after")
         if after:
             self.require_passed(job, after, request.input_run_id)
         if row.get("needs_training_parameters"):
@@ -576,9 +612,9 @@ class Preflight:
         revision, job_memory = self.checked_revision(job, cap)
         if research_code is not None:  # the only write of a job step, after every refusal
             self.code_runs.bind(request.run_id, research_code)
-        # ECS places the task by the revision's task memory (the job room), so the launcher's fit check needs at least that much free memory. The fit
-        # probe gives no more than the host job cap.
-        need = replace(spec.need, memory_mib=max(spec.need.memory_mib, job_memory))
+        # ECS places the task by the revision's task memory, so the launcher's fit check asks for exactly that: the host job cap for a family without
+        # reserve, its own memory for a family that reserves its own size. The fit probe gives no more than the host job cap.
+        need = replace(spec.need, memory_mib=job_memory)
         return replace(spec, task_definition=revision, need=need)
 
     def record_chain(self, bronze_run: str) -> None:
@@ -771,5 +807,5 @@ class Preflight:
             need=Resources(cpu_units=need["cpu_units"], memory_mib=need["memory_mib"], scratch_bytes=need["scratch_gib"] * 2**30),
             acceptance=tuple(row.get("acceptance", ())),
             log_container=log_container,
-            log_prefix=job,
+            log_prefix=str(self.host["jobs"][job].get("like", job)),  # the containers of a model set log under their base job's stream prefix
         )

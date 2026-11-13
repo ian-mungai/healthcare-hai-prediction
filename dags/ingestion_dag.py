@@ -28,4 +28,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("publisher_run")
+    build_job_chain("publisher_run", family="publisher")

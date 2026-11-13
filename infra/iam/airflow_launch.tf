@@ -61,16 +61,22 @@ variable "services_apply_lock_parameter_name" {
 locals {
   # The task role each family runs with, as the host definitions of infra/jobs take them. Promote reuses the training role.
   airflow_launch_family_roles = {
-    train     = "job_train_task"
-    bronze    = "job_write_bronze_task"
-    silver    = "job_write_silver_task"
-    gold      = "job_write_gold_task"
-    features  = "job_write_features_task"
-    drift     = "job_drift_task"
-    promote   = "job_train_task"
-    serve     = "job_serve_task"
-    metadata  = "job_openmetadata_task"
-    publisher = "job_publisher_task"
+    train       = "job_train_task"
+    bronze      = "job_write_bronze_task"
+    silver      = "job_write_silver_task"
+    gold        = "job_write_gold_task"
+    features    = "job_write_features_task"
+    features_m1 = "job_write_features_task"
+    features_m2 = "job_write_features_task"
+    features_m3 = "job_write_features_task"
+    features_m4 = "job_write_features_task"
+    features_m5 = "job_write_features_task"
+    features_m6 = "job_write_features_task"
+    drift       = "job_drift_task"
+    promote     = "job_train_task"
+    serve       = "job_serve_task"
+    metadata    = "job_openmetadata_task"
+    publisher   = "job_publisher_task"
   }
   # The staged request a family's run reads before it starts. Only the bronze and publisher families stage one: a serving deployment is a closed launch request. The launch
   # reads the publisher's (orchestration/publisher_launch.py) and binds every attempt to its digest.
@@ -78,7 +84,10 @@ locals {
     bronze    = "bronze_request.json"
     publisher = "publisher_request.json"
   }
-  airflow_launch_families_sorted = sort(var.airflow_launch_families)
+  # The six model sets of the features job are host families of their own (infra/jobs/host_sets.tf) that run as the features task role. A launch role that
+  # may start the features family may start them too, so no family list has to name them.
+  airflow_launch_set_families    = contains(var.airflow_launch_families, "features") ? [for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : "features_${set}"] : []
+  airflow_launch_families_sorted = sort(concat(var.airflow_launch_families, local.airflow_launch_set_families))
   airflow_launch_request_arns = [
     for family in local.airflow_launch_families_sorted : "arn:aws:s3:::${var.data_bucket_name}/lakehouse/run_stage/*/inputs/${local.airflow_launch_request_files[family]}"
     if contains(keys(local.airflow_launch_request_files), family)

@@ -27,4 +27,4 @@ with DAG(
     },
     default_args={"retries": 0},
 ) as dag:
-    build_job_chain("serve_deploy")
+    build_job_chain("serve_deploy", family="serve")

@@ -139,7 +139,7 @@ with DAG(
     default_args={"retries": 0},
 ) as dag:
 
-    @task(task_id="drift_run", retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT, pool=dag_runtime.launch_pool())
+    @task(task_id="drift_run", retries=0, execution_timeout=dag_runtime.STEP_TIMEOUT, **dag_runtime.pool_settings("drift"))
     def drift_run() -> str:
         return dag_runtime.run_step("drift_run")
 

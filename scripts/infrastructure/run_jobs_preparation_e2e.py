@@ -361,6 +361,18 @@ def _host_room_cases(
         "host_job_memory_mib": 22528,
         "host_capacity_binding": lowered,
     }
+    sets = [f"features_m{number}" for number in range(1, 7)]
+    answer(json.dumps(binding), 0)
+    result = invoke(host_variables | {"host_jobs": ["features", "gold", "silver", *sets]})
+    checks["host_jobs_accept_the_six_model_set_families"] = result.returncode == 0 and json.loads(output.read_text())["host_jobs"] == [
+        "features",
+        "gold",
+        "silver",
+        *sets,
+    ]
+    answer(json.dumps(binding), 0)
+    result = invoke(host_variables | {"host_jobs": ["features", "features_m7"]})
+    checks["host_jobs_refuse_a_seventh_model_set"] = result.returncode != 0
     answer(json.dumps(binding), 0)
     result = invoke(host_variables)
     rendered = output.read_bytes()

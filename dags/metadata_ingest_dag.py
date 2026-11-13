@@ -12,7 +12,7 @@ from datetime import timedelta
 
 from airflow.sdk import DAG, Param, task
 
-from orchestration.dag_runtime import launch_pool, run_step
+from orchestration.dag_runtime import pool_settings, run_step
 
 RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
 # The Terraform variable openmetadata_lifetime_seconds may not exceed this. The job deadline adds 900 seconds of grace.
@@ -33,7 +33,7 @@ with DAG(
     default_args={"retries": 0},
 ) as dag:
 
-    @task(task_id="metadata_run", retries=0, execution_timeout=STEP_LIMIT, pool=launch_pool())
+    @task(task_id="metadata_run", retries=0, execution_timeout=STEP_LIMIT, **pool_settings("metadata"))
     def metadata_run() -> str:
         return run_step("metadata_run")
 

@@ -246,10 +246,10 @@ run "every_family_passes_its_own_role_and_no_other" {
         "arn:aws:iam::111111111111:role/example_project_job_write_gold_task_dev",
         "arn:aws:iam::111111111111:role/example_project_job_write_silver_task_dev",
       ] &&
-      length(jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource) == 9 &&
+      length(jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource) == 15 &&
       alltrue([for arn in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource : endswith(arn, "_host:*")])
     )
-    error_message = "All nine families pass the execution role and eight task roles (promote reuses train), and every run grant names a host definition."
+    error_message = "All nine families and the six model sets (the features task role) pass the execution role and eight task roles (promote reuses train), and every run grant names a host definition."
   }
 }
 
@@ -867,5 +867,48 @@ run "the_promote_family_reads_only_the_research_records" {
   assert {
     condition     = !contains(keys(local.airflow_launch_policy_values), "ALERTS_TOPIC_ARN") && length([for policy in aws_iam_role_policy.airflow_launch_research_records : policy.policy if strcontains(policy.policy, "sns:")]) == 0
     error_message = "The launch role gains no notification action: only the promote task's own role publishes the owner notice."
+  }
+}
+
+run "the_features_family_brings_its_six_model_sets" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["features", "train"]
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource == [
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m1_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m2_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m3_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m4_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m5_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_features_m6_host:*",
+        "arn:aws:ecs:eu-west-1:111111111111:task-definition/example_project_dev_job_train_host:*",
+      ] &&
+      jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Condition.StringEquals["aws:RequestTag/HaiJob"] == ["features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "train"] &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement.Resource if statement.Sid == "PassNamedJobRoles"][0] == [
+        "arn:aws:iam::111111111111:role/example_project_job_execution_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_train_task_dev",
+        "arn:aws:iam::111111111111:role/example_project_job_write_features_task_dev",
+      ]
+    )
+    error_message = "A launch role that may start the features family may also start its six model set families (the same host definitions, tags and the same features task role) and no other."
+  }
+}
+
+run "without_the_features_family_no_model_set_is_granted" {
+  command = plan
+
+  variables {
+    airflow_launch_families = ["gold", "train"]
+  }
+
+  assert {
+    condition     = !anytrue([for arn in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource : strcontains(arn, "features_m")])
+    error_message = "The model set families come only with the features family."
   }
 }

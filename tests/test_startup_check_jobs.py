@@ -188,7 +188,9 @@ def test_a_failed_training_check_leaves_one_json_line_with_the_cause(
 
 
 def test_every_host_job_has_a_row_in_the_check_table() -> None:
-    jobs = set(json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["jobs"])
+    # A model set family is like the features job and runs its code, so the check names the job features for it.
+    table = json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["jobs"]
+    jobs = {name for name, need in table.items() if "like" not in need}
     check(jobs <= set(startup_check.JOB_PHASES), f"jobs without a startup check row: {sorted(jobs - set(startup_check.JOB_PHASES))}")
 
 

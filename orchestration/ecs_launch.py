@@ -717,8 +717,8 @@ class Launcher:
         with no claim started nothing: a task starts only under a claim). A listing that fails refuses too. A claimed launch with no end record is settled
         here (``auto_settle``) and the gate goes on when that ends it, which needs proof about its task; a launch that stays
         unresolved refuses the run with its reason. Two runs that pass this gate at the
-        same moment are kept apart by the one-slot Airflow pool of host jobs and, when they both settle the same launch, by the write-once end record. The
-        run is not claimed, so it launches once the earlier launch is settled."""
+        same moment are kept apart by the Airflow pool of host jobs (a full-size job takes all its slots) and, when they both settle the same launch, by the
+        write-once end record. The run is not claimed, so it launches once the earlier launch is settled."""
         definition = self.adapter.definition(spec.job, HOST)
         busy = self.unstopped_tasks(definition, "nothing was claimed")
         if busy:

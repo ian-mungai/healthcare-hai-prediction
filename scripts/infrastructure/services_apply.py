@@ -135,6 +135,8 @@ JOB_MEMORY = re.compile(r"job_memory_mib=([1-9][0-9]*) ")
 # The jobs inputs the last jobs plan and apply rendered (render_jobs_config), and the jobs stack file that defaults the selected host families.
 JOBS_INPUTS_RENDERED = REPO_ROOT / "infra" / "jobs" / "deployment.auto.tfvars.json"
 JOBS_HOST_VARIABLES = REPO_ROOT / "infra" / "jobs" / "host.tf"
+# The host table: which families reserve their own size (a model set) instead of the whole job room.
+HOST_TABLE = REPO_ROOT / "config" / "orchestration" / "host_jobs.json"
 FAMILY_NAME = re.compile(r"[a-z][a-z0-9_]*")
 # The hold value written by this command is one JSON object with separate fields, so reason text is only ever the reason: "state" (HELD or
 # MIGRATION_HOLD), "by", "at", "reason" and, for a pending host job cap change, "frozen": the host families the reviewed jobs inputs select, their
@@ -156,6 +158,14 @@ def finish_command(token: str) -> str:
     return f"python -m scripts.infrastructure.services_apply finish --token '{token}' --statement '{FINISH_STATEMENT}'"
 
 
+def reserved_memory(family: str) -> int | None:
+    """The task memory in MiB that the host table gives a family that reserves its own size (a model set), or None for a family that reserves the whole
+    job room. ``family`` is the full definition family name, ``<project>_<environment>_job_<job>_host``."""
+    found = re.search(r"_job_([a-z][a-z0-9_]*)_host$", family)
+    need = json.loads(HOST_TABLE.read_text())["jobs"].get(found.group(1) if found else "", {})
+    return int(need["memory_mib"]) if need.get("reserve") else None
+
+
 def registration_problem(definitions: dict[str, dict[str, Any]], binding: str) -> str | None:
     """None when the latest revision of every given host family is active, carries ``binding`` on its init container and has the job memory of
     ``binding`` as its task memory; else a sentence naming the first family that does not. No host family at all is a problem."""
@@ -170,10 +180,13 @@ def registration_problem(definitions: dict[str, dict[str, Any]], binding: str) -
         label = str(labels.get(HOST_CAPACITY_LABEL) or "") if isinstance(labels, dict) else ""
         if found.get("status") != "ACTIVE":
             return f"{family} has no active revision"
-        if label != binding:
-            return f"{family} is bound to {label[:120] or 'no capacity binding'}, but the services give {binding}"
-        if str(found.get("memory", "")) != job[1]:
-            return f"{family} is registered at {str(found.get('memory', ''))[:20]} MiB, the services give a job {job[1]} MiB"
+        own = reserved_memory(family)  # a model set reserves its own memory; every other family the whole job room
+        expected = binding if own is None else JOB_MEMORY.sub(f"job_memory_mib={own} ", binding, count=1)
+        if label != expected:
+            return f"{family} is bound to {label[:120] or 'no capacity binding'}, but the services give {expected}"
+        memory = job[1] if own is None else str(own)
+        if str(found.get("memory", "")) != memory:
+            return f"{family} is registered at {str(found.get('memory', ''))[:20]} MiB, the services give a job {memory} MiB"
     return None
 
 

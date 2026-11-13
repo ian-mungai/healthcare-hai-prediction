@@ -8,16 +8,21 @@ variable "host_jobs_enabled" {
 variable "host_jobs" {
   description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its Fargate twin: the images, the roles, the parameter names and its own enable flag."
   type        = set(string)
-  default     = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
+  default     = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   nullable    = false
 
   validation {
-    condition     = length(setsubtract(var.host_jobs, toset(local.host_families))) == 0
-    error_message = "Select only the nine job families: bronze, drift, features, gold, metadata, promote, serve, silver and train."
+    condition     = !anytrue([for family in var.host_jobs : contains(keys(local.host_set_families), family)]) || contains(var.host_jobs, "features")
+    error_message = "A model set family (features_m1 to features_m6) is registered only with the features family: it has the containers and roles of the features job."
   }
 
   validation {
-    condition     = !var.host_jobs_enabled || alltrue([for family in var.host_jobs : lookup(local.host_source_ready, family, false)])
+    condition     = length(setsubtract(var.host_jobs, toset(local.host_families))) == 0
+    error_message = "Select only the nine job families (bronze, drift, features, gold, metadata, promote, serve, silver and train) and the six model sets features_m1 to features_m6."
+  }
+
+  validation {
+    condition     = !var.host_jobs_enabled || alltrue([for family in var.host_jobs : lookup(local.host_source_ready, lookup(local.host_set_families, family, family), false)])
     error_message = "A host definition is built from the containers of its Fargate twin, so every selected family needs its own enable flag and inputs (layer_jobs_enabled with the layer in layer_jobs, bronze_job_enabled, train_enabled, drift_enabled, promote_enabled, serve_enabled or openmetadata_enabled)."
   }
 
@@ -101,7 +106,7 @@ variable "host_repo_path" {
 }
 
 locals {
-  host_families = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
+  host_families = concat(["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
   # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the host job cap (host_job_memory_mib, from the services stack).
@@ -136,8 +141,8 @@ locals {
     metadata = { execution = lookup(var.openmetadata_roles, "execution", ""), task_key = "openmetadata_task", task = lookup(var.openmetadata_roles, "openmetadata_task", ""), network = "lakehouse" }
   }
   host_selected = {
-    for family, spec in local.host_specs : family => spec
-    if var.host_jobs_enabled && contains(var.host_jobs, family)
+    for family, spec in merge(local.host_specs, { for family, base in local.host_set_families : family => local.host_specs[base] }) : family => spec
+    if var.host_jobs_enabled && contains(var.host_jobs, family) && (!contains(keys(local.host_set_families), family) || contains(var.host_jobs, "features"))
   }
   host_layer_containers = { for layer in local.layer_jobs : layer => concat(local.layer_containers[layer], [local.layer_guards[layer]]) }
   host_source_containers = merge(local.host_layer_containers, {
@@ -147,7 +152,7 @@ locals {
     promote  = local.promote_containers
     serve    = local.serve_containers
     metadata = local.host_metadata_containers
-  })
+  }, { for family, base in local.host_set_families : family => lookup(local.host_layer_containers, base, []) })
   # The persistent catalog runs as a service on the host. The metadata job is only its client: after the init step, one container sends the Glue mirror and dbt metadata to the catalog API.
   host_repo_mount = "/opt/hai/repo"
   host_metadata_mounts = [
@@ -233,7 +238,7 @@ locals {
         { for key, value in {
           command         = [format("%s%s", local.host_init_wipe, container.command[0])]
           linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })
-          dockerLabels    = { (local.host_capacity_label) = coalesce(var.host_capacity_binding, "unset") }
+          dockerLabels    = { (local.host_capacity_label) = local.host_family_binding[family] }
         } : key => value if container.name == "init" },
         { for key, value in {
           command = [format("(%s) && %s", container.command[0], local.host_scratch_wipe)]
@@ -249,8 +254,8 @@ locals {
   }
   host_resources = {
     for family, spec in local.host_selected : family => {
-      cpu    = local.host_cpu_cap
-      memory = local.host_memory_cap
+      cpu    = local.host_family_cpu[family]
+      memory = local.host_family_memory[family]
     }
   }
   host_run_variables = {
@@ -296,6 +301,11 @@ resource "aws_ecs_task_definition" "host" {
     precondition {
       condition     = try(regex("^job_memory_mib=([0-9]+) ", var.host_capacity_binding)[0], "") == tostring(var.host_job_memory_mib)
       error_message = "The capacity binding gives another job memory than host_job_memory_mib. Render both from the same services output with render_jobs_config."
+    }
+
+    precondition {
+      condition     = local.host_family_memory[each.key] <= local.host_memory_cap && local.host_family_cpu[each.key] <= local.host_cpu_cap
+      error_message = "A host family may not reserve more than the job room: its row in config/orchestration/host_jobs.json asks for more memory than host_job_memory_mib or more than 3072 CPU units."
     }
   }
 
@@ -351,9 +361,9 @@ output "host_run_tasks" {
       network_mode          = "bridge"
       network               = local.host_selected[family].network
       propagate_tags        = "TASK_DEFINITION"
-      container_environment = local.host_run_variables[family]
-      dry_run_variable      = try(local.host_dry_run[family].variable, null)
-      dry_run_value         = try(local.host_dry_run[family].value, null)
+      container_environment = local.host_run_variables_of[family]
+      dry_run_variable      = try(local.host_dry_run_of[family].variable, null)
+      dry_run_value         = try(local.host_dry_run_of[family].value, null)
       scratch               = local.host_volumes[family]
     }
   } : null
@@ -368,6 +378,8 @@ output "host_dispatch_contract" {
     jobs_at_a_time    = 1
     cpu_units_cap     = local.host_cpu_cap
     memory_mib_cap    = local.host_memory_cap
+    family_cpu_units  = local.host_family_cpu
+    family_memory_mib = local.host_family_memory
     families          = sort(keys(local.host_selected))
     family_networks   = { for family, spec in local.host_selected : family => spec.network }
     writers = {
