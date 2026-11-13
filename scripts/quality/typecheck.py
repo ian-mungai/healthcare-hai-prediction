@@ -12,6 +12,7 @@ import argparse
 import ast
 import json
 import sys
+from collections.abc import Callable
 from importlib.util import resolve_name
 from pathlib import Path
 
@@ -39,12 +40,21 @@ def imported_modules(tree: ast.AST, package: str) -> set[str]:
     return modules
 
 
-def pending_by_import(files: set[str], pending: dict[str, dict[str, str]]) -> dict[str, str]:
+def read_source(path: str) -> str | bytes | None:
+    return (ROOT / path).read_text()
+
+
+def pending_by_import(files: set[str], pending: dict[str, dict[str, str]], read: Callable[[str], str | bytes | None] = read_source) -> dict[str, str]:
+    """Return the pending files and every file that imports one. ``read`` returns a file's source, or None for a file with no imports to read."""
     modules = {path.removesuffix(".py").replace("/", ".").removesuffix(".__init__"): path for path in files}
-    dependencies = {}
+    dependencies: dict[str, set[str]] = {}
     for module, path in modules.items():
         package = module if path.endswith("/__init__.py") else module.rpartition(".")[0]
-        imports = imported_modules(ast.parse((ROOT / path).read_text(), filename=path), package)
+        source = read(path)
+        if source is None:
+            dependencies[path] = set()
+            continue
+        imports = imported_modules(ast.parse(source, filename=path), package)
         prefixes = {".".join(parts[:length]) for name in imports for parts in [name.split(".")] for length in range(1, len(parts) + 1)}
         dependencies[path] = {modules[name] for name in prefixes if name in modules}
     deferred = {path: entry["reason"] for path, entry in pending.items()}

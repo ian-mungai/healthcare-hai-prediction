@@ -1421,10 +1421,15 @@ def mypy_uncovered_files() -> set[str]:
     """Return the Python files MyPy does not cover: the ``pending`` files of config/quality/mypy_runtimes.json and the files that import them."""
     from scripts.quality import typecheck  # Loaded only here: the other runners that copy this check do not copy MyPy's selector.
 
+    def python_source(path: str) -> bytes | None:
+        # Bytes, not text: ast.parse then reads the file as the interpreter does (UTF-8 or the codec the file declares).
+        data = (typecheck.ROOT / path).read_bytes()
+        return None if text_codec(data) is None else data
+
     config = Path("config/quality/mypy_runtimes.json")
     pending = json.loads(config.read_text())["pending"] if config.is_file() else {}
     try:
-        return set(typecheck.pending_by_import(typecheck.source_files(), pending))
+        return set(typecheck.pending_by_import(typecheck.source_files(), pending, python_source))
     except SyntaxError as error:
         raise SystemExit(f"removed-names: cannot read the import graph of the pending files: {error}") from error
 

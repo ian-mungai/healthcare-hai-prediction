@@ -821,6 +821,8 @@ INPUT_CASES = [
 ]
 
 # Text that is not UTF-8 (Latin-1) must not crash the check, and data with NUL bytes is binary: skipped with a notice.
+UTIL_FUNCTION = f"def {OLD_FUNCTION}() -> int:\n    return 1\n"
+UTIL_IMPORT = f"from app.util import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n"
 ARCHIVE_FLAG = "--archive" + "-copy"
 LATIN1_HEAD = "# -*- coding: latin-1 -*-\nimport argparse\n\nP = argparse.ArgumentParser()\n"
 UMLAUT_HELP = 'help="Unterschrift f\u00fcr den Bericht"'
@@ -840,7 +842,10 @@ LATIN1_NAMES = {
     "gains_nul": "Latin-1 case: a text file that gains a NUL byte after the first 8000 bytes while it loses a flag is skipped with a notice",
     "new_nul": "Latin-1 case: a new text file with a NUL byte after the first 8000 bytes is skipped with a notice",
     "unchanged_nul": "Latin-1 case: an unchanged tracked binary file is skipped with a notice",
+    "graph_nul": "Latin-1 case: a function removed while an unchanged tracked Python file holds a NUL byte is skipped with a notice",
 }
+GRAPH_LATIN1 = "# coding: latin-1\n# Pr\u00fcfung\n"
+GRAPH_PENDING = {PENDING_LIST: PENDING_FIXTURE, "dags/pending_dag.py": "VALUE = 1\n"}
 LATIN1_CASES = [
     Case(
         "Latin-1 file edited, a removed flag is still used in a script",
@@ -938,13 +943,52 @@ LATIN1_CASES = [
         committed={"tools/digest.py": UTF8_HEAD + PAD_LINES + "BLOB = '\0'\n" + SIGN_OFF_LINE, "tools/run_report.sh": SIGN_OFF_CALLER},
         files={"tools/digest.py": UTF8_HEAD + PAD_LINES + "BLOB = '\0'\n"},
     ),
+    Case(
+        "Latin-1 Python file with a declared codec loses a function nothing else uses",
+        "removed-names",
+        True,
+        committed={**GRAPH_PENDING, "tools/helpers.py": (GRAPH_LATIN1 + UTIL_FUNCTION).encode("latin-1")},
+        files={"tools/helpers.py": GRAPH_LATIN1.encode("latin-1")},
+    ),
+    Case(
+        "function removed from a UTF-8 file while an unchanged Latin-1 Python file exists",
+        "removed-names",
+        True,
+        committed={**GRAPH_PENDING, "app/util.py": UTIL_FUNCTION, "tools/other.py": (GRAPH_LATIN1 + "VALUE = 1\n").encode("latin-1")},
+        files={"app/util.py": "X = 1\n"},
+    ),
+    Case(
+        "function removed while a Latin-1 Python file that imports a pending file still names it",
+        "removed-names",
+        False,
+        committed={
+            **GRAPH_PENDING,
+            "app/util.py": UTIL_FUNCTION,
+            "tools/second.py": (GRAPH_LATIN1 + "from dags import pending_dag\n" + UTIL_IMPORT).encode("latin-1"),
+        },
+        files={"app/util.py": "X = 1\n"},
+        reason=f"tools/second.py:6: {OLD_FUNCTION} {LEFTOVER}",
+    ),
+    Case(
+        "function removed while an unchanged Python file holds a Latin-1 string literal without a codec declaration",
+        "removed-names",
+        False,
+        committed={**GRAPH_PENDING, "app/util.py": UTIL_FUNCTION, "tools/legacy.py": "VALUE = '\u00fc'\n".encode("latin-1")},
+        files={"app/util.py": "X = 1\n"},
+        reason="removed-names: cannot read the import graph of the pending files: (unicode error)",
+    ),
+    Case(
+        LATIN1_NAMES["graph_nul"],
+        "removed-names",
+        True,
+        committed={**GRAPH_PENDING, "app/util.py": UTIL_FUNCTION, "tools/blob.py": "BLOB = '\0'\n"},
+        files={"app/util.py": "X = 1\n"},
+    ),
 ]
 
 
 POLICY_DOCUMENT = "scripts/quality/repo_checks.py"
 RUFF_STANDARD = '[tool.ruff]\nline-length = 160\ntarget-version = "py312"\n\n[tool.ruff.lint]\nselect = ["E", "F", "I", "B", "UP", "S", "SIM", "T20"]\n'
-UTIL_FUNCTION = f"def {OLD_FUNCTION}() -> int:\n    return 1\n"
-UTIL_IMPORT = f"from app.util import {OLD_FUNCTION}\n\nVALUE: int = {OLD_FUNCTION}()\n"
 NO_ATTRIBUTE = f'has no attribute "{OLD_FUNCTION}"'
 # A package named like the removed function still exists, so its documented and imported name stays valid.
 SURVIVING_PACKAGE = {
@@ -2895,6 +2939,7 @@ WARNING_HEADERS = {
     LATIN1_NAMES["gains_nul"]: (f"tools/digest.py{BINARY_NOTICE}",),
     LATIN1_NAMES["new_nul"]: (f"tools/blob.py{BINARY_NOTICE}",),
     LATIN1_NAMES["unchanged_nul"]: (f"data/blob.bin{BINARY_NOTICE}",),
+    LATIN1_NAMES["graph_nul"]: (f"tools/blob.py{BINARY_NOTICE}",),
     "history, no longer and wrapped line warn through the hook": (
         "WARN notes.md:1: history note in a current document",
         "WARN notes.md:3: possible history note: 'no longer' describes a change",
