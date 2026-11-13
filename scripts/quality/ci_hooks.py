@@ -10,12 +10,11 @@ import re
 import sys
 import time
 from collections import Counter
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from scripts.process import ProcessGroupSurvived, TimeoutExpired, run_command
+from scripts.process import LaunchesNotStopped, LaunchPool, ProcessGroupSurvived, TimeoutExpired, run_command
 from scripts.quality import case_shards, ci_groups, core_commands
 from scripts.quality.repo_checks import load_yaml
 
@@ -218,14 +217,17 @@ def combine(group: str, count: int, directory: Path) -> int:
 
 
 def run_shards(root: Path, group: str, hooks: list[str], output: Path, start: str, end: str, count: int) -> int:
-    """Run every shard of a sharded group at once, each in its own folder under ``output``, and then combine them."""
-    with ThreadPoolExecutor(max_workers=count) as pool:
+    """Run every shard of a sharded group at once, each in its own folder under ``output``, and then combine them.
+
+    The pool is a ``LaunchPool``: Ctrl-C stops every shard's session with its descendants before the interrupt goes on.
+    """
+    with LaunchPool(max_workers=count) as pool:
         futures = [pool.submit(run, root, group, hooks, folder, start, end, f"{index}/{count}") for index, folder in enumerate(shard_folders(output, count), 1)]
         codes = [future.result() for future in futures]
     return int(any(codes)) | combine(group, count, output)
 
 
-def main() -> int:
+def cli() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--group", required=True)
@@ -270,6 +272,15 @@ def main() -> int:
         return run_shards(args.root, args.group, partitions[args.group], base, args.start, args.end, configured)
     output = args.output_directory or args.root / "data/e2e/hooks" / args.group / f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}_{os.getpid()}"
     return run(args.root, args.group, partitions[args.group], output, args.start, args.end)
+
+
+def main() -> int:
+    """Run the CLI; an interrupt that left a shard's processes alive fails with their names instead of a traceback."""
+    try:
+        return cli()
+    except LaunchesNotStopped as failure:
+        sys.stderr.write(f"hook group: the interrupt did not stop every shard process: {failure}\n")
+        return 1
 
 
 if __name__ == "__main__":

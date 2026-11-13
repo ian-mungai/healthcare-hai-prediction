@@ -39,6 +39,7 @@ list-only run and in the gates part (``release_docker`` runs on its own with a s
 
 from __future__ import annotations
 
+import contextlib
 import copy
 import hashlib
 import importlib
@@ -47,8 +48,10 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -57,7 +60,7 @@ from typing import Any
 from unittest import mock
 
 from scripts.lakehouse import feature_shards
-from scripts.process import clear_git_environment, find_program, run_command
+from scripts.process import TimeoutExpired, clear_git_environment, find_program, list_processes, run_command
 from scripts.quality import case_shards, ci_groups, ci_hooks, core_commands, scratch_marker
 from scripts.quality import pre_push as pre_push_module
 from scripts.quality.repo_checks import load_yaml
@@ -2934,6 +2937,176 @@ def hook_shard_run_cases(scratch: Path, count: int) -> list[dict[str, Any]]:
     return results
 
 
+# An inert pre-commit stand-in for the interruption case: the hook process, a child and a grandchild (each in a session of its own, as a launched check
+# leaves them) record themselves and wait. Only a stop of the whole group, with the sessions of its descendants, removes them.
+HOOK_INTERRUPT_STUB = """#!@PYTHON@
+import json
+import os
+import time
+from pathlib import Path
+
+folder = Path("@RECORDS@")
+cli = os.getppid()
+role = "hook"
+if os.fork() == 0:
+    os.setsid()
+    role = "child"
+    if os.fork() == 0:
+        os.setsid()
+        role = "grandchild"
+(folder / f"pid_{os.getpid()}.json").write_text(json.dumps({"pid": os.getpid(), "role": role, "cli": cli}))
+time.sleep(60)
+"""
+HOOK_INTERRUPT_BOUND_SECONDS = 10
+
+
+def live_pids(pids: set[int]) -> list[int]:
+    """The pids of the set that are alive and not zombies."""
+    return sorted(row.pid for row in list_processes() if row.pid in pids and "Z" not in row.state)
+
+
+def hook_shard_interrupt_case(scratch: Path, count: int) -> dict[str, Any]:
+    """Ctrl-C at the group CLI stops every shard and every descendant of each within a bound (four inert workloads, each with a child and a grandchild)."""
+    root = scratch / "hook_shard_interrupt"
+    records = root / "records"
+    records.mkdir(parents=True)
+    for name in ("config/quality/ci_groups.json", ".pre-commit-config.yaml", ".github/workflows/ci.yml"):
+        (root / name).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / name, root / name)
+    binary = root / ".venv/bin/pre-commit"
+    binary.parent.mkdir(parents=True)
+    binary.write_text(HOOK_INTERRUPT_STUB.replace("@PYTHON@", str(PYTHON)).replace("@RECORDS@", str(records)))
+    binary.chmod(0o755)
+    seen: dict[str, Any] = {}
+
+    def interrupt_when_ready() -> None:
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline:
+            rows = []
+            for path in records.glob("pid_*.json"):
+                try:
+                    rows.append(json.loads(path.read_text()))
+                except json.JSONDecodeError:
+                    continue
+            if len(rows) == 3 * count:
+                seen["cli"] = rows[0]["cli"]
+                os.killpg(seen["cli"], signal.SIGINT)
+                return
+            time.sleep(0.02)
+
+    sender = threading.Thread(target=interrupt_when_ready, name="hook_shard_interrupt_sender")
+    sender.start()
+    # run_command names its session to the program with PROCESS_LAUNCH_SESSION, which makes the CLI's own launches nested (stopped as a group).
+    # The env program removes the variable, so the CLI is the top-level caller that a terminal user is.
+    command = ["-u", "PROCESS_LAUNCH_SESSION", str(PYTHON), "-m", "scripts.quality.ci_hooks", "--root", str(root), "--group", "samples"]
+    command += ["--output-directory", str(root / "output")]
+    environment = {key: value for key, value in os.environ.items() if key != "JOB_STARTED"}
+    started = time.monotonic()
+    timed_out = False
+    exit_code: int | None = None
+    try:
+        exit_code = run_command("/usr/bin/env", command, cwd=ROOT, env=environment, timeout=HOOK_INTERRUPT_BOUND_SECONDS + 5).returncode
+    except TimeoutExpired:
+        timed_out = True
+    finally:
+        sender.join(timeout=10)
+    elapsed = time.monotonic() - started
+    tracked = {json.loads(path.read_text())["pid"] for path in records.glob("pid_*.json")} | ({seen["cli"]} if "cli" in seen else set())
+    deadline = time.monotonic() + HOOK_INTERRUPT_BOUND_SECONDS
+    survivors = live_pids(tracked)
+    while survivors and time.monotonic() < deadline:
+        time.sleep(0.2)
+        survivors = live_pids(tracked)
+    for pid in survivors:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    checks = {
+        "every_workload_started": len(list(records.glob("pid_*.json"))) == 3 * count,
+        "interrupt_sent": "cli" in seen,
+        "cli_ended_inside_the_bound": not timed_out and elapsed <= HOOK_INTERRUPT_BOUND_SECONDS,
+        "cli_failed": exit_code is not None and exit_code != 0,
+        "no_process_survives": not survivors,
+    }
+    return {
+        "case": "hook_samples_interrupt_stops_every_shard_and_descendant",
+        "passed": all(checks.values()),
+        "checks": checks,
+        "survivors": survivors,
+        "seconds": round(elapsed, 1),
+    }
+
+
+# The runtime inputs of the test-checks hook that this lane added: the shard helper and the saved costs. Each must select the hook, because a range that
+# changes only them would otherwise skip every shard and the combine would accept the skip.
+def hook_shard_input_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Each runtime input of the sharded run selects the real test-checks hook entry (inert workload substitute); an unrelated path does not."""
+    inputs = [str(Path(case_shards.__file__).resolve().relative_to(ROOT)), str(case_shards.COSTS.relative_to(ROOT))]
+    config = (ROOT / ".pre-commit-config.yaml").read_text()
+    entry = "entry: .venv/bin/python -m scripts.quality.run_checks_e2e"
+    results: list[dict[str, Any]] = []
+    for label, path in [*[(f"input_{index}", name) for index, name in enumerate(inputs)], ("unrelated_path", "config/quality/job_durations.json")]:
+        root = scratch / f"hook_shard_input_{label}"
+        for name in ("config/quality/ci_groups.json", ".github/workflows/ci.yml"):
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(ROOT / name, root / name)
+        # The real hook definition with its real file filter; only the entry is an inert program that records that it ran.
+        (root / ".pre-commit-config.yaml").write_text(config.replace(entry, "entry: .venv/bin/python hook_probe.py", 1))
+        (root / "hook_probe.py").write_text("import os\nfrom pathlib import Path\n\nPath('ran').write_text(os.environ.get('CHECKS_SHARD', ''))\n")
+        (root / ".venv/bin").mkdir(parents=True)
+        (root / ".venv/bin/python").symlink_to(PYTHON)
+        (root / ".venv/bin/pre-commit").symlink_to(ROOT / ".venv/bin/pre-commit")
+        git(root, "init", "-q")
+        (root / path).parent.mkdir(parents=True, exist_ok=True)
+        (root / path).write_text("one\n")
+        git(root, "add", "-A")
+        identity = ("-c", "user.name=probe", "-c", "user.email=probe@example.invalid", "-c", "commit.gpgsign=false")
+        git(root, *identity, "commit", "-q", "-m", "base")
+        first = git(root, "rev-parse", "HEAD").strip()
+        (root / path).write_text("two\n")
+        git(root, "add", "-A")
+        git(root, *identity, "commit", "-q", "-m", "change")
+        last = git(root, "rev-parse", "HEAD").strip()
+        environment = {**os.environ, "PRE_COMMIT_HOME": str(ROOT / ".tools/pre_commit_cache")}
+        outcome = run_command(
+            str(PYTHON),
+            [
+                "-m",
+                "scripts.quality.ci_hooks",
+                "--root",
+                str(root),
+                "--group",
+                "samples",
+                "--shard",
+                f"1/{HOOK_SAMPLE_SHARDS}",
+                "--from",
+                first,
+                "--to",
+                last,
+                "--output-directory",
+                str(root / "output"),
+            ],
+            cwd=ROOT,
+            env=environment,
+            timeout=120,
+        )
+        ran = (root / "ran").exists()
+        report_path = root / "output/shard_1/report.json"
+        report = json.loads(report_path.read_text()) if report_path.exists() else {}
+        selected = label != "unrelated_path"
+        passed = outcome.returncode == 0 and ran == selected and (report.get("hooks") or [{}])[0].get("skipped", False) == (not selected)
+        results.append(
+            {
+                "case": f"hook_samples_{label}_{'selects' if selected else 'does_not_select'}_the_test_checks_hook",
+                "passed": passed,
+                "path": path,
+                "ran": ran,
+                "exit": outcome.returncode,
+                "error": outcome.stderr[-300:],
+            }
+        )
+    return results
+
+
 def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
     """The test-checks hook is four shards that together run every run_checks_e2e case once, beside a lock group, and a combining step proves it."""
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
@@ -2972,6 +3145,9 @@ def hook_shard_cases(scratch: Path) -> list[dict[str, Any]]:
     if count and inventory:
         results += hook_shard_combine_cases(scratch, inventory, count)
     results += hook_shard_run_cases(scratch, count)
+    results += hook_shard_input_cases(scratch)
+    if count:
+        results.append(hook_shard_interrupt_case(scratch, count))
     return results
 
 
