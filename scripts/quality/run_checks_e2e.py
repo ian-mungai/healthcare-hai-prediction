@@ -1721,9 +1721,18 @@ def account_cases() -> list[Case]:
     return cases
 
 
-# The collectors' code-version records list the code hashes of stored captures: they are history, so a removed script named only there is gone.
+# A code-version record lists the code hashes of a stored capture: each fingerprint's file path is history, so a removed script stays named there.
 VERSIONS_RECORD = "config/acquisition/sample_code_versions.json"
-CODE_VERSION_BODY = json.dumps({"versions": [{"files": {f"scripts/{OLD_SCRIPT}": "sha256:" + "0" * 64}}]}, indent=2) + "\n"
+STILL_LIVE = "scripts/still_live.py"
+
+
+def code_version_record(fingerprint_file: str, reason: str = "First reviewed version", entry_note: str | None = None) -> str:
+    """One record in the shape of the collectors' files: versions[].code_sha256[] with a file and a sha256 each."""
+    entry = {"file": fingerprint_file, "sha256": "0" * 64} | ({} if entry_note is None else {"note": entry_note})
+    return json.dumps({"versions": [{"version": 1, "code_sha256": [entry], "reason": reason}]}, indent=2) + "\n"
+
+
+CODE_VERSION_BODY = code_version_record(f"scripts/{OLD_SCRIPT}")
 CODE_VERSION_CASES = [
     Case(
         "script removed, named only in a code-version record",
@@ -1753,6 +1762,30 @@ CODE_VERSION_CASES = [
         "removed-names",
         False,
         committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: CODE_VERSION_BODY, "README.md": f"Run `scripts/{OLD_SCRIPT}`.\n"},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+    Case(
+        "script removed, named in the reason of a code-version record",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: code_version_record(STILL_LIVE, reason=f"Run scripts/{OLD_SCRIPT}")},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+    Case(
+        "script removed, named in another field of a fingerprint entry",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: code_version_record(STILL_LIVE, entry_note=f"scripts/{OLD_SCRIPT}")},
+        delete=[f"scripts/{OLD_SCRIPT}"],
+        reason=LEFTOVER,
+    ),
+    Case(
+        "script removed, named in a file with a record's name that holds other JSON",
+        "removed-names",
+        False,
+        committed={f"scripts/{OLD_SCRIPT}": "X = 1\n", VERSIONS_RECORD: json.dumps({"command": f"python scripts/{OLD_SCRIPT}"}) + "\n"},
         delete=[f"scripts/{OLD_SCRIPT}"],
         reason=LEFTOVER,
     ),

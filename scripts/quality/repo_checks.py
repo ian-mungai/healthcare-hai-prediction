@@ -74,7 +74,7 @@ SCRIPT_SUFFIXES = {".py", ".sh", ".js", ".mjs", ".ts"}
 FLAG = re.compile(r"""add_argument\(\s*["'](--[\w-]+)["']""")
 CLEANUP_ALLOWLIST = ".cleanup_allowlist"
 CLEANUP_RULE = f"{POLICY}: removed and unused code"
-# The collectors' code-version records list the code hashes of stored captures; they are history, like the changelog.
+# The collectors' code-version records list the code hashes of stored captures; the file path of each fingerprint is history, like the changelog.
 CODE_VERSION_RECORDS = re.compile(r"config/acquisition/[^/]*_code_versions\.json")
 REMOVED_KINDS = ["script", "flag", "env", "python", "config", "terraform", "dbt", "airflow", "dependency"]
 UNUSED_KINDS = ["unused-code", "unused-dependencies", "orphan", "terraform-unused", "docs-path"]
@@ -669,6 +669,23 @@ def changed_lines_and_deletions() -> tuple[dict[str, list[str]], list[str]]:
     return removed, deleted
 
 
+def without_fingerprint_files(text: str) -> str:
+    """Return a code-version record with the ``file`` value of each fingerprint emptied; any text of another shape comes back unchanged."""
+    try:
+        record = json.loads(text)
+    except ValueError:
+        return text
+    versions = record.get("versions") if isinstance(record, dict) else None
+    if not isinstance(versions, list):
+        return text
+    for version in versions:
+        fingerprints = version.get("code_sha256") if isinstance(version, dict) else None
+        for fingerprint in fingerprints if isinstance(fingerprints, list) else []:
+            if isinstance(fingerprint, dict) and isinstance(fingerprint.get("file"), str):
+                fingerprint["file"] = ""
+    return json.dumps(record, indent=2, ensure_ascii=False) + "\n"
+
+
 def reference_files(record_skips: bool = False) -> dict[str, list[str]]:
     """Return the lines of every tracked text file that describes current behavior; history and the allowlist are exempt.
 
@@ -676,12 +693,13 @@ def reference_files(record_skips: bool = False) -> dict[str, list[str]]:
     """
     files: dict[str, list[str]] = {}
     for path in git("ls-files").splitlines():
-        if path == "CHANGELOG.md" or path.startswith("e2e/") or CODE_VERSION_RECORDS.fullmatch(path) or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
+        if path == "CHANGELOG.md" or path.startswith("e2e/") or path == CLEANUP_ALLOWLIST or not Path(path).is_file():
             continue
         data = Path(path).read_bytes()
         codec = text_codec(data)
         if codec is not None:
-            files[path] = data.decode(codec).splitlines()
+            text = data.decode(codec)
+            files[path] = (without_fingerprint_files(text) if CODE_VERSION_RECORDS.fullmatch(path) else text).splitlines()
         elif record_skips:
             skip_binary(path)
     return files
