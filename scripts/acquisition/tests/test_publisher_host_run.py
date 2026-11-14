@@ -174,12 +174,40 @@ def test_a_monthly_run_compares_every_unit_again(host: Host, monkeypatch: pytest
 
 
 def test_a_retry_run_skips_every_complete_unit_and_compares_nothing_again(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
-    host.run(monkeypatch, PUBLISHER_RUN_KIND="monthly")
+    host.run(monkeypatch)
     asked = len(host.world.site.asked)
     host.run(monkeypatch, RUN_ID="20261113T110000Z-0a1b2c3e", PUBLISHER_RUN_KIND="retry")
     check(len(host.world.site.asked) == asked, "a retry run requested a unit that has a completion record")
     second = json.loads(host.world.bucket.objects[record.run_record_key("raw/", "20261113T110000Z-0a1b2c3e")][1])
     check(second["recheck"] is False and len(second["units"]["skipped_complete"]) == 2, f"it skips both complete units: {second['units']}")
+
+
+def bootstrap_marker(root: str = "raw/", run_id: str = RUN_ID) -> str:
+    return f"{root}ingestion_runs/{run_id}/bootstrap.json"
+
+
+def test_a_bootstrap_run_that_passes_leaves_its_bootstrap_record(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    host.run(monkeypatch)
+    body = json.loads(host.world.bucket.objects[bootstrap_marker()][1])
+    check(body == {"kind": "bootstrap_run", "run_id": RUN_ID, "code_sha256": CODE_SHA}, f"the bootstrap record names its run and code: {body}")
+
+
+@pytest.mark.parametrize("kind", ["monthly", "retry"])
+def test_a_monthly_or_retry_run_on_a_root_with_no_bootstrap_record_is_refused_before_any_request(
+    host: Host, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    with pytest.raises(publisher_run.PublisherError, match="no bootstrap run record"):
+        host.run(monkeypatch, PUBLISHER_RUN_KIND=kind)
+    check(not host.world.site.asked and not host.world.bucket.versions, f"a {kind} run asked for a unit or wrote an object")
+
+
+def test_a_bootstrap_record_of_another_root_does_not_open_a_test_root(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    host.run(monkeypatch)
+    root = "ingestion_test/20261113T100000Z-0a1b2c3d/"
+    asked = len(host.world.site.asked)
+    with pytest.raises(publisher_run.PublisherError, match="no bootstrap run record"):
+        host.run(monkeypatch, HAI_CAPTURE_ROOT=root, RUN_ID="20261113T110000Z-0a1b2c3e", PUBLISHER_RUN_KIND="monthly")
+    check(len(host.world.site.asked) == asked, "a monthly run under a root with no bootstrap record asked for a unit")
 
 
 def test_the_tracked_plan_inputs_and_the_seed_files_are_installed_as_real_files_in_the_code_root(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:

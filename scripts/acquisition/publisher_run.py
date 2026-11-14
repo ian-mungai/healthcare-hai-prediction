@@ -229,6 +229,17 @@ def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
         raise PublisherError("The staged queue differs from the digest the launch bound.")
 
 
+def bootstrap_key(root: str, run_id: str) -> str:
+    return f"{root}ingestion_runs/{run_id}/bootstrap.json"
+
+
+def require_bootstrap(storage: Any, root: str) -> None:
+    """A monthly or retry run starts only on a capture root where a bootstrap run passed: the root holds a ``bootstrap.json`` under one run folder."""
+    pattern = re.compile(re.escape(f"{root}ingestion_runs/") + r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}/bootstrap\.json")
+    if not any(item["kind"] == "version" and pattern.fullmatch(item["key"]) for item in capture_mode.list_versions(storage, [f"{root}ingestion_runs/"])):
+        raise PublisherError("The capture root has no bootstrap run record, so no monthly or retry run starts on it.")
+
+
 def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client, opener: Any = None) -> None:
     """Run one publisher task. The job writes one line per unit and no line holds a key, a digest or a name."""
     env = os.environ if environment is None else environment
@@ -248,6 +259,8 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     switched = env.get(task_role.KEYS_VARIABLE) == "1"
     startup_check.check_queue_files("publisher", bundle / "queue.json", controls=None, keys=switched, roots={"code": Path.cwd()}, listing=False)
     storage = task_role.storage_from_environment(env, factory)
+    if env["PUBLISHER_RUN_KIND"] != "bootstrap":
+        require_bootstrap(storage, root)
     before = capture_mode.list_versions(storage, capture_mode.evidence_prefixes(root))
 
     def emit(item: dict) -> None:
@@ -275,6 +288,9 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     emit({"counters": record["counters"], "evidence_problems": len(problems)})
     if problems:
         raise PublisherError(f"The evidence check found {len(problems)} problem{'s' if len(problems) != 1 else ''} in the run.")
+    if env["PUBLISHER_RUN_KIND"] == "bootstrap":
+        body = json.dumps({"kind": "bootstrap_run", "run_id": env["RUN_ID"], "code_sha256": env["CODE_SHA256"]}, sort_keys=True).encode()
+        capture_mode.put_once(run, bootstrap_key(root, env["RUN_ID"]), body)
 
 
 if __name__ == "__main__":
