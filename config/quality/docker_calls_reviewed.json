@@ -1346,7 +1346,7 @@
       "code_sha256": "7262a5d12d7ddd7c8b9f95d4ab8d9e815af69e92bbb232841afa48127d0a5f36",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "0152afa2309ad3326bb3b8f856fffcfbfdff8fb140e0fb3ab0da16a5190eb2cf",
+      "file_sha256": "995d6d8cb56e21cce244f9a13681a12edd25838fa5dda58b9c173093218a7506",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:be06661c42d6b9dfdba96ce6d3ed5bb656409b43d6103d90ba639fec7c473814",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
@@ -1371,7 +1371,7 @@
       "code_sha256": "ddfb4bd744b919616f97d784e28c5a981ddc3d18ee5b387f2f2b2bce6b160e35",
       "problem": "whose program the check cannot prove",
       "occurrences": 1,
-      "file_sha256": "0152afa2309ad3326bb3b8f856fffcfbfdff8fb140e0fb3ab0da16a5190eb2cf",
+      "file_sha256": "995d6d8cb56e21cce244f9a13681a12edd25838fa5dda58b9c173093218a7506",
       "dependencies": {
         "scripts/lakehouse/feature_shards.py": "sha256:be06661c42d6b9dfdba96ce6d3ed5bb656409b43d6103d90ba639fec7c473814",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5",
@@ -1599,11 +1599,11 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 156,
+      "line": 157,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "0f45874f707a3c8c992789b81ca65370f5519d612fe78b4f1839d49cb3c7c866",
+      "file_sha256": "758adb9f43c37d8bd3869cb36fdfebc1bd11f9dc838e339eb3bd3717cb143ab0",
       "dependencies": {
         "orchestration/interface.py": "sha256:5c5c67a829b1a8504da4821b1b50ee302b40f9d2537e21d5b23bd0307704d8c5",
         "orchestration/training_contract.py": "sha256:dd590b0b8acc2b18938117db0d7e00ffc0ce97c478e9bb9b9481242a19ad1d9f"
@@ -1621,7 +1621,7 @@
       "occurrences": 1,
       "file_sha256": "fea900e7b3a84a3a9734a62773b9b2ccbb089549c36c3a3b3d30995c931e912b",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:a77b1ea8519a2901b4560b95b3b533e571edaf6775036abc7b5dc5c6d35c383c",
+        "orchestration/ecs_preflight.py": "sha256:8f15f8cd38adadb05e8718d8127a12b4c72c4a7a24a1c6196b11203ae93c184c",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/host_session.py": "sha256:77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
         "scripts/infrastructure/render_jobs_config.py": "sha256:201d79008edca459b3e4610a5b4a81b6874f4198b824f13d45ad641a95409422",
