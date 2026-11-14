@@ -457,7 +457,7 @@ def trigger_forms() -> dict[str, dict[str, Any]]:
         "model_promotion_dag": {"run_id": run, "hai_type": "HAI_1", "model_version": "3"},
         "research_dag": {"run_id": training.research_run_id(c.SERVE_BASE), "base_run": c.SERVE_BASE},
         "serving_deploy_dag": {"run_id": run, "hai_type": "HAI_1", "deploy_mode": "stable"},
-        "metadata_ingest_dag": {"run_id": run},
+        "metadata_ingest_dag": {"run_id": run, "features_run": other},
         "bronze_chain_dag": {"run_id": run},
     }
 
@@ -879,7 +879,7 @@ def cases_catalog() -> dict[str, Scenario]:
                 job_states(),
                 prepare=stage_retry,
             ),
-            Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real"}, 1, family("metadata"), prepare=stage_other),
+            Step("metadata_ingest_dag", {"run_id": c.OTHER_RUN, "mode": "real", "features_run": features}, 1, family("metadata"), prepare=stage_other),
             Step("gold_transform_dag", {"run_id": gold, "mode": "real", "silver_snapshot_run": silver}, 0, family("gold"), job_states()),  # joins the launch
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 0, family("publisher"), job_states()),
         ),
