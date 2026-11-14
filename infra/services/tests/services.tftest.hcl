@@ -2634,6 +2634,24 @@ run "launch_mounts_are_always_present" {
   }
 }
 
+# The monthly schedule of ingestion_dag runs only where the deployment is production (owner Q3, Nov 9 2026): every Airflow container names its environment in
+# HAI_ENVIRONMENT and mounts the module that reads it.
+run "airflow_names_its_environment_and_mounts_the_schedule_module" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_ENVIRONMENT=${var.environment}")
+          && (length(container.mountPoints) == 0 || contains([for mount in container.mountPoints : mount.containerPath], "/opt/hai/orchestration/ingestion_schedule.py"))
+        ) if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container names its environment in HAI_ENVIRONMENT and mounts orchestration/ingestion_schedule.py."
+  }
+}
+
 run "launch_settings_come_from_the_stack_variables" {
   command = plan
 

@@ -15,7 +15,7 @@ import traceback
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import airflow_mode_cases, research_chain_cases
+from scripts.orchestration import airflow_mode_cases, ingestion_schedule_cases, research_chain_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +28,9 @@ SOURCES = (
     "infra/jobs/tests/publisher_host_definition.json",
     "infra/services/airflow.tf",
     "scripts/orchestration/airflow_mode_cases.py",
+    "scripts/orchestration/ingestion_schedule_cases.py",
+    "orchestration/ingestion_schedule.py",
+    "dags/ingestion_dag.py",
     "scripts/orchestration/research_chain_cases.py",
     "scripts/orchestration/run_airflow_mode_e2e.py",
 )
@@ -49,7 +52,7 @@ def main() -> int:
     parser.add_argument("--case")
     args = parser.parse_args()
     results = []
-    for name, case in {**airflow_mode_cases.CASES, **research_chain_cases.CASES}.items():
+    for name, case in {**airflow_mode_cases.CASES, **research_chain_cases.CASES, **ingestion_schedule_cases.CASES}.items():
         if args.case and args.case != name:
             continue
         try:

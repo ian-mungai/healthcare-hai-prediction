@@ -23,6 +23,7 @@ from typing import Any
 
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
+from orchestration.ingestion_schedule import resolve_kind, resolve_run_id
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for, serving_parameters_for
 
@@ -136,10 +137,14 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
         training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
     elif instance.dag_id == DRIFT_DAG:
         training = {"model": params["model"]}  # the model whose set the drift job checks; the preflight refuses a model outside the contract
-    publisher = {"kind": params["run_kind"], "capture_root": params["capture_root"]} if template == PUBLISHER_TEMPLATE else None
+    run_id = str(params["run_id"])
+    publisher = None
+    if template == PUBLISHER_TEMPLATE:
+        run_id = resolve_run_id(run_id, context)
+        publisher = {"kind": resolve_kind(str(params["run_kind"]), context), "capture_root": params["capture_root"]}
     return SubmissionRequest(
         template,
-        str(params["run_id"]),
+        run_id,
         mode,
         int(instance.try_number),
         instance.dag_id,

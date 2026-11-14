@@ -25,6 +25,7 @@ locals {
     code_features_contract   = "data_contracts/lakehouse/features_publish.json"
     code_silver_sources      = "dbt/models/silver/staging/_bronze__sources.yml"
     code_training_approvals  = "orchestration/training_approvals.py"
+    code_ingestion_schedule  = "orchestration/ingestion_schedule.py"
     code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
     code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"
     code_host_jobs           = "config/orchestration/host_jobs.json"
@@ -72,6 +73,8 @@ locals {
     HAI_LAUNCH_POLARIS_URI   = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:8181/api/catalog"
     HAI_LAUNCH_MLFLOW_URI    = local.airflow_launch_host == null ? "" : "http://${local.airflow_launch_host}:5100"
     HAI_LAUNCH_SCRATCH_PATH  = "/opt/hai/job_scratch"
+    # The deployment's environment, which orchestration/ingestion_schedule.py reads: ingestion_dag runs on its monthly schedule only where this is prod.
+    HAI_ENVIRONMENT = var.environment
     # The host job cap in MiB (Nov 11 2026), read by the preflight at every host launch: the one variable host_job_cap_mib. It comes from the variable alone,
     # because the room it must fit counts the reservations of these Airflow containers, so it cannot be computed here without a cycle.
     HAI_LAUNCH_HOST_JOB_CAP_MIB = tostring(local.host_job_memory_mib)
