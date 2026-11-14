@@ -22,7 +22,7 @@ set -euo pipefail
 # started through scripts/process.py, confirms that no member is left and fails the run with the worker's name. An exit, Ctrl-C or TERM of the dispatcher stops every live worker
 # session the same way. Each group's seconds and each command's start, end and seconds (scripts/quality/timing.sh)
 # are printed and added to the job summary (GITHUB_STEP_SUMMARY).
-# The workers run through an admission queue (run_items). The budget is core_budget cores in config/quality/ci_groups.json (10), the CPU count (nproc) on hosted CI (GITHUB_ACTIONS=true) or
+# The workers run through an admission queue (run_items). The budget is core_budget cores in config/quality/ci_groups.json (12), the CPU count (nproc) on hosted CI (GITHUB_ACTIONS=true) or
 # CI_CORE_BUDGET (a whole number above 0, replacing both). Each kind of worker declares its cores in worker_limits ("cores"); a kind without cores stops the run before any worker starts. The queue
 # admits the waiting worker with the most saved minutes first (the measured_minutes of its hosted job in config/quality/job_durations.json; equal minutes keep the plan order) as soon as the cores
 # in use plus its own fit the budget. A worker with more cores than the budget is admitted only when no other worker runs, and nothing starts beside it. A worker that is waiting for the

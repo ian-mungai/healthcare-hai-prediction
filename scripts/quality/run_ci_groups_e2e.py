@@ -5149,6 +5149,7 @@ def pre_push_repo(
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     if timeout is not None:
         config["pre_push"]["timeout_seconds"] = {"range": timeout, "full": timeout}
+        config["pre_push"]["local_ci_seconds"] = {"range": timeout, "full": timeout}
     config["pre_push"]["small_change"] = {**config["pre_push"]["small_change"], **({"max_files": 0} if small is None else small)}
     (root / "config/quality/ci_groups.json").write_text(json.dumps(config))
     (root / "scripts/run_ci.sh").write_text(STUB_RUN_CI)
@@ -5612,11 +5613,39 @@ def run_ci_release_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+def deadline_cases(scratch: Path) -> list[dict[str, Any]]:
+    """The local_ci step has 2700 s (range) and 4500 s (full, 75 minutes); every other step keeps its scope's deadline (2700 and 3600 s)."""
+    config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
+    results = []
+    for scope, arguments, local_ci, others in (("range", (), 2700, 2700), ("full", ("--full",), 4500, 3600)):
+        plan = pre_push_plan(pre_push_repo(scratch, f"pre_push_deadlines_{scope}"), arguments)
+        by_name = {step["name"]: step["timeout_seconds"] for step in plan["steps"]}
+        other_steps = {name: seconds for name, seconds in by_name.items() if name != "local_ci"}
+        results.append(
+            {
+                "case": f"pre_push_local_ci_deadline_in_the_{scope}_scope",
+                "passed": plan["scope"] == scope and by_name.get("local_ci") == local_ci and bool(other_steps) and set(other_steps.values()) == {others},
+                "local_ci": by_name.get("local_ci"),
+                "others": sorted(set(other_steps.values())),
+            }
+        )
+    results.append(
+        {
+            "case": "core_budget_and_local_ci_deadline_are_the_owner_decisions",
+            "passed": config["core_budget"] == 12 and config["pre_push"]["local_ci_seconds"] == {"range": 2700, "full": 4500},
+            "core_budget": config["core_budget"],
+            "local_ci_seconds": config["pre_push"]["local_ci_seconds"],
+        }
+    )
+    return results
+
+
 def pre_push_cases(work: Path, scratch: Path, gate_stage: bool = True) -> list[dict[str, Any]]:
     """The pre-push run selects the groups of the pushed range as hosted CI does, escalates to the full scope for selector and CI script changes, and
     every step has a deadline that fails visibly."""
     results = [escalation_case(scratch, f"pre_push_escalates_{index}", path, "full") for index, path in enumerate(ESCALATING_PATHS)]
     results += [escalation_case(scratch, f"pre_push_no_escalation_for_ordinary_path_{index}", path, "range") for index, path in enumerate(ORDINARY_PATHS)]
+    results += deadline_cases(scratch)
     config = json.loads((ROOT / "config/quality/ci_groups.json").read_text())
     root = pre_push_repo(scratch, "planted_escalation_gap", "scripts/ci/groups/launcher.sh")
     damaged = copy.deepcopy(config)

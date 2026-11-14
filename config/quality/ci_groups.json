@@ -286,7 +286,7 @@
   ],
   "launcher_shards": 2,
   "launcher_shard_seconds": 1500,
-  "core_budget": 10,
+  "core_budget": 12,
   "feature_shards": {
     "sources": 16,
     "columns": 4
@@ -388,6 +388,10 @@
     "timeout_seconds": {
       "range": 2700,
       "full": 3600
+    },
+    "local_ci_seconds": {
+      "range": 2700,
+      "full": 4500
     }
   },
   "worker_limits": {
