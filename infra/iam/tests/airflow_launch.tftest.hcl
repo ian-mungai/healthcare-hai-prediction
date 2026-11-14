@@ -271,9 +271,9 @@ run "every_statement_but_the_reads_has_a_condition" {
   assert {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement :
-      contains(["ReadStagedRunRecords", "ReadStagedCodeArchive", "ReadLayerRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
+      contains(["ReadStagedRunRecords", "ReadStagedCodeArchive", "ReadLayerRunRecords", "ReadJobLogs", "ReadLaunchHoldAndApplyLock", "ReadCurrentCodeRun", "ListClusterContainerInstances"], statement.Sid) || can(statement.Condition)
     ])
-    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the five reads of run records, the code archive, logs and parameters and the container instance list, which names the cluster ARN, go without one."
+    error_message = "Each launch, stop, describe, task list and pass grant carries a condition. Only the reads of run records, the code archive, logs and parameters and the container instance list, which names the cluster ARN, go without one."
   }
 
   assert {
@@ -394,10 +394,10 @@ run "no_grant_reads_a_parameter_beside_the_host_cap_hold_and_lock" {
   assert {
     condition = !anytrue(flatten([
       for policy in [aws_iam_role_policy.airflow_launch_jobs[0].policy, aws_iam_role_policy.airflow_launch_records[0].policy] : [
-        for statement in jsondecode(policy).Statement : statement.Sid != "ReadLaunchHoldAndApplyLock" && anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
+        for statement in jsondecode(policy).Statement : !contains(["ReadLaunchHoldAndApplyLock", "ReadCurrentCodeRun"], statement.Sid) && anytrue([for action in flatten([statement.Action]) : startswith(action, "ssm:")])
       ]
     ]))
-    error_message = "The launch role reads no Parameter Store value but the launch hold and the apply lock."
+    error_message = "The launch role reads no Parameter Store value but the launch hold, the apply lock and the current code run."
   }
 }
 
@@ -421,6 +421,30 @@ run "launch_role_reads_only_the_launch_hold_and_the_apply_lock" {
       for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : [for resource in flatten([statement.Resource]) : strcontains(resource, "host_job_cap")]
     ]))
     error_message = "No statement of the launch role names the parameter that carried the host job cap until the cap became an Airflow container setting."
+  }
+}
+
+# A scheduled publisher run takes its code from the code run CI staged last (owner A, Nov 13 2026): one read of /<project>/current_code_run, no wildcard and no
+# write. CI writes it (the code staging role).
+run "launch_role_reads_exactly_the_current_code_run_parameter" {
+  command = plan
+
+  assert {
+    condition = (
+      length([for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadCurrentCodeRun"]) == 1 &&
+      [for statement in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement : statement if statement.Sid == "ReadCurrentCodeRun"][0] == {
+        Sid      = "ReadCurrentCodeRun"
+        Effect   = "Allow"
+        Action   = "ssm:GetParameter"
+        Resource = "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/current_code_run"
+      }
+    )
+    error_message = "The launch role reads the one current code run parameter with ssm:GetParameter and nothing else under the project folder."
+  }
+
+  assert {
+    condition     = !strcontains(jsonencode([for key, policy in aws_iam_role_policy.airflow_launch_records : policy.policy]), "current_code_run")
+    error_message = "Only the jobs policy of the launch role names the current code run parameter."
   }
 }
 

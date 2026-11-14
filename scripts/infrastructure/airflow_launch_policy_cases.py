@@ -129,6 +129,7 @@ RETIRED_CAP = "/healthcare_hai_prediction/host_job_cap"
 HOLD = "/healthcare_hai_prediction/host_launch_hold"
 # The services apply lock: a present lock refuses every host launch, so the launch role reads it (infra/iam/airflow_launch.tf).
 APPLY_LOCK = "/healthcare_hai_prediction/services_apply_lock"
+CURRENT_CODE_RUN = f"/{PROJECT}/current_code_run"
 
 
 def values(families: list[str]) -> dict[str, str]:
@@ -145,6 +146,7 @@ def values(families: list[str]) -> dict[str, str]:
         "DATA_BUCKET_NAME": BUCKET,
         "HOST_LAUNCH_HOLD_PARAMETER_NAME": HOLD,
         "SERVICES_APPLY_LOCK_PARAMETER_NAME": APPLY_LOCK,
+        "PROJECT_NAME": PROJECT,
         "RECORD_PREFIX": RECORD_PREFIX,
         "REQUEST_OBJECT_ARNS": json.dumps(requests),
         "FAMILIES": json.dumps(sorted(families)),
@@ -346,6 +348,12 @@ def job_cases() -> list[Case]:
     add("create the apply lock", "ssm:PutParameter", apply_lock, False)
     add("delete the apply lock", "ssm:DeleteParameter", apply_lock, False)
     add("read a sibling of the apply lock", "ssm:GetParameter", f"{apply_lock}_extra", False)
+    code_run = f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{CURRENT_CODE_RUN}"
+    add("read the current code run", "ssm:GetParameter", code_run, True)
+    add("set the current code run", "ssm:PutParameter", code_run, False)
+    add("delete the current code run", "ssm:DeleteParameter", code_run, False)
+    add("read the current code run by the plural call", "ssm:GetParameters", code_run, False)
+    add("read a sibling of the current code run", "ssm:GetParameter", f"{code_run}_extra", False)
     add("read the MLflow password", "ssm:GetParameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/mlflow_admin_password", False)
     for action in ("ecs:UpdateService", "ecs:DeleteService", "ecs:CreateService", "ecs:RegisterTaskDefinition", "ecs:DeregisterTaskDefinition"):
         add(f"no {action}", action, f"arn:aws:ecs:{REGION}:{ACCOUNT}:service/{CLUSTER}/{PROJECT}_{ENVIRONMENT}_polaris", False)
@@ -602,6 +610,9 @@ RESOURCES = (
     Resource("retired host job cap parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{RETIRED_CAP}", NONE, NONE),
     Resource("launch hold", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{HOLD}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
     Resource("apply lock", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{APPLY_LOCK}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})),
+    Resource(
+        "current code run", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{CURRENT_CODE_RUN}", frozenset({"ssm:GetParameter"}), frozenset({"ssm:GetParameter"})
+    ),
     Resource("another parameter", f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter/healthcare_hai_prediction/other_parameter", NONE, NONE),
     Resource("a KMS key", KMS_KEY, NONE, NONE),
     Resource("another KMS key", KMS_OTHER_KEY, NONE, NONE),
@@ -737,6 +748,7 @@ WIDENING_ACTIONS = {
     "ReadStagedRunRecords": ("s3:DeleteObject", "s3:PutObject", "s3:GetObjectVersion"),
     "ReadJobLogs": ("logs:PutLogEvents", "logs:DeleteLogStream"),
     "ReadLaunchHoldAndApplyLock": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
+    "ReadCurrentCodeRun": ("ssm:PutParameter", "ssm:GetParameters", "ssm:DeleteParameter"),
     "ReplaceDecisionRecords": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "WriteLaunchRecordsOnce": ("s3:DeleteObject", "s3:PutObjectAcl"),
     "ReadLaunchRecords": ("s3:DeleteObject", "s3:GetObjectVersion"),
@@ -812,6 +824,8 @@ def planted(documents: Role) -> list[tuple[str, str, dict[str, Any]]]:
         ("jobs", "regression_a_parameter_prefix", appended(jobs, {"Sid": "Extra", "Effect": "Allow", "Action": "ssm:GetParameter", "Resource": f"{ssm}/*"})),
         ("jobs", "ReadLaunchHoldAndApplyLock_a_parameter_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}/healthcare_hai_prediction/*")),
         ("jobs", "ReadLaunchHoldAndApplyLock_a_name_prefix", replaced(jobs, "ReadLaunchHoldAndApplyLock", Resource=f"{ssm}{HOLD}*")),
+        ("jobs", "ReadCurrentCodeRun_a_parameter_prefix", replaced(jobs, "ReadCurrentCodeRun", Resource=f"{ssm}/{PROJECT}/*")),
+        ("jobs", "ReadCurrentCodeRun_a_name_prefix", replaced(jobs, "ReadCurrentCodeRun", Resource=f"{ssm}{CURRENT_CODE_RUN}*")),
         ("jobs", "ReadStagedRunRecords_every_input", replaced(jobs, "ReadStagedRunRecords", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("jobs", "ReadStagedCodeArchive_every_input", replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/lakehouse/run_stage/*/inputs/*")),
         ("jobs", "ReadStagedCodeArchive_every_staged_object", replaced(jobs, "ReadStagedCodeArchive", Resource=f"{bucket}/lakehouse/run_stage/*")),
@@ -1057,7 +1071,7 @@ def allowed_grants(families: list[str]) -> list[Grant]:
         Grant("logs:GetLogEvents", (f"arn:aws:logs:{REGION}:{ACCOUNT}:log-group:{LOG_GROUP}:log-stream:*",), {}),
         Grant(
             "ssm:GetParameter",
-            tuple(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}" for name in (HOLD, APPLY_LOCK)),
+            tuple(f"arn:aws:ssm:{REGION}:{ACCOUNT}:parameter{name}" for name in (HOLD, APPLY_LOCK, CURRENT_CODE_RUN)),
             {},
         ),
     ]
