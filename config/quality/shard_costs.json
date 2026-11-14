@@ -50,7 +50,7 @@
       "flag removed, docs still name it": 1.306,
       "surviving package named like a removed function (removed names)": 3.92,
       "surviving package named like a removed function (importer types)": 4.632,
-      "removed function named in docs and a YAML key, nothing imports it": 1.225,
+      "removed function named in docs and a YAML value, nothing imports it": 1.225,
       "removed function still named in a pending file": 3.871,
       "removed function named in a file that imports a pending file": 3.957,
       "removed function named in a typed file, left to MyPy": 3.88,

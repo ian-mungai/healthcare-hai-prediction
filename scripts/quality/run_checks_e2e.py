@@ -2316,10 +2316,10 @@ CASES = [
         files={"app/rig.py": "KEEP = 1\n"},
     ),
     Case(
-        "removed function named in docs and a YAML key, nothing imports it",
+        "removed function named in docs and a YAML value, nothing imports it",
         "removed-names",
         True,
-        committed={"app/util.py": UTIL_FUNCTION, "README.md": f"Call `{OLD_FUNCTION}`.\n", "config/policy.yaml": f"{OLD_FUNCTION}: strict\n"},
+        committed={"app/util.py": UTIL_FUNCTION, "README.md": f"Call `{OLD_FUNCTION}`.\n", "config/policy.yaml": f"rule: {OLD_FUNCTION}\n"},
         files={"app/util.py": "X = 1\n"},
     ),
     Case(
@@ -3867,8 +3867,9 @@ PLANTED_REGRESSIONS = [
         ],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        "if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n            names.add(node.name)\n",
-        "if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n"
+        "names |= walrus_names(node)\n        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n            names.add(node.name)\n",
+        "names |= walrus_names(node)\n"
+        "        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):\n"
         "            names.add(node.name)\n"
         "            names |= module_bindings(node.body)\n",
         0,
