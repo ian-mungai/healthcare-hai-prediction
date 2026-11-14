@@ -45,6 +45,7 @@
     "lakehouse_bronze": [
       "^scripts/(lakehouse|orchestration)/",
       "^scripts/(acquisition|infrastructure)/",
+      "^infra/(jobs|platform)/",
       "^tests/",
       "^orchestration/",
       "^dbt/",
