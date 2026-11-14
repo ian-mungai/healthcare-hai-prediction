@@ -98,6 +98,7 @@ SPEC_FILES = {  # copies of https://openlineage.io/spec/... taken on Nov 5 2026;
     "OpenLineage-2-0-2.json": "69f68bee00b9beac88a87059c0102410e7bb05f3f43c46d02a0409831eceb0d2",
 }
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
+HOST_FILE = Path("config/orchestration/host_jobs.json")
 GLUE_FILE = Path("config/metadata/ingestion/glue.json")
 MIRROR_FILE = Path("config/lakehouse/athena_mirror.json")
 BRONZE_TABLES_FILE = Path("config/lakehouse/bronze_tables.json")
@@ -229,10 +230,19 @@ def source_tables(text: str) -> set[str]:
     return names
 
 
+def lineage_layer(job: str, *, root: Path = ROOT) -> str:
+    """The job whose lineage a launch family carries: a model set's family (``features_m1``) is a host family that is like the features job and has the
+    features layer's lineage, so its launch records stay under its own family and its datasets are the layer's. Any other family is its own layer."""
+    like = json.loads((root / HOST_FILE).read_text())["jobs"].get(job, {}).get("like")
+    return str(like) if like else job
+
+
 def declared_lineage(job: str, *, root: Path = ROOT) -> dict[str, list[dict[str, str]]]:
     """The tables a job reads and writes, from the files that already name them: bronze writes the tables of the bronze table map, silver reads the bronze
     tables its dbt sources declare (and the file metadata table) and writes its publish contract, gold reads the silver contract and writes its own, features
-    read the gold contract and write theirs. The other jobs declare nothing. Each list is sorted by table name."""
+    read the gold contract and write theirs. A model set's family declares its features layer's tables. The other jobs declare nothing. Each list is sorted
+    by table name."""
+    job = lineage_layer(job, root=root)
     if job not in set(json.loads((root / JOBS_FILE).read_text())["steps"].values()):
         raise LineageRefused(f"{job} is not a job of {JOBS_FILE.name}")
 
@@ -339,7 +349,7 @@ def launch_facts(store: S3LaunchStore, run_id: str, job: str, attempt: int) -> L
     if claim is None or end is None:
         raise LineageRefused(f"{run_id}:{job}:{attempt} has no {'claim' if claim is None else 'end record'}: there is nothing to rebuild yet")
     intent = by_attempt.get((owner, "intent")) or by_attempt.get((attempt, "intent")) or claim
-    return LaunchFacts(run_id, job, attempt, intent["at"], end["at"], end["outcome"], str(claim["bound"].get("input_run", "latest")))
+    return LaunchFacts(run_id, lineage_layer(job), attempt, intent["at"], end["at"], end["outcome"], str(claim["bound"].get("input_run", "latest")))
 
 
 @dataclass(frozen=True)
@@ -615,14 +625,19 @@ class LineageSource:
     evidence: S3Evidence
     store: S3LaunchStore
 
+    @property
+    def layer(self) -> str:
+        """The job whose lineage this launch family carries (``job`` is the family its launch records sit under)."""
+        return lineage_layer(self.job)
+
     def lineage(self) -> tuple[JobLineage, LaunchFacts]:
         """The task's own lineage: the run facet and no dataset. A layer job's versions are checked here and stay in the facet's state, but its datasets travel
         in the per-table events, because one event holding every input and every output makes the receiver pair each input with each output."""
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-        if self.job == BRONZE_JOB:
+        if self.layer == BRONZE_JOB:
             return JobLineage([], [], launch_facet(self.invocation, facts, "not_applicable", [])), facts
-        full = job_lineage(self.job, self.invocation, self.declared, self.evidence, facts)
-        return (JobLineage([], [], full.launch) if self.job in TABLE_EVENT_JOBS else full), facts
+        full = job_lineage(self.layer, self.invocation, self.declared, self.evidence, facts)
+        return (JobLineage([], [], full.launch) if self.layer in TABLE_EVENT_JOBS else full), facts
 
     def table_events(self, facts: LaunchFacts) -> list[dict[str, Any]]:
         """The per-table events of a succeeded layer job: its published tables and their own inputs."""
@@ -631,7 +646,7 @@ class LineageSource:
     def table_lines(self) -> list[str]:
         """The per-table events of a succeeded job as canonical JSON lines, the bytes the replay gives; nothing for a run that did not succeed."""
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-        if self.job not in TABLE_EVENT_JOBS or facts.outcome != "succeeded":
+        if self.layer not in TABLE_EVENT_JOBS or facts.outcome != "succeeded":
             return []
         found = self.table_events(facts)
         for event in found:
@@ -642,7 +657,7 @@ class LineageSource:
         """Send the per-table events of a succeeded bronze or layer run to the receiver of the HTTP lineage settings, within ``TABLE_EVENTS_SECONDS``.
         Nothing is read or sent without those settings. Returns how many events were sent; ``DeliveryFailed`` when the receiver fails or the deadline passes."""
         target = http_lineage(os.environ if environ is None else environ)
-        if self.job not in TABLE_EVENT_JOBS or target is None:
+        if self.layer not in TABLE_EVENT_JOBS or target is None:
             return 0
         lines = self.table_lines()
         send_within(lines, target[0], target[1], TABLE_EVENTS_SECONDS)
@@ -651,7 +666,7 @@ class LineageSource:
     def events(self) -> list[dict[str, Any]]:
         lineage, facts = self.lineage()
         found = events(lineage, self.invocation, facts)
-        if self.job in TABLE_EVENT_JOBS:
+        if self.layer in TABLE_EVENT_JOBS:
             found += self.table_events(facts)
         for event in found:
             check_event(event)
@@ -663,11 +678,11 @@ class LineageSource:
         try:
             lineage, _ = self.lineage()
         except (LineageRefused, EvidenceUnavailable) as error:
-            facts = LaunchFacts(self.run_id, self.job, self.attempt, "", "", "unknown", "latest")
+            facts = LaunchFacts(self.run_id, self.layer, self.attempt, "", "", "unknown", "latest")
             with contextlib.suppress(LineageRefused, EvidenceUnavailable):  # the facet still names the run, job and attempt; the refusal says why
                 facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-            grouped = self.job in TABLE_EVENT_JOBS or self.job == BRONZE_JOB  # a declaration names every table of the job, so a refusal claims none of them
-            outputs = [] if self.job == BRONZE_JOB else [dict(item) for item in self.declared["outputs"]]
+            grouped = self.layer in TABLE_EVENT_JOBS or self.layer == BRONZE_JOB  # a declaration names every table of the job, so a refusal claims none of them
+            outputs = [] if self.layer == BRONZE_JOB else [dict(item) for item in self.declared["outputs"]]
             lineage = JobLineage(
                 [] if grouped else [dict(item) for item in self.declared["inputs"]],
                 [] if grouped else outputs,

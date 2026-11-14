@@ -39,6 +39,7 @@ from orchestration.ecs_lineage import (
     LineageSource,
     S3Evidence,
     declared_lineage,
+    lineage_layer,
     step_invocation,
 )
 from orchestration.ecs_preflight import (
@@ -401,7 +402,7 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
         result |= {"report": accepted["report"], "passed": True}
-    if job in TABLE_EVENT_JOBS:
+    if lineage_layer(job) in TABLE_EVENT_JOBS:
         send_job_table_events(launch_services, request, job, int(claim["attempt"]))
     return result
 

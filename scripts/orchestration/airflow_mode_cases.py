@@ -2872,8 +2872,48 @@ def job_task_hands_the_listener_its_lineage() -> None:
     require("airflow_lineage_http_enabled" in (ROOT / "infra/services/airflow.tf").read_text(), "the HTTP lineage setting is not in the Airflow service")
 
 
+def model_set_jobs_hand_over_the_lineage_of_the_features_layer() -> None:
+    """Each model set's features DAG launches in its own family (``features_m1`` to ``features_m6``) and, with the production lineage factory installed, its
+    job task hands the listener a ``haiLaunch`` facet of the features layer and its evidence step reaches the per-table event dispatch under that family,
+    which is the family of its launch records."""
+    from dataclasses import replace
+
+    from orchestration import ecs_lineage
+    from scripts.orchestration.ecs_lineage_cases import template_bucket
+
+    steps = importlib.import_module("orchestration.airflow_steps")
+    rig = Rig()
+    _, base = base_run_passed(rig)
+    evidence = ecs_lineage.S3Evidence(template_bucket(), BUCKET)
+    rig.services = replace(rig.services, lineage=steps.lineage_factory(evidence, rig.launcher.store), evidence=evidence)
+    sent: list[str] = []
+    seen: dict[str, Any] = {}
+
+    def record(*args: Any) -> None:
+        sent.append(str(args[2]))
+
+    with mock.patch.dict("os.environ", HTTP_LINEAGE), mock.patch.object(steps, "send_job_table_events", record):
+        for dag_id, model in MODEL_DAGS.items():
+            run = model_run(base, model)
+            with world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current:
+                current.run_dag(f"{dag_id}.py")
+                require(current.results.get("gate") == "accepted", f"{dag_id} did not pass: {current.results}")
+                nodes = {node.task_id: node for node in current.built}
+                seen[model] = extractor_manager_facets(nodes["job"], "complete", current.context["ti"])
+    for model, facets in seen.items():
+        require(facets is not None, f"the job task of model set {model} handed the listener no lineage")
+        launch = facets["run_facets"]["haiLaunch"]
+        require(launch["job"] == "features" and launch["attempt"] == 1, f"the facet of model set {model} names {launch}")
+        require(
+            "not a job" not in str(launch.get("refusal", "")) and "not a job" not in str(launch),
+            f"the model set {model} is refused as an unknown job: {launch}",
+        )
+    require(sorted(sent) == [f"features_{model}" for model in MODEL_DAGS.values()], f"the table events were dispatched for {sent}")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "job_task_hands_the_listener_its_lineage": job_task_hands_the_listener_its_lineage,
+    "model_set_jobs_hand_over_the_lineage_of_the_features_layer": model_set_jobs_hand_over_the_lineage_of_the_features_layer,
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
     "gates_refuse_before_any_cloud_call": gates_refuse_before_any_cloud_call,

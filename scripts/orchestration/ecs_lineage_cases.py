@@ -851,7 +851,32 @@ def lineage_is_built_inside_the_guard() -> None:
     require(built_operator.get_openlineage_facets_on_failure(None) is None, "nor on failure")
 
 
+def model_set_families_carry_the_features_layer() -> None:
+    """A model set's host family (``features_m1`` to ``features_m6``) keeps its own launch records and has the lineage of the features layer: the same
+    declaration, a source that sends the layer's table events, and no other family is mapped."""
+    host = json.loads((ROOT / ecs_lineage.HOST_FILE).read_text())["jobs"]
+    sets = sorted(family for family, entry in host.items() if entry.get("like") == "features")
+    require(sets == [f"features_m{number}" for number in range(1, 7)], f"the host table names the model sets {sets}")
+    for family in sets:
+        require(ecs_lineage.lineage_layer(family) == "features", f"{family} is not mapped to the features layer")
+        require(ecs_lineage.declared_lineage(family) == ecs_lineage.declared_lineage("features"), f"{family} declares other tables than the features layer")
+        rig = Rig()
+        found = ecs_lineage.LineageSource(
+            family,
+            RUN_OF["features"],
+            1,
+            invocation("features"),
+            DECLARED["features"],
+            ecs_lineage.S3Evidence(rig.bucket, BUCKET),
+            S3LaunchStore(rig.bucket, BUCKET, PREFIX),
+        )
+        require(found.job == family and found.layer == "features" and found.layer in ecs_lineage.TABLE_EVENT_JOBS, f"{family} is not a table event source")
+    for other in ("bronze", "silver", "gold", "features", "train", "metadata"):
+        require(ecs_lineage.lineage_layer(other) == other, f"{other} must be its own layer")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "model_set_families_carry_the_features_layer": model_set_families_carry_the_features_layer,
     "declared_lineage_follows_the_code": declared_lineage_follows_the_code,
     "declared_names_are_the_mirror_names": declared_names_are_the_mirror_names,
     "every_job_from_the_contract_files": every_job_from_the_contract_files,
