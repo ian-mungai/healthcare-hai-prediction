@@ -167,7 +167,7 @@ def table_inputs(manifest: Mapping[str, Any], tables: Mapping[str, str], layer: 
                     found |= reads(dependency, seen)
         return found
 
-    record: dict[str, dict[str, Any]] = {}
+    record: dict[str, list[dict[str, str]]] = {}
     for key in sorted(nodes):
         node = nodes[key]
         name = model_name(node) if node.get("resource_type") == "model" else ""

@@ -46,21 +46,21 @@ def notice_parameters(outcome: str, **changes: Any) -> dict[str, Any]:
     return {**canary_parameters(**changes), "outcome": outcome}
 
 
-def phase(world: SimpleNamespace, name: str, parameters: dict[str, Any], run: str = CHAIN_RUN, **environment: str | None) -> tuple[int, str, str]:
+def phase(world: SimpleNamespace, name: str, parameters: dict[str, Any], **environment: str | None) -> tuple[int, str, str]:
     """Run one phase in a fresh workspace, as a new task of the run does: the code fetched, the container variables, the bucket and the client stand-ins."""
     work = world.folder / f"work_{name}_{len(list(world.folder.glob(f'work_{name}_*')))}"
     work.mkdir(parents=True)
     _, sha = aws_run_cases.code_archive(work)
     publish = world.publish or (lambda **arguments: world.sent.append(arguments) or {"MessageId": f"message-{len(world.sent)}"})
     sns = SimpleNamespace(publish=publish)
-    values: dict[str, str | None] = {"CODE_SHA256": sha, "TRAINING_PARAMETERS": json.dumps(parameters), "ALERTS_TOPIC_ARN": TOPIC} | environment
+    values: dict[str, str | None] = {"CODE_SHA256": sha, "TRAINING_PARAMETERS": json.dumps(parameters), "ALERTS_TOPIC_ARN": TOPIC, **environment}
     with (
         standins(world.fixture),
         mock.patch.object(promote_receipt, "s3_client", return_value=world.bucket),
         mock.patch.object(aws_run, "sns_client", return_value=sns),
         aws_run_cases.environment(**values),
     ):
-        return aws_run_cases.call(name, "--run", run, "--mode", "real", "--work", str(work))
+        return aws_run_cases.call(name, "--run", CHAIN_RUN, "--mode", "real", "--work", str(work))
 
 
 def stored(world: SimpleNamespace, kind: str) -> dict[str, Any] | None:
@@ -95,7 +95,9 @@ def promotion_chain_cases(cases: Any, folder: Path) -> None:
         code, _, error = phase(world, "canary", canary_parameters())
         require(code == 0, f"the canary check failed: {error}")
         result = stored(world, "canary")
-        require(result is not None and result["decision"] == "promote" and result["failed"] == [], f"the stored result: {result}")
+        if result is None:
+            raise AssertionError("the canary check stored no result")
+        require(result["decision"] == "promote" and result["failed"] == [], f"the stored result: {result}")
         require(
             result["version"] == number and result["model"] == world.record["promotion"]["challenger"]["model"], f"the result names another candidate: {result}"
         )
@@ -108,7 +110,9 @@ def promotion_chain_cases(cases: Any, folder: Path) -> None:
         world.bucket.objects[key_of("replay")] = json.dumps({**report, "statuses": {"200": 99, "500": 1}}).encode()
         code, _, error = phase(world, "canary", canary_parameters())
         result = stored(world, "canary")
-        require(code == 0 and result is not None and result["decision"] == "hold", f"a failed canary was not held: {code} {error} {result}")
+        if result is None:
+            raise AssertionError(f"a failed canary was not held, no result was stored: {code} {error}")
+        require(code == 0 and result["decision"] == "hold", f"a failed canary was not held: {code} {error} {result}")
         require(
             result["failed"] == ["requests_answered"] and not canary_tags(world), f"a held canary left tags or lost its reason: {result} {canary_tags(world)}"
         )
@@ -117,7 +121,9 @@ def promotion_chain_cases(cases: Any, folder: Path) -> None:
         world = staged(folder / "no_replay")
         code, _, error = phase(world, "canary", canary_parameters())
         result = stored(world, "canary")
-        require(code == 0 and result is not None, f"a missing replay failed the phase instead of holding: {code} {error}")
+        if result is None:
+            raise AssertionError(f"a missing replay failed the phase instead of holding: {code} {error}")
+        require(code == 0, f"a missing replay failed the phase instead of holding: {code} {error}")
         require(result["decision"] == "hold" and result["failed"] == ["replay_report_missing"] and not canary_tags(world), f"result: {result}")
 
     def rerun_keeps_the_first_result() -> None:

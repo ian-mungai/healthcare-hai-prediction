@@ -874,10 +874,10 @@ def case_deploy_verifies_the_active_version(c: Checker) -> None:
         c.check("a stable deploy whose active write did not land is refused", refused and store.read_active(HAI) is None)
     for changed, value in (("hai_type", "HAI_2"), ("sequence", 9)):
         with tempfile.TemporaryDirectory(prefix="serving_") as folder:
-            store = AlteredWrite(Path(folder), changed, value)
+            altered = AlteredWrite(Path(folder), changed, value)
             refused = rejected(
-                lambda store=store: deploy.run(
-                    registry=Registry(), manifests=store, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1
+                lambda altered=altered: deploy.run(
+                    registry=Registry(), manifests=altered, hai_type=HAI, candidate_version=None, percent=0, mode="stable", deployment_id=RUN_1
                 )
             )
             c.check(f"a stable deploy whose active record has another {changed} is refused", refused)
@@ -1104,14 +1104,15 @@ def case_deploy_expiry(c: Checker) -> None:
             )
         finished = run(now=NOW + 3600, folder=Path(folder)).deployment
         c.check("a deploy that stopped after its binding finishes on its retry with the first expiry", finished.expires_at == NOW + TTL_HOURS * 3600)
-    for label, arguments in (
+    for label, research_arguments in (
         ("no research run", {"research": None}),
         ("a malformed research run", {"research": "latest"}),
     ):
         with tempfile.TemporaryDirectory(prefix="serving_") as folder:
             c.check(
                 f"a canary deploy with {label} is refused and writes nothing",
-                rejected(lambda folder=folder, arguments=arguments: run(folder=Path(folder), **arguments)) and not list(Path(folder).rglob("*.json")),
+                rejected(lambda folder=folder, research_arguments=research_arguments: run(folder=Path(folder), **research_arguments))
+                and not list(Path(folder).rglob("*.json")),
             )
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         c.check(
@@ -1435,7 +1436,6 @@ def case_chain_rollout(c: Checker) -> None:
         """A recorder whose bucket holds the research record of the research run, and whose canary result, when there is one, is stored when the check runs."""
         recorder = chain.Recorder({})
         recorder.objects[training_contract.record_key("research", research, HAI)] = chain.research_record(HAI, challenger)
-        recorder.pending = {}
         if decision is not None:
             recorder.pending[training_contract.record_key("canary", research, HAI)] = chain.canary_record(
                 HAI, decision, challenger=challenger, changes={"research_run": research}

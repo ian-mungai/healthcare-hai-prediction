@@ -290,7 +290,7 @@ def declared_lineage_follows_the_code() -> None:
     require(set(derived) | set(NO_TABLES) == set(JOBS["jobs"]), "every job is either derived from its code or named as having no declared tables")
     for job, wanted in derived.items():
         found = ecs_lineage.declared_lineage(job)
-        require(found["inputs"] or found["outputs"], f"{job} reads or writes tables but declares none")
+        require(bool(found["inputs"] or found["outputs"]), f"{job} reads or writes tables but declares none")
         for side in ("inputs", "outputs"):
             got = sorted(found[side], key=lambda item: item["name"])
             require(
@@ -316,7 +316,7 @@ def declared_names_are_the_mirror_names() -> None:
     require(all(item["name"].startswith("hai_lakehouse.hai_mirror_silver.") for item in silver["outputs"]), "silver outputs are not in hai_mirror_silver")
     require(all(item["name"].startswith("hai_lakehouse.hai_mirror_bronze.") for item in silver["inputs"]), "silver inputs are not in hai_mirror_bronze")
     bronze = ecs_lineage.declared_lineage("bronze")["outputs"]
-    require(bronze and all(item["name"].startswith("hai_lakehouse.hai_mirror_bronze.") for item in bronze), "bronze outputs are not in hai_mirror_bronze")
+    require(bool(bronze) and all(item["name"].startswith("hai_lakehouse.hai_mirror_bronze.") for item in bronze), "bronze outputs are not in hai_mirror_bronze")
     require({item["namespace"] for item in [*silver["inputs"], *silver["outputs"]]} == {f"iceberg://{SERVICE}"}, "every dataset names the glue_mirror service")
     require(all(".silver." not in item["name"] and ".gold." not in item["name"] for item in ecs_lineage.declared_lineage("gold")["inputs"]), "a Polaris name")
 
@@ -464,7 +464,7 @@ def real_gold_edges_are_not_a_cross_product() -> None:
     pairs = table_pairs(found)
     require(
         len(pairs) == sum(len(reads) for reads in wanted.values()) and len(pairs) < len(declared["gold"]["inputs"]) * len(declared["gold"]["outputs"]),
-        len(pairs),
+        f"{len(pairs)} table pairs",
     )
     unrelated = (glue("silver", "int_wonder_county_deaths")["name"], glue("gold", "dim_change_type")["name"])
     require(unrelated not in pairs, "a silver table the gold table does not read is paired with it")
@@ -929,7 +929,7 @@ def model_set_digest_is_bound_to_its_base_row() -> None:
     bucket, declared, found = model_set_evidence()
     lineage = ecs_lineage.job_lineage("features", invocation("features"), declared, ecs_lineage.S3Evidence(bucket, BUCKET), found)
     require(lineage.launch["snapshotState"] == "complete", f"the evidence of a model set with its true digest is {lineage.launch}")
-    mutations = {
+    mutations: dict[str, tuple[dict[str, Any], str]] = {
         "a wrong digest": ({"pin_digest": "0" * 64}, "base_row_sha256"),
         "a digest of another commit time": ({"pin_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),
         "a changed commit time": ({"apply_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),

@@ -143,7 +143,7 @@ def shard_option_is_checked(work: Path) -> str:
 
 
 def inventory_and_costs_are_checked(work: Path) -> str:
-    cases = (
+    cases: tuple[tuple[str, dict[str, Any], str], ...] = (
         ("duplicate case names", dict(inventory=["a", "a", "b"]), "unique"),
         ("an empty inventory", dict(inventory=[]), "nonempty"),
         ("a zero cost", dict(costs={"case_01": 0}), "positive"),

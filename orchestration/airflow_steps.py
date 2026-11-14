@@ -397,10 +397,10 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
     end = None
     if claim is not None:
         end = {record["event"]: record for record in store.records(request.run_id, job, [claim["attempt"]])}.get("end")
-    if end is None or end.get("outcome") != "succeeded":
+    if claim is None or end is None or end.get("outcome") != "succeeded":
         found = end.get("outcome") if end is not None else "no end record"
         raise LaunchRefused(f"no successful launch of {job} is recorded for run {request.run_id}: {found}")
-    result: dict[str, Any] = {"job": job, "run_id": request.run_id, "attempt": claim["attempt"] if claim else None, "task_arn": end.get("task_arn", "")}
+    result: dict[str, Any] = {"job": job, "run_id": request.run_id, "attempt": claim["attempt"], "task_arn": end.get("task_arn", "")}
     if job in layer_report.LAYERS:
         try:
             accepted = layer_report.accept(report_access(launch_services), job, request.run_id)

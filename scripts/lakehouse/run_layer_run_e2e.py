@@ -1025,12 +1025,13 @@ def case_features_apply_record_is_write_once(case: Case) -> None:
     require(kept is not None and json.loads(kept)["publication"]["run_id"] == FEATURES_RUN, f"the apply record of the run is in the bucket: {kept!r}")
     require(case.phase("features", "feast") == 0, f"a re-apply of the same publication succeeds: {case.err}")
     require(STATE[apply_key()] == kept, "a re-apply of the same publication changes nothing")
-    folder = case.root / "uploadable"
-    folder.mkdir()
+    job = Job("features", FEATURES_RUN, "real", case.root / "uploadable")
+    folder = job.folder
+    folder.mkdir(parents=True)
     for name in ("feast_apply.json", "feast_materialize.json", "layer_run.json"):
         (folder / name).write_text("{}\n")
     require(
-        [path.name for path in layer_run.uploadable(SimpleNamespace(folder=folder))] == ["feast_materialize.json", "layer_run.json"],
+        [path.name for path in layer_run.uploadable(job)] == ["feast_materialize.json", "layer_run.json"],
         "the upload of the run folder leaves the apply record to its own put",
     )
     require([key for _, key in UPLOADS].count(apply_key()) == 1, f"the apply record is written once: {[key for _, key in UPLOADS if key == apply_key()]}")
@@ -1057,7 +1058,7 @@ def case_apply_identity_ignores_what_a_re_apply_may_change(case: Case) -> None:
     identity, and one that names another base publication is not."""
     folder = case.root / "identity"
     folder.mkdir()
-    record = {
+    record: dict[str, Any] = {
         "schema": 1,
         "step": "apply",
         "run_id": FEATURES_RUN,

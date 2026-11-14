@@ -76,7 +76,7 @@ from botocore.exceptions import BotoCoreError, ClientError
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
 
-from orchestration.ecs_launch import LaunchError, S3LaunchStore, launch_record_prefix
+from orchestration.ecs_launch import LaunchError, LaunchStore, S3LaunchStore, launch_record_prefix
 from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -353,7 +353,7 @@ class LaunchFacts:
     model: str = ""  # the model set of a model set family's launch, else empty
 
 
-def launch_facts(store: S3LaunchStore, run_id: str, job: str, attempt: int) -> LaunchFacts:
+def launch_facts(store: LaunchStore, run_id: str, job: str, attempt: int) -> LaunchFacts:
     """Read the claim and the records of the attempt and of the claim's owning attempt. A retry that adopted an earlier launch takes that launch's times
     and outcome, and keeps its own attempt as its identity. An attempt whose launch has no end record has no lineage yet."""
     try:
@@ -703,7 +703,7 @@ class LineageSource:
     invocation: Mapping[str, Any]
     declared: Mapping[str, Any]
     evidence: S3Evidence
-    store: S3LaunchStore
+    store: LaunchStore
 
     @property
     def layer(self) -> str:

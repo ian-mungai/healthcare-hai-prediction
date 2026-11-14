@@ -168,6 +168,7 @@ class Recorder:
         self.types = tuple(challengers)
         self.failing = failing
         self.release_fails = False
+        self.pending: dict[str, bytes] = {}
 
     def launch(self, step: str, run: str, training: dict[str, Any]) -> None:
         self.calls.append((step, training["hai_type"], run, training))
@@ -255,7 +256,7 @@ def one_type_failing_stops_only_its_chain() -> None:
         failing = (("serve_deploy", "HAI_1"),) if step.startswith("serve") else ((step, "HAI_1"),)
         recorder = Recorder(both, failing=failing)
         failures = recorder.run()
-        require(failures and all("HAI_1" in failure for failure in failures), f"{step}: failures {failures}")
+        require(bool(failures) and all("HAI_1" in failure for failure in failures), f"{step}: failures {failures}")
         other = [name for name, hai_type in recorder.steps() if hai_type == "HAI_2" or name == "release" and hai_type == "m4"]
         require(other == complete, f"HAI_2 did not complete after HAI_1 failed at {step}: {other}")
     unresolved = Recorder(both, failing=(("promote", "HAI_1"),))
@@ -485,7 +486,7 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     steps = ("canary_deploy", "canary", "promote", "stable_deploy", "notice")
     runs = [training_contract.chain_run_id(RESEARCH, "HAI_1", step) for step in steps]
     environments = [rig.environment(before + index) for index in range(6)]
-    require([item.get("serve", item.get("promote"))["RUN_ID"] for item in environments] == [RESEARCH, *runs], f"runs: {environments}")
+    require([item["serve" if "serve" in item else "promote"]["RUN_ID"] for item in environments] == [RESEARCH, *runs], f"runs: {environments}")
     canary_request = json.loads(environments[1]["serve"]["SERVING_REQUEST"])
     require(
         canary_request

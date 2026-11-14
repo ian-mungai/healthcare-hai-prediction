@@ -92,7 +92,8 @@ def capture(
     With ``alias`` the manifest also lists each data object again under ``alias["role"]``, as the storage writer does for a response body it keeps as
     transport evidence, and ``alias["object"]`` changes fields of that second entry's object.
     """
-    objects, entries = [], []
+    objects: list[dict[str, Any]] = []
+    entries: list[dict[str, Any]] = []
     for role, name, data in files:
         sha = digest(data)
         key = f"{root}{collection}/datasets/ca/release_date=2026-01-01/{sha}/{name}"

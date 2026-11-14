@@ -149,11 +149,12 @@ def _form(dag_id: str) -> dict[str, ast.Call]:
 
     for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "params" and isinstance(node.value, ast.Dict):
-            return {
-                str(key.value): parameter(value)
-                for key, value in zip(node.value.keys, node.value.values, strict=True)
-                if isinstance(key, ast.Constant) and isinstance(parameter(value), ast.Call)
-            }
+            calls: dict[str, ast.Call] = {}
+            for key, value in zip(node.value.keys, node.value.values, strict=True):
+                chosen = parameter(value)
+                if isinstance(key, ast.Constant) and isinstance(chosen, ast.Call):
+                    calls[str(key.value)] = chosen
+            return calls
     raise AssertionError(f"{dag_id} declares no trigger form")
 
 

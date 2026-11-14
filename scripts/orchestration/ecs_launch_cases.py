@@ -138,7 +138,8 @@ def require(condition: bool, message: str) -> None:
         raise AssertionError(message)
 
 
-def refuses(error: type[BaseException], action: Callable[[], Any]) -> BaseException:
+# Any arguments: MyPy rejects a lambda that binds a loop variable as a default (B023) against Callable[[], Any].
+def refuses(error: type[BaseException], action: Callable[..., Any]) -> BaseException:
     try:
         action()
     except error as caught:

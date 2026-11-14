@@ -420,7 +420,7 @@ def real_dags_results(image: dict[str, Any]) -> dict[str, Any]:
         return {"real-image DAG runs ran": {"ok": False, "error": section["error"]}}
     results: dict[str, Any] = {f"real-image DAG run: {row['name']}": {**row, "ok": row["ok"] is True} for row in section["scenarios"]}
     uncovered = sorted(set(image["dags"]["dag_ids"]) - set(section["dags"]))
-    run = image.get("real_dags_run")
+    run = image.get("real_dags_run") or {}
     problems = [*real_image_dags.step_problems(section["scenarios"]), *real_image_dags.binding_problems(section, run)]
     verdict: dict[str, Any] = {"ok": section.get("ok") is True and not problems, "seconds": section.get("seconds")}
     if problems:

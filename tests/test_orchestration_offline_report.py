@@ -125,7 +125,7 @@ class ImageJobTransport:
         self.events: list[str] = []
         self.refuse_attempt = False
         self.refuse_cleanup = False
-        self.during: Callable[[], None] | None = None
+        self.during: Callable[[], object] | None = None
 
     def call(self, operation: str, payload: dict[str, Any], *, timeout: float) -> dict[str, Any]:
         """Return only the image description requested by the real consumer."""

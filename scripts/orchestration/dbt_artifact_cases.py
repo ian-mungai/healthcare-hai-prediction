@@ -217,7 +217,8 @@ def full_project_manifest_is_copied() -> None:
             errors = io.StringIO()
             with contextlib.redirect_stderr(errors):
                 copied = layer_run.catalog_copy("manifest.json", path, None)
-        require(copied is not None, f"{database}: the full-project manifest was not copied: {errors.getvalue()}")
+        if copied is None:
+            raise AssertionError(f"{database}: the full-project manifest was not copied: {errors.getvalue()}")
         nodes = json.loads(copied)["nodes"]
         placed = {key.rsplit(".", 1)[1] for key, node in nodes.items() if node["database"] == "hai_lakehouse"}
         require(
@@ -528,9 +529,9 @@ def ingestion_runs_once_per_layer() -> None:
         code = openmetadata_ingest.main(
             ["dbt", "--config-dir", str(config_dir), "--token-env", "OM_TOKEN", "--work-dir", folder], environment, seen.append, s3_client=bucket
         )
-        path = Path(seen[0]["source"]["sourceConfig"]["config"]["dbtConfigSource"]["dbtManifestFilePath"]) if seen else None
+        fixed = Path(seen[0]["source"]["sourceConfig"]["config"]["dbtConfigSource"]["dbtManifestFilePath"]) if seen else None
         require(
-            code == 0 and len(seen) == 1 and path is not None and json.loads(path.read_text()) == {"layer": "fixed"},
+            code == 0 and len(seen) == 1 and fixed is not None and json.loads(fixed.read_text()) == {"layer": "fixed"},
             "without layer runs the fixed keys are read",
         )
         for bad in (

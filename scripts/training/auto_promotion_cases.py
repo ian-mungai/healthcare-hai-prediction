@@ -237,7 +237,12 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         require("stays a challenger" in said["held"] and "within_time_limit" in said["held"], f"held: {said['held']}")
         require(said["promoted"] != said["promoted_not_rolled_out"], "a failed rollout reads as a completed one")
         sent: list[dict[str, Any]] = []
-        client = SimpleNamespace(publish=lambda **kwargs: sent.append(kwargs) or {"MessageId": "m-2"})
+
+        def publish(**kwargs: Any) -> dict[str, str]:
+            sent.append(kwargs)
+            return {"MessageId": "m-2"}
+
+        client = SimpleNamespace(publish=publish)
         topic = "arn:aws:sns:example-region:example-account:alerts"
         require(auto_promotion.notify(client, topic, "HAI_1", "promoted_not_rolled_out", said["promoted_not_rolled_out"]) == "m-2", "no message ID")
         require(sent[0]["Subject"] == "model promoted_not_rolled_out: HAI_1", f"subject: {sent[0]['Subject']}")
