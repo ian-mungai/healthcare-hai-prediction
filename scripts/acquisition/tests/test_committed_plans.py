@@ -6,13 +6,19 @@ checkout, as in GitHub CI, has none, so the test is skipped there and runs in th
 A local capture may have lost its file after S3 verified the object (the folder keeps receipt.json and the storage
 record). The loader still runs to its end: a deleted file is read as a stand-in that carries the checksum S3 verified, so the
 loader's own comparison with the plan's expected checksum runs, as do the locks, the plan chain and every other metadata check.
-A deleted dictionary is rebuilt from the headers of the capture receipt that stored it. Only the checks that need the deleted
-bytes (the dictionary labels, the payload) cannot run, and the plan is then skipped with a reason that names the capture.
+A deleted reference dictionary needs the S3-verified dictionary object of the capture whose verified receipt requested its table and year.
+A deleted dictionary is rebuilt from the headers of the capture receipt that stored it, and the receipt counts only when its bytes
+match the sha256 and byte count of the receipt.json object that S3 verified. The English lines it carries come from the plan that
+receipt recorded: the current plan when the hashes agree, else its catalogued predecessor, never an edited plan (then no line is selected
+and the loader's own English-line check fails).
+Only the checks that need the deleted bytes (the dictionary labels, the payload) cannot run, and the plan is then skipped with a
+reason that names the capture.
 Any other missing file fails the test: no record, an unverified object or a different checksum proves nothing.
 """
 
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -22,8 +28,9 @@ from pathlib import Path
 import pytest
 
 from scripts.acquisition import census_acs_api_contract, census_acs_detailed_contract
+from scripts.acquisition.legacy_versions import predecessor_plan
 from scripts.acquisition.redownload import PLANNED
-from scripts.acquisition.source_registry import REPO_ROOT, read_json
+from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, read_json
 
 COLLECTED = REPO_ROOT / "data/datasets"
 RECONCILIATION = "s3_collections_reconciliation.json"
@@ -41,7 +48,26 @@ class Stored(bytes):
 def verified_objects(record: Path) -> list[dict]:
     """The stored objects of a capture's storage record that S3 returned with the recorded checksum and length."""
     objects = read_json(record).get("objects", [])
-    return [{**line["object"], "storage_path": line.get("storage_path")} for line in objects if line.get("object", {}).get("verification") == VERIFIED]
+    return [
+        {**line["object"], "storage_path": line.get("storage_path"), "role": line.get("role")}
+        for line in objects
+        if line.get("object", {}).get("verification") == VERIFIED
+    ]
+
+
+def verified_receipt(folder: Path) -> dict:
+    """The capture's receipt.json, only when its bytes are the object S3 verified (sha256 and byte count of its capture_receipt record); else the test fails."""
+    body = (folder / "receipt.json").read_bytes()
+    proven = [o for o in verified_objects(folder / RECONCILIATION) if o["role"] == "capture_receipt" and o["storage_path"] == "receipt.json"]
+    if not any(o["sha256"] == hashlib.sha256(body).hexdigest() and o["byte_count"] == len(body) for o in proven):
+        pytest.fail(f"{folder.relative_to(COLLECTED).as_posix()}: receipt.json differs from the object S3 verified, so it proves nothing")
+    return json.loads(body)
+
+
+def recorded_plan(recorded: str) -> dict | None:
+    """The detailed plan a verified receipt recorded: the current plan if it hashes to RECORDED, else its catalogued predecessor; None if neither."""
+    plan = read_json(census_acs_detailed_contract.PLAN_PATH)
+    return plan if recorded == canonical_hash(plan) else predecessor_plan(plan, recorded)
 
 
 def pruned_capture_file(missing: Path) -> tuple[str, str] | None:
@@ -54,7 +80,7 @@ def pruned_capture_file(missing: Path) -> tuple[str, str] | None:
     else:
         return None
     stored_path = missing.relative_to(folder).as_posix()
-    artifacts = read_json(folder / "receipt.json").get("artifacts", [])
+    artifacts = verified_receipt(folder).get("artifacts", [])
     wanted = [item["sha256"] for item in artifacts if item.get("storage_path") == stored_path]
     # an expanded archive member is stored under the checksum of the archive artifact that the receipt lists
     expanded = (
@@ -71,26 +97,38 @@ def pruned_capture_file(missing: Path) -> tuple[str, str] | None:
 
 
 def pruned_reference_file(missing: Path) -> tuple[str, str] | None:
-    """The same proof for a reference file (attempt_NN/group.json): its receipt names the checksum and a storage record of the dataset verifies it."""
+    """The same proof for a reference file (attempt_NN/group.json): the S3-verified dictionary object of the capture for its table and year.
+
+    The attempt receipt beside the deleted file only points to that object (checksum and byte count); it proves nothing itself.
+    """
     receipt_path = missing.parent.parent / "receipt.json"
     if missing.parent.name.startswith("attempt_") and receipt_path.is_file() and (dataset := missing.relative_to(COLLECTED).parts[:2]):
         receipt = read_json(receipt_path)
         if Path(receipt.get("path", "")).parts[-3:] == missing.parts[-3:] and receipt.get("sha256"):
             for record in sorted((COLLECTED.joinpath(*dataset)).rglob(RECONCILIATION)):
                 for item in verified_objects(record):
-                    if item["sha256"] == receipt["sha256"]:
-                        return f"{missing.parent.parent.relative_to(COLLECTED).as_posix()}: {item['key']}", item["sha256"]
+                    if item["role"] == "dictionary" and item["sha256"] == receipt["sha256"] and item["byte_count"] == receipt.get("byte_count"):
+                        table, _, year = missing.parent.parent.name.partition("_")
+                        request = verified_receipt(record.parent)["acquisition"]
+                        if request["request_parameters"].get("get") == f"group({table})" and (not year or f"/data/{year}/" in request["requested_url"]):
+                            return f"{missing.parent.parent.relative_to(COLLECTED).as_posix()}: {item['key']}", item["sha256"]
     return None
 
 
 def dictionary_content(dataset: tuple[str, ...], sha256: str) -> bytes:
-    """A deleted group dictionary as its variable names, taken from the capture receipt that stored it; empty when no receipt did."""
-    for path in sorted(COLLECTED.joinpath(*dataset).rglob("receipt.json")):
-        receipt = read_json(path)
+    """A deleted group dictionary as its variable names, from the verified receipt that stored it; empty when no capture did.
+
+    The English lines come from the plan that receipt recorded (`recorded_plan`), so the loader's selection check compares the current plan with that plan.
+    """
+    for record in sorted(COLLECTED.joinpath(*dataset).rglob(RECONCILIATION)):
+        if not any(o["role"] == "dictionary" and o["sha256"] == sha256 for o in verified_objects(record)):
+            continue
+        receipt = verified_receipt(record.parent)
         if any(a.get("role") == "dictionary" and a.get("sha256") == sha256 for a in receipt.get("artifacts", [])):
-            batch_id = json.loads(receipt["lineage"]["extraction_or_query"]).get("batch_id")
-            plan = read_json(census_acs_detailed_contract.PLAN_PATH)
-            lines: list[str] = next((b.get("less_lines", []) for b in plan["batches"] if b["id"] == batch_id), [])
+            query = json.loads(receipt["lineage"]["extraction_or_query"])
+            plan = recorded_plan(query["plan_sha256"]) if query.get("mode") == "census_acs_detailed" else None
+            # without a proven plan no line is selected, and the loader's own English-line check fails for every table that needs lines
+            lines: list[str] = next((b.get("less_lines", []) for b in plan["batches"] if b["id"] == query["batch_id"]), []) if plan else []
             names = [h for h in receipt["schema_profile"]["native_headers"] if h not in {"state", "county"}]
             return json.dumps({"variables": {n: {"label": ENGLISH_LABEL if n in lines else ""} for n in names}}).encode()
     return b""
