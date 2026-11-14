@@ -615,6 +615,7 @@
     "dags/features_m6_dag.py",
     "dags/gold_transform_dag.py",
     "dags/ingestion_dag.py",
+    "dags/ingestion_retry_dag.py",
     "dags/metadata_ingest_dag.py",
     "dags/model_promotion_dag.py",
     "dags/research_dag.py",

@@ -28,6 +28,7 @@ from jsonschema import Draft202012Validator
 
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
+from orchestration.ingestion_schedule import RETRY_DAYS, RETRY_KIND, retry_run_id
 from orchestration.interface import SubmissionRequest
 from orchestration.promotion_chain import RecordRefused, challenger_named, stored_decision
 from orchestration.training_contract import (
@@ -59,9 +60,11 @@ RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
 SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
 PUBLISHER_VARIABLES = ("PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT")
-# A bootstrap skips every unit with a completion record. A monthly run downloads each unit again and compares its payload (``recheck``).
-KINDS = frozenset({"bootstrap", "monthly"})
+# A bootstrap skips every unit with a completion record. A monthly run downloads each unit again and compares its payload (``recheck``). A retry is a new
+# run of the same kind of work as a bootstrap: it names the monthly run it retries and its day, and skips every unit that has a completion record.
+KINDS = frozenset({"bootstrap", "monthly", "retry"})
 REQUEST_KEYS = frozenset({"kind", "capture_root"})
+RETRY_REQUEST_KEYS = REQUEST_KEYS | {"original_run", "day"}
 # What a launch may never name: the staged inputs archive, the queue whose state a task restores, the resumed sources and the prior state of the earlier flow.
 RETIRED_KEYS = frozenset({"inputs_sha256", "queue_sha256", "resume_sources", "prior_state"})
 # The capture root is raw/ or one test folder of one run ID (owner decision D4). The task validates it again.
@@ -233,19 +236,29 @@ def ssm_current_code_run_reader(ssm: Any, name: str) -> Callable[[], str | None]
     return read
 
 
-def publisher_values(request: object) -> dict[str, str]:
+def publisher_values(request: object, run_id: str) -> dict[str, str]:
     """The ``run`` container's publisher variables of a checked request, with ``PUBLISHER_LAUNCH_SHA256`` the digest of its canonical form, which binds
-    every attempt. A request that is not exactly the kind and the capture root is refused before any launch record or cloud call."""
+    every attempt. A request that is not exactly the kind and the capture root (a retry also names its original run and its day, and runs under the run ID
+    of that day) is refused before any launch record or cloud call."""
     if isinstance(request, Mapping) and RETIRED_KEYS & set(request):
         raise LaunchRefused("publisher_request_takes_no_inputs_or_prior_state")
-    if not isinstance(request, Mapping) or set(request) != REQUEST_KEYS:
-        raise LaunchRefused("publisher_request_needs_exactly_kind_and_capture_root")
+    retry = isinstance(request, Mapping) and request.get("kind") == RETRY_KIND
+    if not isinstance(request, Mapping) or set(request) != (RETRY_REQUEST_KEYS if retry else REQUEST_KEYS):
+        raise LaunchRefused(
+            "publisher_retry_request_needs_exactly_kind_capture_root_original_run_and_day" if retry else "publisher_request_needs_exactly_kind_and_capture_root"
+        )
     kind, root = request["kind"], request["capture_root"]
     if not isinstance(kind, str) or kind not in KINDS:
         raise LaunchRefused("publisher_request_has_wrong_kind")
     if not isinstance(root, str) or not CAPTURE_ROOT.fullmatch(root):
         raise LaunchRefused("publisher_request_has_wrong_capture_root")
-    canonical = json.dumps({"kind": kind, "capture_root": root}, sort_keys=True, separators=(",", ":"))
+    if retry:
+        original, day = request["original_run"], request["day"]
+        if not isinstance(original, str) or not RUN_ID.fullmatch(original) or isinstance(day, bool) or not isinstance(day, int) or not 1 <= day <= RETRY_DAYS:
+            raise LaunchRefused("publisher_retry_request_has_wrong_original_run_or_day")
+        if run_id != retry_run_id(original, day):
+            raise LaunchRefused("publisher_retry_run_is_not_the_run_of_that_day")
+    canonical = json.dumps(dict(request), sort_keys=True, separators=(",", ":"))
     return {"PUBLISHER_RUN_KIND": kind, "HAI_CAPTURE_ROOT": root, "PUBLISHER_LAUNCH_SHA256": hashlib.sha256(canonical.encode()).hexdigest()}
 
 
@@ -253,7 +266,7 @@ def require_publisher_request(request: SubmissionRequest) -> dict[str, str]:
     """The checked publisher values of a request whose run ID is a run ID. Nothing here reads the cloud, so a malformed request is refused at once."""
     if not RUN_ID.fullmatch(request.run_id):
         raise LaunchRefused("publisher_request_has_wrong_run_id")
-    return publisher_values(request.publisher)
+    return publisher_values(request.publisher, request.run_id)
 
 
 def derived_run_id(parent_run: str, layer: str) -> str:

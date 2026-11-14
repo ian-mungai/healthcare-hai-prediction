@@ -12,6 +12,7 @@ from dataclasses import replace
 from functools import partial
 from typing import Any
 
+from orchestration import ingestion_schedule as schedule
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings
 from orchestration.ecs_launch import EcsFitProbe, JobSpec, Launcher, LaunchRefused, Resources, S3LaunchStore, launch_record_prefix
 from orchestration.publisher_launch import DEADLINE_SECONDS, publisher_spec
@@ -53,8 +54,8 @@ class Rig:
         probe = EcsFitProbe(self.ecs, CLUSTER, lambda: 2 * NEED.scratch_bytes)
         return Launcher(self.adapter, S3LaunchStore(self.records, BUCKET, PREFIX), probe, self.time.clock())
 
-    def spec(self, attempt: int = 1, request: object = REQUEST) -> JobSpec:
-        return replace(publisher_spec(request, RUN, attempt, CODE, NEED, self.time.now), task_definition=REVISION)
+    def spec(self, attempt: int = 1, request: object = REQUEST, run_id: str = RUN) -> JobSpec:
+        return replace(publisher_spec(request, run_id, attempt, CODE, NEED, self.time.now), task_definition=REVISION)
 
     def record(self, attempt: int, event: str) -> dict[str, Any]:
         return dict(json.loads(self.records.objects[f"{PREFIX}/{RUN}/publisher/{attempt:02d}/{event}.json"]))
@@ -125,6 +126,35 @@ def publisher_launch_names_each_run_kind_and_capture_root() -> None:
     require(first != rig.spec(request=REQUEST | {"capture_root": TEST_ROOT}).bound["request_hash"], "another root has another digest")
 
 
+def publisher_retry_request_names_its_original_run_and_day() -> None:
+    rig = Rig()
+    original = "20261201T000000Z-0a1b2c3d"
+    retry = {"kind": "retry", "capture_root": "raw/", "original_run": original, "day": 3}
+    third = schedule.retry_run_id(original, 3)
+    run = rig.spec(request=retry, run_id=third).environment["run"]
+    require(run["PUBLISHER_RUN_KIND"] == "retry" and run["HAI_CAPTURE_ROOT"] == "raw/", f"the retry reached the task as {run}")
+    first = rig.spec(request=retry, run_id=third).bound["request_hash"]
+    require(first != rig.spec(request=retry | {"day": 4}, run_id=schedule.retry_run_id(original, 4)).bound["request_hash"], "another day has another digest")
+    for label, changes in (
+        ("a retry with no original run", {"original_run": None}),
+        ("a retry with no day", {"day": None}),
+        ("a retry of a day outside one to seven", {"day": 8}),
+        ("a retry of a boolean day", {"day": True}),
+        ("a retry of an original run that is not a run id", {"original_run": "latest"}),
+    ):
+        request = {key: value for key, value in (retry | changes).items() if value is not None}
+        error = refuses(LaunchRefused, partial(rig.spec, request=request, run_id=third))
+        require("publisher_" in str(error), f"{label} was not refused by a fixed code: {error}")
+    error = refuses(LaunchRefused, partial(rig.spec, request=retry, run_id=RUN))
+    require("publisher_retry_run_is_not_the_run_of_that_day" in str(error), f"a retry under another run id than its day's was not refused by name: {error}")
+    for label, extra in (
+        ("a bootstrap with a retry day", {"kind": "bootstrap", "capture_root": "raw/", "original_run": original, "day": 3}),
+        ("a monthly run with an original run", {"kind": "monthly", "capture_root": "raw/", "original_run": original}),
+    ):
+        error = refuses(LaunchRefused, partial(rig.spec, request=extra, run_id=RUN))
+        require("publisher_request_needs_exactly_kind_and_capture_root" in str(error), f"{label} was not refused by name: {error}")
+
+
 def publisher_capture_root_is_validated_and_reaches_the_task() -> None:
     """The request names the capture root. Only raw/ or one run-ID test folder is accepted, and it reaches the run container as the capture root variable. Every
     other form is refused by name before anything is recorded or launched. (No root is refused too: the DAG form supplies raw/ as its default.)"""
@@ -166,7 +196,7 @@ def publisher_request_refusals() -> None:
         "a prior state": (REQUEST | {"prior_state": None}, inputs_or_state),
         "resumed sources": (REQUEST | {"resume_sources": ["bls_api"]}, inputs_or_state),
         "an inputs archive and a prior state with no kind": ({"inputs_sha256": "a" * 64, "prior_state": None, "capture_root": "raw/"}, inputs_or_state),
-        "an unknown kind": (REQUEST | {"kind": "retry"}, "publisher_request_has_wrong_kind"),
+        "an unknown kind": (REQUEST | {"kind": "weekly"}, "publisher_request_has_wrong_kind"),
         "a kind in upper case": (REQUEST | {"kind": "Monthly"}, "publisher_request_has_wrong_kind"),
         "a kind that is not text": (REQUEST | {"kind": ["monthly"]}, "publisher_request_has_wrong_kind"),
         "no slash at the end of the root": (REQUEST | {"capture_root": "raw"}, "publisher_request_has_wrong_capture_root"),
@@ -223,6 +253,7 @@ def publisher_task_lists_the_kinds_and_roots_the_launch_lists() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "publisher_runs_on_the_host_bound_to_its_request": publisher_runs_on_the_host_bound_to_its_request,
     "publisher_launch_names_each_run_kind_and_capture_root": publisher_launch_names_each_run_kind_and_capture_root,
+    "publisher_retry_request_names_its_original_run_and_day": publisher_retry_request_names_its_original_run_and_day,
     "publisher_capture_root_is_validated_and_reaches_the_task": publisher_capture_root_is_validated_and_reaches_the_task,
     "publisher_request_refusals": publisher_request_refusals,
     "publisher_request_changed_after_launch_is_refused": publisher_request_changed_after_launch_is_refused,

@@ -253,7 +253,7 @@ def publisher_cases() -> dict[str, bool]:
     root_only, root_api = triggered("--capture-root", TEST_ROOT)
     explicit, explicit_api = triggered("--run-kind", "bootstrap", "--capture-root", "raw/")
     plain, plain_api = triggered()
-    kinds = ("bootstrap", "monthly", "retry", "", "Monthly", "monthly\n", " bootstrap")
+    kinds = ("bootstrap", "monthly", "weekly", "", "Monthly", "monthly\n", " bootstrap")
     roots = ("raw/", TEST_ROOT, "raw", "", "lakehouse/", "ingestion_test/t1/", "ingestion_test/../raw/", "raw/\n", TEST_ROOT + "x/", TEST_ROOT.upper())
     pairs = [(kind, root) for kind in kinds for root in roots]
     same, refused_quietly = True, True
@@ -272,7 +272,7 @@ def publisher_cases() -> dict[str, bool]:
     root_other_code = invoke(
         root_other_api, ["--dag", DAG, "--mode", "real", "--run-id", RUN, "--silver-snapshot-run", SILVER, "--wait-seconds", "5", "--capture-root", "raw/"]
     )[0]
-    code, _, error, _ = invoke(StandIn(), [*base, "--run-kind", "retry"])
+    code, _, error, _ = invoke(StandIn(), [*base, "--run-kind", "weekly"])
     return {
         "a kind and a test root reach the run's conf": both == 0
         and api.confs == [{"run_id": RUN, "mode": "real", "run_kind": "monthly", "capture_root": TEST_ROOT}],

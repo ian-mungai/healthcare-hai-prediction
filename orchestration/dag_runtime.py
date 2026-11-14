@@ -23,7 +23,7 @@ from typing import Any
 
 from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
-from orchestration.ingestion_schedule import resolve_kind, resolve_run_id
+from orchestration.ingestion_schedule import RETRY_KIND, resolve_kind, resolve_retry, resolve_run_id, retry_run_id
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for, serving_parameters_for
 
@@ -47,6 +47,7 @@ CHECK_TIMEOUT = timedelta(minutes=15)
 CHAIN_TASKS = ("preflight", "job", "evidence")
 # The step of the Run 3 publisher: its DAG form names the run kind and the capture root, and the launch checks them.
 PUBLISHER_TEMPLATE = "publisher_run"
+RETRY_DAG = "ingestion_retry_dag"
 RESEARCH_TASKS = ("ready", "research", "chain")
 # The module that launches a step, and the environment setting that names the pool of host jobs.
 LAUNCH_MODULE = "orchestration.airflow_steps"
@@ -137,11 +138,16 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
         training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
     elif instance.dag_id == DRIFT_DAG:
         training = {"model": params["model"]}  # the model whose set the drift job checks; the preflight refuses a model outside the contract
-    run_id = str(params["run_id"])
     publisher = None
-    if template == PUBLISHER_TEMPLATE:
-        run_id = resolve_run_id(run_id, context)
+    if template == PUBLISHER_TEMPLATE and instance.dag_id == RETRY_DAG:
+        original, day = resolve_retry(str(params["original_run"]), int(params["day"]), context)
+        run_id = retry_run_id(original, day)
+        publisher = {"kind": RETRY_KIND, "capture_root": params["capture_root"], "original_run": original, "day": day}
+    elif template == PUBLISHER_TEMPLATE:
+        run_id = resolve_run_id(str(params["run_id"]), context)
         publisher = {"kind": resolve_kind(str(params["run_kind"]), context), "capture_root": params["capture_root"]}
+    else:
+        run_id = str(params["run_id"])
     return SubmissionRequest(
         template,
         run_id,

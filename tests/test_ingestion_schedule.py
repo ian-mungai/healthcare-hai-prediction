@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta, timezone
 from types import SimpleNamespace
+from typing import Any
 
 import pytest
 
@@ -68,3 +69,57 @@ def test_a_hand_trigger_keeps_the_kind_it_names() -> None:
     check(schedule.resolve_kind("bootstrap", context("manual")) == "bootstrap", "a hand-triggered bootstrap changed its kind")
     check(schedule.resolve_kind("monthly", context("manual")) == "monthly", "a hand-triggered monthly run changed its kind")
     check(schedule.resolve_kind("bootstrap", {}) == "bootstrap", "a run with no DAG run changed its kind")
+
+
+ORIGINAL = schedule.scheduled_run_id(FIRST)
+
+
+def retry_context(day: int, hour: int = 0) -> dict:
+    return {"dag_run": SimpleNamespace(run_type="scheduled", logical_date=datetime(2026, 12, day, hour, tzinfo=UTC))}
+
+
+def test_the_retry_schedule_is_days_two_to_eight_in_production_only() -> None:
+    check(schedule.retry_schedule_for({"HAI_ENVIRONMENT": "prod"}) == "0 0 2-8 * *", "production got no retry schedule on days 2 to 8")
+    check(schedule.retry_schedule_for({"HAI_ENVIRONMENT": "dev"}) is None, "development got a retry schedule")
+    check(schedule.retry_schedule_for({}) is None, "a deployment that names no environment got a retry schedule")
+    with pytest.raises(ValueError, match="HAI_ENVIRONMENT"):
+        schedule.retry_schedule_for({"HAI_ENVIRONMENT": "production"})
+
+
+def test_a_retry_run_id_depends_on_the_original_run_and_the_day_alone() -> None:
+    ids = [schedule.retry_run_id(ORIGINAL, day) for day in range(1, 8)]
+    check(all(RUN_ID.fullmatch(item) for item in ids), f"a retry run id does not match the form's pattern: {ids}")
+    check(len(set(ids)) == 7 and ORIGINAL not in ids, "the seven retry days do not have seven distinct run ids of their own")
+    check(ids[0].startswith("20261202T000000Z-") and ids[6].startswith("20261208T000000Z-"), f"a retry run id does not carry its day: {ids}")
+    check(schedule.retry_run_id(ORIGINAL, 3) == ids[2], "the same run and day gave a different retry run id")
+
+
+@pytest.mark.parametrize("day", [0, 8, -1, True, 1.0, "1"])
+def test_a_retry_day_outside_one_to_seven_is_refused(day: Any) -> None:
+    with pytest.raises(ValueError, match="one to seven"):
+        schedule.retry_run_id(ORIGINAL, day)
+
+
+def test_an_original_run_that_is_not_a_run_id_is_refused() -> None:
+    with pytest.raises(ValueError, match="not a run id"):
+        schedule.retry_run_id("latest", 1)
+
+
+def test_a_scheduled_retry_takes_its_day_and_its_original_run_from_its_logical_date() -> None:
+    for day in range(2, 9):
+        found = schedule.resolve_retry(schedule.SCHEDULED_RUN, schedule.SCHEDULED_RETRY_DAY, retry_context(day))
+        check(found == (ORIGINAL, day - 1), f"day {day} of the month resolved to {found}")
+
+
+@pytest.mark.parametrize("context_of", [retry_context(1), retry_context(9), retry_context(4, 6), {}, context("manual")])
+def test_a_scheduled_retry_outside_its_window_or_not_scheduled_is_refused(context_of: dict) -> None:
+    with pytest.raises(ValueError, match="retry"):
+        schedule.resolve_retry(schedule.SCHEDULED_RUN, schedule.SCHEDULED_RETRY_DAY, context_of)
+
+
+def test_a_hand_triggered_retry_names_both_its_run_and_its_day_or_is_refused() -> None:
+    check(schedule.resolve_retry(ORIGINAL, 2, context("manual")) == (ORIGINAL, 2), "a retry that names both was changed")
+    with pytest.raises(ValueError, match="both"):
+        schedule.resolve_retry(ORIGINAL, schedule.SCHEDULED_RETRY_DAY, context("manual"))
+    with pytest.raises(ValueError, match="both"):
+        schedule.resolve_retry(schedule.SCHEDULED_RUN, 2, context("manual"))

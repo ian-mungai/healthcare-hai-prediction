@@ -38,7 +38,7 @@ REQUIRED = ("RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "
 RETIRED = ("PUBLISHER_INPUTS_SHA256", "PUBLISHER_QUEUE_SHA256", "PUBLISHER_RESUME_SOURCES", "PUBLISHER_PRIOR_STATE", "PUBLISHER_REQUEST_SHA256")
 # The run kinds the launch lists (orchestration/ecs_preflight.py; a test keeps both lists equal). The capture root is checked by ``state_root``, which accepts
 # raw/ and one ingestion_test/<run ID>/ folder as the launch does.
-KINDS = frozenset({"bootstrap", "monthly"})
+KINDS = frozenset({"bootstrap", "monthly", "retry"})
 # The attempt and byte ledgers travel too, settlements and unsettled charges alike, so a new task cannot spend a limit again.
 SAVED = re.compile(
     r"(run\.json|(outcomes|pauses|resumes)/[^/]+\.json|collectors/bls_api_v2/requests/[^/]+\.json"

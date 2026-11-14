@@ -32,6 +32,7 @@ KNOWN_DAGS = {
     "features_m6_dag",
     "gold_transform_dag",
     "ingestion_dag",
+    "ingestion_retry_dag",
     "metadata_ingest_dag",
     "model_promotion_dag",
     "research_dag",
@@ -136,13 +137,22 @@ def test_the_inventory_comes_from_the_dag_folder() -> None:
 
 
 def _form(dag_id: str) -> dict[str, ast.Call]:
-    """The ``Param`` call of each parameter in the trigger form of a shipped DAG file."""
-    for node in ast.walk(ast.parse((SOURCE_ROOT / "dags" / f"{dag_id}.py").read_text())):
+    """The ``Param`` call of each parameter in the trigger form of a shipped DAG file. A parameter named by a module variable takes the variable's value, and
+    one that depends on the schedule takes its development form, because the image names no environment and so runs no schedule."""
+    tree = ast.parse((SOURCE_ROOT / "dags" / f"{dag_id}.py").read_text())
+    assigned = {target.id: stmt.value for stmt in tree.body if isinstance(stmt, ast.Assign) for target in stmt.targets if isinstance(target, ast.Name)}
+
+    def parameter(value: ast.expr) -> ast.expr:
+        if isinstance(value, ast.Name) and value.id in assigned:
+            value = assigned[value.id]
+        return value.orelse if isinstance(value, ast.IfExp) else value
+
+    for node in ast.walk(tree):
         if isinstance(node, ast.keyword) and node.arg == "params" and isinstance(node.value, ast.Dict):
             return {
-                str(key.value): value
+                str(key.value): parameter(value)
                 for key, value in zip(node.value.keys, node.value.values, strict=True)
-                if isinstance(key, ast.Constant) and isinstance(value, ast.Call)
+                if isinstance(key, ast.Constant) and isinstance(parameter(value), ast.Call)
             }
     raise AssertionError(f"{dag_id} declares no trigger form")
 

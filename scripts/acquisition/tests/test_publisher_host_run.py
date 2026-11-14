@@ -173,6 +173,15 @@ def test_a_monthly_run_compares_every_unit_again(host: Host, monkeypatch: pytest
     check(second["recheck"] is True and len(second["units"]["unchanged"]) == 2, f"it finds both payloads unchanged: {second['units']}")
 
 
+def test_a_retry_run_skips_every_complete_unit_and_compares_nothing_again(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    host.run(monkeypatch, PUBLISHER_RUN_KIND="monthly")
+    asked = len(host.world.site.asked)
+    host.run(monkeypatch, RUN_ID="20261113T110000Z-0a1b2c3e", PUBLISHER_RUN_KIND="retry")
+    check(len(host.world.site.asked) == asked, "a retry run requested a unit that has a completion record")
+    second = json.loads(host.world.bucket.objects[record.run_record_key("raw/", "20261113T110000Z-0a1b2c3e")][1])
+    check(second["recheck"] is False and len(second["units"]["skipped_complete"]) == 2, f"it skips both complete units: {second['units']}")
+
+
 def test_the_tracked_plan_inputs_and_the_seed_files_are_installed_as_real_files_in_the_code_root(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.run(monkeypatch)
     check((host.code / TRACKED_INPUT).read_bytes() == b'{"tracked": true}\n', "a tracked plan input is copied to its path")
@@ -205,7 +214,7 @@ def test_a_missing_variable_stops_the_job_before_any_call(host: Host, monkeypatc
 @pytest.mark.parametrize(
     ("changes", "match"),
     [
-        ({"PUBLISHER_RUN_KIND": "retry"}, "run kind"),
+        ({"PUBLISHER_RUN_KIND": "weekly"}, "run kind"),
         ({"PUBLISHER_RUN_KIND": ""}, "PUBLISHER_RUN_KIND"),
         ({"HAI_CAPTURE_ROOT": "raw"}, "capture root"),
         ({"HAI_CAPTURE_ROOT": "lakehouse/"}, "capture root"),

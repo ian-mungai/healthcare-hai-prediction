@@ -1,11 +1,12 @@
 """Build the direct ECS launch request of the Run 3 publisher job from the run kind and the capture root of the launch.
 
 No file is staged for the run but its code archive, which carries the tracked inputs. The launch names the run kind and the capture root only:
-``{"kind": "bootstrap" or "monthly", "capture_root": "raw/" or "ingestion_test/<run id>/"}``. It names no inputs archive, no queue digest and no prior
-state, and ``publisher_values`` refuses a request that does, before any launch record or cloud call. ``publisher_spec`` turns the checked request into the
-``JobSpec`` that ``orchestration.ecs_launch.Launcher`` runs on the host: every attempt of a run is bound to the digest of the canonical request and to the
-run's code digest, so another kind or root for a run that launched needs a new run. ``orchestration.ecs_preflight`` holds the check, which the DAG's
-launch runs too: the Airflow containers mount that module and not this one.
+``{"kind": "bootstrap" or "monthly", "capture_root": "raw/" or "ingestion_test/<run id>/"}``, and a retry also names its ``original_run`` and its ``day``
+and runs under the run id of that day. It names no inputs archive, no queue digest and no prior state, and ``publisher_values`` refuses a request that
+does, before any launch record or cloud call. ``publisher_spec`` turns the checked request into the ``JobSpec`` that ``orchestration.ecs_launch.Launcher``
+runs on the host: every attempt of a run is bound to the digest of the canonical request and to the run's code digest, so another kind or root for a run
+that launched needs a new run. ``orchestration.ecs_preflight`` holds the check, which the DAG's launch runs too: the Airflow containers mount that module
+and not this one.
 """
 
 from __future__ import annotations
@@ -35,7 +36,7 @@ def publisher_spec(request: Any, run_id: str, attempt: int, code: Mapping[str, s
     code_run, code_digest = code.get("run_id", ""), code.get("sha256", "")
     if not CODE_RUN.fullmatch(code_run) or not DIGEST.fullmatch(code_digest):
         raise LaunchRefused("publisher_code_has_wrong_values")
-    values = publisher_values(request)
+    values = publisher_values(request, run_id)
     deadline = str(int(now) + DEADLINE_SECONDS)
     return JobSpec(
         run_id=run_id,
