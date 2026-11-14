@@ -2116,6 +2116,30 @@ IN_USE_CASES = [
         },
         delete=[FIRST_SCHEMA],
     ),
+    Case(
+        "removing a Python string example removes no definition",
+        "removed-names",
+        True,
+        committed={
+            "app/example.py": f'EXAMPLE = """\ndef {RETIRED_KEY}():\n    pass\n"""\n',
+            "app/other_example.py": f'EXAMPLE = """\ndef {RETIRED_KEY}():\n    pass\n"""\n',
+            PENDING_LIST: PENDING_FIXTURE,
+            "dags/pending_dag.py": f"from external_library import {RETIRED_KEY}\nVALUE = {RETIRED_KEY}()\n",
+        },
+        files={"app/example.py": 'EXAMPLE = ""\n'},
+    ),
+    Case(
+        "schema property removed, a Python string after a tokenizer error cannot declare it, code still reads it",
+        "removed-names",
+        False,
+        committed={
+            FIRST_SCHEMA: schema_file(RETIRED_KEY, "region"),
+            "app/example.py": f'if True:\n    x = 1\n  y = 2\nEXAMPLE = """\n{RETIRED_KEY} = 4\n"""\n',
+            "app/reader.py": f'VALUE = RECORD["{RETIRED_KEY}"]\n',
+        },
+        files={FIRST_SCHEMA: schema_file("region")},
+        reason=f"{RETIRED_KEY} {LEFTOVER}",
+    ),
 ]
 CODE_VERSION_BODY = code_version_record(f"scripts/{OLD_SCRIPT}")
 CODE_VERSION_CASES = [
@@ -3813,6 +3837,24 @@ PLANTED_REGRESSIONS = [
         "live = live_names(files, python_left | config_left | removed_ids)",
         "live = live_names(files, config_left | removed_ids)",
         1,
+    ),
+    (
+        "a removed Python name is read from the old and new code",
+        [case for case in IN_USE_CASES if case.expect_pass and "removing a Python string example" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        "for name in python_top_level(lines) - python_top_level(files[path])",
+        'for name in set(PY_TOP_LEVEL.findall("\\n".join(lines))) - python_top_level(files[path])',
+        1,
+    ),
+    (
+        "text after a tokenizer error declares nothing",
+        [case for case in IN_USE_CASES if not case.expect_pass and "after a tokenizer error" in case.name],
+        REMOVED_NAMES_COMMAND,
+        "scripts/quality/repo_checks.py",
+        '        view = "\\n".join(python_literals(lines, blanked, comments=True, drop_unread=True))',
+        '        view = "\\n".join(python_literals(lines, blanked, comments=True))',
+        0,
     ),
     (
         "module scope only for task words",

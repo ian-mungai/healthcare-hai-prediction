@@ -1119,15 +1119,18 @@ PATH_WORD = re.compile(r"[\w.-]*/[\w./-]*|[\w-]+\.(?:md|py|txt|json|ya?ml|toml|s
 LITERAL_TOKENS = {tokenize.STRING, tokenize.FSTRING_MIDDLE}
 
 
-def python_literals(lines: list[str], rewrite: Callable[[str], str], comments: bool = False) -> list[str]:
+def python_literals(lines: list[str], rewrite: Callable[[str], str], comments: bool = False, drop_unread: bool = False) -> list[str]:
     """Return the Python lines with the text of each string literal (and each comment, with ``comments``) replaced by ``rewrite`` of it.
 
     ``rewrite`` returns text of the same length. Tokens read before a tokenizer error count, so a file that does not parse is still read as far as it goes.
+    With ``drop_unread`` the text after the last token read is blanked, because a string in it could not be told from code.
     """
     rows = [list(line) for line in lines]
     kinds = LITERAL_TOKENS | ({tokenize.COMMENT} if comments else set())
+    read_to = (1, 0)
     try:
         for token in tokenize.generate_tokens(io.StringIO("\n".join(lines) + "\n").readline):
+            read_to = token.end
             if token.type not in kinds:
                 continue
             (first, start), (last, end) = token.start, token.end
@@ -1135,7 +1138,10 @@ def python_literals(lines: list[str], rewrite: Callable[[str], str], comments: b
                 begin, stop = start if row == first else 0, end if row == last else len(rows[row - 1])
                 rows[row - 1][begin:stop] = list(rewrite("".join(rows[row - 1][begin:stop])))
     except (tokenize.TokenError, SyntaxError):
-        pass
+        if drop_unread:
+            for number in range(read_to[0], len(rows) + 1):
+                begin = read_to[1] if number == read_to[0] else 0
+                rows[number - 1][begin:] = list(blanked("".join(rows[number - 1][begin:])))
     return ["".join(row) for row in rows]
 
 
@@ -1151,12 +1157,12 @@ def python_declarations(lines: list[str]) -> set[str]:
     """Return the names Python code declares: a function, class, parameter, assignment or annotated target, or attribute store.
 
     Reading a name (an attribute access, a string key, a call keyword or an import) declares nothing. A file that does not parse is read by line for
-    definitions and assignments, with its strings and comments blanked.
+    definitions and assignments, with its strings and comments blanked and the text after a tokenizer error left out.
     """
     try:
         tree = ast.parse("\n".join(lines))
     except SyntaxError:
-        view = "\n".join(python_literals(lines, blanked, comments=True))
+        view = "\n".join(python_literals(lines, blanked, comments=True, drop_unread=True))
         return set(PY_DEFINITION.findall(view)) | set(PY_ASSIGNED.findall(view))
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -1169,6 +1175,11 @@ def python_declarations(lines: list[str]) -> set[str]:
         elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
             names.add(node.attr)
     return names
+
+
+def python_top_level(lines: list[str]) -> set[str]:
+    """Return the functions and classes a Python file defines at module level, read without its strings, its comments and the text after a tokenizer error."""
+    return set(PY_TOP_LEVEL.findall("\n".join(python_literals(lines, blanked, comments=True, drop_unread=True))))
 
 
 def hcl_declarations(lines: list[str]) -> set[str]:
@@ -1272,11 +1283,11 @@ def changed_paths() -> list[str]:
 
 
 def before_texts(paths: list[str]) -> dict[str, list[str]]:
-    """Return the lines before the change of each changed or deleted file whose syntax this check reads (structured and Terraform files)."""
+    """Return the lines before the change of each changed or deleted file whose syntax this check reads (structured, Terraform and Python files)."""
     old_ref = os.environ.get("PRE_COMMIT_FROM_REF", "HEAD")
     before: dict[str, list[str]] = {}
     for path in paths:
-        if Path(path).suffix in STRUCTURED_SUFFIXES | {".tf"}:
+        if Path(path).suffix in STRUCTURED_SUFFIXES | {".tf", ".py"}:
             data = git_blob(f"{old_ref}:{path}")
             if (codec := text_codec(data)) is not None:
                 before[path] = data.decode(codec).splitlines()
@@ -1354,7 +1365,10 @@ def removed_definitions(
     for name in gone(set(ENV_READ.findall(code_removed)), env_now):
         kinds["env"][name] = re.compile(rf"\b{name}\b")
     edited = {path: lines for path, lines in removed.items() if path not in deleted}
-    python_left = gone(set(PY_TOP_LEVEL.findall(joined(edited, {".py"}))), set())
+    python_left = gone(
+        {name for path, lines in before.items() if path in files and path.endswith(".py") for name in python_top_level(lines) - python_top_level(files[path])},
+        set(),
+    )
     removed_keys, removed_ids, parsed = removed_declarations(before, files, deleted)
     # A changed file that does not parse on both sides is read by its removed lines.
     unparsed = {path: lines for path, lines in edited.items() if path not in parsed}
