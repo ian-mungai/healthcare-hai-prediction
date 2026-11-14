@@ -2637,7 +2637,8 @@ if suite == 'sources':
     source.sources.check = lambda root: ready(([], {}))
     source.shell.run_features = lambda *args, **kwargs: ready(SimpleNamespace(database=Path(), relations={}))
     source.shell.step = lambda *args: None
-    source.shell.read_relations = lambda *args: {f'main.synthetic_{i}': '1 rows, md5 ' + 'a' * 32 for i in range(31)}
+    models = list((source.sources.REPO_ROOT / 'dbt/models/features').rglob('*.sql'))
+    source.shell.read_relations = lambda *args: {f'main.{path.stem}': '1 rows, md5 ' + 'a' * 32 for path in models if path.parent.name != 'bridge'}
     relation_problems = source.sources.relation_problems
     source.sources.relation_problems = lambda *args: ready(relation_problems(*args))
     result = source.main()
