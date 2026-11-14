@@ -756,12 +756,12 @@ def wiring_cases(work: Path) -> dict[str, bool]:
     order: list[str] = []
     listing = box.access.directory / "silver" / env.spec.run / "before.json"
 
-    def launched(services_: Any, spec_: Any, context: Any) -> None:
+    def launched(*_: Any) -> None:
         order.append("launch")
         checks["job_step: the listing exists when the launch starts"] = listing.is_file()
         box.s3.entries = entries_of(json.loads((env.root / "after.json").read_text()))
 
-    def gates(services_: Any, request_: Any, context: Any, selections: Any) -> Any:
+    def gates(*_: Any) -> Any:
         order.append("gates")
         checks["job_step: the gates run before the listing exists"] = not listing.is_file()
         return SimpleNamespace(job="silver")
