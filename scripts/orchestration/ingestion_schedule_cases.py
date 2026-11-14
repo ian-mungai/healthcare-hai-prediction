@@ -192,9 +192,11 @@ def development_form_still_requires_its_run() -> None:
 
 
 def retry_rig() -> Rig:
+    """A rig whose monthly run of day 1 is bound to ``CURRENT_CODE``, while the current code run parameter has moved on to ``NEWER_CODE``."""
     rig = Rig()
-    rig.stage_runs(CURRENT_CODE)
-    rig.preflight.current_code_run = reader_of(CURRENT_CODE)
+    rig.stage_runs(CURRENT_CODE, NEWER_CODE)
+    rig.preflight.code_runs.bind(ORIGINAL, CURRENT_CODE)
+    rig.preflight.current_code_run = reader_of(NEWER_CODE)
     return rig
 
 
@@ -220,6 +222,8 @@ def a_scheduled_retry_runs_each_of_the_seven_days_once() -> None:
         environment = rig.environment(day - 1)["run"]
         require(environment["PUBLISHER_RUN_KIND"] == "retry" and environment["HAI_CAPTURE_ROOT"] == "raw/", f"day {day} carried {environment}")
         require(environment["RUN_ID"] == schedule.retry_run_id(ORIGINAL, day), f"day {day} ran under {environment['RUN_ID']}")
+        require(rig.environment(day - 1)["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"day {day} did not run the code of its original run")
+        require(rig.preflight.code_runs.stored(environment["RUN_ID"]) == CURRENT_CODE, f"day {day} was not bound to the code of its original run")
         runs.append(environment["RUN_ID"])
     require(len(set(runs)) == 7 and rig.tasks_started() == 7, f"seven distinct retry runs were expected: {runs}")
     with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 4, tzinfo=UTC)) as (again, _):
@@ -253,6 +257,17 @@ def a_hand_triggered_retry_names_its_run_and_day_or_is_refused() -> None:
     require(rig.environment()["run"]["RUN_ID"] == schedule.retry_run_id(ORIGINAL, 2), "the hand trigger did not run under the run id of its day")
 
 
+def a_retry_of_a_run_with_its_own_code_uses_that_code() -> None:
+    rig = Rig()
+    rig.stage_runs(ORIGINAL, NEWER_CODE)
+    rig.preflight.current_code_run = reader_of(NEWER_CODE)
+    with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 3, tzinfo=UTC)) as (current, _):
+        states = current.run_dag("ingestion_retry_dag.py")
+    require(states == PASSED, f"a retry of a run that ran its own code did not pass: {states}")
+    require(rig.environment()["fetch"]["CODE_RUN_ID"] == ORIGINAL, f"the retry did not fetch the code of its original run: {rig.environment()['fetch']}")
+    require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 2)) == ORIGINAL, "the retry was not bound to the run whose code it used")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "schedule_is_production_only": schedule_is_production_only,
     "scheduled_run_launches_the_monthly_kind_once_per_date": scheduled_run_launches_the_monthly_kind_once_per_date,
@@ -265,4 +280,5 @@ CASES: dict[str, Callable[[], None]] = {
     "a_scheduled_retry_runs_each_of_the_seven_days_once": a_scheduled_retry_runs_each_of_the_seven_days_once,
     "a_retry_outside_the_seven_days_is_refused_before_any_cloud_call": a_retry_outside_the_seven_days_is_refused_before_any_cloud_call,
     "a_hand_triggered_retry_names_its_run_and_day_or_is_refused": a_hand_triggered_retry_names_its_run_and_day_or_is_refused,
+    "a_retry_of_a_run_with_its_own_code_uses_that_code": a_retry_of_a_run_with_its_own_code_uses_that_code,
 }

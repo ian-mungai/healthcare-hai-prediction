@@ -667,13 +667,16 @@ class Preflight:
     def publisher_code_run(self, request: SubmissionRequest) -> tuple[str | None, bool]:
         """The code run of a publisher run and whether the run still needs binding to it.
 
-        A scheduled run stages no code of its own. A run with a binding keeps it, whatever the current-code parameter names now. A run with none takes the
+        A scheduled run stages no code of its own. A run with a binding keeps it, whatever the current-code parameter names now. A retry takes the code run
+        of its original monthly run (the binding of that run, or the run itself when it ran its own code) and is bound to it once. A run with none takes the
         code run the parameter names (the code CI staged last) and is bound to it once, so every later attempt of the run uses the same code. Where no
         parameter is configured or none is set, the run uses the code staged under its own run ID. A parameter that cannot be read waits, and one that is
         not a run ID refuses the run."""
         stored = self.code_runs.stored(request.run_id)
         if stored is not None:
             return stored, False
+        if isinstance(request.publisher, Mapping) and request.publisher.get("kind") == RETRY_KIND:
+            return self.code_runs.resolve(str(request.publisher["original_run"])), True
         if self.current_code_run is None:
             return None, False
         value = self.read(self.current_code_run)
