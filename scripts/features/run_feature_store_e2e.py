@@ -3126,8 +3126,19 @@ def publish_exports(base: Path, report_folder: Path) -> dict[str, Any]:
     return document
 
 
+def require_report_root(report_folder: Path) -> None:
+    """The Spark suite reads ``inputs.json`` and writes ``cases_all.json`` in ``data/e2e/feature_store/<folder name>`` of the mounted checkout, so a report
+    folder anywhere else holds exports the suite cannot see and takes none of its results."""
+    if report_folder.resolve().parent != OUT.resolve():
+        raise ValueError(
+            f"publish_offline needs its report folder directly under {OUT.relative_to(ROOT)} (got {report_folder}): "
+            "the Spark suite finds the exports and writes its cases there. Omit --output-directory or name a new folder under it."
+        )
+
+
 def publish_offline(report: Report, report_folder: Path) -> None:
     """The Spark case suite on the exports of runs A, B and V2. The launcher must define the job ``features_publish_e2e``; without it the mode fails."""
+    require_report_root(report_folder)
     from orchestration import launcher
 
     if "features_publish_e2e" not in getattr(launcher, "SPARK_JOBS", {}):
