@@ -1,0 +1,18 @@
+{
+  "sources": [
+    {
+      "file_pattern": "sahie-\\d{4}-csv\\.zip|sahie-(?:2005\\.txt|200[67]\\.csv)",
+      "index_urls": [
+        "https://www2.census.gov/programs-surveys/sahie/datasets/time-series/estimates-acs/",
+        "https://www2.census.gov/programs-surveys/sahie/datasets/time-series/estimates-cps/"
+      ],
+      "mode": "file",
+      "path_prefixes": [
+        "/programs-surveys/sahie/datasets/time-series/estimates-acs/",
+        "/programs-surveys/sahie/datasets/time-series/estimates-cps/"
+      ],
+      "role": "data",
+      "source_id": "SAHIE"
+    }
+  ]
+}

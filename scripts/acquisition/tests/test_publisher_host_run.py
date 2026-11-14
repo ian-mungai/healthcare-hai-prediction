@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import urllib.parse
 from pathlib import Path
 from typing import Any
 
@@ -86,6 +87,7 @@ class Host:
         self.write_manifest()
         self.relock()
         self.cloud = Cloud(self.world.bucket)
+        self.links_of: Any = None
 
     def write_manifest(self, **changes: Any) -> None:
         queue = hashlib.sha256((self.bundle / "queue.json").read_bytes()).hexdigest()
@@ -114,7 +116,7 @@ class Host:
     def run(self, monkeypatch: pytest.MonkeyPatch, **changes: str) -> None:
         monkeypatch.chdir(self.code)
         self.world.site.scratch = self.workspace / "scratch"
-        publisher_run.main(self.environment(**changes), self.cloud.factory, opener(self.world.site))
+        publisher_run.main(self.environment(**changes), self.cloud.factory, opener(self.world.site), links_of=self.links_of)
 
     def untouched(self) -> bool:
         return self.cloud.calls == [] and not self.world.bucket.versions and not self.world.site.asked
@@ -290,6 +292,77 @@ def test_a_retry_that_does_not_name_a_valid_original_run_and_day_is_refused_befo
 def test_a_run_that_is_not_a_retry_refuses_the_retry_variables_before_any_call(host: Host, monkeypatch: pytest.MonkeyPatch, kind: str, name: str) -> None:
     value = MONTHLY_RUN if name == "PUBLISHER_ORIGINAL_RUN" else "1"
     refused(monkeypatch, host, name, PUBLISHER_RUN_KIND=kind, **{name: value})
+
+
+def listing_host(host: Host, pages: dict[str, Any]) -> str:
+    """Give the code root a reviewed listing source on the host of the first unit, and the job a stand-in reader of its index pages. Returns the host name."""
+    name = urllib.parse.urlsplit(str(host.world.units[0]["url"])).hostname or ""
+    row = {
+        "source_id": "NEWSRC",
+        "index_urls": [f"https://{name}/index/"],
+        "file_pattern": r"new_\d{4}\.csv",
+        "role": "data",
+        "mode": "file",
+        "path_prefixes": ["/index/"],
+    }
+    (host.code / "config/acquisition/listing_sources.json").write_text(json.dumps({"sources": [row]}))
+
+    def links_of(url: str) -> list[dict[str, str]]:
+        found = pages[url]
+        if isinstance(found, Exception):
+            raise found
+        return list(found)
+
+    host.links_of = links_of
+    return name
+
+
+def report_of(host: Host, run_id: str = MONTHLY_RUN) -> dict[str, Any]:
+    key = f"raw/ingestion_runs/{run_id}/plan_rebuild/report.json"
+    return dict(json.loads(host.world.bucket.objects[key][1]))
+
+
+def test_a_monthly_run_writes_a_hold_report_of_the_new_files_and_adds_nothing(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
+    name = urllib.parse.urlsplit(str(host.world.units[0]["url"])).hostname
+    new = f"https://{name}/index/new_2026.csv"
+    listing_host(host, {f"https://{name}/index/": [{"url": new, "label": "new"}]})
+    queue = (host.bundle / "queue.json").read_bytes()
+    host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
+    found = report_of(host)
+    check([item["url"] for item in found["held"]] == [new] and found["known"] == 0, f"the report names the new file: {found}")
+    check(f"raw/ingestion_runs/{MONTHLY_RUN}/plan_rebuild/report.txt" in host.world.bucket.objects, "the report is also stored as text for the owner")
+    check(new not in [str(item) for item in host.world.site.asked], "the new file was requested")
+    check((host.bundle / "queue.json").read_bytes() == queue, "the tracked queue changed")
+    check(len(run_record_of(host, MONTHLY_RUN)["units"]["unchanged"]) == 2, "the monthly run refreshed only the units of the queue")
+
+
+def test_only_a_monthly_run_writes_the_hold_report(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    name = urllib.parse.urlsplit(str(host.world.units[0]["url"])).hostname
+    listing_host(host, {f"https://{name}/index/": [{"url": f"https://{name}/index/new_2026.csv", "label": "new"}]})
+    host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
+    check(not [key for key in host.world.bucket.objects if "plan_rebuild" in key], "a bootstrap run wrote a hold report")
+    host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
+    host.run(monkeypatch, **retry_changes(1))
+    reports = sorted(key for key in host.world.bucket.objects if "plan_rebuild" in key)
+    check(all(f"/{MONTHLY_RUN}/" in key for key in reports) and len(reports) == 2, f"only the monthly run wrote its report: {reports}")
+
+
+def test_an_index_page_that_cannot_be_read_is_named_in_the_report_and_never_fails_the_run(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
+    host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
+    name = urllib.parse.urlsplit(str(host.world.units[0]["url"])).hostname
+    listing_host(host, {f"https://{name}/index/": OSError("down")})
+    host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
+    check(report_of(host)["unreached"] == [{"source_id": "NEWSRC", "url": f"https://{name}/index/", "reason": "index_unreadable"}], f"{report_of(host)}")
+
+
+def test_a_code_root_without_the_reviewed_sources_still_runs_and_says_no_report_was_written(
+    host: Host, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
+    host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
+    check('"plan_rebuild": "not_written"' in capsys.readouterr().out, "the run did not say that no report was written")
+    check(not [key for key in host.world.bucket.objects if "plan_rebuild" in key], "a report was written without sources")
 
 
 def bootstrap_marker(root: str = "raw/", run_id: str = RUN_ID) -> str:

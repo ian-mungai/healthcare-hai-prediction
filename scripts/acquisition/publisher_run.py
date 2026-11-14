@@ -28,9 +28,10 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from scripts import resource_peaks
-from scripts.acquisition import capture_mode, host_inputs, stored_mirror, task_role
+from scripts.acquisition import capture_mode, host_inputs, listing_fetch, listing_readers, plan_rebuild, stored_mirror, task_role
 from scripts.acquisition.collection_layout import run_state_root
 from scripts.acquisition.completion_record import run_record_key as record_key
+from scripts.acquisition.s3_store import StorageError
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure import startup_check
 
@@ -297,7 +298,34 @@ def require_bootstrap(storage: Any, root: str) -> None:
         raise PublisherError("The capture root has no bootstrap run record, so no monthly or retry run starts on it.")
 
 
-def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = stored_mirror.default_client, opener: Any = None) -> None:
+SOURCES_FILE = "config/acquisition/listing_sources.json"
+
+
+def write_plan_report(run: capture_mode.CaptureRun, bundle: Path, links_of: listing_fetch.LinksOf, emit: Callable[[dict], None]) -> None:
+    """Read the reviewed index pages and store the month's hold report: every file the pages show that the tracked queue does not hold, for the owner. It adds
+    nothing to a queue and never fails the run: a report that cannot be built or stored is said so in one fixed line."""
+    try:
+        sources = listing_fetch.read_sources(json.loads(Path(SOURCES_FILE).read_text(encoding="utf-8")))
+        hosts = json.loads((bundle / "publisher_hosts_scope.json").read_text(encoding="utf-8"))
+        queue = json.loads((bundle / "queue.json").read_text(encoding="utf-8"))
+        listing = listing_fetch.build_listing(sources, frozenset(hosts["hosts"]), links_of)
+        decision = plan_rebuild.decide(plan_rebuild.read_entries(listing.entries), plan_rebuild.reference_from(queue, hosts))
+        machine, human = plan_rebuild.report_keys(run.root, run.run_id)
+        document = plan_rebuild.report(decision, run.run_id, listing.unreached, listing.outside)
+        capture_mode.put_once(run, machine, json.dumps(document, sort_keys=True, separators=(",", ":")).encode())
+        capture_mode.put_once(run, human, plan_rebuild.report_text(decision, run.run_id, listing.unreached, listing.outside).encode())
+    except (CaptureError, StorageError, OSError, ValueError, KeyError, TypeError, ClientError):
+        emit({"plan_rebuild": "not_written"})
+        return
+    emit({"plan_rebuild": "written", "held": len(decision.held), "known": decision.known, "unreached": len(listing.unreached)})
+
+
+def main(
+    environment: Mapping[str, str] | None = None,
+    factory: ClientFactory = stored_mirror.default_client,
+    opener: Any = None,
+    links_of: listing_fetch.LinksOf | None = None,
+) -> None:
     """Run one publisher task. The job writes one line per unit and no line holds a key, a digest or a name."""
     env = os.environ if environment is None else environment
     missing = [name for name in REQUIRED if not env.get(name)]
@@ -346,6 +374,8 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     record = capture_mode.execute(run)
     problems = capture_mode.check_run(storage, record, before)
     emit({"counters": record["counters"], "evidence_problems": len(problems)})
+    if env["PUBLISHER_RUN_KIND"] == "monthly":
+        write_plan_report(run, bundle, links_of or listing_readers.links_reader(workspace_of(env) / "listing"), emit)
     if problems:
         raise PublisherError(f"The evidence check found {len(problems)} problem{'s' if len(problems) != 1 else ''} in the run.")
     if env["PUBLISHER_RUN_KIND"] == "bootstrap":
