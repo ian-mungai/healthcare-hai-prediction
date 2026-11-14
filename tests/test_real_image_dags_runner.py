@@ -358,12 +358,6 @@ def test_the_serving_request_digest_is_the_hash_the_claim_binds_not_a_container_
         real_image_dags.serving_request_is_bound(_serve_rig("records", "run-2", digest), "run-1", environment)
 
 
-def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_research_dag_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    monkeypatch.setattr(os, "environ", dict(os.environ))
-    real_image_dags.configure_airflow(str(tmp_path))
-    check(os.environ["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "false", "the rig creates DAGs paused, so the fail_when_dag_is_paused trigger fails")
-
-
 def test_each_wrong_bucket_plant_hits_only_the_store_its_scenario_names() -> None:
     cases = importlib.import_module("scripts.orchestration.airflow_mode_cases")
     catalog = real_image_dags.cases_catalog()
@@ -379,6 +373,20 @@ def test_each_wrong_bucket_plant_hits_only_the_store_its_scenario_names() -> Non
     check(record_plant.when(claim) and not record_plant.when(bound), "the launch record plant must reach the claim write and leave the code run binding alone")
     check(binding_plant.when(bound) and not binding_plant.when(claim), "the binding plant must reach the code run binding and leave the launch records alone")
     check(binding.starts == 0 and records.starts == 0, "neither refused write may start a task")
+
+
+def test_the_retry_dag_runs_under_the_run_its_original_and_day_give() -> None:
+    orchestration = importlib.import_module("orchestration.ingestion_schedule")
+    (step,) = [step for _, step in _steps() if step.dag_id == "ingestion_retry_dag"]
+    original, day = str(step.params["original_run"]), int(step.params["day"])
+    check(real_image_dags.launch_run_id(step) == orchestration.retry_run_id(original, day), "the retry step is not checked under its own run")
+    check(real_image_dags.launch_run_id(step) != original, "the retry step is checked under the run it retries")
+
+
+def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_research_dag_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    real_image_dags.configure_airflow(str(tmp_path))
+    check(os.environ["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "false", "the rig creates DAGs paused, so the fail_when_dag_is_paused trigger fails")
 
 
 def test_the_rig_names_none_of_the_retired_inputs() -> None:

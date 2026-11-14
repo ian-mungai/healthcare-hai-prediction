@@ -370,9 +370,19 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
     return facts
 
 
+def launch_run_id(step: Step) -> str:
+    """The run ID the launch of a step runs under: the run ID of its form, or for the retry DAG the new run ID that its original run and day give."""
+    params = dict(step.params)
+    if "original_run" in params:
+        from orchestration.ingestion_schedule import retry_run_id
+
+        return retry_run_id(str(params["original_run"]), int(params["day"]))
+    return str(params["run_id"])
+
+
 def check_run(rig: Any, step: Step, facts: dict[str, Any], calls: list[dict[str, Any]]) -> None:
     """Break an expectation when the run is not the step's."""
-    where = f"{step.dag_id} {dict(step.params).get('run_id', '')}"
+    where = f"{step.dag_id} {launch_run_id(step)}"
     wanted = dict(step.states) if step.states is not None else {task: "skipped" if task in step.skipped else DONE_STATE for task in facts["tasks"]}
     require(facts["tasks"], f"{where}: no task ran: {facts}")
     require(facts["run_state"] == step.run_state, f"{where}: the DAG run ended {facts['run_state']}, not {step.run_state}: {facts['tasks']} {facts['errors']}")
@@ -403,7 +413,7 @@ def check_run(rig: Any, step: Step, facts: dict[str, Any], calls: list[dict[str,
     names = {item["name"] for item in first["overrides"]["containerOverrides"]}
     planned = set(rig_modules().cases.host_planned_containers()[str(family).removeprefix("example_dev_job_").removesuffix("_host")]["containers"])
     require(bool(names) and names <= planned - {"init"}, f"{where}: overrides for containers {names} that the host definition {planned} does not run")
-    run_id = str(dict(step.params)["run_id"])
+    run_id = launch_run_id(step)
     environment = {pair["name"]: pair["value"] for item in first["overrides"]["containerOverrides"] for pair in item["environment"]}
     require(environment.get("RUN_ID", run_id) == run_id or run_id in environment.values(), f"{where}: no override carries the run id: {environment}")
     job = str(family).removeprefix("example_dev_job_").removesuffix("_host")
@@ -479,7 +489,11 @@ def form_check(_rig: Any) -> None:
     c = rig_modules().cases
     run = c.SILVER_RUN
     required = trigger_forms()
-    wrong: tuple[dict[str, Any], ...] = ({}, {"run_id": "latest"}, {"run_id": "x" + run}, {"run_id": 20261104}, {"run_id": run, "mode": "mock"})
+    own_run = {"ingestion_retry_dag": "original_run"}  # the retry DAG's form names the run it retries, and the retry's own run ID comes from it and the day
+
+    def wrong_forms(dag_id: str) -> tuple[dict[str, Any], ...]:
+        name = own_run.get(dag_id, "run_id")
+        return ({}, {name: "latest"}, {name: "x" + run}, {name: 20261104}, {name: run, "mode": "mock"})
 
     def validated(dag_id: str, conf: Mapping[str, Any]) -> dict[str, Any]:
         dag = BAG["bag"].get_dag(dag_id)
@@ -502,7 +516,7 @@ def form_check(_rig: Any) -> None:
                 problems.append(f"{dag_id}: the default mode is {filled['mode']!r}")
         except Exception as error:
             problems.append(f"{dag_id} refused its required values {conf}: {type(error).__name__}: {str(error)[:200]}")
-        problems.extend(f"{dag_id} accepted {bad}" for bad in wrong if not refused(dag_id, {**conf, **bad} if bad else {}))
+        problems.extend(f"{dag_id} accepted {bad}" for bad in wrong_forms(dag_id) if not refused(dag_id, {**conf, **bad} if bad else {}))
     for dag_id, name in (
         ("gold_transform_dag", "silver_snapshot_run"),
         ("features_base_dag", "gold_snapshot_run"),
@@ -524,6 +538,8 @@ def form_check(_rig: Any) -> None:
         if not refused("ingestion_dag", {**required["ingestion_dag"], **bad}):
             problems.append(f"ingestion_dag accepted {bad}")
     for dag_id, name, value in (
+        ("ingestion_retry_dag", "day", 8),
+        ("ingestion_retry_dag", "day", "1"),
         ("research_dag", "base_run", "latest"),
         ("research_dag", "hai_types", ["HAI_9"]),
         ("drift_monitoring_dag", "features_run", "latest"),
