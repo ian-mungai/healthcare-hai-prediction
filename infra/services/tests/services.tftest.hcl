@@ -2652,6 +2652,22 @@ run "airflow_names_its_environment_and_mounts_the_schedule_module" {
   }
 }
 
+# A scheduled publisher run takes its code from the code run that CI staged last (owner A, Nov 13 2026): every Airflow container names the one parameter that
+# holds it, and the launch role may read that parameter and nothing else under the project folder (infra/iam).
+run "airflow_names_the_current_code_run_parameter" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER=/example_project/current_code_run") if startswith(container.name, "airflow")
+      ])
+    ])
+    error_message = "Every Airflow container names the one parameter that holds the current code run, the parameter the launch role may read."
+  }
+}
+
 run "launch_settings_come_from_the_stack_variables" {
   command = plan
 

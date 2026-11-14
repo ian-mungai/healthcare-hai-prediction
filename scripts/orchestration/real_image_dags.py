@@ -251,7 +251,7 @@ def make_rig(*, capacity: str | None = None, hold: str | Exception | None = None
     rig.ecs.clock = time.time
     rig.ecs.finish_after = 1
     answer: list[str | Exception] = [cases.CLEAR if hold is None else hold]
-    rig.ssm = cases.LaunchSsm({cases.HOLD_PARAMETER: answer, cases.LOCK_PARAMETER: cases.no_lock()})
+    rig.ssm = cases.LaunchSsm({cases.HOLD_PARAMETER: answer, cases.LOCK_PARAMETER: cases.no_lock(), cases.CURRENT_CODE_PARAMETER: cases.no_lock()})
     return rig
 
 
@@ -280,6 +280,7 @@ def launch_environment(rig: Any, endpoint: str, scratch: str) -> dict[str, str]:
         cases.CAP_SETTING: str(cases.JOB_MEMORY),
         "HAI_LAUNCH_HOST_HOLD_PARAMETER": cases.HOLD_PARAMETER,
         "HAI_LAUNCH_APPLY_LOCK_PARAMETER": cases.LOCK_PARAMETER,
+        "HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER": cases.CURRENT_CODE_PARAMETER,
     }
 
 

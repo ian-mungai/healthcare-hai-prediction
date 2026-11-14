@@ -9,7 +9,11 @@ ECS. The failure modes, each with the case that covers it:
    (``schedule_is_production_only``).
 2. A scheduled run names its run from its logical date, runs the monthly kind and never the bootstrap kind, and the same logical date again launches
    nothing new (``scheduled_run_launches_the_monthly_kind_once_per_date``).
-3. A hand trigger in production that names no run is refused before any cloud call, one that names its run keeps the kind it names, and a hand trigger in
+3. A scheduled run stages no code of its own, so it takes the code run that the current-code parameter names and is bound to it once: a run that has a
+   binding keeps it when the parameter moves, an unreadable parameter waits and launches nothing, and a parameter that is not a run id is refused
+   (``scheduled_run_takes_the_current_code_run_and_keeps_it``, ``current_code_run_that_is_unreadable_or_malformed_launches_nothing``). A deployment that
+   names no code run keeps the run's own staged code (``without_a_current_code_run_the_run_uses_its_own_code``).
+4. A hand trigger in production that names no run is refused before any cloud call, one that names its run keeps the kind it names, and a hand trigger in
    development still requires its run (``hand_trigger_in_production_must_name_its_run``, ``development_form_still_requires_its_run``).
 """
 
@@ -23,12 +27,15 @@ from typing import Any
 from unittest import mock
 
 from orchestration import ingestion_schedule as schedule
+from orchestration.ecs_preflight import TaskUnavailable
 from scripts.orchestration.airflow_mode_cases import Rig, World, world
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag
 from scripts.orchestration.ecs_launch_cases import refuses
 
 LOGICAL_DATE = datetime(2026, 12, 1, tzinfo=UTC)
+CURRENT_CODE = "20261110T130000Z-0a1b2c3d"
+NEWER_CODE = "20261112T090000Z-1a2b3c4d"
 PRODUCTION = {schedule.ENVIRONMENT_SETTING: "prod"}
 PASSED = {"preflight": "success", "job": "success", "evidence": "success", "gate": "success"}
 
@@ -97,6 +104,61 @@ def scheduled_run_launches_the_monthly_kind_once_per_date() -> None:
     require(rig.tasks_started() == 1, "the same logical date started a second task")
 
 
+def reader_of(value: str | None | Exception) -> Callable[[], str | None]:
+    def read() -> str | None:
+        if isinstance(value, Exception):
+            raise value
+        return value
+
+    return read
+
+
+def scheduled_run_takes_the_current_code_run_and_keeps_it() -> None:
+    rig = Rig()
+    run = schedule.scheduled_run_id(LOGICAL_DATE)
+    rig.stage_runs(CURRENT_CODE, NEWER_CODE)
+    rig.preflight.current_code_run = reader_of(CURRENT_CODE)
+    with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
+        states = current.run_dag("ingestion_dag.py")
+    require(states == PASSED, f"the scheduled run did not pass without code of its own: {states}")
+    require(rig.environment()["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"the publisher did not fetch the current code run: {rig.environment()['fetch']}")
+    require(rig.preflight.code_runs.stored(run) == CURRENT_CODE, "the scheduled run was not bound to the code run it used")
+    rig.preflight.current_code_run = reader_of(NEWER_CODE)
+    with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (again, _):
+        again.run_dag("ingestion_dag.py")
+    require(rig.tasks_started() == 1, "the same logical date started a second task after the parameter moved")
+    require(rig.preflight.code_runs.stored(run) == CURRENT_CODE, "the parameter moving changed the code run a bound run uses")
+
+
+def current_code_run_that_is_unreadable_or_malformed_launches_nothing() -> None:
+    run = schedule.scheduled_run_id(LOGICAL_DATE)
+    for label, value in (
+        ("an unreadable parameter", TaskUnavailable("current_code_run_unreadable")),
+        ("a parameter that is not a run id", "latest"),
+        ("a parameter with a trailing line break", CURRENT_CODE + "\n"),
+    ):
+        rig = Rig()
+        rig.stage_runs(CURRENT_CODE, run)  # the run's own code is staged too, so a refusal can come only from the parameter
+        rig.preflight.current_code_run = reader_of(value)
+        with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
+            states = current.run_dag("ingestion_dag.py")
+        require(states["preflight"] == "failed" and states["job"] == "upstream_failed", f"{label}: the scheduled run did not stop: {states}")
+        require(rig.tasks_started() == 0, f"{label}: a task started")
+        require(rig.preflight.code_runs.stored(run) is None, f"{label}: the run was bound to a code run")
+
+
+def without_a_current_code_run_the_run_uses_its_own_code() -> None:
+    rig = Rig()
+    run = schedule.scheduled_run_id(LOGICAL_DATE)
+    rig.stage_runs(run)
+    rig.preflight.current_code_run = reader_of(None)
+    with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
+        states = current.run_dag("ingestion_dag.py")
+    require(states == PASSED, f"a run with code of its own and no current code run did not pass: {states}")
+    require(rig.environment()["fetch"]["CODE_RUN_ID"] == run, f"the publisher did not fetch the code of its own run: {rig.environment()['fetch']}")
+    require(rig.preflight.code_runs.stored(run) is None, "a run that used its own code was bound")
+
+
 def hand_trigger_in_production_must_name_its_run() -> None:
     rig = Rig()
     rig.stage_runs(schedule.scheduled_run_id(LOGICAL_DATE))
@@ -125,6 +187,9 @@ def development_form_still_requires_its_run() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "schedule_is_production_only": schedule_is_production_only,
     "scheduled_run_launches_the_monthly_kind_once_per_date": scheduled_run_launches_the_monthly_kind_once_per_date,
+    "scheduled_run_takes_the_current_code_run_and_keeps_it": scheduled_run_takes_the_current_code_run_and_keeps_it,
+    "current_code_run_that_is_unreadable_or_malformed_launches_nothing": current_code_run_that_is_unreadable_or_malformed_launches_nothing,
+    "without_a_current_code_run_the_run_uses_its_own_code": without_a_current_code_run_the_run_uses_its_own_code,
     "hand_trigger_in_production_must_name_its_run": hand_trigger_in_production_must_name_its_run,
     "development_form_still_requires_its_run": development_form_still_requires_its_run,
 }

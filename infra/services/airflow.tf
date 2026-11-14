@@ -83,6 +83,9 @@ locals {
     # A present or unreadable services apply lock refuses every host launch (round 4, owner A, Nov 10 2026).
     HAI_LAUNCH_APPLY_LOCK_PARAMETER = var.services_apply_lock_parameter_name
     HAI_LAUNCH_HOST_CAPACITY        = format("usable_memory_mib=%d system_reserve_mib=%d", var.host_usable_memory_mib, var.host_system_reserve_mib)
+    # The parameter that names the code run CI staged last. A scheduled publisher run takes its code from it and is bound to that code run once. The launch
+    # role may read this one parameter (infra/iam ReadCurrentCodeRun) and nothing else under the project folder.
+    HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER = "/${var.project_name}/current_code_run"
   }
   airflow_migrate_last = "airflow db migrate\nexec airflow pools set ${local.airflow_launch_pool} ${local.airflow_pool_slots} 'Host jobs: one slot for each ${local.airflow_pool_slot_cpu_units} CPU units of job room'"
 

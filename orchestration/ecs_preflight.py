@@ -217,6 +217,22 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
     return read
 
 
+def ssm_current_code_run_reader(ssm: Any, name: str) -> Callable[[], str | None]:
+    """Read the code run that CI staged last from Parameter Store, or None while the parameter does not exist."""
+
+    def read() -> str | None:
+        try:
+            return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                return None
+            raise TaskUnavailable("current_code_run_unreadable") from None
+        except BotoCoreError:
+            raise TaskUnavailable("current_code_run_unreadable") from None
+
+    return read
+
+
 def publisher_values(request: object) -> dict[str, str]:
     """The ``run`` container's publisher variables of a checked request, with ``PUBLISHER_LAUNCH_SHA256`` the digest of its canonical form, which binds
     every attempt. A request that is not exactly the kind and the capture root is refused before any launch record or cloud call."""
@@ -391,6 +407,10 @@ class CodeRuns(Protocol):
         """The code run of the run: the bound one, or the run itself while nothing is bound. A binding that cannot be read raises ``InputNotReady``."""
         ...
 
+    def stored(self, run_id: str) -> str | None:
+        """The code run the run is bound to, or None while nothing is bound. A binding that cannot be read raises ``InputNotReady``."""
+        ...
+
     def bind(self, run_id: str, code_run: str) -> None:
         """Bind the run to ``code_run`` once. The same binding again is accepted, another one raises ``LaunchRefused``."""
         ...
@@ -544,6 +564,7 @@ class Preflight:
         host_job_cap: Callable[[], str | None],
         host_launch_hold: Callable[[], str | None] | None = None,
         bronze_request: Callable[[str], dict[str, str]] | None = None,
+        current_code_run: Callable[[], str | None] | None = None,
         read_record: Callable[[str], bytes | None] | None = None,
     ) -> None:
         self.jobs: Mapping[str, Any] = table["jobs"]
@@ -555,6 +576,7 @@ class Preflight:
         self.code_runs = code_runs
         self.clock = clock
         self.bronze_request = bronze_request
+        self.current_code_run = current_code_run
         self.host_capacity = host_capacity
         self.task_definition = task_definition
         self.host_job_cap = host_job_cap
@@ -617,14 +639,36 @@ class Preflight:
         if request.template == "research" and request.dag_id == "research_dag":
             # Research compares the models' runs, so it runs the code the first of them trained with.
             research_code = self.code_runs.resolve(trained_run_id(str((request.training or {})["base_run"]), PROMOTION_MODELS[0]))
+        bind = research_code is not None
+        if research_code is None and row.get("needs_publisher_run_request"):
+            research_code, bind = self.publisher_code_run(request)
         spec = self.spec(request, job, research_code)
         revision, job_memory = self.checked_revision(job, cap)
-        if research_code is not None:  # the only write of a job step, after every refusal
+        if research_code is not None and bind:  # the only write of a job step, after every refusal
             self.code_runs.bind(request.run_id, research_code)
         # ECS places the task by the revision's task memory, so the launcher's fit check asks for exactly that: the host job cap for a family without
         # reserve, its own memory for a family that reserves its own size. The fit probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=job_memory)
         return replace(spec, task_definition=revision, need=need)
+
+    def publisher_code_run(self, request: SubmissionRequest) -> tuple[str | None, bool]:
+        """The code run of a publisher run and whether the run still needs binding to it.
+
+        A scheduled run stages no code of its own. A run with a binding keeps it, whatever the current-code parameter names now. A run with none takes the
+        code run the parameter names (the code CI staged last) and is bound to it once, so every later attempt of the run uses the same code. Where no
+        parameter is configured or none is set, the run uses the code staged under its own run ID. A parameter that cannot be read waits, and one that is
+        not a run ID refuses the run."""
+        stored = self.code_runs.stored(request.run_id)
+        if stored is not None:
+            return stored, False
+        if self.current_code_run is None:
+            return None, False
+        value = self.read(self.current_code_run)
+        if value is None:
+            return None, False
+        if not RUN_ID.fullmatch(value):
+            raise LaunchRefused("the current code run parameter is not a staged run ID")
+        return value, True
 
     def record_chain(self, bronze_run: str) -> None:
         """Bind each layer run that derives from the bronze run, and for each model the runs of its chain from the base run (its set's features run, the

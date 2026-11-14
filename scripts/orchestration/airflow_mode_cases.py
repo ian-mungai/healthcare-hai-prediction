@@ -1161,6 +1161,7 @@ def cap_setting_is_rendered_by_the_services_stack() -> None:
 
 HOLD_PARAMETER = "/healthcare_hai_prediction/host_launch_hold"
 LOCK_PARAMETER = "/healthcare_hai_prediction/services_apply_lock"
+CURRENT_CODE_PARAMETER = "/healthcare_hai_prediction/current_code_run"
 APPLY_LOCK_VALUE = "apply-host:4242:20261110T230000Z:0badc0de"  # an apply lock value in its token shape, not a credential
 CLEAR = "clear"
 HELD = "held by services_apply at 2026-11-10T20:00:00Z"

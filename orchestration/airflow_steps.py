@@ -56,6 +56,7 @@ from orchestration.ecs_preflight import (
     host_cap_reader,
     load_tables,
     s3_digest_reader,
+    ssm_current_code_run_reader,
     ssm_launch_hold_reader,
 )
 from orchestration.interface import SubmissionRequest
@@ -80,6 +81,7 @@ SETTINGS = (
     HOST_JOB_CAP_SETTING,
     "HAI_LAUNCH_HOST_HOLD_PARAMETER",
     "HAI_LAUNCH_APPLY_LOCK_PARAMETER",
+    "HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER",
 )
 # The usable-memory inputs the services stack always renders (host_usable_memory_mib defaults to the current host size), checked by the preflight
 # against the binding of every host revision.
@@ -169,6 +171,7 @@ def services() -> LaunchServices:
         code_runs=S3CodeRuns(s3, bucket),
         clock=clock.wall,
         bronze_request=bronze_request_reader(s3, bucket, collections),
+        current_code_run=ssm_current_code_run_reader(ssm, values["HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER"]),
         host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
         host_job_cap=cap,
