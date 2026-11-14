@@ -2825,8 +2825,9 @@ def extractor_manager_facets(task: Any, state: str, instance: Any) -> Any:
 
 
 def job_task_hands_the_listener_its_lineage() -> None:
-    """The job task that a collapsed DAG registers carries the lineage of the launch it runs, so the provider's listener gets the job's datasets with
-    their versions when the task succeeds, and the datasets without versions when it fails. A task whose preflight refused launched nothing and gives none."""
+    """The job task that a collapsed DAG registers carries the lineage of the launch it runs, so the provider's listener gets the run facet with the state of
+    the job's versions when the task succeeds or fails (no dataset: the layer's tables travel in per-table events). A task whose preflight refused gives
+    none."""
     from dataclasses import replace
 
     from orchestration import ecs_lineage
@@ -2850,12 +2851,13 @@ def job_task_hands_the_listener_its_lineage() -> None:
     found, others = run_dag(Rig())
     complete = found["complete"]
     require(complete is not None, "the provider's extractor manager got no lineage from the job task")
-    declared = ecs_lineage.declared_lineage("silver")
-    require(len(complete["inputs"]) == len(declared["inputs"]) and len(complete["outputs"]) == len(declared["outputs"]), f"datasets {complete['run_facets']}")
+    require(
+        complete["inputs"] == [] and complete["outputs"] == [],
+        f"a layer's task facets name no dataset, its tables travel in their own events: {complete['run_facets']}",
+    )
     require(complete["run_facets"]["haiLaunch"]["snapshotState"] == "complete", f"facet {complete['run_facets']['haiLaunch']}")
-    require(all("version" in item["facets"] for item in complete["outputs"]), "an output has no version")
     failure = found["failure"]
-    require(failure is not None and failure["outputs"] == [] and len(failure["inputs"]) == len(declared["inputs"]), f"on failure: {failure}")
+    require(failure is not None and failure["outputs"] == [] and failure["inputs"] == [], f"on failure: {failure}")
     require(all(value is None for value in others.values()), f"a task that launches nothing handed over lineage: {others}")
     refused, _ = run_dag(Rig(), "publish_fixture")
     require(refused["complete"] is None and refused["failure"] is None, f"a task whose preflight refused launched nothing: {refused}")

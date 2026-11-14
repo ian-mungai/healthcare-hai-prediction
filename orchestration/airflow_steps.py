@@ -8,8 +8,8 @@ A staged input that is not there yet (``InputNotReady``) is retried for ``UNAVAI
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
 the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found.
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
-(the launch's end record says the job passed; after a bronze job it also sends the job's per-table lineage events, outside the OpenLineage provider's forked
-process and under their own total deadline).
+(the launch's end record says the job passed; after a bronze, silver, gold or features job it also sends the job's per-table lineage events, outside the
+OpenLineage provider's forked process and under their own total deadline).
 Each launch operator gets the lineage source of its step (``orchestration/ecs_lineage.py``), so the OpenLineage provider can ask it for the job's datasets.
 """
 
@@ -32,7 +32,7 @@ from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
 from orchestration.ecs_lineage import (
-    BRONZE_JOB,
+    TABLE_EVENT_JOBS,
     DeliveryFailed,
     EvidenceUnavailable,
     LineageRefused,
@@ -233,26 +233,28 @@ def send_table_events(source: LineageSource) -> None:
     try:
         sent = source.send_table_events()
     except (DeliveryFailed, LineageRefused, EvidenceUnavailable) as error:  # their texts name a key or a rule, never a credential
-        LOG.warning("bronze table lineage events of %s attempt %s were not delivered: %s: %s", source.run_id, source.attempt, type(error).__name__, error)
+        LOG.warning(
+            "%s table lineage events of %s attempt %s were not delivered: %s: %s", source.job, source.run_id, source.attempt, type(error).__name__, error
+        )
     except Exception as error:  # the job already succeeded: nothing of its lineage may fail the step
-        LOG.warning("bronze table lineage events of %s attempt %s were not delivered: %s", source.run_id, source.attempt, type(error).__name__)
+        LOG.warning("%s table lineage events of %s attempt %s were not delivered: %s", source.job, source.run_id, source.attempt, type(error).__name__)
     else:
         if sent:
-            LOG.info("sent %d bronze table lineage events of %s attempt %s", sent, source.run_id, source.attempt)
+            LOG.info("sent %d %s table lineage events of %s attempt %s", sent, source.job, source.run_id, source.attempt)
 
 
-def send_bronze_table_events(found: LaunchServices, request: SubmissionRequest, attempt: int) -> None:
-    """The evidence step's sends of a succeeded bronze job's per-table events. The step runs outside the OpenLineage provider's forked process, which the
-    provider kills after its execution timeout (``AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT``), so the sends have their own total deadline
+def send_job_table_events(found: LaunchServices, request: SubmissionRequest, job: str, attempt: int) -> None:
+    """The evidence step's sends of a succeeded bronze or layer job's per-table events. The step runs outside the OpenLineage provider's forked process,
+    which the provider kills after its execution timeout (``AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT``), so the sends have their own total deadline
     (``ecs_lineage.TABLE_EVENTS_SECONDS``). The events name the job's own task (``JOB_TASK``) and launch attempt, as the replay of that attempt does."""
     try:
         if found.evidence is None:
             return
         invocation = step_invocation(replace(request, task_id=JOB_TASK, attempt=attempt).as_dict())
-        declared = declared_lineage(BRONZE_JOB)
-        send_table_events(LineageSource(BRONZE_JOB, request.run_id, attempt, invocation, declared, found.evidence, found.preflight.store))
+        declared = declared_lineage(job)
+        send_table_events(LineageSource(job, request.run_id, attempt, invocation, declared, found.evidence, found.preflight.store))
     except Exception as error:  # the job already succeeded: no lineage of it may fail the step
-        LOG.warning("bronze table lineage events of %s were not delivered: %s", request.run_id, type(error).__name__)
+        LOG.warning("%s table lineage events of %s were not delivered: %s", job, request.run_id, type(error).__name__)
 
 
 def lineage_factory(evidence: S3Evidence, store: S3LaunchStore) -> Callable[[SubmissionRequest, JobSpec], Callable[[bool], Mapping[str, Any]]]:
@@ -380,7 +382,8 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
 
 def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> dict[str, Any]:
     """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed. After a
-    bronze job passed it also sends the job's per-table lineage events (``send_bronze_table_events``); a failure of that is logged and never fails the step."""
+    bronze or layer job passed it also sends the job's per-table lineage events (``send_job_table_events``); a failure of that is logged and never fails the
+    step."""
     launch_services = services()
     store = launch_services.preflight.store
     job = job_of(request.template, request.dag_id)
@@ -398,8 +401,8 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
         result |= {"report": accepted["report"], "passed": True}
-    if job == BRONZE_JOB:
-        send_bronze_table_events(launch_services, request, int(claim["attempt"]))
+    if job in TABLE_EVENT_JOBS:
+        send_job_table_events(launch_services, request, job, int(claim["attempt"]))
     return result
 
 

@@ -94,6 +94,7 @@ STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 DBT_ARTIFACTS = ("manifest.json", "catalog.json", "run_results.json")
 DBT_ARTIFACT_PREFIX = "metadata/dbt/"
+INPUTS_RECORD = "table_inputs.json"  # beside the dbt copy of a run: each published table with the tables its model reads
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # each layer run's own write-once copy for the catalog, one dbt workflow per layer run
 # The code copy, the bulk input extracts, the build file the sealed copy repeats and the working databases of the features build, which hold a copy of gold.
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb", "features_work")
@@ -799,7 +800,11 @@ def catalog_copy(name: str, path: Path, tables: Mapping[str, str] | None) -> byt
 
     try:
         found = artifacts.layer_tables() if tables is None else tables
-        return artifacts.encoded(artifacts.REWRITERS[name](json.loads(path.read_bytes()), found))
+        document = json.loads(path.read_bytes())
+        left = artifacts.unpublished(document, found) if name == "manifest.json" else []
+        if left:
+            sys.stderr.write(f"layer_run: {len(left)} models of the manifest have no published table and stay as built (for example {left[0]})\n")
+        return artifacts.encoded(artifacts.REWRITERS[name](document, found))
     except (artifacts.ArtifactError, ValueError, KeyError) as error:
         sys.stderr.write(f"layer_run: the dbt file {name} was not copied for the catalog: {error}\n")
         return None
@@ -840,36 +845,58 @@ def upload_dbt_run_artifacts(job: Job, bucket: str, client: Any, tables: Mapping
     Each copy is a write-once put. A repeat of the phase finds the same bytes and counts them; a stored copy that differs is reported on standard error and
     never replaced. This is best effort like the fixed-key copy of gold: a refused or failed copy never fails the phase, because the publish is committed.
     """
-    from botocore.exceptions import BotoCoreError, ClientError
-
     sent = []
+    prefix = DBT_RUN_PREFIX.format(layer=job.layer, run=job.run)
     for name in DBT_ARTIFACTS:
         path = job.folder / DBT_TARGET.get(job.layer, Path("target")) / name
         if not path.is_file():
             continue
-        key = DBT_RUN_PREFIX.format(layer=job.layer, run=job.run) + name
         body = catalog_copy(name, path, tables)
-        if body is None:
-            continue
-        try:
-            client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") not in ("PreconditionFailed", "ConditionalRequestConflict"):
-                sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {error.response.get('Error', {}).get('Code', 'ClientError')}\n")
-                continue
-            try:
-                stored = client.get_object(Bucket=bucket, Key=key)["Body"].read()
-            except (ClientError, BotoCoreError) as read_error:
-                sys.stderr.write(f"layer_run: {key} exists and cannot be read back: {type(read_error).__name__}\n")
-                continue
-            if stored != body:
-                sys.stderr.write(f"layer_run: {key} already holds a copy that differs from this run's {name}; it is kept\n")
-                continue
-        except BotoCoreError as error:
-            sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {type(error).__name__}\n")
-            continue
-        sent.append(name)
+        if body is not None and put_once(client, bucket, prefix + name, body, name):
+            sent.append(name)
+    manifest = job.folder / DBT_TARGET.get(job.layer, Path("target")) / "manifest.json"
+    if manifest.is_file():
+        record = inputs_record(job, manifest, tables)
+        if record is not None and put_once(client, bucket, prefix + INPUTS_RECORD, record, INPUTS_RECORD):
+            sent.append(INPUTS_RECORD)
     return sent
+
+
+def inputs_record(job: Job, manifest: Path, tables: Mapping[str, str] | None) -> bytes | None:
+    """The per-table inputs of the run from its manifest as built (``dbt_catalog_artifacts.table_inputs``), or None with the cause on standard error."""
+    from scripts.lakehouse import dbt_catalog_artifacts as artifacts
+
+    try:
+        found = artifacts.layer_tables() if tables is None else tables
+        return artifacts.encoded(artifacts.table_inputs(json.loads(manifest.read_bytes()), found, job.layer, job.run))
+    except (artifacts.ArtifactError, ValueError, KeyError) as error:
+        sys.stderr.write(f"layer_run: the per-table inputs of the run were not copied for the catalog: {error}\n")
+        return None
+
+
+def put_once(client: Any, bucket: str, key: str, body: bytes, name: str) -> bool:
+    """A write-once put of one catalog copy. True when the object holds exactly these bytes after the call; a failure or a different stored copy is reported on
+    standard error, never replaced and never raised."""
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
+    except ClientError as error:
+        if error.response.get("Error", {}).get("Code") not in ("PreconditionFailed", "ConditionalRequestConflict"):
+            sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {error.response.get('Error', {}).get('Code', 'ClientError')}\n")
+            return False
+        try:
+            stored = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+        except (ClientError, BotoCoreError) as read_error:
+            sys.stderr.write(f"layer_run: {key} exists and cannot be read back: {type(read_error).__name__}\n")
+            return False
+        if stored != body:
+            sys.stderr.write(f"layer_run: {key} already holds a copy that differs from this run's {name}; it is kept\n")
+            return False
+    except BotoCoreError as error:
+        sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {type(error).__name__}\n")
+        return False
+    return True
 
 
 def maintain(job: Job) -> None:

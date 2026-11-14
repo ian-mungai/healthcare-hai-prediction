@@ -25,14 +25,16 @@ Where the parts come from:
   bronze inside the job, so its frozen pins are the pin file that the run's one claim (``state/pinned.json``) covers. The output record is checked by
   ``snapshots.validate_snapshot_record``. Any record that breaks a rule is refused with its key; an unreadable object is never read as missing, except
   the one optional read: a job's output record that the role is denied (AccessDenied) gives the declared outputs without versions and the state ``unreadable``.
-- The bronze job is the exception: its datasets are the tables its run record ``lakehouse/bronze_runs/<run>/check.json`` evidences, each with its own raw
-  files in (``raw_lineage.bronze_run_events``). OpenMetadata pairs every input of an event with every output of the same event, and the provider sends one
-  flat event per task, so one task event with several tables would link every table to every file. The task's own event therefore names no bronze dataset
-  (only its run facet). The per-table events are sent by the evidence step of the bronze DAG (``airflow_steps.evidence_step``), not by the completion hook:
-  the provider runs that hook in a forked process that it kills after ``AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT`` (5 s), far short of the hundreds of events.
-  After a succeeded run, with HTTP lineage on, the step sends the events of the replay, byte for byte, with ``post_event`` inside one total deadline
-  (``TABLE_EVENTS_SECONDS``). The declared bronze row names every table and is only the check that the record claims nothing undeclared. A refused or
-  unreadable record gives no dataset and sends nothing.
+- A layer job's datasets travel in one event per published table, never in the task's own event. OpenMetadata pairs every input of an event with every
+  output of the same event, so one event with the layer's 137 inputs and 71 outputs would claim 9,727 edges. The run's record
+  ``metadata/dbt/<layer>/<run>/table_inputs.json`` (written beside its dbt copy by the job's upload phase from the manifest's dependencies) gives each table
+  the tables its own model reads (``layer_table_events``), and the versions come from the evidence above. The task's own event and the facets the provider
+  gets carry the run facet and its state only. The evidence step sends the table events like the bronze ones (below), and the replay adds them.
+- The bronze job sends no table event. Its tables' only inputs are the raw S3 files its run record lists, and OpenMetadata 2.0.7 resolves an S3 dataset only
+  to a container entity that an S3 storage connector made, which this project does not run; the receiver would discard every such event (a dataset it cannot
+  resolve is skipped, and an event with no resolvable input writes nothing). The bronze task's own event names no dataset either, and the bronze to silver
+  edge comes from the silver job's table events. The raw files of each bronze table are written onto the table by the metadata job (owner decision
+  "Raw-file lineage route", Nov 13 2026).
 
 Recorded limits:
 
@@ -85,6 +87,7 @@ TRANSPORT_TYPE, TRANSPORT_URL, TRANSPORT_KEY = "OPENLINEAGE__TRANSPORT__TYPE", "
 JOB_NAMESPACE = "hai-prediction-aws"  # the provider's namespace (AIRFLOW__OPENLINEAGE__NAMESPACE in infra/services/airflow.tf)
 PRODUCER = "https://github.com/ian-mungai/healthcare-hai-prediction"
 EVENT_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
+PARENT_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet"
 VERSION_SCHEMA = "https://openlineage.io/spec/facets/1-0-0/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"
 FACET_FILE = Path("data_contracts/orchestration/launch_lineage_facet.schema.json")
 FACET_SCHEMA = f"{PRODUCER}/blob/main/{FACET_FILE.as_posix()}"
@@ -108,6 +111,8 @@ BRONZE_NAMESPACE = "bronze"  # the lakehouse namespace of the bronze tables, whi
 PINNED_ALWAYS = ("file_metadata",)  # the table every silver pin holds beside the dbt sources it declares (scripts/lakehouse/pins.py, ``pinned_tables``)
 SOURCE_TABLE = re.compile(r"\s*- name:\s*(\S+)\s*")
 EVIDENCE_PREFIX = "lakehouse/layer_runs"
+INPUTS_KEY = "metadata/dbt/{layer}/{run}/table_inputs.json"  # written by the layer job's upload phase beside its dbt copy (scripts/lakehouse/layer_run.py)
+INPUTS_KEYS = {"schema", "layer", "run_id", "tables"}
 MODE = "real"
 EVIDENCE_BYTES = 2 * 1024**2
 IDENTIFIER = re.compile(r"[a-z][a-z0-9_]{0,127}")
@@ -150,6 +155,9 @@ LAYERS = {
     "gold": Layer("silver_pins.json", "silver", "publish/commit.json", "gold", ("silver", "silver_snapshot.json")),
     "features": Layer("gold_pins.json", "gold", "features_snapshot.json", "features", ("gold", "publish/commit.json")),
 }
+
+
+TABLE_EVENT_JOBS = tuple(LAYERS)  # the jobs whose datasets travel in one event per table, never in the task's own event
 
 
 def canonical(value: Any) -> str:
@@ -462,6 +470,72 @@ def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, 
     )
 
 
+def table_inputs(evidence: S3Evidence, layer: str, run_id: str, declared: Mapping[str, Any]) -> dict[str, list[dict[str, str]]]:
+    """The tables a layer run published, each with the tables its own model reads, from the run's record beside its dbt copy. A record that is missing, names
+    another run or layer, names a table the job did not publish or an input it neither pinned nor published, or has a table read itself, is refused by key."""
+    key = INPUTS_KEY.format(layer=layer, run=run_id)
+    record = evidence.read(key)
+    if record is None:
+        raise LineageRefused(f"{key}: missing from the evidence of a succeeded job")
+    if not isinstance(record, dict) or set(record) != INPUTS_KEYS or record["schema"] != 1:
+        raise LineageRefused(f"{key}: does not have exactly the keys {sorted(INPUTS_KEYS)} of schema version 1")
+    if record["run_id"] != run_id:
+        raise LineageRefused(f"{key}: belongs to another run ({record['run_id']})")
+    if record["layer"] != layer:
+        raise LineageRefused(f"{key}: names layer {record['layer']}, not {layer}")
+    tables = record["tables"]
+    if not isinstance(tables, dict):
+        raise LineageRefused(f"{key}: the tables are not an object")
+    published = {item["name"] for item in declared["outputs"]}
+    allowed = {(item["namespace"], item["name"]) for item in [*declared["inputs"], *declared["outputs"]]}
+    found: dict[str, list[dict[str, str]]] = {}
+    for table, reads in tables.items():
+        if not IDENTIFIER.fullmatch(str(table)) or dataset(layer, table)["name"] not in published:
+            raise LineageRefused(f"{key}: {table!r} is not a published table of the {layer} job")
+        if not isinstance(reads, list) or not all(isinstance(item, dict) and set(item) == {"layer", "table"} for item in reads):
+            raise LineageRefused(f"{key}: the inputs of {table} are not a list of layer and table")
+        items = []
+        for item in reads:
+            if (item["layer"], item["table"]) == (layer, table):
+                raise LineageRefused(f"{key}: {table} reads itself")
+            read = dataset(str(item["layer"]), str(item["table"]))
+            if (read["namespace"], read["name"]) not in allowed:
+                raise LineageRefused(f"{key}: {table} reads {read['name']}, which the job neither pinned nor published (not declared)")
+            items.append(read)
+        found[table] = items
+    return found
+
+
+def layer_table_events(evidence: S3Evidence, declared: Mapping[str, Any], invocation: Mapping[str, Any], facts: LaunchFacts) -> list[dict[str, Any]]:
+    """The events of a layer job's published tables. Each table is its own run, a child of the step's run: the tables its own model reads in (as the run's
+    record beside its dbt copy lists them) and itself out, each with the version the layer's evidence proves, so the receiver's pairing of the inputs of an
+    event with its outputs gives the tables' real edges, not every input with every output of the layer. A job that did not succeed claims no table."""
+    if facts.outcome != "succeeded":
+        return []
+    layer = facts.job
+    full = job_lineage(layer, invocation, declared, evidence, facts)
+    versioned = {(item["namespace"], item["name"]): item for item in [*full.inputs, *full.outputs]}
+    reads = table_inputs(evidence, layer, facts.run_id, declared)
+    parent = {
+        "_producer": PRODUCER,
+        "_schemaURL": PARENT_SCHEMA,
+        "run": {"runId": run_uuid(invocation)},
+        "job": {"namespace": JOB_NAMESPACE, "name": f"{invocation['dag_id']}.{invocation['task_id']}"},
+    }
+    found = []
+    for table in sorted(reads):
+        output = versioned[(dataset(layer, table)["namespace"], dataset(layer, table)["name"])]
+        inputs = [versioned[(item["namespace"], item["name"])] for item in reads[table]]
+        state = "complete" if "facets" in output else "unreadable" if full.launch["snapshotState"] == "unreadable" else "missing"
+        missing = [] if state == "complete" else [{"namespace": output["namespace"], "name": output["name"]}]
+        launch = launch_facet(invocation, facts, state, missing, full.launch.get("refusal"))
+        table_invocation = {**invocation, "task_id": f"{invocation['task_id']}.{table}"}
+        for event in events(JobLineage(inputs, [output], launch), table_invocation, facts):
+            event["run"]["facets"]["parent"] = parent
+            found.append(event)
+    return found
+
+
 def launch_facet(invocation: Mapping[str, Any], facts: LaunchFacts, state: str, missing: list[dict[str, str]], refusal: str | None = None) -> dict[str, Any]:
     facet: dict[str, Any] = {
         "_producer": PRODUCER,
@@ -541,45 +615,44 @@ class LineageSource:
     evidence: S3Evidence
     store: S3LaunchStore
 
-    def bronze_events(self, facts: LaunchFacts) -> list[dict[str, Any]]:
-        """The events of the bronze job: its run record names the tables it loaded and their raw files, not the declared lineage."""
-        from orchestration.raw_lineage import bronze_run_events  # raw_lineage imports this module
-
-        return bronze_run_events(self.evidence, self.declared, self.invocation, facts)
-
     def lineage(self) -> tuple[JobLineage, LaunchFacts]:
+        """The task's own lineage: the run facet and no dataset. A layer job's versions are checked here and stay in the facet's state, but its datasets travel
+        in the per-table events, because one event holding every input and every output makes the receiver pair each input with each output."""
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-        if self.job != BRONZE_JOB:
-            return job_lineage(self.job, self.invocation, self.declared, self.evidence, facts), facts
-        self.bronze_events(facts)  # a refused or unreadable run record raises here; the task's own event claims no table either way
-        return JobLineage([], [], launch_facet(self.invocation, facts, "not_applicable", [])), facts
+        if self.job == BRONZE_JOB:
+            return JobLineage([], [], launch_facet(self.invocation, facts, "not_applicable", [])), facts
+        full = job_lineage(self.job, self.invocation, self.declared, self.evidence, facts)
+        return (JobLineage([], [], full.launch) if self.job in TABLE_EVENT_JOBS else full), facts
+
+    def table_events(self, facts: LaunchFacts) -> list[dict[str, Any]]:
+        """The per-table events of a succeeded layer job: its published tables and their own inputs."""
+        return layer_table_events(self.evidence, self.declared, self.invocation, facts)
 
     def table_lines(self) -> list[str]:
-        """The per-table events of a succeeded bronze run as canonical JSON lines, the bytes the replay gives; nothing for a run that did not succeed."""
+        """The per-table events of a succeeded job as canonical JSON lines, the bytes the replay gives; nothing for a run that did not succeed."""
         facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-        if self.job != BRONZE_JOB or facts.outcome != "succeeded":
+        if self.job not in TABLE_EVENT_JOBS or facts.outcome != "succeeded":
             return []
-        found = self.bronze_events(facts)
+        found = self.table_events(facts)
         for event in found:
             check_event(event)
         return [canonical(event) for event in found]
 
     def send_table_events(self, environ: Mapping[str, str] | None = None) -> int:
-        """Send the per-table events of a succeeded bronze run to the receiver of the HTTP lineage settings, within ``TABLE_EVENTS_SECONDS``. Nothing is
-        read or sent without those settings. Returns how many events were sent; ``DeliveryFailed`` when the receiver fails or the deadline passes."""
+        """Send the per-table events of a succeeded bronze or layer run to the receiver of the HTTP lineage settings, within ``TABLE_EVENTS_SECONDS``.
+        Nothing is read or sent without those settings. Returns how many events were sent; ``DeliveryFailed`` when the receiver fails or the deadline passes."""
         target = http_lineage(os.environ if environ is None else environ)
-        if self.job != BRONZE_JOB or target is None:
+        if self.job not in TABLE_EVENT_JOBS or target is None:
             return 0
         lines = self.table_lines()
         send_within(lines, target[0], target[1], TABLE_EVENTS_SECONDS)
         return len(lines)
 
     def events(self) -> list[dict[str, Any]]:
-        if self.job == BRONZE_JOB:
-            found = self.bronze_events(launch_facts(self.store, self.run_id, self.job, self.attempt))
-        else:
-            lineage, facts = self.lineage()
-            found = events(lineage, self.invocation, facts)
+        lineage, facts = self.lineage()
+        found = events(lineage, self.invocation, facts)
+        if self.job in TABLE_EVENT_JOBS:
+            found += self.table_events(facts)
         for event in found:
             check_event(event)
         return found
@@ -593,11 +666,11 @@ class LineageSource:
             facts = LaunchFacts(self.run_id, self.job, self.attempt, "", "", "unknown", "latest")
             with contextlib.suppress(LineageRefused, EvidenceUnavailable):  # the facet still names the run, job and attempt; the refusal says why
                 facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
-            bronze = self.job == BRONZE_JOB  # the declared bronze lineage names every table, so a refusal claims none
-            outputs = [] if bronze else [dict(item) for item in self.declared["outputs"]]
+            grouped = self.job in TABLE_EVENT_JOBS or self.job == BRONZE_JOB  # a declaration names every table of the job, so a refusal claims none of them
+            outputs = [] if self.job == BRONZE_JOB else [dict(item) for item in self.declared["outputs"]]
             lineage = JobLineage(
-                [] if bronze else [dict(item) for item in self.declared["inputs"]],
-                outputs,
+                [] if grouped else [dict(item) for item in self.declared["inputs"]],
+                [] if grouped else outputs,
                 launch_facet(self.invocation, facts, "refused", outputs, f"{type(error).__name__}: {error}"),
             )
         inputs = lineage.inputs if complete else [{"namespace": item["namespace"], "name": item["name"]} for item in lineage.inputs]

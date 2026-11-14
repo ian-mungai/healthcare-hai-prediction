@@ -753,7 +753,10 @@ def case_gold_and_features_chain(case: Case) -> None:
     require(dbt_keys == ["metadata/dbt/manifest.json", "metadata/dbt/run_results.json"], f"the gold run publishes its dbt files for the catalog: {dbt_keys}")
     for layer in ("silver", "gold", "features"):
         copies = sorted(key.rsplit("/", 1)[1] for key in DBT_COPIES if key.startswith(f"metadata/dbt/{layer}/"))
-        require(copies == ["manifest.json", "run_results.json"], f"the {layer} run copies its dbt files once under metadata/dbt/{layer}/<run>/: {copies}")
+        require(
+            copies == ["manifest.json", "run_results.json", "table_inputs.json"],
+            f"the {layer} run copies its dbt files and its per-table inputs once under metadata/dbt/{layer}/<run>/: {copies}",
+        )
 
 
 def case_gold_maintenance_runs_last_under_the_chain_rule(case: Case) -> None:

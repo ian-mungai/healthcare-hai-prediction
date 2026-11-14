@@ -1,6 +1,8 @@
 """Run the Glue mirror and dbt ingestion of the metadata job on the host, against the persistent OpenMetadata catalog.
 
-Runs inside the ingestion image as ``python -m scripts.infrastructure.openmetadata_host_ingest --config-dir D --work-dir W glue dbt``. The job is a bridge
+Runs inside the ingestion image as ``python -m scripts.infrastructure.openmetadata_host_ingest --config-dir D --work-dir W glue dbt``. The dbt source needs
+``FEATURES_RUN``, the ID of the features run, and ingests the dbt copy of each layer run of the chain that run recorded (``openmetadata_chain``), never a latest
+copy. The job is a bridge
 task that holds only this one container, so the catalog is not on loopback: ``OM_API`` names the catalog API on the host's private address, and the bot token
 arrives in ``OM_INGESTION_TOKEN`` as a task secret. The token is never written to a file. Each source goes through ``openmetadata_ingest.main``, so its refusal
 of a profiling or sampling configuration, its variable check and its dbt download stay the ones of the catalog task. Exit codes: 0 done, 1 a source failed,
@@ -20,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts import resource_peaks
+from scripts.infrastructure import openmetadata_chain as chain
 from scripts.infrastructure import openmetadata_ingest as ingest
 from scripts.infrastructure import startup_check
 
@@ -62,6 +65,23 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
         sys.stderr.write(f"openmetadata_host_ingest: {refusal}\n")
         return 1
     run = ingest.run_workflow if workflow is None else workflow
+    layers: dict[str, str] = {}
+    if "dbt" in options.sources:
+        # The dbt source ingests the copies of the three layer runs of the chain that FEATURES_RUN records. There is no latest and no fixed key to fall back to.
+        features_run = environment.get("FEATURES_RUN", "")
+        if not chain.RUN_ID.fullmatch(features_run):
+            sys.stderr.write("openmetadata_host_ingest: FEATURES_RUN must be the ID of the features run whose chain is ingested; there is no latest\n")
+            return 2
+        client = s3_client
+        if client is None:
+            import boto3
+
+            client = boto3.client("s3", region_name=environment.get("AWS_REGION"))
+        try:
+            layers = chain.layer_runs(client, environment.get("DATA_BUCKET_NAME", ""), features_run)
+        except chain.ChainError as error:
+            sys.stderr.write(f"openmetadata_host_ingest: {error}\n")
+            return 1
 
     def aimed(config: dict[str, Any]) -> None:
         server = config["workflowConfig"]["openMetadataServerConfig"]
@@ -72,7 +92,16 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     for source in options.sources:
         # The empty device stands in for the token file: the token comes from the variable and is set in ``aimed`` after the placeholders are filled.
         code = ingest.main(
-            [source, "--config-dir", str(options.config_dir), "--token-file", os.devnull, "--work-dir", str(options.work_dir)],
+            [
+                source,
+                "--config-dir",
+                str(options.config_dir),
+                "--token-file",
+                os.devnull,
+                "--work-dir",
+                str(options.work_dir),
+                *(item for layer, run_id in layers.items() if source == "dbt" for item in ("--dbt-run", f"{layer}={run_id}")),
+            ],
             env=environment,
             workflow=aimed,
             s3_client=s3_client,

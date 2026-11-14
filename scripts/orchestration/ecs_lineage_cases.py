@@ -68,6 +68,20 @@ def put(bucket: Any, key: str, value: Any) -> None:
     bucket.objects[key] = value if isinstance(value, bytes) else (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
 
 
+def put_table_inputs(bucket: Any, layer: str, edges: dict[str, list[tuple[str, str]]]) -> None:
+    """The record the layer job's upload phase writes beside its dbt copy: each published table with the tables its model reads."""
+    run = RUN_OF[layer]
+    body = {table: [{"layer": below, "table": name} for below, name in inputs] for table, inputs in edges.items()}
+    put(bucket, f"metadata/dbt/{layer}/{run}/table_inputs.json", {"schema": 1, "layer": layer, "run_id": run, "tables": body})
+
+
+EDGES = {
+    "silver": {"s1": [("bronze", "t1")], "s2": [("bronze", "t1"), ("bronze", "t2")]},
+    "gold": {"g1": [("silver", "s1")]},
+    "features": {"f1": [("gold", "g1")]},
+}
+
+
 def evidence_bucket(rig: Rig | None = None) -> Any:
     """The project bucket with the S3 evidence of a silver, a gold and a features run that chain into each other."""
     bucket = (rig or Rig()).bucket
@@ -103,6 +117,8 @@ def evidence_bucket(rig: Rig | None = None) -> Any:
         f"{layer}/features/{features}/features_snapshot.json",
         {"schema": 1, "run_id": features, "mode": "real", "namespace": "features", "snapshot_set": {"f1": 41}},
     )
+    for layer, edges in EDGES.items():
+        put_table_inputs(bucket, layer, edges)
     return bucket
 
 
@@ -174,9 +190,25 @@ def tables_of(items: list[dict[str, str]]) -> dict[str, int]:
     return {item["name"].split(".")[-1]: snapshot_id(item) for item in items}
 
 
-def template_bucket() -> Any:
+def real_edges(declared: dict[str, Any]) -> dict[str, dict[str, list[tuple[str, str]]]]:
+    """Edges over the real declared tables: each output reads two inputs of the layer below (and, in gold and features, the output before it)."""
+    found: dict[str, dict[str, list[tuple[str, str]]]] = {}
+    for layer in ("silver", "gold", "features"):
+        outputs = [item["name"].split(".")[-1] for item in declared[layer]["outputs"]]
+        inputs = [item["name"].split(".")[-1] for item in declared[layer]["inputs"]]
+        below = {"silver": "bronze", "gold": "silver", "features": "gold"}[layer]
+        found[layer] = {}
+        for index, table in enumerate(outputs):
+            reads = {(below, inputs[index % len(inputs)]), (below, inputs[(index + 1) % len(inputs)])}
+            if layer != "silver" and index:
+                reads.add((layer, outputs[index - 1]))
+            found[layer][table] = sorted(reads)
+    return found
+
+
+def template_bucket(rig: Rig | None = None) -> Any:
     """Evidence of a silver, gold and features run that pins and publishes exactly the tables the contract files declare for each job."""
-    bucket = Rig().bucket
+    bucket = (rig or Rig()).bucket
     bucket.allowed_prefix = ""
     layer = "lakehouse/layer_runs"
     silver, gold, features = RUN_OF["silver"], RUN_OF["gold"], RUN_OF["features"]
@@ -217,6 +249,8 @@ def template_bucket() -> Any:
         f"{layer}/features/{features}/features_snapshot.json",
         {"schema": 1, "run_id": features, "mode": "real", "namespace": "features", "snapshot_set": tables_of(declared["features"]["outputs"])},
     )
+    for layer, wanted in real_edges(declared).items():
+        put_table_inputs(bucket, layer, wanted)
     return bucket
 
 
@@ -393,6 +427,110 @@ def names_equal_the_connector_names() -> None:
             ecs_lineage.connector_fqn(entry)  # refuses a declared dataset the connector would name differently
 
 
+def table_pairs(events: list[dict[str, Any]]) -> set[tuple[str, str]]:
+    """The input to output name pairs that OpenMetadata 2.0.7 makes of these events: every input of an event with every output of the same event."""
+    return {(i["name"], o["name"]) for event in events if event["eventType"] == "COMPLETE" for i in event["inputs"] for o in event["outputs"]}
+
+
+def layer_table_events_carry_each_tables_own_edges() -> None:
+    """A layer job's datasets travel in one event per published table, with the tables its own model reads in and itself out, so the receiver's pairing
+    gives exactly the manifest's edges. Versions: an output has its snapshot, an input its pin."""
+    check = validator()
+    pins = {"t1": "11", "t2": "12", "s1": "21", "s2": "22", "g1": "31", "f1": "41"}
+    for job, edges in EDGES.items():
+        found = ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(evidence_bucket(), BUCKET), DECLARED[job], invocation(job), facts(job))
+        for event in found:
+            require(not check(event), f"{job} {event['eventType']}: {check(event)[:3]}")
+        want = {(glue(below, name)["name"], glue(job, table)["name"]) for table, reads in edges.items() for below, name in reads}
+        require(table_pairs(found) == want, f"{job}: pairs {sorted(table_pairs(found) ^ want)}")
+        require([event["eventType"] for event in found] == ["START", "COMPLETE"] * len(edges), f"{job}: event types")
+        for event in (item for item in found if item["eventType"] == "COMPLETE"):
+            require(len(event["outputs"]) == 1, f"{job}: one table per event: {event['outputs']}")
+            for item in [*event["inputs"], *event["outputs"]]:
+                require(item["facets"]["version"]["datasetVersion"] == pins[item["name"].split(".")[-1]], f"{job}: version of {item['name']}")
+        started = [item for item in found if item["eventType"] == "START"]
+        require(all(item["outputs"] == [] and "facets" not in item["inputs"][0] for item in started), f"{job}: START names no output and no version")
+    failed = ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(evidence_bucket(), BUCKET), DECLARED["gold"], invocation("gold"), facts("gold", "failed"))
+    require(failed == [], "a job that did not succeed claims no table")
+
+
+def real_gold_edges_are_not_a_cross_product() -> None:
+    """With the real declared gold tables (137 silver inputs, 71 outputs), the events describe the recorded edges only, not the 9,727 pairs of one grouped
+    event, and an input a table does not read is not paired with it."""
+    declared = {job: ecs_lineage.declared_lineage(job) for job in ("silver", "gold", "features")}
+    found = ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(template_bucket(), BUCKET), declared["gold"], invocation("gold"), facts("gold"))
+    wanted = real_edges(declared)["gold"]
+    pairs = table_pairs(found)
+    require(
+        len(pairs) == sum(len(reads) for reads in wanted.values()) and len(pairs) < len(declared["gold"]["inputs"]) * len(declared["gold"]["outputs"]),
+        len(pairs),
+    )
+    unrelated = (glue("silver", "int_wonder_county_deaths")["name"], glue("gold", "dim_change_type")["name"])
+    require(unrelated not in pairs, "a silver table the gold table does not read is paired with it")
+    require(len([event for event in found if event["eventType"] == "COMPLETE"]) == len(declared["gold"]["outputs"]), "one event per published gold table")
+
+
+def layer_task_event_names_no_dataset() -> None:
+    """The task's own event and the facets the provider gets carry the run facet and no dataset, so the receiver cannot pair the layer's inputs with its
+    outputs; the replay adds the per-table events."""
+    rig = Rig()
+    evidence_bucket(rig)
+    operator(rig, None).execute(context())
+    found = source(rig, spec(), DECLARED["gold"])
+    for complete in (True, False):
+        facets = found.facets(complete)
+        require(facets["inputs"] == [] and facets["outputs"] == [], f"facets name datasets (complete={complete}): {facets}")
+    require(found.facets(True)["run_facets"]["haiLaunch"]["snapshotState"] == "complete", "the facet still says the versions are complete")
+    events = found.events()
+    task, tables = events[:2], events[2:]
+    require(all(item["inputs"] == [] and item["outputs"] == [] for item in task), "the task event names no dataset")
+    require(task[1]["run"]["facets"]["haiLaunch"]["snapshotState"] == "complete" and len(tables) == 2, f"{len(tables)} table events")
+    require(table_pairs(events) == {(glue("silver", "s1")["name"], glue("gold", "g1")["name"])}, f"pairs {table_pairs(events)}")
+    broken = Rig()
+    evidence_bucket(broken)
+    operator(broken, None).execute(context())
+    pin = f"lakehouse/layer_runs/gold/{RUN_OF['gold']}/silver_pins.json"
+    broken.bucket.objects.pop(pin)
+    refused = source(broken, spec(), DECLARED["gold"]).facets(True)
+    require(refused["inputs"] == [] and refused["outputs"] == [], f"a refused record leaves no declared dataset: {refused}")
+    require(pin in refused["run_facets"]["haiLaunch"]["refusal"], "the facet names the record")
+
+
+def table_inputs_record_refusals() -> None:
+    """A per-table inputs record that is missing, unreadable or wrong is refused by its key and the rule, and a refusal sends no table event."""
+    key = "metadata/dbt/gold/" + RUN_OF["gold"] + "/table_inputs.json"
+
+    def change(edit: Callable[[dict[str, Any]], None]) -> Callable[[Any], None]:
+        return lambda bucket: edit_record(bucket, key, edit)
+
+    cases: list[tuple[str, Callable[[Any], None], str]] = [
+        ("missing", lambda b: b.objects.pop(key), "missing"),
+        ("another run", change(lambda d: d.update(run_id=RUN_OF["features"])), "another run"),
+        ("another layer", change(lambda d: d.update(layer="silver")), "layer"),
+        ("a table nobody published", change(lambda d: d["tables"].update(g9=[])), "not a published table"),
+        ("an input nobody pinned or published", change(lambda d: d["tables"].update(g1=[{"layer": "silver", "table": "s9"}])), "not declared"),
+        ("an extra key", change(lambda d: d.update(extra=1)), "keys"),
+        ("a duplicate key", lambda b: put(b, key, b'{"schema": 1, "schema": 1}'), "duplicate"),
+        ("not JSON", lambda b: put(b, key, b"[nope"), "not JSON"),
+        ("an input that reads itself", change(lambda d: d["tables"].update(g1=[{"layer": "gold", "table": "g1"}])), "itself"),
+    ]
+    for label, edit, phrase in cases:
+        bucket = evidence_bucket()
+        edit(bucket)
+        error = refuses(
+            ecs_lineage.LineageRefused,
+            lambda bucket=bucket: ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(bucket, BUCKET), DECLARED["gold"], invocation("gold"), facts("gold")),
+        )
+        require(key in str(error) and phrase in str(error), f"{label}: the refusal must name the record and '{phrase}': {error}")
+    bucket = evidence_bucket()
+    bucket.deny_keys.add(key)
+    error = refuses(
+        ecs_lineage.EvidenceUnavailable,
+        lambda: ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(bucket, BUCKET), DECLARED["gold"], invocation("gold"), facts("gold")),
+    )
+    require(key in str(error) and "AccessDenied" in str(error), f"an unreadable record is never read as missing: {error}")
+
+
 def mutated(change: Callable[[Any], None]) -> Any:
     bucket = evidence_bucket()
     change(bucket)
@@ -403,6 +541,9 @@ def edit(bucket: Any, key: str, change: Callable[[dict[str, Any]], None]) -> Non
     document = json.loads(bucket.objects[key])
     change(document)
     put(bucket, key, document)
+
+
+edit_record = edit
 
 
 def refused_records() -> None:
@@ -479,23 +620,23 @@ def source(rig: Rig, job: JobSpec, declared: dict[str, Any]) -> ecs_lineage.Line
 
 
 def operator_returns_the_facets() -> None:
-    """After a real launch the operator returns the declared datasets with versions; a refused record never fails the task and is named in the facet."""
+    """After a real launch the operator returns the run facet with the versions' state and no dataset (a layer's datasets travel in per-table events); a
+    refused record never fails the task and is named in the facet."""
     rig = Rig()
     evidence_bucket(rig)
     built_operator = operator(rig, source(rig, spec(), DECLARED["gold"]).facets)
     built_operator.execute(context())
     found = built_operator.get_openlineage_facets_on_complete(None)
-    require([item["name"] for item in found["outputs"]] == ["hai_lakehouse.hai_mirror_gold.g1"], f"outputs {found}")
-    require(found["outputs"][0]["facets"]["version"]["datasetVersion"] == "31", f"output version {found['outputs'][0]}")
+    require(found["inputs"] == [] and found["outputs"] == [], f"a layer job's facets name no dataset: {found}")
     require(found["run_facets"]["haiLaunch"]["snapshotState"] == "complete", f"facet {found['run_facets']}")
     require(found["run_facets"]["haiLaunch"]["boundInputRun"] == BOUND["input_run"], "the facet names the input run bound at launch")
     failed = built_operator.get_openlineage_facets_on_failure(None)
-    require(failed["outputs"] == [] and len(failed["inputs"]) == 2, f"on failure: {failed}")
+    require(failed["outputs"] == [] and failed["inputs"] == [], f"on failure: {failed}")
     edit(rig.bucket, f"lakehouse/layer_runs/gold/{RUN}/silver_pins.json", lambda d: d["snapshot_set"].update(s2=98))
     found = built_operator.get_openlineage_facets_on_complete(None)
     facet = found["run_facets"]["haiLaunch"]
     require(facet["snapshotState"] == "refused" and "silver_pins.json" in facet["refusal"], f"a refused record shows in the facet: {facet}")
-    require(all("facets" not in item for item in [*found["inputs"], *found["outputs"]]), "a refused record attaches no version")
+    require(found["inputs"] == [] and found["outputs"] == [], "a refused record leaves no dataset")
 
     def broken(complete: bool) -> Any:
         raise RuntimeError("synthetic failure of the lineage source")
@@ -541,7 +682,7 @@ def unreadable_output_record() -> None:
     operator(unready, source(unready, spec(), DECLARED["gold"]).facets).execute(context())
     found = source(unready, spec(), DECLARED["gold"]).facets()
     require(found["run_facets"]["haiLaunch"]["snapshotState"] == "unreadable", f"the live facets say unreadable: {found['run_facets']}")
-    require(all("facets" not in item for item in found["outputs"]) and len(found["outputs"]) == 1, f"the live outputs have no versions: {found['outputs']}")
+    require(found["inputs"] == [] and found["outputs"] == [], f"the live facets name no dataset: {found}")
 
 
 class Receiver:
@@ -616,7 +757,7 @@ def replay_rebuilds_the_same_events() -> None:
     arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
     arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
     first, second = (ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"]) for _ in range(2))
-    require(first == second and len(first) == 2, "two replays give the same bytes")
+    require(first == second and len(first) == 4, "two replays give the same bytes: the task's START and COMPLETE and the table's")
     expected = source(rig, spec(), DECLARED["gold"])
     require([json.loads(line) for line in first] == expected.events(), "the replay equals the events the operator's source builds")
     require(rig.bucket.count("put_object") == writes, "a replay writes nothing to the bucket")
@@ -626,7 +767,7 @@ def replay_rebuilds_the_same_events() -> None:
         for _ in range(2):
             ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
     bodies = [item["body"] for item in receiver.requests]
-    require(len(bodies) == 4 and bodies[:2] == bodies[2:] and [body.decode() for body in bodies[:2]] == first, "a second send repeats the same events")
+    require(len(bodies) == 8 and bodies[:4] == bodies[4:] and [body.decode() for body in bodies[:4]] == first, "a second send repeats the same events")
     unended = Rig()
     evidence_bucket(unended)
     error = refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.replay(unended.bucket, arguments, declared=DECLARED["gold"]))
@@ -648,7 +789,9 @@ def adopted_retry_keeps_its_lineage() -> None:
     events = found.events()
     complete = events[1]
     require(complete["eventType"] == "COMPLETE", f"the adopted success is a COMPLETE event: {complete['eventType']}")
-    require(all("version" in item.get("facets", {}) for item in [*complete["inputs"], *complete["outputs"]]), "the adopted retry keeps the versions")
+    table = events[3]
+    require(table["eventType"] == "COMPLETE" and table["outputs"][0]["name"].endswith(".g1"), f"the table's event follows the task's: {table['eventType']}")
+    require(all("version" in item.get("facets", {}) for item in [*table["inputs"], *table["outputs"]]), "the adopted retry keeps the versions")
     require(complete["run"]["facets"]["haiLaunch"]["attempt"] == 2, "the identity is the retry's own attempt")
     first = source(rig, spec(), DECLARED["gold"]).events()
     require(first[1]["run"]["runId"] != complete["run"]["runId"], "the retry is its own run")
@@ -715,6 +858,10 @@ CASES: dict[str, Callable[[], None]] = {
     "every_job_with_declared_datasets": every_job_with_declared_datasets,
     "edges_equal_the_declared_lineage": edges_equal_the_declared_lineage,
     "names_equal_the_connector_names": names_equal_the_connector_names,
+    "layer_table_events_carry_each_tables_own_edges": layer_table_events_carry_each_tables_own_edges,
+    "real_gold_edges_are_not_a_cross_product": real_gold_edges_are_not_a_cross_product,
+    "layer_task_event_names_no_dataset": layer_task_event_names_no_dataset,
+    "table_inputs_record_refusals": table_inputs_record_refusals,
     "refused_records": refused_records,
     "operator_returns_the_facets": operator_returns_the_facets,
     "unreadable_output_record": unreadable_output_record,

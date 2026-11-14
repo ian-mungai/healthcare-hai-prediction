@@ -241,6 +241,16 @@ class FakeS3:
         self.keys = keys
         self.requested: list[str] = []
 
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        import io
+
+        from botocore.exceptions import ClientError
+
+        self.requested.append(f"{Bucket}/{Key}")
+        if Key not in self.keys:
+            raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}}, "GetObject")
+        return {"Body": io.BytesIO(self.keys[Key])}
+
     def download_file(self, bucket: str, key: str, target: str) -> None:
         self.requested.append(f"{bucket}/{key}")
         if key not in self.keys:
@@ -363,10 +373,33 @@ def run_host_ingest(args: list[str], env: dict[str, str], workflow: Callable[[di
     return code, out.getvalue(), err.getvalue()
 
 
+SILVER_RUN, GOLD_RUN, FEATURES_RUN = "20261104T100000Z-5111e201", "20261104T110000Z-601d0001", "20261104T120000Z-feed0001"
+
+
+def chain_keys(**change: Any) -> dict[str, bytes]:
+    """The pin files that record one chain (features run to gold run to silver run) and one dbt copy per layer run, as the layer jobs leave them."""
+
+    def pin(run: str, source: str, namespace: str) -> bytes:
+        return json.dumps({"schema": 1, "run_id": run, "mode": "real", "namespace": namespace, "source_run_id": source, "snapshot_set": {"t": 1}}).encode()
+
+    keys = {
+        f"lakehouse/layer_runs/features/{FEATURES_RUN}/gold_pins.json": pin(FEATURES_RUN, GOLD_RUN, "gold"),
+        f"lakehouse/layer_runs/gold/{GOLD_RUN}/silver_pins.json": pin(GOLD_RUN, SILVER_RUN, "silver"),
+    }
+    for layer, run in (("silver", SILVER_RUN), ("gold", GOLD_RUN), ("features", FEATURES_RUN)):
+        keys[f"metadata/dbt/{layer}/{run}/manifest.json"] = json.dumps({"layer": layer}).encode()
+    for key, value in change.items():
+        if value is None:
+            keys.pop(key, None)
+        else:
+            keys[key] = value
+    return keys
+
+
 def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str], dict[str, str]]:
     """The command line and variables of the host ingestion container: no token file, the catalog address and the token as variables."""
     _, env = ingest_environment(root)
-    env.update(OM_API=HOST_API, OM_INGESTION_TOKEN=BEARER_VALUE)
+    env.update(OM_API=HOST_API, OM_INGESTION_TOKEN=BEARER_VALUE, FEATURES_RUN=FEATURES_RUN)
     for name, value in changes.items():
         if value is None:
             env.pop(name, None)
@@ -377,12 +410,11 @@ def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str
 
 def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
     seen: list[dict[str, Any]] = []
-    keys = {f"metadata/dbt/{name}": b"{}" for name in ("manifest.json", "catalog.json", "run_results.json")}
     with tempfile.TemporaryDirectory() as folder:
         args, env = host_ingest_environment(Path(folder))
-        code, out, err = run_host_ingest(args, env, seen.append, s3_client=FakeS3(keys))
+        code, out, err = run_host_ingest(args, env, seen.append, s3_client=FakeS3(chain_keys()))
         require(code == 0, (code, err))
-        require(len(seen) == 2, f"glue and dbt must each run once, got {len(seen)}")
+        require(len(seen) == 4, f"glue once and dbt once per layer of the chain, got {len(seen)}")
         for config in seen:
             server = config["workflowConfig"]["openMetadataServerConfig"]
             require(server["hostPort"] == HOST_API, f"the workflow does not name the persistent catalog: {server['hostPort']}")
@@ -394,6 +426,94 @@ def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
         require(written, "the dbt artifacts must be in the work folder, or this check proves nothing")
         for path in written:
             require(BEARER_VALUE.encode() not in path.read_bytes(), f"the token was written to disk: {path.name}")
+
+
+def chain_follows_the_recorded_pins() -> None:
+    """From the features run, the gold run is the one its gold pins name and the silver run the one the gold run's silver pins name; each pin file must be
+    of the run it was read from. The bronze run is not recorded by silver's pins, so none is returned."""
+    from scripts.infrastructure import openmetadata_chain as chain
+
+    s3 = FakeS3(chain_keys())
+    found = chain.layer_runs(s3, "example-project-data-dev", FEATURES_RUN)
+    require(found == {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}, found)
+    require(sorted(s3.requested) == sorted(f"example-project-data-dev/{key}" for key in chain_keys() if key.endswith("_pins.json")), s3.requested)
+
+
+def chain_refuses_a_missing_or_mismatched_pin() -> None:
+    """A pin file that is missing, unreadable, of another run, of another namespace or mode, or that names no run stops the chain by its key. Nothing falls back
+    to a latest run."""
+    from scripts.infrastructure import openmetadata_chain as chain
+
+    gold_pin = f"lakehouse/layer_runs/features/{FEATURES_RUN}/gold_pins.json"
+    silver_pin = f"lakehouse/layer_runs/gold/{GOLD_RUN}/silver_pins.json"
+    good = json.loads(chain_keys()[gold_pin])
+    cases: dict[str, tuple[dict[str, bytes | None], str, str]] = {
+        "missing": ({gold_pin: None}, gold_pin, "missing"),
+        "silver pin missing": ({silver_pin: None}, silver_pin, "missing"),
+        "another run": ({gold_pin: json.dumps({**good, "run_id": GOLD_RUN}).encode()}, gold_pin, "another run"),
+        "another namespace": ({gold_pin: json.dumps({**good, "namespace": "silver"}).encode()}, gold_pin, "namespace"),
+        "not real mode": ({gold_pin: json.dumps({**good, "mode": "publish_fixture"}).encode()}, gold_pin, "mode"),
+        "latest": ({gold_pin: json.dumps({**good, "source_run_id": "latest"}).encode()}, gold_pin, "not a run"),
+        "no source": ({gold_pin: json.dumps({key: value for key, value in good.items() if key != "source_run_id"}).encode()}, gold_pin, "keys"),
+        "not json": ({gold_pin: b"[nope"}, gold_pin, "not JSON"),
+    }
+    for label, (change, key, phrase) in cases.items():
+        try:
+            chain.layer_runs(FakeS3(chain_keys(**change)), "example-project-data-dev", FEATURES_RUN)
+        except chain.ChainError as error:
+            require(key in str(error) and phrase in str(error), f"{label}: the refusal must name {key} and '{phrase}': {error}")
+        else:
+            raise AssertionError(f"{label}: a bad pin was accepted")
+    for run in ("latest", "", "20261104T120000Z-FEED0001", f"{FEATURES_RUN}/x"):
+        try:
+            chain.layer_runs(FakeS3(chain_keys()), "example-project-data-dev", run)
+        except chain.ChainError as error:
+            require("not a run" in str(error), (run, str(error)))
+        else:
+            raise AssertionError(f"the features run {run!r} was accepted")
+
+
+def host_ingest_ingests_the_three_recorded_layers() -> None:
+    """The dbt source runs once for each layer of the chain that FEATURES_RUN records, on that layer run's copy and no other, and reads no fixed key."""
+    seen: list[dict[str, Any]] = []
+    read: list[str] = []
+
+    def workflow(config: dict[str, Any]) -> None:
+        seen.append(config)
+        source = config["source"]["sourceConfig"]["config"].get("dbtConfigSource")
+        if source is not None:
+            read.append(json.loads(Path(source["dbtManifestFilePath"]).read_text())["layer"])
+
+    s3 = FakeS3(chain_keys() | {"metadata/dbt/manifest.json": b'{"layer": "fixed_gold"}'})
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        code, _, err = run_host_ingest(args, env, workflow, s3_client=s3)
+    require(code == 0, (code, err))
+    require(read == ["silver", "gold", "features"], f"dbt ingested {read}")
+    require(not [key for key in s3.requested if key.endswith("metadata/dbt/manifest.json")], f"a fixed key was read: {s3.requested}")
+
+
+def host_ingest_never_falls_back_to_latest() -> None:
+    """Without FEATURES_RUN, with one that is not a run ID, or with a chain that does not hold, the dbt source stops before any workflow runs."""
+    for label, changes, expected in (
+        ("unset", {"FEATURES_RUN": None}, 2),
+        ("empty", {"FEATURES_RUN": ""}, 2),
+        ("latest", {"FEATURES_RUN": "latest"}, 2),
+    ):
+        seen: list[dict[str, Any]] = []
+        s3 = FakeS3(chain_keys() | {"metadata/dbt/manifest.json": b"{}"})
+        with tempfile.TemporaryDirectory() as folder:
+            args, env = host_ingest_environment(Path(folder), **changes)
+            code, _, err = run_host_ingest([*args[:-2], "dbt"], env, seen.append, s3_client=s3)
+        require(code == expected and not seen and "FEATURES_RUN" in err, f"{label}: code {code}, {len(seen)} workflows, {err}")
+        require(not s3.requested, f"{label}: S3 was read: {s3.requested}")
+    broken = FakeS3(chain_keys(**{f"lakehouse/layer_runs/gold/{GOLD_RUN}/silver_pins.json": None}))
+    seen = []
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        code, _, err = run_host_ingest([*args[:-2], "dbt"], env, seen.append, s3_client=broken)
+    require(code == 1 and not seen and "silver_pins.json" in err, f"a missing pin stops the task: code {code}, {err}")
+    require(not [key for key in broken.requested if key.startswith("example-project-data-dev/metadata/dbt/")], "no dbt copy is read before the chain holds")
 
 
 def host_ingest_refuses_an_unusable_catalog_address() -> None:
@@ -470,7 +590,7 @@ def host_ingest_stops_at_the_first_failing_source() -> None:
 
     with tempfile.TemporaryDirectory() as folder:
         args, env = host_ingest_environment(Path(folder))
-        code, out, err = run_host_ingest(args, env, broken)
+        code, out, err = run_host_ingest(args, env, broken, s3_client=FakeS3(chain_keys()))
     require(code == 1 and len(seen) == 1, (code, len(seen)))
     require("RuntimeError" in err and BEARER_VALUE not in out + err, err)
 
@@ -486,7 +606,7 @@ def host_ingest_keeps_the_profiler_refusal() -> None:
         bad.mkdir()
         (bad / "glue.json").write_text(json.dumps(config))
         args[args.index("--config-dir") + 1] = str(bad)
-        code, _, err = run_host_ingest(args, env, seen.append)
+        code, _, err = run_host_ingest(args, env, seen.append, s3_client=FakeS3(chain_keys()))
     require(code == 2 and seen == [], (code, seen))
     require("generatesampledata" in err.lower(), err)
 
@@ -1158,6 +1278,10 @@ CASES: list[Callable[[], None]] = [
     ingest_names_a_missing_variable_but_not_a_value,
     ingest_fails_when_the_workflow_fails_without_echoing_the_config,
     ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest,
+    chain_follows_the_recorded_pins,
+    chain_refuses_a_missing_or_mismatched_pin,
+    host_ingest_ingests_the_three_recorded_layers,
+    host_ingest_never_falls_back_to_latest,
     host_ingest_aims_both_sources_at_the_persistent_catalog,
     host_ingest_refuses_an_unusable_catalog_address,
     host_ingest_accepts_each_private_range_on_the_catalog_port,

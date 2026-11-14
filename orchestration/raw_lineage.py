@@ -1,20 +1,24 @@
-"""Lineage from acquisition to bronze: the raw files an acquisition run stored and the raw files a bronze run loaded, named the same way on both sides.
+"""Raw-file lineage: the acquisition builder, and the reader of the bronze run record.
 
-A raw file is the dataset ``s3://<bucket>`` / ``<object key>``, with the object version as its version facet (``raw_file``). The acquisition run's events
-name each stored file as an output with a ``haiReceipt`` facet from its receipt: the address the publisher served it from (the resolved URL of the capture,
-else the requested one), the landing page, the source, the snapshot, the artifact, the role, the SHA-256 and the size. The publisher address is a facet,
-not an input dataset, because OpenMetadata has no entity for a web address and would report it as unresolved.
+A raw file is the dataset ``s3://<bucket>`` / ``<object key>``, with the object version as its version facet (``raw_file``). ``acquisition_events``
+names each file a saved acquisition job stored as an output with a ``haiReceipt`` facet from its receipt: the address the publisher served it from
+(the resolved URL of the capture, else the requested one), the landing page, the source, the snapshot, the artifact, the role, the SHA-256 and the
+size. The publisher address is a facet, not an input dataset, because OpenMetadata has no entity for a web address and would report it as unresolved.
 
-A bronze run's events give each table the run loaded its own run, a child of the step's run: that table's raw files (as the run record lists them) in,
-that table out with the snapshot the record names, so OpenMetadata joins each bronze table to exactly the files it was loaded from. A table the run did
-not load is claimed by no event. ``bronze_run_events`` reads the run record ``lakehouse/bronze_runs/<run>/check.json``, which the bronze check phase
-writes once; its ``objects`` list names every loaded object with its table. The bookkeeping and dictionary tables are not claimed (recorded limit).
-
-``acquisition_events`` reads one job of a saved acquisition batch: ``jobs/<job>/completed_collection_layout.json`` (``scripts/acquisition/batch.py``), the
-receipt and the reconciliation record (``scripts/acquisition/s3_store.py``) it names. The acquisition DAG calls it after a job completes; ``replay_acquisition``
-rebuilds every completed job's events from the same saved states, and gives the same bytes each time:
+**Nothing in production calls the acquisition builder.** It is reached only by its own replay (``replay_acquisition``, below) and its cases, and no
+DAG or job sends its events. It also could not deliver anything: the COMPLETE event has no input, and OpenMetadata 2.0.7
+(``OpenLineageMapper.mapRunEvent``) returns before it resolves anything when the inputs or the outputs are empty. The owner decision "Raw-file lineage
+route" (Nov 13 2026) sends no acquisition event; the acquisition run and its receipts stay in the immutable S3 records. Sending them as lineage needs
+an S3 storage connector for container entities (a recorded follow-up). ``acquisition_events`` reads one job of a saved acquisition batch:
+``jobs/<job>/completed_collection_layout.json`` (``scripts/acquisition/batch.py``), the receipt and the reconciliation record
+(``scripts/acquisition/s3_store.py``) it names, and the replay rebuilds every completed job's events from the same saved states, with the same bytes
+each time:
 
     python -m orchestration.raw_lineage replay-acquisition --state-root <batch folder>
+
+``loaded_objects`` checks the run record ``lakehouse/bronze_runs/<run>/check.json`` that the bronze check phase writes once, and returns the objects
+the run loaded (each with its table, bucket, key, version, SHA-256 and size) and the snapshot of each table. The metadata job writes those files onto
+each bronze table.
 
 Recorded limit: the saved state keeps the capture's retrieval time only, so START and COMPLETE carry that time.
 """
@@ -33,23 +37,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from orchestration.ecs_lineage import (
-    EVENT_SCHEMA,
-    JOB_NAMESPACE,
-    PRODUCER,
-    JobLineage,
-    LaunchFacts,
-    LineageRefused,
-    S3Evidence,
-    canonical,
-    dataset,
-    events,
-    launch_facet,
-    run_uuid,
-    timestamp_text,
-    validators,
-    version_facet,
-)
+from orchestration.ecs_lineage import EVENT_SCHEMA, JOB_NAMESPACE, PRODUCER, LineageRefused, canonical, timestamp_text, validators, version_facet
 
 ROOT = Path(__file__).resolve().parents[1]
 RECEIPT_FACET_FILE = Path("data_contracts/orchestration/raw_file_receipt_facet.schema.json")
@@ -75,19 +63,6 @@ def versioned_file(stored: Mapping[str, Any], where: str) -> dict[str, Any]:
     if not isinstance(version, str) or not version or version == "null":
         raise LineageRefused(f"{where}: {stored.get('key')!r} has no object version")
     return {**raw_file(stored.get("bucket", ""), stored.get("key", "")), "facets": version_facet({"id": version})}
-
-
-def bronze_inputs(objects: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """The raw files a bronze run loaded, each once, in the given order."""
-    found: list[dict[str, Any]] = []
-    seen: set[tuple[str, str]] = set()
-    for stored in objects:
-        item = versioned_file(stored, "bronze input")
-        if (item["namespace"], item["name"]) in seen:
-            raise LineageRefused(f"bronze input: {item['name']} is listed twice")
-        seen.add((item["namespace"], item["name"]))
-        found.append(item)
-    return found
 
 
 BRONZE_RECORD = "lakehouse/bronze_runs/{run}/check.json"
@@ -121,45 +96,6 @@ def loaded_objects(record: Any, key: str, run_id: str) -> tuple[list[dict[str, A
         if not isinstance(item["sha256"], str) or not SHA256.fullmatch(item["sha256"]) or type(item["byte_count"]) is not int or item["byte_count"] < 0:
             raise LineageRefused(f"{key}: object {item['key']!r} has no valid SHA-256 or size")
     return objects, snapshots
-
-
-PARENT_SCHEMA = "https://openlineage.io/spec/facets/1-1-0/ParentRunFacet.json#/$defs/ParentRunFacet"
-
-
-def bronze_run_events(evidence: S3Evidence, declared: Mapping[str, Any], invocation: Mapping[str, Any], facts: LaunchFacts) -> list[dict[str, Any]]:
-    """The events of a bronze run. Each table the run record evidences is its own run, a child of the step's run: only that table's loaded objects in,
-    only that table out, with the snapshot the record names. A table the run did not load is claimed by no event. A failed run has one step run that
-    claims no file and no table."""
-    if facts.outcome != "succeeded":
-        return events(JobLineage([], [], launch_facet(invocation, facts, "not_applicable", [])), invocation, facts)
-    key = BRONZE_RECORD.format(run=facts.run_id)
-    record = evidence.read(key)
-    if record is None:
-        raise LineageRefused(f"{key}: missing from the evidence of a succeeded job")
-    objects, snapshots = loaded_objects(record, key, facts.run_id)
-    parent = {
-        "_producer": PRODUCER,
-        "_schemaURL": PARENT_SCHEMA,
-        "run": {"runId": run_uuid(invocation)},
-        "job": {"namespace": JOB_NAMESPACE, "name": f"{invocation['dag_id']}.{invocation['task_id']}"},
-    }
-    found = []
-    for table in sorted(snapshots):
-        output = dataset("bronze", table)
-        if output not in [dict(item) for item in declared["outputs"]]:
-            raise LineageRefused(f"{key}: the table {table} is not declared by the bronze_load row")
-        try:
-            inputs = bronze_inputs([{name: item[name] for name in ("bucket", "key", "version_id")} for item in objects if item["table"] == table])
-        except LineageRefused as error:
-            raise LineageRefused(f"{key}: {error}") from None
-        if not inputs:
-            raise LineageRefused(f"{key}: the table {table} has a snapshot but no loaded object")
-        lineage = JobLineage(inputs, [{**output, "facets": version_facet({"id": str(snapshots[table])})}], launch_facet(invocation, facts, "complete", []))
-        table_invocation = {**invocation, "task_id": f"{invocation['task_id']}.{table}"}
-        for event in events(lineage, table_invocation, facts):
-            event["run"]["facets"]["parent"] = parent
-            found.append(event)
-    return found
 
 
 def read_json(path: Path, where: str) -> Any:
