@@ -11,9 +11,9 @@ boundary: a file can shadow the trap's own commands. The file defines the entry 
 for the launcher and ``lakehouse_gold_<unit>`` for each gold unit). No function of a group remains in the dispatcher: its text is searched for a
 declaration of any function that a group owns (continued lines, quotes, backslashes and ``$'...'`` escapes in names removed first). A body file is
 listed in its own group's path list and matches no other group's list, ``global``, ``passive`` or ``upstream_inputs`` (the broad ``\\.(py|sh)$``
-pattern of ``repository_code_checks`` and of the group split from it, ``ci_tooling_checks``, may match it, so that the guards run when a body file
-changes). Groups in ``full_only`` have no body file. The guard also requires every configured group to have a hosted job that runs its part through
-scripts/run_ci.sh. The guard needs Bash 3.2 or later (macOS ``/bin/bash`` and GitHub's Bash 5).
+pattern of ``repository_code_checks`` and of the groups split from it, ``ci_tooling_checks`` and ``ci_tooling_runtime``, may match it, so that the guards
+run when a body file changes). Groups in ``full_only`` have no body file. The guard also requires every configured group to have a hosted job that runs its part
+through scripts/run_ci.sh. The guard needs Bash 3.2 or later (macOS ``/bin/bash`` and GitHub's Bash 5).
 
     .venv/bin/python -m scripts.quality.ci_group_files [--root <repository folder>]
 
@@ -38,7 +38,7 @@ GROUPS_DIRECTORY = "scripts/ci/groups"
 DISPATCHER = "scripts/run_ci.sh"
 CONFIG = "config/quality/ci_groups.json"
 WORKFLOW = ".github/workflows/ci.yml"
-BROAD_GROUPS = ("repository_code_checks", "ci_tooling_checks")
+BROAD_GROUPS = ("repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime")
 ENVIRONMENT = {"PATH": "/usr/bin:/bin"}
 SECONDS_PER_FILE = 30
 COMMAND_EXIT = 87  # the exit status in PROGRAM

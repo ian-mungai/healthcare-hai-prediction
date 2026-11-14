@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The terraform_checks check group of scripts/run_ci.sh. The dispatcher runs the group in its own shell process (run_group), which loads only
+# The terraform_checks check group of scripts/run_ci.sh (the stacks, the services proofs and the Redis cases; the jobs proofs that take the longest are the terraform_proofs group, so the two run side by side). The dispatcher runs the group in its own shell process (run_group), which loads only
 # scripts/quality/timing.sh (timed) and this file, and then calls the entry function. It gets python_bin, repo_root, scratch, quality_output, e2e_output and
 # CI_TIMING_FILE from the dispatcher beside the exported environment. This file defines functions only: the guard scripts/quality/ci_group_files.py checks it.
 # shellcheck disable=SC2154,SC2329
@@ -69,11 +69,6 @@ terraform_checks() {
   timed "terraform_checks: services move proof" "$python_bin" -m scripts.infrastructure.run_services_move_e2e --output-directory "$e2e_output/services_move"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
   timed "terraform_checks: serving transition on the first apply" "$python_bin" -m scripts.infrastructure.run_serving_transition_e2e --output-directory "$e2e_output/serving_transition"
-  # Every task definition of the jobs plan, child modules included, is an EC2 bridge task, and a task definition planted through each way of writing one is caught.
-  timed "terraform_checks: jobs host-only proof" "$python_bin" -m scripts.infrastructure.run_jobs_host_only_e2e --out "$e2e_output/jobs_host_only"
-  # The apply that removes the retired Fargate job definitions only forgets them: the plan against the historical state changes exactly the 19 retired addresses and no host definition,
-  # and the plan after it is empty.
-  timed "terraform_checks: retired definitions proof" "$python_bin" -m scripts.infrastructure.run_retired_definitions_e2e --out "$e2e_output/retired_definitions"
   # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that .github/actions/setup installs on a hosted runner. A
   # missing server fails the case.
   timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh

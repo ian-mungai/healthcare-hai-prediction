@@ -211,7 +211,9 @@ jobs:
           - group: documentation
             timeout: 30  # max 1.9 min
           - group: code
-            timeout: 40  # max 22 min, about 24 estimated with the seven linters
+            timeout: 30  # max 22 min with orphan-files; the other hooks are about 4.5 min on the Mac (Nov 14 2026) plus setup and the seven linters
+          - group: orphans
+            timeout: 45  # the orphan-files hook alone, 18 min on the Mac (Nov 14 2026)
           - group: lock
             timeout: 12  # estimate: the lock export and its planted defects
     steps:
@@ -397,7 +399,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # The former Local CI Core job is seven jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
+    # The former Local CI Core job is ten jobs, one for each part of "parts" in config/quality/ci_groups.json (owner decisions 161 and 163). Each runs complete command
     # suites of its groups and splits no command and no scenario; config/quality/core_commands.json lists every command and the CI groups E2E fails on a dropped or a
     # duplicated one. The wall time beside each timeout is an estimate until a complete hosted run of the new jobs exists: the longest group of the part from the
     # command seconds of the last complete hosted run of the former job (run 41521618599 of pull request 72, where all its groups ran together, so the figure is an
@@ -416,10 +418,19 @@ jobs:
             timeout: 40  # wall time 23.5 min, estimate: SQL style 1169 s (Terraform 751 s runs beside it)
           - part: core_configuration
             title: Core Configuration Checks
-            timeout: 50  # wall time 32 min, estimate: 23 commands, 1692 s
+            timeout: 50  # wall time 22 min, estimate: 21 commands, about 1000 s on the Mac (the owner list and host checks are Core Configuration Host Checks)
+          - part: core_configuration_host
+            title: Core Configuration Host Checks
+            timeout: 50  # wall time 22 min, estimate: 10 commands, about 1020 s on the Mac (the IAM preflight about 470 s, the owner list 374 s)
+          - part: core_terraform_proofs
+            title: Core Terraform Proof Checks
+            timeout: 30  # wall time 13 min, estimate: jobs host-only proof 157 s and retired definitions proof 374 s on the Mac plus about 4 minutes of setup and gates
           - part: core_ci_tooling
             title: Core CI Tooling Checks
-            timeout: 45  # wall time 30 min, estimate: container import hook 874 s, selection 387 s, process stops about 275 s, rebind 18 s
+            timeout: 30  # wall time 12 min, estimate: group selection 344 s and process stops 150 s on the Mac (387 s and about 275 s hosted) plus about 4 minutes
+          - part: core_ci_tooling_runtime
+            title: Core CI Tooling Runtime Checks
+            timeout: 45  # wall time 24 min, estimate: container import hook 874 s hosted (329 s on the Mac), worker deadlines about 276 s and rebind 18 s plus about 4 minutes
           - part: core_code_rules
             title: Core Code Rules
             timeout: 10  # wall time 5.5 min, estimate: 106 s on the Mac (47 s of commands, 57 s of gates), about twice that hosted, and about 1.5 min of setup

@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # CI_PART selects what runs: "all" (the default, every part), "core" (everything except the launcher E2E, the CI groups
-# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), one of the seven hosted parts of "core" ("core_static", "core_sql_terraform", "core_configuration",
-# "core_ci_tooling", "core_code_rules", "core_orchestration_engine" or "core_orchestration_offline": the hosted Core jobs run these, see parts in config/quality/ci_groups.json), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
+# reuse and gate stage cases, the acquisition gate and the four lakehouse layers), one of the ten hosted parts of "core" ("core_static", "core_sql_terraform", "core_terraform_proofs", "core_configuration",
+# "core_configuration_host", "core_ci_tooling", "core_ci_tooling_runtime", "core_code_rules", "core_orchestration_engine" or "core_orchestration_offline": the hosted Core jobs run these, see parts in config/quality/ci_groups.json), "reuse_gate" (those reuse and gate stage cases: their own hosted job), "launcher" (the gates and the launcher E2E, one LAUNCHER_SHARD=K/N of it
 # if set), "bronze", "silver", "gold" or "features" (that layer), "feature_sources" or "feature_columns" (one feature suite), "feature_store" (the feature store's own light checks) or "gates" (the gates only).
 # FEATURE_SHARD=K/N selects one hosted feature shard. Without it the selected feature suites run all their shards and combine their evidence. GitHub CI runs
-# the seven parts of "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
+# the ten parts of "core", the launcher shards and the four layers as parallel jobs; "gates" is the quick part of a reused pull request result.
 # CI_UNITS selects the units of the gold layer (checks, writer_setup, model_metadata_e2e; default all three). GitHub CI runs the model
 # metadata E2E in its own job. A unit marked alone below (writer_setup: it has timing assertions) runs by itself, before the others.
 # CI_SCOPE selects the check groups (scripts/quality/ci_groups.py, config/quality/ci_groups.json): "full" (the default,
@@ -480,6 +480,7 @@ hook_partition() {
 hook_privacy() { hook_partition privacy; }
 hook_documentation() { hook_partition documentation; }
 hook_code() { hook_partition code; }
+hook_orphans() { hook_partition orphans; }
 hook_lock() { hook_partition lock; }
 # The test-checks hook is hook_sample_shards shards (hook_shards in config/quality/ci_groups.json): the item hook_samples_<K> runs shard K of them (run_item), each in its own folder under
 # $quality_output/hooks/samples, and hook_samples_combine requires every case of the suite to have run once in all.
@@ -559,7 +560,7 @@ if [[ "$part" == "all" ]] && is_selected acquisition; then
 fi
 
 if [[ "$part" == "all" ]] && is_selected repository_hooks; then
-  shared+=(hook_privacy hook_documentation hook_code)
+  shared+=(hook_privacy hook_documentation hook_code hook_orphans)
   hook_shard_items=()
   for ((hook_index = 1; hook_index <= hook_sample_shards; hook_index++)); do
     shared+=("hook_samples_$hook_index")

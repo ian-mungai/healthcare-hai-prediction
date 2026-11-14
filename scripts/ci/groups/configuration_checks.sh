@@ -8,9 +8,6 @@ configuration_checks() {
   local policy_output="${POLICY_ARTIFACT_DIR:-$repo_root/data/e2e/policies/$(date -u +%Y%m%dT%H%M%SZ)_$$}"
   timed "configuration_checks: infrastructure E2E" "$python_bin" -m scripts.infrastructure.run_e2e --output-directory "$e2e_output"
   timed "configuration_checks: activation inputs E2E" "$python_bin" -m scripts.infrastructure.run_activation_inputs_e2e --out "$quality_output/activation_inputs"
-  timed "configuration_checks: owner list E2E" "$python_bin" -m scripts.infrastructure.run_owner_list_e2e --out "$quality_output/owner_list"
-  timed "configuration_checks: layer acceptance E2E" "$python_bin" -m scripts.lakehouse.run_layer_acceptance_e2e --out "$quality_output/layer_acceptance"
-  timed "configuration_checks: layer report E2E" "$python_bin" -m scripts.lakehouse.run_layer_report_e2e --out "$quality_output/layer_report"
   timed "configuration_checks: policy E2E" "$python_bin" -m scripts.infrastructure.run_policy_e2e --output-directory "$policy_output"
   timed "configuration_checks: job IAM E2E" "$python_bin" -m scripts.infrastructure.run_jobs_iam_e2e --output "$quality_output/jobs_iam"
   timed "configuration_checks: Airflow launch policy cases" "$python_bin" -m scripts.infrastructure.airflow_launch_policy_cases --output "$quality_output/airflow_launch_policy"
@@ -21,18 +18,11 @@ configuration_checks() {
   timed "configuration_checks: secret store E2E" "$python_bin" -m scripts.infrastructure.run_secret_store_e2e
   timed "configuration_checks: OpenMetadata image mirror E2E" "$python_bin" -m scripts.infrastructure.run_push_images_e2e
   timed "configuration_checks: monitoring files E2E" "$python_bin" -m scripts.infrastructure.run_monitoring_e2e
-  timed "configuration_checks: host session E2E" "$python_bin" -m scripts.infrastructure.run_host_session_e2e
-  timed "configuration_checks: services apply launch hold E2E" "$python_bin" -m scripts.infrastructure.run_services_apply_e2e
-  timed "configuration_checks: host session plants" "$python_bin" -m scripts.infrastructure.host_session_plants
-  timed "configuration_checks: host code one-shot E2E" "$python_bin" -m scripts.infrastructure.run_code_fetch_e2e
-  timed "configuration_checks: AWS catalog setup E2E" "$python_bin" -m scripts.lakehouse.run_aws_catalog_setup_e2e --out "$quality_output/aws_catalog_setup" --mutations
-  timed "configuration_checks: Glue mirror E2E" "$python_bin" -m scripts.lakehouse.run_glue_mirror_e2e --out "$quality_output/glue_mirror"
   timed "configuration_checks: install the pinned DVC" "$python_bin" -m scripts.quality.install_dvc
   timed "configuration_checks: DVC setup E2E" "$python_bin" -m scripts.quality.run_dvc_e2e
   timed "configuration_checks: DVC training baseline E2E" "$python_bin" -m scripts.training.run_dvc_baseline_e2e
   timed "configuration_checks: drift monitoring E2E" "$python_bin" -m monitoring.run_drift_e2e
   timed "configuration_checks: task cleanup E2E" "$python_bin" -m scripts.infrastructure.run_aws_tasks_e2e
   timed "configuration_checks: task cleanup plants" "$python_bin" -m scripts.infrastructure.aws_tasks_plants
-  timed "configuration_checks: IAM preflight E2E" "$python_bin" -m scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"
   timed "configuration_checks: pytest with coverage" "$python_bin" -m pytest --cov=scripts.infrastructure --cov-report=term-missing -q
 }

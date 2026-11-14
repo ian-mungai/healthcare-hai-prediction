@@ -184,6 +184,25 @@
       "^services/orchestration/egress_proxy\\.json$",
       "^scripts/ci/groups/ci_tooling_checks\\.sh$"
     ],
+    "ci_tooling_runtime": [
+      "\\.(py|sh)$",
+      "(^|/)Dockerfile$",
+      "^[^/]*compose[^/]*\\.ya?ml$",
+      "^(orchestration|services|config)/.*compose[^/]*\\.ya?ml$",
+      "^scripts/quality/",
+      "^config/quality/",
+      "^\\.env\\.example$",
+      "^dbt/(dbt_project|profiles)\\.yml$",
+      "^dbt/models/silver/intermediate/_intermediate__models\\.yml$",
+      "^README\\.md$",
+      "^\\.(privacy|writing|cleanup)_allowlist$",
+      "^\\.markdownlint-cli2\\.jsonc$",
+      "^\\.sqlfluff$",
+      "^\\.yamllint$",
+      "^config/quality_tools\\.json$",
+      "^services/orchestration/egress_proxy\\.json$",
+      "^scripts/ci/groups/ci_tooling_runtime\\.sh$"
+    ],
     "configuration_checks": [
       "^scripts/(infrastructure|quality|training)/",
       "^monitoring/",
@@ -201,6 +220,23 @@
       "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
       "^scripts/ci/groups/configuration_checks\\.sh$"
     ],
+    "configuration_host_checks": [
+      "^scripts/(infrastructure|quality|training)/",
+      "^monitoring/",
+      "^data_contracts/monitoring/",
+      "^data_contracts/infrastructure/",
+      "^dags/drift_monitoring_dag\\.py$",
+      "^orchestration/launcher\\.py$",
+      "^\\.dvc(ignore)?(/|$)",
+      "^tests/",
+      "^config/",
+      "^infra/",
+      "^monitoring/",
+      "^\\.env\\.example$",
+      "^orchestration/layer_report\\.py$",
+      "^scripts/lakehouse/(aws_catalog_setup|run_aws_catalog_setup_e2e|layer_acceptance|run_layer_acceptance_e2e|run_layer_report_e2e|principal_credentials|glue_mirror|run_glue_mirror_e2e)\\.py$",
+      "^scripts/ci/groups/configuration_host_checks\\.sh$"
+    ],
     "sql_style": [
       "^dbt/",
       "^\\.sqlfluff$",
@@ -216,6 +252,15 @@
       "^scripts/quality/(static_checks|install_tools)\\.py$",
       "^config/quality_tools\\.json$",
       "^scripts/ci/groups/terraform_checks\\.sh$",
+      "^scripts/infrastructure/run_(services_move|serving_release_real|serving_transition)_e2e\\.py$",
+      "^config/aws/serving_release\\.json$"
+    ],
+    "terraform_proofs": [
+      "^infra/",
+      "^\\.github/scripts/",
+      "^scripts/quality/(static_checks|install_tools)\\.py$",
+      "^config/quality_tools\\.json$",
+      "^scripts/ci/groups/terraform_proofs\\.sh$",
       "^scripts/infrastructure/run_(services_move|serving_release_real|serving_transition)_e2e\\.py$",
       "^config/aws/serving_release\\.json$"
     ],
@@ -269,7 +314,6 @@
       "unused-code",
       "unused-dependencies",
       "dependency-lock",
-      "orphan-files",
       "terraform-unused",
       "sqlfluff",
       "ruff",
@@ -293,6 +337,9 @@
       "check-jsonschema",
       "typos",
       "osv-scanner"
+    ],
+    "orphans": [
+      "orphan-files"
     ],
     "lock": [
       "test-lock"
@@ -364,6 +411,11 @@
       "minutes": 50,
       "cores": 2
     },
+    "configuration_host_checks": {
+      "job": "Core Configuration Host Checks",
+      "minutes": 50,
+      "cores": 2
+    },
     "sql_style": {
       "job": "Core SQL and Terraform Checks",
       "minutes": 40,
@@ -372,6 +424,11 @@
     "terraform_checks": {
       "job": "Core SQL and Terraform Checks",
       "minutes": 40,
+      "cores": 2
+    },
+    "terraform_proofs": {
+      "job": "Core Terraform Proof Checks",
+      "minutes": 30,
       "cores": 2
     },
     "reuse_gate_checks": {
@@ -451,8 +508,13 @@
     },
     "hook_code": {
       "job": "Repository Hooks (code)",
-      "minutes": 40,
+      "minutes": 30,
       "cores": 2
+    },
+    "hook_orphans": {
+      "job": "Repository Hooks (orphans)",
+      "minutes": 45,
+      "cores": 1
     },
     "hook_lock": {
       "job": "Repository Hooks (lock)",
@@ -481,6 +543,11 @@
     },
     "ci_tooling_checks": {
       "job": "Core CI Tooling Checks",
+      "minutes": 30,
+      "cores": 2
+    },
+    "ci_tooling_runtime": {
+      "job": "Core CI Tooling Runtime Checks",
       "minutes": 45,
       "cores": 2
     },
@@ -498,11 +565,20 @@
       "sql_style",
       "terraform_checks"
     ],
+    "core_terraform_proofs": [
+      "terraform_proofs"
+    ],
     "core_configuration": [
       "configuration_checks"
     ],
+    "core_configuration_host": [
+      "configuration_host_checks"
+    ],
     "core_ci_tooling": [
       "ci_tooling_checks"
+    ],
+    "core_ci_tooling_runtime": [
+      "ci_tooling_runtime"
     ],
     "core_code_rules": [
       "repository_code_checks"

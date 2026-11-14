@@ -29,8 +29,9 @@ groups: scripts/run_ci.sh runs them in every scope.
 
 The plan prints as JSON, or with ``--format shell`` as lines: ``reason``, ``run <group>`` and ``skip <group> <reason>``.
 
-The part ``core`` is the union of the seven hosted Core parts named in ``parts`` (core_static, core_sql_terraform, core_configuration, core_ci_tooling,
-core_code_rules, core_orchestration_engine and core_orchestration_offline); every group of ``core`` is in exactly one of them, and loading the configuration
+The part ``core`` is the union of the ten hosted Core parts named in ``parts`` (core_static, core_sql_terraform, core_terraform_proofs, core_configuration,
+core_configuration_host, core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine and core_orchestration_offline);
+every group of ``core`` is in exactly one of them, and loading the configuration
 refuses one where a group is in none or in two.
 
 E2E: ``.venv/bin/python -m scripts.quality.run_ci_groups_e2e``.

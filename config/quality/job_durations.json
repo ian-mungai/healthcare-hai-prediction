@@ -28,9 +28,15 @@
     },
     {
       "job": "Repository Hooks (code)",
-      "measured_minutes": 24,
-      "timeout_minutes": 40,
-      "basis": "estimate, 22 measured Oct 30 2026 for the remaining manual hooks plus about 2 for the seven linters"
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, Mac run Nov 14 2026: 265 s for the manual hooks other than orphan-files (SQLFluff 183 s, docker-calls 36 s) plus about 6 minutes of setup and the lint tool install; the group lost orphan-files to its own job"
+    },
+    {
+      "job": "Repository Hooks (orphans)",
+      "measured_minutes": 22,
+      "timeout_minutes": 45,
+      "basis": "estimate, Mac run Nov 14 2026: 1090 s for the orphan-files hook alone (80 percent of the former code group), 22 minutes measured hosted Oct 30 2026 for the whole former group; resize it from the first complete hosted run"
     },
     {
       "job": "Repository Hooks (lock)",
@@ -81,16 +87,34 @@
       "basis": "estimate, SQL style 1169 s from the hosted run 41521618599 (the Terraform checks, 751 s, run beside it) plus about 4 minutes of setup and gates; local Mac run Nov 3 2026: 249 s for the whole part"
     },
     {
+      "job": "Core Terraform Proof Checks",
+      "measured_minutes": 13,
+      "timeout_minutes": 30,
+      "basis": "estimate, Mac run Nov 14 2026: jobs host-only proof 157 s and retired definitions proof 374 s (531 s) plus about 4 minutes of setup and gates"
+    },
+    {
       "job": "Core Configuration Checks",
-      "measured_minutes": 32,
+      "measured_minutes": 21,
       "timeout_minutes": 50,
-      "basis": "estimate, 23 commands and 1692 s from the hosted run 41521618599 plus about 4 minutes of setup and gates; local Mac run Nov 3 2026: 826 s for the whole part"
+      "basis": "estimate, Mac runs Nov 14 2026: 21 commands, about 1020 s (infrastructure E2E 453 s, policy E2E 123 s, drift monitoring E2E 151 s) plus about 4 minutes of setup and gates; the other 10 commands are Core Configuration Host Checks"
+    },
+    {
+      "job": "Core Configuration Host Checks",
+      "measured_minutes": 21,
+      "timeout_minutes": 50,
+      "basis": "estimate, Mac runs Nov 14 2026: 10 commands, about 1020 s (IAM preflight E2E 472 s, owner list E2E 374 s) plus about 4 minutes of setup and gates"
     },
     {
       "job": "Core CI Tooling Checks",
-      "measured_minutes": 30,
+      "measured_minutes": 12,
+      "timeout_minutes": 30,
+      "basis": "estimate, Mac run Nov 14 2026: CI groups selection E2E 344 s and process group stop E2E 150 s plus about 4 minutes; the container import hook, worker deadline and rebind E2Es are Core CI Tooling Runtime Checks"
+    },
+    {
+      "job": "Core CI Tooling Runtime Checks",
+      "measured_minutes": 24,
       "timeout_minutes": 45,
-      "basis": "estimate, container import hook 874 s, group selection 387 s and the process stop E2Es about 275 s from the hosted run 41521618599 and local runs, plus about 4 minutes; local Mac run Nov 3 2026: about 13 minutes for the whole part"
+      "basis": "estimate, container import hook 874 s hosted (hosted run 41521618599; 329 s on the Mac), worker deadline E2E 276 s and rebind 18 s plus about 4 minutes"
     },
     {
       "job": "Core Code Rules",

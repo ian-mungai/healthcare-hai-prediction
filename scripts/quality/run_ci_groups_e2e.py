@@ -226,17 +226,29 @@ CORE = [
     "orchestration_engine_e2e",
     "repository_code_checks",
     "ci_tooling_checks",
+    "ci_tooling_runtime",
     "configuration_checks",
+    "configuration_host_checks",
     "sql_style",
     "terraform_checks",
+    "terraform_proofs",
 ]
 # The groups split from another group select on the same paths, apart from their own body file: a path that selects the origin selects the split group too.
-SPLIT_FROM = {"orchestration_engine_e2e": "orchestration_checks", "ci_tooling_checks": "repository_code_checks"}
+SPLIT_FROM = {
+    "orchestration_engine_e2e": "orchestration_checks",
+    "ci_tooling_checks": "repository_code_checks",
+    "ci_tooling_runtime": "ci_tooling_checks",
+    "configuration_host_checks": "configuration_checks",
+    "terraform_proofs": "terraform_checks",
+}
 
 
 def with_split_groups(wanted: list[str]) -> list[str]:
-    """The groups a path selects: those of ``wanted`` and the groups split from them."""
-    return [*wanted, *(group for group, origin in SPLIT_FROM.items() if origin in wanted and group not in wanted)]
+    """The groups a path selects: those of ``wanted`` and the groups split from them, a group split from a split group included."""
+    selected = list(wanted)
+    while added := [group for group, origin in SPLIT_FROM.items() if origin in selected and group not in selected]:
+        selected += added
+    return selected
 
 
 WITH_LAYERS = [CORE[0], *LAYERS, *CORE[1:]]
@@ -455,8 +467,9 @@ def run_entry(work: Path, out: Path, label: str, extra: dict[str, str]) -> tuple
 
 
 def tooling_suites() -> list[str]:
-    """The modules that the ci_tooling_checks group file runs as its E2E suites."""
-    return re.findall(r"-m (scripts\.quality\.run_\w+_e2e)\b", (ROOT / GROUP_FILES / "ci_tooling_checks.sh").read_text(encoding="utf-8"))
+    """The modules that the ci_tooling_checks and ci_tooling_runtime group files run as their E2E suites."""
+    texts = (ROOT / GROUP_FILES / f"{group}.sh" for group in ("ci_tooling_checks", "ci_tooling_runtime"))
+    return [module for text in texts for module in re.findall(r"-m (scripts\.quality\.run_\w+_e2e)\b", text.read_text(encoding="utf-8"))]
 
 
 def install_tooling_filter(work: Path) -> Path:
@@ -1427,10 +1440,12 @@ HOSTED_ENTRY_POINTS = {
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),
         ("scripts.infrastructure.run_push_images_e2e", ("scripts/infrastructure/run_push_images_e2e.py", "scripts/infrastructure/push_images.py")),
-        ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
-        ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
         ("scripts.infrastructure.run_aws_tasks_e2e", ("scripts/infrastructure/run_aws_tasks_e2e.py", "scripts/infrastructure/aws_tasks.py")),
         ("scripts.infrastructure.aws_tasks_plants", ("scripts/infrastructure/aws_tasks_plants.py", "scripts/infrastructure/aws_tasks.py")),
+    ),
+    "configuration_host_checks": (
+        ("scripts.infrastructure.run_host_session_e2e", ("scripts/infrastructure/run_host_session_e2e.py", "scripts/infrastructure/host_session.py")),
+        ("scripts.infrastructure.host_session_plants", ("scripts/infrastructure/host_session_plants.py", "scripts/infrastructure/host_session.py")),
         (
             'scripts.infrastructure.run_iam_preflight_e2e --output-directory "$quality_output/iam_preflight"',
             (
@@ -2199,7 +2214,7 @@ def core_scratch(root: Path) -> Path:
 
 
 def core_command_cases() -> list[dict[str, Any]]:
-    """Every Core command runs once, in one of the seven hosted Core parts, and the guard fails on a dropped or a duplicated command."""
+    """Every Core command runs once, in one of the ten hosted Core parts, and the guard fails on a dropped or a duplicated command."""
     cases: list[dict[str, Any]] = [
         {"case": "core_commands_run_exactly_once", "passed": not core_commands.findings(ROOT), "findings": core_commands.findings(ROOT)}
     ]
@@ -2216,8 +2231,8 @@ def core_command_cases() -> list[dict[str, Any]]:
     hosted = sorted(part for part in hosted if part.startswith("core_"))
     cases.append(
         {
-            "case": "seven_hosted_core_jobs_run_the_seven_parts",
-            "passed": len(config.get("parts", {})) == 7 and hosted == sorted(config.get("parts", {})),
+            "case": "ten_hosted_core_jobs_run_the_ten_parts",
+            "passed": len(config.get("parts", {})) == 10 and hosted == sorted(config.get("parts", {})),
             "parts": sorted(config.get("parts", {})),
             "hosted": hosted,
         }
@@ -2320,6 +2335,7 @@ WORKER_KINDS = (
     "hook_privacy",
     "hook_documentation",
     "hook_code",
+    "hook_orphans",
     "hook_lock",
     "hook_samples",
     "hook_samples_combine",
@@ -2769,7 +2785,7 @@ def hook_delegation_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
-HOOK_GROUPS = ("privacy", "documentation", "code", "lock", "samples")
+HOOK_GROUPS = ("privacy", "documentation", "code", "orphans", "lock", "samples")
 HOOK_SAMPLE_SHARDS = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8")).get("hook_shards", {}).get("samples", 4)
 HOOK_SHARD_LABELS = [f"repository hooks: samples shard {index}/{HOOK_SAMPLE_SHARDS}" for index in range(1, HOOK_SAMPLE_SHARDS + 1)]
 HOOK_COMBINE_LABEL = f"repository hooks: samples combine/{HOOK_SAMPLE_SHARDS}"
@@ -4046,20 +4062,23 @@ def speed_real_cases(work: Path, out: Path) -> list[dict[str, Any]]:
 
 
 BODY_SELECTION = {
-    "python_lint": ["python_lint", "repository_code_checks", "ci_tooling_checks"],
-    "lakehouse_bronze": [*LAYERS, "repository_code_checks", "ci_tooling_checks"],
-    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks", "ci_tooling_checks"],
-    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks", "ci_tooling_checks"],
-    "lakehouse_features": ["lakehouse_features", "repository_code_checks", "ci_tooling_checks"],
-    "orchestration_checks": ["orchestration_checks", "repository_code_checks", "ci_tooling_checks"],
-    "orchestration_engine_e2e": ["orchestration_engine_e2e", "repository_code_checks", "ci_tooling_checks"],
-    "repository_code_checks": ["repository_code_checks", "ci_tooling_checks"],
-    "ci_tooling_checks": ["repository_code_checks", "ci_tooling_checks"],
-    "configuration_checks": ["configuration_checks", "repository_code_checks", "ci_tooling_checks"],
-    "sql_style": ["repository_code_checks", "ci_tooling_checks", "sql_style"],
-    "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "terraform_checks"],
-    "launcher": ["repository_code_checks", "ci_tooling_checks", "launcher"],
-    "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "launcher", "reuse_gate_checks"],
+    "python_lint": ["python_lint", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "lakehouse_bronze": [*LAYERS, "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "lakehouse_silver": [*LAYERS[1:], "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "lakehouse_gold": [*LAYERS[2:], "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "lakehouse_features": ["lakehouse_features", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "orchestration_checks": ["orchestration_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "orchestration_engine_e2e": ["orchestration_engine_e2e", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "repository_code_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "ci_tooling_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "ci_tooling_runtime": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "configuration_checks": ["configuration_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "configuration_host_checks": ["configuration_host_checks", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"],
+    "sql_style": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "sql_style"],
+    "terraform_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_checks"],
+    "terraform_proofs": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "terraform_proofs"],
+    "launcher": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher"],
+    "reuse_gate_checks": ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "launcher", "reuse_gate_checks"],
 }
 
 
@@ -4935,7 +4954,7 @@ def fast_hook_cases(scratch: Path) -> list[dict[str, Any]]:
         hook_table(document)["unused-code"]["entry"] += " --changed"
 
     def unpartition(_: dict[str, Any], partitions: dict[str, list[str]]) -> None:
-        partitions["code"].remove("orphan-files")
+        partitions["orphans"].remove("orphan-files")
 
     results += [
         planted("heavy_hook_in_commit_stage", add_stage("unused-code", "pre-commit"), "heavy_in_commit_stage", "commit_stage_holds_only_fast_hooks"),
