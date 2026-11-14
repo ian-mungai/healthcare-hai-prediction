@@ -852,14 +852,20 @@ def lineage_is_built_inside_the_guard() -> None:
 
 
 def model_set_families_carry_the_features_layer() -> None:
-    """A model set's host family (``features_m1`` to ``features_m6``) keeps its own launch records and has the lineage of the features layer: the same
-    declaration, a source that sends the layer's table events, and no other family is mapped."""
+    """A model set's host family (``features_m1`` to ``features_m6``) keeps its own launch records and has the lineage of the features layer: a source that
+    sends the layer's table events, the domain matrices of the feature schema as its inputs and the one table of its set as its output. No other family is
+    mapped."""
+    schema = json.loads((ROOT / ecs_lineage.FEATURE_SCHEMA_FILE).read_text())
+    domain = sorted(name for name, table in schema["tables"].items() if table["role"] == "predictor")
     host = json.loads((ROOT / ecs_lineage.HOST_FILE).read_text())["jobs"]
     sets = sorted(family for family, entry in host.items() if entry.get("like") == "features")
     require(sets == [f"features_m{number}" for number in range(1, 7)], f"the host table names the model sets {sets}")
     for family in sets:
         require(ecs_lineage.lineage_layer(family) == "features", f"{family} is not mapped to the features layer")
-        require(ecs_lineage.declared_lineage(family) == ecs_lineage.declared_lineage("features"), f"{family} declares other tables than the features layer")
+        table = schema["model_sets"][family.removeprefix("features_")]["table"]
+        expected = {"inputs": [glue("features", name) for name in domain], "outputs": [glue("features", table)]}
+        require(ecs_lineage.declared_lineage(family) == expected, f"{family} declares {ecs_lineage.declared_lineage(family)}, not its set's tables")
+        require(ecs_lineage.declared_lineage("features") != expected, "the base features run declares the contract tables, not a set's")
         rig = Rig()
         found = ecs_lineage.LineageSource(
             family,

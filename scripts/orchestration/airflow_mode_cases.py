@@ -2913,7 +2913,85 @@ def model_set_jobs_hand_over_the_lineage_of_the_features_layer() -> None:
     require(sorted(sent) == [f"features_{model}" for model in MODEL_DAGS.values()], f"the table events were dispatched for {sent}")
 
 
+def model_set_lineage_reads_the_base_pins_and_its_scoped_table() -> None:
+    """A model set's features run pins a base run (``base_pins.json``, with the digest of the base row) and publishes its one scoped table. With that
+    evidence each of the six model DAGs hands the listener a complete facet, its evidence step delivers the table's events and the replay of its attempt
+    rebuilds them; the base features run stays on ``gold_pins.json``."""
+    from dataclasses import replace
+
+    from orchestration import ecs_lineage
+    from scripts.features import feature_sets, features_input, features_publish
+    from scripts.orchestration import ecs_lineage_cases as fixtures
+
+    steps = importlib.import_module("orchestration.airflow_steps")
+    domain = features_input.base_tables()
+    for dag_id, model in MODEL_DAGS.items():
+        rig = Rig()
+        _, base = base_run_passed(rig)
+        run = model_run(base, model)
+        bucket = fixtures.template_bucket()
+        bucket.objects.update(rig.records.objects)
+        base_set = fixtures.tables_of(ecs_lineage.declared_lineage("features")["outputs"])
+        base_row = {"run_id": base, "mode": "real", "snapshot_set": base_set, "committed_at": fixtures.END, "base_run": None}
+        pin = {
+            "schema": 1,
+            "run_id": run,
+            "mode": "real",
+            "namespace": "features",
+            "source_run_id": base,
+            "snapshot_set": {name: base_set[name] for name in domain},
+            "base_row_sha256": feature_sets.base_row_digest(base_row),
+        }
+        features_input.check_base_pin(pin, run, "real", set(domain))
+        outputs = {name: 800 + index for index, name in enumerate(features_publish.publish_plan("real", feature_set=model).tables)}
+        folder = f"lakehouse/layer_runs/features/{run}"
+        base_record = {"schema": 1, "run_id": base, "mode": "real", "namespace": "features", "snapshot_set": base_set, "feature_set": "base"}
+        fixtures.put(bucket, f"lakehouse/layer_runs/features/{base}/features_snapshot.json", base_record)
+        fixtures.put(bucket, f"{folder}/base_pins.json", pin)
+        record = {"schema": 1, "run_id": run, "mode": "real", "namespace": "features", "snapshot_set": outputs, "feature_set": model, "base_run": base}
+        fixtures.put(bucket, f"{folder}/features_snapshot.json", record)
+        reads = {name: [{"layer": "features", "table": table} for table in domain] for name in outputs}
+        fixtures.put(bucket, f"metadata/dbt/features/{run}/table_inputs.json", {"schema": 1, "layer": "features", "run_id": run, "tables": reads})
+        evidence = ecs_lineage.S3Evidence(bucket, BUCKET)
+        rig.services = replace(rig.services, lineage=steps.lineage_factory(evidence, rig.launcher.store), evidence=evidence)
+        captured: list[Any] = []
+        sent: list[str] = []
+        original = steps.send_table_events
+
+        def record_source(source: Any, original: Any = original, bucket: Any = bucket, rig: Rig = rig, captured: list[Any] = captured) -> None:
+            captured.append(source)
+            bucket.objects.update(rig.records.objects)
+            original(source)
+
+        def deliver(lines: list[str], *args: Any, sent: list[str] = sent) -> None:
+            sent.extend(lines)
+
+        environment = {**HTTP_LINEAGE, ecs_lineage.TRANSPORT_KEY: "synthetic-test-only"}
+        with (
+            mock.patch.dict("os.environ", environment),
+            mock.patch.object(steps, "send_table_events", record_source),
+            mock.patch.object(ecs_lineage, "send_within", deliver),
+            world(rig, dag_id, {"run_id": run, "mode": "real", BASE_RUN_PARAMETER: base}) as current,
+        ):
+            current.run_dag(f"{dag_id}.py")
+            require(current.results.get("gate") == "accepted", f"{dag_id} did not pass: {current.results}")
+            nodes = {node.task_id: node for node in current.built}
+            facets = extractor_manager_facets(nodes["job"], "complete", current.context["ti"])
+        require(facets is not None, f"the job task of model set {model} handed the listener no lineage")
+        launch = facets["run_facets"]["haiLaunch"]
+        require(launch["snapshotState"] == "complete", f"the facet of model set {model} is {launch}")
+        require(facets["inputs"] == [] and facets["outputs"] == [], f"a layer task facet names no dataset: {facets}")
+        require(len(captured) == 1 and len(sent) == 2 * len(outputs), f"model set {model} delivered {len(sent)} lines for {len(outputs)} tables")
+        source = captured[0]
+        arguments = ["--bucket", BUCKET, "--job", source.job, "--attempt", str(source.attempt)]
+        for name in ("run_id", "template", "dag_id", "task_id", "dag_run_id"):
+            arguments += ["--" + name.replace("_", "-"), str(source.invocation[name])]
+        replayed = ecs_lineage.replay(bucket, arguments)
+        require(len(replayed) == 2 + 2 * len(outputs), f"the replay of model set {model} rebuilt {len(replayed)} events")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "model_set_lineage_reads_the_base_pins_and_its_scoped_table": model_set_lineage_reads_the_base_pins_and_its_scoped_table,
     "job_task_hands_the_listener_its_lineage": job_task_hands_the_listener_its_lineage,
     "model_set_jobs_hand_over_the_lineage_of_the_features_layer": model_set_jobs_hand_over_the_lineage_of_the_features_layer,
     "dags_hold_no_broker_client": dags_hold_no_broker_client,

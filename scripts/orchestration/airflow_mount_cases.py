@@ -35,6 +35,11 @@ NOT_RUN = frozenset(
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.bronze",
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.gold_publish",
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.silver_publish",
+        # The model set evidence case of airflow_mode_cases builds its pins with the writer's own functions; the in-image run never calls it either.
+        "scripts/orchestration/airflow_mode_cases.py scripts.features",
+        "scripts/orchestration/airflow_mode_cases.py scripts.features.feature_sets",
+        "scripts/orchestration/airflow_mode_cases.py scripts.features.features_input",
+        "scripts/orchestration/airflow_mode_cases.py scripts.features.features_publish",
     }
 )
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')

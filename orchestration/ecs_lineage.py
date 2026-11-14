@@ -99,6 +99,7 @@ SPEC_FILES = {  # copies of https://openlineage.io/spec/... taken on Nov 5 2026;
 }
 JOBS_FILE = Path("config/orchestration/ecs_broker_jobs.json")
 HOST_FILE = Path("config/orchestration/host_jobs.json")
+FEATURE_SCHEMA_FILE = Path("data_contracts/features/feature_schema.json")
 GLUE_FILE = Path("config/metadata/ingestion/glue.json")
 MIRROR_FILE = Path("config/lakehouse/athena_mirror.json")
 BRONZE_TABLES_FILE = Path("config/lakehouse/bronze_tables.json")
@@ -157,6 +158,9 @@ LAYERS = {
     "features": Layer("gold_pins.json", "gold", "features_snapshot.json", "features", ("gold", "publish/commit.json")),
 }
 
+
+# A model set's features run pins the domain matrices of a base run (base_pins.json, with the digest of the base run's ledger row) and publishes its table
+MODEL_LAYER = Layer("base_pins.json", "features", "features_snapshot.json", "features", ("features", "features_snapshot.json"))
 
 TABLE_EVENT_JOBS = tuple(LAYERS)  # the jobs whose datasets travel in one event per table, never in the task's own event
 
@@ -237,11 +241,19 @@ def lineage_layer(job: str, *, root: Path = ROOT) -> str:
     return str(like) if like else job
 
 
+def model_set_of(job: str, *, root: Path = ROOT) -> str | None:
+    """The model set (``m1`` to ``m6``) whose host family ``job`` is, or None for any other family."""
+    layer = lineage_layer(job, root=root)
+    return job.removeprefix(f"{layer}_") if layer != job and layer == "features" else None
+
+
 def declared_lineage(job: str, *, root: Path = ROOT) -> dict[str, list[dict[str, str]]]:
     """The tables a job reads and writes, from the files that already name them: bronze writes the tables of the bronze table map, silver reads the bronze
     tables its dbt sources declare (and the file metadata table) and writes its publish contract, gold reads the silver contract and writes its own, features
-    read the gold contract and write theirs. A model set's family declares its features layer's tables. The other jobs declare nothing. Each list is sorted
+    read the gold contract and write theirs. A model set's family reads the domain matrices of the feature schema and writes the one table of its set. The
+    other jobs declare nothing. Each list is sorted
     by table name."""
+    model = model_set_of(job, root=root)
     job = lineage_layer(job, root=root)
     if job not in set(json.loads((root / JOBS_FILE).read_text())["steps"].values()):
         raise LineageRefused(f"{job} is not a job of {JOBS_FILE.name}")
@@ -252,6 +264,12 @@ def declared_lineage(job: str, *, root: Path = ROOT) -> dict[str, list[dict[str,
     def items(schema: str, tables: Sequence[str]) -> list[dict[str, str]]:
         return [dataset(schema, table) for table in tables]
 
+    if model is not None:
+        schema = json.loads((root / FEATURE_SCHEMA_FILE).read_text())
+        if model not in schema["model_sets"]:
+            raise LineageRefused(f"{FEATURE_SCHEMA_FILE.name} names no model set {model}")
+        domain = sorted(name for name, table in schema["tables"].items() if table["role"] == "predictor")
+        return {"inputs": items("features", domain), "outputs": items("features", [schema["model_sets"][model]["table"]])}
     bronze = sorted(entry["table"] for entry in json.loads((root / BRONZE_TABLES_FILE).read_text())["tables"])
     if job == BRONZE_JOB:
         return {"inputs": [], "outputs": items(BRONZE_NAMESPACE, bronze)}
@@ -332,6 +350,7 @@ class LaunchFacts:
     ended_at: str
     outcome: str
     input_run: str
+    model: str = ""  # the model set of a model set family's launch, else empty
 
 
 def launch_facts(store: S3LaunchStore, run_id: str, job: str, attempt: int) -> LaunchFacts:
@@ -349,7 +368,9 @@ def launch_facts(store: S3LaunchStore, run_id: str, job: str, attempt: int) -> L
     if claim is None or end is None:
         raise LineageRefused(f"{run_id}:{job}:{attempt} has no {'claim' if claim is None else 'end record'}: there is nothing to rebuild yet")
     intent = by_attempt.get((owner, "intent")) or by_attempt.get((attempt, "intent")) or claim
-    return LaunchFacts(run_id, lineage_layer(job), attempt, intent["at"], end["at"], end["outcome"], str(claim["bound"].get("input_run", "latest")))
+    return LaunchFacts(
+        run_id, lineage_layer(job), attempt, intent["at"], end["at"], end["outcome"], str(claim["bound"].get("input_run", "latest")), model_set_of(job) or ""
+    )
 
 
 @dataclass(frozen=True)
@@ -376,11 +397,11 @@ def snapshot_items(schema: str, snapshots: Any, where: str) -> list[dict[str, An
     return sorted(items, key=lambda item: (item["namespace"], item["name"]))
 
 
-def require_record(record: Any, where: str, run_id: str, schema: str | None, keys: set[str]) -> dict[str, Any]:
-    """A layer record of this run in real mode, of the given namespace, with exactly the given keys."""
+def require_record(record: Any, where: str, run_id: str, schema: str | None, keys: set[str], optional: frozenset[str] = frozenset()) -> dict[str, Any]:
+    """A layer record of this run in real mode, of the given namespace, with exactly the given keys and any of the optional ones."""
     if record is None:
         raise LineageRefused(f"{where}: missing from the evidence of a succeeded job")
-    if not isinstance(record, dict) or set(record) != keys:
+    if not isinstance(record, dict) or not keys <= set(record) <= keys | optional:
         raise LineageRefused(f"{where}: does not have exactly the keys {sorted(keys)}")
     if record["run_id"] != run_id:
         raise LineageRefused(f"{where}: belongs to another run ({record['run_id']})")
@@ -394,10 +415,16 @@ def require_record(record: Any, where: str, run_id: str, schema: str | None, key
 SNAPSHOT_KEYS = {"schema", "run_id", "mode", "namespace", "snapshot_set"}
 PIN_KEYS = SNAPSHOT_KEYS | {"source_run_id"}
 COMMIT_KEYS = {"schema", "run_id", "backup_sha256", "snapshot_set", "state"}
+SET_KEYS = frozenset({"feature_set", "base_run"})  # a features run's record names its feature set, and a model set's names the base run it read
+MODEL_PIN_KEYS = PIN_KEYS | {"base_row_sha256"}
+DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
-def output_set(evidence: S3Evidence, layer_name: str, run_id: str, *, required: bool) -> tuple[list[dict[str, Any]] | None, str]:
-    """The published snapshots of a layer run from its output record, or None when it is absent and not required."""
+def output_set(
+    evidence: S3Evidence, layer_name: str, run_id: str, *, required: bool, expect: Mapping[str, str] | None = None
+) -> tuple[list[dict[str, Any]] | None, str]:
+    """The published snapshots of a layer run from its output record, or None when it is absent and not required. ``expect`` names fields of the record
+    that must have the given values (a model set's record names its set and the base run it read)."""
     layer = LAYERS[layer_name]
     key = f"{EVIDENCE_PREFIX}/{layer_name}/{run_id}/{layer.output}"
     record = evidence.read(key)
@@ -408,13 +435,17 @@ def output_set(evidence: S3Evidence, layer_name: str, run_id: str, *, required: 
         if record["state"] != "committed":
             raise LineageRefused(f"{key}: the publish is not committed ({record['state']})")
     else:
-        record = require_record(record, key, run_id, layer.output_schema, SNAPSHOT_KEYS)
+        record = require_record(record, key, run_id, layer.output_schema, SNAPSHOT_KEYS, SET_KEYS if layer_name == "features" else frozenset())
+        for field, value in (expect or {}).items():
+            if record.get(field) != value:
+                raise LineageRefused(f"{key}: names {field} {record.get(field)!r}, not {value!r}")
     return snapshot_items(layer.output_schema, record["snapshot_set"], key), key
 
 
-def input_pins(evidence: S3Evidence, facts: LaunchFacts) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str]:
-    """The pins of the job's pin file and the frozen pins they must equal, with the key of the pin file."""
-    layer = LAYERS[facts.job]
+def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str | None]:
+    """The pins of the job's pin file and the frozen pins they must equal, with the key of the pin file and the input run the file names. A model set's
+    pin file pins the domain matrices of its base run, so the pins it must equal are those tables of the base run's record."""
+    layer = MODEL_LAYER if facts.model else LAYERS[facts.job]
     folder = f"{EVIDENCE_PREFIX}/{facts.job}/{facts.run_id}"
     key = f"{folder}/{layer.pin}"
     record = evidence.read(key)
@@ -426,15 +457,20 @@ def input_pins(evidence: S3Evidence, facts: LaunchFacts) -> tuple[list[dict[str,
         if record is None:
             raise LineageRefused(f"{key}: missing from the evidence of a succeeded job")
         pins = snapshot_items(layer.input_schema, record, key)
-        return pins, pins, key
-    record = require_record(record, key, facts.run_id, layer.input_schema, PIN_KEYS)
+        return pins, pins, key, None
+    record = require_record(record, key, facts.run_id, layer.input_schema, MODEL_PIN_KEYS if facts.model else PIN_KEYS)
+    if facts.model and not (isinstance(record["base_row_sha256"], str) and DIGEST.fullmatch(record["base_row_sha256"])):
+        raise LineageRefused(f"{key}: the digest of the base run's ledger row is not a SHA-256")
     source = record["source_run_id"]
     if not isinstance(source, str) or not RUN_ID.fullmatch(source):
         raise LineageRefused(f"{key}: the input run {source!r} is not a run ID")
     if facts.input_run != "latest" and source != facts.input_run:
         raise LineageRefused(f"{key}: pins run {source}, not the input run {facts.input_run} bound at launch")
     frozen, _ = output_set(evidence, layer.frozen[0], source, required=True)
-    return snapshot_items(layer.input_schema, record["snapshot_set"], key), frozen or [], key
+    if facts.model:
+        pinned = {(item["namespace"], item["name"]) for item in declared["inputs"]}
+        frozen = [item for item in frozen or [] if (item["namespace"], item["name"]) in pinned]
+    return snapshot_items(layer.input_schema, record["snapshot_set"], key), frozen or [], key, source
 
 
 def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, Any], evidence: S3Evidence, facts: LaunchFacts) -> JobLineage:
@@ -444,8 +480,9 @@ def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, 
     outputs = [dict(item) for item in declared["outputs"]]
     versions: dict[tuple[str, str], dict[str, str]] = {}
     unreadable = ""
+    source = None
     if succeeded and job in LAYERS and inputs:
-        pins, frozen, key = input_pins(evidence, facts)
+        pins, frozen, key, source = input_pins(evidence, facts, declared)
         record = {"version": 1, "invocation": dict(invocation), "inputs": pins}
         try:
             checked = validate_input_record(record, dict(invocation), inputs, succeeded=True, pinned=frozen)
@@ -454,7 +491,8 @@ def job_lineage(job: str, invocation: Mapping[str, Any], declared: Mapping[str, 
         versions |= {(item["namespace"], item["name"]): item["snapshot"] for item in checked["inputs"]}
     if succeeded and job in LAYERS and outputs:
         try:
-            found, key = output_set(evidence, job, facts.run_id, required=False)
+            expect = {"feature_set": facts.model, "base_run": source} if facts.model and source else None
+            found, key = output_set(evidence, job, facts.run_id, required=False, expect=expect)
         except EvidenceDenied as error:  # the one optional read: unreadable is not missing, and says so
             found, unreadable = None, str(error)
         if found is not None:
@@ -678,7 +716,7 @@ class LineageSource:
         try:
             lineage, _ = self.lineage()
         except (LineageRefused, EvidenceUnavailable) as error:
-            facts = LaunchFacts(self.run_id, self.layer, self.attempt, "", "", "unknown", "latest")
+            facts = LaunchFacts(self.run_id, self.layer, self.attempt, "", "", "unknown", "latest", model_set_of(self.job) or "")
             with contextlib.suppress(LineageRefused, EvidenceUnavailable):  # the facet still names the run, job and attempt; the refusal says why
                 facts = launch_facts(self.store, self.run_id, self.job, self.attempt)
             grouped = self.layer in TABLE_EVENT_JOBS or self.layer == BRONZE_JOB  # a declaration names every table of the job, so a refusal claims none of them

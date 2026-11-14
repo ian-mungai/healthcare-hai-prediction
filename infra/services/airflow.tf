@@ -23,6 +23,7 @@ locals {
     code_silver_contract     = "data_contracts/lakehouse/silver_publish.json"
     code_gold_contract       = "data_contracts/lakehouse/gold_contract.json"
     code_features_contract   = "data_contracts/lakehouse/features_publish.json"
+    code_feature_schema      = "data_contracts/features/feature_schema.json"
     code_silver_sources      = "dbt/models/silver/staging/_bronze__sources.yml"
     code_training_approvals  = "orchestration/training_approvals.py"
     code_ingestion_schedule  = "orchestration/ingestion_schedule.py"
