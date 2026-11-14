@@ -1599,12 +1599,13 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 157,
+      "line": 168,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "758adb9f43c37d8bd3869cb36fdfebc1bd11f9dc838e339eb3bd3717cb143ab0",
+      "file_sha256": "52644cc21ac3167f30e1723e608e249b1716b5cae14130db74fdc7bf93db78c1",
       "dependencies": {
+        "orchestration/ingestion_schedule.py": "sha256:5389d6543b521445459a1f135859b6af5ac728c5f3ad33e4918928cb8c69d8c0",
         "orchestration/interface.py": "sha256:5c5c67a829b1a8504da4821b1b50ee302b40f9d2537e21d5b23bd0307704d8c5",
         "orchestration/training_contract.py": "sha256:dd590b0b8acc2b18938117db0d7e00ffc0ce97c478e9bb9b9481242a19ad1d9f"
       },
@@ -1621,7 +1622,7 @@
       "occurrences": 1,
       "file_sha256": "fea900e7b3a84a3a9734a62773b9b2ccbb089549c36c3a3b3d30995c931e912b",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:8f15f8cd38adadb05e8718d8127a12b4c72c4a7a24a1c6196b11203ae93c184c",
+        "orchestration/ecs_preflight.py": "sha256:ad23f1702c5246a3a50896ed04960ad8b273b69bd922b6c944ef65831209d6f3",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/host_session.py": "sha256:77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
         "scripts/infrastructure/render_jobs_config.py": "sha256:201d79008edca459b3e4610a5b4a81b6874f4198b824f13d45ad641a95409422",
