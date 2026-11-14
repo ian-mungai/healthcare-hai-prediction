@@ -399,15 +399,30 @@ def _host_room_cases(
     return checks
 
 
-def _hand_written_host_addresses() -> list[str]:
-    """Return every IPv4 literal in the jobs stack files, so none of the host's addresses is typed by hand."""
+def _hand_written_host_addresses(folder: Path = ROOT / "infra/jobs") -> list[str]:
+    """Return every IPv4 literal in the jobs stack files of a folder, so none of the host's addresses is typed by hand."""
     found: list[str] = []
-    for source in sorted((ROOT / "infra/jobs").rglob("*")):
+    for source in sorted(folder.rglob("*")):
         if source.suffix not in (".tf", ".py") or ".terraform" in source.parts or "tests" in source.parts:
             continue
         text = source.read_text(encoding="utf-8")
         found += [f"{source.name}:{literal}" for literal in re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b(?!/)", text)]
     return found
+
+
+def _scan_flags_every_stack_file(folder: Path) -> bool:
+    """Plant an address expression in each top-level jobs stack file of a copy, one file at a time; the scan must name exactly that file."""
+    folder.mkdir()
+    sources = sorted((ROOT / "infra/jobs").glob("*.tf"))
+    for source in sources:
+        shutil.copyfile(source, folder / source.name)
+    flagged = bool(sources)
+    for source in sources:
+        original = (folder / source.name).read_text(encoding="utf-8")
+        (folder / source.name).write_text(original + '\nlocals {\n  planted_host_address = "http://10.40.0.88:8585/api"\n}\n', encoding="utf-8")
+        flagged = flagged and _hand_written_host_addresses(folder) == [f"{source.name}:10.40.0.88"]
+        (folder / source.name).write_text(original, encoding="utf-8")
+    return flagged and _hand_written_host_addresses(folder) == []
 
 
 def _host_address_cases(
@@ -542,6 +557,7 @@ def _host_address_cases(
             result.returncode == 2 and "preparation contract is invalid" in result.stderr and output.read_bytes() == rendered
         )
     checks["the_jobs_stack_files_hold_no_hand_written_host_address"] = _hand_written_host_addresses() == []
+    checks["the_address_scan_flags_a_planted_address_in_every_jobs_stack_file"] = _scan_flags_every_stack_file(workspace / "address_scan")
     return checks
 
 
