@@ -35,7 +35,7 @@ SOURCES = (
     "scripts/infrastructure/__init__.py",
     "scripts/infrastructure/terraform.sh",
     "scripts/infrastructure/render_project_config.py",
-    "scripts/infrastructure/render_ecs_target.py",
+    "scripts/infrastructure/capture_reader.py",
     "scripts/infrastructure/render_jobs_config.py",
     "scripts/infrastructure/render_platform_config.py",
     "data_contracts/infrastructure/jobs_preparation.schema.json",
@@ -59,7 +59,6 @@ OUTPUTS = {
 }
 IMAGE = f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_%s_dev@sha256:" + "a" * 64
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/example_project_%s_dev"
-RESOURCES = {"cpu": 1024, "memory": 4096, "ephemeral_storage_gib": 21}
 # The launch role may also start the Run 3 publisher host task (infra/iam/airflow_launch.tf lists publisher among the families).
 LAUNCH_FAMILIES = ["publisher", "serve", "train"]
 # The platform defaults of infra/platform/variables.tf, which a case below compares with the file, and the additions the owner steps make to them.
@@ -241,7 +240,6 @@ ROWS: list[Row] = [
     ),
     *flags(
         "jobs",
-        "jobs_enabled",
         "train_enabled",
         "layer_jobs_enabled",
         "drift_enabled",
@@ -250,7 +248,6 @@ ROWS: list[Row] = [
         "publisher_keys_enabled",
         "promote_enabled",
         "serve_enabled",
-        "openmetadata_enabled",
         "host_jobs_enabled",
     ),
     Row("jobs", "layer_jobs", ["silver", "gold"], "silver"),
@@ -269,34 +266,24 @@ ROWS: list[Row] = [
         {"write_silver_task": ["/example_project/aws_polaris_silver_client_id"]},
     ),
     Row("jobs", "log_group_name", "example_project_jobs_dev", 5),
-    Row("jobs", "layer_resources", {"silver": RESOURCES, "gold": RESOURCES, "features": RESOURCES}, {"cpu": 1}),
     Row("jobs", "drift_images", {name: IMAGE % name for name in ("training", "feature_store", "drift")}, {"drift": "latest"}),
     Row("jobs", "drift_roles", {"execution": ROLE % "job_execution", "drift_task": ROLE % "job_drift_task"}, {"drift_task": "x"}),
-    Row("jobs", "drift_resources", RESOURCES, {"cpu": 1}),
-    Row("jobs", "bronze_resources", RESOURCES, {"cpu": 1}),
-    Row("jobs", "promote_resources", RESOURCES, {"cpu": 1}),
     Row("jobs", "serve_roles", {"serve_task": ROLE % "job_serve_task"}, {"serve_task": "x"}),
     Row("jobs", "serve_manifest_prefix", "serving/deployments", "serving/deployments/"),
-    Row("jobs", "serve_resources", RESOURCES, {"cpu": 1}),
     Row(
         "jobs",
         "openmetadata_images",
-        {name: IMAGE % f"openmetadata_{name}" for name in ("server", "ingestion", "search", "database")},
-        {"server": "latest"},
+        {"ingestion": IMAGE % "openmetadata_ingestion"},
+        {"ingestion": "latest"},
     ),
     Row("jobs", "openmetadata_roles", {"execution": ROLE % "job_execution", "openmetadata_task": ROLE % "job_openmetadata_task"}, {"openmetadata_task": "x"}),
-    Row("jobs", "openmetadata_resources", RESOURCES, {"cpu": 1}),
-    Row("jobs", "openmetadata_lifetime_seconds", 3600, "3600"),
-    Row("jobs", "openmetadata_cpu_architecture", "ARM64", "POWER"),
-    Row("jobs", "openmetadata_marquez_url", "http://10.0.1.20:5000", 5),
-    Row("jobs", "openmetadata_server_url", "http://10.0.1.20:8585", 5),
     Row(
         "jobs",
         "host_jobs",
         ["metadata", "silver"],
         "metadata",
         HOST_FAMILIES,
-        (["unreviewed_family"], ["silver", "Metadata"], ["fargate"]),
+        (["unreviewed_family"], ["silver", "Metadata"], ["unlisted"]),
     ),
     Row(
         "jobs",

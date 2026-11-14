@@ -1,6 +1,6 @@
 mock_provider "aws" {}
 
-# Every family has its source switched on, so each run can compare the host definitions with the Fargate definitions the same inputs register.
+# Every family has its source switched on, so each run plans the nine host definitions from the same inputs.
 variables {
   aws_profile         = "example_project_dev"
   aws_region          = "us-west-2"
@@ -27,10 +27,7 @@ variables {
     drift         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_drift_dev@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   }
   openmetadata_images = {
-    server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_server_dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_search_dev@sha256:3333333333333333333333333333333333333333333333333333333333333333"
-    database  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_database_dev@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   }
   job_role_arns = {
     execution           = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
@@ -64,9 +61,7 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
-  openmetadata_admin_password_name      = "/example_project/openmetadata_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
-  openmetadata_cpu_architecture         = "ARM64"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
   host_openmetadata_api                 = "http://10.0.1.20:8585/api"
   host_repo_path                        = "/data/repo"
@@ -76,7 +71,6 @@ variables {
   drift_enabled                         = true
   promote_enabled                       = true
   serve_enabled                         = true
-  openmetadata_enabled                  = true
 }
 
 run "flag_off" {
@@ -93,15 +87,6 @@ run "flag_off" {
       output.host_dispatch_contract == null && output.host_secret_flow == null
     )
     error_message = "Without host_jobs_enabled every host output is null, so the plan shows no output change."
-  }
-
-  assert {
-    condition = (
-      length(aws_ecs_task_definition.layer) == 3 && length(aws_ecs_task_definition.bronze) == 1 && length(aws_ecs_task_definition.train) == 1 &&
-      length(aws_ecs_task_definition.drift) == 1 && length(aws_ecs_task_definition.promote) == 1 && length(aws_ecs_task_definition.serve) == 1 &&
-      length(aws_ecs_task_definition.openmetadata) == 1 && !contains(keys(output.task_definition_settings), "silver")
-    )
-    error_message = "The nine Fargate definitions stay registered while the host flag is off."
   }
 }
 
@@ -126,7 +111,7 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
       task.skip_destroy && length(task.ephemeral_storage) == 0 && one(task.runtime_platform).cpu_architecture == "ARM64" &&
       one(task.runtime_platform).operating_system_family == "LINUX"
     )])
-    error_message = "A host definition is an EC2 bridge task named <project>_<environment>_job_<family>_host on ARM64, with no Fargate scratch block."
+    error_message = "A host definition is an EC2 bridge task named <project>_<environment>_job_<family>_host on ARM64, with no scratch block of its own."
   }
 
   assert {
@@ -136,7 +121,7 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
       } : (
       aws_ecs_task_definition.host[family].cpu == tostring(size[0]) && aws_ecs_task_definition.host[family].memory == tostring(size[1])
     )])
-    error_message = "Every host job gets the 3072 CPU units and the memory the services stack leaves for one job (host_job_memory_mib), whatever its Fargate size."
+    error_message = "Every host job gets the 3072 CPU units and the memory the services stack leaves for one job (host_job_memory_mib), whatever the job."
   }
 
   assert {
@@ -148,7 +133,7 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
       aws_ecs_task_definition.host[family].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
       aws_ecs_task_definition.host[family].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_${roles[1]}_dev"
     )])
-    error_message = "Each host definition runs under the execution role and the same task role as its Fargate twin."
+    error_message = "Each host definition runs under the execution role and the task role of its family."
   }
 
   assert {
@@ -160,58 +145,11 @@ run "flag_on_plans_the_nine_host_definitions_and_the_six_model_sets" {
   }
 }
 
-run "flag_on_leaves_every_existing_definition_unchanged" {
+run "every_host_container_is_unprivileged_and_carries_no_size_of_its_own" {
   command = plan
 
   variables {
     host_jobs_enabled = true
-  }
-
-  assert {
-    condition = (
-      output.layer_container_definitions == run.flag_off.layer_container_definitions && output.bronze_container_definitions == run.flag_off.bronze_container_definitions &&
-      output.train_container_definitions == run.flag_off.train_container_definitions && output.drift_container_definitions == run.flag_off.drift_container_definitions &&
-      output.promote_container_definitions == run.flag_off.promote_container_definitions && output.serve_container_definitions == run.flag_off.serve_container_definitions &&
-      output.openmetadata_container_definitions == run.flag_off.openmetadata_container_definitions && output.layer_run_tasks == run.flag_off.layer_run_tasks &&
-      output.bronze_run_task == run.flag_off.bronze_run_task && output.train_run_task == run.flag_off.train_run_task && output.drift_run_task == run.flag_off.drift_run_task &&
-      output.promote_run_task == run.flag_off.promote_run_task && output.serve_run_task == run.flag_off.serve_run_task &&
-      output.openmetadata_run_task == run.flag_off.openmetadata_run_task && output.task_definition_settings == run.flag_off.task_definition_settings &&
-      output.dispatch_contract == run.flag_off.dispatch_contract && output.writer_dispatch_contracts == run.flag_off.writer_dispatch_contracts &&
-      output.layer_secret_flow == run.flag_off.layer_secret_flow && output.execution_digests == run.flag_off.execution_digests
-    )
-    error_message = "Turning the host flag on must not change any Fargate definition, run-task output, dispatch contract or pin."
-  }
-
-  assert {
-    condition = alltrue([for family, task in aws_ecs_task_definition.layer : (
-      task.network_mode == "awsvpc" && task.requires_compatibilities == toset(["FARGATE"]) && task.family == "example_project_dev_job_${family}"
-    )]) && aws_ecs_task_definition.train[0].network_mode == "awsvpc" && aws_ecs_task_definition.bronze[0].family == "example_project_dev_job_bronze"
-    error_message = "The Fargate definitions keep their names and their awsvpc mode."
-  }
-}
-
-run "host_containers_run_the_same_phases_as_the_fargate_twin" {
-  command = plan
-
-  variables {
-    host_jobs_enabled = true
-  }
-
-  assert {
-    condition = alltrue([for family, fargate in {
-      silver   = jsondecode(output.layer_container_definitions["silver"]), gold = jsondecode(output.layer_container_definitions["gold"]),
-      features = jsondecode(output.layer_container_definitions["features"]), bronze = jsondecode(output.bronze_container_definitions),
-      train    = jsondecode(output.train_container_definitions), drift = jsondecode(output.drift_container_definitions),
-      promote  = jsondecode(output.promote_container_definitions), serve = jsondecode(output.serve_container_definitions)
-      } : (
-      [for container in jsondecode(output.host_container_definitions[family]) : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters", "dockerLabels"], key)) || (key == "command" && container.essential && container.name != "guard")) }] ==
-      [for container in fargate : { for key, value in container : key => value if key != "environment" && !((container.name == "init" && contains(["command", "linuxParameters", "dockerLabels"], key)) || (key == "command" && container.essential && container.name != "guard")) }] &&
-      [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.name]] ==
-      [for container in fargate : [for item in container.environment : item.name]] &&
-      [for container in jsondecode(output.host_container_definitions[family]) : [for item in container.environment : item.value]] ==
-      [for container in fargate : [for item in container.environment : item.value]]
-    )])
-    error_message = "A host container of the eight job families equals its Fargate twin in command, image, user, secrets, dependencies, mounts and every variable. The init step differs by its wipe and capabilities and the last phase by its cleanup, which the scratch cases pin."
   }
 
   assert {
@@ -219,7 +157,7 @@ run "host_containers_run_the_same_phases_as_the_fargate_twin" {
       !contains(keys(container), "memory") && !contains(keys(container), "memoryReservation") && !contains(keys(container), "cpu") && !container.privileged &&
       container.logConfiguration.options["awslogs-region"] == "us-west-2"
     )]]))
-    error_message = "Containers carry no memory or CPU of their own: the task level value counts once at placement."
+    error_message = "No host container is privileged or carries a memory or CPU of its own: the task level value counts once at placement. Every container logs to the project region."
   }
 }
 
@@ -353,26 +291,20 @@ run "one_family_can_move_first" {
   }
 }
 
-run "every_host_job_gets_the_computed_cap_whatever_its_fargate_shape" {
+run "every_host_job_gets_the_computed_cap" {
   command = plan
 
   variables {
     host_jobs_enabled     = true
     host_job_memory_mib   = 20480
     host_capacity_binding = "job_memory_mib=20480 usable_memory_mib=27648 system_reserve_mib=2048 service_reservations_mib=5120"
-    layer_resources = {
-      silver   = { cpu = 4096, memory = 30720, ephemeral_storage_gib = 100 }
-      gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
-      features = { cpu = 16384, memory = 65536, ephemeral_storage_gib = 100 }
-    }
-    drift_resources = { cpu = 1024, memory = 4096, ephemeral_storage_gib = 30 }
   }
 
   assert {
     condition = alltrue([for family in ["silver", "gold", "features"] : (
       aws_ecs_task_definition.host[family].cpu == "3072" && aws_ecs_task_definition.host[family].memory == "20480"
     )])
-    error_message = "A whole-room job's size comes from the host room, not from its Fargate twin, and its engines derive their limits from the task."
+    error_message = "A host job's size comes from the host room, not from a size of its own: one job runs at a time and its engines derive their limits from the task."
   }
 }
 
@@ -489,16 +421,12 @@ run "run_task_and_dispatch_contract" {
   assert {
     condition = (
       toset(keys(output.host_run_tasks)) == setunion(toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs)), toset(["features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"])) &&
-      output.host_run_tasks["silver"].container_environment == output.layer_run_tasks["silver"].container_environment &&
-      output.host_run_tasks["features"].container_environment == output.layer_run_tasks["features"].container_environment &&
-      output.host_run_tasks["bronze"].container_environment == output.bronze_run_task.container_environment &&
-      output.host_run_tasks["train"].container_environment == output.train_run_task.container_environment &&
-      output.host_run_tasks["drift"].container_environment == output.drift_run_task.container_environment &&
-      output.host_run_tasks["promote"].container_environment == output.promote_run_task.container_environment &&
-      output.host_run_tasks["serve"].container_environment == output.serve_run_task.container_environment &&
+      alltrue([for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] :
+        output.host_run_tasks[family].container_environment == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[family].containers
+      ]) &&
       jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] })
     )
-    error_message = "The host entries cover exactly the families of the job table and name the same container variables as the Fargate outputs."
+    error_message = "The host entries cover exactly the families of the job table and name the container variables of that table."
   }
 
   assert {
@@ -508,7 +436,7 @@ run "run_task_and_dispatch_contract" {
       output.host_run_tasks["silver"].dry_run_variable == "LAYER_DRY_RUN" && output.host_run_tasks["bronze"].dry_run_variable == "BRONZE_DRY_RUN" &&
       output.host_run_tasks["train"].dry_run_variable == null
     )
-    error_message = "Each entry names the role key of its Fargate twin and the dry run override where the family has one."
+    error_message = "Each entry names the role key of its family and the dry run override where the family has one."
   }
 
   assert {
@@ -537,7 +465,7 @@ run "host_definitions_pass_the_secret_flow_check" {
       output.host_secret_flow.violations == [] && output.host_secret_flow.alias_chains_converged && length(output.host_secret_flow.mutation_mismatches) == 0 &&
       output.host_secret_flow.mutations_checked > 0
     )
-    error_message = "The host definitions pass the same secret-flow and pin mutation checks as the Fargate definitions."
+    error_message = "The host definitions pass the secret-flow and pin mutation checks."
   }
 
   assert {
@@ -546,7 +474,7 @@ run "host_definitions_pass_the_secret_flow_check" {
       "host_features/publish", "host_features/feast", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
       "host_promote/promote", "host_serve/serve", "host_metadata/ingest"
     ], flatten([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : ["host_features_${set}/pin", "host_features_${set}/publish", "host_features_${set}/feast"]])))
-    error_message = "The containers that receive a secret are the ones the Fargate twins have, and the flow check follows each of them."
+    error_message = "The containers that receive a secret are the ones that receive a secret, and the flow check follows each of them."
   }
 }
 
@@ -566,18 +494,6 @@ run "an_unknown_family_is_refused" {
 
   variables {
     host_jobs = ["silver", "write_gold"]
-  }
-
-  expect_failures = [var.host_jobs]
-}
-
-run "the_catalog_task_needs_the_host_architecture" {
-  command = plan
-
-  variables {
-    host_jobs_enabled             = true
-    host_jobs                     = ["metadata"]
-    openmetadata_cpu_architecture = "X86_64"
   }
 
   expect_failures = [var.host_jobs]
@@ -704,15 +620,14 @@ run "the_metadata_job_needs_only_the_ingestion_image_and_the_catalog_roles" {
   command = plan
 
   variables {
-    host_jobs_enabled    = true
-    host_jobs            = ["metadata"]
-    openmetadata_enabled = false
-    openmetadata_images  = { ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222" }
+    host_jobs_enabled   = true
+    host_jobs           = ["metadata"]
+    openmetadata_images = { ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222" }
   }
 
   assert {
-    condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["metadata"]) && length(aws_ecs_task_definition.openmetadata) == 0
-    error_message = "The host metadata job does not depend on the Fargate catalog task or on the server, search and database images."
+    condition     = toset(keys(aws_ecs_task_definition.host)) == toset(["metadata"])
+    error_message = "The host metadata job does not depend on the server, search and database images."
   }
 }
 
@@ -792,10 +707,9 @@ run "the_metadata_job_without_its_image_is_refused" {
   command = plan
 
   variables {
-    host_jobs_enabled    = true
-    host_jobs            = ["metadata"]
-    openmetadata_enabled = false
-    openmetadata_images  = {}
+    host_jobs_enabled   = true
+    host_jobs           = ["metadata"]
+    openmetadata_images = {}
   }
 
   expect_failures = [var.host_jobs]

@@ -1,7 +1,7 @@
 mock_provider "aws" {}
 
 # The Run 3 publisher runs only on the host: one EC2 bridge definition <project>_<environment>_job_publisher_host that the direct ECS launch starts
-# (orchestration/publisher_launch.py). It has no Fargate twin, no awsvpc network and no public IP; the host firewall and the approved hosts file bound
+# (orchestration/publisher_launch.py). It has no public IP; the host firewall and the approved hosts file bound
 # where it connects.
 
 variables {
@@ -52,7 +52,7 @@ run "publisher_is_a_bridge_task_on_the_host_with_its_own_role" {
       aws_ecs_task_definition.publisher_host[0].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
       length(aws_ecs_task_definition.publisher_host[0].ephemeral_storage) == 0
     )
-    error_message = "The publisher is an EC2 bridge task named <project>_<environment>_job_publisher_host with its own task role and no Fargate ephemeral storage."
+    error_message = "The publisher is an EC2 bridge task named <project>_<environment>_job_publisher_host with its own task role and no ephemeral storage block."
   }
   assert {
     condition     = aws_ecs_task_definition.publisher_host[0].cpu == "2048" && aws_ecs_task_definition.publisher_host[0].memory == "8192"
@@ -244,18 +244,6 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
     error_message = "No container carries a variable of the staged inputs flow: the run takes its inputs from the code archive and names its approved hosts file itself."
   }
 }
-
-run "no_fargate_publisher_definition_remains" {
-  command = plan
-  variables {
-    jobs_enabled                          = true
-    enabled_definitions                   = ["publisher_fetch"]
-    aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
-    aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
-  }
-  expect_failures = [var.enabled_definitions]
-}
-
 run "the_capture_root_is_declared_once_and_defaults_to_raw" {
   command = plan
   variables {

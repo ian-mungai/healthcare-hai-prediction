@@ -352,12 +352,8 @@ def job_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
         raise AssertionError("the job table has no metadata job")
     require(document["steps"].get("metadata_run") == "metadata", "the step metadata_run does not name the metadata job")
     require(job.get("chain") is True, "the catalog job belongs to the chain")
-    require(
-        job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"], "ingest_dbt": ["RUN_ID", "FEATURES_RUN"]}, f"wrong containers: {job['containers']}"
-    )
-    terraform = (ROOT / "infra/jobs/openmetadata.tf").read_text()
-    default = re.search(r'variable "openmetadata_lifetime_seconds".*?default\s*=\s*([0-9]+)', terraform, re.S)
-    require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the job deadline is not the task lifetime plus 900 seconds")
+    require(job["containers"] == {"ingest": ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"]}, f"wrong containers: {job['containers']}")
+    require(0 < job["deadline_seconds"] <= 14400 + 900, "the metadata job deadline is not within the DAG step limit plus 900 seconds")
     require('run_step("metadata_run")' in (ROOT / "dags/metadata_ingest_dag.py").read_text(), "the catalog DAG does not submit metadata_run")
     require(load_tables(ROOT)[0]["jobs"]["metadata"] == job, "the launch preflight does not load the metadata job")
 

@@ -1,5 +1,5 @@
 variable "drift_enabled" {
-  description = "Register the drift task that the direct launch starts for drift_monitoring_dag. It needs the training, feature store and drift image digests, the execution and drift roles and the jobs log group."
+  description = "Supply the inputs of the drift host definition that drift_monitoring_dag launches. It needs the training, feature store and drift image digests, the execution and drift roles and the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -57,27 +57,6 @@ variable "drift_mlflow_password_name" {
   }
 }
 
-variable "drift_resources" {
-  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of the drift task."
-  type = object({
-    cpu                   = number
-    memory                = number
-    ephemeral_storage_gib = number
-  })
-  default = { cpu = 2048, memory = 8192, ephemeral_storage_gib = 30 }
-
-  validation {
-    condition = try(
-      var.drift_resources.memory >= local.memory_shapes[tostring(var.drift_resources.cpu)].min &&
-      var.drift_resources.memory <= local.memory_shapes[tostring(var.drift_resources.cpu)].max &&
-      var.drift_resources.memory % local.memory_shapes[tostring(var.drift_resources.cpu)].step == 0 &&
-      var.drift_resources.ephemeral_storage_gib >= 20 && var.drift_resources.ephemeral_storage_gib <= 200 &&
-      var.drift_resources.ephemeral_storage_gib == floor(var.drift_resources.ephemeral_storage_gib), false
-    )
-    error_message = "Supply a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
-  }
-}
-
 locals {
   drift_run_variables = {
     fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
@@ -88,9 +67,6 @@ locals {
   }
   # The baseline phase gates the model named in FEATURE_SET and the current phase reads the model run named in INPUT_RUN_ID (the set the drift check covers).
   drift_phase = "cd /workspace/code && python -m monitoring.aws_run %s --run \"$RUN_ID\"%s"
-  # Fargate bind mounts are created owned by root, and the job user is 10001. The init step runs first as root, with only the capability to change owners
-  # (Fargate lets a container drop default capabilities but not add one), and hands the two volumes to the job user.
-  drift_init_drop = ["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]
   drift_steps = [
     { name = "init", image = "training", script = "chown 10001:10001 /workspace /tmp", secrets = [] },
     { name = "fetch", image = "training", script = "python -I /opt/hai/fetch_code.py", secrets = [] },
@@ -116,7 +92,7 @@ locals {
       entryPoint             = ["sh", "-c"]
       command                = [step.script]
       stopTimeout            = 90
-      linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.drift_init_drop : ["ALL"] }, initProcessEnabled = true }
+      linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.host_init_drop : ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = index == 0 ? [] : [{ containerName = local.drift_steps[index - 1].name, condition = "SUCCESS" }]
       environment = concat(
@@ -149,79 +125,4 @@ locals {
       }
     }
   ] : []
-}
-
-resource "aws_ecs_task_definition" "drift" {
-  count = var.drift_enabled ? 1 : 0
-
-  family                   = "${var.project_name}_${var.environment}_job_drift"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = tostring(var.drift_resources.cpu)
-  memory                   = tostring(var.drift_resources.memory)
-  execution_role_arn       = lookup(var.drift_roles, "execution", "")
-  task_role_arn            = lookup(var.drift_roles, "drift_task", "")
-  container_definitions    = jsonencode(local.drift_containers)
-  skip_destroy             = true
-  enable_fault_injection   = false
-  tags                     = local.tags
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64"
-  }
-
-  volume {
-    name                = "workspace"
-    configure_at_launch = false
-  }
-
-  volume {
-    name                = "tmp"
-    configure_at_launch = false
-  }
-
-  dynamic "ephemeral_storage" {
-    for_each = var.drift_resources.ephemeral_storage_gib > 20 ? [var.drift_resources.ephemeral_storage_gib] : []
-    content {
-      size_in_gib = ephemeral_storage.value
-    }
-  }
-}
-
-module "drift_flow" {
-  source      = "../services/tests/flow"
-  definitions = { for task in aws_ecs_task_definition.drift : "drift" => task.container_definitions }
-  tasks = {
-    for task in aws_ecs_task_definition.drift : "drift" => {
-      for attribute, value in task : attribute => try(tolist(value), value)
-      if attribute != "container_definitions" && !contains(local.task_attributes_assigned_at_apply, attribute)
-    }
-  }
-}
-
-output "drift_container_definitions" {
-  description = "Complete container JSON of the drift task, or null while drift_enabled is false."
-  value       = one([for task in aws_ecs_task_definition.drift : task.container_definitions])
-}
-
-output "drift_secret_flow" {
-  description = "Secret-flow and pin mutation results of the drift task for review and mocked plan assertions."
-  value = {
-    violations          = module.drift_flow.violations
-    containers_checked  = module.drift_flow.containers_checked
-    mutation_mismatches = module.drift_flow.mutation_mismatches
-  }
-}
-
-output "drift_run_task" {
-  description = "What a run-task call for the drift task needs, or null while drift_enabled is false. Registration starts nothing."
-  value = var.drift_enabled ? {
-    task_definition       = aws_ecs_task_definition.drift[0].family
-    assign_public_ip      = "DISABLED"
-    capacity_providers    = ["FARGATE"]
-    propagate_tags        = "TASK_DEFINITION"
-    network_source        = "training_network output of the IAM stack"
-    container_environment = local.drift_run_variables
-  } : null
 }

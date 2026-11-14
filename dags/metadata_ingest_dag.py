@@ -15,7 +15,7 @@ from airflow.sdk import DAG, Param, task
 from orchestration.dag_runtime import pool_settings, run_step
 
 RUN_ID = r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}"
-# The Terraform variable openmetadata_lifetime_seconds may not exceed this. The job deadline adds 900 seconds of grace.
+# The longest the metadata step may run. The job deadline adds 900 seconds of grace.
 LIFETIME_CEILING_SECONDS = 14400
 STEP_LIMIT = timedelta(seconds=LIFETIME_CEILING_SECONDS + 1800)
 

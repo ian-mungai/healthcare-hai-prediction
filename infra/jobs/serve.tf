@@ -1,5 +1,5 @@
 variable "serve_enabled" {
-  description = "Register the serve task that the direct launch starts for serving_deploy_dag and for the promotion chain of research_dag. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
+  description = "Supply the inputs of the serve host definition that serving_deploy_dag and the promotion chain of research_dag launch. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -40,27 +40,6 @@ variable "serve_manifest_prefix" {
   }
 }
 
-variable "serve_resources" {
-  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of the serve task. It writes two small records and reads the model registry, so it is small."
-  type = object({
-    cpu                   = number
-    memory                = number
-    ephemeral_storage_gib = number
-  })
-  default = { cpu = 1024, memory = 4096, ephemeral_storage_gib = 21 }
-
-  validation {
-    condition = try(
-      var.serve_resources.memory >= local.memory_shapes[tostring(var.serve_resources.cpu)].min &&
-      var.serve_resources.memory <= local.memory_shapes[tostring(var.serve_resources.cpu)].max &&
-      var.serve_resources.memory % local.memory_shapes[tostring(var.serve_resources.cpu)].step == 0 &&
-      var.serve_resources.ephemeral_storage_gib >= 20 && var.serve_resources.ephemeral_storage_gib <= 200 &&
-      var.serve_resources.ephemeral_storage_gib == floor(var.serve_resources.ephemeral_storage_gib), false
-    )
-    error_message = "Supply a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
-  }
-}
-
 locals {
   # Two steps after the volume hand-over: fetch the run's code, then deploy. The deploy step logs in to MLflow as the train step does. The derived request arrives in
   # SERVING_REQUEST, which the launch preflight built from the closed launch request (the type and the mode), and the tool reads it from there. The time limit is
@@ -88,7 +67,7 @@ locals {
       entryPoint             = ["sh", "-c"]
       command                = [step.script]
       stopTimeout            = 90
-      linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.train_init_drop : ["ALL"] }, initProcessEnabled = true }
+      linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.host_init_drop : ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = index == 0 ? [] : [{ containerName = local.serve_steps[index - 1].name, condition = "SUCCESS" }]
       environment = concat(
@@ -126,79 +105,4 @@ locals {
       }
     }
   ] : []
-}
-
-resource "aws_ecs_task_definition" "serve" {
-  count = var.serve_enabled ? 1 : 0
-
-  family                   = "${var.project_name}_${var.environment}_job_serve"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = tostring(var.serve_resources.cpu)
-  memory                   = tostring(var.serve_resources.memory)
-  execution_role_arn       = lookup(var.train_roles, "execution", "")
-  task_role_arn            = lookup(var.serve_roles, "serve_task", "")
-  container_definitions    = jsonencode(local.serve_containers)
-  skip_destroy             = true
-  enable_fault_injection   = false
-  tags                     = local.tags
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64"
-  }
-
-  volume {
-    name                = "workspace"
-    configure_at_launch = false
-  }
-
-  volume {
-    name                = "tmp"
-    configure_at_launch = false
-  }
-
-  dynamic "ephemeral_storage" {
-    for_each = var.serve_resources.ephemeral_storage_gib > 20 ? [var.serve_resources.ephemeral_storage_gib] : []
-    content {
-      size_in_gib = ephemeral_storage.value
-    }
-  }
-}
-
-module "serve_flow" {
-  source      = "../services/tests/flow"
-  definitions = { for task in aws_ecs_task_definition.serve : "serve" => task.container_definitions }
-  tasks = {
-    for task in aws_ecs_task_definition.serve : "serve" => {
-      for attribute, value in task : attribute => try(tolist(value), value)
-      if attribute != "container_definitions" && !contains(local.task_attributes_assigned_at_apply, attribute)
-    }
-  }
-}
-
-output "serve_container_definitions" {
-  description = "Complete container JSON of the serve task, or null while serve_enabled is false."
-  value       = one([for task in aws_ecs_task_definition.serve : task.container_definitions])
-}
-
-output "serve_secret_flow" {
-  description = "Secret-flow and pin mutation results of the serve task for review and mocked plan assertions."
-  value = {
-    violations          = module.serve_flow.violations
-    containers_checked  = module.serve_flow.containers_checked
-    mutation_mismatches = module.serve_flow.mutation_mismatches
-  }
-}
-
-output "serve_run_task" {
-  description = "What a run-task call for the serve task needs, or null while serve_enabled is false. The launch supplies the variables. Registration starts nothing."
-  value = var.serve_enabled ? {
-    task_definition       = aws_ecs_task_definition.serve[0].family
-    assign_public_ip      = "DISABLED"
-    capacity_providers    = ["FARGATE"]
-    propagate_tags        = "TASK_DEFINITION"
-    network_source        = "training_network output of the IAM stack"
-    container_environment = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
-  } : null
 }

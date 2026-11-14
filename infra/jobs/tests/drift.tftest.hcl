@@ -20,21 +20,11 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
   log_group_name                        = "example_project_jobs_dev"
-}
-
-run "default_plan_creates_no_drift_task" {
-  command = plan
-
-  variables {
-    drift_images   = {}
-    drift_roles    = {}
-    log_group_name = null
-  }
-
-  assert {
-    condition     = length(aws_ecs_task_definition.drift) == 0 && output.drift_run_task == null && output.drift_container_definitions == null
-    error_message = "Without drift_enabled the stack registers no drift task and needs no drift image or role."
-  }
+  host_job_memory_mib                   = 23552
+  # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
+  host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  host_jobs_enabled     = true
+  host_jobs             = ["drift"]
 }
 
 run "drift_definition_shape" {
@@ -46,29 +36,27 @@ run "drift_definition_shape" {
 
   assert {
     condition = (
-      length(aws_ecs_task_definition.drift) == 1 &&
-      aws_ecs_task_definition.drift[0].family == "example_project_dev_job_drift" &&
-      aws_ecs_task_definition.drift[0].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_drift_task_dev" &&
-      aws_ecs_task_definition.drift[0].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
-      toset(aws_ecs_task_definition.drift[0].requires_compatibilities) == toset(["FARGATE"]) && aws_ecs_task_definition.drift[0].network_mode == "awsvpc" &&
-      aws_ecs_task_definition.drift[0].runtime_platform[0].cpu_architecture == "ARM64" && aws_ecs_task_definition.drift[0].runtime_platform[0].operating_system_family == "LINUX" &&
-      aws_ecs_task_definition.drift[0].cpu == "2048" && aws_ecs_task_definition.drift[0].memory == "8192" &&
-      aws_ecs_task_definition.drift[0].ephemeral_storage[0].size_in_gib == 30 &&
-      aws_ecs_task_definition.drift[0].skip_destroy && !aws_ecs_task_definition.drift[0].enable_fault_injection
+      aws_ecs_task_definition.host["drift"].family == "example_project_dev_job_drift_host" &&
+      aws_ecs_task_definition.host["drift"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_drift_task_dev" &&
+      aws_ecs_task_definition.host["drift"].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
+      toset(aws_ecs_task_definition.host["drift"].requires_compatibilities) == toset(["EC2"]) && aws_ecs_task_definition.host["drift"].network_mode == "bridge" &&
+      aws_ecs_task_definition.host["drift"].runtime_platform[0].cpu_architecture == "ARM64" && aws_ecs_task_definition.host["drift"].runtime_platform[0].operating_system_family == "LINUX" &&
+      aws_ecs_task_definition.host["drift"].cpu == "2048" && aws_ecs_task_definition.host["drift"].memory == "8192" &&
+      aws_ecs_task_definition.host["drift"].skip_destroy && !aws_ecs_task_definition.host["drift"].enable_fault_injection
     )
-    error_message = "The drift task is one ARM64 Linux Fargate definition with its own role, the execution role and the sized scratch."
+    error_message = "The drift task is one ARM64 Linux host definition with its own role, the execution role and its reservation of the host."
   }
 
   assert {
     condition = (
-      [for container in jsondecode(output.drift_container_definitions) : container.name] == ["init", "fetch", "baseline", "current", "check", "publish"] &&
-      [for container in jsondecode(output.drift_container_definitions) : container.image] == [
+      [for container in jsondecode(output.host_container_definitions["drift"]) : container.name] == ["init", "fetch", "baseline", "current", "check", "publish"] &&
+      [for container in jsondecode(output.host_container_definitions["drift"]) : container.image] == [
         var.drift_images.training, var.drift_images.training, var.drift_images.training, var.drift_images.feature_store, var.drift_images.drift, var.drift_images.training
       ] &&
-      [for container in jsondecode(output.drift_container_definitions) : container.essential] == [false, false, false, false, false, true] &&
-      alltrue([for index, container in jsondecode(output.drift_container_definitions) : (
+      [for container in jsondecode(output.host_container_definitions["drift"]) : container.essential] == [false, false, false, false, false, true] &&
+      alltrue([for index, container in jsondecode(output.host_container_definitions["drift"]) : (
         index == 0 ? length(container.dependsOn) == 0 : (
-          length(container.dependsOn) == 1 && container.dependsOn[0].containerName == jsondecode(output.drift_container_definitions)[index - 1].name && container.dependsOn[0].condition == "SUCCESS"
+          length(container.dependsOn) == 1 && container.dependsOn[0].containerName == jsondecode(output.host_container_definitions["drift"])[index - 1].name && container.dependsOn[0].condition == "SUCCESS"
         )
       )])
     )
@@ -76,7 +64,7 @@ run "drift_definition_shape" {
   }
 
   assert {
-    condition = alltrue([for container in slice(jsondecode(output.drift_container_definitions), 1, 6) : (
+    condition = alltrue([for container in slice(jsondecode(output.host_container_definitions["drift"]), 1, 6) : (
       !container.privileged && container.readonlyRootFilesystem && container.user == "10001:10001" && container.linuxParameters.capabilities.drop == ["ALL"] &&
       container.logConfiguration.options["awslogs-group"] == "example_project_jobs_dev" && container.logConfiguration.options["awslogs-stream-prefix"] == "drift" &&
       container.entryPoint == ["sh", "-c"] && container.workingDirectory == "/workspace"
@@ -94,22 +82,22 @@ run "drift_init_step_makes_the_volumes_writable_for_the_job_user" {
 
   assert {
     condition = (
-      jsondecode(output.drift_container_definitions)[0].name == "init" &&
-      jsondecode(output.drift_container_definitions)[0].user == "0:0" &&
-      jsondecode(output.drift_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"] &&
-      !jsondecode(output.drift_container_definitions)[0].privileged &&
-      jsondecode(output.drift_container_definitions)[0].readonlyRootFilesystem &&
-      jsondecode(output.drift_container_definitions)[0].linuxParameters.capabilities.add == [] &&
-      !contains(jsondecode(output.drift_container_definitions)[0].linuxParameters.capabilities.drop, "CHOWN") &&
-      length(jsondecode(output.drift_container_definitions)[0].secrets) == 0
+      jsondecode(output.host_container_definitions["drift"])[0].name == "init" &&
+      jsondecode(output.host_container_definitions["drift"])[0].user == "0:0" &&
+      jsondecode(output.host_container_definitions["drift"])[0].command == ["find /workspace /tmp -mindepth 1 -delete && chown 10001:10001 /workspace /tmp"] &&
+      !jsondecode(output.host_container_definitions["drift"])[0].privileged &&
+      jsondecode(output.host_container_definitions["drift"])[0].readonlyRootFilesystem &&
+      jsondecode(output.host_container_definitions["drift"])[0].linuxParameters.capabilities.add == [] &&
+      !contains(jsondecode(output.host_container_definitions["drift"])[0].linuxParameters.capabilities.drop, "CHOWN") &&
+      length(jsondecode(output.host_container_definitions["drift"])[0].secrets) == 0
     )
     error_message = "The init step runs as root with only the capability to change owners, no secret and a read-only root, and hands both volumes to the job user."
   }
 
   assert {
     condition = (
-      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.drift_container_definitions)[0].mountPoints : mount.containerPath]) &&
-      alltrue([for container in jsondecode(output.drift_container_definitions) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
+      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.host_container_definitions["drift"])[0].mountPoints : mount.containerPath]) &&
+      alltrue([for container in jsondecode(output.host_container_definitions["drift"]) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
     )
     error_message = "Every writable mount of every container is one of the two volumes that the init step hands to the job user."
   }
@@ -124,18 +112,18 @@ run "drift_commands_and_environment" {
 
   assert {
     condition = (
-      jsondecode(output.drift_container_definitions)[1].command == ["python -I /opt/hai/fetch_code.py"] &&
-      jsondecode(output.drift_container_definitions)[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\" --model \"$FEATURE_SET\""] &&
-      jsondecode(output.drift_container_definitions)[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\" --features-run \"$INPUT_RUN_ID\""] &&
-      jsondecode(output.drift_container_definitions)[4].command == ["cd /workspace/code && python -m monitoring.aws_run check --run \"$RUN_ID\""] &&
-      jsondecode(output.drift_container_definitions)[5].command == ["cd /workspace/code && python -m monitoring.aws_run publish --run \"$RUN_ID\""]
+      jsondecode(output.host_container_definitions["drift"])[1].command == ["python -I /opt/hai/fetch_code.py"] &&
+      jsondecode(output.host_container_definitions["drift"])[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\" --model \"$FEATURE_SET\""] &&
+      jsondecode(output.host_container_definitions["drift"])[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\" --features-run \"$INPUT_RUN_ID\""] &&
+      jsondecode(output.host_container_definitions["drift"])[4].command == ["cd /workspace/code && python -m monitoring.aws_run check --run \"$RUN_ID\""] &&
+      jsondecode(output.host_container_definitions["drift"])[5].command == ["(cd /workspace/code && python -m monitoring.aws_run publish --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"]
     )
     error_message = "The fetch step runs the script baked into the image. The other four run the phases of the fetched code, the baseline phase for the model of the run and the current phase for its model run."
   }
 
   assert {
     condition = alltrue([
-      for container in slice(jsondecode(output.drift_container_definitions), 1, 6) :
+      for container in slice(jsondecode(output.host_container_definitions["drift"]), 1, 6) :
       contains(container.environment, { name = "DATA_BUCKET_NAME", value = "example-project-data-dev" }) &&
       contains(container.environment, { name = "PYTHONHASHSEED", value = "0" }) &&
       contains(container.environment, { name = "RUN_ID", value = "" }) &&
@@ -146,11 +134,11 @@ run "drift_commands_and_environment" {
 
   assert {
     condition = (
-      toset([for variable in jsondecode(output.drift_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"]) &&
-      toset([for variable in jsondecode(output.drift_container_definitions)[5].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"])
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[5].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"])
     )
     error_message = "Each container lists exactly the empty variables the run-task override must fill for it."
   }
@@ -165,12 +153,12 @@ run "drift_secrets_reach_only_the_baseline_and_current_steps" {
 
   assert {
     condition = (
-      jsondecode(output.drift_container_definitions)[0].secrets == [] && jsondecode(output.drift_container_definitions)[1].secrets == [] &&
-      jsondecode(output.drift_container_definitions)[4].secrets == [] && jsondecode(output.drift_container_definitions)[5].secrets == [] &&
-      jsondecode(output.drift_container_definitions)[2].secrets == [
+      jsondecode(output.host_container_definitions["drift"])[0].secrets == [] && jsondecode(output.host_container_definitions["drift"])[1].secrets == [] &&
+      jsondecode(output.host_container_definitions["drift"])[4].secrets == [] && jsondecode(output.host_container_definitions["drift"])[5].secrets == [] &&
+      jsondecode(output.host_container_definitions["drift"])[2].secrets == [
         { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/mlflow_admin_password" },
       ] &&
-      jsondecode(output.drift_container_definitions)[3].secrets == [
+      jsondecode(output.host_container_definitions["drift"])[3].secrets == [
         { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
         { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
       ]
@@ -180,71 +168,21 @@ run "drift_secrets_reach_only_the_baseline_and_current_steps" {
 
   assert {
     condition = (
-      contains(jsondecode(output.drift_container_definitions)[2].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
-      !strcontains(jsondecode(output.drift_container_definitions)[2].command[0], "MLFLOW_TRACKING_PASSWORD")
+      contains(jsondecode(output.host_container_definitions["drift"])[2].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
+      !strcontains(jsondecode(output.host_container_definitions["drift"])[2].command[0], "MLFLOW_TRACKING_PASSWORD")
     )
     error_message = "The baseline step logs in to MLflow with the administrator account. The password never appears in the command."
   }
 
   assert {
-    condition     = length(output.drift_secret_flow.violations) == 0 && length(output.drift_secret_flow.mutation_mismatches) == 0
+    condition     = length(output.host_secret_flow.violations) == 0 && length(output.host_secret_flow.mutation_mismatches) == 0
     error_message = "The shared secret-flow check finds no secret in a command line, file or log, and catches its planted mutations."
   }
 
   assert {
-    condition     = toset(output.drift_secret_flow.containers_checked) == toset(["drift/baseline", "drift/current"])
+    condition     = toset(output.host_secret_flow.containers_checked) == toset(["host_drift/baseline", "host_drift/current"])
     error_message = "The shared check follows the two containers that receive a secret."
   }
-}
-
-run "drift_run_task_contract" {
-  command = plan
-
-  variables {
-    drift_enabled = true
-  }
-
-  assert {
-    condition = (
-      output.drift_run_task.task_definition == "example_project_dev_job_drift" &&
-      output.drift_run_task.assign_public_ip == "DISABLED" && output.drift_run_task.capacity_providers == ["FARGATE"] &&
-      output.drift_run_task.propagate_tags == "TASK_DEFINITION" &&
-      output.drift_run_task.network_source == "training_network output of the IAM stack" &&
-      output.drift_run_task.container_environment == {
-        fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-        baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]
-        current  = ["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]
-        check    = ["RUN_ID"]
-        publish  = ["RUN_ID"]
-      }
-    )
-    error_message = "The output names the on-demand private placement and the variables each container needs, for the owner's run-task call or the launch's."
-  }
-}
-
-run "drift_resources_can_be_resized_within_a_fargate_shape" {
-  command = plan
-
-  variables {
-    drift_enabled   = true
-    drift_resources = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 60 }
-  }
-
-  assert {
-    condition     = aws_ecs_task_definition.drift[0].cpu == "4096" && aws_ecs_task_definition.drift[0].memory == "16384" && aws_ecs_task_definition.drift[0].ephemeral_storage[0].size_in_gib == 60
-    error_message = "A valid larger shape is accepted."
-  }
-}
-
-run "invalid_shape_is_refused" {
-  command = plan
-
-  variables {
-    drift_enabled   = true
-    drift_resources = { cpu = 2048, memory = 1024, ephemeral_storage_gib = 30 }
-  }
-
-  expect_failures = [var.drift_resources]
 }
 
 run "missing_image_is_refused" {
@@ -332,11 +270,11 @@ run "drift_containers_follow_the_job_catalog" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.drift_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.drift.containers)) &&
-      alltrue([for container in jsondecode(output.drift_container_definitions) : (
+      toset([for container in jsondecode(output.host_container_definitions["drift"]) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.drift.containers)) &&
+      alltrue([for container in jsondecode(output.host_container_definitions["drift"]) : (
         container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.drift.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.drift_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.drift.log_container)
+      contains([for container in jsondecode(output.host_container_definitions["drift"]) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.drift.log_container)
     )
     error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
@@ -351,7 +289,7 @@ run "no_drift_container_fixes_an_engine_limit" {
 
   assert {
     condition = alltrue([
-      for container in jsondecode(output.drift_container_definitions) : length([
+      for container in jsondecode(output.host_container_definitions["drift"]) : length([
         for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
       ]) == 0
     ])

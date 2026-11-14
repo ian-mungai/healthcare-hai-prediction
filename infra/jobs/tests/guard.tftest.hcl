@@ -30,6 +30,11 @@ variables {
   aws_polaris_reader_client_id_name     = "/example_project/aws_polaris_reader_client_id"
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   log_group_name                        = "example_project_jobs_dev"
+  host_job_memory_mib                   = 23552
+  # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
+  host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  host_jobs_enabled     = true
+  host_jobs             = ["silver", "gold", "features"]
 }
 
 # A phase that exits with an error does not stop a layer task: the phases after it wait for its success and never start, and the only essential container never
@@ -44,10 +49,10 @@ run "a_failed_phase_ends_the_task_through_the_guard" {
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      jsondecode(output.layer_container_definitions[layer])[length(jsondecode(output.layer_container_definitions[layer])) - 1].name == "guard" &&
-      length(jsondecode(output.layer_container_definitions[layer])) == length(jsondecode(output.layer_phase_containers[layer])) + 1 &&
-      [for container in jsondecode(output.layer_container_definitions[layer]) : container.name if container.essential] == [
-        jsondecode(output.layer_phase_containers[layer])[length(jsondecode(output.layer_phase_containers[layer])) - 1].name, "guard"
+      jsondecode(output.host_container_definitions[layer])[length(jsondecode(output.host_container_definitions[layer])) - 1].name == "guard" &&
+      length(jsondecode(output.host_container_definitions[layer])) == length([for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"]) + 1 &&
+      [for container in jsondecode(output.host_container_definitions[layer]) : container.name if container.essential] == [
+        [for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"][length([for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"]) - 1].name, "guard"
       ]
     )])
     error_message = "Each layer task ends with a guard container, and the last phase and the guard are the only essential containers, so a failed phase stops the task."
@@ -55,30 +60,30 @@ run "a_failed_phase_ends_the_task_through_the_guard" {
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).dependsOn == [] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).entryPoint == ["python", "-I", "-c"] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).command == [file("${path.module}/../../scripts/orchestration/task_guard.py")] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).image == var.images.spark
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).dependsOn == [] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).entryPoint == ["python", "-I", "-c"] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).command == [file("${path.module}/../../scripts/orchestration/task_guard.py")] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).image == var.images.spark
     )])
     error_message = "The guard starts with the task, with no dependency, and runs scripts/orchestration/task_guard.py in the Spark image."
   }
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).user == "10001:10001" &&
-      !one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).privileged &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).readonlyRootFilesystem &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).linuxParameters.capabilities.drop == ["ALL"] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).secrets == [] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).mountPoints == [] &&
-      one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).logConfiguration.options["awslogs-stream-prefix"] == layer
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).user == "10001:10001" &&
+      !one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).privileged &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).readonlyRootFilesystem &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).linuxParameters.capabilities.drop == ["ALL"] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).secrets == [] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).mountPoints == [] &&
+      one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).logConfiguration.options["awslogs-stream-prefix"] == layer
     )])
     error_message = "The guard is unprivileged with a read-only root, no capability, no secret and no volume, and logs to the layer's stream prefix."
   }
 
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : (
-      tonumber(one([for item in one([for container in jsondecode(output.layer_container_definitions[layer]) : container if container.name == "guard"]).environment : item.value if item.name == "GUARD_SECONDS"]))
+      tonumber(one([for item in one([for container in jsondecode(output.host_container_definitions[layer]) : container if container.name == "guard"]).environment : item.value if item.name == "GUARD_SECONDS"]))
       == jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs[layer].deadline_seconds + 900
     )])
     error_message = "The guard's time limit is the job deadline plus 900 seconds, so it never ends a run that is within its deadline and ends a task that nobody supervises soon after it."

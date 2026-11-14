@@ -25,7 +25,7 @@ terraform_checks() {
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
   # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform alerts services modules/bronze_writer_job jobs; do
+  for stack in storage iam platform alerts services jobs; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
@@ -69,11 +69,16 @@ terraform_checks() {
   timed "terraform_checks: services move proof" "$python_bin" -m scripts.infrastructure.run_services_move_e2e --output-directory "$e2e_output/services_move"
   timed "terraform_checks: serving release on the real definitions" "$python_bin" -m scripts.infrastructure.run_serving_release_real_e2e --output-directory "$e2e_output/serving_release_real"
   timed "terraform_checks: serving transition on the first apply" "$python_bin" -m scripts.infrastructure.run_serving_transition_e2e --output-directory "$e2e_output/serving_transition"
-  # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that the core job of .github/workflows/ci.yml installs on a hosted runner. A
+  # Every task definition of the jobs plan, child modules included, is an EC2 bridge task, and a task definition planted through each way of writing one is caught.
+  timed "terraform_checks: jobs host-only proof" "$python_bin" -m scripts.infrastructure.run_jobs_host_only_e2e --out "$e2e_output/jobs_host_only"
+  # The apply that removes the retired Fargate job definitions only forgets them: the plan against the historical state changes exactly the 19 retired addresses and no host definition,
+  # and the plan after it is empty.
+  timed "terraform_checks: retired definitions proof" "$python_bin" -m scripts.infrastructure.run_retired_definitions_e2e --out "$e2e_output/retired_definitions"
+  # The Redis start script runs against a real redis-server: the machine's own in local CI, and the pinned package that .github/actions/setup installs on a hosted runner. A
   # missing server fails the case.
   timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh
   static_failed=0
-  for stack in storage iam platform alerts services modules/bronze_writer_job jobs; do
+  for stack in storage iam platform alerts services jobs; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"

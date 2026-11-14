@@ -82,8 +82,6 @@ def snapshot() -> dict[str, str]:
         "infra/iam/bronze_writer.tf",
         "infra/iam/bronze_writer_variables.tf",
     ]
-    names += [str(path.relative_to(ROOT)) for path in sorted((ROOT / "infra/modules/bronze_writer_job").rglob("*.tf"))]
-    names += [str(path.relative_to(ROOT)) for path in sorted((ROOT / "infra/modules/bronze_writer_job/tests").glob("*.tftest.hcl"))]
     names += ["infra/iam/tests/bronze_writer.tftest.hcl"]
     names += [
         f"infra/iam/owner_policies/{name}.json"

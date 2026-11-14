@@ -93,12 +93,6 @@
       "files": [
         "data_contracts/orchestration/examples/ecs_input_map.json"
       ]
-    },
-    {
-      "schema": "data_contracts/orchestration/ecs_target.schema.json",
-      "files": [
-        "data_contracts/orchestration/examples/ecs_target.json"
-      ]
     }
   ]
 }

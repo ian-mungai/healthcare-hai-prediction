@@ -326,7 +326,7 @@ def scope_denial(subject: ModuleType, journal: ModuleType, out: Path) -> dict[st
     rejected(subject, "bronze", "namespace creation", namespace_creation_approved=False)
     rejected(subject, "checksum_fixture", "fixture action")
     rejected(subject, "checksums", "unknown bronze job")
-    rejected(subject, "bronze", "identity", principal="lakehouse_reader", pair="reader", task_role="job_read_task", definition="spark_read")
+    rejected(subject, "bronze", "identity", principal="lakehouse_reader", pair="reader", task_role="job_read_task", definition="test_writer")
     return {"forbidden_targets_refused": [*PRODUCTION, "silver", "gold", "features", "stray"], "read_identity_refused": True}
 
 

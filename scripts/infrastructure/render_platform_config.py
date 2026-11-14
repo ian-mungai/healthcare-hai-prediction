@@ -13,7 +13,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from scripts.infrastructure.render_ecs_target import TargetError, read_capture_with_digest
+from scripts.infrastructure.capture_reader import CaptureError, read_capture_with_digest
 from scripts.infrastructure.render_project_config import (
     REPO_ROOT,
     ConfigurationError,
@@ -124,7 +124,7 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
         raise ConfigurationError("Supply both the preparation input path and preparation SHA-256.")
     try:
         document, actual = read_capture_with_digest(path)
-    except TargetError as error:
+    except CaptureError as error:
         raise ConfigurationError(str(error)) from None
     if sha256 != actual:
         raise ConfigurationError("The preparation SHA-256 differs from the reviewed bytes. No Terraform action was run.")

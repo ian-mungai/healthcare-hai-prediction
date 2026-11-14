@@ -34,7 +34,7 @@ SOURCE_PATHS = (
     "scripts/process.py",
     "scripts/infrastructure/render_project_config.py",
     "scripts/infrastructure/render_platform_config.py",
-    "scripts/infrastructure/render_ecs_target.py",
+    "scripts/infrastructure/capture_reader.py",
     "scripts/infrastructure/render_project_config.sh",
     "scripts/infrastructure/terraform.sh",
     "config/aws/iam_preparation.json",

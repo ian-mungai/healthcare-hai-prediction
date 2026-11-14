@@ -62,7 +62,7 @@ def test_an_unset_or_empty_alert_address_renders_no_address_input(tmp_path: Path
 
 @pytest.mark.parametrize("stack", ["platform", "services"])
 def test_no_other_stack_receives_the_alert_address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, stack: str) -> None:
-    outputs = {name: {"value": "x"} for name in renderer.SERVICES_PLATFORM_KEYS}
+    outputs: dict[str, dict[str, Any]] = {name: {"value": "x"} for name in renderer.SERVICES_PLATFORM_KEYS}
     outputs["log_group_names"] = {"value": {"jobs": "x"}}
     outputs["ecr_repository_urls"] = {"value": {"airflow": "x"}}
     platform_outputs(monkeypatch, **outputs)

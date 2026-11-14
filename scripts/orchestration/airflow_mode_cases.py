@@ -2531,7 +2531,7 @@ def services_build_the_session_adapter() -> None:
 
 def metadata_uses_the_host_containers() -> None:
     """The host metadata definition has one client container, ``ingest``. The launch sends overrides for it alone and reads its log, and the fake ECS
-    refuses an override for a container the definition lacks, as ECS does. The job table's containers are unchanged."""
+    refuses an override for a container the definition lacks, as ECS does. The job table names the same one container."""
     probe = FakeEcs()
     probe.definitions = {"example_dev_job_metadata_host": frozenset({"ingest"})}
     error = refuses(
@@ -2542,10 +2542,10 @@ def metadata_uses_the_host_containers() -> None:
             count=1,
             clientToken="stand-in-token",
             capacityProviderStrategy=[{"capacityProvider": "stand-in_host", "weight": 1}],
-            overrides={"containerOverrides": [{"name": "ingest_polaris", "environment": []}]},
+            overrides={"containerOverrides": [{"name": "a_container_the_definition_lacks", "environment": []}]},
         ),
     )
-    require("ingest_polaris" in str(error) and not probe.tasks, f"the fake took an override for a container its definition lacks: {error}")
+    require("a_container_the_definition_lacks" in str(error) and not probe.tasks, f"the fake took an override for a container its definition lacks: {error}")
     rig = Rig()
     run = OTHER_RUN
     features_run = "20261104T120000Z-feed0001"
@@ -2565,8 +2565,8 @@ def metadata_uses_the_host_containers() -> None:
     require(spec is not None and spec.log_container == "ingest", f"the metadata log is not read from the host container: {spec}")
     table = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]["metadata"]
     require(
-        set(table["containers"]) == {"ingest_polaris", "ingest_dbt"} and table["log_container"] == "ingest_polaris",
-        "the job table's metadata containers changed",
+        set(table["containers"]) == {"ingest"} and table["log_container"] == "ingest",
+        "the job table's metadata containers are not the host container",
     )
 
 

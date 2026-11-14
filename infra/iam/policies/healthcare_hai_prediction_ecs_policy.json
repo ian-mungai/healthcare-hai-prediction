@@ -2,7 +2,7 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "DescribeAndListEcsResources",
+      "Sid": "Read",
       "Effect": "Allow",
       "Action": [
         "ecs:ListClusters",
@@ -18,7 +18,7 @@
       }
     },
     {
-      "Sid": "CreateTaggedClusterAndCapacityProvider",
+      "Sid": "MakeInfra",
       "Effect": "Allow",
       "Action": [
         "ecs:CreateCluster",
@@ -40,7 +40,7 @@
       }
     },
     {
-      "Sid": "ManageProjectCluster",
+      "Sid": "Cluster",
       "Effect": "Allow",
       "Action": [
         "ecs:DeleteCluster",
@@ -54,7 +54,7 @@
       "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:cluster/${PROJECT_NAME}_cluster_${ENVIRONMENT}"
     },
     {
-      "Sid": "DescribeProjectContainerInstances",
+      "Sid": "Instances",
       "Effect": "Allow",
       "Action": [
         "ecs:DescribeContainerInstances"
@@ -62,7 +62,7 @@
       "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:container-instance/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
     },
     {
-      "Sid": "ManageProjectCapacityProvider",
+      "Sid": "Capacity",
       "Effect": "Allow",
       "Action": [
         "ecs:UpdateCapacityProvider",
@@ -73,7 +73,7 @@
       "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:capacity-provider/${PROJECT_NAME}_host_${ENVIRONMENT}"
     },
     {
-      "Sid": "CreateTaggedServicesThatPropagateTags",
+      "Sid": "MakeService",
       "Effect": "Allow",
       "Action": [
         "ecs:CreateService"
@@ -95,7 +95,7 @@
       }
     },
     {
-      "Sid": "ManageProjectServices",
+      "Sid": "Services",
       "Effect": "Allow",
       "Action": [
         "ecs:UpdateService",
@@ -107,7 +107,7 @@
       "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:service/${PROJECT_NAME}_cluster_${ENVIRONMENT}/${PROJECT_NAME}_${ENVIRONMENT}_*"
     },
     {
-      "Sid": "ListServicesAndTasksOfProjectCluster",
+      "Sid": "ListSvcTask",
       "Effect": "Allow",
       "Action": [
         "ecs:ListServices",
@@ -121,7 +121,7 @@
       }
     },
     {
-      "Sid": "DescribeServiceDeployments",
+      "Sid": "Deploys",
       "Effect": "Allow",
       "Action": [
         "ecs:DescribeServiceDeployments",
@@ -133,7 +133,7 @@
       ]
     },
     {
-      "Sid": "RegisterTaggedTaskDefinitions",
+      "Sid": "Register",
       "Effect": "Allow",
       "Action": [
         "ecs:RegisterTaskDefinition"
@@ -151,7 +151,7 @@
       }
     },
     {
-      "Sid": "RunTaggedProjectTasks",
+      "Sid": "RunTask",
       "Effect": "Allow",
       "Action": [
         "ecs:RunTask"
@@ -172,7 +172,7 @@
       }
     },
     {
-      "Sid": "ManageProjectTasks",
+      "Sid": "Tasks",
       "Effect": "Allow",
       "Action": [
         "ecs:StopTask",
@@ -181,7 +181,7 @@
       "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task/${PROJECT_NAME}_cluster_${ENVIRONMENT}/*"
     },
     {
-      "Sid": "TagWhileCreating",
+      "Sid": "TagCreate",
       "Effect": "Allow",
       "Action": [
         "ecs:TagResource"
@@ -206,7 +206,7 @@
       }
     },
     {
-      "Sid": "DenyCreatesWithoutProjectTagValue",
+      "Sid": "DenyNoTag",
       "Effect": "Deny",
       "Action": [
         "ecs:CreateCluster",
@@ -223,7 +223,7 @@
       }
     },
     {
-      "Sid": "DenyCreatesWithoutExactProjectKey",
+      "Sid": "DenyBadKey",
       "Effect": "Deny",
       "Action": [
         "ecs:CreateCluster",
@@ -242,7 +242,7 @@
       }
     },
     {
-      "Sid": "DenyServicesAndTasksThatDoNotPropagateTags",
+      "Sid": "DenyNoProp",
       "Effect": "Deny",
       "Action": [
         "ecs:CreateService"
@@ -258,7 +258,7 @@
       }
     },
     {
-      "Sid": "DenyAnotherProjectTagOnRunTaskServicesAndTags",
+      "Sid": "DenyOtherTag",
       "Effect": "Deny",
       "Action": [
         "ecs:RunTask",
@@ -276,7 +276,7 @@
       }
     },
     {
-      "Sid": "DenyUpdatesThatStopTagPropagation",
+      "Sid": "DenyStopProp",
       "Effect": "Deny",
       "Action": [
         "ecs:UpdateService"
@@ -289,7 +289,7 @@
       }
     },
     {
-      "Sid": "DenyTagChangesAfterCreate",
+      "Sid": "DenyRetag",
       "Effect": "Deny",
       "Action": [
         "ecs:TagResource",

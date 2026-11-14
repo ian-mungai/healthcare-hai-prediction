@@ -26,10 +26,7 @@ variables {
     drift         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_drift_dev@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   }
   openmetadata_images = {
-    server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_server_dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_search_dev@sha256:3333333333333333333333333333333333333333333333333333333333333333"
-    database  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_database_dev@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   }
   job_role_arns = {
     execution           = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
@@ -63,9 +60,7 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
-  openmetadata_admin_password_name      = "/example_project/openmetadata_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
-  openmetadata_cpu_architecture         = "ARM64"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
   host_openmetadata_api                 = "http://10.0.1.20:8585/api"
   host_repo_path                        = "/data/repo"
@@ -75,7 +70,6 @@ variables {
   drift_enabled                         = true
   promote_enabled                       = true
   serve_enabled                         = true
-  openmetadata_enabled                  = true
 }
 
 run "host_definitions_equal_the_fixture_the_airflow_mode_rig_reads" {

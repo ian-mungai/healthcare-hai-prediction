@@ -11,7 +11,7 @@ from typing import Any
 
 from jsonschema import Draft202012Validator
 
-from scripts.infrastructure.render_ecs_target import TargetError, read_capture_with_digest
+from scripts.infrastructure.capture_reader import CaptureError, read_capture_with_digest
 from scripts.infrastructure.render_project_config import (
     REPO_ROOT,
     ConfigurationError,
@@ -86,8 +86,6 @@ def preparation_values(path: Path | None, sha256: str | None, root: str) -> dict
     if document.get("root") != root or next(Draft202012Validator(schema).iter_errors(document), None) is not None:
         raise ConfigurationError("The preparation contract is invalid for the selected jobs root. No Terraform action was run.")
     values = dict(document["variables"])
-    if root == "jobs" and "enabled_definitions" in values:
-        values["enabled_definitions"] = sorted(values["enabled_definitions"])
     return values
 
 
@@ -124,7 +122,7 @@ def main() -> int:
         if arguments.verify_identity:
             verify_project_identity(storage)
         write_or_check(directory / "deployment.auto.tfvars.json", values, arguments.check)
-    except (ConfigurationError, TargetError) as error:
+    except (ConfigurationError, CaptureError) as error:
         parser.error(str(error))
     except (OSError, ValueError, TypeError, AttributeError, KeyError, RecursionError):
         parser.error("The jobs configuration or saved jobs plan is invalid. No Terraform action was run.")

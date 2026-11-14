@@ -683,7 +683,7 @@ def container_instance_cases() -> Iterator[Case]:
 
 def conflicting_project_tag_cases() -> Iterator[Case]:
     """A task, service or tag request that sets its own Project tag is refused when the value is not the project's."""
-    sid = "DenyAnotherProjectTagOnRunTaskServicesAndTags"
+    sid = "DenyOtherTag"
     run = {"ecs:cluster": CLUSTER}
     yield Case("ecs:RunTask with the project's own Project tag", request("ecs:RunTask", TASK_DEFINITION, tags=TAG, extra=run, region=None), True)
     yield Case(
@@ -697,13 +697,13 @@ def conflicting_project_tag_cases() -> Iterator[Case]:
             f"ecs:RunTask sets {key} to another project",
             request("ecs:RunTask", TASK_DEFINITION, tags={key: "other_project"}, extra=run, region=None),
             False,
-            "DenyCreatesWithoutProjectTagValue",
+            "DenyNoTag",
         )
         yield Case(
             f"ecs:RunTask sets {key} to an empty value",
             request("ecs:RunTask", TASK_DEFINITION, tags={key: ""}, extra=run, region=None),
             False,
-            "DenyCreatesWithoutProjectTagValue",
+            "DenyNoTag",
         )
         yield Case(
             f"ecs:TagResource sets {key} to another project while RunTask",
@@ -821,19 +821,19 @@ def tag_cases() -> Iterator[Case]:
             f"ecs:TagResource later on a {name} with the project value",
             request("ecs:TagResource", resource, tags=TAG, extra={"aws:ResourceTag/Project": P}, region=None),
             False,
-            "DenyTagChangesAfterCreate",
+            "DenyRetag",
         )
         yield Case(
             f"ecs:UntagResource on a {name} removes Project",
             request("ecs:UntagResource", resource, tags=TAG, extra={"aws:ResourceTag/Project": P}, region=None),
             False,
-            "DenyTagChangesAfterCreate",
+            "DenyRetag",
         )
         yield Case(
             f"ecs:UntagResource on a {name} removes another tag",
             request("ecs:UntagResource", resource, tags={"Owner": ""}, region=None),
             False,
-            "DenyTagChangesAfterCreate",
+            "DenyRetag",
         )
     for create_action, resource in (
         ("CreateCluster", CLUSTER),
@@ -858,11 +858,9 @@ def tag_cases() -> Iterator[Case]:
             f"ecs:CreateService propagates {value!r}",
             request("ecs:CreateService", SERVICE, tags=TAG, extra={"ecs:propagate-tags": value}, region=None),
             False,
-            "DenyServicesAndTasksThatDoNotPropagateTags",
+            "DenyNoProp",
         )
-    yield Case(
-        "ecs:CreateService omits propagation", request("ecs:CreateService", SERVICE, tags=TAG, region=None), False, "DenyServicesAndTasksThatDoNotPropagateTags"
-    )
+    yield Case("ecs:CreateService omits propagation", request("ecs:CreateService", SERVICE, tags=TAG, region=None), False, "DenyNoProp")
     yield Case(
         "ecs:CreateService propagates the service tags",
         request("ecs:CreateService", SERVICE, tags=TAG, extra={"ecs:propagate-tags": "SERVICE"}, region=None),
@@ -877,7 +875,7 @@ def tag_cases() -> Iterator[Case]:
         "ecs:UpdateService turns propagation off",
         request("ecs:UpdateService", SERVICE, extra={"ecs:propagate-tags": "NONE"}, region=None),
         False,
-        "DenyUpdatesThatStopTagPropagation",
+        "DenyStopProp",
     )
     yield Case("ecs:UpdateService keeps propagation", request("ecs:UpdateService", SERVICE, extra={"ecs:propagate-tags": "SERVICE"}, region=None), True)
     yield Case("ecs:UpdateService leaves propagation as it is", request("ecs:UpdateService", SERVICE, region=None), True)
@@ -2692,26 +2690,26 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         del by_sid(documents, "logs", "CreateTaggedLogGroups")["Condition"]
 
     def service_without_propagation(documents: dict[str, dict[str, Any]]) -> None:
-        drop(documents, "ecs", "DenyServicesAndTasksThatDoNotPropagateTags")
-        del by_sid(documents, "ecs", "CreateTaggedServicesThatPropagateTags")["Condition"]["StringEquals"]["ecs:propagate-tags"]
+        drop(documents, "ecs", "DenyNoProp")
+        del by_sid(documents, "ecs", "MakeService")["Condition"]["StringEquals"]["ecs:propagate-tags"]
 
     def remove_run_task_from_deny(documents: dict[str, dict[str, Any]], sid: str) -> None:
         statement = by_sid(documents, "ecs", sid)
         statement["Action"] = [action for action in as_list(statement["Action"]) if action != "ecs:RunTask"]
 
     def task_without_project_tag(documents: dict[str, dict[str, Any]]) -> None:
-        for sid in ("DenyCreatesWithoutProjectTagValue", "DenyCreatesWithoutExactProjectKey"):
+        for sid in ("DenyNoTag", "DenyBadKey"):
             remove_run_task_from_deny(documents, sid)
-        condition = by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]
+        condition = by_sid(documents, "ecs", "RunTask")["Condition"]
         del condition["StringEquals"]
         del condition["ForAnyValue:StringEquals"]
 
     def task_without_exact_project_key(documents: dict[str, dict[str, Any]]) -> None:
-        remove_run_task_from_deny(documents, "DenyCreatesWithoutExactProjectKey")
-        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["ForAnyValue:StringEquals"]
+        remove_run_task_from_deny(documents, "DenyBadKey")
+        del by_sid(documents, "ecs", "RunTask")["Condition"]["ForAnyValue:StringEquals"]
 
     def task_requires_unsupported_propagation_key(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["StringEquals"]["ecs:propagate-tags"] = "TASK_DEFINITION"
+        by_sid(documents, "ecs", "RunTask")["Condition"]["StringEquals"]["ecs:propagate-tags"] = "TASK_DEFINITION"
 
     def task_denies_missing_unsupported_propagation_key(documents: dict[str, dict[str, Any]]) -> None:
         documents["healthcare_hai_prediction_ecs_policy"]["Statement"].append(
@@ -2725,20 +2723,20 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         )
 
     def task_in_any_cluster(documents: dict[str, dict[str, Any]]) -> None:
-        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["ArnEquals"]
+        del by_sid(documents, "ecs", "RunTask")["Condition"]["ArnEquals"]
 
     def task_from_any_definition(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "RunTaggedProjectTasks")["Resource"] = "*"
+        by_sid(documents, "ecs", "RunTask")["Resource"] = "*"
 
     def service_recovery_refused(documents: dict[str, dict[str, Any]]) -> None:
-        statement = by_sid(documents, "ecs", "ManageProjectServices")
+        statement = by_sid(documents, "ecs", "Services")
         statement["Action"] = [action for action in statement["Action"] if action != "ecs:UpdateService"]
 
     def service_recovery_in_any_project(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "ManageProjectServices")["Resource"] = f"arn:aws:ecs:{R}:{A}:service/*"
+        by_sid(documents, "ecs", "Services")["Resource"] = f"arn:aws:ecs:{R}:{A}:service/*"
 
     def update_turns_propagation_off(documents: dict[str, dict[str, Any]]) -> None:
-        drop(documents, "ecs", "DenyUpdatesThatStopTagPropagation")
+        drop(documents, "ecs", "DenyStopProp")
 
     def instance_launch(documents: dict[str, dict[str, Any]]) -> None:
         documents["healthcare_hai_prediction_ec2_policy"]["Statement"].append(
@@ -2911,11 +2909,11 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         by_sid(documents, "ssm", "EndOwnSessions")["Resource"] = f"arn:aws:ssm:{R}:{A}:session/*"
 
     def deregister_task_definitions(documents: dict[str, dict[str, Any]]) -> None:
-        add_action(documents, "ecs", "ManageProjectServices", "ecs:DeregisterTaskDefinition")
-        by_sid(documents, "ecs", "ManageProjectServices")["Resource"] = "*"
+        add_action(documents, "ecs", "Services", "ecs:DeregisterTaskDefinition")
+        by_sid(documents, "ecs", "Services")["Resource"] = "*"
 
     def ecs_other_project(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "ManageProjectCluster")["Resource"] = f"arn:aws:ecs:{R}:{A}:cluster/*"
+        by_sid(documents, "ecs", "Cluster")["Resource"] = f"arn:aws:ecs:{R}:{A}:cluster/*"
 
     def secrets_create(documents: dict[str, dict[str, Any]]) -> None:
         add_action(documents, "secretsmanager", "ReadSharedApiKeys", "secretsmanager:CreateSecret")
@@ -2949,25 +2947,25 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
         owner_statement(documents, "task_execution", "InjectNamedParameters")["Resource"] = f"arn:aws:ssm:{R}:{A}:parameter/{PARAMETER_FOLDER}/*"
 
     def container_instance_on_cluster(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "DescribeProjectContainerInstances")["Resource"] = f"arn:aws:ecs:{R}:{A}:cluster/{P}_cluster_{E}"
+        by_sid(documents, "ecs", "Instances")["Resource"] = f"arn:aws:ecs:{R}:{A}:cluster/{P}_cluster_{E}"
 
     def container_instance_in_any_cluster(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "DescribeProjectContainerInstances")["Resource"] = f"arn:aws:ecs:{R}:{A}:container-instance/*"
+        by_sid(documents, "ecs", "Instances")["Resource"] = f"arn:aws:ecs:{R}:{A}:container-instance/*"
 
     def another_project_tag_on_run_task_only(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Action"] = ["ecs:CreateService", "ecs:TagResource"]
-        remove_run_task_from_deny(documents, "DenyCreatesWithoutProjectTagValue")
-        del by_sid(documents, "ecs", "RunTaggedProjectTasks")["Condition"]["StringEquals"]
+        by_sid(documents, "ecs", "DenyOtherTag")["Action"] = ["ecs:CreateService", "ecs:TagResource"]
+        remove_run_task_from_deny(documents, "DenyNoTag")
+        del by_sid(documents, "ecs", "RunTask")["Condition"]["StringEquals"]
 
     def another_project_tag_allowed(documents: dict[str, dict[str, Any]]) -> None:
         another_project_tag_on_run_task_only(documents)
-        drop(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")
+        drop(documents, "ecs", "DenyOtherTag")
 
     def another_project_tag_on_tagging_only(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Action"] = ["ecs:RunTask", "ecs:CreateService"]
+        by_sid(documents, "ecs", "DenyOtherTag")["Action"] = ["ecs:RunTask", "ecs:CreateService"]
 
     def own_project_tag_refused(documents: dict[str, dict[str, Any]]) -> None:
-        by_sid(documents, "ecs", "DenyAnotherProjectTagOnRunTaskServicesAndTags")["Condition"] = {"Null": {"aws:RequestTag/Project": "false"}}
+        by_sid(documents, "ecs", "DenyOtherTag")["Condition"] = {"Null": {"aws:RequestTag/Project": "false"}}
 
     def job_resource(service: str, sid: str, index: int, resource: str) -> Mutation:
         def mutate(documents: dict[str, dict[str, Any]]) -> None:

@@ -1,0 +1,124 @@
+# TEST FIXTURE, never part of the stack. scripts/infrastructure/run_retired_definitions_e2e.py copies this file into a scratch copy of the jobs stack as
+# retired_fargate_history.tf. It declares, at their old addresses, the 19 Fargate job definitions that earlier applies registered with skip_destroy on, so a mock
+# apply can build the state that the jobs stack had before it dropped them. retired_history_present false drops them again, as the removing change does.
+variable "retired_history_present" {
+  description = "Declare the retired Fargate job definitions of the historical state."
+  type        = bool
+  default     = false
+  nullable    = false
+}
+
+locals {
+  retired_history_read   = var.retired_history_present ? toset(["analytics_offline", "quality_offline", "seal", "analytics_read", "spark_read"]) : toset([])
+  retired_history_writer = var.retired_history_present ? toset(["spark_write_e2e", "spark_write_silver", "spark_write_gold", "spark_write_features", "spark_write_bronze"]) : toset([])
+  retired_history_layer  = var.retired_history_present ? toset(["silver", "gold", "features"]) : toset([])
+  retired_history_single = var.retired_history_present ? 1 : 0
+}
+
+resource "aws_ecs_task_definition" "read" {
+  for_each = local.retired_history_read
+
+  family                   = "${var.project_name}_${var.environment}_job_${each.key}"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = each.key, image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "writer" {
+  for_each = local.retired_history_writer
+
+  family                   = "${var.project_name}_${var.environment}_job_${each.key}"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = each.key, image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "layer" {
+  for_each = local.retired_history_layer
+
+  family                   = "${var.project_name}_${var.environment}_job_${each.key}"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = each.key, image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "bronze" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_bronze"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "bronze", image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "drift" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_drift"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "drift", image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "train" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_train"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "train", image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "promote" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_promote"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "promote", image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "serve" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_serve"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "serve", image = "historical", essential = true }])
+  skip_destroy             = true
+}
+
+resource "aws_ecs_task_definition" "openmetadata" {
+  count = local.retired_history_single
+
+  family                   = "${var.project_name}_${var.environment}_job_metadata"
+  requires_compatibilities = ["FARGATE"]
+  network_mode             = "awsvpc"
+  cpu                      = "1024"
+  memory                   = "2048"
+  container_definitions    = jsonencode([{ name = "metadata", image = "historical", essential = true }])
+  skip_destroy             = true
+}

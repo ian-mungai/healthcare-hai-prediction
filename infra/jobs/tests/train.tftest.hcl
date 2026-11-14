@@ -19,21 +19,11 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
   log_group_name                        = "example_project_jobs_dev"
-}
-
-run "default_plan_creates_no_training_task" {
-  command = plan
-
-  variables {
-    train_images   = {}
-    train_roles    = {}
-    log_group_name = null
-  }
-
-  assert {
-    condition     = length(aws_ecs_task_definition.train) == 0 && output.train_run_task == null && output.train_container_definitions == null
-    error_message = "Without train_enabled the stack registers no training task and needs no training image or role."
-  }
+  host_job_memory_mib                   = 23552
+  # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
+  host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+  host_jobs_enabled     = true
+  host_jobs             = ["train"]
 }
 
 run "train_definition_shape" {
@@ -45,27 +35,25 @@ run "train_definition_shape" {
 
   assert {
     condition = (
-      length(aws_ecs_task_definition.train) == 1 &&
-      aws_ecs_task_definition.train[0].family == "example_project_dev_job_train" &&
-      aws_ecs_task_definition.train[0].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_train_task_dev" &&
-      aws_ecs_task_definition.train[0].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
-      toset(aws_ecs_task_definition.train[0].requires_compatibilities) == toset(["FARGATE"]) && aws_ecs_task_definition.train[0].network_mode == "awsvpc" &&
-      aws_ecs_task_definition.train[0].runtime_platform[0].cpu_architecture == "ARM64" && aws_ecs_task_definition.train[0].runtime_platform[0].operating_system_family == "LINUX" &&
-      aws_ecs_task_definition.train[0].cpu == "4096" && aws_ecs_task_definition.train[0].memory == "16384" &&
-      aws_ecs_task_definition.train[0].ephemeral_storage[0].size_in_gib == 50 &&
-      aws_ecs_task_definition.train[0].skip_destroy && !aws_ecs_task_definition.train[0].enable_fault_injection
+      aws_ecs_task_definition.host["train"].family == "example_project_dev_job_train_host" &&
+      aws_ecs_task_definition.host["train"].task_role_arn == "arn:aws:iam::111111111111:role/example_project_job_train_task_dev" &&
+      aws_ecs_task_definition.host["train"].execution_role_arn == "arn:aws:iam::111111111111:role/example_project_job_execution_dev" &&
+      toset(aws_ecs_task_definition.host["train"].requires_compatibilities) == toset(["EC2"]) && aws_ecs_task_definition.host["train"].network_mode == "bridge" &&
+      aws_ecs_task_definition.host["train"].runtime_platform[0].cpu_architecture == "ARM64" && aws_ecs_task_definition.host["train"].runtime_platform[0].operating_system_family == "LINUX" &&
+      aws_ecs_task_definition.host["train"].cpu == "3072" && aws_ecs_task_definition.host["train"].memory == "23552" &&
+      aws_ecs_task_definition.host["train"].skip_destroy && !aws_ecs_task_definition.host["train"].enable_fault_injection
     )
-    error_message = "The training task is one ARM64 Linux Fargate definition with its own role, the execution role and the sized scratch."
+    error_message = "The training task is one ARM64 Linux host definition with its own role, the execution role and the host job cap."
   }
 
   assert {
     condition = (
-      [for container in jsondecode(output.train_container_definitions) : container.name] == ["init", "fetch", "prepare", "extract", "train"] &&
-      [for container in jsondecode(output.train_container_definitions) : container.image] == [var.train_images.training, var.train_images.training, var.train_images.training, var.train_images.feature_store, var.train_images.training] &&
-      [for container in jsondecode(output.train_container_definitions) : container.essential] == [false, false, false, false, true] &&
-      alltrue([for index, container in jsondecode(output.train_container_definitions) : (
+      [for container in jsondecode(output.host_container_definitions["train"]) : container.name] == ["init", "fetch", "prepare", "extract", "train"] &&
+      [for container in jsondecode(output.host_container_definitions["train"]) : container.image] == [var.train_images.training, var.train_images.training, var.train_images.training, var.train_images.feature_store, var.train_images.training] &&
+      [for container in jsondecode(output.host_container_definitions["train"]) : container.essential] == [false, false, false, false, true] &&
+      alltrue([for index, container in jsondecode(output.host_container_definitions["train"]) : (
         index == 0 ? length(container.dependsOn) == 0 : (
-          length(container.dependsOn) == 1 && container.dependsOn[0].containerName == jsondecode(output.train_container_definitions)[index - 1].name && container.dependsOn[0].condition == "SUCCESS"
+          length(container.dependsOn) == 1 && container.dependsOn[0].containerName == jsondecode(output.host_container_definitions["train"])[index - 1].name && container.dependsOn[0].condition == "SUCCESS"
         )
       )])
     )
@@ -73,7 +61,7 @@ run "train_definition_shape" {
   }
 
   assert {
-    condition = alltrue([for container in slice(jsondecode(output.train_container_definitions), 1, 5) : (
+    condition = alltrue([for container in slice(jsondecode(output.host_container_definitions["train"]), 1, 5) : (
       !container.privileged && container.readonlyRootFilesystem && container.user == "10001:10001" && container.linuxParameters.capabilities.drop == ["ALL"] &&
       container.logConfiguration.options["awslogs-group"] == "example_project_jobs_dev" && container.logConfiguration.options["awslogs-stream-prefix"] == "train" &&
       container.entryPoint == ["sh", "-c"] && container.workingDirectory == "/workspace"
@@ -91,23 +79,23 @@ run "train_init_step_makes_the_volumes_writable_for_the_job_user" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].name == "init" &&
-      jsondecode(output.train_container_definitions)[0].user == "0:0" &&
-      jsondecode(output.train_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"] &&
-      !jsondecode(output.train_container_definitions)[0].privileged &&
-      jsondecode(output.train_container_definitions)[0].readonlyRootFilesystem &&
-      jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.add == [] &&
-      !contains(jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.drop, "CHOWN") &&
-      toset(jsondecode(output.train_container_definitions)[0].linuxParameters.capabilities.drop) == toset(["DAC_OVERRIDE", "FSETID", "FOWNER", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]) &&
-      length(jsondecode(output.train_container_definitions)[0].secrets) == 0
+      jsondecode(output.host_container_definitions["train"])[0].name == "init" &&
+      jsondecode(output.host_container_definitions["train"])[0].user == "0:0" &&
+      jsondecode(output.host_container_definitions["train"])[0].command == ["find /workspace /tmp -mindepth 1 -delete && chown 10001:10001 /workspace /tmp"] &&
+      !jsondecode(output.host_container_definitions["train"])[0].privileged &&
+      jsondecode(output.host_container_definitions["train"])[0].readonlyRootFilesystem &&
+      jsondecode(output.host_container_definitions["train"])[0].linuxParameters.capabilities.add == [] &&
+      !contains(jsondecode(output.host_container_definitions["train"])[0].linuxParameters.capabilities.drop, "CHOWN") &&
+      toset(jsondecode(output.host_container_definitions["train"])[0].linuxParameters.capabilities.drop) == toset(["FSETID", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"]) &&
+      length(jsondecode(output.host_container_definitions["train"])[0].secrets) == 0
     )
-    error_message = "The init step runs as root with only the capability to change owners (Fargate allows dropping, not adding), no secret and a read-only root, and hands both volumes to the job user."
+    error_message = "The init step runs as root with only the capability to change owners ((a container drops capabilities from the default list and adds none)), no secret and a read-only root, and hands both volumes to the job user."
   }
 
   assert {
     condition = (
-      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.train_container_definitions)[0].mountPoints : mount.containerPath]) &&
-      alltrue([for container in jsondecode(output.train_container_definitions) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
+      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.host_container_definitions["train"])[0].mountPoints : mount.containerPath]) &&
+      alltrue([for container in jsondecode(output.host_container_definitions["train"]) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
     )
     error_message = "Every writable mount of every container is one of the two volumes that the init step hands to the job user. No container writes anywhere else."
   }
@@ -122,18 +110,18 @@ run "train_commands_and_environment" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].command == ["chown 10001:10001 /workspace /tmp"] &&
-      jsondecode(output.train_container_definitions)[1].command == ["python -I /opt/hai/fetch_code.py"] &&
-      jsondecode(output.train_container_definitions)[2].command == ["cd /workspace/code && python -m scripts.training.aws_run prepare --run \"$RUN_ID\""] &&
-      jsondecode(output.train_container_definitions)[3].command == ["cd /workspace/code && python -m scripts.training.aws_run extract --run \"$RUN_ID\""] &&
-      jsondecode(output.train_container_definitions)[4].command == ["cd /workspace/code && python -m scripts.training.aws_run train --run \"$RUN_ID\""]
+      jsondecode(output.host_container_definitions["train"])[0].command == ["find /workspace /tmp -mindepth 1 -delete && chown 10001:10001 /workspace /tmp"] &&
+      jsondecode(output.host_container_definitions["train"])[1].command == ["python -I /opt/hai/fetch_code.py"] &&
+      jsondecode(output.host_container_definitions["train"])[2].command == ["cd /workspace/code && python -m scripts.training.aws_run prepare --run \"$RUN_ID\""] &&
+      jsondecode(output.host_container_definitions["train"])[3].command == ["cd /workspace/code && python -m scripts.training.aws_run extract --run \"$RUN_ID\""] &&
+      jsondecode(output.host_container_definitions["train"])[4].command == ["(cd /workspace/code && python -m scripts.training.aws_run train --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"]
     )
     error_message = "The fetch step runs the script baked into the image. The other three run the phases of the fetched code."
   }
 
   assert {
     condition = alltrue([
-      for container in slice(jsondecode(output.train_container_definitions), 1, 5) :
+      for container in slice(jsondecode(output.host_container_definitions["train"]), 1, 5) :
       contains(container.environment, { name = "DATA_BUCKET_NAME", value = "example-project-data-dev" }) &&
       contains(container.environment, { name = "PYTHONHASHSEED", value = "0" }) &&
       contains(container.environment, { name = "RUN_ID", value = "" }) &&
@@ -144,10 +132,10 @@ run "train_commands_and_environment" {
 
   assert {
     condition = (
-      toset([for variable in jsondecode(output.train_container_definitions)[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "POLARIS_URI", "MLFLOW_TRACKING_URI"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
-      toset([for variable in jsondecode(output.train_container_definitions)[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"])
+      toset([for variable in jsondecode(output.host_container_definitions["train"])[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["train"])[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "POLARIS_URI", "MLFLOW_TRACKING_URI"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["train"])[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["train"])[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI"])
     )
     error_message = "Each container lists exactly the empty variables the run-task override must fill for it."
   }
@@ -162,8 +150,8 @@ run "train_container_records_its_image_digest" {
 
   assert {
     condition = (
-      contains(jsondecode(output.train_container_definitions)[4].environment, { name = "TRAINING_IMAGE_DIGEST", value = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }) &&
-      alltrue([for container in slice(jsondecode(output.train_container_definitions), 0, 4) : !contains([for variable in container.environment : variable.name], "TRAINING_IMAGE_DIGEST")])
+      contains(jsondecode(output.host_container_definitions["train"])[4].environment, { name = "TRAINING_IMAGE_DIGEST", value = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd" }) &&
+      alltrue([for container in slice(jsondecode(output.host_container_definitions["train"]), 0, 4) : !contains([for variable in container.environment : variable.name], "TRAINING_IMAGE_DIGEST")])
     )
     error_message = "The train container carries the digest of the training image, which the run key records. The other containers do not."
   }
@@ -178,8 +166,8 @@ run "train_secrets_reach_only_the_extract_and_train_steps" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[0].secrets == [] && jsondecode(output.train_container_definitions)[1].secrets == [] && jsondecode(output.train_container_definitions)[2].secrets == [] &&
-      jsondecode(output.train_container_definitions)[3].secrets == [
+      jsondecode(output.host_container_definitions["train"])[0].secrets == [] && jsondecode(output.host_container_definitions["train"])[1].secrets == [] && jsondecode(output.host_container_definitions["train"])[2].secrets == [] &&
+      jsondecode(output.host_container_definitions["train"])[3].secrets == [
         { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
         { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
       ]
@@ -189,78 +177,29 @@ run "train_secrets_reach_only_the_extract_and_train_steps" {
 
   assert {
     condition = (
-      jsondecode(output.train_container_definitions)[4].secrets == [
+      jsondecode(output.host_container_definitions["train"])[4].secrets == [
         { name = "MLFLOW_TRACKING_PASSWORD", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/mlflow_admin_password" },
       ] &&
-      contains(jsondecode(output.train_container_definitions)[4].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
-      !strcontains(jsondecode(output.train_container_definitions)[4].command[0], "MLFLOW_TRACKING_PASSWORD")
+      contains(jsondecode(output.host_container_definitions["train"])[4].environment, { name = "MLFLOW_TRACKING_USERNAME", value = "admin" }) &&
+      !strcontains(jsondecode(output.host_container_definitions["train"])[4].command[0], "MLFLOW_TRACKING_PASSWORD")
     )
     error_message = "The train step logs in to MLflow with the administrator account. The password comes from the secret store and never appears in the command."
   }
 
   assert {
-    condition     = length(output.train_secret_flow.violations) == 0
+    condition     = length(output.host_secret_flow.violations) == 0
     error_message = "The shared secret-flow check finds no secret in a command line, file or log of the four containers."
   }
 
   assert {
-    condition     = toset(output.train_secret_flow.containers_checked) == toset(["train/extract", "train/train"])
+    condition     = toset(output.host_secret_flow.containers_checked) == toset(["host_train/extract", "host_train/train"])
     error_message = "The shared check follows the two containers that receive a secret."
   }
 
   assert {
-    condition     = length(output.train_secret_flow.mutation_mismatches) == 0
+    condition     = length(output.host_secret_flow.mutation_mismatches) == 0
     error_message = "The planted secret-flow mutations are all caught."
   }
-}
-
-run "train_run_task_contract" {
-  command = plan
-
-  variables {
-    train_enabled = true
-  }
-
-  assert {
-    condition = (
-      output.train_run_task.task_definition == "example_project_dev_job_train" &&
-      output.train_run_task.assign_public_ip == "DISABLED" && output.train_run_task.capacity_providers == ["FARGATE"] &&
-      output.train_run_task.propagate_tags == "TASK_DEFINITION" &&
-      output.train_run_task.network_source == "training_network output of the IAM stack" &&
-      output.train_run_task.container_environment == {
-        fetch   = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-        prepare = ["RUN_ID", "CODE_SHA256", "TRAINING_PARAMETERS", "POLARIS_URI", "MLFLOW_TRACKING_URI"]
-        extract = ["RUN_ID", "POLARIS_URI"]
-        train   = ["RUN_ID", "MLFLOW_TRACKING_URI"]
-      }
-    )
-    error_message = "The output names the on-demand private placement and the variables each container needs, for the owner's run-task call."
-  }
-}
-
-run "train_resources_can_be_resized_within_a_fargate_shape" {
-  command = plan
-
-  variables {
-    train_enabled   = true
-    train_resources = { cpu = 8192, memory = 32768, ephemeral_storage_gib = 100 }
-  }
-
-  assert {
-    condition     = aws_ecs_task_definition.train[0].cpu == "8192" && aws_ecs_task_definition.train[0].memory == "32768" && aws_ecs_task_definition.train[0].ephemeral_storage[0].size_in_gib == 100
-    error_message = "A valid larger shape is accepted."
-  }
-}
-
-run "invalid_shape_is_refused" {
-  command = plan
-
-  variables {
-    train_enabled   = true
-    train_resources = { cpu = 4096, memory = 4096, ephemeral_storage_gib = 50 }
-  }
-
-  expect_failures = [var.train_resources]
 }
 
 run "missing_image_is_refused" {
@@ -344,11 +283,11 @@ run "train_containers_follow_the_job_catalog" {
 
   assert {
     condition = (
-      toset([for container in jsondecode(output.train_container_definitions) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.containers)) &&
-      alltrue([for container in jsondecode(output.train_container_definitions) : (
+      toset([for container in jsondecode(output.host_container_definitions["train"]) : container.name if container.name != "init"]) == toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.containers)) &&
+      alltrue([for container in jsondecode(output.host_container_definitions["train"]) : (
         container.name == "init" || toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.containers[container.name])
       )]) &&
-      contains([for container in jsondecode(output.train_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.log_container)
+      contains([for container in jsondecode(output.host_container_definitions["train"]) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.train.log_container)
     )
     error_message = "The container names, their empty variables and the log container equal the job catalog, so every override the launch sends names a container of the task and fills what it needs."
   }
@@ -363,7 +302,7 @@ run "no_train_container_fixes_an_engine_limit" {
 
   assert {
     condition = alltrue([
-      for container in jsondecode(output.train_container_definitions) : length([
+      for container in jsondecode(output.host_container_definitions["train"]) : length([
         for item in container.environment : item.name if contains(["SPARK_JOB_MEMORY", "DUCKDB_MEMORY_LIMIT", "JOB_THREADS", "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS", "HAI_DUCKDB_MAX_TEMP_BYTES"], item.name)
       ]) == 0
     ])

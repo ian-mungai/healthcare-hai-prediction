@@ -730,11 +730,12 @@ def open_steps() -> Steps:
         return host_job_room()[1]
 
     def freeze(path: str, sha256: str) -> dict[str, Any]:
-        from scripts.infrastructure.render_jobs_config import TargetError, preparation_values
+        from scripts.infrastructure.capture_reader import CaptureError
+        from scripts.infrastructure.render_jobs_config import preparation_values
 
         try:
             values = preparation_values(Path(path), sha256, "jobs")
-        except TargetError as error:
+        except CaptureError as error:
             raise ConfigurationError(str(error)) from None
         prefix = f"{settings['project_name']}_{settings['environment']}_job_"
         return {

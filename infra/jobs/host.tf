@@ -1,12 +1,12 @@
 variable "host_jobs_enabled" {
-  description = "Register the host twin of each selected job family: an EC2 bridge task definition named <project>_<environment>_job_<family>_host for the host capacity provider. Off by default. The Fargate definitions stay as they are, so a family moves between Fargate and the host with no change to either."
+  description = "Register the host definition of each selected job family: an EC2 bridge task definition named <project>_<environment>_job_<family>_host for the host capacity provider. Every job runs on the host, so the stack registers no other kind of job definition. Off by default."
   type        = bool
   default     = false
   nullable    = false
 }
 
 variable "host_jobs" {
-  description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its Fargate twin: the images, the roles, the parameter names and its own enable flag."
+  description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its containers: the images, the roles, the parameter names and its own enable flag."
   type        = set(string)
   default     = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   nullable    = false
@@ -23,12 +23,7 @@ variable "host_jobs" {
 
   validation {
     condition     = !var.host_jobs_enabled || alltrue([for family in var.host_jobs : lookup(local.host_source_ready, lookup(local.host_set_families, family, family), false)])
-    error_message = "A host definition is built from the containers of its Fargate twin, so every selected family needs its own enable flag and inputs (layer_jobs_enabled with the layer in layer_jobs, bronze_job_enabled, train_enabled, drift_enabled, promote_enabled, serve_enabled or openmetadata_enabled)."
-  }
-
-  validation {
-    condition     = !var.host_jobs_enabled || !contains(var.host_jobs, "metadata") || var.openmetadata_cpu_architecture == "ARM64"
-    error_message = "The host is an ARM64 instance, so the catalog task runs on it only when openmetadata_cpu_architecture is ARM64 and all four images list linux/arm64."
+    error_message = "Every selected family needs its own enable flag and inputs (layer_jobs_enabled with the layer in layer_jobs, bronze_job_enabled, train_enabled, drift_enabled, promote_enabled or serve_enabled) and, for metadata, the ingestion image, the catalog roles and the jobs log group."
   }
 }
 
@@ -115,7 +110,7 @@ locals {
   host_memory_cap = var.host_job_memory_mib
   # The init container of every host revision carries the capacity binding it was sized from; orchestration/ecs_preflight.py reads this label.
   host_capacity_label = "hai.host_capacity"
-  # The two volumes of every Fargate job keep their names and become host folders; a volume that is not named here keeps its own name as the folder.
+  # The two volumes of every job become host folders; a volume that is not named here keeps its own name as the folder.
   host_volume_directories = { workspace = "work" }
   host_source_ready = {
     silver   = var.layer_jobs_enabled && contains(var.layer_jobs, "silver")
@@ -182,7 +177,7 @@ locals {
       entryPoint             = ["sh", "-c"]
       command                = ["chown 10001:10001 /workspace /tmp"]
       stopTimeout            = 60
-      linuxParameters        = { capabilities = { add = [], drop = local.train_init_drop }, initProcessEnabled = true }
+      linuxParameters        = { capabilities = { add = [], drop = local.host_init_drop }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = []
       environment            = []
@@ -220,8 +215,8 @@ locals {
     },
   ]
   # A host folder keeps what the last job left, so the init step of each job first deletes the contents of its two folders. Root can
-  # delete the job user's files only with DAC_OVERRIDE and FOWNER, which the Fargate init step drops, so the host init step keeps
-  # those two and drops the rest of the Fargate list.
+  # delete the job user's files only with DAC_OVERRIDE and FOWNER, so the init step keeps those two and drops the rest of the default list.
+  # Host bind mounts are created owned by root, and the job user is 10001: the init step then hands the two volumes to the job user.
   #
   # The same deletion ends the last phase of the job, after the whole phase has succeeded. A task stops as soon as its essential container
   # ends, so a later container would never start, and that is why the phase runs the deletion itself: the group keeps the phase command
@@ -239,9 +234,8 @@ locals {
       for container in lookup(local.host_source_containers, family, []) : merge(
         container,
         { for key, value in {
-          command         = [format("%s%s", local.host_init_wipe, container.command[0])]
-          linuxParameters = merge(container.linuxParameters, { capabilities = { add = [], drop = local.host_init_drop } })
-          dockerLabels    = { (local.host_capacity_label) = local.host_family_binding[family] }
+          command      = [format("%s%s", local.host_init_wipe, container.command[0])]
+          dockerLabels = { (local.host_capacity_label) = local.host_family_binding[family] }
         } : key => value if container.name == "init" },
         { for key, value in {
           command = [format("(%s) && %s", container.command[0], local.host_scratch_wipe)]
@@ -355,7 +349,7 @@ output "host_secret_flow" {
 }
 
 output "host_run_tasks" {
-  description = "What the launcher's run-task call needs for each registered host task, the host equivalent of layer_run_tasks and the other run-task outputs. The call sends the capacity provider strategy and no network configuration. Registration starts nothing."
+  description = "What the launcher's run-task call needs for each registered host task. The call sends the capacity provider strategy and no network configuration. Registration starts nothing."
   value = var.host_jobs_enabled ? {
     for family, task in aws_ecs_task_definition.host : family => {
       task_definition       = task.family
@@ -373,7 +367,7 @@ output "host_run_tasks" {
 }
 
 output "host_dispatch_contract" {
-  description = "Host equivalent of dispatch_contract and writer_dispatch_contracts: where a host job runs and what bounds it. The host firewall bounds the network, so the contract carries each family's class and no security group. Registration dispatches nothing."
+  description = "Where a host job runs and what bounds it. The host firewall bounds the network, so the contract carries each family's class and no security group. Registration dispatches nothing."
   value = var.host_jobs_enabled ? {
     capacity_provider = local.host_provider
     network_mode      = "bridge"

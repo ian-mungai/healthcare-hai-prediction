@@ -1,6 +1,6 @@
 mock_provider "aws" {}
 
-# Every family has its source switched on, so each run can compare the host definitions with the Fargate definitions the same inputs register.
+# Every family has its source switched on, so each run plans the nine host definitions from the same inputs.
 variables {
   aws_profile         = "example_project_dev"
   aws_region          = "us-west-2"
@@ -27,10 +27,7 @@ variables {
     drift         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_drift_dev@sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
   }
   openmetadata_images = {
-    server    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_server_dev@sha256:1111111111111111111111111111111111111111111111111111111111111111"
     ingestion = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_ingestion_dev@sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    search    = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_search_dev@sha256:3333333333333333333333333333333333333333333333333333333333333333"
-    database  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_openmetadata_database_dev@sha256:4444444444444444444444444444444444444444444444444444444444444444"
   }
   job_role_arns = {
     execution           = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
@@ -64,10 +61,8 @@ variables {
   aws_polaris_reader_client_secret_name = "/example_project/aws_polaris_reader_client_secret"
   mlflow_admin_password_name            = "/example_project/mlflow_admin_password"
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
-  openmetadata_admin_password_name      = "/example_project/openmetadata_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
   layer_feast_redis_host                = "10.0.1.20"
-  openmetadata_cpu_architecture         = "ARM64"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
   host_openmetadata_api                 = "http://10.0.1.20:8585/api"
   host_repo_path                        = "/data/repo"
@@ -77,7 +72,6 @@ variables {
   drift_enabled                         = true
   promote_enabled                       = true
   serve_enabled                         = true
-  openmetadata_enabled                  = true
 }
 
 
@@ -86,7 +80,6 @@ variables {
 # - the wipe runs after another step or reaches beyond the two scratch folders;
 # - the init container cannot delete files the job user wrote, because it dropped the capabilities that let root delete them,
 #   so every job stops at its first step;
-# - the Fargate definition, which needs no wipe, changes with the host definition;
 # - a successful job leaves its files on the shared volume, so the next job of another family finds less room than it needs;
 # - the metadata job, which had only one container, starts on the files of its previous attempt;
 # - the cleanup runs although the last phase failed, so the files that show the failure are gone, or it runs before the evidence is durable;
@@ -121,7 +114,7 @@ run "every_host_init_wipes_the_two_scratch_folders_first" {
         strcontains(jsondecode(output.host_container_definitions[family])[0].command[0], "chown 10001:10001 /workspace /tmp")
       )
     ])
-    error_message = "The wipe is followed by the init step the Fargate twin runs, which hands the folders to the job user."
+    error_message = "The wipe is followed by the init step every job runs, which hands the folders to the job user."
   }
 
   assert {
@@ -130,7 +123,7 @@ run "every_host_init_wipes_the_two_scratch_folders_first" {
         jsondecode(output.host_container_definitions[family])[0].image == jsondecode(output.host_container_definitions[family])[1].image || family == "metadata"
       )
     ]) && jsondecode(output.host_container_definitions["metadata"])[0].image == var.openmetadata_images["ingestion"]
-    error_message = "The metadata init step runs in the ingestion image, the only image of that job, and the other families keep the init image of their Fargate twin."
+    error_message = "The metadata init step runs in the ingestion image, the only image of that job, and the other families run the init step in the image of their first phase."
   }
 
   assert {
@@ -169,7 +162,7 @@ run "host_init_keeps_the_capabilities_that_let_root_delete_the_job_users_files" 
         toset(jsondecode(output.host_container_definitions[family])[0].linuxParameters.capabilities.drop) == toset(["FSETID", "MKNOD", "NET_RAW", "SETGID", "SETUID", "SETFCAP", "SETPCAP", "NET_BIND_SERVICE", "SYS_CHROOT", "KILL", "AUDIT_WRITE"])
       )
     ])
-    error_message = "The host init step keeps DAC_OVERRIDE and FOWNER, so root can delete files the job user wrote, and still drops every other capability the Fargate init drops."
+    error_message = "The host init step keeps DAC_OVERRIDE and FOWNER, so root can delete files the job user wrote, and still drops every other capability of the default list."
   }
 
   assert {
@@ -261,21 +254,14 @@ run "the_cleanup_keeps_the_phase_command_and_follows_only_its_success" {
 
   assert {
     condition = alltrue([
-      for pair in [
-        { family = "silver", fargate = output.layer_container_definitions["silver"] },
-        { family = "gold", fargate = output.layer_container_definitions["gold"] },
-        { family = "features", fargate = output.layer_container_definitions["features"] },
-        { family = "bronze", fargate = output.bronze_container_definitions },
-        { family = "train", fargate = output.train_container_definitions },
-        { family = "drift", fargate = output.drift_container_definitions },
-        { family = "promote", fargate = output.promote_container_definitions },
-        { family = "serve", fargate = output.serve_container_definitions },
-        ] : (
-        [for container in jsondecode(output.host_container_definitions[pair.family]) : container if container.name != "guard"][length([for container in jsondecode(output.host_container_definitions[pair.family]) : container if container.name != "guard"]) - 1].command[0] ==
-        format("(%s) && find /workspace /tmp -mindepth 1 -delete", [for container in jsondecode(pair.fargate) : container if container.name != "guard"][length([for container in jsondecode(pair.fargate) : container if container.name != "guard"]) - 1].command[0])
+      for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve"] : (
+        startswith([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"][length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"]) - 1].command[0], "(") &&
+        endswith([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"][length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"]) - 1].command[0], ") && find /workspace /tmp -mindepth 1 -delete") &&
+        [for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"][length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "guard"]) - 1].essential &&
+        length([for container in jsondecode(output.host_container_definitions[family]) : container if container.name != "init" && strcontains(container.command[0], "find /workspace")]) == 1
       )
     ])
-    error_message = "The host cleanup wraps the unchanged command of the last Fargate phase in a group and follows it with &&, so a failed phase keeps its files."
+    error_message = "The host cleanup wraps the command of the last phase in a group and follows it with &&, so a failed phase keeps its files. No other phase carries a cleanup, and the last phase stays the essential container."
   }
 
   assert {
@@ -288,28 +274,3 @@ run "the_cleanup_keeps_the_phase_command_and_follows_only_its_success" {
   }
 }
 
-run "the_fargate_definitions_need_no_wipe_and_do_not_change" {
-  command = plan
-
-  variables {
-    host_jobs_enabled = true
-  }
-
-  assert {
-    condition = alltrue(flatten([
-      for json in [
-        output.layer_container_definitions["silver"], output.bronze_container_definitions, output.train_container_definitions,
-        output.drift_container_definitions, output.promote_container_definitions, output.serve_container_definitions
-      ] : [for container in jsondecode(json) : !strcontains(jsonencode(container.command), "find /workspace")]
-    ]))
-    error_message = "The Fargate definitions start with an empty workspace and carry no wipe or cleanup."
-  }
-
-  assert {
-    condition = (
-      [for container in jsondecode(output.layer_container_definitions["silver"]) : container.name][0] == "init" &&
-      alltrue([for json in [output.bronze_container_definitions, output.train_container_definitions, output.drift_container_definitions, output.promote_container_definitions, output.serve_container_definitions] : jsondecode(json)[length(jsondecode(json)) - 1].essential])
-    )
-    error_message = "The last Fargate phase stays the essential container."
-  }
-}

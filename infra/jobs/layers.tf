@@ -1,5 +1,5 @@
 variable "layer_jobs_enabled" {
-  description = "Register the permanent silver, gold and features task definitions that the direct launch starts. They need the spark, analytics and quality image digests, the execution role, each enabled layer's writer role and pair, the jobs log group and, for features, the feature store image and the host Redis address."
+  description = "Supply the inputs of the silver, gold and features host definitions. They need the spark, analytics and quality image digests, the execution role, each enabled layer's writer role and pair, the jobs log group and, for features, the feature store image and the host Redis address."
   type        = bool
   default     = false
   nullable    = false
@@ -17,7 +17,7 @@ variable "layer_jobs_enabled" {
 }
 
 variable "layer_jobs" {
-  description = "The layers whose task definition is registered while layer_jobs_enabled is true. Gold runs only after the silver publish passes, so the owner can register one layer at a time."
+  description = "The layers whose host definition can be registered while layer_jobs_enabled is true. Gold runs only after the silver publish passes, so the owner can register one layer at a time."
   type        = set(string)
   default     = ["silver", "gold", "features"]
   nullable    = false
@@ -25,34 +25,6 @@ variable "layer_jobs" {
   validation {
     condition     = length(setsubtract(var.layer_jobs, toset(["silver", "gold", "features"]))) == 0
     error_message = "Select only silver, gold or features."
-  }
-}
-
-variable "layer_resources" {
-  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of each layer task. Every size is a reviewed allocation. Silver and gold keep 4 vCPU and 16 GiB; features has the 16 vCPU and 64 GiB that the Nov 9 2026 AWS run proved (ARM64 Fargate, a valid combination). The engines inside a task derive their own limits from this size when a phase starts, so nothing else here fixes memory, threads or a spill cap."
-  type = map(object({
-    cpu                   = number
-    memory                = number
-    ephemeral_storage_gib = number
-  }))
-  default = {
-    silver   = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
-    gold     = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 100 }
-    features = { cpu = 16384, memory = 65536, ephemeral_storage_gib = 100 }
-  }
-  nullable = false
-
-  validation {
-    condition = toset(keys(var.layer_resources)) == toset(["silver", "gold", "features"]) && alltrue([
-      for size in values(var.layer_resources) : try(
-        size.memory >= local.memory_shapes[tostring(size.cpu)].min &&
-        size.memory <= local.memory_shapes[tostring(size.cpu)].max &&
-        size.memory % local.memory_shapes[tostring(size.cpu)].step == 0 &&
-        size.ephemeral_storage_gib >= 20 && size.ephemeral_storage_gib <= 200 &&
-        size.ephemeral_storage_gib == floor(size.ephemeral_storage_gib), false
-      )
-    ])
-    error_message = "Give silver, gold and features each a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
   }
 }
 
@@ -140,7 +112,7 @@ locals {
         entryPoint             = ["sh", "-c"]
         command                = [step.script]
         stopTimeout            = 90
-        linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.train_init_drop : ["ALL"] }, initProcessEnabled = true }
+        linuxParameters        = { capabilities = { add = [], drop = step.name == "init" ? local.host_init_drop : ["ALL"] }, initProcessEnabled = true }
         ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
         dependsOn              = index == 0 ? [] : [{ containerName = steps[index - 1].name, condition = "SUCCESS" }]
         environment = concat(
@@ -222,96 +194,6 @@ locals {
           max-buffer-size       = "16m"
         }
       }
-    }
-  }
-}
-
-resource "aws_ecs_task_definition" "layer" {
-  for_each = local.layer_jobs
-
-  family                   = "${var.project_name}_${var.environment}_job_${each.key}"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = tostring(var.layer_resources[each.key].cpu)
-  memory                   = tostring(var.layer_resources[each.key].memory)
-  execution_role_arn       = lookup(var.job_role_arns, "execution", "")
-  task_role_arn            = lookup(var.job_role_arns, local.layer_roles[each.key], "")
-  container_definitions    = jsonencode(concat(local.layer_containers[each.key], [local.layer_guards[each.key]]))
-  skip_destroy             = true
-  enable_fault_injection   = false
-  tags                     = local.tags
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64"
-  }
-
-  volume {
-    name                = "workspace"
-    configure_at_launch = false
-  }
-
-  volume {
-    name                = "tmp"
-    configure_at_launch = false
-  }
-
-  dynamic "ephemeral_storage" {
-    for_each = var.layer_resources[each.key].ephemeral_storage_gib > 20 ? [var.layer_resources[each.key].ephemeral_storage_gib] : []
-    content {
-      size_in_gib = ephemeral_storage.value
-    }
-  }
-}
-
-module "layer_flow" {
-  source      = "../services/tests/flow"
-  definitions = { for layer, task in aws_ecs_task_definition.layer : "layer_${layer}" => task.container_definitions }
-  tasks = {
-    for layer, task in aws_ecs_task_definition.layer : "layer_${layer}" => {
-      for attribute, value in task : attribute => try(tolist(value), value)
-      if attribute != "container_definitions" && !contains(local.task_attributes_assigned_at_apply, attribute)
-    }
-  }
-}
-
-output "layer_task_definition_arns" {
-  description = "Registered layer task revisions, keyed by layer. Empty while layer_jobs_enabled is false."
-  value       = { for layer, task in aws_ecs_task_definition.layer : layer => task.arn }
-}
-
-output "layer_container_definitions" {
-  description = "Complete container JSON of each layer task, keyed by layer, for review and mocked plan assertions."
-  value       = { for layer, task in aws_ecs_task_definition.layer : layer => task.container_definitions }
-}
-
-output "layer_phase_containers" {
-  description = "The phase containers of each layer task without the guard, in pipeline order, for review and mocked plan assertions."
-  value       = { for layer, task in aws_ecs_task_definition.layer : layer => jsonencode(local.layer_containers[layer]) }
-}
-
-output "layer_secret_flow" {
-  description = "Secret-flow and pin results of the shared flow module for the layer tasks."
-  value = {
-    violations          = module.layer_flow.violations
-    containers_checked  = module.layer_flow.containers_checked
-    mutation_mismatches = module.layer_flow.mutation_mismatches
-  }
-}
-
-output "layer_run_tasks" {
-  description = "What the run-task call needs for each registered layer task. Registration starts nothing. The dry run variable is the one override that makes a run a dry run."
-  value = {
-    for layer, task in aws_ecs_task_definition.layer : layer => {
-      task_definition       = task.family
-      task_role_key         = local.layer_roles[layer]
-      assign_public_ip      = "DISABLED"
-      capacity_providers    = ["FARGATE"]
-      network               = "lakehouse"
-      propagate_tags        = "TASK_DEFINITION"
-      container_environment = local.layer_run_variables[layer]
-      dry_run_variable      = "LAYER_DRY_RUN"
-      dry_run_value         = "1"
     }
   }
 }

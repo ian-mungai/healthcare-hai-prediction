@@ -165,9 +165,9 @@ def cases(root: Path, rows: int, silver: int) -> list[tuple[str, str, Callable[[
     run_task_other_family = [
         (
             "policies/healthcare_hai_prediction_ecs_policy.json",
-            '"Sid": "RunTaggedProjectTasks",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
+            '"Sid": "RunTask",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
             '      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_*:*"',
-            '"Sid": "RunTaggedProjectTasks",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
+            '"Sid": "RunTask",\n      "Effect": "Allow",\n      "Action": [\n        "ecs:RunTask"\n      ],\n'
             '      "Resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train:*"',
         )
     ]

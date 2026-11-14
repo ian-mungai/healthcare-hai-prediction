@@ -1,5 +1,5 @@
 variable "publisher_job_enabled" {
-  description = "Register the Run 3 publisher host task definition <project>_<environment>_job_publisher_host, which the direct ECS launch starts on the host (orchestration/publisher_launch.py). It needs the analytics image digest, the execution role, the publisher task role and the jobs log group. The publisher has no Fargate definition."
+  description = "Register the Run 3 publisher host task definition <project>_<environment>_job_publisher_host, which the direct ECS launch starts on the host (orchestration/publisher_launch.py). It needs the analytics image digest, the execution role, the publisher task role and the jobs log group."
   type        = bool
   default     = false
   nullable    = false
@@ -92,7 +92,7 @@ locals {
       }, step.name == "init" ? { dockerLabels = { (local.host_capacity_label) = local.publisher_binding } } : {}
     )
   ]
-  # Both folders are on the host scratch volume (60 GiB default, infra/platform). The Fargate-era 200 GiB had no measurement behind it; the run 3
+  # Both folders are on the host scratch volume (60 GiB default, infra/platform). An earlier 200 GiB estimate had no measurement behind it; the run 3
   # queue's recorded sizes add up to about 14.3 GiB, plus the inputs archive and the saved state.
   publisher_volumes = {
     workspace = "${var.host_scratch_root}/publisher/work"

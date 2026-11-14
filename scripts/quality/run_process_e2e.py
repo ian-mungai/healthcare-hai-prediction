@@ -1596,7 +1596,7 @@ def run_round6_runner(scratch: Scratch, code: str, plant: str = "", seconds: flo
     error_text = ""
     try:
         try:
-            _output, error_text = runner.communicate(timeout=seconds)
+            _stdout, error_text = runner.communicate(timeout=seconds)
             status = runner.returncode
         except TimeoutExpired:
             status = None

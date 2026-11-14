@@ -1,5 +1,5 @@
 variable "bronze_job_enabled" {
-  description = "Register the permanent bronze task definition that the direct launch starts. It needs the spark image digest, the execution role, the bronze writer role and its pair, and the jobs log group. The tables, the target and the dry run flag arrive at dispatch."
+  description = "Supply the inputs of the bronze host definition. It needs the spark image digest, the execution role, the bronze writer role and its pair, and the jobs log group. The tables, the target and the dry run flag arrive at dispatch."
   type        = bool
   default     = false
   nullable    = false
@@ -16,24 +16,15 @@ variable "bronze_job_enabled" {
   }
 }
 
-variable "bronze_resources" {
-  description = "Fargate CPU units, memory MiB and ephemeral storage GiB of the bronze task."
-  type = object({
-    cpu                   = number
-    memory                = number
-    ephemeral_storage_gib = number
-  })
-  default = { cpu = 4096, memory = 16384, ephemeral_storage_gib = 50 }
+variable "bronze_read_environment" {
+  description = "The read environment the IAM bronze_writer_contract states when the raw read grant is on. The bronze job runs under that writer role, so every bronze phase receives it. Empty keeps the containers as they were."
+  type        = map(string)
+  default     = {}
+  nullable    = false
 
   validation {
-    condition = try(
-      var.bronze_resources.memory >= local.memory_shapes[tostring(var.bronze_resources.cpu)].min &&
-      var.bronze_resources.memory <= local.memory_shapes[tostring(var.bronze_resources.cpu)].max &&
-      var.bronze_resources.memory % local.memory_shapes[tostring(var.bronze_resources.cpu)].step == 0 &&
-      var.bronze_resources.ephemeral_storage_gib >= 20 && var.bronze_resources.ephemeral_storage_gib <= 200 &&
-      var.bronze_resources.ephemeral_storage_gib == floor(var.bronze_resources.ephemeral_storage_gib), false
-    )
-    error_message = "Supply a valid whole-vCPU Fargate shape and 20 to 200 whole GiB of scratch."
+    condition     = alltrue([for name, value in var.bronze_read_environment : name == "HAI_READ_RAW_ROOT" && value == "true"])
+    error_message = "Only HAI_READ_RAW_ROOT with the value true is accepted."
   }
 }
 
@@ -68,7 +59,7 @@ locals {
       entryPoint      = step.name == "init" ? ["sh", "-c"] : ["/opt/hai/deadline_run", "sh", "-c"]
       command         = [step.script]
       stopTimeout     = 90
-      linuxParameters = { capabilities = { add = [], drop = step.name == "init" ? local.train_init_drop : ["ALL"] }, initProcessEnabled = true }
+      linuxParameters = { capabilities = { add = [], drop = step.name == "init" ? local.host_init_drop : ["ALL"] }, initProcessEnabled = true }
       ulimits         = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn       = index == 0 ? [] : [{ containerName = local.bronze_steps[index - 1].name, condition = "SUCCESS" }]
       environment = concat(
@@ -82,7 +73,8 @@ locals {
           { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
           { name = "HAI_SPARK_LOCAL_DIRECTORY", value = "/workspace/spill" },
         ],
-        [for name in lookup(local.bronze_run_variables, step.name, []) : { name = name, value = "" }]
+        [for name in lookup(local.bronze_run_variables, step.name, []) : { name = name, value = "" }],
+        step.name == "init" ? [] : [for name, value in var.bronze_read_environment : { name = name, value = value }]
       )
       secrets = step.name == "load" ? lookup(local.writer_parameters, local.bronze_role, []) : []
       mountPoints = [
@@ -101,89 +93,4 @@ locals {
       }
     }
   ]
-}
-
-resource "aws_ecs_task_definition" "bronze" {
-  count = length(local.bronze_job_enabled)
-
-  family                   = "${var.project_name}_${var.environment}_job_bronze"
-  requires_compatibilities = ["FARGATE"]
-  network_mode             = "awsvpc"
-  cpu                      = tostring(var.bronze_resources.cpu)
-  memory                   = tostring(var.bronze_resources.memory)
-  execution_role_arn       = lookup(var.job_role_arns, "execution", "")
-  task_role_arn            = lookup(var.job_role_arns, local.bronze_role, "")
-  container_definitions    = jsonencode(local.bronze_containers)
-  skip_destroy             = true
-  enable_fault_injection   = false
-  tags                     = local.tags
-
-  runtime_platform {
-    operating_system_family = "LINUX"
-    cpu_architecture        = "ARM64"
-  }
-
-  volume {
-    name                = "workspace"
-    configure_at_launch = false
-  }
-
-  volume {
-    name                = "tmp"
-    configure_at_launch = false
-  }
-
-  dynamic "ephemeral_storage" {
-    for_each = var.bronze_resources.ephemeral_storage_gib > 20 ? [var.bronze_resources.ephemeral_storage_gib] : []
-    content {
-      size_in_gib = ephemeral_storage.value
-    }
-  }
-}
-
-module "bronze_flow" {
-  source      = "../services/tests/flow"
-  definitions = { for task in aws_ecs_task_definition.bronze : "bronze" => task.container_definitions }
-  tasks = {
-    for task in aws_ecs_task_definition.bronze : "bronze" => {
-      for attribute, value in task : attribute => try(tolist(value), value)
-      if attribute != "container_definitions" && !contains(local.task_attributes_assigned_at_apply, attribute)
-    }
-  }
-}
-
-output "bronze_task_definition_arn" {
-  description = "Registered bronze task revision. Null while bronze_job_enabled is false."
-  value       = try(aws_ecs_task_definition.bronze[0].arn, null)
-}
-
-output "bronze_container_definitions" {
-  description = "Complete container JSON of the bronze task for review and mocked plan assertions. Null while bronze_job_enabled is false."
-  value       = try(aws_ecs_task_definition.bronze[0].container_definitions, null)
-}
-
-output "bronze_secret_flow" {
-  description = "Secret-flow and pin results of the shared flow module for the bronze task."
-  value = {
-    violations          = module.bronze_flow.violations
-    containers_checked  = module.bronze_flow.containers_checked
-    mutation_mismatches = module.bronze_flow.mutation_mismatches
-  }
-}
-
-output "bronze_run_task" {
-  description = "What the run-task call needs for the bronze task. Registration starts nothing. The tables, the target and the dry run flag come from the staged request; the dry run variable is the one override that makes a hand-started run a dry run."
-  value = merge([
-    for task in aws_ecs_task_definition.bronze : {
-      task_definition       = task.family
-      task_role_key         = local.bronze_role
-      assign_public_ip      = "DISABLED"
-      capacity_providers    = ["FARGATE"]
-      network               = "lakehouse"
-      propagate_tags        = "TASK_DEFINITION"
-      container_environment = local.bronze_run_variables
-      dry_run_variable      = "BRONZE_DRY_RUN"
-      dry_run_value         = "1"
-    }
-  ]...)
 }
