@@ -14,7 +14,11 @@
     "pyyaml": "dynamic: imported by name in repo_checks.load_yaml (front-matter check) and package_fixture.check; pre-commit installs the same version.",
     "vulture": "tool: unused-code check",
     "deptry": "tool: unused-dependencies check",
-    "yamllint": "tool: YAML source checks through scripts/quality/lint_sources.py"
+    "yamllint": "tool: YAML source checks through scripts/quality/lint_sources.py",
+    "distlib": "transitive: held on Linux at its pre-Airflow-3.4.0 version so the resolver does not give the host the image's newer one (pyproject.toml host group)",
+    "filelock": "transitive: held on Linux at the lowest release that fixes the filelock advisories (pyproject.toml host group)",
+    "markdown": "transitive: held on Linux at its pre-Airflow-3.4.0 version so the resolver does not give the host the image's newer one (pyproject.toml host group)",
+    "python-discovery": "transitive: held on Linux at its pre-Airflow-3.4.0 version so the resolver does not give the host the image's newer one (pyproject.toml host group)"
   },
   "direct_groups": [
     "host"
@@ -97,6 +101,7 @@
         "orchestration/ecs_launch_provider.py",
         "orchestration/training_contract.py",
         "scripts/orchestration/in_image_checks.py",
+        "scripts/orchestration/real_image_dags.py",
         "scripts/orchestration/db_dump.py",
         "services/lineage/provider_transport.py",
         "services/lineage/db_dump.py",
