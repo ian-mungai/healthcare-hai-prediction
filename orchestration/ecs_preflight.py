@@ -100,6 +100,15 @@ def phase_of(template: str) -> str:
         raise LaunchRefused(f"the step {template} names no phase of the promote task") from None
 
 
+def features_run_of(request: SubmissionRequest) -> str:
+    """The features run whose chain the metadata job ingests: the run the DAG form named. It must be a run ID, so a missing value or ``latest`` is refused
+    here, before anything launches, and the job can never ingest a chain nobody named."""
+    run = request.input_run_id
+    if run is None or not RUN_ID.fullmatch(run):
+        raise LaunchRefused(f"the metadata job needs FEATURES_RUN, the ID of the features run to ingest, not {run or 'latest'!r}: there is no latest run")
+    return run
+
+
 def feature_set_of(dag_id: str) -> str:
     """The feature set the features job of ``dag_id`` builds; a DAG that names none is refused, so the job never runs a set by default."""
     try:
@@ -786,6 +795,7 @@ class Preflight:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
+            "FEATURES_RUN": lambda: features_run_of(request),
             "FEATURE_SET": lambda: drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
             "PHASE": lambda: phase_of(request.template),
             **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},

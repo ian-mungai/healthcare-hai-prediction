@@ -134,6 +134,28 @@ def write_blocks(api: str, token: str, blocks: Mapping[str, str], http: Http = h
     return result
 
 
+def write_runs(api: str, token: str, s3: Any, bucket: str, runs: Sequence[str], http: Http = http_request) -> int:
+    """Write the raw files of each bronze run onto its tables and say what happened on standard output and error. Returns 0, or 1 when a record or a table
+    failed or a table is not in the catalog."""
+    failed = False
+    for run in sorted(set(runs)):
+        try:
+            result = write_blocks(api, token, run_blocks(s3, bucket, run), http)
+        except WriteFailed as error:
+            sys.stderr.write(f"openmetadata_raw_files: {error}\n")
+            failed = True
+            continue
+        sys.stdout.write(
+            f"openmetadata_raw_files: run {run}: {len(result['written'])} written, {len(result['unchanged'])} unchanged, {len(result['absent'])} absent\n"
+        )
+        if result["absent"]:
+            sys.stderr.write(
+                f"openmetadata_raw_files: not in the catalog: {', '.join(result['absent'][:5])}{' and more' if len(result['absent']) > 5 else ''}\n"
+            )
+            failed = True
+    return 1 if failed else 0
+
+
 def main(argv: list[str], env: Mapping[str, str] | None = None, s3_client: Any = None, http: Http = http_request) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bronze-run", action="append", required=True, default=[])
@@ -155,23 +177,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, s3_client: Any =
         import boto3
 
         client = boto3.client("s3", region_name=environment.get("AWS_REGION"))
-    failed = False
-    for run in runs:
-        try:
-            result = write_blocks(api, token, run_blocks(client, environment.get("DATA_BUCKET_NAME", ""), run), http)
-        except WriteFailed as error:
-            sys.stderr.write(f"openmetadata_raw_files: {error}\n")
-            failed = True
-            continue
-        sys.stdout.write(
-            f"openmetadata_raw_files: run {run}: {len(result['written'])} written, {len(result['unchanged'])} unchanged, {len(result['absent'])} absent\n"
-        )
-        if result["absent"]:
-            sys.stderr.write(
-                f"openmetadata_raw_files: not in the catalog: {', '.join(result['absent'][:5])}{' and more' if len(result['absent']) > 5 else ''}\n"
-            )
-            failed = True
-    return 1 if failed else 0
+    return write_runs(api, token, client, environment.get("DATA_BUCKET_NAME", ""), runs, http)
 
 
 if __name__ == "__main__":

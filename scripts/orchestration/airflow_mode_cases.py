@@ -2546,11 +2546,19 @@ def metadata_uses_the_host_containers() -> None:
     require("ingest_polaris" in str(error) and not probe.tasks, f"the fake took an override for a container its definition lacks: {error}")
     rig = Rig()
     run = OTHER_RUN
-    with world(rig, "metadata_ingest_dag", {"run_id": run, "mode": "real"}) as current:
+    features_run = "20261104T120000Z-feed0001"
+    with world(rig, "metadata_ingest_dag", {"run_id": run, "mode": "real", "features_run": features_run}) as current:
         require(current.step("metadata_run") == "succeeded", "the metadata job did not pass")
     values = rig.environment()
-    require(values == {"ingest": {"RUN_ID": run, "POLARIS_URI": POLARIS}}, f"the metadata overrides are not the host container's: {values}")
-    request = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", None)
+    require(
+        values == {"ingest": {"RUN_ID": run, "POLARIS_URI": POLARIS, "FEATURES_RUN": features_run}},
+        f"the metadata overrides are not the host container's, with the features run of the form: {values}",
+    )
+    for missing in (None, "latest", "", "20261104T120000Z-FEED0001"):
+        bad = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", missing)
+        error = refuses(LaunchRefused, lambda bad=bad: Rig().preflight.prepare(bad))
+        require("FEATURES_RUN" in str(error) and "latest" in str(error), f"the features run {missing!r} was not refused by name: {error}")
+    request = SubmissionRequest("metadata_run", run, "real", 1, "metadata_ingest_dag", "metadata_run", "manual__test", features_run)
     spec = rig.preflight.prepare(request)
     require(spec is not None and spec.log_container == "ingest", f"the metadata log is not read from the host container: {spec}")
     table = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]["metadata"]

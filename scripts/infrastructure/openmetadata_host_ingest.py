@@ -2,7 +2,8 @@
 
 Runs inside the ingestion image as ``python -m scripts.infrastructure.openmetadata_host_ingest --config-dir D --work-dir W glue dbt``. The dbt source needs
 ``FEATURES_RUN``, the ID of the features run, and ingests the dbt copy of each layer run of the chain that run recorded (``openmetadata_chain``), never a latest
-copy. The job is a bridge
+copy. The ``raw_files`` source, last, writes the raw files of the bronze run that the silver run of that chain was bound to (the input run in its launch claim)
+onto the bronze tables (``openmetadata_raw_files``); a silver run started on ``latest`` names none, which is said and not an error. The job is a bridge
 task that holds only this one container, so the catalog is not on loopback: ``OM_API`` names the catalog API on the host's private address, and the bot token
 arrives in ``OM_INGESTION_TOKEN`` as a task secret. The token is never written to a file. Each source goes through ``openmetadata_ingest.main``, so its refusal
 of a profiling or sampling configuration, its variable check and its dbt download stay the ones of the catalog task. Exit codes: 0 done, 1 a source failed,
@@ -26,6 +27,7 @@ from scripts.infrastructure import openmetadata_chain as chain
 from scripts.infrastructure import openmetadata_ingest as ingest
 from scripts.infrastructure import startup_check
 
+RAW_FILES = "raw_files"  # the source that writes each bronze table's raw files onto the table (openmetadata_raw_files), after the Glue and dbt sources
 # The catalog is reached over the bridge at the host's address: an http URL whose host is a private IPv4 address, port 8585 and the path /api, and nothing else.
 API_ADDRESS = re.compile(r"http://([0-9]{1,3}(?:\.[0-9]{1,3}){3}):8585/api")
 PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
@@ -44,9 +46,15 @@ def catalog_address_is_valid(api: str) -> bool:
     return any(host in network for network in PRIVATE_NETWORKS)
 
 
-def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callable[[dict[str, Any]], None] | None = None, s3_client: Any = None) -> int:
+def main(
+    argv: list[str],
+    env: Mapping[str, str] | None = None,
+    workflow: Callable[[dict[str, Any]], None] | None = None,
+    s3_client: Any = None,
+    http: Callable[[str, str, Mapping[str, str], bytes | None], tuple[int, Any]] | None = None,
+) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("sources", nargs="+", choices=ingest.SOURCES)
+    parser.add_argument("sources", nargs="+", choices=(*ingest.SOURCES, RAW_FILES))
     parser.add_argument("--config-dir", type=Path, required=True)
     parser.add_argument("--work-dir", type=Path, required=True)
     options = parser.parse_args(argv)
@@ -66,8 +74,10 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
         return 1
     run = ingest.run_workflow if workflow is None else workflow
     layers: dict[str, str] = {}
-    if "dbt" in options.sources:
-        # The dbt source ingests the copies of the three layer runs of the chain that FEATURES_RUN records. There is no latest and no fixed key to fall back to.
+    bronze: str | None = None
+    if "dbt" in options.sources or RAW_FILES in options.sources:
+        # The dbt source ingests the copies of the three layer runs of the chain that FEATURES_RUN records, and the raw files source writes the files of the
+        # bronze run that the chain's silver run was bound to. There is no latest and no fixed key to fall back to.
         features_run = environment.get("FEATURES_RUN", "")
         if not chain.RUN_ID.fullmatch(features_run):
             sys.stderr.write("openmetadata_host_ingest: FEATURES_RUN must be the ID of the features run whose chain is ingested; there is no latest\n")
@@ -79,6 +89,8 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
             client = boto3.client("s3", region_name=environment.get("AWS_REGION"))
         try:
             layers = chain.layer_runs(client, environment.get("DATA_BUCKET_NAME", ""), features_run)
+            if RAW_FILES in options.sources:
+                bronze = chain.bronze_run(client, environment.get("DATA_BUCKET_NAME", ""), layers["silver"])
         except chain.ChainError as error:
             sys.stderr.write(f"openmetadata_host_ingest: {error}\n")
             return 1
@@ -90,6 +102,18 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
         run(config)
 
     for source in options.sources:
+        if source == RAW_FILES:
+            if bronze is None:
+                sys.stderr.write(
+                    "openmetadata_host_ingest: the silver run was started without a bronze run, so no bronze run is recorded and no raw files are written\n"
+                )
+                continue
+            from scripts.infrastructure import openmetadata_raw_files as raw_files  # imports this module, so it is loaded here
+
+            code = raw_files.write_runs(api, token, client, environment.get("DATA_BUCKET_NAME", ""), [bronze], raw_files.http_request if http is None else http)
+            if code:
+                return code
+            continue
         # The empty device stands in for the token file: the token comes from the variable and is set in ``aimed`` after the placeholders are filled.
         code = ingest.main(
             [

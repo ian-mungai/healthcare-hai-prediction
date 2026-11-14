@@ -68,6 +68,7 @@
                   "POLARIS_URI",
                   "MLFLOW_TRACKING_URI",
                   "INPUT_RUN_ID",
+                  "FEATURES_RUN",
                   "FEATURE_SET",
                   "BRONZE_TABLES",
                   "BRONZE_TARGET",

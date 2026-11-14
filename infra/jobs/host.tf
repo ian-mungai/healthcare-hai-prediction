@@ -199,7 +199,7 @@ locals {
       user                   = "10001:10001"
       workingDirectory       = local.host_repo_mount
       entryPoint             = ["sh", "-c"]
-      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt"]
+      command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt raw_files"]
       stopTimeout            = 60
       linuxParameters        = { capabilities = { add = [], drop = ["ALL"] }, initProcessEnabled = true }
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]

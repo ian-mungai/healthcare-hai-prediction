@@ -268,7 +268,8 @@
           "POLARIS_URI"
         ],
         "ingest_dbt": [
-          "RUN_ID"
+          "RUN_ID",
+          "FEATURES_RUN"
         ]
       },
       "chain": true

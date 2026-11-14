@@ -158,7 +158,8 @@ with DAG(
         params = get_current_context()["params"]
         run = metadata_run_id(params["run_id"])
         try:
-            created = create_dag_run("metadata_ingest_dag", dag_run_id("metadata_ingest_dag", run), {"run_id": run, "mode": params["mode"]})
+            conf = {"run_id": run, "features_run": chain_run("features", params["run_id"]), "mode": params["mode"]}
+            created = create_dag_run("metadata_ingest_dag", dag_run_id("metadata_ingest_dag", run), conf)
         except Exception as error:
             LOG.error("the catalog start for %s failed: %s: %s", run, type(error).__name__, error)
             return f"catalog start failed: {type(error).__name__}: {error}"

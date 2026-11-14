@@ -676,7 +676,7 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
   assert {
     condition = (
       jsondecode(output.host_container_definitions["metadata"])[1].entryPoint == ["sh", "-c"] &&
-      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt)") &&
+      startswith(jsondecode(output.host_container_definitions["metadata"])[1].command[0], "(python -m scripts.infrastructure.openmetadata_host_ingest --config-dir /opt/hai/repo/config/metadata/ingestion --work-dir /workspace glue dbt raw_files)") &&
       jsondecode(output.host_container_definitions["metadata"])[1].workingDirectory == "/opt/hai/repo"
     )
     error_message = "The container runs the host ingestion script from the mounted checkout for the Glue mirror and dbt sources."

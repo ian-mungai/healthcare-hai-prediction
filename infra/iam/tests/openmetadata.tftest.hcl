@@ -95,10 +95,11 @@ run "prepared_role_reads_catalog_metadata_only" {
           "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/features/*/gold_pins.json",
           "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/gold/*/silver_pins.json",
           "arn:aws:s3:::${var.data_bucket_name}/lakehouse/bronze_runs/*/check.json",
+          "arn:aws:s3:::${var.data_bucket_name}/${jsondecode(file("${path.module}/../../config/orchestration/ecs_launch.json")).record_prefix}*/silver/claim.json",
         ], resource)
       ])
     ])
-    error_message = "The catalog role reads the dbt artifacts and three named records only: the two pin files that record a chain and the bronze run record. The Glue connector reads the mirror registrations, so no Iceberg metadata file or data file is readable."
+    error_message = "The catalog role reads the dbt artifacts and four named records only: the two pin files that record a chain, the silver launch claim that names its bronze run, and the bronze run record. The Glue connector reads the mirror registrations, so no Iceberg metadata file or data file is readable."
   }
 
   assert {
@@ -108,11 +109,12 @@ run "prepared_role_reads_catalog_metadata_only" {
         "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/features/*/gold_pins.json",
         "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/gold/*/silver_pins.json",
         "arn:aws:s3:::${var.data_bucket_name}/lakehouse/bronze_runs/*/check.json",
+        "arn:aws:s3:::${var.data_bucket_name}/${jsondecode(file("${path.module}/../../config/orchestration/ecs_launch.json")).record_prefix}*/silver/claim.json",
       ]) &&
       toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement : statement.Condition.StringLike["s3:prefix"] if contains(flatten([statement.Action]), "s3:ListBucket")])) ==
       toset(["metadata/dbt/", "metadata/dbt/*"])
     )
-    error_message = "The catalog role lists only the dbt artifact prefix, nothing under the lakehouse, and reads under the lakehouse only the three named records."
+    error_message = "The catalog role lists only the dbt artifact prefix, nothing under the lakehouse, and reads under the lakehouse only the four named records."
   }
 
   assert {

@@ -64,6 +64,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--code-sha256", default="", help="CODE_SHA256: the digest in code.sha256 beside the staged archive")
     parser.add_argument("--polaris-uri", default="", help="POLARIS_URI: http://<host private address>:8181/api/catalog")
     parser.add_argument("--input-run", default="", help="INPUT_RUN_ID: the committed silver run for gold, the committed gold run for features")
+    parser.add_argument("--features-run", default="", help="FEATURES_RUN: the features run whose chain the metadata job ingests (a run ID, never latest)")
     parser.add_argument("--feature-set", default="", help="FEATURE_SET: all (the single path, the default), base or m1 to m6 for the features job")
     parser.add_argument("--mlflow-uri", default="", help="MLFLOW_TRACKING_URI: http://<host private address>:5100")
     parser.add_argument("--training-parameters", default="", help="TRAINING_PARAMETERS: the parameters of the run as one JSON string")
@@ -75,6 +76,7 @@ def main(argv: list[str] | None = None) -> int:
         "CODE_SHA256": args.code_sha256,
         "POLARIS_URI": args.polaris_uri,
         "INPUT_RUN_ID": args.input_run,
+        "FEATURES_RUN": args.features_run,
         "FEATURE_SET": args.feature_set,
         "MLFLOW_TRACKING_URI": args.mlflow_uri,
         "TRAINING_PARAMETERS": args.training_parameters,

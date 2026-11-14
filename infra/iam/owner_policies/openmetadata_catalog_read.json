@@ -14,6 +14,7 @@
       "Resource": [
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/gold_pins.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/silver_pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/launch_records/*/silver/claim.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_runs/*/check.json"
       ]
     },

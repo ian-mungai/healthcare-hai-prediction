@@ -28,6 +28,8 @@ with DAG(
     tags=["metadata"],
     params={
         "run_id": Param(type="string", pattern=f"^{RUN_ID}$"),
+        # The features run whose chain the catalog ingests: the dbt copies of it and of the gold and silver runs it recorded. No default and no "latest".
+        "features_run": Param(type="string", pattern=f"^{RUN_ID}$"),
         "mode": Param("real", type="string", enum=["real"]),
     },
     default_args={"retries": 0},

@@ -238,7 +238,7 @@ locals {
     },
     {
       name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = true, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
-      environment = [{ name = "RUN_ID", value = "" }]
+      environment = [{ name = "RUN_ID", value = "" }, { name = "FEATURES_RUN", value = "" }]
       secrets     = [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }]
       entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "dbt"], local.om_persistent_ingest)
     },
@@ -281,7 +281,7 @@ locals {
       },
       {
         name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
-        environment = [{ name = "RUN_ID", value = "" }]
+        environment = [{ name = "RUN_ID", value = "" }, { name = "FEATURES_RUN", value = "" }]
         secrets     = []
         entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "dbt"], local.om_ingest)
       },
@@ -416,6 +416,6 @@ output "openmetadata_run_task" {
     lifetime_seconds      = var.openmetadata_lifetime_seconds
     deadline_seconds      = var.openmetadata_lifetime_seconds + 900
     hourly_usd_range      = local.om_hourly
-    container_environment = { ingest_polaris = ["RUN_ID", "POLARIS_URI"], ingest_dbt = ["RUN_ID"] }
+    container_environment = { ingest_polaris = ["RUN_ID", "POLARIS_URI"], ingest_dbt = ["RUN_ID", "FEATURES_RUN"] }
   } : null
 }

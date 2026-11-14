@@ -312,7 +312,8 @@ def metadata_start_posts_the_dag_run_through_the_api_with_a_signed_token() -> No
     request = api.requests[0]
     require(request["path"] == "/api/v2/dags/metadata_ingest_dag/dagRuns", f"wrong trigger path: {request['path']}")
     require(
-        request["body"].get("dag_run_id") == f"chain__metadata_ingest_dag__{run}" and request["body"].get("conf") == {"run_id": run, "mode": "real"},
+        request["body"].get("dag_run_id") == f"chain__metadata_ingest_dag__{run}"
+        and request["body"].get("conf") == {"run_id": run, "features_run": str(load_dag()["chain_run"]("features", BRONZE)), "mode": "real"},
         f"wrong trigger body: {request['body']}",
     )
     header, claims, signature = request["authorization"].removeprefix("Bearer ").split(".")
@@ -351,7 +352,9 @@ def job_table_runs_the_catalog_step_as_a_bounded_chain_job() -> None:
         raise AssertionError("the job table has no metadata job")
     require(document["steps"].get("metadata_run") == "metadata", "the step metadata_run does not name the metadata job")
     require(job.get("chain") is True, "the catalog job belongs to the chain")
-    require(job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"], "ingest_dbt": ["RUN_ID"]}, f"wrong containers: {job['containers']}")
+    require(
+        job["containers"] == {"ingest_polaris": ["RUN_ID", "POLARIS_URI"], "ingest_dbt": ["RUN_ID", "FEATURES_RUN"]}, f"wrong containers: {job['containers']}"
+    )
     terraform = (ROOT / "infra/jobs/openmetadata.tf").read_text()
     default = re.search(r'variable "openmetadata_lifetime_seconds".*?default\s*=\s*([0-9]+)', terraform, re.S)
     require(default is not None and job["deadline_seconds"] == int(default.group(1)) + 900, "the job deadline is not the task lifetime plus 900 seconds")

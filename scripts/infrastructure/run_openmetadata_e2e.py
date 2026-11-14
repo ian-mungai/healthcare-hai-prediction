@@ -624,6 +624,92 @@ def chain_refuses_a_missing_or_mismatched_pin() -> None:
             raise AssertionError(f"the features run {run!r} was accepted")
 
 
+def silver_claim(input_run: str, run: str = SILVER_RUN, **change: Any) -> bytes:
+    """The launch claim of the silver job as the launch library writes it, bound to the bronze run it pinned."""
+    claim = {
+        "event": "claim",
+        "job": "silver",
+        "run_id": run,
+        "attempt": 1,
+        "schema_version": 1,
+        "bound": {"code_digest": "a" * 64, "request_hash": "b" * 64, "input_run": input_run},
+    } | change
+    return json.dumps(claim).encode()
+
+
+SILVER_CLAIM_KEY = f"lakehouse/launch_records/{SILVER_RUN}/silver/claim.json"
+
+
+def chain_names_the_bronze_run_of_silvers_claim() -> None:
+    """The bronze run of a chain is the input run that the silver job's launch claim bound; ``latest`` names none, and a claim that is missing, of another run
+    or job, or bound to something that is not a run ID stops the chain by its key."""
+    from scripts.infrastructure import openmetadata_chain as chain
+
+    bucket = "example-project-data-dev"
+    require(chain.bronze_run(FakeS3(chain_keys() | {SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN)}), bucket, SILVER_RUN) == BRONZE_RUN, "the bound bronze run")
+    require(chain.bronze_run(FakeS3(chain_keys() | {SILVER_CLAIM_KEY: silver_claim("latest")}), bucket, SILVER_RUN) is None, "latest names no bronze run")
+    cases = {
+        "missing": ({}, "missing"),
+        "another run": ({SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN, run=GOLD_RUN)}, "another run"),
+        "another job": ({SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN, job="gold")}, "another job"),
+        "not a run": ({SILVER_CLAIM_KEY: silver_claim("yesterday")}, "not a run"),
+        "not JSON": ({SILVER_CLAIM_KEY: b"[nope"}, "not JSON"),
+    }
+    for label, (change, phrase) in cases.items():
+        try:
+            chain.bronze_run(FakeS3(chain_keys() | change), bucket, SILVER_RUN)
+        except chain.ChainError as error:
+            require(SILVER_CLAIM_KEY in str(error) and phrase in str(error), f"{label}: the refusal must name the claim and '{phrase}': {error}")
+        else:
+            raise AssertionError(f"{label}: a bad claim was accepted")
+
+
+def host_ingest_writes_the_bronze_files_after_the_dbt_layers() -> None:
+    """With the raw_files source the host ingestion also writes the raw files of the bronze run that silver's claim names, after the Glue and dbt sources,
+    over the catalog API with the token."""
+    seen: list[str] = []
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+
+    def workflow(config: dict[str, Any]) -> None:
+        seen.append(config["source"]["type"])
+
+    keys = chain_keys() | {SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN), BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode()}
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        env["DATA_BUCKET_NAME"] = "example-project-data-dev"
+        from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+
+        with quiet() as (out, err):
+            code = host_ingest.main([*args, "raw_files"], env=env, workflow=workflow, s3_client=FakeS3(keys), http=catalog)
+    require(code == 0, (code, err.getvalue()))
+    require(seen == ["glue", "dbt", "dbt", "dbt"], f"the catalog sources ran first: {seen}")
+    description = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(BRONZE_RUN in description and "2 files" in description and catalog.patches() == 1, description[:200])
+    require(BEARER_VALUE not in out.getvalue() + err.getvalue(), "the token reached the output")
+
+
+def host_ingest_skips_the_bronze_files_when_silver_ran_on_latest() -> None:
+    """A silver claim bound to ``latest`` names no bronze run: the files are not written, the task says so on standard error, and it does not fail. A claim
+    that is missing or wrong stops the task before any workflow or catalog call."""
+    keys = chain_keys() | {SILVER_CLAIM_KEY: silver_claim("latest")}
+    seen: list[dict[str, Any]] = []
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        with quiet() as (_, err):
+            code = host_ingest.main([*args, "raw_files"], env=env, workflow=seen.append, s3_client=FakeS3(keys), http=catalog)
+    require(code == 0 and not catalog.calls and "no bronze run" in err.getvalue(), (code, err.getvalue(), catalog.calls))
+    broken = FakeS3(chain_keys())
+    seen.clear()
+    with tempfile.TemporaryDirectory() as folder:
+        args, env = host_ingest_environment(Path(folder))
+        with quiet() as (_, err):
+            code = host_ingest.main([*args, "raw_files"], env=env, workflow=seen.append, s3_client=broken, http=catalog)
+    require(code == 1 and not seen and not catalog.calls and SILVER_CLAIM_KEY in err.getvalue(), (code, len(seen), err.getvalue()))
+
+
 def host_ingest_ingests_the_three_recorded_layers() -> None:
     """The dbt source runs once for each layer of the chain that FEATURES_RUN records, on that layer run's copy and no other, and reads no fixed key."""
     seen: list[dict[str, Any]] = []
@@ -1339,6 +1425,13 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
     require(step["retries"] == 0 and 0 < step["execution_timeout"].total_seconds() <= 5 * 3600, step)
     require(step["pool"] == "stand_in_pool", f"the step must run in the pool the runtime names: {step}")
     require(dag.kwargs["dagrun_timeout"].total_seconds() <= 6 * 3600, "the DAG run must have a bound")
+    params = dag.kwargs["params"]
+    require(set(params) == {"run_id", "mode", "features_run"}, f"the form is {sorted(params)}")
+    features = params["features_run"]
+    require(
+        features["args"] == () and "default" not in features and features["type"] == "string" and features["pattern"] == params["run_id"]["pattern"],
+        f"features_run is a required run ID with no default (never latest): {features}",
+    )
     require(calls == [], "importing the DAG must not start a step")
     require(loaded.LIFETIME_CEILING_SECONDS == 14400, "the DAG bound must follow the Terraform lifetime ceiling")
 
@@ -1434,6 +1527,9 @@ CASES: list[Callable[[], None]] = [
     raw_files_list_is_capped,
     raw_files_writer_refuses_and_fails_visibly,
     chain_follows_the_recorded_pins,
+    chain_names_the_bronze_run_of_silvers_claim,
+    host_ingest_writes_the_bronze_files_after_the_dbt_layers,
+    host_ingest_skips_the_bronze_files_when_silver_ran_on_latest,
     chain_refuses_a_missing_or_mismatched_pin,
     host_ingest_ingests_the_three_recorded_layers,
     host_ingest_never_falls_back_to_latest,

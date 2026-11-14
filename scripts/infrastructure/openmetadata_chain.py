@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+from pathlib import Path
 from typing import Any
 
 from botocore.exceptions import BotoCoreError, ClientError
@@ -19,6 +20,7 @@ RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 PIN_KEYS = {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"}
 PIN_KEY = "lakehouse/layer_runs/{layer}/{run}/{name}"
 PIN_BYTES = 2 * 1024**2
+LAUNCH_FILE = Path(__file__).resolve().parents[2] / "config/orchestration/ecs_launch.json"  # the record prefix the launch library writes its records under
 LINKS = (("features", "gold_pins.json", "gold"), ("gold", "silver_pins.json", "silver"))  # the layer whose run is read, its pin file, the layer the pin names
 
 
@@ -63,6 +65,36 @@ def source_run(s3: Any, bucket: str, layer: str, run: str, name: str, namespace:
     if not isinstance(source, str) or not RUN_ID.fullmatch(source):
         raise ChainError(f"{key}: names {source!r}, which is not a run ID")
     return source
+
+
+def bronze_run(s3: Any, bucket: str, silver_run: str) -> str | None:
+    """The bronze run that the silver run was bound to: the input run in the silver job's launch claim. ``latest`` (silver was started without naming a
+    bronze run) names none, so the result is None and the caller says so. A claim that is missing, of another run or job, or bound to anything else that
+    is not a run ID stops the chain with its key."""
+    key = f"{json.loads(LAUNCH_FILE.read_text())['record_prefix']}{silver_run}/silver/claim.json"
+    try:
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read(PIN_BYTES + 1)
+    except ClientError as error:
+        code = str(error.response.get("Error", {}).get("Code", "")) or "ClientError"
+        raise ChainError(f"{key}: {'missing' if code == 'NoSuchKey' else code}") from None
+    except BotoCoreError as error:
+        raise ChainError(f"{key}: {type(error).__name__}") from None
+    try:
+        claim = json.loads(body, object_pairs_hook=duplicate_free) if len(body) <= PIN_BYTES else None
+    except ValueError:
+        raise ChainError(f"{key}: is not JSON") from None
+    if not isinstance(claim, dict) or claim.get("event") != "claim" or not isinstance(claim.get("bound"), dict):
+        raise ChainError(f"{key}: is not a launch claim")
+    if claim.get("run_id") != silver_run:
+        raise ChainError(f"{key}: belongs to another run ({claim.get('run_id')!r})")
+    if claim.get("job") != "silver":
+        raise ChainError(f"{key}: belongs to another job ({claim.get('job')!r})")
+    bound = claim["bound"].get("input_run")
+    if bound == "latest":
+        return None
+    if not isinstance(bound, str) or not RUN_ID.fullmatch(bound):
+        raise ChainError(f"{key}: binds {bound!r}, which is not a run ID")
+    return bound
 
 
 def layer_runs(s3: Any, bucket: str, features_run: str) -> dict[str, str]:

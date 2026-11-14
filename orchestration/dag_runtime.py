@@ -30,7 +30,7 @@ LOG = logging.getLogger(__name__)
 RESEARCH_DAG = "research_dag"
 STEP_TIMEOUT = timedelta(hours=26)
 # The DAG parameter that selects the producer run a pin reads ("latest" when absent), and the asset each committing task emits.
-SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run"}
+SELECTIONS = {"pin_silver": "silver_snapshot_run", "pin_gold": "gold_snapshot_run", "metadata_run": "features_run"}
 # A model set's features DAG builds from the base run that the base DAG published: its form names that run, not a gold run.
 MODEL_SELECTIONS = {"pin_gold": "base_snapshot_run"}
 # The serving deployment's form names the research run whose record names the candidate of a canary.
