@@ -371,6 +371,31 @@ def base_pin_cases(report: Report) -> None:
             "the record of the single path keeps its five keys and gains none",
             sorted(single) == ["mode", "namespace", "run_id", "schema", "snapshot_set"],
         )
+        ledger = gold_publish.published_runs(context(FakeSpark(rows, every)))
+        chosen = next(row for row in ledger if row["run_id"] == BASE_RUN_2)
+        report.case(
+            "B11",
+            "FS3",
+            "the base pin records the digest of the ledger row it chose",
+            record.get("base_row_sha256") == feature_sets.base_row_digest(chosen),
+        )
+        check_row = feature_sets.check_base_row
+        rewritten = [{**row, "snapshot_set": {**row["snapshot_set"], domain[0]: 1}} if row["run_id"] == BASE_RUN_2 else row for row in ledger]
+        extended = [{**row, "snapshot_set": {**row["snapshot_set"], "feature_matrix_m2": 8000}} if row["run_id"] == BASE_RUN_2 else row for row in ledger]
+        outcomes = {
+            "unchanged": not refuses(partial(check_row, ledger, record), "base run") and check_row(ledger, record) is None,
+            "a sibling row appended": check_row([*ledger, {**ledger[-1], "run_id": "20261109T070000Z-0000a007"}], record) is None,
+            "a snapshot rewritten": refuses(partial(check_row, rewritten, record), "differs"),
+            "a table added": refuses(partial(check_row, extended, record), "differs"),
+            "the row gone": refuses(partial(check_row, [row for row in ledger if row["run_id"] != BASE_RUN_2], record), "holds 0 rows"),
+        }
+        report.case(
+            "B12",
+            "FS3",
+            "a publish refuses a base row that was rewritten or removed after the pin and accepts rows that other runs appended",
+            all(outcomes.values()),
+            outcomes=outcomes,
+        )
 
 
 def plan_cases(report: Report) -> None:
@@ -2139,11 +2164,9 @@ def runs_column_cases(report: Report) -> None:
     report.case(
         "R06",
         "FS3",
-        "a model set run's commit step receives its base pin, as the record step does; the other steps and a base run's steps do not",
-        "--base-pin" in model_steps.get("commit", [])
-        and pin_text in model_steps.get("commit", [])
-        and "--base-pin" in model_steps.get("record", [])
-        and not any("--base-pin" in model_steps.get(step, []) for step in ("candidates", "reconcile", "backup"))
+        "a model set run's candidates, commit and record steps receive its base pin; the other steps and a base run's steps do not",
+        all("--base-pin" in model_steps.get(step, []) and pin_text in model_steps.get(step, []) for step in ("candidates", "commit", "record"))
+        and not any("--base-pin" in model_steps.get(step, []) for step in ("reconcile", "backup"))
         and not any("--base-pin" in arguments for arguments in base_steps.values()),
         steps=sorted(model_steps),
     )

@@ -18,6 +18,8 @@ access: a model belongs to a set when its record's ``feature_set`` names it, and
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
@@ -92,6 +94,27 @@ def newest_base_row(rows: Sequence[Mapping[str, Any]], base_tables: Iterable[str
         (row for row in reversed(rows) if wanted <= set(row["snapshot_set"]) and not (namespace and retired_publications.is_retired(namespace, row["run_id"]))),
         None,
     )
+
+
+ROW_FIELDS = ("run_id", "committed_at", "snapshot_set", "base_run")  # what the publish step and the Feast step read of a publish_runs row
+
+
+def base_row_digest(row: Mapping[str, Any]) -> str:
+    """The SHA-256 of the fields that the publish step and the Feast step read from a publish_runs row: the run, the commit time, the full snapshot set
+    and the base run."""
+    document = {name: row.get(name) for name in ROW_FIELDS}
+    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def check_base_row(rows: Sequence[Mapping[str, Any]], pin: Mapping[str, Any]) -> None:
+    """Refuse a model set publish when the ledger row of the base run that the pin chose is gone, doubled or not the row the pin recorded. The rows of other
+    runs are free to change: sibling sets append theirs while this one runs."""
+    source = pin.get("source_run_id")
+    matches = [row for row in rows if row.get("run_id") == source]
+    if len(matches) != 1:
+        raise PublishError(f"the publish ledger holds {len(matches)} rows of base run {source} now: the base pin needs exactly one")
+    if base_row_digest(matches[0]) != pin.get("base_row_sha256"):
+        raise PublishError(f"the ledger row of base run {source} differs from the one the base pin recorded")
 
 
 def production_models(records: Mapping[str, Mapping[str, Any] | None], feature_set: str) -> dict[str, str | None]:

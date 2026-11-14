@@ -28,6 +28,7 @@ from scripts.lakehouse.gold_publish import (
     commit_publish,
     load_plan,
     publish_candidates,
+    published_runs,
     reconcile_candidates,
 )
 from scripts.lakehouse.gold_publish_record import PublishError
@@ -66,13 +67,24 @@ def record_committed(ctx: Context, path: Path, feature_set: str = "", base_run: 
         raise PublishError(str(error).replace("silver", "features")) from error
 
 
-def base_run_of(pin: Path | None, feature_set: str) -> str | None:
-    """The base run a model set read, from its base pin; base and the single path read none. A model set without a readable pin is refused."""
+def base_pin_of(pin: Path | None, feature_set: str) -> dict[str, Any] | None:
+    """The base pin a model set read; base and the single path read none. A model set without a readable pin is refused."""
     if feature_sets.checked(feature_set) in ("", feature_sets.BASE):
         return None
     if pin is None or not pin.is_file():
         raise PublishError(f"the record of model set {feature_set} needs the base pin it read (--base-pin)")
-    run = json.loads(pin.read_text()).get("source_run_id")
+    document = json.loads(pin.read_text())
+    if not isinstance(document, dict):
+        raise PublishError("the base pin is not a JSON object")
+    return document
+
+
+def base_run_of(pin: Path | None, feature_set: str) -> str | None:
+    """The base run a model set read, from its base pin; base and the single path read none."""
+    document = base_pin_of(pin, feature_set)
+    if document is None:
+        return None
+    run = document.get("source_run_id")
     if not isinstance(run, str):
         raise PublishError("the base pin names no base run")
     return run
@@ -119,6 +131,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 accepted_result_sha256=args.accepted_result_sha256,
                 base_run=step_base_run(args.step, args.base_pin, args.feature_set),
             )
+            if args.step in ("candidates", "commit"):
+                pin_document = base_pin_of(args.base_pin, args.feature_set)
+                if pin_document is not None:
+                    feature_sets.check_base_row(published_runs(ctx), pin_document)
             if args.step == "record":
                 result = record_committed(ctx, args.record, args.feature_set, ctx.base_run)
             else:

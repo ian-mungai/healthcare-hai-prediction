@@ -749,7 +749,7 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
         check_input_objects(job, bucket, client)
     pin_flags: list[str | Path] = ["--base-pin", job.folder / job.pin_name] if job.model_set else []
     for step in ("candidates", "reconcile", "backup", "commit"):
-        step_flags = pin_flags if step == "commit" else []
+        step_flags = pin_flags if step in ("candidates", "commit") else []
         run_publish(
             job,
             [step, *common, "--sealed-sha256", sha, "--accepted-result-sha256", accepted, "--publish-dir", job.publish_folder, *step_flags, *job.local_flags],

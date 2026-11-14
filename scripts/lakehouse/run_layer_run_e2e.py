@@ -33,7 +33,7 @@ from unittest import mock
 
 import duckdb
 
-from scripts.features import features_input, features_publish
+from scripts.features import feature_sets, features_input, features_publish
 from scripts.lakehouse import code_archive, layer_run, pins
 from scripts.lakehouse.layer_run import Job, StepError
 from scripts.process import run_command
@@ -349,7 +349,10 @@ def layer_step(job: Job, module: str, name: str, step: str, arguments: Sequence[
             pinned = pinned[1:]
         if "pin_source" in DEFECTS:
             source = "20260101T000000Z-deadbeef"
-        target.write_text(json.dumps({"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}) + "\n")
+        record: dict[str, Any] = {"source_run_id": source, "snapshot_set": {name: 1 for name in pinned}}
+        if job.model_set:
+            record["base_row_sha256"] = feature_sets.base_row_digest(next(row for row in runs if row["run_id"] == source))
+        target.write_text(json.dumps(record) + "\n")
     elif step == "read":
         if option(arguments, "--expected-pin-sha256") != sha_of(folder / job.pin_name):
             fail(module)
@@ -380,6 +383,13 @@ def publish_step(job: Job, module: str, step: str, arguments: Sequence[str | Pat
         fail(module)
     namespace, plan = contract(job.layer, job.mode, job.feature_set)
     manifest = read_json(publish / "export/manifest.json")
+    if job.model_set and step in ("candidates", "commit"):
+        pin = Path(option(arguments, "--base-pin")) if "--base-pin" in [str(item) for item in arguments] else None
+        try:
+            document = features_publish.base_pin_of(pin, job.feature_set)
+            feature_sets.check_base_row(model("publish_runs.json", []), document or {})
+        except features_publish.PublishError as error:
+            raise StepError(f"{module} exited 1: {error}") from error
     if step == "candidates":
         if set(manifest["tables"]) != set(plan.tables):
             fail(module)
@@ -842,9 +852,33 @@ def features_up_to(case: Case, last: str) -> None:
         require(case.phase("features", phase) == 0, (phase, case.err))
 
 
+def base_row() -> dict[str, Any]:
+    """The ledger row of the committed base run: its commit time and the snapshot of every table of the features contract."""
+    snapshots = {table: 5000 + number for number, table in enumerate(sorted(features_publish.publish_plan("real").tables))}
+    snapshots |= {table: 1 for table in features_input.base_tables()}  # the snapshot that the stand-in pin records for each domain matrix
+    snapshots |= {"label_matrix_hai_outcomes": 2001, "int_hospital_spine": 2000}
+    return {"layer": "features", "run_id": BASE_RUN, "committed_at": "2026-10-30T03:15:00+00:00", "snapshot_set": snapshots, "base_run": None}
+
+
+def write_base_row(row: dict[str, Any] | None = None) -> None:
+    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([row or base_row()]))
+
+
+def rewrite_base_row(change: Callable[[dict[str, Any]], None]) -> Callable[[], None]:
+    """A later change of the chosen base run's row in the ledger, the table files of the 47 tables untouched, and the ledger table's own new object."""
+
+    def run() -> None:
+        rows = model("publish_runs.json", [])
+        change(next(row for row in rows if row["run_id"] == BASE_RUN))
+        (CATALOG[0] / "publish_runs.json").write_text(json.dumps(rows))
+        bucket_write("lakehouse/features/publish_runs/metadata/rewritten-base-row.metadata.json")
+
+    return run
+
+
 def sets_up_to(case: Case, names: Sequence[str], last: str = "publish") -> None:
     """The base run is committed and each named model set has run its phases before ``last``, as six sibling tasks do before any of them publishes."""
-    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([{"layer": "features", "run_id": BASE_RUN}]))
+    write_base_row()
     for name in names:
         for phase in layer_run.PHASES["features"]:
             if phase == last:
@@ -878,12 +912,12 @@ def case_model_set_publish_ignores_unrelated_features_paths(case: Case) -> None:
     require(committed_sets() == [SET_RUNS["m1"]], committed_sets())
 
 
-def changed_base_table(change: Callable[[], None], text: str) -> Callable[[Case], None]:
+def changed_base_table(change: Callable[[], None], text: str, reason: str = "input version changed") -> Callable[[Case], None]:
     def run(case: Case) -> None:
         sets_up_to(case, ["m1"])
         change()
         before = len(writes())
-        require(case.set_phase("m1", "publish") != 0 and "input version changed" in case.err and text in case.err, case.err)
+        require(case.set_phase("m1", "publish") != 0 and reason in case.err and text in case.err, case.err)
         require(len(writes()) == before and not committed_sets(), "a changed input stops publish before any catalog write")
 
     return run
@@ -907,7 +941,7 @@ def case_model_set_pin_lists_every_base_table_and_no_set_table(case: Case) -> No
 
 def case_model_set_pin_refuses_a_base_table_without_objects(case: Case) -> None:
     INPUT_VERSIONS[:] = [item for item in INPUT_VERSIONS if "/feature_matrix_hospital/" not in item["Key"]]
-    (CATALOG[0] / "publish_runs.json").write_text(json.dumps([{"layer": "features", "run_id": BASE_RUN}]))
+    write_base_row()
     require(case.set_phase("m1", "pin") != 0 and "feature_matrix_hospital" in case.err and "no object" in case.err, case.err)
 
 
@@ -1272,6 +1306,15 @@ CASES: dict[str, Callable[[Case], None]] = {
     ),
     "a new object under the build inputs table stops model set publish": changed_base_table(
         lambda: bucket_write("lakehouse/features/feature_build_inputs/data/new.parquet"), "feature_build_inputs"
+    ),
+    "a rewritten snapshot in the chosen base run row stops model set publish": changed_base_table(
+        rewrite_base_row(lambda row: row["snapshot_set"].__setitem__("label_matrix_hai_outcomes", 9001)), BASE_RUN, "differs from the one the base pin recorded"
+    ),
+    "a table added to the chosen base run row stops model set publish": changed_base_table(
+        rewrite_base_row(lambda row: row["snapshot_set"].__setitem__("feature_matrix_m2", 8000)), BASE_RUN, "differs from the one the base pin recorded"
+    ),
+    "a chosen base run row that left the ledger stops model set publish": changed_base_table(
+        rewrite_base_row(lambda row: row.__setitem__("run_id", "20261030T031501Z-3d4e5f61")), BASE_RUN, "holds 0 rows"
     ),
     "a model set pin lists every table of the base run and no model set table": case_model_set_pin_lists_every_base_table_and_no_set_table,
     "a model set publish rerun after its own commit passes and commits nothing more": case_model_set_publish_rerun_commits_nothing_more,

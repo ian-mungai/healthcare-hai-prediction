@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.features import feature_schema as schema_module
-from scripts.features import features_input, features_publish
+from scripts.features import feature_sets, features_input, features_publish
 from scripts.lakehouse import feature_columns as columns
 from scripts.lakehouse import gold_export
 from scripts.process import run_command
@@ -70,6 +70,7 @@ def base_input(first: Path, folder: Path, run: str, tables: dict[str, int] | Non
     domain = features_input.base_tables()
     snapshot_set = tables if tables is not None else {name: 1000 + index for index, name in enumerate(domain)}
     pin = {"schema": 1, "run_id": run, "mode": "publish_fixture", "namespace": "features_e2e", "source_run_id": BASE_RUN, "snapshot_set": snapshot_set}
+    pin["base_row_sha256"] = feature_sets.base_row_digest({"run_id": BASE_RUN, "snapshot_set": snapshot_set})
     pin_sha = write_json(folder / features_input.BASE_PIN_NAME, pin)
     files: dict[str, str] = {}
     connection = duckdb.connect(str(first / "staging.duckdb"), read_only=True)

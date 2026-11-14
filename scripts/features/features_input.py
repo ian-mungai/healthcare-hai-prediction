@@ -7,7 +7,9 @@
 in the catalog) and writes ``gold_pins.json`` once: the chosen ``publish_runs`` row of the gold namespace (the head, or the run named by ``--source-run``).
 With ``--newest-only`` (the features job of the AWS chain) the named gold run must be the newest committed one: the chain reads the set its own gold job just
 published, and gold maintenance in that job keeps only the newest sets, so an older run is refused by name before anything is pinned.
-A retry reads the same record and re-checks it. ``read`` exports exactly the pinned snapshots (``version as of``) to ``gold_input/`` with a manifest of file
+A retry reads the same record and re-checks it. A model set pin also records the digest of the ``publish_runs`` row of the base run it chose
+(``feature_sets.base_row_digest``), and the candidates and commit steps of the publish refuse when that row changed or left the ledger.
+``read`` exports exactly the pinned snapshots (``version as of``) to ``gold_input/`` with a manifest of file
 digests, in the shape of ``silver_input.extract``, which hardcodes the silver paths. Both run in the Spark image and record names, counts and hashes only.
 """
 
@@ -17,6 +19,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import sys
 from collections.abc import Mapping, Sequence
 from pathlib import Path
@@ -36,6 +39,7 @@ NAMESPACES = {"publish_fixture": "gold_e2e", "real": "gold"}
 BASE_NAMESPACES = {"publish_fixture": "features_e2e", "real": "features"}
 SNAPSHOT_SQL = "select * from {table} version as of {snapshot}"
 MAX_SNAPSHOT = 9223372036854775807
+RUN_ID_DIGEST = re.compile(r"[0-9a-f]{64}")
 
 
 def gold_plan() -> Plan:
@@ -76,9 +80,11 @@ def pin(ctx: Context, path: Path, source_run: str | None = None, newest_only: bo
         raise as_gold(error) from error
 
 
-def check_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str], namespaces: Mapping[str, str], label: str) -> None:
+def check_pin(
+    record: Mapping[str, Any], run_id: str, mode: str, tables: set[str], namespaces: Mapping[str, str], label: str, extra: frozenset[str] = frozenset()
+) -> None:
     """Require a complete pin of the named layer for this run and mode: its shape, identity, namespace and the exact table set."""
-    if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} or record.get("schema") != 1:
+    if set(record) != {"schema", "run_id", "mode", "namespace", "source_run_id", "snapshot_set"} | extra or record.get("schema") != 1:
         raise PipelineError(f"the {label} pin has an unsupported shape")
     if (
         record["run_id"] != run_id
@@ -101,8 +107,11 @@ def check_gold_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: se
 
 
 def check_base_pin(record: Mapping[str, Any], run_id: str, mode: str, tables: set[str]) -> None:
-    """Require a complete base pin for this run and mode: the domain matrices of one committed base run in the features namespace."""
-    check_pin(record, run_id, mode, tables, BASE_NAMESPACES, "base")
+    """Require a complete base pin for this run and mode: the domain matrices of one committed base run in the features namespace, and the digest of the
+    ledger row that chose it."""
+    check_pin(record, run_id, mode, tables, BASE_NAMESPACES, "base", frozenset({"base_row_sha256"}))
+    if not RUN_ID_DIGEST.fullmatch(str(record["base_row_sha256"])):
+        raise PipelineError("the base pin holds no valid ledger row digest")
 
 
 def base_tables(schema: Mapping[str, Any] | None = None) -> list[str]:
@@ -125,7 +134,11 @@ def pin_base(ctx: Context, path: Path, source_run: str | None) -> dict[str, Any]
         if source_run is not None and previous.get("source_run_id") != source_run:
             raise PublishError("the selected base run differs from the immutable pin")
         row = next((entry for entry in published_runs(ctx) if entry["run_id"] == previous.get("source_run_id")), None)
-        if row is None or checked_tables(ctx, row, tables) != previous.get("snapshot_set"):
+        if (
+            row is None
+            or checked_tables(ctx, row, tables) != previous.get("snapshot_set")
+            or feature_sets.base_row_digest(row) != previous.get("base_row_sha256")
+        ):
             raise PublishError("the base pin no longer matches its committed set")
         return previous
     if not source_run:
@@ -142,6 +155,7 @@ def pin_base(ctx: Context, path: Path, source_run: str | None) -> dict[str, Any]
         "namespace": ctx.namespace,
         "source_run_id": newest["run_id"],
         "snapshot_set": checked_tables(ctx, newest, tables),
+        "base_row_sha256": feature_sets.base_row_digest(newest),
     }
     silver_publish.write_once(path, record)
     return record
