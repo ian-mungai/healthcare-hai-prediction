@@ -54,6 +54,7 @@ the Airflow image after a provider or Airflow upgrade. The failure modes, each w
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import inspect
 import json
@@ -2947,6 +2948,10 @@ def model_set_lineage_reads_the_base_pins_and_its_scoped_table() -> None:
         folder = f"lakehouse/layer_runs/features/{run}"
         base_record = {"schema": 1, "run_id": base, "mode": "real", "namespace": "features", "snapshot_set": base_set, "feature_set": "base"}
         fixtures.put(bucket, f"lakehouse/layer_runs/features/{base}/features_snapshot.json", base_record)
+        sealed = hashlib.sha256(json.dumps(dict(sorted(base_set.items())), separators=(",", ":")).encode()).hexdigest()
+        publication = {"run_id": base, "committed_at": fixtures.END, "tables": len(base_set), "snapshot_set_sha256": sealed}
+        applied = {"schema": 1, "step": "apply", "run_id": base, "mode": "real", "publication": publication}
+        fixtures.put(bucket, f"lakehouse/layer_runs/features/{base}/feast_apply.json", applied)
         fixtures.put(bucket, f"{folder}/base_pins.json", pin)
         record = {"schema": 1, "run_id": run, "mode": "real", "namespace": "features", "snapshot_set": outputs, "feature_set": model, "base_run": base}
         fixtures.put(bucket, f"{folder}/features_snapshot.json", record)

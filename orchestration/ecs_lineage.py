@@ -418,6 +418,13 @@ COMMIT_KEYS = {"schema", "run_id", "backup_sha256", "snapshot_set", "state"}
 SET_KEYS = frozenset({"feature_set", "base_run"})  # a features run's record names its feature set, and a model set's names the base run it read
 MODEL_PIN_KEYS = PIN_KEYS | {"base_row_sha256"}
 DIGEST = re.compile(r"[0-9a-f]{64}")
+ROW_FIELDS = (
+    "run_id",
+    "committed_at",
+    "snapshot_set",
+    "base_run",
+)  # what the model set publish reads of a base run's publish_runs row (feature_sets.ROW_FIELDS)
+APPLY_RECORD = "feast_apply.json"  # the base run's own record of the publication it committed, uploaded by its Feast phase
 
 
 def output_set(
@@ -440,6 +447,39 @@ def output_set(
             if record.get(field) != value:
                 raise LineageRefused(f"{key}: names {field} {record.get(field)!r}, not {value!r}")
     return snapshot_items(layer.output_schema, record["snapshot_set"], key), key
+
+
+def base_row_digest(row: Mapping[str, Any]) -> str:
+    """The SHA-256 of a base run's ``publish_runs`` row in the writer's canonical form (``feature_sets.base_row_digest``): the ``ROW_FIELDS``, sorted keys and
+    compact separators."""
+    document = {name: row.get(name) for name in ROW_FIELDS}
+    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def base_row(evidence: S3Evidence, source: str) -> dict[str, Any]:
+    """The ``publish_runs`` row of base run ``source`` as its own evidence gives it, never the ledger's head. Its full snapshot set comes from its features
+    record and its commit time from the apply record of its own Feast phase, which names the publication it committed (run, commit time, table count and the
+    digest of the snapshot set) and is uploaded once, after the commit. A missing or inconsistent record is refused."""
+    folder = f"{EVIDENCE_PREFIX}/features/{source}"
+    snapshot_key, apply_key = f"{folder}/{LAYERS['features'].output}", f"{folder}/{APPLY_RECORD}"
+    snapshot = require_record(evidence.read(snapshot_key), snapshot_key, source, "features", SNAPSHOT_KEYS, SET_KEYS)
+    if snapshot.get("feature_set") not in (None, "base"):
+        raise LineageRefused(f"{snapshot_key}: is the record of set {snapshot['feature_set']}, not of a base run")
+    snapshots = snapshot["snapshot_set"]
+    applied = evidence.read(apply_key)
+    if applied is None:
+        raise LineageRefused(
+            f"{apply_key}: missing: the commit time of base run {source}, which its row digest covers, is recorded nowhere else in the evidence"
+        )
+    publication = applied.get("publication") if isinstance(applied, dict) else None
+    if not isinstance(publication, dict) or applied.get("step") != "apply" or applied.get("run_id") != source or applied.get("mode") != MODE:
+        raise LineageRefused(f"{apply_key}: is not the apply record of real base run {source}")
+    if publication.get("run_id") != source or publication.get("tables") != len(snapshots):
+        raise LineageRefused(f"{apply_key}: its publication is not the {len(snapshots)} tables of base run {source}")
+    sealed = hashlib.sha256(json.dumps(dict(sorted(snapshots.items())), separators=(",", ":")).encode()).hexdigest()
+    if publication.get("snapshot_set_sha256") != sealed:
+        raise LineageRefused(f"{snapshot_key}: its snapshot set is not the one that base run {source} committed ({apply_key})")
+    return {"run_id": source, "committed_at": timestamp_text(publication.get("committed_at"), apply_key), "snapshot_set": snapshots, "base_run": None}
 
 
 def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str, str | None]:
@@ -468,6 +508,8 @@ def input_pins(evidence: S3Evidence, facts: LaunchFacts, declared: Mapping[str, 
         raise LineageRefused(f"{key}: pins run {source}, not the input run {facts.input_run} bound at launch")
     frozen, _ = output_set(evidence, layer.frozen[0], source, required=True)
     if facts.model:
+        if base_row_digest(base_row(evidence, source)) != record["base_row_sha256"]:
+            raise LineageRefused(f"{key}: base_row_sha256 is not the digest of the row of base run {source} that its own evidence gives")
         pinned = {(item["namespace"], item["name"]) for item in declared["inputs"]}
         frozen = [item for item in frozen or [] if (item["namespace"], item["name"]) in pinned]
     return snapshot_items(layer.input_schema, record["snapshot_set"], key), frozen or [], key, source

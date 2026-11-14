@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
@@ -881,7 +882,70 @@ def model_set_families_carry_the_features_layer() -> None:
         require(ecs_lineage.lineage_layer(other) == other, f"{other} must be its own layer")
 
 
+MODEL_RUN = "20261104T130000Z-feed0002"
+BASE_COMMITTED_AT = "2026-11-04T10:20:00+00:00"
+
+
+def base_row_digest_of(run: str, committed_at: str, snapshot_set: dict[str, int]) -> str:
+    """The digest of a base ledger row in the writer's canonical form (scripts/features/feature_sets.py ``base_row_digest``), written out here."""
+    document = {"run_id": run, "committed_at": committed_at, "snapshot_set": snapshot_set, "base_run": None}
+    return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def model_set_evidence(**change: Any) -> tuple[Any, dict[str, Any], ecs_lineage.LaunchFacts]:
+    """Evidence of the model set m1's run over a base features run: the base run's record and its own Feast apply record (the publication it committed, with
+    its commit time), the model run's pin with the digest of the base row, its one scoped table and its facts. ``change`` replaces one part of the evidence:
+    ``pin_digest``, ``pin_time`` (the commit time the pin's digest was made from), ``apply_time``, ``apply_run``, ``drift`` (a snapshot of the base record that
+    changes after the pin) or ``apply=False`` (no apply record)."""
+    bucket = template_bucket()
+    base, layer = RUN_OF["features"], "lakehouse/layer_runs/features"
+    declared = ecs_lineage.declared_lineage("features_m1")
+    domain = tables_of(declared["inputs"])
+    base_set = {**tables_of(ecs_lineage.declared_lineage("features")["outputs"]), **domain}
+    drifted = {**base_set, "feature_bridge_geography_measures": 999} if change.get("drift") else base_set
+    put(bucket, f"{layer}/{base}/features_snapshot.json", {"schema": 1, "run_id": base, "mode": "real", "namespace": "features", "snapshot_set": drifted})
+    if change.get("apply", True):
+        publication = {
+            "run_id": change.get("apply_run", base),
+            "committed_at": change.get("apply_time", BASE_COMMITTED_AT),
+            "tables": len(base_set),
+            "snapshot_set_sha256": hashlib.sha256(json.dumps(dict(sorted(drifted.items())), separators=(",", ":")).encode()).hexdigest(),
+        }
+        put(bucket, f"{layer}/{base}/feast_apply.json", {"schema": 1, "step": "apply", "run_id": base, "mode": "real", "publication": publication})
+    digest = change.get("pin_digest") or base_row_digest_of(base, change.get("pin_time", BASE_COMMITTED_AT), base_set)
+    pin = {"schema": 1, "run_id": MODEL_RUN, "mode": "real", "namespace": "features", "source_run_id": base, "snapshot_set": domain, "base_row_sha256": digest}
+    put(bucket, f"{layer}/{MODEL_RUN}/base_pins.json", pin)
+    scoped = tables_of(declared["outputs"])
+    record = {"schema": 1, "run_id": MODEL_RUN, "mode": "real", "namespace": "features", "snapshot_set": scoped, "feature_set": "m1", "base_run": base}
+    put(bucket, f"{layer}/{MODEL_RUN}/features_snapshot.json", record)
+    facts_of = ecs_lineage.LaunchFacts(MODEL_RUN, "features", 1, START, END, "succeeded", base, "m1")
+    return bucket, declared, facts_of
+
+
+def model_set_digest_is_bound_to_its_base_row() -> None:
+    """The base-row digest of a model set's pin is compared with the digest of the row that the base run's own evidence gives (its snapshot set, its
+    publication's run and commit time): a wrong digest, a digest of another commit time, a changed commit time, a drifted base record, a missing or foreign
+    apply record each make the lineage refused, never complete."""
+    bucket, declared, found = model_set_evidence()
+    lineage = ecs_lineage.job_lineage("features", invocation("features"), declared, ecs_lineage.S3Evidence(bucket, BUCKET), found)
+    require(lineage.launch["snapshotState"] == "complete", f"the evidence of a model set with its true digest is {lineage.launch}")
+    mutations = {
+        "a wrong digest": ({"pin_digest": "0" * 64}, "base_row_sha256"),
+        "a digest of another commit time": ({"pin_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),
+        "a changed commit time": ({"apply_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),
+        "a drifted base record": ({"drift": True}, "base_row_sha256"),
+        "no apply record": ({"apply": False}, "feast_apply.json"),
+        "an apply record of another run": ({"apply_run": MODEL_RUN}, "feast_apply.json"),
+    }
+    for name, (change, word) in mutations.items():
+        bucket, declared, found = model_set_evidence(**change)
+        read = partial(ecs_lineage.job_lineage, "features", invocation("features"), declared, ecs_lineage.S3Evidence(bucket, BUCKET), found)
+        error = refuses(ecs_lineage.LineageRefused, read)
+        require(word in str(error), f"{name} is refused with {error}")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "model_set_digest_is_bound_to_its_base_row": model_set_digest_is_bound_to_its_base_row,
     "model_set_families_carry_the_features_layer": model_set_families_carry_the_features_layer,
     "declared_lineage_follows_the_code": declared_lineage_follows_the_code,
     "declared_names_are_the_mirror_names": declared_names_are_the_mirror_names,
