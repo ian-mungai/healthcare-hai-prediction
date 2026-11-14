@@ -3789,7 +3789,7 @@ PLANTED_REGRESSIONS = [
         [case for case in IN_USE_CASES if not case.expect_pass and "unparsable Python file holds the word" in case.name],
         REMOVED_NAMES_COMMAND,
         "scripts/quality/repo_checks.py",
-        '        view = "\\n".join(python_literals(lines, blanked, comments=True))',
+        '        view = "\\n".join(python_literals(lines, blanked, comments=True, drop_unread=True))',
         '        view = "\\n".join(lines)',
         0,
     ),
