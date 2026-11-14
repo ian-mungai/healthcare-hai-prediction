@@ -38,11 +38,14 @@ NOT_RUN = frozenset(
     }
 )
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
+# The files the launch library needs are listed once in ``airflow_launch_files`` and the stack generates one mount per entry under /opt/hai/<path>.
+GENERATED_MOUNT = re.compile(r'^\s+code_[a-z0-9_]+\s*=\s*"orchestration/([A-Za-z0-9_]+\.py)"', re.MULTILINE)
 
 
 def mounted_modules() -> list[str]:
     """The ``orchestration`` files that the Airflow containers receive, as the services stack lists them."""
-    names = MOUNT.findall((ROOT / "infra/services/airflow.tf").read_text())
+    text = (ROOT / "infra/services/airflow.tf").read_text()
+    names = [*MOUNT.findall(text), *GENERATED_MOUNT.findall(text)]
     require(bool(names) and "__init__.py" in names, f"the Airflow mount lists no orchestration package: {names}")
     return names
 
