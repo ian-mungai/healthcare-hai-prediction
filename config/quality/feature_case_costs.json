@@ -1,5 +1,5 @@
 {
-  "note": "Saved cost in seconds of each feature E2E case, from the hosted run 41521618599 of pull request 72 (the combined reports of both suites). scripts/lakehouse/feature_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost. A cost changes only the balance, never which cases run: the combining step requires every case exactly once.",
+  "note": "Saved cost in seconds of each feature E2E case, from the hosted run 41521618599 of pull request 72 (the combined reports of both suites). scripts/lakehouse/feature_shards.py packs the cases of a suite into its shards by these costs, heaviest first, each case into the lightest shard. A case without a cost is packed with the median cost. A cost changes only the balance, never which cases run: the combining step requires every case exactly once. Six cases of the sources suite (first_window_year_not_a_year, first_window_year_removed, reviewed_var_in_a_model_is_admitted_resolved, reviewed_var_with_a_default_resolved, var_name_built_at_run_time_resolved, var_with_an_unreviewed_name_resolved) have no hosted cost: their costs were measured locally on one Mac on 2026-11-14 as the seconds of each case in the report of data/e2e/heavy_20261114/r11_feature_costs/ (rounded to 0.1 s), not taken from the hosted run.",
   "sources": {
     "committed_files_admitted": 117.6,
     "run_query_rewrites_a_filter_table_in_a_contracted_model_resolved": 23.6,
@@ -155,7 +155,13 @@
     "default_selector_includes_the_tag": 0.2,
     "exclusion_only_in_a_comment_of_pipeline_build": 0.1,
     "silver_name_in_comments_passes": 0.2,
-    "silver_name_in_string_and_comment_passes": 0.2
+    "silver_name_in_string_and_comment_passes": 0.2,
+    "reviewed_var_in_a_model_is_admitted_resolved": 42.4,
+    "var_with_an_unreviewed_name_resolved": 12.9,
+    "reviewed_var_with_a_default_resolved": 12.7,
+    "var_name_built_at_run_time_resolved": 12.7,
+    "first_window_year_removed": 0.2,
+    "first_window_year_not_a_year": 0.1
   },
   "columns": {
     "committed_files": 0.0,
