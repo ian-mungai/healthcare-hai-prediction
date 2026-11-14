@@ -220,14 +220,17 @@ def bronze_request_reader(s3: S3Reader, bucket: str, collections: Mapping[str, s
     return read
 
 
-def ssm_current_code_run_reader(ssm: Any, name: str) -> Callable[[], str | None]:
-    """Read the code run that CI staged last from Parameter Store, or None while the parameter does not exist."""
+def ssm_current_code_run_reader(ssm: Any, name: str, required: bool = False) -> Callable[[], str | None]:
+    """Read the code run that CI staged last from Parameter Store. A parameter that does not exist reads as None, or is refused by name where ``required``
+    (production, where no run may fall back to code staged under its own run ID)."""
 
     def read() -> str | None:
         try:
             return str(ssm.get_parameter(Name=name)["Parameter"]["Value"])
         except ClientError as error:
             if error.response.get("Error", {}).get("Code") == "ParameterNotFound":
+                if required:
+                    raise TaskRefused(f"current_code_run_parameter_{name}_is_not_set") from None
                 return None
             raise TaskUnavailable("current_code_run_unreadable") from None
         except BotoCoreError:
@@ -670,7 +673,8 @@ class Preflight:
         A scheduled run stages no code of its own. A run with a binding keeps it, whatever the current-code parameter names now. A retry takes the code run
         of its original monthly run (the binding of that run, or the run itself when it ran its own code) and is bound to it once. A run with none takes the
         code run the parameter names (the code CI staged last) and is bound to it once, so every later attempt of the run uses the same code. Where no
-        parameter is configured or none is set, the run uses the code staged under its own run ID. A parameter that cannot be read waits, and one that is
+        parameter is configured or none is set (development), the run uses the code staged under its own run ID; production refuses a missing parameter by
+        name. A parameter that cannot be read waits, and one that is
         not a run ID refuses the run."""
         stored = self.code_runs.stored(request.run_id)
         if stored is not None:

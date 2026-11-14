@@ -22,6 +22,7 @@ ECS. The failure modes, each with the case that covers it:
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -30,10 +31,23 @@ from typing import Any
 from unittest import mock
 
 from orchestration import ingestion_schedule as schedule
-from orchestration.ecs_preflight import TaskUnavailable
-from scripts.orchestration.airflow_mode_cases import Rig, World, world
+from orchestration.ecs_adapter import TaskRefused
+from orchestration.ecs_preflight import TaskUnavailable, ssm_current_code_run_reader
+from scripts.orchestration.airflow_mode_cases import (
+    CURRENT_CODE_PARAMETER,
+    HOLD_PARAMETER,
+    LOCK_PARAMETER,
+    LaunchSsm,
+    Rig,
+    World,
+    launch_environment,
+    no_lock,
+    production_services,
+    world,
+)
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_chain_cases import Dag
+from scripts.orchestration.ecs_fake import client_error
 from scripts.orchestration.ecs_launch_cases import refuses
 
 LOGICAL_DATE = datetime(2026, 12, 1, tzinfo=UTC)
@@ -268,12 +282,56 @@ def a_retry_of_a_run_with_its_own_code_uses_that_code() -> None:
     require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 2)) == ORIGINAL, "the retry was not bound to the run whose code it used")
 
 
+class MissingParameter:
+    """The SSM client of a stack where nobody staged any code: the one parameter does not exist."""
+
+    def get_parameter(self, **request: Any) -> dict[str, Any]:
+        raise client_error("ParameterNotFound", "GetParameter")
+
+
+def a_missing_current_code_run_refuses_in_production_and_names_the_parameter() -> None:
+    name = CURRENT_CODE_PARAMETER
+    error = refuses(TaskRefused, ssm_current_code_run_reader(MissingParameter(), name, required=True))
+    require(name in str(error), f"the refusal does not name the parameter: {error}")
+    require(ssm_current_code_run_reader(MissingParameter(), name, required=False)() is None, "a deployment that is not production refused a missing parameter")
+    run = schedule.scheduled_run_id(LOGICAL_DATE)
+    for label, blind in (("a scheduled run", "scheduled"), ("a hand trigger", "manual")):
+        rig = Rig()
+        rig.stage_runs(run, "20261110T120000Z-ab12cd34")  # code staged under the run's own id must not be a way around the refusal
+        rig.preflight.current_code_run = ssm_current_code_run_reader(MissingParameter(), name, required=True)
+        params = {"mode": "real"} if blind == "scheduled" else {"run_id": "20261110T120000Z-ab12cd34", "mode": "real"}
+        with scheduled(rig, PRODUCTION, params, blind) as (current, _):
+            states = current.run_dag("ingestion_dag.py")
+            error_text = str(current.results.get("preflight"))
+        require(states["preflight"] == "failed" and states["job"] == "upstream_failed", f"{label}: the run did not stop: {states}")
+        require(name in error_text, f"{label}: the refusal does not name the parameter: {error_text}")
+        require(rig.tasks_started() == 0, f"{label}: a task started")
+
+
+def production_services_require_the_current_code_run_only_in_production() -> None:
+    for environment, refuses_missing in (({schedule.ENVIRONMENT_SETTING: "prod"}, True), ({schedule.ENVIRONMENT_SETTING: "dev"}, False), ({}, False)):
+        ssm = LaunchSsm({HOLD_PARAMETER: ["clear"], LOCK_PARAMETER: no_lock(), CURRENT_CODE_PARAMETER: no_lock()})
+        with tempfile.TemporaryDirectory() as scratch:
+            built = production_services(
+                ssm,
+                launch_environment(scratch, HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER=CURRENT_CODE_PARAMETER) | environment,
+            )
+        reader = built.preflight.current_code_run
+        require(callable(reader), "the production preflight has no current code run reader")
+        if refuses_missing:
+            require(CURRENT_CODE_PARAMETER in str(refuses(TaskRefused, reader)), "production did not refuse a missing parameter by name")
+        else:
+            require(reader() is None, f"{environment} refused a missing parameter")
+
+
 CASES: dict[str, Callable[[], None]] = {
     "schedule_is_production_only": schedule_is_production_only,
     "scheduled_run_launches_the_monthly_kind_once_per_date": scheduled_run_launches_the_monthly_kind_once_per_date,
     "scheduled_run_takes_the_current_code_run_and_keeps_it": scheduled_run_takes_the_current_code_run_and_keeps_it,
     "current_code_run_that_is_unreadable_or_malformed_launches_nothing": current_code_run_that_is_unreadable_or_malformed_launches_nothing,
     "without_a_current_code_run_the_run_uses_its_own_code": without_a_current_code_run_the_run_uses_its_own_code,
+    "a_missing_current_code_run_refuses_in_production_and_names_the_parameter": a_missing_current_code_run_refuses_in_production_and_names_the_parameter,
+    "production_services_require_the_current_code_run_only_in_production": production_services_require_the_current_code_run_only_in_production,
     "hand_trigger_in_production_must_name_its_run": hand_trigger_in_production_must_name_its_run,
     "development_form_still_requires_its_run": development_form_still_requires_its_run,
     "retry_schedule_is_production_only": retry_schedule_is_production_only,

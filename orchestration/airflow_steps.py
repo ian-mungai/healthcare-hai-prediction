@@ -171,7 +171,9 @@ def services() -> LaunchServices:
         code_runs=S3CodeRuns(s3, bucket),
         clock=clock.wall,
         bronze_request=bronze_request_reader(s3, bucket, collections),
-        current_code_run=ssm_current_code_run_reader(ssm, values["HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER"]),
+        current_code_run=ssm_current_code_run_reader(
+            ssm, values["HAI_LAUNCH_CURRENT_CODE_RUN_PARAMETER"], required=os.environ.get("HAI_ENVIRONMENT") == "prod"
+        ),
         host_capacity=values[HOST_CAPACITY],
         task_definition=adapter.task_definition,
         host_job_cap=cap,
