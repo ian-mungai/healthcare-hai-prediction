@@ -17,10 +17,10 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-import yaml
 
 from scripts.orchestration import offline_checks, real_image_dags
 from scripts.orchestration import run_real_image_dags_e2e as runner
+from scripts.quality.repo_checks import load_yaml
 from tests.support import check
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
@@ -392,7 +392,7 @@ def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_r
 
 def test_the_airflow_check_service_sets_the_creation_default_the_check_needs_before_it_imports_airflow() -> None:
     # in_image_checks imports Airflow before the rig runs, and Airflow reads the default once at import, so the rig's own setting comes too late in the image.
-    compose = yaml.safe_load((SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text())
+    compose: Any = load_yaml((SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text())
     environment = compose["services"]["airflow-check"]["environment"]
     check(environment.get("AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION") == "false", f"the check image creates DAGs paused: {environment}")
 
