@@ -169,15 +169,33 @@ def current_code_run_that_is_unreadable_or_malformed_launches_nothing() -> None:
 
 
 def without_a_current_code_run_the_run_uses_its_own_code() -> None:
+    """Outside production a run with no current code run uses the code staged under its own run id, is bound to it once, and keeps that code when the
+    parameter appears later."""
     rig = Rig()
     run = schedule.scheduled_run_id(LOGICAL_DATE)
-    rig.stage_runs(run)
+    rig.stage_runs(run, NEWER_CODE)
     rig.preflight.current_code_run = reader_of(None)
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
         states = current.run_dag("ingestion_dag.py")
     require(states == PASSED, f"a run with code of its own and no current code run did not pass: {states}")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == run, f"the publisher did not fetch the code of its own run: {rig.environment()['fetch']}")
-    require(rig.preflight.code_runs.stored(run) is None, "a run that used its own code was bound")
+    require(rig.preflight.code_runs.stored(run) == run, "a run that used its own code was not bound to it")
+    rig.preflight.current_code_run = reader_of(NEWER_CODE)
+    with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (again, _):
+        again.run_dag("ingestion_dag.py")
+    require(rig.tasks_started() == 1, "the parameter appearing later started a second task")
+    require(rig.preflight.code_runs.stored(run) == run, "the parameter appearing later changed the binding of a run")
+
+
+def a_run_with_no_current_code_run_reader_is_bound_to_its_own_code() -> None:
+    rig = Rig()
+    run = schedule.scheduled_run_id(LOGICAL_DATE)
+    rig.stage_runs(run)
+    rig.preflight.current_code_run = None
+    with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (current, _):
+        states = current.run_dag("ingestion_dag.py")
+    require(states == PASSED, f"a run with no parameter configured did not pass: {states}")
+    require(rig.preflight.code_runs.stored(run) == run, "a run with no parameter configured was not bound to its own code")
 
 
 def hand_trigger_in_production_must_name_its_run() -> None:
@@ -330,6 +348,7 @@ CASES: dict[str, Callable[[], None]] = {
     "scheduled_run_takes_the_current_code_run_and_keeps_it": scheduled_run_takes_the_current_code_run_and_keeps_it,
     "current_code_run_that_is_unreadable_or_malformed_launches_nothing": current_code_run_that_is_unreadable_or_malformed_launches_nothing,
     "without_a_current_code_run_the_run_uses_its_own_code": without_a_current_code_run_the_run_uses_its_own_code,
+    "a_run_with_no_current_code_run_reader_is_bound_to_its_own_code": a_run_with_no_current_code_run_reader_is_bound_to_its_own_code,
     "a_missing_current_code_run_refuses_in_production_and_names_the_parameter": a_missing_current_code_run_refuses_in_production_and_names_the_parameter,
     "production_services_require_the_current_code_run_only_in_production": production_services_require_the_current_code_run_only_in_production,
     "hand_trigger_in_production_must_name_its_run": hand_trigger_in_production_must_name_its_run,
