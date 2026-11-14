@@ -1820,6 +1820,7 @@ FEATURE_ENTRIES = [
     "lakehouse_features_combine",
     "lakehouse_features_store",
 ]
+FEATURE_COMMAND_FUNCTIONS = ("sources_check", "sources", "columns_check", "columns")
 OLD_GOLD_COMMANDS = (
     "scripts.lakehouse.bridge_references --check",
     "scripts.lakehouse.run_bridge_references_e2e",
@@ -2027,7 +2028,9 @@ def gold_unit_cases() -> list[dict[str, Any]]:
 
 def feature_split_cases() -> list[dict[str, Any]]:
     text = ci_script()
-    feature_commands = [command for suite in ("sources", "columns") for command in timed_commands(function_text(text, f"lakehouse_features_{suite}") or "")]
+    feature_commands = [
+        command for function in FEATURE_COMMAND_FUNCTIONS for command in timed_commands(function_text(text, f"lakehouse_features_{function}") or "")
+    ]
     gold_commands = [command for name in GOLD_UNIT_FUNCTIONS for command in timed_commands(function_text(text, name) or "")]
     sources = (
         "scripts/lakehouse/feature_allowlist.py",
