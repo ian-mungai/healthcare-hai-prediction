@@ -277,11 +277,11 @@
     },
     {
       "path": "scripts/acquisition/tests/test_committed_plans.py",
-      "line": 24,
+      "line": 77,
       "code_sha256": "77941c9c827bf363e8d23dc7d5821595660e9640a88b976a3fc40bcc5e088222",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "c1304afc43816561700d2606c25fe41cd47131eb450241729ee2611de8d8ab27",
+      "file_sha256": "0ed264be30ce5034234524c4c02877e8de798a953e28322840d97b12d1113186",
       "dependencies": {
         "scripts/acquisition/redownload.py": "sha256:64af6386d53fae1902569a319bf1b793743766b4583d6716b260c3d2efb7043f",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
