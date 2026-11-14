@@ -1030,6 +1030,35 @@ def case_e11_variables(c: Checker) -> None:
         c.check("the refusal lists names only", SENTINEL not in message)
 
 
+def case_e13_own_publication(c: Checker) -> None:
+    """The record of an apply names the publication of the run it applies, never the catalog head: a later publication with the same snapshots does not
+    replace it, a run with no publication is refused and so is a run whose tables moved on."""
+    schema = synthetic_schema()
+    log: list[str] = []
+    _, snapshots = stub_features(schema)
+    later = T0 + timedelta(hours=1)
+    catalog, _ = stub_features(schema, runs=[runs_row(RUN_A, T0, snapshots), runs_row(RUN_B, later, snapshots)])
+    own = reads.read_publication(catalog, "features_e2e", RUN_A)
+    with tempfile.TemporaryDirectory(prefix="feast_cases_") as raw:
+        folder = Path(raw)
+        record = run_apply(catalog, RecordingBackend(schema, log), recording_lease(log), schema, folder)
+        c.check("a later publication with the same snapshots does not replace the run's own", record["publication"]["run_id"] == RUN_A)
+        c.check("the record carries the commit time of the run's own row", record["publication"]["committed_at"] == own.committed_at)
+        absent, _ = stub_features(schema, runs=[runs_row(RUN_B, later, snapshots)])
+        c.refused(
+            "a run with no publication is refused",
+            lambda: run_apply(absent, RecordingBackend(schema, log), recording_lease(log), schema, folder),
+            "exactly one",
+        )
+        moved, _ = stub_features(schema, runs=[runs_row(RUN_A, T0, snapshots), runs_row(RUN_B, later, {**snapshots, "feature_matrix_measures": 9999})])
+        moved.tables["feature_matrix_measures"].main = 9999
+        c.refused(
+            "a run whose tables moved on is refused",
+            lambda: run_apply(moved, RecordingBackend(schema, log), recording_lease(log), schema, folder),
+            "feature_matrix_measures",
+        )
+
+
 def case_e13_order(c: Checker) -> None:
     """LC13: heads are verified before the pre-apply comparison and again, inside the lease, after the read-back."""
     schema = synthetic_schema()
@@ -2253,6 +2282,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E33_cached_release": (online_release_cases.case_e33_cached_release, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
+    "E13_own_publication": (case_e13_own_publication, "LC13"),
     "E13_lease": (case_e13_lease, "LC12"),
     "E13_protocol": (case_e13_protocol, "LC12"),
     "E13_repository": (case_e13_repository, "LC31 LC32"),

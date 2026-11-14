@@ -52,6 +52,8 @@ CHAIN = {"silver": SILVER_RUN, "gold": GOLD_RUN, "features": FEATURES_RUN}
 INPUT_OF = {"silver": None, "gold": SILVER_RUN, "features": GOLD_RUN}
 CATALOG: list[Path] = []  # the throwaway catalog folder of the case being run
 DEFECTS: set[str] = set()  # the stand-in defects of the case being run
+FEAST_PUBLICATION: dict[str, str] = {}  # the publication that the stand-in Feast apply of a run names, when it is not the run itself
+FEAST_COMMITTED_AT: dict[str, str] = {}  # the commit time that the stand-in Feast apply of a run records, when it is not the usual one
 UPLOADS: list[tuple[str, str]] = []
 
 
@@ -215,7 +217,16 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
         if "feast_fails" in DEFECTS:
             fail(module)
         shared_write("feast", step=step, run=job.run)
-        (folder / f"feast_{step}.json").write_text(json.dumps({"step": step, "run_id": job.run}) + "\n")
+        record: dict[str, Any] = {"step": step, "run_id": job.run}
+        if step == "apply":
+            publication = {
+                "run_id": FEAST_PUBLICATION.get(job.run, job.run),
+                "tables": 47,
+                "snapshot_set_sha256": "a" * 64,
+                "committed_at": FEAST_COMMITTED_AT.get(job.run, "2026-10-30T03:15:00+00:00"),
+            }
+            record |= {"schema": 1, "mode": job.mode, "publication": publication}
+        (folder / f"feast_{step}.json").write_text(json.dumps(record) + "\n")
     elif name == "gold_maintenance":
         maintain_step(job, arguments)
     else:
@@ -551,6 +562,9 @@ class FakeS3:
         if IfNoneMatch == "*" and Key in STATE:
             raise self.ClientError("PreconditionFailed")
         STATE[Key] = Body.encode() if isinstance(Body, str) else Body
+        if Key.endswith("/feast_apply.json"):
+            UPLOADS.append((Bucket, Key))
+            shared_write("upload", key=Key)
         return {}
 
     def head_object(self, Bucket: str, Key: str) -> dict[str, Any]:
@@ -576,6 +590,8 @@ class FakeS3:
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
         if Key in DBT_COPIES:
             return {"Body": io.BytesIO(DBT_COPIES[Key])}
+        if Key in STATE:
+            return {"Body": io.BytesIO(STATE[Key])}
         require(Bucket == BUCKET and Key in STORED, (Bucket, Key))
         return {"Body": io.BytesIO(STORED[Key])}
 
@@ -635,6 +651,8 @@ class Case:
         CATALOG[0].mkdir()
         UPLOADS.clear()
         DEFECTS.clear()
+        FEAST_PUBLICATION.clear()
+        FEAST_COMMITTED_AT.clear()
         STORED.clear()
         STATE.clear()
         DBT_COPIES.clear()
@@ -994,6 +1012,79 @@ def case_features_h3_other_source(case: Case) -> None:
     require(case.phase("features", "pin") != 0 and "names another gold run than INPUT_RUN_ID" in case.err, case.err)
 
 
+OTHER_PUBLICATION = "20261030T040000Z-5e6f7a8b"  # the run of another publication, which a stand-in Feast apply can be told to name
+
+
+def apply_key() -> str:
+    return f"lakehouse/layer_runs/features/{FEATURES_RUN}/feast_apply.json"
+
+
+def case_features_apply_record_is_write_once(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7 and case.chain("features") == [0] * 7, case.err)
+    kept = STATE.get(apply_key())
+    require(kept is not None and json.loads(kept)["publication"]["run_id"] == FEATURES_RUN, f"the apply record of the run is in the bucket: {kept!r}")
+    require(case.phase("features", "feast") == 0, f"a re-apply of the same publication succeeds: {case.err}")
+    require(STATE[apply_key()] == kept, "a re-apply of the same publication changes nothing")
+    folder = case.root / "uploadable"
+    folder.mkdir()
+    for name in ("feast_apply.json", "feast_materialize.json", "layer_run.json"):
+        (folder / name).write_text("{}\n")
+    require(
+        [path.name for path in layer_run.uploadable(SimpleNamespace(folder=folder))] == ["feast_materialize.json", "layer_run.json"],
+        "the upload of the run folder leaves the apply record to its own put",
+    )
+    require([key for _, key in UPLOADS].count(apply_key()) == 1, f"the apply record is written once: {[key for _, key in UPLOADS if key == apply_key()]}")
+
+
+def case_features_reapply_of_another_publication_is_refused(case: Case) -> None:
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7 and case.chain("features") == [0] * 7, case.err)
+    kept = STATE[apply_key()]
+    FEAST_COMMITTED_AT[FEATURES_RUN] = "2026-10-30T09:00:00+00:00"
+    require(case.phase("features", "feast") != 0, "a re-apply that names another publication is refused")
+    require("publication" in case.err and apply_key() in case.err, case.err)
+    require(STATE[apply_key()] == kept, "the stored apply record is kept")
+
+
+def case_features_apply_record_of_another_publication_is_not_uploaded(case: Case) -> None:
+    features_up_to(case, "feast")
+    FEAST_PUBLICATION[FEATURES_RUN] = OTHER_PUBLICATION
+    require(case.phase("features", "feast") != 0, "an apply record that names another publication than the run's own is refused")
+    require(apply_key() not in STATE and apply_key() not in [key for _, key in UPLOADS], "nothing of it is in the bucket")
+
+
+def case_apply_identity_ignores_what_a_re_apply_may_change(case: Case) -> None:
+    """A model set's record names its own publication and its base's: a re-apply that changes only the Feast version or the object counts is the same
+    identity, and one that names another base publication is not."""
+    folder = case.root / "identity"
+    folder.mkdir()
+    record = {
+        "schema": 1,
+        "step": "apply",
+        "run_id": FEATURES_RUN,
+        "mode": "real",
+        "feature_set": "m1",
+        "publication": {"run_id": FEATURES_RUN, "tables": 1, "snapshot_set_sha256": "a" * 64, "committed_at": "2026-10-30T04:00:00+00:00"},
+        "base_publication": {"run_id": BASE_RUN, "tables": 47, "snapshot_set_sha256": "b" * 64},
+        "feast_version": "1",
+    }
+    path = folder / "feast_apply.json"
+
+    def put(value: dict[str, Any]) -> None:
+        path.write_text(json.dumps(value) + "\n")
+        layer_run.put_apply_record(FakeS3(), BUCKET, apply_key(), path, FEATURES_RUN)
+
+    put(record)
+    kept = STATE[apply_key()]
+    put({**record, "feast_version": "2", "objects": {"entity": 9}})
+    require(STATE[apply_key()] == kept, "the same identity changes nothing")
+    try:
+        put({**record, "base_publication": {**record["base_publication"], "run_id": OTHER_PUBLICATION}})
+    except layer_run.StepError as error:
+        require("base_publication" in str(error) and STATE[apply_key()] == kept, f"{error}")
+    else:
+        raise AssertionError("another base publication was accepted")
+
+
 def case_features_failed_feast_keeps_the_evidence(case: Case) -> None:
     features_up_to(case, "feast")
     prefix = f"lakehouse/layer_runs/features/{FEATURES_RUN}/"
@@ -1346,6 +1437,10 @@ CASES: dict[str, Callable[[Case], None]] = {
     "features H3: a pin with an extra table is refused": case_features_h3_extra_table,
     "features H3: a pin of another gold run is refused": case_features_h3_other_source,
     "features: the evidence is in the bucket before Feast can fail": case_features_failed_feast_keeps_the_evidence,
+    "features: the apply record is kept and a same publication re-apply changes nothing": case_features_apply_record_is_write_once,
+    "features: a re-apply of another publication is refused": case_features_reapply_of_another_publication_is_refused,
+    "features: an apply record of another publication is not uploaded": case_features_apply_record_of_another_publication_is_not_uploaded,
+    "features: the apply identity ignores what a re-apply may change": case_apply_identity_ignores_what_a_re_apply_may_change,
     "a second pin of a run ID is refused before any shared write": case_retry_of_a_run_is_refused_at_the_pin,
     "a plain git archive is refused before the run ID is claimed": case_plain_git_archive_is_refused_before_the_run_id_is_claimed,
     "the archive builder writes the same bytes every time": case_builder_output_is_the_same_bytes_every_time,

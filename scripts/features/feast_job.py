@@ -259,10 +259,11 @@ def apply(
     lease: Lease,
     deadline: Callable[[str], None],
 ) -> dict[str, Any]:
-    """Apply the repository to one verified publication and return the record (also written to ``feast_apply.json`` by ``run``)."""
+    """Apply the repository to the verified publication of ``settings.run`` and return the record (also written to ``feast_apply.json`` by ``run``). The
+    catalog head is never selected: a later publication cannot give the run's record its identity, and a run with no publication is refused."""
     namespace = reads.NAMESPACES[settings.mode]
     deadline("selecting the publication")
-    publication = reads.read_publication(catalog, namespace)
+    publication = reads.read_publication(catalog, namespace, settings.run)
     reads.verify_heads(catalog, publication, "before apply")
     deadline("the pre-apply comparison")
     preflight(catalog, publication, schema, backend)
