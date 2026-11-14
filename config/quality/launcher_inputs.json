@@ -343,6 +343,11 @@
       "why": "reviewed: the DAG cases list the shipped DAG files with glob at scripts/orchestration/airflow_mode_cases.py:1366, :1905 and :2045 on (ROOT / \"dags\") and read each match; no other folder is listed"
     },
     {
+      "module": "scripts/orchestration/ecs_lineage_cases.py",
+      "pattern": "^data_contracts/openlineage/[^/]+[.]json$",
+      "why": "reviewed: the lineage cases list the copied OpenLineage specification files with glob at scripts/orchestration/ecs_lineage_cases.py:154 and :811 on SPEC_FOLDER (:35 = ROOT / data_contracts / openlineage) and read each match; the second site compares the folder with the digests that orchestration/ecs_lineage.py pins, so an extra file fails; no other folder is listed"
+    },
+    {
       "module": "scripts/orchestration/in_image_checks.py",
       "pattern": null,
       "why": "reviewed: dags lists DAG_FOLDER = /opt/hai/dags, a path inside the Airflow image (scripts/orchestration/in_image_checks.py:39, glob :48), and the spool check lists a temporary folder (:226); neither is a folder of the checkout"
@@ -466,6 +471,7 @@
     "scripts/lakehouse/silver_input.py": 2,
     "scripts/lakehouse/silver_quality.py": 1,
     "scripts/orchestration/airflow_mode_cases.py": 3,
+    "scripts/orchestration/ecs_lineage_cases.py": 2,
     "scripts/orchestration/in_image_checks.py": 2,
     "scripts/orchestration/ledger.py": 1,
     "scripts/orchestration/offline_checks.py": 1,
