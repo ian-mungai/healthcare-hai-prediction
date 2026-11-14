@@ -4220,8 +4220,10 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
         "scope_and_check_range_steps_pass": all(code == 0 for code in scope_exits.values()),
         "commit_checks_use_the_real_range": bool(consumers)
         and all(env == {"RANGE_START": want_start, "RANGE_END": head} for name, env in consumers.items() if name not in file_based),
-        # The hook partitions and the acquisition tests read the files of the range in a pull request and every file in a full run.
-        "file_based_checks_use_the_check_range": len(file_based) == 3
+        # The hook partitions (the groups and the samples shards) and the acquisition tests (the shards and the combine) read the files of the range in a pull
+        # request and every file in a full run.
+        "file_based_checks_use_the_check_range": sorted(name.split(".")[0] for name in file_based)
+        == ["acquisition", "acquisition_shard", "hook_samples", "hooks"]
         and all(
             consumers[name] == ({"RANGE_START": want_start, "RANGE_END": head} if event == "pull_request" else {"RANGE_START": "", "RANGE_END": ""})
             for name in file_based
