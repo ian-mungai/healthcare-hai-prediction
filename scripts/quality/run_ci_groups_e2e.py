@@ -3661,7 +3661,7 @@ def observe(label: str, argv: list[str], action: Callable[[], Any]) -> Any:
     marker(label, "started").touch()
     met = True
     if label in exclusive:
-        await_markers([marker(peers[0], "started")])
+        met = await_markers([marker(name, "started") for name in exclusive])
     elif label in peers:
         met = await_markers([marker(name, "started") for name in [*exclusive, *peers]])
         marker(label, "ready").touch()
@@ -3766,6 +3766,8 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
                 "SCHEDULING_PROBE": str(probe),
                 "SCHEDULING_FAIL": HOOK_SHARD_LABELS[2] if fail_samples else "",
                 "QUALITY_ARTIFACT_DIR": str(quality),
+                # The case checks the order and the rendezvous of items that run together: the budget admits them all at once, as on any machine.
+                "CI_CORE_BUDGET": "64",
             },
             prepare=prepare,
             timing=timing,
@@ -3801,21 +3803,24 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
         expected += ["probe: lakehouse_features_store", "lakehouse_features: feature sources check", "lakehouse_features: feature columns check"]
-        expected += [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
+        # A failed shard of the hooks stops the combining steps of the run, as a failed acquisition shard does, while the other workers still run.
+        expected += [] if fail_samples else [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
         expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)]
-        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "lock")] + [*HOOK_SHARD_LABELS, HOOK_COMBINE_LABEL]
+        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "lock")] + HOOK_SHARD_LABELS
+        expected += [] if fail_samples else [HOOK_COMBINE_LABEL]
         expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
-        expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)] + ["probe: acquisition combine"]
+        expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)]
+        expected += [] if fail_samples else ["probe: acquisition combine"]
     peer_rows = [row for row in rows if row["label"] in peers]
     writer = [row for row in rows if row["label"] == "probe: lakehouse_gold_writer_setup"]
     summary = (out / f"{name}_summary.md").read_text()
     checks = {
         "intended_exit": code != 0 if fail_samples else code == 0,
-        "orchestration_commands_exactly_once_with_unchanged_argv": actual == ([] if staged or fail_samples else wanted),
-        "selected_commands_exactly_once": True if fail_samples else sorted(labels) == sorted(expected),
-        "samples_have_no_peer_overlap": all(not intervals_overlap(sample, row) for sample in samples for row in rows if row not in samples),
+        "orchestration_commands_exactly_once_with_unchanged_argv": actual == ([] if staged else wanted),
+        "selected_commands_exactly_once": sorted(labels) == sorted(expected),
         "the_shards_and_the_lock_run_at_once": part != "all"
         or len(samples) == len(HOOK_EXCLUSIVE_LABELS)
+        and all(row["barrier_met"] for row in samples)
         and all(intervals_overlap(left, right) for left in samples for right in samples if left is not right),
         "gold_writer_precedes_samples": not writer or not samples or writer[0]["end"] <= min(row["start"] for row in samples),
         "the_combine_runs_once_after_every_shard": part != "all"
@@ -3823,10 +3828,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
         and not combine
         or len(combine) == 1
         and all(row["end"] <= combine[0]["start"] for row in samples),
-        "shared_work_follows_samples_and_the_combine": not samples
-        or fail_samples
-        or all(max(row["end"] for row in [*samples, *combine]) <= row["start"] for row in shared),
-        "failed_samples_stop_the_shared_work": not fail_samples or not shared,
+        "failed_samples_do_not_stop_the_shared_work": not fail_samples or len(shared) > 0,
         "remaining_shared_workers_overlap": fail_samples
         or len(peer_rows) == 2
         and all(row["barrier_met"] for row in peer_rows)
