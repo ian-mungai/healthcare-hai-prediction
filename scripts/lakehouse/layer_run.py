@@ -25,7 +25,8 @@ table of its base run, never the whole features prefix, so sibling sets that pub
 configured bronze tables (silver) or, as a contract check, the tables of the silver publish contract (gold) or the gold publish contract (features). Two extra
 checks run beside them: the staged code objects keep their recorded versions and the backup stored in the bucket equals its record. ``upload``, ``maintain``
 and ``feast`` run only for a run that passed them. Any failed check exits 1 and names the phase. Features uploads its run records before ``feast``, because the
-commit is already done and a Feast failure must not lose its evidence. ``feast`` then adds the records of its own two steps.
+commit is already done and a Feast failure must not lose its evidence. ``feast`` then adds the records of its own two steps. ``upload`` also copies the run's
+dbt files once to ``metadata/dbt/<layer>/<run>/`` for the catalog (best effort).
 
 ``maintain`` is the last gold phase, on every gold run: Iceberg snapshot expiry and orphan-file removal on gold (``scripts.lakehouse.gold_maintenance``)
 under the chain rule, so it reads no reader record. It keeps the newest ``retain_sets`` committed sets, branch and tag heads, snapshots newer than the
@@ -56,9 +57,10 @@ import shutil
 import signal
 import sys
 import tarfile
+import tempfile
 import threading
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -92,10 +94,12 @@ STAGE_PREFIX = "lakehouse/run_stage"
 STAGED_INPUTS = ("code.tar.gz", "code.sha256")  # the objects the fetch container read; the pin phase records their versions
 DBT_ARTIFACTS = ("manifest.json", "catalog.json", "run_results.json")
 DBT_ARTIFACT_PREFIX = "metadata/dbt/"
+DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # each layer run's own write-once copy for the catalog, one dbt workflow per layer run
 # The code copy, the bulk input extracts, the build file the sealed copy repeats and the working databases of the features build, which hold a copy of gold.
 NOT_UPLOADED = ("snapshot", "silver_input", "gold_input", "staging.duckdb", "features_work")
 FEAST_RECORDS = ("feast_apply.json", "feast_materialize.json")
 HOLD_RECORD = "online_hold.json"  # a model set whose online load is held leaves it in the run folder; the release reads it from the run prefix
+DBT_TARGET = {"features": Path("features_work/build/target")}  # where each layer build writes its dbt artifacts, beside the default <run>/target
 DRY_ENV = "LAYER_DRY_RUN"
 DRY_MARKER = "dry_run"  # in the run folder: once a task has a dry phase, every later phase of it is dry
 PLAN_FILE = "publish/dry_run_plan.json"
@@ -788,8 +792,21 @@ def upload(job: Job, bucket: str, client: Any) -> int:
     return len(files)
 
 
-def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
-    """Copy the gold run's dbt manifest, catalog and run results to ``metadata/dbt/`` for the catalog.
+def catalog_copy(name: str, path: Path, tables: Mapping[str, str] | None) -> bytes | None:
+    """The dbt file as the catalog reads it: each model at its published table (``scripts/lakehouse/dbt_catalog_artifacts.py``), or None with the cause
+    on standard error when the build names a model or relation that has no published table. The file as built is never sent."""
+    from scripts.lakehouse import dbt_catalog_artifacts as artifacts
+
+    try:
+        found = artifacts.layer_tables() if tables is None else tables
+        return artifacts.encoded(artifacts.REWRITERS[name](json.loads(path.read_bytes()), found))
+    except (artifacts.ArtifactError, ValueError, KeyError) as error:
+        sys.stderr.write(f"layer_run: the dbt file {name} was not copied for the catalog: {error}\n")
+        return None
+
+
+def upload_dbt_artifacts(job: Job, bucket: str, client: Any, tables: Mapping[str, str] | None = None) -> list[str]:
+    """Copy the gold run's dbt manifest, catalog and run results, rewritten to the published tables, to ``metadata/dbt/`` for the catalog.
 
     This is best effort: a refused or failed copy is reported on standard error and never fails the upload, because the publish is already committed.
     Only the gold layer uploads them, and a file the run did not write is skipped.
@@ -801,12 +818,57 @@ def upload_dbt_artifacts(job: Job, bucket: str, client: Any) -> list[str]:
         path = job.folder / "target" / name
         if not path.is_file():
             continue
+        body = catalog_copy(name, path, tables)
+        if body is None:
+            continue
         try:
-            client.upload_file(str(path), bucket, DBT_ARTIFACT_PREFIX + name)
+            with tempfile.TemporaryDirectory() as folder:
+                rewritten = Path(folder) / name
+                rewritten.write_bytes(body)
+                client.upload_file(str(rewritten), bucket, DBT_ARTIFACT_PREFIX + name)
         except Exception as error:
             sys.stderr.write(f"layer_run: the dbt file {name} was not uploaded for the catalog: {type(error).__name__}\n")
         else:
             sent.append(name)
+    return sent
+
+
+def upload_dbt_run_artifacts(job: Job, bucket: str, client: Any, tables: Mapping[str, str] | None = None) -> list[str]:
+    """Copy the run's dbt manifest, catalog and run results, rewritten to the published tables, once to ``metadata/dbt/<layer>/<run>/`` for the catalog,
+    and return the names that are there.
+
+    Each copy is a write-once put. A repeat of the phase finds the same bytes and counts them; a stored copy that differs is reported on standard error and
+    never replaced. This is best effort like the fixed-key copy of gold: a refused or failed copy never fails the phase, because the publish is committed.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    sent = []
+    for name in DBT_ARTIFACTS:
+        path = job.folder / DBT_TARGET.get(job.layer, Path("target")) / name
+        if not path.is_file():
+            continue
+        key = DBT_RUN_PREFIX.format(layer=job.layer, run=job.run) + name
+        body = catalog_copy(name, path, tables)
+        if body is None:
+            continue
+        try:
+            client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*")
+        except ClientError as error:
+            if error.response.get("Error", {}).get("Code") not in ("PreconditionFailed", "ConditionalRequestConflict"):
+                sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {error.response.get('Error', {}).get('Code', 'ClientError')}\n")
+                continue
+            try:
+                stored = client.get_object(Bucket=bucket, Key=key)["Body"].read()
+            except (ClientError, BotoCoreError) as read_error:
+                sys.stderr.write(f"layer_run: {key} exists and cannot be read back: {type(read_error).__name__}\n")
+                continue
+            if stored != body:
+                sys.stderr.write(f"layer_run: {key} already holds a copy that differs from this run's {name}; it is kept\n")
+                continue
+        except BotoCoreError as error:
+            sys.stderr.write(f"layer_run: the dbt file {name} was not copied to {key}: {type(error).__name__}\n")
+            continue
+        sent.append(name)
     return sent
 
 
@@ -986,7 +1048,8 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     elif phase == "upload":
         client = s3_client()
         uploaded = upload(job, args.bucket, client)
-        sys.stdout.write(json.dumps({"uploaded": uploaded, "dbt_files": upload_dbt_artifacts(job, args.bucket, client)}) + "\n")
+        dbt_files = upload_dbt_artifacts(job, args.bucket, client)  # the fixed-key copy the catalog reads today; the per-run copy below replaces it later
+        sys.stdout.write(json.dumps({"uploaded": uploaded, "dbt_files": dbt_files, "dbt_run_files": upload_dbt_run_artifacts(job, args.bucket, client)}) + "\n")
     elif phase == "feast":
         feast(job, args.bucket, s3_client())
     elif phase == "publish":

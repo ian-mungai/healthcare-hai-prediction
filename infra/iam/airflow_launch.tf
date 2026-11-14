@@ -139,6 +139,16 @@ resource "aws_iam_role_policy" "airflow_launch_records" {
   policy = templatefile("${path.module}/owner_policies/airflow_launch_records.json", local.airflow_launch_policy_values)
 }
 
+# The lineage of a layer job rebuilds its dataset versions from the run's pin file, its pin claim and its output record
+# (orchestration/ecs_lineage.py). The scheduler reads those named records only: nothing else under lakehouse/layer_runs/, no write and no listing.
+resource "aws_iam_role_policy" "airflow_launch_lineage" {
+  count = var.airflow_launch_prepared ? 1 : 0
+
+  name   = "airflow_launch_lineage"
+  role   = aws_iam_role.airflow_launch_task[0].name
+  policy = templatefile("${path.module}/owner_policies/airflow_launch_lineage.json", local.airflow_launch_policy_values)
+}
+
 # The staged request of a bronze run holds its tables, target and dry run flag, and that of a Run 3 publisher run names its inputs, queue, resumed sources and prior state. Only a launch role that may start the bronze or publisher family can read them.
 resource "aws_iam_role_policy" "airflow_launch_requests" {
   count = var.airflow_launch_prepared && length(local.airflow_launch_request_arns) > 0 ? 1 : 0

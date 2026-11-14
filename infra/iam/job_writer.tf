@@ -201,8 +201,24 @@ resource "aws_iam_role_policy" "job_writer_layer_upload" {
   name = "layer_run_upload"
   role = each.value.name
   policy = templatefile("${path.module}/owner_policies/job_writer_layer_upload.json", {
-    # Gold also copies its dbt files to metadata/dbt/ for the catalog task, which reads them and cannot write them.
-    UPLOAD_OBJECT_ARNS = jsonencode(concat(["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*"], each.key == "gold" ? ["${local.bronze_bucket_arn}/metadata/dbt/*"] : []))
+    # Gold also copies its dbt files to the three fixed keys under metadata/dbt/ that the catalog task reads today, and to no other key there; the per-run
+    # copies have their own grant (job_writer_layer_dbt). The fixed keys go when the catalog reads the per-run copies.
+    UPLOAD_OBJECT_ARNS = jsonencode(concat(
+      ["${local.bronze_bucket_arn}/lakehouse/layer_runs/${each.key}/*"],
+      [for name in ["manifest.json", "catalog.json", "run_results.json"] : "${local.bronze_bucket_arn}/metadata/dbt/${name}" if each.key == "gold"]
+    ))
+  })
+}
+
+# Each layer run copies its dbt files once to metadata/dbt/<layer>/<run>/ for the catalog (scripts/lakehouse/layer_run.py, a write-once put). The writer reads
+# a copy back only to compare a repeat. Gold's three fixed keys (job_writer_layer_upload) stay until the catalog reads the per-run copies.
+resource "aws_iam_role_policy" "job_writer_layer_dbt" {
+  for_each = local.job_layer_run_prepared_roles
+
+  name = "layer_run_dbt_copy"
+  role = each.value.name
+  policy = templatefile("${path.module}/owner_policies/job_writer_layer_dbt.json", {
+    DBT_OBJECT_ARNS = jsonencode(["${local.bronze_bucket_arn}/metadata/dbt/${each.key}/*"])
   })
 }
 

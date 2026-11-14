@@ -8,12 +8,15 @@ A staged input that is not there yet (``InputNotReady``) is retried for ``UNAVAI
 A ``LaunchUnavailable`` from the launch library means the launch is not finished: the step fails with it at once and nothing repeats it, because only
 the library's own evidence resolves the launch: the next launch of the family settles it at the family gate (``Launcher.auto_settle``) once its task is found.
 A one-task-per-job DAG (``dag_runtime.build_job_chain``) calls ``preflight_step`` (the gates, no launch), ``job_step`` (the launch) and ``evidence_step``
-(the launch's end record says the job passed).
+(the launch's end record says the job passed; after a bronze job it also sends the job's per-table lineage events, outside the OpenLineage provider's forked
+process and under their own total deadline).
+Each launch operator gets the lineage source of its step (``orchestration/ecs_lineage.py``), so the OpenLineage provider can ask it for the job's datasets.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 from collections.abc import Callable, Mapping, Sequence
@@ -28,6 +31,16 @@ from orchestration import layer_report, promotion_chain
 from orchestration.ecs_adapter import EcsAdapter, EcsSettings, client_config
 from orchestration.ecs_launch import Clock, EcsFitProbe, JobSpec, Launcher, LaunchError, LaunchRefused, S3LaunchStore, launch_record_prefix
 from orchestration.ecs_launch_operator import JobFailed
+from orchestration.ecs_lineage import (
+    BRONZE_JOB,
+    DeliveryFailed,
+    EvidenceUnavailable,
+    LineageRefused,
+    LineageSource,
+    S3Evidence,
+    declared_lineage,
+    step_invocation,
+)
 from orchestration.ecs_preflight import (
     GATE,
     HOST_JOB_CAP_SETTING,
@@ -46,8 +59,10 @@ from orchestration.ecs_preflight import (
 )
 from orchestration.interface import SubmissionRequest
 
+LOG = logging.getLogger(__name__)
 UNAVAILABLE_SECONDS = 600.0
 UNAVAILABLE_POLL_SECONDS = 15.0
+JOB_TASK = "job"  # the task of a one-job chain that launches (``dag_runtime.CHAIN_TASKS``); its identity is what the bronze table events name
 ROOT = Path(__file__).resolve().parents[1]
 SETTINGS = (
     "AWS_REGION",
@@ -83,6 +98,8 @@ class LaunchServices:
     report: layer_report.ReportAccess | None = None
     # Reads one object of the data bucket: its bytes, or None when the key is absent. The research DAG reads the records that research and the canary store.
     read_object: Callable[[str], bytes | None] | None = None
+    lineage: Callable[[SubmissionRequest, JobSpec], Callable[[bool], Mapping[str, Any]]] | None = None  # the lineage source of a step's launch
+    evidence: S3Evidence | None = None  # the S3 evidence the evidence step sends a bronze job's per-table lineage events from
 
 
 def host_fit_probe(inner: EcsFitProbe, hold: Callable[[], str | None], cap: Callable[[], str | None]) -> HeldCapProbe:
@@ -157,6 +174,7 @@ def services() -> LaunchServices:
         host_launch_hold=hold,
         read_record=object_reader(s3, bucket),
     )
+    evidence = S3Evidence(s3, bucket)
     return LaunchServices(
         preflight,
         launcher,
@@ -166,6 +184,8 @@ def services() -> LaunchServices:
         clock,
         report,
         object_reader(s3, bucket),
+        lineage_factory(evidence, store),
+        evidence,
     )
 
 
@@ -207,6 +227,48 @@ def scratch_usage(root: Path, families: Sequence[str]) -> dict[str, int]:
     return {family: folder_bytes(root / family) if (root / family).is_dir() else 0 for family in families}
 
 
+def send_table_events(source: LineageSource) -> None:
+    """Send a succeeded bronze job's per-table events (``LineageSource.send_table_events``) when HTTP lineage is on. A failure or the deadline is logged and
+    never fails the step; ``replay`` rebuilds what was not sent. Only the kind of an unexpected failure is logged: its text can hold a header or a key."""
+    try:
+        sent = source.send_table_events()
+    except (DeliveryFailed, LineageRefused, EvidenceUnavailable) as error:  # their texts name a key or a rule, never a credential
+        LOG.warning("bronze table lineage events of %s attempt %s were not delivered: %s: %s", source.run_id, source.attempt, type(error).__name__, error)
+    except Exception as error:  # the job already succeeded: nothing of its lineage may fail the step
+        LOG.warning("bronze table lineage events of %s attempt %s were not delivered: %s", source.run_id, source.attempt, type(error).__name__)
+    else:
+        if sent:
+            LOG.info("sent %d bronze table lineage events of %s attempt %s", sent, source.run_id, source.attempt)
+
+
+def send_bronze_table_events(found: LaunchServices, request: SubmissionRequest, attempt: int) -> None:
+    """The evidence step's sends of a succeeded bronze job's per-table events. The step runs outside the OpenLineage provider's forked process, which the
+    provider kills after its execution timeout (``AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT``), so the sends have their own total deadline
+    (``ecs_lineage.TABLE_EVENTS_SECONDS``). The events name the job's own task (``JOB_TASK``) and launch attempt, as the replay of that attempt does."""
+    try:
+        if found.evidence is None:
+            return
+        invocation = step_invocation(replace(request, task_id=JOB_TASK, attempt=attempt).as_dict())
+        declared = declared_lineage(BRONZE_JOB)
+        send_table_events(LineageSource(BRONZE_JOB, request.run_id, attempt, invocation, declared, found.evidence, found.preflight.store))
+    except Exception as error:  # the job already succeeded: no lineage of it may fail the step
+        LOG.warning("bronze table lineage events of %s were not delivered: %s", request.run_id, type(error).__name__)
+
+
+def lineage_factory(evidence: S3Evidence, store: S3LaunchStore) -> Callable[[SubmissionRequest, JobSpec], Callable[[bool], Mapping[str, Any]]]:
+    """The lineage source of a step's launch. Nothing is read or built until the provider asks, so a missing declaration or a refused record happens
+    inside the operator's guard (``LaunchGuarantees.lineage_of``) and never stops the job."""
+
+    def lineage(request: SubmissionRequest, spec: JobSpec) -> Callable[[bool], Mapping[str, Any]]:
+        def facets(complete: bool) -> Mapping[str, Any]:
+            declared = declared_lineage(spec.job)
+            return LineageSource(spec.job, spec.run_id, spec.attempt, step_invocation(request.as_dict()), declared, evidence, store).facets(complete)
+
+        return facets
+
+    return lineage
+
+
 def selected_input(preflight: Preflight, request: SubmissionRequest, params: Mapping[str, Any], selections: Mapping[str, str]) -> str | None:
     """The producer run a job publishes from, named by a DAG parameter. Every step of the job gets it, not only the pin step, because the launch binds it."""
     job = preflight.steps.get(request.template)
@@ -233,16 +295,23 @@ def prepared(launch: LaunchServices, request: SubmissionRequest) -> JobSpec | No
             launch.clock.sleep(UNAVAILABLE_POLL_SECONDS)
 
 
-def launch(services_: LaunchServices, spec: JobSpec, context: Mapping[str, Any]) -> None:
-    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job."""
-    services_.operator_class(
+def launch(
+    services_: LaunchServices, request: SubmissionRequest, spec: JobSpec, context: Mapping[str, Any], built: Callable[[Any], None] | None = None
+) -> None:
+    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job. ``built`` gets the launch operator before it runs, so
+    the task that runs it can hand the operator's lineage to the OpenLineage listener after the launch succeeded or failed."""
+    operator = services_.operator_class(
         task_id=context["ti"].task_id,
         job=spec,
         launcher=lambda: services_.launcher,
         task_definition=services_.definition(spec.job),
         cluster=services_.cluster,
         overrides={},
-    ).execute(context)
+        lineage=services_.lineage(request, spec) if services_.lineage else None,
+    )
+    if built is not None:
+        built(operator)
+    operator.execute(context)
 
 
 def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
@@ -250,7 +319,7 @@ def launch_step(request: SubmissionRequest, context: Mapping[str, Any], selectio
     found = services()
     spec = prepared(found, with_input(found, request, context, selections))
     if spec is not None:
-        launch(found, spec, context)
+        launch(found, request, spec, context)
     return "succeeded"
 
 
@@ -283,8 +352,8 @@ def report_access(found: LaunchServices) -> layer_report.ReportAccess:
     return found.report
 
 
-def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> str:
-    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job.
+def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str], built: Callable[[Any], None] | None = None) -> str:
+    """Launch the job's one ECS task and wait for it, or join the recorded launch of the run and job. ``built`` gets the launch operator (see ``launch``).
 
     A silver or gold job saves the listing of every object version under ``lakehouse/`` here, after the gates and right before the launch. This task holds the
     slots of the launch pool (a silver or gold job takes every slot), so no other run's job writes meanwhile, and the writes of another run during the wait
@@ -300,7 +369,7 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
             layer_report.save_before_listing(report_access(found), spec.job, request.run_id)
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
-    launch(found, spec, context)
+    launch(found, request, spec, context, built)
     if report:
         try:
             layer_report.save_closing_evidence(report_access(found), spec.job, request.run_id)
@@ -310,7 +379,8 @@ def job_step(request: SubmissionRequest, context: Mapping[str, Any], selections:
 
 
 def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], selections: Mapping[str, str]) -> dict[str, Any]:
-    """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed."""
+    """The end record of the run and job's one launch, read back from the launch store. Refuses unless the job and its acceptance checks passed. After a
+    bronze job passed it also sends the job's per-table lineage events (``send_bronze_table_events``); a failure of that is logged and never fails the step."""
     launch_services = services()
     store = launch_services.preflight.store
     job = job_of(request.template, request.dag_id)
@@ -328,6 +398,8 @@ def evidence_step(request: SubmissionRequest, context: Mapping[str, Any], select
         except layer_report.ReportError as error:
             raise LaunchRefused(str(error)) from None
         result |= {"report": accepted["report"], "passed": True}
+    if job == BRONZE_JOB:
+        send_bronze_table_events(launch_services, request, int(claim["attempt"]))
     return result
 
 

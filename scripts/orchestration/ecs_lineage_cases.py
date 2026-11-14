@@ -1,0 +1,718 @@
+"""Cases of the lineage of the direct ECS jobs: the facets the launch operator returns and the events the replay command rebuilds from S3 evidence.
+
+Isolation is justified because the evidence must be wrong on cue (a pin of another run, a record that names an undeclared table, an unreadable object) and
+the receiver must be slow on cue. Every case drives the real ``orchestration.ecs_lineage`` and ``orchestration.snapshots``. The launch records come from a
+real ``Launcher`` run over the fake ECS API (``ecs_launch_cases.Rig``). The bucket is the in-memory write-once bucket of ``ecs_launch_fake``, and the
+receiver is a local HTTP stand-in of the OpenMetadata lineage route. The events are checked against the OpenLineage 2-0-2 schema copied into
+``data_contracts/openlineage`` by this file's own validator, not by the module's.
+"""
+
+from __future__ import annotations
+
+import ast
+import copy
+import hashlib
+import json
+import threading
+import time
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+
+from jsonschema import Draft202012Validator
+from referencing import Registry, Resource
+
+from orchestration import ecs_lineage
+from orchestration.ecs_launch import JobSpec, S3LaunchStore
+from orchestration.ecs_launch_operator import LaunchGuarantees
+from scripts.orchestration.ecs_launch_cases import BOUND, BUCKET, CLUSTER, PREFIX, RUN, Rig, refuses, require, spec
+from scripts.orchestration.ecs_launch_standin import StandInEcsRunTaskOperator
+
+ROOT = Path(__file__).resolve().parents[2]
+SPEC_FOLDER = ROOT / "data_contracts" / "openlineage"
+FACET_SCHEMA = ROOT / "data_contracts" / "orchestration" / "launch_lineage_facet.schema.json"
+JOBS = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())
+GOLD_RUN = RUN  # the run of the gold job the launch rig runs
+GOLD_INPUT = BOUND["input_run"]  # the silver run the rig's gold launch is bound to
+FEATURES_RUN = "20261104T120000Z-feed0001"
+CREDENTIAL = "synthetic-lineage-credential"
+START = "2026-11-04T10:00:00+00:00"
+END = "2026-11-04T10:30:00+00:00"
+
+
+# The OpenMetadata table of each lakehouse namespace: glue_mirror.hai_lakehouse.<Glue database>.<table> (config/metadata/ingestion/glue.json). Written out here,
+# not read from the config, so a changed config or module fails a case. Bronze has no Glue database, so its name keeps the lakehouse namespace.
+SERVICE = "glue_mirror"
+MIRROR_SCHEMA = {"bronze": "bronze", "silver": "hai_mirror_silver", "gold": "hai_mirror_gold", "features": "hai_mirror_features"}
+
+
+def glue(schema: str, table: str) -> dict[str, str]:
+    return {"namespace": f"iceberg://{SERVICE}", "name": f"hai_lakehouse.{MIRROR_SCHEMA[schema]}.{table}"}
+
+
+DECLARED = {
+    "silver": {"inputs": [glue("bronze", "t1"), glue("bronze", "t2")], "outputs": [glue("silver", "s1"), glue("silver", "s2")]},
+    "gold": {"inputs": [glue("silver", "s1"), glue("silver", "s2")], "outputs": [glue("gold", "g1")]},
+    "features": {"inputs": [glue("gold", "g1")], "outputs": [glue("features", "f1")]},
+}
+OTHER_DECLARED = {"inputs": [glue("features", "f1")], "outputs": [glue("gold", "model_scores")]}
+TEMPLATE = {"silver": "silver_build", "gold": "gold_build", "features": "features_build"}
+DAG = {"silver": "silver_transform_dag", "gold": "gold_transform_dag", "features": "features_transform_dag"}
+RUN_OF = {"silver": GOLD_INPUT, "gold": GOLD_RUN, "features": FEATURES_RUN}
+
+
+def put(bucket: Any, key: str, value: Any) -> None:
+    bucket.objects[key] = value if isinstance(value, bytes) else (json.dumps(value, indent=2, sort_keys=True) + "\n").encode()
+
+
+def evidence_bucket(rig: Rig | None = None) -> Any:
+    """The project bucket with the S3 evidence of a silver, a gold and a features run that chain into each other."""
+    bucket = (rig or Rig()).bucket
+    bucket.allowed_prefix = ""  # the stand-in holds the launch records and the layer evidence, as the one project bucket does
+    layer = "lakehouse/layer_runs"
+    silver, gold, features = RUN_OF["silver"], RUN_OF["gold"], RUN_OF["features"]
+    put(bucket, f"{layer}/silver/{silver}/state/pinned.json", {"layer": "silver", "mode": "real", "run_id": silver})
+    put(bucket, f"{layer}/silver/{silver}/pins.json", {"t1": "11", "t2": "12"})
+    put(
+        bucket,
+        f"{layer}/silver/{silver}/silver_snapshot.json",
+        {"schema": 1, "run_id": silver, "mode": "real", "namespace": "silver", "snapshot_set": {"s1": 21, "s2": 22}},
+    )
+    put(bucket, f"{layer}/gold/{gold}/state/pinned.json", {"layer": "gold", "mode": "real", "run_id": gold})
+    put(
+        bucket,
+        f"{layer}/gold/{gold}/silver_pins.json",
+        {"schema": 1, "run_id": gold, "mode": "real", "namespace": "silver", "source_run_id": silver, "snapshot_set": {"s1": 21, "s2": 22}},
+    )
+    put(
+        bucket,
+        f"{layer}/gold/{gold}/publish/commit.json",
+        {"schema": 1, "run_id": gold, "backup_sha256": "c" * 64, "snapshot_set": {"g1": 31}, "state": "committed"},
+    )
+    put(bucket, f"{layer}/features/{features}/state/pinned.json", {"layer": "features", "mode": "real", "run_id": features})
+    put(
+        bucket,
+        f"{layer}/features/{features}/gold_pins.json",
+        {"schema": 1, "run_id": features, "mode": "real", "namespace": "gold", "source_run_id": gold, "snapshot_set": {"g1": 31}},
+    )
+    put(
+        bucket,
+        f"{layer}/features/{features}/features_snapshot.json",
+        {"schema": 1, "run_id": features, "mode": "real", "namespace": "features", "snapshot_set": {"f1": 41}},
+    )
+    return bucket
+
+
+def facts(job: str, outcome: str = "succeeded", input_run: str | None = None) -> ecs_lineage.LaunchFacts:
+    bound = input_run or {"silver": "latest", "gold": RUN_OF["silver"], "features": RUN_OF["gold"]}.get(job, "latest")
+    return ecs_lineage.LaunchFacts(run_id=RUN_OF.get(job, GOLD_RUN), job=job, attempt=1, started_at=START, ended_at=END, outcome=outcome, input_run=bound)
+
+
+def invocation(job: str, template: str | None = None) -> dict[str, Any]:
+    template = template or TEMPLATE.get(job) or next(name for name, owner in JOBS["steps"].items() if owner == job)
+    dags = json.loads((ROOT / "config/orchestration/host_jobs.json").read_text())["dags"]
+    dag = DAG.get(job) or next((name for name, family in dags.items() if family == job), "bronze_chain_dag")  # the bronze job runs in the chain DAG
+    request: dict[str, Any] = {
+        "request_version": 2,
+        "template": template,
+        "run_id": RUN_OF.get(job, GOLD_RUN),
+        "mode": "real",
+        "attempt": 1,
+        "dag_id": dag,
+        "task_id": template,
+        "dag_run_id": f"manual__{RUN_OF.get(job, GOLD_RUN)}",
+    }
+    if dag == "training_dag":
+        request["training"] = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "aws"}
+    if dag == "model_promotion_dag":
+        request["training"] = {"hai_type": "HAI_1", "model_version": "3", "promotion_mode": "promote", "mlflow": "aws"}
+    return request
+
+
+def validator() -> Callable[[dict[str, Any]], list[str]]:
+    """The case's own OpenLineage 2-0-2 RunEvent check, over the copied spec files, plus the closed schema of the project's run facet."""
+    resources = []
+    for path in sorted(SPEC_FOLDER.glob("*.json")):
+        document = json.loads(path.read_text())
+        resources.append((document["$id"], Resource.from_contents(document)))
+    registry = Registry().with_resources(resources)
+    core = json.loads((SPEC_FOLDER / "OpenLineage-2-0-2.json").read_text())
+    event_check = Draft202012Validator({"$ref": core["$id"] + "#/$defs/RunEvent"}, registry=registry)
+    version_check = Draft202012Validator(
+        {"$ref": "https://openlineage.io/spec/facets/1-0-0/DatasetVersionDatasetFacet.json#/$defs/DatasetVersionDatasetFacet"}, registry=registry
+    )
+    facet_check = Draft202012Validator(json.loads(FACET_SCHEMA.read_text()))
+
+    def check(event: dict[str, Any]) -> list[str]:
+        problems = [error.message for error in event_check.iter_errors(event)]
+        facet = event.get("run", {}).get("facets", {}).get("haiLaunch")
+        problems += ["haiLaunch: " + error.message for error in facet_check.iter_errors(facet)] if facet is not None else ["haiLaunch facet missing"]
+        for item in [*event.get("inputs", []), *event.get("outputs", [])]:
+            version = item.get("facets", {}).get("version")
+            if version is not None:
+                problems += [f"{item['name']} version: " + error.message for error in version_check.iter_errors(version)]
+        return problems
+
+    return check
+
+
+def built(job: str, declared: dict[str, Any] | None = None, outcome: str = "succeeded", bucket: Any = None, **change: Any) -> list[dict[str, Any]]:
+    bucket = bucket if bucket is not None else evidence_bucket()
+    source = ecs_lineage.S3Evidence(bucket, BUCKET)
+    lineage = ecs_lineage.job_lineage(job, invocation(job), declared if declared is not None else DECLARED[job], source, facts(job, outcome, **change))
+    return ecs_lineage.events(lineage, invocation(job), facts(job, outcome, **change))
+
+
+def snapshot_id(item: dict[str, str]) -> int:
+    return int(hashlib.sha256(item["name"].encode()).hexdigest()[:15], 16) + 1
+
+
+def tables_of(items: list[dict[str, str]]) -> dict[str, int]:
+    return {item["name"].split(".")[-1]: snapshot_id(item) for item in items}
+
+
+def template_bucket() -> Any:
+    """Evidence of a silver, gold and features run that pins and publishes exactly the tables the contract files declare for each job."""
+    bucket = Rig().bucket
+    bucket.allowed_prefix = ""
+    layer = "lakehouse/layer_runs"
+    silver, gold, features = RUN_OF["silver"], RUN_OF["gold"], RUN_OF["features"]
+    declared = {job: ecs_lineage.declared_lineage(job) for job in ("silver", "gold", "features")}
+    put(bucket, f"{layer}/silver/{silver}/state/pinned.json", {"layer": "silver", "mode": "real", "run_id": silver})
+    put(bucket, f"{layer}/silver/{silver}/pins.json", {table: str(value) for table, value in tables_of(declared["silver"]["inputs"]).items()})
+    silver_set = tables_of(declared["silver"]["outputs"])
+    put(
+        bucket,
+        f"{layer}/silver/{silver}/silver_snapshot.json",
+        {"schema": 1, "run_id": silver, "mode": "real", "namespace": "silver", "snapshot_set": silver_set},
+    )
+    put(
+        bucket,
+        f"{layer}/gold/{gold}/silver_pins.json",
+        {"schema": 1, "run_id": gold, "mode": "real", "namespace": "silver", "source_run_id": silver, "snapshot_set": tables_of(declared["gold"]["inputs"])},
+    )
+    gold_set = tables_of(declared["gold"]["outputs"])
+    put(
+        bucket,
+        f"{layer}/gold/{gold}/publish/commit.json",
+        {"schema": 1, "run_id": gold, "backup_sha256": "c" * 64, "snapshot_set": gold_set, "state": "committed"},
+    )
+    put(
+        bucket,
+        f"{layer}/features/{features}/gold_pins.json",
+        {
+            "schema": 1,
+            "run_id": features,
+            "mode": "real",
+            "namespace": "gold",
+            "source_run_id": gold,
+            "snapshot_set": tables_of(declared["features"]["inputs"]),
+        },
+    )
+    put(
+        bucket,
+        f"{layer}/features/{features}/features_snapshot.json",
+        {"schema": 1, "run_id": features, "mode": "real", "namespace": "features", "snapshot_set": tables_of(declared["features"]["outputs"])},
+    )
+    return bucket
+
+
+NO_TABLES = {
+    "promote": "it moves a model version in the MLflow registry and reads or writes no table",
+    "serve": "it deploys a model version to the model API and reads or writes no table",
+    "metadata": "it ingests catalog metadata into OpenMetadata and reads or writes no table data",
+    "train": "its DAG runs a task per step with no lineage hooks, so no event of it carries datasets (recorded limit of orchestration/ecs_lineage.py)",
+    "drift": "its DAG runs a task per step with no lineage hooks, so no event of it carries datasets (recorded limit of orchestration/ecs_lineage.py)",
+}
+
+
+def glue_items(schema: str, tables: Any) -> list[dict[str, str]]:
+    return [glue(schema, table) for table in sorted(tables)]
+
+
+def code_derived_lineage() -> dict[str, dict[str, list[dict[str, str]]]]:
+    """Each lineage job's tables from the code it runs: the table map the bronze job loads, the silver pin and the publish modules of the layers."""
+    from scripts.features import features_publish
+    from scripts.lakehouse import bronze, gold_publish, pins, silver_publish
+
+    silver, gold, features = silver_publish.publish_plan("real").tables, gold_publish.load_plan().tables, features_publish.publish_plan("real").tables
+    loaded = [table["table"] for table in bronze.load_table_map()["tables"]]
+    return {
+        "bronze": {"inputs": [], "outputs": glue_items("bronze", loaded)},
+        "silver": {"inputs": glue_items("bronze", pins.mapped_tables()), "outputs": glue_items("silver", silver)},
+        "gold": {"inputs": glue_items("silver", silver), "outputs": glue_items("gold", gold)},
+        "features": {"inputs": glue_items("gold", gold), "outputs": glue_items("features", features)},
+    }
+
+
+def declared_lineage_follows_the_code() -> None:
+    """Every job that reads or writes tables declares exactly the tables its code pins, loads and publishes, named as the Glue mirror names them; the
+    others are named with their reason."""
+    derived = code_derived_lineage()
+    require(set(derived) | set(NO_TABLES) == set(JOBS["jobs"]), "every job is either derived from its code or named as having no declared tables")
+    for job, wanted in derived.items():
+        found = ecs_lineage.declared_lineage(job)
+        require(found["inputs"] or found["outputs"], f"{job} reads or writes tables but declares none")
+        for side in ("inputs", "outputs"):
+            got = sorted(found[side], key=lambda item: item["name"])
+            require(
+                got == sorted(wanted[side], key=lambda item: item["name"]),
+                f"{job} {side}: declared {len(got)} datasets, the code gives {len(wanted[side])}: {[i['name'] for i in got if i not in wanted[side]][:3]}",
+            )
+    for job in NO_TABLES:
+        found = ecs_lineage.declared_lineage(job)
+        require(found == {"inputs": [], "outputs": []}, f"{job} declares tables but {NO_TABLES[job]}")
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.declared_lineage("job_without_a_declaration"))
+
+
+def declared_names_are_the_mirror_names() -> None:
+    """A layer's datasets name its Glue database (hai_mirror_silver, hai_mirror_gold, hai_mirror_features) and the bronze job's keep ``bronze``, whatever the
+    mirror's ``enabled`` setting says: the names come from the config files, not from a live mirror."""
+    mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
+    for layer, expected in MIRROR_SCHEMA.items():
+        if layer != "bronze":
+            require(
+                mirror["layers"][layer]["database"] == expected, f"{layer}: the mirror config names {mirror['layers'][layer]['database']}, the case {expected}"
+            )
+    silver = ecs_lineage.declared_lineage("silver")
+    require(all(item["name"].startswith("hai_lakehouse.hai_mirror_silver.") for item in silver["outputs"]), "silver outputs are not in hai_mirror_silver")
+    require(all(item["name"].startswith("hai_lakehouse.bronze.") for item in silver["inputs"]), "silver inputs are not named bronze")
+    require({item["namespace"] for item in [*silver["inputs"], *silver["outputs"]]} == {f"iceberg://{SERVICE}"}, "every dataset names the glue_mirror service")
+    require(all(".silver." not in item["name"] and ".gold." not in item["name"] for item in ecs_lineage.declared_lineage("gold")["inputs"]), "a Polaris name")
+
+
+def every_job_from_the_contract_files() -> None:
+    """Each of the nine jobs, with the lineage its contract files declare, gives valid START and terminal events for success and failure. A layer job with
+    evidence that pins and publishes exactly its declared tables gets a version on every dataset."""
+    check = validator()
+    require(len(JOBS["jobs"]) == 9, f"the job table names {len(JOBS['jobs'])} jobs, not nine")
+    bucket = template_bucket()
+    for job in sorted(JOBS["jobs"]):
+        declared = ecs_lineage.declared_lineage(job)
+        for outcome in ("succeeded", "failed"):
+            events = built(job, declared, outcome, bucket=bucket)
+            require([event["eventType"] for event in events] == ["START", "COMPLETE" if outcome == "succeeded" else "FAIL"], f"{job}: event types {events}")
+            for event in events:
+                problems = check(event)
+                require(not problems, f"{job} {event['eventType']}: {problems[:3]}")
+            if outcome == "succeeded" and job in ("silver", "gold", "features"):
+                complete = events[1]
+                require(complete["run"]["facets"]["haiLaunch"]["snapshotState"] == "complete", f"{job}: {complete['run']['facets']['haiLaunch']}")
+                require(all("version" in item.get("facets", {}) for item in [*complete["inputs"], *complete["outputs"]]), f"{job}: a dataset has no version")
+
+
+def every_job_with_declared_datasets() -> None:
+    """With Iceberg datasets declared for every job, each event is valid, and a COMPLETE event carries the versions of the S3 evidence."""
+    check = validator()
+    for job in sorted(JOBS["jobs"]):
+        declared = DECLARED.get(job, OTHER_DECLARED)
+        events = built(job, declared)
+        for event in events:
+            problems = check(event)
+            require(not problems, f"{job} {event['eventType']}: {problems[:3]}")
+        start, complete = events
+        require(start["outputs"] == [], f"{job}: a START event names no output")
+        facet = complete["run"]["facets"]["haiLaunch"]
+        if job in DECLARED:
+            require(facet["snapshotState"] == "complete", f"{job}: snapshot state {facet}")
+            versions = {item["name"]: item["facets"]["version"]["datasetVersion"] for item in [*complete["inputs"], *complete["outputs"]]}
+            wanted = {
+                "silver": {
+                    "hai_lakehouse.bronze.t1": "11",
+                    "hai_lakehouse.bronze.t2": "12",
+                    "hai_lakehouse.hai_mirror_silver.s1": "21",
+                    "hai_lakehouse.hai_mirror_silver.s2": "22",
+                },
+                "gold": {"hai_lakehouse.hai_mirror_silver.s1": "21", "hai_lakehouse.hai_mirror_silver.s2": "22", "hai_lakehouse.hai_mirror_gold.g1": "31"},
+                "features": {"hai_lakehouse.hai_mirror_gold.g1": "31", "hai_lakehouse.hai_mirror_features.f1": "41"},
+            }[job]
+            require(versions == wanted, f"{job}: versions {versions}")
+        else:
+            require(
+                facet["snapshotState"] == "missing" and facet["missingOutputs"] == OTHER_DECLARED["outputs"], f"{job}: no evidence must be missing: {facet}"
+            )
+
+
+def edges_equal_the_declared_lineage() -> None:
+    """The datasets of a COMPLETE event are exactly the declared ones, in their declared order; a FAIL event names the inputs and no output."""
+    for job, declared in DECLARED.items():
+        complete = built(job)[1]
+        named = (
+            [{"namespace": item["namespace"], "name": item["name"]} for item in complete["inputs"]],
+            [{"namespace": item["namespace"], "name": item["name"]} for item in complete["outputs"]],
+        )
+        require(named == (declared["inputs"], declared["outputs"]), f"{job}: edges {named}")
+        failed = built(job, outcome="failed")[1]
+        require(failed["outputs"] == [] and [item["name"] for item in failed["inputs"]] == [item["name"] for item in declared["inputs"]], f"{job}: {failed}")
+        require(all("facets" not in item for item in failed["inputs"]), f"{job}: a failed job claims no pinned version")
+
+
+def names_equal_the_connector_names() -> None:
+    """A dataset name is the table FQN the Glue connector creates for the mirror, without its service name; the dbt connector writes to the same service and
+    the same Glue databases (the models are moved to them at ingestion)."""
+    glue_source = json.loads((ROOT / "config/metadata/ingestion/glue.json").read_text())["source"]
+    dbt_config = json.loads((ROOT / "config/metadata/ingestion/dbt.json").read_text())
+    mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
+    service, database = glue_source["serviceName"], glue_source["serviceConnection"]["config"]["databaseName"]
+    require((service, database) == (SERVICE, "hai_lakehouse"), f"the Glue connector names {service}.{database}")
+    require(dbt_config["source"]["serviceName"] == service, "the dbt connector must attach its models to the Glue mirror service")
+    require(dbt_config["hai_glue_mapping"]["database"] == database, "the dbt mapping names another OpenMetadata database than the Glue connector")
+    databases = {layer: spec["database"] for layer, spec in mirror["layers"].items()}
+    require(dbt_config["hai_glue_mapping"]["schemas"] == databases, "the dbt mapping and the mirror config name different Glue databases")
+    require(
+        sorted(glue_source["sourceConfig"]["config"]["schemaFilterPattern"]["includes"]) == sorted(f"^{name}$" for name in databases.values()), "schema filter"
+    )
+    item = ecs_lineage.dataset("gold", "fact_hai_measure")
+    require(item == {"namespace": f"iceberg://{service}", "name": f"{database}.hai_mirror_gold.fact_hai_measure"}, f"dataset {item}")
+    require(ecs_lineage.connector_fqn(item) == f"{service}.{database}.hai_mirror_gold.fact_hai_measure", f"FQN {ecs_lineage.connector_fqn(item)}")
+    require(ecs_lineage.dataset("bronze", "cms_hai_hospital")["name"] == f"{database}.bronze.cms_hai_hospital", "bronze keeps its namespace name")
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.dataset("Gold", "x;y"))
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.dataset("polaris_extra", "x"))
+    refuses(
+        ecs_lineage.LineageRefused,
+        lambda: ecs_lineage.connector_fqn({"namespace": "iceberg://polaris", "name": f"{database}.hai_mirror_gold.fact_hai_measure"}),
+    )
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.connector_fqn({"namespace": f"iceberg://{service}", "name": f"{database}.gold.fact_hai_measure"}))
+    for job in JOBS["jobs"]:
+        for entry in [side for found in ecs_lineage.declared_lineage(job).values() for side in found]:
+            require(entry["namespace"] == f"iceberg://{service}", f"{job}: declared namespace {entry['namespace']}")
+            if ".bronze." not in entry["name"]:
+                ecs_lineage.connector_fqn(entry)  # refuses a declared dataset the connector would name differently
+
+
+def mutated(change: Callable[[Any], None]) -> Any:
+    bucket = evidence_bucket()
+    change(bucket)
+    return bucket
+
+
+def edit(bucket: Any, key: str, change: Callable[[dict[str, Any]], None]) -> None:
+    document = json.loads(bucket.objects[key])
+    change(document)
+    put(bucket, key, document)
+
+
+def refused_records() -> None:
+    """Every invalid or mismatched record is refused, and the refusal names the evidence object and the rule."""
+    layer = "lakehouse/layer_runs"
+    silver, gold, features = RUN_OF["silver"], RUN_OF["gold"], RUN_OF["features"]
+    gold_pin, silver_out = f"{layer}/gold/{gold}/silver_pins.json", f"{layer}/silver/{silver}/silver_snapshot.json"
+    cases: list[tuple[str, str, Callable[[Any], None], str]] = [
+        ("silver", f"{silver}/pins.json", lambda b: edit(b, f"{layer}/silver/{silver}/pins.json", lambda d: d.update(t3="13")), "not declared"),
+        ("silver", f"{silver}/pins.json", lambda b: edit(b, f"{layer}/silver/{silver}/pins.json", lambda d: d.pop("t2")), "every declared input"),
+        ("silver", f"{silver}/pins.json", lambda b: edit(b, f"{layer}/silver/{silver}/pins.json", lambda d: d.update(t1="abc")), "closed schema"),
+        ("silver", f"{silver}/state/pinned.json", lambda b: b.objects.pop(f"{layer}/silver/{silver}/state/pinned.json"), "claim"),
+        ("silver", f"{silver}/silver_snapshot.json", lambda b: edit(b, silver_out, lambda d: d["snapshot_set"].update(s9=29)), "not declared"),
+        ("silver", f"{silver}/silver_snapshot.json", lambda b: edit(b, silver_out, lambda d: d.update(run_id=features)), "another run"),
+        ("silver", f"{silver}/silver_snapshot.json", lambda b: edit(b, silver_out, lambda d: d.update(mode="publish_fixture")), "real mode"),
+        ("gold", f"{gold}/silver_pins.json", lambda b: edit(b, gold_pin, lambda d: d.update(source_run_id=features)), "bound at launch"),
+        ("gold", f"{gold}/silver_pins.json", lambda b: edit(b, gold_pin, lambda d: d["snapshot_set"].update(s1=99)), "frozen"),
+        ("gold", f"{gold}/silver_pins.json", lambda b: put(b, gold_pin, b'{"schema": 1, "schema": 2}'), "duplicate"),
+        ("gold", f"{gold}/silver_pins.json", lambda b: put(b, gold_pin, b"[not json"), "not JSON"),
+        (
+            "gold",
+            f"{gold}/publish/commit.json",
+            lambda b: edit(b, f"{layer}/gold/{gold}/publish/commit.json", lambda d: d.update(state="pending")),
+            "committed",
+        ),
+        (
+            "features",
+            f"{features}/gold_pins.json",
+            lambda b: edit(b, f"{layer}/features/{features}/gold_pins.json", lambda d: d.update(namespace="silver")),
+            "gold",
+        ),
+    ]
+    for job, key, change, phrase in cases:
+        bucket = mutated(change)
+        error = refuses(ecs_lineage.LineageRefused, lambda job=job, bucket=bucket: built(job, bucket=bucket))
+        require(key in str(error) and phrase in str(error), f"{job} {key}: the refusal must name the object and '{phrase}': {error}")
+    bucket = mutated(lambda b: b.deny_keys.add(gold_pin))
+    error = refuses(ecs_lineage.EvidenceUnavailable, lambda: built("gold", bucket=bucket))
+    require(gold_pin in str(error) and "AccessDenied" in str(error), f"an unreadable pin is never read as missing: {error}")
+    bucket = mutated(lambda b: b.objects.pop(gold_pin))
+    error = refuses(ecs_lineage.LineageRefused, lambda: built("gold", bucket=bucket))
+    require(gold_pin in str(error) and "missing" in str(error), f"a succeeded job without its pin is refused: {error}")
+    bucket = mutated(lambda b: b.objects.pop(silver_out))
+    complete = built("silver", bucket=bucket)[1]
+    facet = complete["run"]["facets"]["haiLaunch"]
+    require(facet["snapshotState"] == "missing" and facet["missingOutputs"] == DECLARED["silver"]["outputs"], f"a missing output record: {facet}")
+    require(all("facets" not in item for item in complete["outputs"]), "no output version without its record")
+
+
+def operator(rig: Rig, lineage: Callable[[bool], Any] | None) -> Any:
+    class Operator(LaunchGuarantees, StandInEcsRunTaskOperator):
+        def __init__(self, **kwargs: Any) -> None:
+            super().__init__(**kwargs)  # the stand-in metaclass wraps __init__ only when the subclass has its own, as Airflow does
+
+    built_operator = Operator(job=spec(), launcher=rig.launcher, lineage=lineage, task_definition="stand-in", cluster=CLUSTER, overrides={})
+    built_operator.client = rig.ecs
+    return built_operator
+
+
+def context() -> dict[str, Any]:
+    return {"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="gold_build", run_id=f"manual__{RUN}", map_index=-1, try_number=1)}
+
+
+def source(rig: Rig, job: JobSpec, declared: dict[str, Any]) -> ecs_lineage.LineageSource:
+    return ecs_lineage.LineageSource(
+        job=job.job,
+        run_id=job.run_id,
+        attempt=job.attempt,
+        invocation=invocation("gold"),
+        declared=declared,
+        evidence=ecs_lineage.S3Evidence(rig.bucket, BUCKET),
+        store=S3LaunchStore(rig.bucket, BUCKET, PREFIX),
+    )
+
+
+def operator_returns_the_facets() -> None:
+    """After a real launch the operator returns the declared datasets with versions; a refused record never fails the task and is named in the facet."""
+    rig = Rig()
+    evidence_bucket(rig)
+    built_operator = operator(rig, source(rig, spec(), DECLARED["gold"]).facets)
+    built_operator.execute(context())
+    found = built_operator.get_openlineage_facets_on_complete(None)
+    require([item["name"] for item in found["outputs"]] == ["hai_lakehouse.hai_mirror_gold.g1"], f"outputs {found}")
+    require(found["outputs"][0]["facets"]["version"]["datasetVersion"] == "31", f"output version {found['outputs'][0]}")
+    require(found["run_facets"]["haiLaunch"]["snapshotState"] == "complete", f"facet {found['run_facets']}")
+    require(found["run_facets"]["haiLaunch"]["boundInputRun"] == BOUND["input_run"], "the facet names the input run bound at launch")
+    failed = built_operator.get_openlineage_facets_on_failure(None)
+    require(failed["outputs"] == [] and len(failed["inputs"]) == 2, f"on failure: {failed}")
+    edit(rig.bucket, f"lakehouse/layer_runs/gold/{RUN}/silver_pins.json", lambda d: d["snapshot_set"].update(s2=98))
+    found = built_operator.get_openlineage_facets_on_complete(None)
+    facet = found["run_facets"]["haiLaunch"]
+    require(facet["snapshotState"] == "refused" and "silver_pins.json" in facet["refusal"], f"a refused record shows in the facet: {facet}")
+    require(all("facets" not in item for item in [*found["inputs"], *found["outputs"]]), "a refused record attaches no version")
+
+    def broken(complete: bool) -> Any:
+        raise RuntimeError("synthetic failure of the lineage source")
+
+    plain = operator(Rig(), broken)
+    require(plain.get_openlineage_facets_on_complete(None) is None, "a broken lineage source gives no lineage and raises nothing")
+    require(operator(Rig(), None).get_openlineage_facets_on_complete(None) is None, "an operator without a lineage source gives none")
+
+
+def unreadable_output_record() -> None:
+    """A role that may not read the one optional record, a succeeded job's output record, gives the declared outputs without versions and a facet that says
+    the record was unreadable, not missing. Every other read still refuses on AccessDenied, and a readable record still adds its versions."""
+    layer = "lakehouse/layer_runs"
+    silver, gold = RUN_OF["silver"], RUN_OF["gold"]
+    commit = f"{layer}/gold/{gold}/publish/commit.json"
+    check = validator()
+    versions = built("gold")[1]
+    require(all(item["facets"]["version"]["datasetVersion"] == "31" for item in versions["outputs"]), "a readable output record adds its versions")
+    require(versions["run"]["facets"]["haiLaunch"]["snapshotState"] == "complete", "a readable output record is complete")
+    complete = built("gold", bucket=mutated(lambda b: b.deny_keys.add(commit)))[1]
+    facet = complete["run"]["facets"]["haiLaunch"]
+    require(facet["snapshotState"] == "unreadable", f"a denied output record is unreadable, not missing: {facet}")
+    require(facet["missingOutputs"] == DECLARED["gold"]["outputs"], f"every declared output lacks its version: {facet}")
+    require(commit in facet["refusal"] and "AccessDenied" in facet["refusal"], f"the facet names the record and the denial: {facet}")
+    require([{key: item[key] for key in ("namespace", "name")} for item in complete["outputs"]] == DECLARED["gold"]["outputs"], "the declared outputs are sent")
+    require(all("facets" not in item for item in complete["outputs"]), "no output version without its record")
+    require(all("version" in item["facets"] for item in complete["inputs"]), "the input versions stay")
+    require(not check(complete), f"the unreadable event is valid: {check(complete)[:3]}")
+    absent = built("gold", bucket=mutated(lambda b: b.objects.pop(commit)))[1]["run"]["facets"]["haiLaunch"]
+    require(absent["snapshotState"] == "missing" and "refusal" not in absent, f"an absent output record is still missing: {absent}")
+    denied = [
+        ("gold", f"{layer}/gold/{gold}/silver_pins.json"),
+        ("gold", f"{layer}/silver/{silver}/silver_snapshot.json"),  # the input run's output record, a required read
+        ("silver", f"{layer}/silver/{silver}/pins.json"),
+        ("silver", f"{layer}/silver/{silver}/state/pinned.json"),
+    ]
+    for job, key in denied:
+        error = refuses(ecs_lineage.EvidenceUnavailable, lambda job=job, key=key: built(job, bucket=mutated(lambda b: b.deny_keys.add(key))))
+        require(key in str(error) and "AccessDenied" in str(error), f"{job}: a denied required record {key} is never read as missing: {error}")
+    unready = Rig()
+    source_bucket = evidence_bucket(unready)
+    source_bucket.deny_keys.add(commit)
+    operator(unready, source(unready, spec(), DECLARED["gold"]).facets).execute(context())
+    found = source(unready, spec(), DECLARED["gold"]).facets()
+    require(found["run_facets"]["haiLaunch"]["snapshotState"] == "unreadable", f"the live facets say unreadable: {found['run_facets']}")
+    require(all("facets" not in item for item in found["outputs"]) and len(found["outputs"]) == 1, f"the live outputs have no versions: {found['outputs']}")
+
+
+class Receiver:
+    """A local HTTP stand-in of OpenMetadata's lineage route. ``delay`` holds every reply that long, as a slow or hung receiver does."""
+
+    def __init__(self, delay: float = 0.0) -> None:
+        self.requests: list[dict[str, Any]] = []
+        self.delay = delay
+        self.release = threading.Event()
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
+                owner.requests.append({"path": self.path, "authorization": self.headers.get("Authorization"), "body": body})
+                if owner.delay:
+                    owner.release.wait(owner.delay)
+                reply = json.dumps({"status": "success", "lineageEdgesCreated": 1, "unresolvedDatasets": []}).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(reply)))
+                self.end_headers()
+                self.wfile.write(reply)
+
+            def log_message(self, format: str, *args: Any) -> None:
+                return
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
+
+
+@contextmanager
+def receiving(delay: float = 0.0) -> Iterator[Receiver]:
+    receiver = Receiver(delay)
+    receiver.thread.start()
+    try:
+        yield receiver
+    finally:
+        receiver.release.set()
+        receiver.server.shutdown()
+        receiver.server.server_close()
+        receiver.thread.join(10)
+
+
+def receiver_gets_the_bearer_and_the_timeout() -> None:
+    """The events reach the stand-in at the lineage route with the bearer credential; a receiver that does not answer is left after the 5 s limit."""
+    require(ecs_lineage.ROUTE == "/api/v1/openlineage/lineage" and ecs_lineage.DELIVERY_SECONDS == 5.0, "the route and the 5 second limit are fixed")
+    events = built("gold")
+    with receiving() as receiver:
+        for event in events:
+            status = ecs_lineage.post_event(receiver.url, ecs_lineage.canonical(event).encode(), CREDENTIAL)
+            require(status == 200, f"status {status}")
+    require([item["path"] for item in receiver.requests] == [ecs_lineage.ROUTE] * 2, f"paths {receiver.requests}")
+    require(all(item["authorization"] == f"Bearer {CREDENTIAL}" for item in receiver.requests), "every request carries the bearer credential")
+    require([json.loads(item["body"]) for item in receiver.requests] == events, "the stand-in received the events byte for byte")
+    with receiving(delay=30.0) as slow:
+        began = time.monotonic()
+        error = refuses(ecs_lineage.DeliveryFailed, lambda: ecs_lineage.post_event(slow.url, b"{}", CREDENTIAL))
+        spent = time.monotonic() - began
+    require(4.5 <= spent < 7.0, f"a slow receiver is left after the limit, not before and not much later: {spent:.2f} s ({error})")
+    require(CREDENTIAL not in str(error), "a delivery error never shows the credential")
+
+
+def replay_rebuilds_the_same_events() -> None:
+    """The replay command rebuilds the events from the launch records and the evidence, byte for byte, any number of times, and writes nothing."""
+    rig = Rig()
+    evidence_bucket(rig)
+    operator(rig, None).execute(context())
+    writes = rig.bucket.count("put_object")
+    arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    first, second = (ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"]) for _ in range(2))
+    require(first == second and len(first) == 2, "two replays give the same bytes")
+    expected = source(rig, spec(), DECLARED["gold"])
+    require([json.loads(line) for line in first] == expected.events(), "the replay equals the events the operator's source builds")
+    require(rig.bucket.count("put_object") == writes, "a replay writes nothing to the bucket")
+    check = validator()
+    require(all(not check(json.loads(line)) for line in first), "replayed events are valid")
+    with receiving() as receiver:
+        for _ in range(2):
+            ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
+    bodies = [item["body"] for item in receiver.requests]
+    require(len(bodies) == 4 and bodies[:2] == bodies[2:] and [body.decode() for body in bodies[:2]] == first, "a second send repeats the same events")
+    unended = Rig()
+    evidence_bucket(unended)
+    error = refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.replay(unended.bucket, arguments, declared=DECLARED["gold"]))
+    require("nothing to rebuild yet" in str(error), f"a launch that has not ended has nothing to replay: {error}")
+
+
+def adopted_retry_keeps_its_lineage() -> None:
+    """A retry that adopts an earlier successful attempt replays with the versions of that launch, under its own attempt's identity."""
+    rig = Rig()
+    evidence_bucket(rig)
+    operator(rig, None).execute(context())
+    retry = operator(rig, None)
+    retry.job = spec(2)
+    retry.execute({"ti": SimpleNamespace(dag_id="gold_transform_dag", task_id="gold_build", run_id=f"manual__{RUN}", map_index=-1, try_number=2)})
+    second = {**invocation("gold"), "attempt": 2}
+    found = ecs_lineage.LineageSource(
+        "gold", RUN, 2, second, DECLARED["gold"], ecs_lineage.S3Evidence(rig.bucket, BUCKET), S3LaunchStore(rig.bucket, BUCKET, PREFIX)
+    )
+    events = found.events()
+    complete = events[1]
+    require(complete["eventType"] == "COMPLETE", f"the adopted success is a COMPLETE event: {complete['eventType']}")
+    require(all("version" in item.get("facets", {}) for item in [*complete["inputs"], *complete["outputs"]]), "the adopted retry keeps the versions")
+    require(complete["run"]["facets"]["haiLaunch"]["attempt"] == 2, "the identity is the retry's own attempt")
+    first = source(rig, spec(), DECLARED["gold"]).events()
+    require(first[1]["run"]["runId"] != complete["run"]["runId"], "the retry is its own run")
+    require((first[0]["eventTime"], first[1]["eventTime"]) == (events[0]["eventTime"], events[1]["eventTime"]), "the times are those of the adopted launch")
+    arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "2", "--template", "gold_build"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    require(
+        [json.loads(line) for line in ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"])] == events,
+        "the replay of the retry equals its events",
+    )
+    facets = found.facets()
+    require(facets["run_facets"]["haiLaunch"]["snapshotState"] == "complete", f"the live facets of the retry keep the versions: {facets['run_facets']}")
+
+
+def spec_copies_are_pinned() -> None:
+    """The copied OpenLineage files are the published ones: their digests are pinned in the module."""
+    found = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(SPEC_FOLDER.glob("*.json"))}
+    require(found == ecs_lineage.SPEC_FILES, f"spec copies {found}")
+
+
+def module_check_agrees() -> None:
+    """The module's own event check accepts what the case's validator accepts and refuses an event with an unknown launch facet field."""
+    event = built("gold")[1]
+    ecs_lineage.check_event(event)
+    bad = copy.deepcopy(event)
+    bad["run"]["facets"]["haiLaunch"]["extra"] = 1
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.check_event(bad))
+    bad = copy.deepcopy(event)
+    bad["eventTime"] = 5
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.check_event(bad))
+
+
+def imports_stay_in_the_image() -> None:
+    """The module runs in the Airflow image: it imports nothing from ``scripts`` and nothing from Airflow."""
+    tree = ast.parse((ROOT / "orchestration/ecs_lineage.py").read_text())
+    names = [node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)]
+    names += [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+    require(not [name for name in names if name.split(".")[0] in ("scripts", "airflow")], f"imports {names}")
+
+
+def lineage_is_built_inside_the_guard() -> None:
+    """A lineage source that cannot be built (a job without a declaration) never stops the launch: the step's factory only builds it when the provider
+    asks, inside the operator's guard, so the task runs and the provider gets no lineage."""
+    from dataclasses import replace
+
+    from orchestration import airflow_steps
+    from orchestration.interface import SubmissionRequest
+
+    rig = Rig()
+    evidence_bucket(rig)
+    factory = airflow_steps.lineage_factory(ecs_lineage.S3Evidence(rig.bucket, BUCKET), S3LaunchStore(rig.bucket, BUCKET, PREFIX))
+    request = SubmissionRequest("gold_build", RUN, "real", 1, "gold_transform_dag", "gold_build", f"manual__{RUN}")
+    deferred = factory(request, replace(spec(), job="job_without_a_declaration"))
+    built_operator = operator(rig, deferred)
+    built_operator.execute(context())
+    require(built_operator.get_openlineage_facets_on_complete(None) is None, "an undeclared job gives no lineage and raises nothing")
+    require(built_operator.get_openlineage_facets_on_failure(None) is None, "nor on failure")
+
+
+CASES: dict[str, Callable[[], None]] = {
+    "declared_lineage_follows_the_code": declared_lineage_follows_the_code,
+    "declared_names_are_the_mirror_names": declared_names_are_the_mirror_names,
+    "every_job_from_the_contract_files": every_job_from_the_contract_files,
+    "every_job_with_declared_datasets": every_job_with_declared_datasets,
+    "edges_equal_the_declared_lineage": edges_equal_the_declared_lineage,
+    "names_equal_the_connector_names": names_equal_the_connector_names,
+    "refused_records": refused_records,
+    "operator_returns_the_facets": operator_returns_the_facets,
+    "unreadable_output_record": unreadable_output_record,
+    "receiver_gets_the_bearer_and_the_timeout": receiver_gets_the_bearer_and_the_timeout,
+    "replay_rebuilds_the_same_events": replay_rebuilds_the_same_events,
+    "adopted_retry_keeps_its_lineage": adopted_retry_keeps_its_lineage,
+    "spec_copies_are_pinned": spec_copies_are_pinned,
+    "module_check_agrees": module_check_agrees,
+    "imports_stay_in_the_image": imports_stay_in_the_image,
+    "lineage_is_built_inside_the_guard": lineage_is_built_inside_the_guard,
+}

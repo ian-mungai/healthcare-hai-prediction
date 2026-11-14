@@ -641,3 +641,106 @@ run "logs_go_to_a_foundation_group" {
     error_message = "The new containers log to the existing lineage group under their own stream prefix."
   }
 }
+
+# HTTP lineage to OpenMetadata (airflow_lineage_http_enabled). Off, the scheduler keeps exactly the shared Airflow environment and secrets, so the task
+# definitions do not change. On, only the scheduler, which runs every task, gets the HTTP transport, the 5 second limit and the lineage bot credential as an
+# ECS secret; no environment value names the credential.
+run "lineage_http_off_leaves_the_scheduler_as_before" {
+  command = plan
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
+        for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) : (
+          container.environment == local.airflow_environment && !strcontains(jsonencode(container), "OPENLINEAGE__TRANSPORT")
+          && !strcontains(jsonencode(container), "openmetadata_bot_lineage")
+        ) if startswith(container.name, "airflow_") && container.name != "airflow_migrate"
+      ])
+    ])
+    error_message = "With airflow_lineage_http_enabled false every Airflow container has the shared environment and no HTTP transport or lineage credential."
+  }
+
+  assert {
+    condition     = [for container in jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions) : container.secrets if container.name == "airflow_scheduler"][0] == local.airflow_secrets
+    error_message = "With airflow_lineage_http_enabled false the scheduler has exactly the shared Airflow secrets."
+  }
+
+  assert {
+    condition     = !contains(output.parameter_names_used, var.openmetadata_bot_token_names["lineage"])
+    error_message = "With airflow_lineage_http_enabled false no task definition reads the lineage bot parameter."
+  }
+}
+
+run "lineage_http_on_sends_only_to_openmetadata_from_the_scheduler" {
+  command = plan
+
+  variables {
+    airflow_lineage_http_enabled = true
+  }
+
+  assert {
+    condition = {
+      for item in [for container in jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions) : container.environment if container.name == "airflow_scheduler"][0] :
+      item.name => item.value if startswith(item.name, "OPENLINEAGE__") || startswith(item.name, "AIRFLOW__OPENLINEAGE__")
+      } == {
+      AIRFLOW__OPENLINEAGE__CONFIG_CONN_ID         = ""
+      AIRFLOW__OPENLINEAGE__CONFIG_PATH            = ""
+      AIRFLOW__OPENLINEAGE__DEBUG_MODE             = "false"
+      AIRFLOW__OPENLINEAGE__DISABLE_SOURCE_CODE    = "true"
+      AIRFLOW__OPENLINEAGE__EXECUTION_TIMEOUT      = "5"
+      AIRFLOW__OPENLINEAGE__INCLUDE_FULL_TASK_INFO = "false"
+      AIRFLOW__OPENLINEAGE__NAMESPACE              = "hai-prediction-aws"
+      AIRFLOW__OPENLINEAGE__TRANSPORT              = ""
+      OPENLINEAGE__TRANSPORT__TYPE                 = "http"
+      OPENLINEAGE__TRANSPORT__URL                  = "http://127.0.0.1:8585"
+      OPENLINEAGE__TRANSPORT__ENDPOINT             = "api/v1/openlineage/lineage"
+      OPENLINEAGE__TRANSPORT__TIMEOUT              = "5"
+      OPENLINEAGE__TRANSPORT__AUTH__TYPE           = "api_key"
+    }
+    error_message = "The scheduler sends over HTTP only to OpenMetadata's lineage route, with the 5 second limits and no spool configuration file."
+  }
+
+  assert {
+    condition = contains(
+      [for container in jsondecode(aws_ecs_task_definition.service["airflow_scheduler"].container_definitions) : container.secrets if container.name == "airflow_scheduler"][0],
+      { name = "OPENLINEAGE__TRANSPORT__AUTH__API_KEY", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/healthcare_hai_prediction/openmetadata_bot_lineage" }
+    )
+    error_message = "The lineage bot credential reaches the scheduler only as an ECS secret from its own parameter."
+  }
+
+  assert {
+    condition = alltrue([
+      for key in ["airflow_apiserver", "airflow_dag_processor", "airflow_triggerer"] :
+      !strcontains(aws_ecs_task_definition.service[key].container_definitions, "OPENLINEAGE__TRANSPORT") && !strcontains(aws_ecs_task_definition.service[key].container_definitions, "openmetadata_bot_lineage")
+    ])
+    error_message = "Only the scheduler holds the HTTP transport and the lineage credential."
+  }
+
+  assert {
+    condition     = contains(output.parameter_names_used, "/healthcare_hai_prediction/openmetadata_bot_lineage")
+    error_message = "The parameter_names_used output names the lineage bot parameter, so the execution role grant can be reviewed against it."
+  }
+}
+
+run "lineage_http_needs_the_persistent_catalog" {
+  command = plan
+
+  variables {
+    airflow_lineage_http_enabled    = true
+    openmetadata_persistent_enabled = false
+    openmetadata_task_role_arn      = null
+  }
+
+  expect_failures = [var.airflow_lineage_http_enabled]
+}
+
+run "lineage_url_is_a_private_address_on_8585" {
+  command = plan
+
+  variables {
+    airflow_lineage_http_enabled = true
+    airflow_lineage_url          = "http://203.0.113.10:8585/api"
+  }
+
+  expect_failures = [var.airflow_lineage_url]
+}

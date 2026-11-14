@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ian-mungai/healthcare-hai-prediction/blob/main/data_contracts/orchestration/raw_file_receipt_facet.schema.json",
+  "title": "Raw file receipt dataset facet",
+  "description": "The dataset facet haiReceipt of a raw file that an acquisition run stored: where the publisher served it (the resolved address of the capture, else the requested one), the official landing page, the capture's source and snapshot, and the file's artifact, role, SHA-256 and size from the receipt. The object version is the standard version facet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_producer", "_schemaURL", "sourceId", "snapshotId", "publisher", "landingUrl", "requestedUrl", "publisherUrl", "retrievedAt", "artifactId", "role", "sha256", "byteCount"],
+  "properties": {
+    "_producer": {"type": "string", "format": "uri"},
+    "_schemaURL": {"type": "string", "format": "uri"},
+    "sourceId": {"type": "string", "minLength": 1, "maxLength": 200},
+    "snapshotId": {"type": "string", "minLength": 1, "maxLength": 200},
+    "publisher": {"type": ["string", "null"], "maxLength": 500},
+    "landingUrl": {"type": ["string", "null"], "maxLength": 2048},
+    "requestedUrl": {"type": "string", "pattern": "^https?://", "maxLength": 2048},
+    "publisherUrl": {"type": "string", "pattern": "^https?://", "maxLength": 2048},
+    "retrievedAt": {"type": "string", "maxLength": 40},
+    "artifactId": {"type": ["string", "null"], "maxLength": 200},
+    "role": {"type": "string", "minLength": 1, "maxLength": 60},
+    "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "byteCount": {"type": "integer", "minimum": 0}
+  }
+}

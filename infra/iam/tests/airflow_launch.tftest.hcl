@@ -112,7 +112,7 @@ run "airflow_launch_is_off_by_default" {
   assert {
     condition = (
       length(aws_iam_role.airflow_launch_task) == 0 && length(aws_iam_role_policy.airflow_launch_jobs) == 0 &&
-      length(aws_iam_role_policy.airflow_launch_records) == 0 && length(aws_iam_role_policy.airflow_launch_requests) == 0 &&
+      length(aws_iam_role_policy.airflow_launch_records) == 0 && length(aws_iam_role_policy.airflow_launch_requests) == 0 && length(aws_iam_role_policy.airflow_launch_lineage) == 0 &&
       length(aws_iam_role_policy.airflow_launch_bronze_record) == 0 && length(aws_iam_role_policy.airflow_launch_code_runs) == 0 &&
       length(aws_iam_role_policy.airflow_launch_drift_records) == 0 && output.airflow_launch_roles == {}
     )
@@ -874,5 +874,32 @@ run "without_the_features_family_no_model_set_is_granted" {
   assert {
     condition     = !anytrue([for arn in jsondecode(aws_iam_role_policy.airflow_launch_jobs[0].policy).Statement[0].Resource : strcontains(arn, "features_m")])
     error_message = "The model set families come only with the features family."
+  }
+}
+
+run "launch_role_reads_only_the_lineage_records_of_layer_runs" {
+  command = plan
+
+  assert {
+    condition = (
+      aws_iam_role_policy.airflow_launch_lineage[0].role == aws_iam_role.airflow_launch_task[0].name &&
+      jsondecode(aws_iam_role_policy.airflow_launch_lineage[0].policy).Statement == [
+        {
+          Sid    = "ReadLayerRunLineageRecords"
+          Effect = "Allow"
+          Action = "s3:GetObject"
+          Resource = [
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/pins.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/state/pinned.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/silver_snapshot.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/gold/*/silver_pins.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/gold/*/publish/commit.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/gold_pins.json",
+            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/features_snapshot.json",
+          ]
+        },
+      ]
+    )
+    error_message = "The launch role reads only the pin, pin claim and output records that the lineage of a layer run rebuilds its versions from, and writes or lists nothing under lakehouse/layer_runs/."
   }
 }

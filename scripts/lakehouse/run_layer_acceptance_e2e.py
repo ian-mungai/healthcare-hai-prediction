@@ -1291,7 +1291,11 @@ def static_cases() -> dict[str, bool]:
             set(acceptance.WRITE_PREFIXES[layer]) - {"metadata/dbt/", "lakehouse/feast/registry.pb"} == prefixes[layer] for layer in acceptance.LAYERS
         ),
         "the features role may also write the Feast registry": 'job_layer_run_registry_key   = "lakehouse/feast/registry.pb"' in writer,
-        "the gold role may also write the dbt metadata": '"${local.bronze_bucket_arn}/metadata/dbt/*"' in writer,
+        "the gold role may also write the fixed dbt keys, and each layer only its own dbt prefix": (
+            '"${local.bronze_bucket_arn}/metadata/dbt/${name}" if each.key == "gold"' in writer
+            and '"${local.bronze_bucket_arn}/metadata/dbt/${each.key}/*"' in writer
+            and '"${local.bronze_bucket_arn}/metadata/dbt/*"' not in writer
+        ),
         "the expected containers are init and the job catalog's containers": all(
             acceptance.expected_containers(layer) == ["init", *catalog[layer]["containers"]] for layer in acceptance.LAYERS
         ),

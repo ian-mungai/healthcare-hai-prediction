@@ -89,7 +89,7 @@ locals {
     # These two names are used only by the OpenMetadata containers, so they appear in the task definitions and in the grant only while the flag is on.
     openmetadata_admin_password = var.openmetadata_admin_password_name
     openmetadata_db_password    = var.openmetadata_db_password_name
-  }, local.model_api_secret_names, local.streamlit_secret_names)
+  }, local.model_api_secret_names, local.streamlit_secret_names, var.airflow_lineage_http_enabled ? { openmetadata_bot_lineage = var.openmetadata_bot_token_names["lineage"] } : {})
 
   # A SecureString parameter ARN is the name without its leading slash after "parameter/". It is built from the name: no data source reads the parameter, so no value
   # enters the plan or the state. The variable validation guarantees the leading slash.

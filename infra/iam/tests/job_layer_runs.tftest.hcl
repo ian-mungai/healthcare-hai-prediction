@@ -52,6 +52,7 @@ run "layer_run_grants_default_off" {
       length(aws_iam_role_policy.job_writer_layer_input) == 0 &&
       length(aws_iam_role_policy.job_writer_layer_upload) == 0 &&
       length(aws_iam_role_policy.job_writer_features_feast) == 0 &&
+      length(aws_iam_role_policy.job_writer_layer_dbt) == 0 &&
       output.job_layer_runs_contract.prepared == false
     )
     error_message = "The layer run grants default to off and create no policy."
@@ -115,11 +116,11 @@ run "only_silver_and_gold_upload_and_only_under_their_own_run_prefix" {
         jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Action == ["s3:PutObject"] &&
         jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Resource == concat(
           ["arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/${layer}/*"],
-          layer == "gold" ? ["arn:aws:s3:::example-project-ci-bucket/metadata/dbt/*"] : []
+          [for name in ["manifest.json", "catalog.json", "run_results.json"] : "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/${name}" if layer == "gold"]
         )
       )])
     )
-    error_message = "Silver and gold may put objects under lakehouse/layer_runs/<layer>/ and nowhere else. Gold may also put the dbt files under metadata/dbt/ for the catalog. Features uploads nothing."
+    error_message = "Silver and gold may put objects under lakehouse/layer_runs/<layer>/ and nowhere else. Gold may also put the three fixed dbt keys the catalog reads today, and no other metadata/dbt/ key. Features uploads nothing through this grant."
   }
 }
 
@@ -189,5 +190,53 @@ run "layer_run_contract_names_the_grants" {
       output.job_layer_runs_contract.production_activation == false
     )
     error_message = "The contract output names the input layer and the upload prefix of each layer and activates nothing."
+  }
+}
+
+run "each_layer_copies_its_dbt_files_only_under_its_own_prefix" {
+  command = plan
+
+  variables {
+    job_writer_layers_prepared = true
+    job_layer_runs_prepared    = true
+  }
+
+  assert {
+    condition = (
+      toset(keys(aws_iam_role_policy.job_writer_layer_dbt)) == toset(["silver", "gold", "features"]) &&
+      alltrue([for layer in ["silver", "gold", "features"] : (
+        aws_iam_role_policy.job_writer_layer_dbt[layer].role == aws_iam_role.job_write_layer_task[layer].name &&
+        length(jsondecode(aws_iam_role_policy.job_writer_layer_dbt[layer].policy).Statement) == 1 &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_dbt[layer].policy).Statement[0].Effect == "Allow" &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_dbt[layer].policy).Statement[0].Action == ["s3:GetObject", "s3:PutObject"] &&
+        jsondecode(aws_iam_role_policy.job_writer_layer_dbt[layer].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/metadata/dbt/${layer}/*"]
+      )])
+    )
+    error_message = "Each layer writer may put and read back only its own dbt copies under metadata/dbt/<layer>/, and no other layer's."
+  }
+}
+
+run "each_layer_writer_reaches_only_its_own_objects" {
+  command = plan
+
+  variables {
+    job_writer_layers_prepared = true
+    job_layer_runs_prepared    = true
+  }
+
+  assert {
+    condition = alltrue([for layer in ["silver", "gold", "features"] : (
+      toset(flatten([
+        [for resource in try(jsondecode(aws_iam_role_policy.job_writer_layer_upload[layer].policy).Statement[0].Resource, []) : resource if layer != "features"],
+        jsondecode(aws_iam_role_policy.job_writer_layer_dbt[layer].policy).Statement[0].Resource,
+        [for resource in jsondecode(aws_iam_role_policy.job_writer_layer_state["features"].policy).Statement[0].Resource : resource if layer == "features"],
+        ])) == toset(concat(
+        [for prefix in ["lakehouse/layer_runs/${layer}/*"] : "arn:aws:s3:::example-project-ci-bucket/${prefix}" if layer != "features"],
+        ["arn:aws:s3:::example-project-ci-bucket/metadata/dbt/${layer}/*"],
+        [for name in ["manifest.json", "catalog.json", "run_results.json"] : "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/${name}" if layer == "gold"],
+        [for rest in ["*/state/*"] : "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/${rest}" if layer == "features"],
+      ))
+    )])
+    error_message = "The combined upload, dbt copy and claim grants of each layer writer name only its own run folder (silver and gold), its own dbt prefix, the features claim objects and, for gold, the three fixed dbt keys: no wildcard reaches another layer's objects."
   }
 }

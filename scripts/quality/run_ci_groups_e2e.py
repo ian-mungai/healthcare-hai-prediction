@@ -3693,6 +3693,8 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.trigger_dag_cases", "-B", "--output", "@quality@/trigger_dag_cases/report.json"),
     ("scripts.orchestration.run_ecs_launch_e2e",),
     ("scripts.orchestration.run_airflow_mode_e2e",),
+    ("scripts.orchestration.run_ecs_lineage_e2e",),
+    ("scripts.orchestration.run_dbt_artifacts_e2e",),
     ("scripts.lakehouse.run_layer_run_e2e",),
     ("scripts.lakehouse.run_bronze_run_e2e",),
     ("scripts.orchestration.run_lineage_completion_e2e",),

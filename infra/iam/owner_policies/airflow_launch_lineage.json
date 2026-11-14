@@ -1,0 +1,19 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadLayerRunLineageRecords",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/*/pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/*/state/pinned.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/silver/*/silver_snapshot.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/silver_pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/publish/commit.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/gold_pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/features_snapshot.json"
+      ]
+    }
+  ]
+}

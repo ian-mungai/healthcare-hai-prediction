@@ -1559,6 +1559,8 @@ def collapsed_job_dags_are_one_chain() -> None:
     """The silver, gold, promotion and serving DAGs are one task per job: preflight (the gates, no launch), job (the one ECS task, in the pool),
     evidence (the launch record says the job passed) and gate (runs after a failure, fails the DAG run unless the three passed, carries the asset)."""
     graph = importlib.import_module("orchestration.graph")
+    job_task = importlib.import_module("orchestration.airflow_steps").JOB_TASK
+    require(COLLAPSED_TASKS[1] == job_task, f"the evidence step names the job task {job_task!r}, not {COLLAPSED_TASKS[1]!r} of the chain")
     rig = Rig()
     plan: tuple[tuple[str, dict[str, Any], str, str, list[str]], ...] = (
         ("silver_transform_dag", SILVER, "silver", SILVER_RUN, []),
@@ -2805,7 +2807,63 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
         require(named in str(error), f"the refusal does not say {named!r}: {error}")
 
 
+HTTP_LINEAGE = {
+    "OPENLINEAGE__TRANSPORT__TYPE": "http",
+    "OPENLINEAGE__TRANSPORT__URL": "http://10.0.0.5:8585",
+    "OPENLINEAGE__TRANSPORT__ENDPOINT": "api/v1/openlineage/lineage",
+    "OPENLINEAGE__TRANSPORT__TIMEOUT": "5",
+}
+
+
+def extractor_manager_facets(task: Any, state: str, instance: Any) -> Any:
+    """What the OpenLineage provider's extractor manager gets from a task (apache-airflow-providers-openlineage 2.20.1, ``get_extractor_class`` and the
+    default extractor): no extractor is registered for a decorated Python task's type, so the default one serves a task only when the task itself has a
+    ``get_openlineage_facets_on_<state>`` method, and the facets are what that method returns. The real manager is not run: Airflow is not installed here."""
+    methods = {name: getattr(task, f"get_openlineage_facets_on_{name}", None) for name in ("start", "complete", "failure")}
+    method = methods[state] if any(callable(found) for found in methods.values()) else None
+    return method(instance) if callable(method) else None
+
+
+def job_task_hands_the_listener_its_lineage() -> None:
+    """The job task that a collapsed DAG registers carries the lineage of the launch it runs, so the provider's listener gets the job's datasets with
+    their versions when the task succeeds, and the datasets without versions when it fails. A task whose preflight refused launched nothing and gives none."""
+    from dataclasses import replace
+
+    from orchestration import ecs_lineage
+    from scripts.orchestration.ecs_lineage_cases import RUN_OF, template_bucket
+
+    run = RUN_OF["silver"]
+    steps = importlib.import_module("orchestration.airflow_steps")
+    params = {"run_id": run, "mode": "real"}
+
+    def run_dag(rig: Rig, mode: str = "real") -> tuple[dict[str, Any], Any]:
+        rig.stage_runs(run)
+        evidence = ecs_lineage.S3Evidence(template_bucket(), BUCKET)
+        rig.services = replace(rig.services, lineage=steps.lineage_factory(evidence, rig.launcher.store))
+        with mock.patch.dict("os.environ", HTTP_LINEAGE), world(rig, "silver_transform_dag", {**params, "mode": mode}) as current:
+            current.run_dag("silver_transform_dag.py")
+            nodes = {node.task_id: node for node in current.built}
+            instance = current.context["ti"]
+            found = {state: extractor_manager_facets(nodes["job"], state, instance) for state in ("complete", "failure")}
+            return found, {name: extractor_manager_facets(nodes[name], "complete", instance) for name in ("preflight", "evidence", "gate")}
+
+    found, others = run_dag(Rig())
+    complete = found["complete"]
+    require(complete is not None, "the provider's extractor manager got no lineage from the job task")
+    declared = ecs_lineage.declared_lineage("silver")
+    require(len(complete["inputs"]) == len(declared["inputs"]) and len(complete["outputs"]) == len(declared["outputs"]), f"datasets {complete['run_facets']}")
+    require(complete["run_facets"]["haiLaunch"]["snapshotState"] == "complete", f"facet {complete['run_facets']['haiLaunch']}")
+    require(all("version" in item["facets"] for item in complete["outputs"]), "an output has no version")
+    failure = found["failure"]
+    require(failure is not None and failure["outputs"] == [] and len(failure["inputs"]) == len(declared["inputs"]), f"on failure: {failure}")
+    require(all(value is None for value in others.values()), f"a task that launches nothing handed over lineage: {others}")
+    refused, _ = run_dag(Rig(), "publish_fixture")
+    require(refused["complete"] is None and refused["failure"] is None, f"a task whose preflight refused launched nothing: {refused}")
+    require("airflow_lineage_http_enabled" in (ROOT / "infra/services/airflow.tf").read_text(), "the HTTP lineage setting is not in the Airflow service")
+
+
 CASES: dict[str, Callable[[], None]] = {
+    "job_task_hands_the_listener_its_lineage": job_task_hands_the_listener_its_lineage,
     "dags_hold_no_broker_client": dags_hold_no_broker_client,
     "pool_only_when_configured": pool_only_when_configured,
     "gates_refuse_before_any_cloud_call": gates_refuse_before_any_cloud_call,

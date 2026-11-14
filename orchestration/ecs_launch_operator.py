@@ -5,12 +5,14 @@ its flow (reattach, start, wait, check) and the mixin replaces the four hooks it
 (``operators/ecs.py`` lines 526-597 for ``execute`` and 815-825 for ``on_kill``). The provider's own hook bodies are not used: they send no client token, list
 tasks with ``startedBy`` and ``desiredStatus`` together, wait up to 1,000,000 attempts, count the guard's exit code and stop a killed task
 without confirming it.
+The mixin also gives the provider's OpenLineage listener the job's lineage (``get_openlineage_facets_on_complete`` and ``..._on_failure``) from the
+``lineage`` source, ``orchestration.ecs_lineage.LineageSource.facets``; a lineage failure is logged and never fails the task.
 This module imports nothing from Airflow, so the offline cases can run it over a stand-in.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Any
 
 from orchestration.ecs_launch import JobSpec, Launch, Launcher, LaunchUnavailable
@@ -30,7 +32,15 @@ class LaunchGuarantees:
     arn: str | None  # the provider operator's fields and logger, set by its constructor and by Airflow
     log: Any
 
-    def __init__(self, *, job: JobSpec, launcher: Callable[[], Launcher], stop_on_kill: bool = False, **kwargs: Any) -> None:
+    def __init__(
+        self,
+        *,
+        job: JobSpec,
+        launcher: Callable[[], Launcher],
+        stop_on_kill: bool = False,
+        lineage: Callable[[bool], Mapping[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> None:
         if kwargs.get("deferrable"):
             raise ValueError("a launch operator cannot defer: the deadline, stop and records need this process")
         kwargs["deferrable"] = False  # the provider's default is read from the operators.default_deferrable setting (operators/ecs.py line 473)
@@ -41,6 +51,7 @@ class LaunchGuarantees:
         self.job = job
         self.stop_on_kill = stop_on_kill
         self._make_launcher = launcher
+        self._lineage = lineage
         self._launcher: Launcher | None = None
         self._launch: Launch | None = None
 
@@ -74,6 +85,27 @@ class LaunchGuarantees:
         if not outcome.ok:
             earlier = " in an earlier attempt, nothing was launched, start a new run to try again" if outcome.adopted else ""
             raise JobFailed(f"{self.job.job} attempt {self.job.attempt} ended {outcome.outcome} (exit {outcome.exit_code}){earlier}: {outcome.reason}")
+
+    def openlineage_result(self, found: Mapping[str, Any]) -> Any:
+        """The lineage in the provider's form. ``orchestration/ecs_launch_provider.py`` turns it into an ``OperatorLineage``; here it stays a mapping."""
+        return found
+
+    def lineage_of(self, complete: bool) -> Any:
+        if self._lineage is None:
+            return None
+        try:
+            return self.openlineage_result(self._lineage(complete))
+        except Exception as error:  # lineage never fails the task: the provider gets nothing and the log names the cause
+            self.log.warning("no lineage for %s attempt %s: %s: %s", self.job.job, self.job.attempt, type(error).__name__, error)
+            return None
+
+    def get_openlineage_facets_on_complete(self, task_instance: Any) -> Any:
+        """Called by Airflow's OpenLineage provider after a successful task: the declared datasets with the versions the job's S3 evidence proves."""
+        return self.lineage_of(True)
+
+    def get_openlineage_facets_on_failure(self, task_instance: Any) -> Any:
+        """Called by the provider after a failed task: the declared inputs without versions and no output."""
+        return self.lineage_of(False)
 
     def on_kill(self) -> None:
         if not self.stop_on_kill:

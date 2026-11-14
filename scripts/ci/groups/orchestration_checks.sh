@@ -13,6 +13,8 @@ orchestration_checks() {
   timed "orchestration_checks: trigger_dag cases" "$python_bin" -B -m scripts.orchestration.trigger_dag_cases --output "$quality_output/trigger_dag_cases/report.json"
   timed "orchestration_checks: direct ECS launch E2E" "$python_bin" -m scripts.orchestration.run_ecs_launch_e2e
   timed "orchestration_checks: Airflow launch mode E2E" "$python_bin" -m scripts.orchestration.run_airflow_mode_e2e
+  timed "orchestration_checks: direct ECS lineage E2E" "$python_bin" -m scripts.orchestration.run_ecs_lineage_e2e
+  timed "orchestration_checks: dbt artifact rewrite E2E" "$python_bin" -m scripts.orchestration.run_dbt_artifacts_e2e
   timed "orchestration_checks: layer driver E2E" "$python_bin" -m scripts.lakehouse.run_layer_run_e2e
   timed "orchestration_checks: code archive E2E" "$python_bin" -m scripts.lakehouse.run_code_archive_e2e
   timed "orchestration_checks: bronze driver E2E" "$python_bin" -m scripts.lakehouse.run_bronze_run_e2e

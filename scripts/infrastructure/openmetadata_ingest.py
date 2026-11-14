@@ -60,6 +60,9 @@ SERVER_URL = re.compile(r"^http://(?:[0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{2,5}/api$"
 DBT_FILES = ("manifest.json", "catalog.json", "run_results.json")
 DBT_PREFIX = "metadata/dbt/"
 DBT_PATH_KEYS = {"catalog.json": "dbtCatalogFilePath", "run_results.json": "dbtRunResultsFilePath"}
+DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, in chain order
+DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
+DBT_RUN = re.compile(r"^(silver|gold|features)=([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")
 
 
 def explicitly_off(value: Any) -> bool:
@@ -109,16 +112,34 @@ def fill(node: Any, values: Mapping[str, str], missing: set[str]) -> Any:
     return node
 
 
-def fetch_dbt(s3: Any, bucket: str, folder: Path) -> list[str]:
-    """Download the dbt artifacts into ``folder`` and return the names that were not found. A missing manifest is a failure for the caller."""
+NOT_FOUND = frozenset({"404", "NoSuchKey", "NotFound"})
+
+
+class FetchFailed(RuntimeError):
+    """A dbt artifact could not be read for a reason other than its absence."""
+
+
+def fetch_dbt(s3: Any, bucket: str, folder: Path, prefix: str = DBT_PREFIX) -> list[str]:
+    """Download the dbt artifacts under ``prefix`` into ``folder`` and return the names that do not exist. A missing manifest is a failure for the caller.
+
+    Only a genuine not-found is absent. A refused read, a timeout or any other failure raises ``FetchFailed``, so the ingestion never runs on a partial set
+    of files that it took for complete."""
+    from botocore.exceptions import BotoCoreError, ClientError
+
     folder.mkdir(parents=True, exist_ok=True)
     absent = []
     for name in DBT_FILES:
         try:
-            s3.download_file(bucket, DBT_PREFIX + name, str(folder / name))
-        except Exception:
-            absent.append(name)
+            s3.download_file(bucket, prefix + name, str(folder / name))
+        except ClientError as error:
             (folder / name).unlink(missing_ok=True)
+            code = str(error.response.get("Error", {}).get("Code", ""))
+            if code not in NOT_FOUND:
+                raise FetchFailed(f"{prefix}{name} cannot be read: {code or 'ClientError'}") from None
+            absent.append(name)
+        except (BotoCoreError, OSError) as error:
+            (folder / name).unlink(missing_ok=True)
+            raise FetchFailed(f"{prefix}{name} cannot be read: {type(error).__name__}") from None
     return absent
 
 
@@ -150,6 +171,11 @@ def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
     return len(moved)
 
 
+def fill_dbt(config: dict[str, Any], folder: Path) -> dict[str, Any]:
+    """The dbt configuration with ``${DBT_ARTIFACT_DIR}`` set to the folder of one fetched copy; the other placeholders stay for ``fill``."""
+    return fill(config, {"DBT_ARTIFACT_DIR": str(folder)}, set())
+
+
 def run_workflow(config: dict[str, Any]) -> None:
     """Run the OpenMetadata metadata workflow and raise when it recorded a failure."""
     workflow = importlib.import_module("metadata.workflow.metadata").MetadataWorkflow.create(config)
@@ -167,7 +193,21 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
     parser.add_argument("--token-env", help="name of the environment variable that holds the ingestion bot token (the persistent catalog)")
     parser.add_argument("--server-url", help="OpenMetadata API address that replaces the one in the configuration, for example http://10.0.1.20:8585/api")
     parser.add_argument("--work-dir", type=Path, required=True)
+    parser.add_argument(
+        "--dbt-run",
+        action="append",
+        default=[],
+        metavar="LAYER=RUN",
+        help="dbt only: ingest the copy of one layer run from metadata/dbt/<layer>/<run>/, once per layer; without it the fixed keys are read",
+    )
     options = parser.parse_args(argv)
+    layer_runs: dict[str, str] = {}
+    for item in options.dbt_run:
+        match = DBT_RUN.fullmatch(item)
+        if options.source != "dbt" or match is None or match.group(1) in layer_runs:
+            sys.stderr.write(f"openmetadata_ingest: --dbt-run {item!r} must be LAYER=RUN, once per layer of {', '.join(DBT_LAYERS)}, for the dbt source only\n")
+            return 2
+        layer_runs[match.group(1)] = match.group(2)
     environment = dict(os.environ if env is None else env)
     run = run_workflow if workflow is None else workflow
     config = json.loads((options.config_dir / f"{options.source}.json").read_text())
@@ -196,38 +236,52 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
             return 2
     if options.server_url is not None:
         config["workflowConfig"]["openMetadataServerConfig"]["hostPort"] = options.server_url
+    configs: list[tuple[str, dict[str, Any]]] = [(options.source, config)]
     if options.source == "dbt":
-        folder = options.work_dir / "dbt"
         client = s3_client
         if client is None:
             import boto3
 
             client = boto3.client("s3", region_name=environment.get("AWS_REGION"))
-        absent = fetch_dbt(client, environment.get("DATA_BUCKET_NAME", ""), folder)
-        if "manifest.json" in absent:
-            sys.stderr.write("openmetadata_ingest: manifest.json is missing from the dbt artifacts\n")
-            return 1
-        if mapping is not None:
+        batches = [
+            (layer, options.work_dir / "dbt" / layer, DBT_RUN_PREFIX.format(layer=layer, run=layer_runs[layer])) for layer in DBT_LAYERS if layer in layer_runs
+        ]
+        configs = []
+        for label, folder, prefix in batches or [("dbt", options.work_dir / "dbt", DBT_PREFIX)]:
             try:
-                moved = place_models(folder, mapping)
-            except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
-                sys.stderr.write(f"openmetadata_ingest: the dbt artifacts cannot be mapped to the Glue tables: {type(error).__name__}\n")
+                absent = fetch_dbt(client, environment.get("DATA_BUCKET_NAME", ""), folder, prefix)
+            except FetchFailed as error:
+                sys.stderr.write(f"openmetadata_ingest: {error}\n")
                 return 1
-            sys.stdout.write(f"openmetadata_ingest: {moved} dbt models point at their Glue tables\n")
-        values["DBT_ARTIFACT_DIR"] = str(folder)
-        settings = config["source"]["sourceConfig"]["config"]["dbtConfigSource"]
-        for name in absent:
-            settings.pop(DBT_PATH_KEYS[name], None)
-    missing: set[str] = set()
-    filled = fill(config, values, missing)
-    if missing:
-        sys.stderr.write(f"openmetadata_ingest: these variables are not set: {', '.join(sorted(missing))}\n")
-        return 2
-    try:
-        run(filled)
-    except Exception as error:
-        sys.stderr.write(f"openmetadata_ingest: {options.source} failed: {type(error).__name__}\n")
-        return 1
+            if "manifest.json" in absent:
+                sys.stderr.write(f"openmetadata_ingest: manifest.json is missing from the dbt artifacts of {label} ({prefix})\n")
+                return 1
+            if mapping is not None:
+                try:
+                    moved = place_models(folder, mapping)
+                except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+                    sys.stderr.write(f"openmetadata_ingest: the dbt artifacts of {label} cannot be mapped to the Glue tables: {type(error).__name__}\n")
+                    return 1
+                sys.stdout.write(f"openmetadata_ingest: {moved} dbt models of {label} point at their Glue tables\n")
+            layer_config = json.loads(json.dumps(config))
+            settings = layer_config["source"]["sourceConfig"]["config"]["dbtConfigSource"]
+            for name in absent:
+                settings.pop(DBT_PATH_KEYS[name], None)
+            configs.append((label, fill_dbt(layer_config, folder)))
+    filled_configs = []
+    for label, item in configs:
+        missing: set[str] = set()
+        filled = fill(item, values, missing)
+        if missing:
+            sys.stderr.write(f"openmetadata_ingest: these variables are not set: {', '.join(sorted(missing))}\n")
+            return 2
+        filled_configs.append((label, filled))
+    for label, filled in filled_configs:
+        try:
+            run(filled)
+        except Exception as error:
+            sys.stderr.write(f"openmetadata_ingest: {label} failed: {type(error).__name__}\n")
+            return 1
     sys.stdout.write(f"openmetadata_ingest: {options.source} done\n")
     return 0
 

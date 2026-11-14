@@ -58,7 +58,8 @@
         "owner_policies/job_writer_layer_storage.json",
         "owner_policies/job_stage_read.json",
         "owner_policies/job_writer_layer_input.json",
-        "owner_policies/job_writer_layer_upload.json"
+        "owner_policies/job_writer_layer_upload.json",
+        "owner_policies/job_writer_layer_dbt.json"
       ],
       "attachments": [
         {
@@ -69,6 +70,11 @@
         {
           "policy": "owner_policies/job_writer_layer_upload.json",
           "resource": "job_writer_layer_upload",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_dbt.json",
+          "resource": "job_writer_layer_dbt",
           "flag": "job_layer_runs_prepared"
         }
       ]
@@ -83,7 +89,8 @@
         "owner_policies/job_writer_layer_storage.json",
         "owner_policies/job_stage_read.json",
         "owner_policies/job_writer_layer_input.json",
-        "owner_policies/job_writer_layer_upload.json"
+        "owner_policies/job_writer_layer_upload.json",
+        "owner_policies/job_writer_layer_dbt.json"
       ],
       "attachments": [
         {
@@ -94,6 +101,11 @@
         {
           "policy": "owner_policies/job_writer_layer_upload.json",
           "resource": "job_writer_layer_upload",
+          "flag": "job_layer_runs_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_dbt.json",
+          "resource": "job_writer_layer_dbt",
           "flag": "job_layer_runs_prepared"
         }
       ]
@@ -110,7 +122,8 @@
         "owner_policies/job_writer_layer_input.json",
         "owner_policies/job_writer_layer_upload.json",
         "owner_policies/job_writer_features_feast.json",
-        "owner_policies/job_writer_features_activation.json"
+        "owner_policies/job_writer_features_activation.json",
+        "owner_policies/job_writer_layer_dbt.json"
       ],
       "attachments": [
         {
@@ -132,6 +145,11 @@
           "policy": "owner_policies/job_writer_features_activation.json",
           "resource": "job_writer_features_activation",
           "flag": "job_features_image_prepared"
+        },
+        {
+          "policy": "owner_policies/job_writer_layer_dbt.json",
+          "resource": "job_writer_layer_dbt",
+          "flag": "job_layer_runs_prepared"
         }
       ]
     },
@@ -143,7 +161,8 @@
       "policies": [
         "owner_policies/airflow_launch_jobs.json",
         "owner_policies/airflow_launch_records.json",
-        "owner_policies/airflow_launch_code_runs.json"
+        "owner_policies/airflow_launch_code_runs.json",
+        "owner_policies/airflow_launch_lineage.json"
       ],
       "attachments": [
         {
@@ -159,6 +178,11 @@
         {
           "policy": "owner_policies/airflow_launch_code_runs.json",
           "resource": "airflow_launch_code_runs",
+          "flag": "airflow_launch_prepared"
+        },
+        {
+          "policy": "owner_policies/airflow_launch_lineage.json",
+          "resource": "airflow_launch_lineage",
           "flag": "airflow_launch_prepared"
         }
       ]
@@ -1958,6 +1982,41 @@
       "action": "s3:GetObject",
       "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/example_run/publish/export/manifest.json",
       "scope": "features"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/silver/example_run/manifest.json"
+    },
+    {
+      "role": "write_silver",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/silver/example_run/manifest.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/gold/example_run/manifest.json"
+    },
+    {
+      "role": "write_gold",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/gold/example_run/manifest.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:PutObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/features/example_run/manifest.json"
+    },
+    {
+      "role": "write_features",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/features/example_run/manifest.json"
+    },
+    {
+      "role": "airflow_launch",
+      "action": "s3:GetObject",
+      "resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/example_run/publish/commit.json"
     }
   ]
 }

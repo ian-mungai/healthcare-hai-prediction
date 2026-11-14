@@ -613,3 +613,27 @@ variable "airflow_launch_scratch_path" {
     error_message = "Use an absolute folder without a trailing slash, a parent step or a double slash, for example /data/job_scratch."
   }
 }
+
+variable "airflow_lineage_http_enabled" {
+  description = "Send the OpenLineage events of the Airflow tasks over HTTP only to OpenMetadata's lineage route (/api/v1/openlineage/lineage), with the lineage bot credential of openmetadata_bot_token_names as an ECS secret of the scheduler and a 5 second limit, instead of the spool transport. Turn it on only with persistent OpenMetadata running and the execution role granted the lineage bot parameter (the parameter_names_used output names it). False leaves the Airflow task definitions as they were."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.airflow_lineage_http_enabled || var.openmetadata_persistent_enabled
+    error_message = "HTTP lineage goes only to the persistent OpenMetadata catalog: set openmetadata_persistent_enabled to true first."
+  }
+}
+
+variable "airflow_lineage_url" {
+  description = "Address of OpenMetadata's API as the scheduler reaches it, with no path: the client appends the lineage route."
+  type        = string
+  default     = "http://127.0.0.1:8585"
+  nullable    = false
+
+  validation {
+    condition     = can(regex("^http://(127\\.0\\.0\\.1|10(\\.[0-9]{1,3}){3}|172\\.(1[6-9]|2[0-9]|3[01])(\\.[0-9]{1,3}){2}|192\\.168(\\.[0-9]{1,3}){2}):8585$", var.airflow_lineage_url))
+    error_message = "Use http://<loopback or private IPv4 address>:8585 with no path, the only port OpenMetadata's API listens on."
+  }
+}

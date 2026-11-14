@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ian-mungai/healthcare-hai-prediction/blob/main/data_contracts/orchestration/launch_lineage_facet.schema.json",
+  "title": "Direct ECS launch run facet",
+  "description": "The run facet haiLaunch of every OpenLineage event of a job that the direct ECS launch library ran: the launch identity (run, job, attempt), the DAG step template, the input run bound at launch and the snapshot status rebuilt from the job's S3 evidence. A refused status names the evidence record and the rule it broke. An unreadable status means the role was denied the job's output record, which is not the same as the record being missing: the outputs are declared without versions and refusal names the record.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["_producer", "_schemaURL", "runId", "job", "attempt", "template", "boundInputRun", "snapshotState", "missingOutputs"],
+  "properties": {
+    "_producer": {"type": "string", "format": "uri"},
+    "_schemaURL": {"type": "string", "format": "uri"},
+    "runId": {"type": "string", "pattern": "^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"},
+    "job": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,40}$"},
+    "attempt": {"type": "integer", "minimum": 1, "maximum": 99},
+    "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
+    "boundInputRun": {"type": "string", "pattern": "^(latest|[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$"},
+    "snapshotState": {"enum": ["complete", "partial", "missing", "not_applicable", "refused", "unreadable"]},
+    "missingOutputs": {
+      "type": "array",
+      "maxItems": 1000,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["namespace", "name"],
+        "properties": {"namespace": {"type": "string", "maxLength": 250}, "name": {"type": "string", "maxLength": 1024}}
+      }
+    },
+    "refusal": {"type": "string", "maxLength": 600}
+  }
+}

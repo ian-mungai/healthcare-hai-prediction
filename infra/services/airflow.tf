@@ -9,6 +9,21 @@ locals {
     code_ecs_launch_operator = "orchestration/ecs_launch_operator.py"
     code_ecs_launch_provider = "orchestration/ecs_launch_provider.py"
     code_promotion_chain     = "orchestration/promotion_chain.py"
+    code_ecs_lineage         = "orchestration/ecs_lineage.py"
+    code_raw_lineage         = "orchestration/raw_lineage.py"
+    code_snapshots           = "orchestration/snapshots.py"
+    code_launch_facet        = "data_contracts/orchestration/launch_lineage_facet.schema.json"
+    code_snapshot_schema     = "data_contracts/orchestration/snapshot_record.schema.json"
+    code_input_schema        = "data_contracts/orchestration/input_snapshot_record.schema.json"
+    code_openlineage_core    = "data_contracts/openlineage/OpenLineage-2-0-2.json"
+    code_openlineage_legacy  = "data_contracts/openlineage/OpenLineage-1-0-2.json"
+    code_openlineage_version = "data_contracts/openlineage/DatasetVersionDatasetFacet-1-0-0.json"
+    code_glue_connector      = "config/metadata/ingestion/glue.json"
+    code_athena_mirror       = "config/lakehouse/athena_mirror.json"
+    code_silver_contract     = "data_contracts/lakehouse/silver_publish.json"
+    code_gold_contract       = "data_contracts/lakehouse/gold_contract.json"
+    code_features_contract   = "data_contracts/lakehouse/features_publish.json"
+    code_silver_sources      = "dbt/models/silver/staging/_bronze__sources.yml"
     code_training_approvals  = "orchestration/training_approvals.py"
     code_jobs_table          = "config/orchestration/ecs_broker_jobs.json"
     code_jobs_schema         = "config/orchestration/ecs_broker_jobs.schema.json"
@@ -98,6 +113,24 @@ locals {
     { sourceVolume = "code_lineage", containerPath = "/opt/hai/hai_lineage", readOnly = true },
     { sourceVolume = "airflow_logs", containerPath = "/opt/airflow/logs", readOnly = false },
   ], local.airflow_launch_mounts)
+
+  # With airflow_lineage_http_enabled the scheduler, which runs every task (LocalExecutor), sends the OpenLineage events over HTTP only to OpenMetadata's
+  # lineage route with the lineage bot credential, injected as an ECS secret so no file holds it, and the 5 second limit of the provider and the client.
+  # The provider then has no config file and no transport setting, so the OpenLineage client reads its OPENLINEAGE__TRANSPORT__ variables, and the spool
+  # transport is not used. With the flag false these maps are empty and the task definitions are as before.
+  airflow_lineage_http_environment = var.airflow_lineage_http_enabled ? {
+    AIRFLOW__OPENLINEAGE__CONFIG_PATH  = ""
+    AIRFLOW__OPENLINEAGE__TRANSPORT    = ""
+    OPENLINEAGE__TRANSPORT__TYPE       = "http"
+    OPENLINEAGE__TRANSPORT__URL        = var.airflow_lineage_url
+    OPENLINEAGE__TRANSPORT__ENDPOINT   = "api/v1/openlineage/lineage"
+    OPENLINEAGE__TRANSPORT__TIMEOUT    = "5"
+    OPENLINEAGE__TRANSPORT__AUTH__TYPE = "api_key"
+  } : {}
+
+  airflow_lineage_http_secrets = var.airflow_lineage_http_enabled ? [{ name = "OPENLINEAGE__TRANSPORT__AUTH__API_KEY", valueFrom = local.secret_arn["openmetadata_bot_lineage"] }] : []
+
+  airflow_scheduler_environment = [for name, value in merge(local.airflow_environment_map, local.airflow_lineage_http_environment) : { name = name, value = value }]
 
   airflow_lineage_provider_mount = { sourceVolume = "airflow_lineage_provider", containerPath = "/opt/hai/lineage_provider", readOnly = false }
 
@@ -196,6 +229,8 @@ locals {
   airflow_scheduler_containers = [
     merge(local.airflow_container_defaults, {
       name              = "airflow_scheduler"
+      environment       = local.airflow_scheduler_environment
+      secrets           = concat(local.airflow_secrets, local.airflow_lineage_http_secrets)
       memory            = local.memory_profile.airflow_scheduler.limit
       memoryReservation = local.memory_profile.airflow_scheduler.reservation
       command           = ["bash", "-ec", "${local.airflow_wait_for_migrations}\nexec airflow scheduler --skip-serve-logs"]

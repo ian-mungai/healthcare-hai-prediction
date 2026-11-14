@@ -219,6 +219,8 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
         return {"UPLOAD_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/{role['layer']}/{rest}"])}
     if policy.endswith("job_writer_features_activation.json"):
         return {"BUCKET_ARN": f"arn:aws:s3:::{bucket}", "RUN_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/features/*"])}
+    if policy.endswith("job_writer_layer_dbt.json"):
+        return {"DBT_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/metadata/dbt/{role['layer']}/*"])}
     if policy.endswith("job_writer_features_feast.json"):
         return {
             "REGISTRY_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/{layer_registry_key(infra)}"]),

@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import re
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -165,12 +166,34 @@ def run_step(template: str) -> str:
     return str(launch_module().launch_step(step_request(template, context), context, selections_of(context["ti"].dag_id)))
 
 
-def collapsed_step(kind: str, template: str) -> Any:
-    """Run one task of the one-job chain whose job ``template`` names: its preflight, its launch or its evidence."""
+def collapsed_step(kind: str, template: str, built: Callable[[Any], None] | None = None) -> Any:
+    """Run one task of the one-job chain whose job ``template`` names: its preflight, its launch or its evidence. The launch passes ``built`` the launch
+    operator before it runs."""
     context = get_current_context()
     steps = launch_module()
-    run = {"preflight": steps.preflight_step, "job": steps.job_step, "evidence": steps.evidence_step}[kind]
-    return run(step_request(template, context), context, selections_of(context["ti"].dag_id))
+    request = step_request(template, context)
+    selections = selections_of(context["ti"].dag_id)
+    if kind == "job":
+        return steps.job_step(request, context, selections, built)
+    return {"preflight": steps.preflight_step, "evidence": steps.evidence_step}[kind](request, context, selections)
+
+
+class JobLineage:
+    """The lineage hooks of a job task. The OpenLineage listener asks the operator it was given, here the task that runs the launch operator inside it, for
+    ``get_openlineage_facets_on_complete`` and ``..._on_failure``, so the task forwards them to the launch operator once the launch has built it. A task
+    that failed before it launched has no launch operator and gives the listener nothing."""
+
+    def __init__(self) -> None:
+        self.launch: Any = None
+
+    def built(self, operator: Any) -> None:
+        self.launch = operator
+
+    def get_openlineage_facets_on_complete(self, task_instance: Any) -> Any:
+        return None if self.launch is None else self.launch.get_openlineage_facets_on_complete(task_instance)
+
+    def get_openlineage_facets_on_failure(self, task_instance: Any) -> Any:
+        return None if self.launch is None else self.launch.get_openlineage_facets_on_failure(task_instance)
 
 
 def build_job_chain(template: str, asset: str | None = None, family: str | None = None) -> Any:
@@ -181,9 +204,11 @@ def build_job_chain(template: str, asset: str | None = None, family: str | None 
     def preflight() -> str:
         return str(collapsed_step("preflight", template))
 
+    lineage = JobLineage()
+
     @task(task_id="job", retries=0, execution_timeout=STEP_TIMEOUT, **pool_settings(family))
     def job() -> str:
-        return str(collapsed_step("job", template))
+        return str(collapsed_step("job", template, lineage.built))
 
     @task(task_id="evidence", retries=0, execution_timeout=CHECK_TIMEOUT)
     def evidence() -> Any:
@@ -198,6 +223,8 @@ def build_job_chain(template: str, asset: str | None = None, family: str | None 
         return "accepted"
 
     first, launched, found, last = preflight().operator, job().operator, evidence().operator, gate().operator
+    launched.get_openlineage_facets_on_complete = lineage.get_openlineage_facets_on_complete
+    launched.get_openlineage_facets_on_failure = lineage.get_openlineage_facets_on_failure
     first >> launched >> found >> last
     return last
 

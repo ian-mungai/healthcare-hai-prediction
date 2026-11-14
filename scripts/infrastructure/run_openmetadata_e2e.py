@@ -244,7 +244,9 @@ class FakeS3:
     def download_file(self, bucket: str, key: str, target: str) -> None:
         self.requested.append(f"{bucket}/{key}")
         if key not in self.keys:
-            raise FileNotFoundError(key)
+            from botocore.exceptions import ClientError
+
+            raise ClientError({"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject")  # what boto3's download_file raises for a missing key
         Path(target).write_bytes(self.keys[key])
 
 

@@ -107,8 +107,9 @@ class _Body:
     def __init__(self, data: bytes) -> None:
         self.data = data
 
-    def read(self) -> bytes:
-        return self.data
+    def read(self, amt: int | None = None) -> bytes:
+        """As botocore's ``StreamingBody.read``: at most ``amt`` bytes, or all of them."""
+        return self.data if amt is None else self.data[:amt]
 
 
 class FakeLaunchBucket:

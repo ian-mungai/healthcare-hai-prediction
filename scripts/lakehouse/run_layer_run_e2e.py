@@ -212,6 +212,8 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
     elif name == "publish_plan":
         plan_state(job, arguments)
     elif name == "feast_job":
+        if "feast_fails" in DEFECTS:
+            fail(module)
         shared_write("feast", step=step, run=job.run)
         (folder / f"feast_{step}.json").write_text(json.dumps({"step": step, "run_id": job.run}) + "\n")
     elif name == "gold_maintenance":
@@ -279,10 +281,14 @@ def build(job: Job, module: str, arguments: Sequence[str | Path], environment: d
         (folder / "features_work/full.duckdb").write_text("bulk\n")
     receipt = {"run_id": job.run, "layer": job.layer, "mode": job.mode, "source_sha256": source, "input_sha256": expected_input}
     (folder / "build_receipt.json").write_text(json.dumps(receipt) + "\n")
-    target = folder / "target"
-    target.mkdir(exist_ok=True)
+    # The features build writes its dbt artifacts and its scratch databases under features_work, as scripts/features/features_build.py does.
+    target = folder / ("features_work/build/target" if module.endswith("features_build") else "target")
+    target.mkdir(parents=True, exist_ok=True)
     (target / "manifest.json").write_text('{"metadata": {"project_name": "stand_in"}}\n')
     (target / "run_results.json").write_text('{"results": []}\n')
+    if module.endswith("features_build"):
+        for name in SCRATCH_DATABASES:
+            (folder / "features_work" / name).write_text("scratch database with imported gold rows\n")
 
 
 def export(job: Job, module: str, arguments: Sequence[str | Path]) -> None:
@@ -513,6 +519,8 @@ def bucket_write(key: str) -> None:
 
 
 STATE: dict[str, bytes] = {}  # the run state objects the driver writes at pin
+SCRATCH_DATABASES = ("full.duckdb", "shell.duckdb", "features.duckdb")  # the features build's scratch databases, which never leave the task
+DBT_COPIES: dict[str, bytes] = {}  # the write-once dbt copies of each layer run under metadata/dbt/<layer>/<run>/
 STORED: dict[str, bytes] = {}  # the bucket objects the stand-in publish steps write: the catalog backups
 SLOW_UPLOAD = [0.0]  # seconds the stand-in bucket takes for each upload
 STAGED_VERSION = ["1"]  # the object version of the staged code files; a case changes it to model an input replaced during the run
@@ -533,6 +541,12 @@ class FakeS3:
     exceptions = SimpleNamespace()
 
     def put_object(self, Bucket: str, Key: str, Body: bytes | str, IfNoneMatch: str = "") -> dict[str, Any]:
+        if Key.startswith("metadata/dbt/"):
+            require(Bucket == BUCKET and IfNoneMatch == "*" and len(Key.split("/")) == 5, f"a dbt copy is a write-once put of one layer run: {Key}")
+            if Key in DBT_COPIES:
+                raise self.ClientError("PreconditionFailed")
+            DBT_COPIES[Key] = Body.encode() if isinstance(Body, str) else Body
+            return {}
         require(Bucket == BUCKET and Key.startswith("lakehouse/layer_runs/"), (Bucket, Key))
         if IfNoneMatch == "*" and Key in STATE:
             raise self.ClientError("PreconditionFailed")
@@ -560,6 +574,8 @@ class FakeS3:
         return found
 
     def get_object(self, Bucket: str, Key: str) -> dict[str, Any]:
+        if Key in DBT_COPIES:
+            return {"Body": io.BytesIO(DBT_COPIES[Key])}
         require(Bucket == BUCKET and Key in STORED, (Bucket, Key))
         return {"Body": io.BytesIO(STORED[Key])}
 
@@ -621,6 +637,7 @@ class Case:
         DEFECTS.clear()
         STORED.clear()
         STATE.clear()
+        DBT_COPIES.clear()
         reset_input_versions()
         CODE_RUN_EXPECTED[0] = CODE_RUN
         STAGED_VERSION[0] = "1"
@@ -734,6 +751,9 @@ def case_gold_and_features_chain(case: Case) -> None:
     require(order.index(("upload", "commit.json")) < order.index(("feast", "")), "the evidence of a committed publish is uploaded before Feast can fail")
     dbt_keys = sorted(key for _, key in UPLOADS if key.startswith("metadata/dbt/"))
     require(dbt_keys == ["metadata/dbt/manifest.json", "metadata/dbt/run_results.json"], f"the gold run publishes its dbt files for the catalog: {dbt_keys}")
+    for layer in ("silver", "gold", "features"):
+        copies = sorted(key.rsplit("/", 1)[1] for key in DBT_COPIES if key.startswith(f"metadata/dbt/{layer}/"))
+        require(copies == ["manifest.json", "run_results.json"], f"the {layer} run copies its dbt files once under metadata/dbt/{layer}/<run>/: {copies}")
 
 
 def case_gold_maintenance_runs_last_under_the_chain_rule(case: Case) -> None:
