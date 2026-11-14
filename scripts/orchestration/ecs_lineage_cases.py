@@ -929,7 +929,7 @@ def model_set_digest_is_bound_to_its_base_row() -> None:
     bucket, declared, found = model_set_evidence()
     lineage = ecs_lineage.job_lineage("features", invocation("features"), declared, ecs_lineage.S3Evidence(bucket, BUCKET), found)
     require(lineage.launch["snapshotState"] == "complete", f"the evidence of a model set with its true digest is {lineage.launch}")
-    mutations: dict[str, tuple[dict[str, Any], str]] = {
+    mutations: dict[str, tuple[dict[str, str | bool], str]] = {
         "a wrong digest": ({"pin_digest": "0" * 64}, "base_row_sha256"),
         "a digest of another commit time": ({"pin_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),
         "a changed commit time": ({"apply_time": "2026-11-04T10:21:00+00:00"}, "base_row_sha256"),
