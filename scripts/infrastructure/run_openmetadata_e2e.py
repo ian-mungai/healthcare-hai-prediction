@@ -1631,7 +1631,7 @@ def dag_runs_one_broker_step_with_bounds_and_no_schedule() -> None:
         calls.append(template)
         return "succeeded"
 
-    runtime.__dict__.update(STEP_TIMEOUT=None, run_step=record_step, launch_pool=lambda: "stand_in_pool")
+    runtime.__dict__.update(STEP_TIMEOUT=None, run_step=record_step, pool_settings=lambda family=None: {"pool": "stand_in_pool"})
     saved = {name: sys.modules.get(name) for name in ("airflow", "airflow.sdk", "orchestration.dag_runtime")}
     sys.modules.update({"airflow": types.ModuleType("airflow"), "airflow.sdk": sdk, "orchestration.dag_runtime": runtime})
     try:

@@ -151,8 +151,8 @@ def invocation(job: str, template: str | None = None) -> dict[str, Any]:
 def validator() -> Callable[[dict[str, Any]], list[str]]:
     """The case's own OpenLineage 2-0-2 RunEvent check, over the copied spec files, plus the closed schema of the project's run facet."""
     resources = []
-    for path in sorted(SPEC_FOLDER.glob("*.json")):
-        document = json.loads(path.read_text())
+    for name in sorted(ecs_lineage.SPEC_FILES):
+        document = json.loads((SPEC_FOLDER / name).read_text())
         resources.append((document["$id"], Resource.from_contents(document)))
     registry = Registry().with_resources(resources)
     core = json.loads((SPEC_FOLDER / "OpenLineage-2-0-2.json").read_text())
@@ -808,7 +808,7 @@ def adopted_retry_keeps_its_lineage() -> None:
 
 def spec_copies_are_pinned() -> None:
     """The copied OpenLineage files are the published ones: their digests are pinned in the module."""
-    found = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in sorted(SPEC_FOLDER.glob("*.json"))}
+    found = {name: hashlib.sha256((SPEC_FOLDER / name).read_bytes()).hexdigest() for name in sorted(ecs_lineage.SPEC_FILES)}
     require(found == ecs_lineage.SPEC_FILES, f"spec copies {found}")
 
 

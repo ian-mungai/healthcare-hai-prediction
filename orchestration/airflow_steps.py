@@ -429,7 +429,7 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
             spec = prepared(found, step)
             if spec is None:
                 raise LaunchRefused(f"{template} starts no ECS job")
-            launch(found, spec, context)
+            launch(found, step, spec, context)
         except (JobFailed, LaunchError) as error:
             raise promotion_chain.StepFailed(f"{type(error).__name__}: {error}") from None
 

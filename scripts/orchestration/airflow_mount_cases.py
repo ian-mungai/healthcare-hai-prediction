@@ -26,7 +26,17 @@ CHECK_COMPOSE = "services/orchestration/docker-compose.orchestration.yaml"
 CHECK_SERVICE = "airflow-check"
 CHECK_CHECKOUT = "/opt/hai/repo"  # where the check container's checkout folders sit; real_image_dags puts it first on the module search path
 # The graph follows every definition of a module that the run imports. This one is an offline case of the rig that the in-image run never calls.
-NOT_RUN = frozenset({"scripts/orchestration/airflow_mode_cases.py scripts.infrastructure.services_apply"})
+NOT_RUN = frozenset(
+    {
+        "scripts/orchestration/airflow_mode_cases.py scripts.infrastructure.services_apply",
+        # The lineage cases (imported by airflow_mode_cases) read the publish plans from the code; the in-image run never calls them either.
+        "scripts/orchestration/ecs_lineage_cases.py scripts.features",
+        "scripts/orchestration/ecs_lineage_cases.py scripts.features.features_publish",
+        "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.bronze",
+        "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.gold_publish",
+        "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.silver_publish",
+    }
+)
 MOUNT = re.compile(r'containerPath\s*=\s*"/opt/hai/orchestration/([A-Za-z0-9_]+\.py)"')
 
 
