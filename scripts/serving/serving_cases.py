@@ -2306,7 +2306,8 @@ def case_dag(c: Checker) -> None:
     calls = [node for node in ast.walk(source) if isinstance(node, ast.Call)]
     c.check(
         "the DAG file builds one job chain of the serve job through the shared runtime",
-        [ast.unparse(call) for call in calls if getattr(call.func, "id", "") in ("build_tasks", "build_job_chain")] == ["build_job_chain('serve_deploy')"],
+        [ast.unparse(call) for call in calls if getattr(call.func, "id", "") in ("build_tasks", "build_job_chain")]
+        == ["build_job_chain('serve_deploy', family='serve')"],
     )
     form = (ROOT / "dags/serving_deploy_dag.py").read_text()
     c.check(
