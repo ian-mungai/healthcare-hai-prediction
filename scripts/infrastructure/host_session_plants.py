@@ -64,8 +64,8 @@ PLANTS: dict[str, tuple[str, str]] = {
         "        self.deadline = end if outer is None else min(end, outer)\n        try:\n            self.run_one_shot(",
         "        try:\n            self.run_one_shot(",
     ),
-    "compares only the run ID": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")', 'CODE_ENVIRONMENT = ("CODE_RUN_ID",)'),
-    "compares only the digest": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256")', 'CODE_ENVIRONMENT = ("CODE_SHA256",)'),
+    "compares only the run ID": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_MODE")'),
+    "compares only the digest": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_SHA256", "CODE_MODE")'),
     "leaves the host on after a failure": (
         "        try:\n            with deferred_signals(self.step):\n                self.host_off()\n        except HostSessionError",
         "        try:\n            pass\n        except HostSessionError",
