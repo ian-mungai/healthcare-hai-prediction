@@ -24,7 +24,7 @@ from typing import Any
 from unittest.mock import patch
 
 from scripts.lakehouse import pipeline_build, session
-from scripts.orchestration.ecs_stage_runtime_cases import changed_function, lint_mutant, require
+from scripts.orchestration.source_mutation import changed_function, lint_mutant, require
 from scripts.process import run_command
 
 # The secret variable the planted defect reads; named here so the planted text is not itself an environment read.
@@ -40,7 +40,7 @@ SOURCES = (
     "scripts/lakehouse/silver_quality.py",
     "dbt/profiles.yml",
     "scripts/orchestration/ecs_engine_cases.py",
-    "scripts/orchestration/ecs_stage_runtime_cases.py",
+    "scripts/orchestration/source_mutation.py",
     "config/quality/mypy_runtimes.json",
 )
 

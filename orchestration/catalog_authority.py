@@ -218,7 +218,7 @@ def check_writer(
     authority = authority_record(dict(record))
     if authority["state"] != "aws_writer":
         raise AuthorityError("AWS writer admission is closed")
-    if target != "ecs":
+    if target != "aws":
         raise AuthorityError("AWS is the only writer target")
     if epoch_number(epoch) != authority["epoch"]:
         raise AuthorityError("stale catalog epoch")

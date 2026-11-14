@@ -577,7 +577,7 @@ def driver(root: Path, request: dict[str, Any]) -> dict[str, Any]:
         approval = request.get("approval", {"run_id": request["run_id"], "layer": layer, "epoch": epoch})
         if action == "bootstrap":
             return authority.check_writer(
-                record, epoch=epoch, layer=layer, mode=mode, target="ecs", run_id=request["run_id"], namespaces=names, approval=approval
+                record, epoch=epoch, layer=layer, mode=mode, target="aws", run_id=request["run_id"], namespaces=names, approval=approval
             )
         binding = authority.admit_writer(
             state,
@@ -586,7 +586,7 @@ def driver(root: Path, request: dict[str, Any]) -> dict[str, Any]:
             epoch=epoch,
             layer=layer,
             mode=mode,
-            target=request.get("target", "ecs"),
+            target=request.get("target", "aws"),
             run_id=request["run_id"],
             database_id="original_synthetic_database",
             namespaces=request.get("namespaces", names),

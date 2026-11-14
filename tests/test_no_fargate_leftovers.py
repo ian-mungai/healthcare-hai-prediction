@@ -99,3 +99,18 @@ def test_the_fargate_identity_probe_and_its_tooling_are_gone() -> None:
     check("identity" + "-probe" not in wrapper, "the wrapper or the jobs renderer still takes the probe option")
     schema = (ROOT / "data_contracts/infrastructure/jobs_preparation.schema.json").read_text()
     check("identity" + "_probe" not in schema, "the jobs preparation contract still names the probe root")
+
+
+def test_the_legacy_cloud_staging_and_remote_run_subsystem_is_gone() -> None:
+    patterns = (
+        ("orchestration", "remote_r*"),
+        ("orchestration", "ecs_sta*"),
+        ("scripts/orchestration", "ecs_sta*"),
+        ("scripts/orchestration", "run_ecs_prep*"),
+        ("scripts/orchestration", "ecs_prep*"),
+        ("scripts/orchestration", "ecs_fake_s*"),
+        ("data_contracts/orchestration", "remote_r*"),
+        ("data_contracts/orchestration", "ecs_job*"),
+    )
+    present = [str(path.relative_to(ROOT)) for folder, pattern in patterns for path in (ROOT / folder).glob(pattern)]
+    check(not present, f"the legacy cloud subsystem is still present: {present}")

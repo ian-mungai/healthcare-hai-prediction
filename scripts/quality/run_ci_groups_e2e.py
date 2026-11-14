@@ -3699,7 +3699,6 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.run_lineage_service_cases",),
     ("scripts.orchestration.run_publish_contracts",),
     ("scripts.orchestration.run_pipeline_light",),
-    ("scripts.orchestration.run_ecs_preparation", "--out", "@quality@/ecs_preparation"),
     ("scripts.serving.run_serving_checks", "-B", "--output", "@quality@/serving_checks"),
     ("scripts.streamlit_app.run_streamlit_checks", "-B", "--output", "@quality@/streamlit_checks"),
     ("scripts.orchestration.offline_checks", "--no-image"),

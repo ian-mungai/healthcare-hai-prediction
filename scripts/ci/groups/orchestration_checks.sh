@@ -20,7 +20,6 @@ orchestration_checks() {
   timed "orchestration_checks: lineage service cases" "$python_bin" -m scripts.orchestration.run_lineage_service_cases
   timed "orchestration_checks: publish contracts" "$python_bin" -m scripts.orchestration.run_publish_contracts
   timed "orchestration_checks: light pipeline" "$python_bin" -m scripts.orchestration.run_pipeline_light
-  timed "orchestration_checks: ECS preparation" "$python_bin" -m scripts.orchestration.run_ecs_preparation --out "$quality_output/ecs_preparation"
   # The offline checks skip the built Airflow image, which a CI runner does not have.
   timed "orchestration_checks: model API E2E" "$python_bin" -B -m scripts.serving.run_serving_checks --output "$quality_output/serving_checks"
   # The page cases need Streamlit, which the runner does not install, so the runner reports them as blocked here. They run in the page image.

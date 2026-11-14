@@ -39,7 +39,6 @@
     "\"$python_bin\" -m scripts.orchestration.offline_checks --no-image",
     "\"$python_bin\" -m scripts.orchestration.run_airflow_mode_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_ecs_launch_e2e",
-    "\"$python_bin\" -m scripts.orchestration.run_ecs_preparation --out \"$quality_output/ecs_preparation\"",
     "\"$python_bin\" -m scripts.orchestration.run_job_catalog_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_completion_e2e",
     "\"$python_bin\" -m scripts.orchestration.run_lineage_service_cases",
