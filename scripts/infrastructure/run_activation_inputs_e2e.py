@@ -104,6 +104,12 @@ class Row(NamedTuple):
     bad: Any
     default: Any = None
     refuse: tuple[Any, ...] = ()
+    with_: tuple[tuple[str, Any], ...] = ()
+
+
+def row_variables(row: Row, value: Any) -> dict[str, Any]:
+    """The reviewed file of one row: its value and the inputs the contract requires beside it."""
+    return {row.name: value, **dict(row.with_)}
 
 
 def flags(stack: str, *names: str) -> list[Row]:
@@ -248,8 +254,9 @@ ROWS: list[Row] = [
         "publisher_keys_enabled",
         "promote_enabled",
         "serve_enabled",
-        "host_jobs_enabled",
     ),
+    # The contract requires host_jobs beside host_jobs_enabled, so the host families are listed explicitly and never defaulted.
+    Row("jobs", "host_jobs_enabled", True, "true", with_=(("host_jobs", ["silver"]),)),
     Row("jobs", "layer_jobs", ["silver", "gold"], "silver"),
     Row("jobs", "images", {name: IMAGE % name for name in ("analytics", "quality", "spark")}, {"spark": "latest"}),
     Row("jobs", "train_images", {name: IMAGE % name for name in ("training", "feature_store")}, {"training": "latest"}),
@@ -306,28 +313,6 @@ ROWS: list[Row] = [
             "/mnt/job_scratch",
             "/data/job_scratch_other",
             "/data/job_scratch/../postgres",
-        ),
-    ),
-    Row(
-        "jobs",
-        "host_openmetadata_api",
-        "http://172.31.0.7:8585/api",
-        5,
-        None,
-        (
-            "http://127.0.0.1:8585/api",
-            "http://8.8.8.8:8585/api",
-            "http://172.15.0.1:8585/api",
-            "http://172.32.0.1:8585/api",
-            "http://192.169.0.1:8585/api",
-            "http://10.0.1.256:8585/api",
-            "http://10.0.01.20:8585/api",
-            "http://10.0.1.20:8586/api",
-            "http://10.0.1.20:8585",
-            "http://10.0.1.20:8585/api/",
-            "https://10.0.1.20:8585/api",
-            "http://catalog.internal:8585/api",
-            "10.0.1.20:8585/api",
         ),
     ),
     Row(
@@ -554,18 +539,18 @@ def row_cases(workspace: Workspace, row: Row) -> dict[str, bool]:
     label = f"{stack} {name}"
     checks: dict[str, bool] = {}
     workspace.clear(stack)
-    accepted = workspace.run(stack, {name: row.good})
+    accepted = workspace.run(stack, row_variables(row, row.good))
     written = workspace.written(stack) or {}
     checks[f"{label}: the reviewed value renders exactly"] = accepted.returncode == 0 and written.get(name) == row.good
     workspace.clear(stack)
-    refused = workspace.run(stack, {name: row.bad})
+    refused = workspace.run(stack, row_variables(row, row.bad))
     checks[f"{label}: a value of the wrong type is refused and nothing is written"] = refused.returncode == 2 and workspace.written(stack) is None
     workspace.clear(stack)
-    unknown = workspace.run(stack, {f"{name}_unreviewed": row.good})
+    unknown = workspace.run(stack, {f"{name}_unreviewed": row.good, **dict(row.with_)})
     checks[f"{label}: an unreviewed name is refused and nothing is written"] = unknown.returncode == 2 and workspace.written(stack) is None
     for index, value in enumerate(row.refuse):
         workspace.clear(stack)
-        stray = workspace.run(stack, {name: value})
+        stray = workspace.run(stack, row_variables(row, value))
         checks[f"{label}: a constrained value {index} is refused and nothing is written"] = stray.returncode == 2 and workspace.written(stack) is None
     workspace.clear(stack)
     default = workspace.run(stack, None)
@@ -584,7 +569,7 @@ def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str,
     }
     checks: dict[str, bool] = {}
     workspace.clear(stack)
-    workspace.run(stack, {name: row.good})
+    workspace.run(stack, row_variables(row, row.good))
     rendered = dict(workspace.written(stack) or {})
     extra: dict[str, Any] = {}
     if stack == "iam":
@@ -601,10 +586,10 @@ def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str,
     elif stack == "services":
         rendered["image_digests"] = {}
     workspace.plan.write_text(json.dumps(plan_document(rendered, off, extra)))
-    good = workspace.run(stack, {name: row.good}, "--check-plan", str(workspace.plan))
+    good = workspace.run(stack, row_variables(row, row.good), "--check-plan", str(workspace.plan))
     checks[f"{label}: a plan that carries the reviewed value is accepted"] = good.returncode == 0
     without = {key: value for key, value in rendered.items() if key != name}
-    workspace.plan.write_text(json.dumps(plan_document(without, off, {name: row.good, **extra})))
+    workspace.plan.write_text(json.dumps(plan_document(without, off, {**row_variables(row, row.good), **extra})))
     refused = workspace.run(stack, None if stack != "iam" else {}, "--check-plan", str(workspace.plan))
     checks[f"{label}: a plan that enables it without the reviewed file is refused"] = refused.returncode == 2
     return checks
@@ -843,6 +828,10 @@ PROCEDURE_STUB = (
 )
 
 
+# The contract requires the host families beside host_jobs_enabled. A family other than metadata keeps the platform address out of these cases.
+PROCEDURE_JOBS_VARIABLES = {"host_jobs_enabled": True, "host_jobs": ["silver"]}
+
+
 def procedure_lines() -> list[str]:
     """The command lines of the owner procedure in the docstring of services_apply.py: the indented lines between its first sentence and the next section."""
     document = ast.get_docstring(ast.parse((ROOT / "scripts/infrastructure/services_apply.py").read_text())) or ""
@@ -905,7 +894,7 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
         for stack, key in (("services", "SERVICES_INPUTS"), ("jobs", "JOBS_INPUTS")):
             path = workspace.root / literals[key]
             path.parent.mkdir(parents=True, exist_ok=True)
-            document = {"schema_version": 1, "root": stack, "variables": variables if stack == "services" else {"host_jobs_enabled": True}}
+            document = {"schema_version": 1, "root": stack, "variables": variables if stack == "services" else PROCEDURE_JOBS_VARIABLES}
             path.write_text(json.dumps(document, sort_keys=True) + "\n")
         environment = {
             **environment_base,
@@ -920,7 +909,7 @@ def procedure_cases(workspace: Workspace) -> dict[str, bool]:
         for line in kinds["wrapper"]:
             stack = next(item for item in ("services", "jobs", "iam") if f"--{item}" in line or f"{item.upper()}_FLAGS" in line)
             applying = " apply " in f" {line} "
-            cap_variables = variables if stack == "services" else ({"host_jobs_enabled": True} if stack == "jobs" else None)
+            cap_variables = variables if stack == "services" else (PROCEDURE_JOBS_VARIABLES if stack == "jobs" else None)
             siblings = [row for row in ROWS if row.stack == stack]
             off = {
                 row.name: (False if isinstance(row.good, bool) else row.default) for row in siblings if isinstance(row.good, bool) or row.default is not None

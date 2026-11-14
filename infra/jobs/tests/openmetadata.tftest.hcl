@@ -16,7 +16,7 @@ variables {
   host_capacity_binding             = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
   host_jobs_enabled                 = true
   host_jobs                         = ["metadata"]
-  host_openmetadata_api             = "http://10.0.1.20:8585/api"
+  host_private_ip                   = "10.0.1.20"
   host_repo_path                    = "/data/repo"
   openmetadata_ingestion_token_name = "/example_project/openmetadata_bot_ingestion"
   openmetadata_images = {

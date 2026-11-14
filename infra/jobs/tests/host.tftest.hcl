@@ -63,7 +63,7 @@ variables {
   drift_mlflow_password_name            = "/example_project/mlflow_admin_password"
   serve_manifest_prefix                 = "serving/deployments"
   openmetadata_ingestion_token_name     = "/example_project/openmetadata_bot_ingestion"
-  host_openmetadata_api                 = "http://10.0.1.20:8585/api"
+  host_private_ip                       = "10.0.1.20"
   host_repo_path                        = "/data/repo"
   layer_jobs_enabled                    = true
   bronze_job_enabled                    = true
@@ -631,40 +631,28 @@ run "the_metadata_job_needs_only_the_ingestion_image_and_the_catalog_roles" {
   }
 }
 
-run "the_metadata_job_needs_a_catalog_address" {
+run "the_metadata_job_needs_the_host_address" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = null
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = null
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_may_not_be_loopback" {
+run "the_host_address_may_not_be_loopback" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://127.0.0.1:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "127.0.0.1"
   }
 
-  expect_failures = [var.host_openmetadata_api]
-}
-
-run "the_catalog_address_is_a_private_address_with_the_api_path" {
-  command = plan
-
-  variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:8585"
-  }
-
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
 run "the_metadata_job_needs_the_repository_path" {
@@ -715,14 +703,14 @@ run "the_metadata_job_without_its_image_is_refused" {
   expect_failures = [var.host_jobs]
 }
 
-run "other_families_need_no_catalog_address" {
+run "other_families_need_no_host_address" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["silver"]
-    host_openmetadata_api = null
-    host_repo_path        = null
+    host_jobs_enabled = true
+    host_jobs         = ["silver"]
+    host_private_ip   = null
+    host_repo_path    = null
   }
 
   assert {
@@ -731,258 +719,222 @@ run "other_families_need_no_catalog_address" {
   }
 }
 
-run "the_catalog_address_refuses_public" {
+run "the_host_address_refuses_public" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://203.0.113.20:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "203.0.113.20"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_link_local" {
+run "the_host_address_refuses_link_local" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://169.254.169.254:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "169.254.169.254"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_octet_over_255" {
+run "the_host_address_refuses_octet_over_255" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.256:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "10.0.1.256"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_first_octet_over_255" {
+run "the_host_address_refuses_first_octet_over_255" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://999.0.1.20:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "999.0.1.20"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_leading_zero" {
+run "the_host_address_refuses_leading_zero" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.01.20:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "10.0.01.20"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_another_port" {
+run "the_host_address_refuses_a_name" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:8586/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "catalog.example.invalid"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_port_over_65535" {
+run "the_host_address_refuses_a_port" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:99999/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "10.0.1.20:8585"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_a_name" {
+run "the_host_address_refuses_a_url" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://catalog.example.invalid:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "http://10.0.1.20"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_tls" {
+run "the_host_address_refuses_below_172_16" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "https://10.0.1.20:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "172.15.255.255"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_below_172_16" {
+run "the_host_address_refuses_above_172_31" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://172.15.255.255:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "172.32.0.1"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_above_172_31" {
+run "the_host_address_refuses_above_10" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://172.32.0.1:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "11.0.0.1"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_above_10" {
+run "the_host_address_refuses_above_192_168" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://11.0.0.1:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "192.169.0.1"
   }
 
-  expect_failures = [var.host_openmetadata_api]
+  expect_failures = [var.host_private_ip]
 }
 
-run "the_catalog_address_refuses_above_192_168" {
+run "the_host_address_accepts_ten" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://192.169.0.1:8585/api"
-  }
-
-  expect_failures = [var.host_openmetadata_api]
-}
-
-run "the_catalog_address_refuses_another_path" {
-  command = plan
-
-  variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:8585/apix"
-  }
-
-  expect_failures = [var.host_openmetadata_api]
-}
-
-run "the_catalog_address_refuses_user_information" {
-  command = plan
-
-  variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:8585@203.0.113.20:8585/api"
-  }
-
-  expect_failures = [var.host_openmetadata_api]
-}
-
-run "the_catalog_address_accepts_ten" {
-  command = plan
-
-  variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.0.1.20:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "10.0.1.20"
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
-    error_message = "A private address on port 8585 with the /api path reaches the container."
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://${var.host_private_ip}:8585/api"
+    error_message = "A private host address reaches the container on port 8585 with the /api path."
   }
 }
 
-run "the_catalog_address_accepts_ten_edges" {
+run "the_host_address_accepts_ten_edges" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://10.255.255.255:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "10.255.255.255"
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
-    error_message = "A private address on port 8585 with the /api path reaches the container."
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://${var.host_private_ip}:8585/api"
+    error_message = "A private host address reaches the container on port 8585 with the /api path."
   }
 }
 
-run "the_catalog_address_accepts_low_172" {
+run "the_host_address_accepts_low_172" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://172.16.0.0:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "172.16.0.0"
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
-    error_message = "A private address on port 8585 with the /api path reaches the container."
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://${var.host_private_ip}:8585/api"
+    error_message = "A private host address reaches the container on port 8585 with the /api path."
   }
 }
 
-run "the_catalog_address_accepts_high_172" {
+run "the_host_address_accepts_high_172" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://172.31.255.255:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "172.31.255.255"
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
-    error_message = "A private address on port 8585 with the /api path reaches the container."
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://${var.host_private_ip}:8585/api"
+    error_message = "A private host address reaches the container on port 8585 with the /api path."
   }
 }
 
-run "the_catalog_address_accepts_private_192" {
+run "the_host_address_accepts_private_192" {
   command = plan
 
   variables {
-    host_jobs_enabled     = true
-    host_jobs             = ["metadata"]
-    host_openmetadata_api = "http://192.168.0.1:8585/api"
+    host_jobs_enabled = true
+    host_jobs         = ["metadata"]
+    host_private_ip   = "192.168.0.1"
   }
 
   assert {
-    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == var.host_openmetadata_api
-    error_message = "A private address on port 8585 with the /api path reaches the container."
+    condition     = one([for item in jsondecode(output.host_container_definitions["metadata"])[1].environment : item.value if item.name == "OM_API"]) == "http://${var.host_private_ip}:8585/api"
+    error_message = "A private host address reaches the container on port 8585 with the /api path."
   }
 }
 

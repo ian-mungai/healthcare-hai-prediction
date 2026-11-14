@@ -67,15 +67,15 @@ variable "host_capacity_binding" {
   }
 }
 
-variable "host_openmetadata_api" {
-  description = "Address of the persistent OpenMetadata API for the metadata host task, for example http://10.0.1.20:8585/api, always port 8585 and path /api. Use the private address of the host, because the bridge task reaches the host's services at that address and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
+variable "host_private_ip" {
+  description = "Private IPv4 address of the container host: the platform stack's host_private_ip output, which scripts/infrastructure/render_jobs_config.py reads, never typed by hand and never part of the reviewed preparation file. The bridge tasks reach the host's services at this address (the persistent OpenMetadata catalog on port 8585, path /api) and the host firewall opens the catalog port for it. Loopback is the task's own address in bridge mode, and the bridge gateway is not one of the addresses the firewall rules name. Required while the metadata host task is selected."
   type        = string
   default     = null
 
   validation {
-    condition = var.host_openmetadata_api == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : try(
+    condition = var.host_private_ip == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : try(
       [
-        for captures in [regex("^http://(([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})):8585/api$", var.host_openmetadata_api)] : [
+        for captures in [regex("^(([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3})\\.([0-9]{1,3}))$", var.host_private_ip)] : [
           for octets in [[for part in slice(captures, 1, 5) : tonumber(part)]] : (
             alltrue([for octet in octets : octet <= 255]) &&
             captures[0] == format("%d.%d.%d.%d", octets...) &&
@@ -85,7 +85,7 @@ variable "host_openmetadata_api" {
       ][0],
       false
     )
-    error_message = "Supply the catalog API as http://<private IPv4 address>:8585/api while the metadata host task is selected. The address must be in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 with octets from 0 to 255 and no leading zero, the port must be 8585 and the path /api, because the task sends its bot token there."
+    error_message = "Supply the platform output host_private_ip: a private IPv4 address in 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 with octets from 0 to 255 and no leading zero, while the metadata host task is selected, because the task sends its bot token to the catalog there."
   }
 }
 
@@ -101,7 +101,9 @@ variable "host_repo_path" {
 }
 
 locals {
-  host_families = concat(["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
+  # The persistent catalog on the host: always port 8585, path /api, at the address of the platform output.
+  host_catalog_api = var.host_private_ip == null ? null : "http://${var.host_private_ip}:8585/api"
+  host_families    = concat(["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"], keys(local.host_set_families))
   # The capacity provider that infra/platform registers: format("<project>_%s_<environment>", "host").
   host_provider = "${var.project_name}_host_${var.environment}"
   # The host has 4096 CPU units. One job runs at a time and gets 3072 units and the host job cap (host_job_memory_mib, from the services stack).
@@ -200,7 +202,7 @@ locals {
       ulimits                = [{ name = "core", softLimit = 0, hardLimit = 0 }]
       dependsOn              = [{ containerName = "init", condition = "SUCCESS" }]
       environment = concat(local.om_common_environment, [
-        { name = "OM_API", value = coalesce(var.host_openmetadata_api, "unset") },
+        { name = "OM_API", value = coalesce(local.host_catalog_api, "unset") },
         { name = "RUN_ID", value = "" },
         { name = "POLARIS_URI", value = "" },
         # The ID of the features run whose chain the dbt source ingests. The launch fills it from the metadata DAG's required features_run parameter; the task

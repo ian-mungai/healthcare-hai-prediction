@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import sys
@@ -15,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from scripts.infrastructure import render_jobs_config as renderer_module
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -277,6 +279,7 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
     off = invoke(bronze)
     checks["raw_read_environment_off_renders_without_the_field"] = off.returncode == 0 and "bronze_read_environment" not in json.loads(output.read_text())
     checks.update(_host_room_cases(workspace, environment_file, prep, output, document, values, publisher["variables"]))
+    checks.update(_host_address_cases(workspace, environment_file, prep, output, document, values, publisher["variables"]))
     return checks
 
 
@@ -322,7 +325,8 @@ def _host_room_cases(
             timeout=15,
         )
 
-    host_variables = document["variables"] | {"host_jobs_enabled": True}
+    # The job room cases select one family other than metadata, so the platform address is not read.
+    host_variables = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["silver"]}
     checks: dict[str, bool] = {}
     # TEST FIXTURE ONLY, not measured values: the binding the services output host_capacity_binding gives for a 30720 MiB usable host.
     binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
@@ -392,6 +396,152 @@ def _host_room_cases(
     checks["jobs_without_host_jobs_read_no_services_output"] = (
         result.returncode == 0 and not calls.exists() and not {"host_job_memory_mib", "host_capacity_binding"} & set(json.loads(output.read_text()))
     )
+    return checks
+
+
+def _hand_written_host_addresses() -> list[str]:
+    """Return every IPv4 literal in the jobs stack files, so none of the host's addresses is typed by hand."""
+    found: list[str] = []
+    for source in sorted((ROOT / "infra/jobs").rglob("*")):
+        if source.suffix not in (".tf", ".py") or ".terraform" in source.parts or "tests" in source.parts:
+            continue
+        text = source.read_text(encoding="utf-8")
+        found += [f"{source.name}:{literal}" for literal in re.findall(r"\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b(?!/)", text)]
+    return found
+
+
+def _host_address_cases(
+    workspace: Path, environment_file: Path, prep: Path, output: Path, document: dict[str, Any], values: dict[str, Any], publisher_variables: dict[str, Any]
+) -> dict[str, bool]:
+    """The metadata host job gets the host address from the platform output host_private_ip; the reviewed file cannot type it."""
+    binary = workspace / "host_address_bin"
+    binary.mkdir()
+    tool = binary / "terraform"
+    calls = binary / "calls.jsonl"
+    # TEST FIXTURE ONLY, not measured values.
+    binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
+    platform_directory = str((workspace / "infra/platform").resolve())
+
+    def answer(address_text: str, address_code: int) -> None:
+        tool.write_text(
+            f"#!{sys.executable}\nimport json, sys\n"
+            f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
+            f"if sys.argv[1] == {'-chdir=' + platform_directory!r}:\n"
+            f"    sys.stdout.write({address_text!r})\n    sys.exit({address_code})\n"
+            f"sys.stdout.write({json.dumps(binding)!r})\n"
+        )
+        tool.chmod(0o700)
+
+    env = _environment() | {"PATH": str(binary) + os.pathsep + os.environ.get("PATH", "")}
+
+    def invoke(variables: dict[str, Any]) -> Any:
+        prep.write_text(json.dumps(document | {"variables": variables}, sort_keys=True) + "\n")
+        return run_command(
+            sys.executable,
+            [
+                "-m",
+                "scripts.infrastructure.render_jobs_config",
+                "--env-file",
+                str(environment_file),
+                "--preparation-inputs",
+                str(prep),
+                "--preparation-sha256",
+                hashlib.sha256(prep.read_bytes()).hexdigest(),
+            ],
+            cwd=workspace,
+            env=env,
+            timeout=15,
+        )
+
+    def platform_asks() -> list[list[str]]:
+        asked = [json.loads(line) for line in calls.read_text().splitlines()] if calls.exists() else []
+        return [call for call in asked if call[0] == "-chdir=" + platform_directory]
+
+    ask = ["-chdir=" + platform_directory, "output", "-json", "host_private_ip"]
+    metadata = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["metadata", "silver"]}
+    # The reviewed file lists the host families; the list holding every family is Terraform's default and names metadata.
+    default_families = [
+        *("bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6"),
+        *("gold", "metadata", "promote", "serve", "silver", "train"),
+    ]
+    omitted = document["variables"] | {"host_jobs_enabled": True}
+    explicit_default = omitted | {"host_jobs": default_families}
+    checks: dict[str, bool] = {}
+    answer(json.dumps("10.40.0.20"), 0)
+    for name, variables in (
+        ("the_metadata_host_job", metadata),
+        ("the_explicit_default_host_families", explicit_default),
+    ):
+        calls.unlink(missing_ok=True)
+        result = invoke(variables)
+        checks[f"{name}_gets_host_private_ip_from_the_platform_output"] = (
+            result.returncode == 0
+            and platform_asks() == [ask]
+            and json.loads(output.read_text()).get("host_private_ip") == "10.40.0.20"
+            and "10.40.0.20" not in result.stdout + result.stderr
+        )
+    rendered = output.read_bytes()
+    for name, text, code in (
+        ("a_failed_platform_output", "", 1),
+        ("a_null_address", "null", 0),
+        ("an_address_that_is_not_text", "20", 0),
+        ("a_public_address", json.dumps("203.0.113.20"), 0),
+        ("a_loopback_address", json.dumps("127.0.0.1"), 0),
+        ("a_link_local_address", json.dumps("169.254.169.254"), 0),
+        ("an_address_with_a_leading_zero", json.dumps("10.0.01.20"), 0),
+        ("a_host_name", json.dumps("host.example.invalid"), 0),
+        ("an_address_with_a_port", json.dumps("10.40.0.20:8585"), 0),
+    ):
+        answer(text, code)
+        for label, variables in (
+            ("metadata", metadata),
+            ("explicit_default_families", explicit_default),
+        ):
+            result = invoke(variables)
+            checks[f"host_address_refuses_{name}_for_{label}"] = (
+                result.returncode == 2 and "host_private_ip" in result.stderr and output.read_bytes() == rendered
+            )
+    checks["host_address_refusal_asks_for_a_platform_apply"] = "apply the platform stack" in result.stderr.lower()
+    answer(json.dumps("10.40.0.20"), 0)
+    rendered = output.read_bytes()
+    for name, variables in (
+        ("an_omitted_host_jobs_list", omitted),
+        ("a_host_family_nobody_registered", omitted | {"host_jobs": ["fargate"]}),
+        ("a_repeated_host_family", omitted | {"host_jobs": ["silver", "silver"]}),
+        ("a_host_jobs_switch_that_is_not_a_boolean", document["variables"] | {"host_jobs_enabled": "true", "host_jobs": ["metadata"]}),
+    ):
+        calls.unlink(missing_ok=True)
+        result = invoke(variables)
+        checks[f"{name}_is_refused_before_any_terraform_call"] = result.returncode == 2 and not calls.exists() and output.read_bytes() == rendered
+    try:
+        renderer_module.needs_host_address({"host_jobs_enabled": True})
+        named = False
+    except renderer_module.ConfigurationError as refusal:
+        named = "host_jobs" in str(refusal) and "explicitly" in str(refusal)
+    checks["the_renderer_names_host_jobs_and_asks_for_an_explicit_list_when_it_is_omitted"] = named
+    for name, variables in (
+        ("no_host_job_family_of_metadata", document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["silver"]}),
+        ("an_empty_host_family_list", document["variables"] | {"host_jobs_enabled": True, "host_jobs": []}),
+        ("host_jobs_turned_off_without_a_list", document["variables"] | {"host_jobs_enabled": False}),
+        ("the_publisher_job_alone", publisher_variables),
+        ("jobs_without_a_catalog", document["variables"]),
+    ):
+        calls.unlink(missing_ok=True)
+        result = invoke(variables)
+        checks[f"{name}_reads_no_platform_output"] = (
+            result.returncode == 0 and platform_asks() == [] and "host_private_ip" not in json.loads(output.read_text())
+        )
+    rendered = output.read_bytes()
+    # The schema refuses every key it does not list, so a made-up key proves the refusal without naming any removed input.
+    for label, key, typed in (
+        ("host_private_ip", "host_private_ip", "10.40.0.20"),
+        ("any_unknown_key", "zz_unregistered_probe_key", "any value"),
+    ):
+        result = invoke(metadata | {key: typed})
+        checks[f"the_reviewed_file_may_not_type_{label}"] = (
+            result.returncode == 2 and "preparation contract is invalid" in result.stderr and output.read_bytes() == rendered
+        )
+    checks["the_jobs_stack_files_hold_no_hand_written_host_address"] = _hand_written_host_addresses() == []
     return checks
 
 

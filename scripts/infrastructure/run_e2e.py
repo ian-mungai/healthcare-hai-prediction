@@ -1801,7 +1801,10 @@ def run_services_cases(evidence: Evidence, sources: dict[str, bytes], bash: str)
     lock_id = "standin-host:1:20261110T220000Z:0123abcd"
     # The change freezes the reviewed jobs inputs when it starts, so the wrapper takes their path and digest and checks them before the lock.
     jobs_inputs = workspace / "jobs_inputs.json"
-    jobs_inputs.write_text(json.dumps({"schema_version": 1, "root": "jobs", "variables": {"host_jobs_enabled": True}}, sort_keys=True) + "\n", encoding="utf-8")
+    jobs_inputs.write_text(
+        json.dumps({"schema_version": 1, "root": "jobs", "variables": {"host_jobs_enabled": True, "host_jobs": ["silver"]}}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     jobs_digest = sha256(jobs_inputs.read_bytes())
     keep = ["--keep-launch-hold", "--jobs-inputs", str(jobs_inputs), "--jobs-sha256", jobs_digest]
     for label, options, lock_extra in (

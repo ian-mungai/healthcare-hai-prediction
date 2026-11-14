@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import re
 import sys
@@ -25,6 +26,8 @@ from scripts.process import TimeoutExpired, run_command
 
 JOBS_DIRECTORY = REPO_ROOT / "infra/jobs"
 SERVICES_DIRECTORY = REPO_ROOT / "infra/services"
+PLATFORM_DIRECTORY = REPO_ROOT / "infra/platform"
+PRIVATE_NETWORKS = tuple(ipaddress.IPv4Network(block) for block in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
 JOB_ROOM_FLOOR_MIB = 4096
 # The services output host_capacity_binding: the job memory (the host job cap) and the usable-memory inputs and reservations it must fit. The jobs stack
 # labels the init container of every host revision with it, and the launch preflight runs a host job only from a revision bound to the current inputs.
@@ -59,6 +62,44 @@ def host_job_room(directory: Path = SERVICES_DIRECTORY) -> tuple[int, str]:
             "Apply the services stack, then render again. No Terraform action was run."
         )
     return room, str(binding)
+
+
+def host_private_ip(directory: Path = PLATFORM_DIRECTORY) -> str:
+    """Return the host's private address from the platform stack output host_private_ip, or refuse; the reviewed file never carries it."""
+    refusal = ConfigurationError(
+        "The metadata host job needs the host's private address from the platform stack output host_private_ip "
+        "(a private IPv4 address). Apply the platform stack, then render again. No Terraform action was run."
+    )
+    try:
+        result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "host_private_ip"], timeout=120)
+    except (OSError, TimeoutExpired):
+        raise refusal from None
+    try:
+        address = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        address = None
+    try:
+        parsed = ipaddress.IPv4Address(address) if isinstance(address, str) else None
+    except ValueError:
+        parsed = None
+    if parsed is None or str(parsed) != address or not any(parsed in network for network in PRIVATE_NETWORKS):
+        raise refusal
+    return str(address)
+
+
+def needs_host_address(values: dict[str, Any]) -> bool:
+    """True when the metadata host job is selected: the only job that calls the host's services by address.
+
+    The reviewed file lists the host families whenever host jobs are on, so no default list is read from the Terraform source.
+    An omitted list is refused by name.
+    """
+    host_jobs_on = values.get("host_jobs_enabled") is True
+    if host_jobs_on and "host_jobs" not in values:
+        raise ConfigurationError(
+            "host_jobs_enabled needs host_jobs: list the host job families explicitly in the reviewed jobs preparation file "
+            "(Terraform's default list is not read). No Terraform action was run."
+        )
+    return host_jobs_on and "metadata" in values["host_jobs"]
 
 
 def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
@@ -106,8 +147,11 @@ def main() -> int:
         values: dict[str, Any] = jobs_values(storage)
         directory = JOBS_DIRECTORY
         values.update(prepared)
+        address_needed = root == "jobs" and needs_host_address(values)
         if root == "jobs" and (values.get("host_jobs_enabled") is True or values.get("publisher_job_enabled") is True):
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
+        if address_needed:
+            values["host_private_ip"] = host_private_ip()
         if arguments.check_plan:
             try:
                 result = run_command("terraform", [f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], timeout=120)

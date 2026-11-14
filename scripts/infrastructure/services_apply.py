@@ -30,7 +30,8 @@ step 5 wrote) disagree with the frozen selection, binding or identity.
 
 Before step 1, save your current reviewed services inputs (the file you pass to ``--preparation-inputs`` today) as ``SERVICES_INPUTS`` below, with
 ``"host_job_cap_mib": 22528`` (or your cap) added to its ``variables``; leave the key out to keep the default of 26816. Save your current reviewed jobs
-inputs as ``JOBS_INPUTS``. Run every command from the repository root in one shell.
+inputs as ``JOBS_INPUTS``; they list ``host_jobs`` beside ``host_jobs_enabled``, because the contract refuses an omitted list.
+Run every command from the repository root in one shell.
 
     set -euo pipefail
     PY=.venv/bin/python
