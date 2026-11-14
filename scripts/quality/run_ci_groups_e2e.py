@@ -3699,6 +3699,7 @@ ORCHESTRATION_COMMANDS = (
     ("scripts.orchestration.run_ecs_lineage_e2e",),
     ("scripts.orchestration.run_dbt_artifacts_e2e",),
     ("scripts.lakehouse.run_layer_run_e2e",),
+    ("scripts.lakehouse.run_code_archive_e2e",),
     ("scripts.lakehouse.run_bronze_run_e2e",),
     ("scripts.orchestration.run_lineage_completion_e2e",),
     ("scripts.orchestration.run_lineage_service_cases",),
