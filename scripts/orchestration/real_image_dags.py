@@ -190,6 +190,9 @@ def configure_airflow(folder: str) -> None:
             "AIRFLOW__DATABASE__SQL_ALCHEMY_CONN": f"sqlite:///{folder}/airflow.db",
             "AIRFLOW__CORE__DAGS_FOLDER": str(ROOT / "dags"),
             "AIRFLOW__CORE__LOAD_EXAMPLES": "false",
+            # dag.test() syncs the sibling DAGs with the creation default (paused). The mapped trigger of the training DAG fails with DagIsPaused for a paused
+            # research_dag (fail_when_dag_is_paused), so the rig leaves its DAGs unpaused as the owner does before a deployed run. Production keeps "true".
+            "AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION": "false",
             "AIRFLOW__CORE__UNIT_TEST_MODE": "false",
             "AIRFLOW__OPENLINEAGE__DISABLED": "true",
         }

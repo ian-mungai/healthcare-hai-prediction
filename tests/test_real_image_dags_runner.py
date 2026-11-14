@@ -6,6 +6,7 @@ import ast
 import hashlib
 import importlib
 import json
+import os
 import re
 import shutil
 import sys
@@ -355,6 +356,12 @@ def test_the_serving_request_digest_is_the_hash_the_claim_binds_not_a_container_
         real_image_dags.serving_request_is_bound(_serve_rig("records", "run-1", "0" * 64), "run-1", environment)
     with pytest.raises(real_image_dags.Expectation, match="no claim record"):
         real_image_dags.serving_request_is_bound(_serve_rig("records", "run-2", digest), "run-1", environment)
+
+
+def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_research_dag_running(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(os, "environ", dict(os.environ))
+    real_image_dags.configure_airflow(str(tmp_path))
+    check(os.environ["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "false", "the rig creates DAGs paused, so the fail_when_dag_is_paused trigger fails")
 
 
 def test_the_rig_names_none_of_the_retired_inputs() -> None:
