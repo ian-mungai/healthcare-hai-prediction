@@ -308,10 +308,12 @@ def dbt_manifest() -> dict[str, Any]:
 
 
 def ingest_dbt_points_gold_and_features_models_at_the_glue_tables() -> None:
-    """dbt runs on DuckDB, so every model says database staging and schema main. OpenMetadata 2.0.7 looks a dbt node up as service.database.schema.table
-    and its catalogMapping changes only the database, so the copy of the manifest the workflow reads names the Glue database of each mirrored layer."""
+    """dbt runs on DuckDB, so every model says database staging and schema main, and a bronze source says database lakehouse. OpenMetadata 2.0.7 looks a dbt
+    node up as service.database.schema.table and its catalogMapping changes only the database, so the copy of the manifest the workflow reads names the Glue
+    database of each mirrored layer: the models by their folder, the bronze sources by their schema."""
     manifest = dbt_manifest()
     catalog = {"nodes": {key: {"metadata": {"database": "staging", "schema": "main", "name": node["name"]}} for key, node in manifest["nodes"].items()}}
+    catalog["sources"] = {"source.hai.bronze.measure": {"metadata": {"database": "lakehouse", "schema": "bronze", "name": "measure"}}}
     keys = {"metadata/dbt/manifest.json": json.dumps(manifest).encode(), "metadata/dbt/catalog.json": json.dumps(catalog).encode()}
     seen: list[dict[str, Any]] = []
     read: dict[str, Any] = {}
@@ -336,7 +338,15 @@ def ingest_dbt_points_gold_and_features_models_at_the_glue_tables() -> None:
         place["test.hai.not_null_dim_state"] == ("staging", "main") and place["model.dbt_project_evaluator.fct_check"] == ("staging", "main"),
         "tests and models of other folders or packages stay as dbt wrote them",
     )
-    require(read["manifest"]["sources"] == manifest["sources"], "sources stay as dbt wrote them")
+    source = read["manifest"]["sources"]["source.hai.bronze.measure"]
+    require(
+        (source["database"], source["schema"], source["name"]) == ("hai_lakehouse", "hai_mirror_bronze", "measure"),
+        f"a bronze source is a table of hai_mirror_bronze: {source}",
+    )
+    require(
+        read["catalog"]["sources"]["source.hai.bronze.measure"]["metadata"]["schema"] == "hai_mirror_bronze",
+        "the catalog entry of a bronze source moves with it",
+    )
     require((cat["model.hai.dim_state"]["metadata"]["database"], cat["model.hai.dim_state"]["metadata"]["schema"]) == ("hai_lakehouse", "hai_mirror_gold"), cat)
     require(cat["model.hai.stg_measure"]["metadata"]["schema"] == "hai_mirror_silver", "the catalog entry of a silver model moves with it")
     require(cat["model.dbt_project_evaluator.fct_check"]["metadata"]["schema"] == "main", "the catalog entry of a package model stays")

@@ -2,8 +2,8 @@
 
 Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt --config-dir D --token-file F --work-dir W``. The persistent catalog
 gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. OpenMetadata 2.0.7 has no Iceberg connector, so the
-``glue`` source reads the gold and features tables from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The ``dbt`` source
-names, in its copy of the manifest, the Glue database of each gold and features model, so that dbt attaches to those tables.
+``glue`` source reads the tables of every layer, bronze included, from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The
+``dbt`` source names, in its copy of the manifest, the Glue database of each model and of each bronze source, so that dbt attaches to those tables.
 It refuses a configuration that profiles, samples
 or reads rows before it fills any placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside
 the Public research-data scope, which is why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
@@ -144,11 +144,13 @@ def fetch_dbt(s3: Any, bucket: str, folder: Path, prefix: str = DBT_PREFIX) -> l
 
 
 def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
-    """Point every dbt model of a mirrored layer at its Glue table in the downloaded manifest and catalog; return how many models moved.
+    """Point every dbt model of a mirrored layer, and every source of a mirrored namespace, at its Glue table in the downloaded manifest and catalog;
+    return how many nodes moved.
 
-    dbt runs on DuckDB, so a model's database is ``staging`` and its schema ``main``. OpenMetadata 2.0.7 finds the table of a dbt node as
-    ``service.database.schema.table`` and its ``catalogMapping`` can change only the database. The layer is the model's folder under the project
-    (``fqn[1]``). Silver models, tests, seeds and sources keep what dbt wrote: no Glue table exists for them.
+    dbt runs on DuckDB, so a model's database is ``staging`` and its schema ``main``, and a bronze source's database is ``lakehouse``. OpenMetadata 2.0.7
+    finds the table of a dbt node as ``service.database.schema.table`` and its ``catalogMapping`` can change only the database. The layer is the model's
+    folder under the project (``fqn[1]``) and the namespace of a source is its schema (``bronze``). Tests, seeds and the models of other folders keep what
+    dbt wrote: no Glue table exists for them.
     """
     schemas = mapping["schemas"]
     manifest_path = folder / "manifest.json"
@@ -159,16 +161,22 @@ def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
         if node.get("resource_type") == "model" and len(fqn) > 2 and fqn[1] in schemas:
             node["database"], node["schema"] = mapping["database"], schemas[fqn[1]]
             moved[key] = schemas[fqn[1]]
+    sources: dict[str, str] = {}
+    for key, node in (manifest.get("sources") or {}).items():
+        if node.get("resource_type") == "source" and node.get("schema") in schemas:
+            sources[key] = schemas[node["schema"]]
+            node["database"], node["schema"] = mapping["database"], sources[key]
     manifest_path.write_text(json.dumps(manifest))
     catalog_path = folder / "catalog.json"
     if catalog_path.is_file():
         catalog = json.loads(catalog_path.read_text())
-        for key, schema in moved.items():
-            metadata = ((catalog.get("nodes") or {}).get(key) or {}).get("metadata")
-            if isinstance(metadata, dict):
-                metadata["database"], metadata["schema"] = mapping["database"], schema
+        for section, placed in (("nodes", moved), ("sources", sources)):
+            for key, schema in placed.items():
+                metadata = ((catalog.get(section) or {}).get(key) or {}).get("metadata")
+                if isinstance(metadata, dict):
+                    metadata["database"], metadata["schema"] = mapping["database"], schema
         catalog_path.write_text(json.dumps(catalog))
-    return len(moved)
+    return len(moved) + len(sources)
 
 
 def fill_dbt(config: dict[str, Any], folder: Path) -> dict[str, Any]:
@@ -262,7 +270,7 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, workflow: Callab
                 except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
                     sys.stderr.write(f"openmetadata_ingest: the dbt artifacts of {label} cannot be mapped to the Glue tables: {type(error).__name__}\n")
                     return 1
-                sys.stdout.write(f"openmetadata_ingest: {moved} dbt models of {label} point at their Glue tables\n")
+                sys.stdout.write(f"openmetadata_ingest: {moved} dbt models and sources of {label} point at their Glue tables\n")
             layer_config = json.loads(json.dumps(config))
             settings = layer_config["source"]["sourceConfig"]["config"]["dbtConfigSource"]
             for name in absent:

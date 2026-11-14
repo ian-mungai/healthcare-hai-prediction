@@ -214,7 +214,7 @@ def bronze_events_name_the_loaded_files() -> None:
         event = complete[table]
         require(pair(event["inputs"]) == pair(raw_lineage.bronze_inputs([stored])), f"{table}: only its own objects are inputs: {pair(event['inputs'])}")
         outputs = [(item["name"], item["facets"]["version"]["datasetVersion"]) for item in event["outputs"]]
-        require(outputs == [(f"hai_lakehouse.bronze.{table}", snapshot)], f"{table}: only its own table is an output: {outputs}")
+        require(outputs == [(f"hai_lakehouse.hai_mirror_bronze.{table}", snapshot)], f"{table}: only its own table is an output: {outputs}")
         require(event["run"]["facets"]["haiLaunch"]["snapshotState"] == "complete", f"{table}: {event['run']['facets']['haiLaunch']}")
     parents = {event["run"]["facets"]["parent"]["run"]["runId"] for event in events}
     runs = {event["run"]["runId"] for event in events}
@@ -223,10 +223,13 @@ def bronze_events_name_the_loaded_files() -> None:
     tables = {(item["namespace"], item["name"]) for event in events for item in event["outputs"]}
     require(
         {namespace for namespace, _ in tables} == {"iceberg://glue_mirror"},
-        f"a bronze table is a table of the glue_mirror service, not a Polaris one: {tables}",
+        f"a bronze table is a table of the glue_mirror service, in its Glue database hai_mirror_bronze: {tables}",
     )
     claimed = {item["name"] for event in events for item in event["outputs"]}
-    require(claimed == {"hai_lakehouse.bronze.cms_hai_hospital", "hai_lakehouse.bronze.cms_hai_state"}, f"no unloaded table is claimed: {claimed}")
+    require(
+        claimed == {"hai_lakehouse.hai_mirror_bronze.cms_hai_hospital", "hai_lakehouse.hai_mirror_bronze.cms_hai_state"},
+        f"no unloaded table is claimed: {claimed}",
+    )
     failed = bronze_built(two_table_record(), outcome="failed")
     require([event["eventType"] for event in failed] == ["START", "FAIL"], f"a failed run has one step run: {failed}")
     require(all(event["inputs"] == [] and event["outputs"] == [] for event in failed), "a failed bronze run claims no file and no table")
@@ -278,7 +281,7 @@ BRONZE_ARGUMENTS = [
     *("--dag-id", "bronze_chain_dag", "--task-id", "bronze_load", "--dag-run-id", f"manual__{RUN}"),
 ]
 BRONZE_REQUEST = ("bronze_load", RUN, "real", 1, "bronze_chain_dag", "bronze_load", f"manual__{RUN}")
-TABLES = ("hai_lakehouse.bronze.cms_hai_hospital", "hai_lakehouse.bronze.cms_hai_state")
+TABLES = ("hai_lakehouse.hai_mirror_bronze.cms_hai_hospital", "hai_lakehouse.hai_mirror_bronze.cms_hai_state")
 
 
 def http_on(url: str, **change: str) -> dict[str, str]:
@@ -422,7 +425,10 @@ def bronze_evidence_step_sends_the_replay_events() -> None:
     rig, _, found = bronze_launch(two_table_record())
     replayed = ecs_lineage.replay(rig.bucket, EVIDENCE_ARGUMENTS, declared=found.declared)
     pairs = table_pairs([json.loads(line) for line in replayed])
-    own = {(raw_lineage.raw_file(item["bucket"], item["key"])["name"], f"hai_lakehouse.bronze.{item['table']}") for item in two_table_record()["objects"]}
+    own = {
+        (raw_lineage.raw_file(item["bucket"], item["key"])["name"], f"hai_lakehouse.hai_mirror_bronze.{item['table']}")
+        for item in two_table_record()["objects"]
+    }
     require(len(replayed) == 4 and pairs == own and {output for _, output in pairs} == set(TABLES), f"replay {len(replayed)} lines, pairs {pairs}")
     with receiving() as quiet, lineage_environment(http_on(quiet.url)):
         without = run_evidence(bronze_launch(two_table_record())[0])

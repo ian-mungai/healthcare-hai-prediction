@@ -17,8 +17,7 @@ Where the parts come from:
   Iceberg tables, and the snapshot record schemas allow that form) and name ``<OpenMetadata database>.<Glue database>.<table>``, from
   ``config/metadata/ingestion/glue.json`` and ``config/lakehouse/athena_mirror.json``. The names come from those files, never from the live mirror, so
   they are the same while the mirror's ``enabled`` is false; OpenMetadata resolves them once the mirror is on and ingested (it creates no unresolved
-  entity). Bronze has no Glue database: its datasets keep the name ``<database>.bronze.<table>`` under the same service, which no connector creates yet,
-  so bronze tables stay unresolved in OpenMetadata until a bronze mirror layer exists.
+  entity). Bronze is a mirror layer like the others (``hai_mirror_bronze``), so a bronze table is named the same way and resolves once the mirror holds it.
 - The launch identity, the times, the outcome and the input run bound at launch come from the launch records (``orchestration/ecs_launch.py``).
 - The versions come from the job's evidence under ``lakehouse/layer_runs/<layer>/<run>/``: the pin file (the input snapshots) and the output record.
   The input snapshot record is checked by ``snapshots.validate_input_record``: it names exactly the declared inputs, and its pins equal the frozen pins.
@@ -176,19 +175,19 @@ def connector() -> Connector:
 
 
 def dataset(schema: str, table: str) -> dict[str, str]:
-    """The OpenLineage dataset of a lakehouse table: namespace ``iceberg://<service>`` and name ``<database>.<Glue database>.<table>``. A table of a layer is in
-    the layer's Glue database; a bronze table keeps ``bronze``, because the mirror has no bronze database."""
+    """The OpenLineage dataset of a lakehouse table: namespace ``iceberg://<service>`` and name ``<database>.<Glue database>.<table>``. A table is in the Glue
+    database of its layer in ``config/lakehouse/athena_mirror.json``, bronze included."""
     if not IDENTIFIER.fullmatch(schema) or not IDENTIFIER.fullmatch(table):
         raise LineageRefused(f"{schema}.{table} is not a plain catalog identifier")
     found = connector()
-    glue_database = BRONZE_NAMESPACE if schema == BRONZE_NAMESPACE else found.schemas.get(schema)
+    glue_database = found.schemas.get(schema)
     if glue_database is None:
-        raise LineageRefused(f"{schema} is not a lakehouse namespace of the Glue mirror or bronze")
+        raise LineageRefused(f"{schema} is not a lakehouse namespace of the Glue mirror")
     return {"namespace": f"iceberg://{found.service}", "name": f"{found.database}.{glue_database}.{table}"}
 
 
 def connector_fqn(item: Mapping[str, str]) -> str:
-    """The FQN of the table the Glue connector creates for a dataset. A dataset it would name differently or not create at all (bronze) is refused."""
+    """The FQN of the table the Glue connector creates for a dataset. A dataset it would name differently or not create at all is refused."""
     found = connector()
     parts = str(item.get("name", "")).split(".")
     mirrored = {database: schema for schema, database in found.schemas.items()}

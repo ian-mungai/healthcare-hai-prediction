@@ -24,6 +24,7 @@ LAYER_MODELS = {"silver": ("int_hospital_windows", "int_county_values"), "gold":
 TABLES = {model: layer for layer, models in LAYER_MODELS.items() for model in models}
 # The Glue database of each layer, written out here and not read from config/lakehouse/athena_mirror.json, so a changed config or module fails a case.
 MIRROR = {"silver": "hai_mirror_silver", "gold": "hai_mirror_gold", "features": "hai_mirror_features"}
+PLACES = {**MIRROR, "bronze": "hai_mirror_bronze"}  # the ingestion also places the bronze sources, which have no model
 RELATION = re.compile(r'"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?')
 
 
@@ -168,7 +169,7 @@ def connector_config_places_the_models() -> None:
 
     config = json.loads(ROOT_CONFIG.read_text())
     mapping = config.pop(MAPPING_KEY)
-    require(mapping == {"database": "hai_lakehouse", "schemas": MIRROR}, f"the models are not placed in the Glue mirror: {mapping}")
+    require(mapping == {"database": "hai_lakehouse", "schemas": PLACES}, f"the models and bronze sources are not placed in the Glue mirror: {mapping}")
     require(config["source"]["serviceName"] == "glue_mirror", f"the dbt models attach to {config['source']['serviceName']}")
     require("catalogMapping" not in config["source"]["sourceConfig"]["config"], "bronze is not mirrored, so no catalog maps to a Glue database")
     require(not violations(config), f"dbt.json is refused: {violations(config)}")
@@ -188,12 +189,17 @@ def rewrite_and_placement_agree() -> None:
             (Path(folder) / "manifest.json").write_text(json.dumps(rewritten))
             moved = place_models(Path(folder), mapping)
             placed = json.loads((Path(folder) / "manifest.json").read_text())
-        require(moved == len(LAYER_MODELS[layer]), f"{layer}: the placement moved {moved} models")
+        require(moved == len(LAYER_MODELS[layer]) + 1, f"{layer}: the placement moved {moved} nodes, the models and the one bronze source")
         for key, node in rewritten["nodes"].items():
             if node["resource_type"] == "model":
                 require(
                     (placed["nodes"][key]["database"], placed["nodes"][key]["schema"]) == (node["database"], node["schema"]), f"{layer} {key}: placed apart"
                 )
+        source = placed["sources"]["source.hai.bronze.cms_hai_hospital"]
+        require(
+            (source["database"], source["schema"]) == ("hai_lakehouse", "hai_mirror_bronze"),
+            f"{layer}: a bronze source is placed in hai_mirror_bronze: {source}",
+        )
 
 
 RUNS = {"silver": "20261104T100000Z-5111e201", "gold": "20261104T110000Z-601d0001", "features": "20261104T120000Z-feed0001"}

@@ -44,9 +44,9 @@ END = "2026-11-04T10:30:00+00:00"
 
 
 # The OpenMetadata table of each lakehouse namespace: glue_mirror.hai_lakehouse.<Glue database>.<table> (config/metadata/ingestion/glue.json). Written out here,
-# not read from the config, so a changed config or module fails a case. Bronze has no Glue database, so its name keeps the lakehouse namespace.
+# not read from the config, so a changed config or module fails a case. Every layer, bronze included, has a Glue database in athena_mirror.json.
 SERVICE = "glue_mirror"
-MIRROR_SCHEMA = {"bronze": "bronze", "silver": "hai_mirror_silver", "gold": "hai_mirror_gold", "features": "hai_mirror_features"}
+MIRROR_SCHEMA = {"bronze": "hai_mirror_bronze", "silver": "hai_mirror_silver", "gold": "hai_mirror_gold", "features": "hai_mirror_features"}
 
 
 def glue(schema: str, table: str) -> dict[str, str]:
@@ -269,17 +269,19 @@ def declared_lineage_follows_the_code() -> None:
 
 
 def declared_names_are_the_mirror_names() -> None:
-    """A layer's datasets name its Glue database (hai_mirror_silver, hai_mirror_gold, hai_mirror_features) and the bronze job's keep ``bronze``, whatever the
-    mirror's ``enabled`` setting says: the names come from the config files, not from a live mirror."""
+    """A layer's datasets name its Glue database (hai_mirror_bronze, hai_mirror_silver, hai_mirror_gold, hai_mirror_features), whatever the mirror's
+    ``enabled`` setting says: the names come from the config files, not from a live mirror. Bronze names resolve like the other layers' names."""
     mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
     for layer, expected in MIRROR_SCHEMA.items():
-        if layer != "bronze":
-            require(
-                mirror["layers"][layer]["database"] == expected, f"{layer}: the mirror config names {mirror['layers'][layer]['database']}, the case {expected}"
-            )
+        require(
+            mirror["layers"][layer] == {"namespace": layer, "database": expected},
+            f"{layer}: the mirror config names {mirror['layers'].get(layer)}, the case {expected}",
+        )
     silver = ecs_lineage.declared_lineage("silver")
     require(all(item["name"].startswith("hai_lakehouse.hai_mirror_silver.") for item in silver["outputs"]), "silver outputs are not in hai_mirror_silver")
-    require(all(item["name"].startswith("hai_lakehouse.bronze.") for item in silver["inputs"]), "silver inputs are not named bronze")
+    require(all(item["name"].startswith("hai_lakehouse.hai_mirror_bronze.") for item in silver["inputs"]), "silver inputs are not in hai_mirror_bronze")
+    bronze = ecs_lineage.declared_lineage("bronze")["outputs"]
+    require(bronze and all(item["name"].startswith("hai_lakehouse.hai_mirror_bronze.") for item in bronze), "bronze outputs are not in hai_mirror_bronze")
     require({item["namespace"] for item in [*silver["inputs"], *silver["outputs"]]} == {f"iceberg://{SERVICE}"}, "every dataset names the glue_mirror service")
     require(all(".silver." not in item["name"] and ".gold." not in item["name"] for item in ecs_lineage.declared_lineage("gold")["inputs"]), "a Polaris name")
 
@@ -321,8 +323,8 @@ def every_job_with_declared_datasets() -> None:
             versions = {item["name"]: item["facets"]["version"]["datasetVersion"] for item in [*complete["inputs"], *complete["outputs"]]}
             wanted = {
                 "silver": {
-                    "hai_lakehouse.bronze.t1": "11",
-                    "hai_lakehouse.bronze.t2": "12",
+                    "hai_lakehouse.hai_mirror_bronze.t1": "11",
+                    "hai_lakehouse.hai_mirror_bronze.t2": "12",
                     "hai_lakehouse.hai_mirror_silver.s1": "21",
                     "hai_lakehouse.hai_mirror_silver.s2": "22",
                 },
@@ -352,7 +354,8 @@ def edges_equal_the_declared_lineage() -> None:
 
 def names_equal_the_connector_names() -> None:
     """A dataset name is the table FQN the Glue connector creates for the mirror, without its service name; the dbt connector writes to the same service and
-    the same Glue databases (the models are moved to them at ingestion)."""
+    the same Glue databases (the models and the bronze sources are moved to them at ingestion). Every layer of athena_mirror.json is in the connector's
+    schema filter and in the dbt mapping, so no dataset names a table the catalog does not read."""
     glue_source = json.loads((ROOT / "config/metadata/ingestion/glue.json").read_text())["source"]
     dbt_config = json.loads((ROOT / "config/metadata/ingestion/dbt.json").read_text())
     mirror = json.loads((ROOT / "config/lakehouse/athena_mirror.json").read_text())
@@ -361,14 +364,21 @@ def names_equal_the_connector_names() -> None:
     require(dbt_config["source"]["serviceName"] == service, "the dbt connector must attach its models to the Glue mirror service")
     require(dbt_config["hai_glue_mapping"]["database"] == database, "the dbt mapping names another OpenMetadata database than the Glue connector")
     databases = {layer: spec["database"] for layer, spec in mirror["layers"].items()}
-    require(dbt_config["hai_glue_mapping"]["schemas"] == databases, "the dbt mapping and the mirror config name different Glue databases")
     require(
-        sorted(glue_source["sourceConfig"]["config"]["schemaFilterPattern"]["includes"]) == sorted(f"^{name}$" for name in databases.values()), "schema filter"
+        set(databases) == set(MIRROR_SCHEMA) and all(databases[layer] == MIRROR_SCHEMA[layer] for layer in databases), f"the mirror config names {databases}"
     )
+    places = dbt_config["hai_glue_mapping"]["schemas"]
+    require(places == databases, f"the dbt mapping must name every mirror layer, the models of silver, gold and features and the bronze sources: {places}")
+    includes = set(glue_source["sourceConfig"]["config"]["schemaFilterPattern"]["includes"])
+    require({f"^{name}$" for name in databases.values()} <= includes, f"the Glue connector's schema filter lacks a mirror database: {sorted(includes)}")
     item = ecs_lineage.dataset("gold", "fact_hai_measure")
     require(item == {"namespace": f"iceberg://{service}", "name": f"{database}.hai_mirror_gold.fact_hai_measure"}, f"dataset {item}")
     require(ecs_lineage.connector_fqn(item) == f"{service}.{database}.hai_mirror_gold.fact_hai_measure", f"FQN {ecs_lineage.connector_fqn(item)}")
-    require(ecs_lineage.dataset("bronze", "cms_hai_hospital")["name"] == f"{database}.bronze.cms_hai_hospital", "bronze keeps its namespace name")
+    bronze = ecs_lineage.dataset("bronze", "cms_hai_hospital")
+    require(bronze["name"] == f"{database}.hai_mirror_bronze.cms_hai_hospital", f"bronze dataset {bronze}")
+    require(
+        ecs_lineage.connector_fqn(bronze) == f"{service}.{database}.hai_mirror_bronze.cms_hai_hospital", "a bronze table resolves like any other layer's table"
+    )
     refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.dataset("Gold", "x;y"))
     refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.dataset("polaris_extra", "x"))
     refuses(
@@ -376,11 +386,11 @@ def names_equal_the_connector_names() -> None:
         lambda: ecs_lineage.connector_fqn({"namespace": "iceberg://polaris", "name": f"{database}.hai_mirror_gold.fact_hai_measure"}),
     )
     refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.connector_fqn({"namespace": f"iceberg://{service}", "name": f"{database}.gold.fact_hai_measure"}))
+    refuses(ecs_lineage.LineageRefused, lambda: ecs_lineage.connector_fqn({"namespace": f"iceberg://{service}", "name": f"{database}.bronze.cms_hai_hospital"}))
     for job in JOBS["jobs"]:
         for entry in [side for found in ecs_lineage.declared_lineage(job).values() for side in found]:
             require(entry["namespace"] == f"iceberg://{service}", f"{job}: declared namespace {entry['namespace']}")
-            if ".bronze." not in entry["name"]:
-                ecs_lineage.connector_fqn(entry)  # refuses a declared dataset the connector would name differently
+            ecs_lineage.connector_fqn(entry)  # refuses a declared dataset the connector would name differently
 
 
 def mutated(change: Callable[[Any], None]) -> Any:

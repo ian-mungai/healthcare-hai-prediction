@@ -10,9 +10,9 @@ The rewrite moves each model to that table, using the table sets the publish ste
 the node's ``database``, ``schema`` and ``relation_name``, every ``staging.main.<model>`` relation in compiled SQL (quoted or not), the ``catalog.json``
 metadata and the ``run_results.json`` relation names. The places are the same names whether the mirror is switched on or not. A model with no published
 table, a model built anywhere but ``staging.main`` and compiled SQL that names an unpublished relation are refused by name. The bronze sources keep the dbt
-catalog ``lakehouse`` and schema ``bronze``: bronze has no Glue database, so they stay unresolved in the catalog. The ingestion
-(``openmetadata_ingest.place_models``) puts the models in the same places, so a copy that this rewrite made is not moved again. The output is canonical JSON,
-so the same input gives the same bytes.
+catalog ``lakehouse`` and schema ``bronze``: this rewrite moves models only, and the ingestion places the sources in ``hai_mirror_bronze``. The ingestion
+(``openmetadata_ingest.place_models``) puts the models in the same places too, so a copy that this rewrite made is not moved again. The output is canonical
+JSON, so the same input gives the same bytes.
 """
 
 from __future__ import annotations
