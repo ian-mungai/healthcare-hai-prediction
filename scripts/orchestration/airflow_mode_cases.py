@@ -2785,9 +2785,10 @@ def publisher_host_definition_matches_the_job_table() -> None:
     require(job["log_container"] == "run" and job["acceptance"] == ["run"] and job["deadline_seconds"] == 86_400, f"the publisher job row is wrong: {job}")
     require(table["steps"]["publisher_run"] == "publisher" and "publisher" in host["jobs"], "the publisher step or its host row is missing")
     require(
-        job["containers"]["run"] == ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
+        job["containers"]["run"]
+        == ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY", "HAI_DEADLINE_UTC"]
         and job.get("needs_publisher_run_request") is True,
-        f"the publisher run container does not take its code digest, the run kind and the capture root alone: {job}",
+        f"the publisher run container does not take its code digest, the run kind, the capture root and the retry variables alone: {job}",
     )
 
 

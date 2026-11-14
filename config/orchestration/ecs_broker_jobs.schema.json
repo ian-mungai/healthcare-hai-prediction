@@ -79,6 +79,8 @@
                   "SERVING_REQUEST",
                   "PUBLISHER_RUN_KIND",
                   "HAI_CAPTURE_ROOT",
+                  "PUBLISHER_ORIGINAL_RUN",
+                  "PUBLISHER_RETRY_DAY",
                   "PHASE"
                 ]
               }

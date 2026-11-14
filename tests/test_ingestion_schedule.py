@@ -10,6 +10,7 @@ from typing import Any
 import pytest
 
 from orchestration import ingestion_schedule as schedule
+from scripts.acquisition import publisher_run
 from tests.support import check
 
 RUN_ID = re.compile(r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$")
@@ -123,3 +124,11 @@ def test_a_hand_triggered_retry_names_both_its_run_and_its_day_or_is_refused() -
         schedule.resolve_retry(ORIGINAL, schedule.SCHEDULED_RETRY_DAY, context("manual"))
     with pytest.raises(ValueError, match="both"):
         schedule.resolve_retry(schedule.SCHEDULED_RUN, 2, context("manual"))
+
+
+def test_the_job_and_the_launch_derive_the_same_retry_run_id() -> None:
+    for day in range(1, 8):
+        check(
+            publisher_run.retry_run_id(ORIGINAL, day) == schedule.retry_run_id(ORIGINAL, day),
+            f"the retry run id of day {day} differs between the job and the launch",
+        )

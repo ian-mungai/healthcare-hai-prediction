@@ -60,6 +60,8 @@ RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
 SERVING_VARIABLES = ("SERVING_REQUEST", "SERVING_REQUEST_SHA256")
 PUBLISHER_VARIABLES = ("PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT")
+# Only a retry names its original run and its day: for every other kind the two variables are left out of the container, which holds them empty.
+RETRY_VARIABLES = ("PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY")
 # A bootstrap skips every unit with a completion record. A monthly run downloads each unit again and compares its payload (``recheck``). A retry is a new
 # run of the same kind of work as a bootstrap: it names the monthly run it retries and its day, and skips every unit that has a completion record.
 KINDS = frozenset({"bootstrap", "monthly", "retry"})
@@ -262,7 +264,8 @@ def publisher_values(request: object, run_id: str) -> dict[str, str]:
         if run_id != retry_run_id(original, day):
             raise LaunchRefused("publisher_retry_run_is_not_the_run_of_that_day")
     canonical = json.dumps(dict(request), sort_keys=True, separators=(",", ":"))
-    return {"PUBLISHER_RUN_KIND": kind, "HAI_CAPTURE_ROOT": root, "PUBLISHER_LAUNCH_SHA256": hashlib.sha256(canonical.encode()).hexdigest()}
+    values = {"PUBLISHER_RUN_KIND": kind, "HAI_CAPTURE_ROOT": root, "PUBLISHER_LAUNCH_SHA256": hashlib.sha256(canonical.encode()).hexdigest()}
+    return values | {"PUBLISHER_ORIGINAL_RUN": request["original_run"], "PUBLISHER_RETRY_DAY": str(request["day"])} if retry else values
 
 
 def require_publisher_request(request: SubmissionRequest) -> dict[str, str]:
@@ -862,10 +865,15 @@ class Preflight:
             "FEATURES_RUN": lambda: features_run_of(request),
             "FEATURE_SET": lambda: drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
             "PHASE": lambda: phase_of(request.template),
-            **{name: partial(fixed.__getitem__, name) for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, DEADLINE_VARIABLE)},
+            **{
+                name: partial(fixed.__getitem__, name)
+                for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, *RETRY_VARIABLES, DEADLINE_VARIABLE)
+            },
         }
         containers, log_container = self.containers(job)
-        environment = {container: {name: values[name]() for name in names} for container, names in containers.items()}
+        environment = {
+            container: {name: values[name]() for name in names if name not in RETRY_VARIABLES or name in fixed} for container, names in containers.items()
+        }
         uses_code = any("CODE_SHA256" in names for names in containers.values())
         request_hash = fixed.get("BRONZE_REQUEST_SHA256") or fixed.get("SERVING_REQUEST_SHA256") or fixed.get("PUBLISHER_LAUNCH_SHA256")
         if not request_hash:

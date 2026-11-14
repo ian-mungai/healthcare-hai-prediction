@@ -20,7 +20,7 @@ import re
 import sys
 import tarfile
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -30,6 +30,7 @@ from botocore.exceptions import ClientError
 from scripts import resource_peaks
 from scripts.acquisition import capture_mode, host_inputs, stored_mirror, task_role
 from scripts.acquisition.collection_layout import run_state_root
+from scripts.acquisition.completion_record import run_record_key as record_key
 from scripts.acquisition.transport import CaptureError
 from scripts.infrastructure import startup_check
 
@@ -229,6 +230,62 @@ def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
         raise PublisherError("The staged queue differs from the digest the launch bound.")
 
 
+RUN_ID_FORM = re.compile(r"([0-9]{8}T[0-9]{6}Z)-[a-f0-9]{8}")
+RETRY_DAYS = 7
+
+
+def retry_run_id(original_run: str, day: int) -> str:
+    """The run ID of the retry of ``original_run`` on ``day``. The launch derives it by the same rule, and a test keeps both equal."""
+    found = RUN_ID_FORM.fullmatch(original_run)
+    if found is None or isinstance(day, bool) or not 1 <= day <= RETRY_DAYS:
+        raise PublisherError("The retry names an original run that is not a run ID or a retry day outside one to seven.")
+    moment = datetime.strptime(found[1], "%Y%m%dT%H%M%SZ").replace(tzinfo=UTC) + timedelta(days=day)
+    return f"{moment.strftime('%Y%m%dT%H%M%SZ')}-{hashlib.sha256(f'{original_run}/{day}'.encode()).hexdigest()[:8]}"
+
+
+RETRY_VARIABLES = ("PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY")
+
+
+def check_retry(env: Mapping[str, str]) -> tuple[str, int] | None:
+    """The original run and the day of a retry, or None. Only a retry names them, and a retry names both and runs under the run ID of that day."""
+    named = {name: env.get(name, "") for name in RETRY_VARIABLES}
+    if env["PUBLISHER_RUN_KIND"] != "retry":
+        for name, value in named.items():
+            if value:
+                raise PublisherError(f"Only a retry takes {name}.")
+        return None
+    for name, value in named.items():
+        if not value:
+            raise PublisherError(f"A retry needs {name}.")
+    original, day_text = named["PUBLISHER_ORIGINAL_RUN"], named["PUBLISHER_RETRY_DAY"]
+    if not RUN_ID_FORM.fullmatch(original):
+        raise PublisherError("The retry names an original run that is not a run ID.")
+    if not re.fullmatch(r"[1-7]", day_text):
+        raise PublisherError("The retry day is outside one to seven.")
+    if env["RUN_ID"] != retry_run_id(original, int(day_text)):
+        raise PublisherError("The retry does not run under the run ID of that day.")
+    return original, int(day_text)
+
+
+def read_run_record(storage: Any, root: str, run_id: str) -> dict[str, Any] | None:
+    key = record_key(root, run_id)
+    return json.loads(capture_mode.read_stored(storage, key)) if capture_mode.list_objects(storage, key) else None
+
+
+def outstanding_units(storage: Any, root: str, original: str, day: int) -> frozenset[str]:
+    """The snapshots a retry on ``day`` downloads again: those the original monthly run failed or did not attempt because its source paused, less those an
+    earlier retry day of the chain recovered. Every other unit keeps the capture it has, so a retry spends no request on a unit that is complete."""
+    first = read_run_record(storage, root, original)
+    if first is None:
+        raise PublisherError("The original run of the retry has no run record on this capture root.")
+    outstanding = {item["snapshot_id"] for item in first["units"]["failed"]} | set(first["units"]["paused_not_attempted"])
+    for earlier in range(1, day):
+        found = read_run_record(storage, root, retry_run_id(original, earlier))
+        if found is not None:
+            outstanding -= {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in found["units"][name]}
+    return frozenset(outstanding)
+
+
 def bootstrap_key(root: str, run_id: str) -> str:
     return f"{root}ingestion_runs/{run_id}/bootstrap.json"
 
@@ -250,6 +307,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
         raise PublisherError("The launch names an inputs archive or a prior state, which the host job never takes.")
     if env["PUBLISHER_RUN_KIND"] not in KINDS:
         raise PublisherError("The run kind is not one the launch lists.")
+    retry = check_retry(env)
     root = state_root(env)
     try:
         bundle = host_inputs.prepare(Path.cwd())
@@ -261,6 +319,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
     storage = task_role.storage_from_environment(env, factory)
     if env["PUBLISHER_RUN_KIND"] != "bootstrap":
         require_bootstrap(storage, root)
+    recheck_units = outstanding_units(storage, root, *retry) if retry is not None else frozenset()
     before = capture_mode.list_versions(storage, capture_mode.evidence_prefixes(root))
 
     def emit(item: dict) -> None:
@@ -281,6 +340,7 @@ def main(environment: Mapping[str, str] | None = None, factory: ClientFactory = 
         opener=opener,
         task_keys=partial(task_role.TaskKeys, environment=env) if switched else None,
         recheck=env["PUBLISHER_RUN_KIND"] == "monthly",
+        recheck_units=recheck_units,
         log=emit,
     )
     record = capture_mode.execute(run)

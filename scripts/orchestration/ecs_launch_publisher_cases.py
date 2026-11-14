@@ -133,6 +133,16 @@ def publisher_retry_request_names_its_original_run_and_day() -> None:
     third = schedule.retry_run_id(original, 3)
     run = rig.spec(request=retry, run_id=third).environment["run"]
     require(run["PUBLISHER_RUN_KIND"] == "retry" and run["HAI_CAPTURE_ROOT"] == "raw/", f"the retry reached the task as {run}")
+    require(
+        (run["PUBLISHER_ORIGINAL_RUN"], run["PUBLISHER_RETRY_DAY"]) == (original, "3"),
+        f"the retry did not carry its original run and its day to the run container: {run}",
+    )
+    other = rig.spec(request=REQUEST).environment
+    require(
+        not any(name in container for container in other.values() for name in ("PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY")),
+        f"a run that is not a retry carried a retry variable: {other}",
+    )
+    require("PUBLISHER_ORIGINAL_RUN" not in rig.spec(request=retry, run_id=third).environment["fetch"], "the fetch container got a retry variable")
     first = rig.spec(request=retry, run_id=third).bound["request_hash"]
     require(first != rig.spec(request=retry | {"day": 4}, run_id=schedule.retry_run_id(original, 4)).bound["request_hash"], "another day has another digest")
     for label, changes in (

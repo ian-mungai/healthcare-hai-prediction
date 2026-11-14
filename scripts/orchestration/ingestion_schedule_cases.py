@@ -120,6 +120,10 @@ def scheduled_run_launches_the_monthly_kind_once_per_date() -> None:
         (environment["PUBLISHER_RUN_KIND"], environment["HAI_CAPTURE_ROOT"]) == ("monthly", "raw/"),
         f"the scheduled run did not carry the monthly kind under raw/: {environment}",
     )
+    require(
+        "PUBLISHER_ORIGINAL_RUN" not in environment and "PUBLISHER_RETRY_DAY" not in environment,
+        f"a monthly run carried a retry variable: {environment}",
+    )
     with scheduled(rig, PRODUCTION, {"mode": "real"}, "scheduled") as (again, _):
         again.run_dag("ingestion_dag.py")
     require(rig.tasks_started() == 1, "the same logical date started a second task")
@@ -254,6 +258,10 @@ def a_scheduled_retry_runs_each_of_the_seven_days_once() -> None:
         environment = rig.environment(day - 1)["run"]
         require(environment["PUBLISHER_RUN_KIND"] == "retry" and environment["HAI_CAPTURE_ROOT"] == "raw/", f"day {day} carried {environment}")
         require(environment["RUN_ID"] == schedule.retry_run_id(ORIGINAL, day), f"day {day} ran under {environment['RUN_ID']}")
+        require(
+            (environment["PUBLISHER_ORIGINAL_RUN"], environment["PUBLISHER_RETRY_DAY"]) == (ORIGINAL, str(day)),
+            f"day {day} did not carry its original run and its day to the container: {environment}",
+        )
         require(rig.environment(day - 1)["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"day {day} did not run the code of its original run")
         require(rig.preflight.code_runs.stored(environment["RUN_ID"]) == CURRENT_CODE, f"day {day} was not bound to the code of its original run")
         runs.append(environment["RUN_ID"])

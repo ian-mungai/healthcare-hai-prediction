@@ -221,7 +221,7 @@ run "publisher_launch_names_the_variables_the_launch_request_sets" {
       propagate_tags    = "TASK_DEFINITION"
       container_environment = {
         fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-        run   = ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
+        run   = ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY", "HAI_DEADLINE_UTC"]
       }
       scratch = { workspace = "/data/job_scratch/publisher/work", tmp = "/data/job_scratch/publisher/tmp" }
     }

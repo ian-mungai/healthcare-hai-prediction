@@ -281,6 +281,7 @@ class CaptureRun:
     task_keys: Callable[[str], Any] | None = None
     api_request: Callable | None = None
     recheck: bool = False
+    recheck_units: frozenset[str] = frozenset()
     byte_cap: int = BYTE_CAP
     stale_retry: timedelta = STALE_RETRY
     clock: Callable[[], datetime] = utc_now
@@ -988,12 +989,17 @@ class Result:
     reason: str | None = None
 
 
+def rechecks(run: CaptureRun, unit: Mapping[str, Any]) -> bool:
+    """Whether the run downloads the unit again and compares its payload: every unit of a monthly run and the named snapshots of a retry."""
+    return run.recheck or unit["snapshot_id"] in run.recheck_units
+
+
 def close_unit(run: CaptureRun, unit: dict, key: str, target: str, body: bytes, expected: Mapping[str, Any], reason: str | None = None) -> Result:
     """Create the unit's completion record once. When another run created it first, the unit is complete if that record verifies as this unit's.
 
     A conflict whose winner cannot be read yet is read again a bounded number of times. The loser claims no creation: only its own successful puts count.
     """
-    ended = "changed" if run.recheck else "completed"
+    ended = "changed" if rechecks(run, unit) else "completed"
     if create_new(run.storage, target, body):
         return Result(key, unit, ended, reason)
     for read in range(CONFLICT_READS):
@@ -1053,7 +1059,7 @@ def attempt(run: CaptureRun, unit: dict, spec: dict, key: str, opener: Any, stat
         mapping = archive_mapping(unit, spec, receipt_path, registry) if spec.get("archive_members") else None
         payload = records.payload_sha256(local_payload(receipt, mapping))
         target = records.record_key(run.root, key, payload)
-        if run.recheck and (decided := recheck_unit(run, unit, key, payload, receipt["acquisition"]["retrieved_at_utc"], expected)) is not None:
+        if rechecks(run, unit) and (decided := recheck_unit(run, unit, key, payload, receipt["acquisition"]["retrieved_at_utc"], expected)) is not None:
             return decided
         generation = len(list_objects(run.storage, records.unit_prefix(run.root, key))) + 1
         try:
@@ -1095,9 +1101,9 @@ def failure_reason(error: Exception) -> str:
     return redownload.error_category(error)
 
 
-def decide_skip(run: CaptureRun, key: str, now: datetime, expected: Mapping[str, Any]) -> tuple[str, str | None]:
+def decide_skip(run: CaptureRun, unit: Mapping[str, Any], key: str, now: datetime, expected: Mapping[str, Any]) -> tuple[str, str | None]:
     """Before any request: ``complete`` (a verified record), ``refused`` (a record that does not verify), ``stale`` (retry interval not over) or ``go``."""
-    if not run.recheck:
+    if not rechecks(run, unit):
         found = list_objects(run.storage, records.unit_prefix(run.root, key))
         if found:
             problems = verify_record(run.storage, newest(found)["Key"], run.root, expected)
@@ -1180,7 +1186,7 @@ def process(run: CaptureRun, units: list[dict], specs: dict[str, dict], queue_sh
                 if first:
                     paused.add(source)
                 continue
-            verdict, why = decide_skip(run, key, run.clock(), expected)
+            verdict, why = decide_skip(run, unit, key, run.clock(), expected)
             if verdict != "go":
                 if verdict == "complete":
                     done["skipped_complete"].append(key)

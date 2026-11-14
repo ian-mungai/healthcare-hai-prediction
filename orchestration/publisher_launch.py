@@ -16,7 +16,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from orchestration.ecs_launch import JobSpec, LaunchRefused, Resources
-from orchestration.ecs_preflight import RUN_ID, publisher_values
+from orchestration.ecs_preflight import RETRY_VARIABLES, RUN_ID, publisher_values
 
 JOB = "publisher"
 # The job's own deadline: one day, the publisher downloads every Run 3 source once.
@@ -49,6 +49,7 @@ def publisher_spec(request: Any, run_id: str, attempt: int, code: Mapping[str, s
                 "CODE_SHA256": code_digest,
                 "PUBLISHER_RUN_KIND": values["PUBLISHER_RUN_KIND"],
                 "HAI_CAPTURE_ROOT": values["HAI_CAPTURE_ROOT"],
+                **{name: values[name] for name in RETRY_VARIABLES if name in values},
                 "HAI_DEADLINE_UTC": deadline,
             },
         },

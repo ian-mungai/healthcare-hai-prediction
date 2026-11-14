@@ -29,7 +29,7 @@ locals {
   # one exception: it defaults to raw/, and the request may override it with raw/ or one ingestion_test/<run ID>/ folder (owner decision D4).
   publisher_run_variables = {
     fetch = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "HAI_DEADLINE_UTC"]
-    run   = ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "HAI_DEADLINE_UTC"]
+    run   = ["RUN_ID", "CODE_SHA256", "PUBLISHER_RUN_KIND", "HAI_CAPTURE_ROOT", "PUBLISHER_ORIGINAL_RUN", "PUBLISHER_RETRY_DAY", "HAI_DEADLINE_UTC"]
   }
   # The host firewall lets a job reach DNS and TCP 443 only, and has no rule per host. The approved hosts file is the control on where the task
   # connects; the downloader enforces it. The file and its approval are tracked in the code archive (config/acquisition/baseline_run/), and the run names them.
