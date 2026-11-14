@@ -277,12 +277,14 @@
     },
     {
       "path": "scripts/acquisition/tests/test_committed_plans.py",
-      "line": 77,
+      "line": 127,
       "code_sha256": "77941c9c827bf363e8d23dc7d5821595660e9640a88b976a3fc40bcc5e088222",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "0ed264be30ce5034234524c4c02877e8de798a953e28322840d97b12d1113186",
+      "file_sha256": "3f0736d66d3de572dd9f48cf6522a6a8fc05d4931c8ead4ebce932f711238706",
       "dependencies": {
+        "scripts/acquisition/census_acs_api_contract.py": "sha256:909ad5114f5eed432bc3cb5281a8cc392bad05b997950a203834b1e0cf31a556",
+        "scripts/acquisition/census_acs_detailed_contract.py": "sha256:eb6ee929260b10495216d941b9af5947eb0f91ea96c667407e4cba3784500052",
         "scripts/acquisition/redownload.py": "sha256:64af6386d53fae1902569a319bf1b793743766b4583d6716b260c3d2efb7043f",
         "scripts/acquisition/source_registry.py": "sha256:cd6a68e767376715575781f18e0fe0bd968b820a59e4f97a6bdce912a677b499"
       },
