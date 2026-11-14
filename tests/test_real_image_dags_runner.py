@@ -364,6 +364,23 @@ def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_r
     check(os.environ["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "false", "the rig creates DAGs paused, so the fail_when_dag_is_paused trigger fails")
 
 
+def test_each_wrong_bucket_plant_hits_only_the_store_its_scenario_names() -> None:
+    cases = importlib.import_module("scripts.orchestration.airflow_mode_cases")
+    catalog = real_image_dags.cases_catalog()
+    (records,) = catalog["planted_wrong_bucket_for_the_launch_records_fails_closed"].steps
+    (binding,) = catalog["planted_wrong_bucket_for_the_code_run_binding_fails_closed"].steps
+    claim, bound = (
+        {"Key": f"{cases.PREFIX}/20261110T120000Z-ab12cd34/publisher/claim.json"},
+        {"Key": "lakehouse/run_stage/20261110T120000Z-ab12cd34/inputs/code_run.json"},
+    )
+    record_plant, binding_plant = records.plant, binding.plant
+    if record_plant is None or binding_plant is None:
+        raise AssertionError("a wrong bucket scenario has no plant")
+    check(record_plant.when(claim) and not record_plant.when(bound), "the launch record plant must reach the claim write and leave the code run binding alone")
+    check(binding_plant.when(bound) and not binding_plant.when(claim), "the binding plant must reach the code run binding and leave the launch records alone")
+    check(binding.starts == 0 and records.starts == 0, "neither refused write may start a task")
+
+
 def test_the_rig_names_none_of_the_retired_inputs() -> None:
     text = Path(real_image_dags.__file__).read_text()
     for retired in ("serving_request.json", "promotion_approval", "SERVING_REQUEST ="):

@@ -1153,6 +1153,12 @@ def cases_catalog() -> dict[str, Scenario]:
     def digest_key(params: dict[str, Any]) -> bool:
         return str(params.get("Key", "")).endswith("code.sha256")
 
+    def launch_record_key(params: dict[str, Any]) -> bool:
+        return str(params.get("Key", "")).startswith(f"{c.PREFIX}/")
+
+    def code_binding_key(params: dict[str, Any]) -> bool:
+        return str(params.get("Key", "")).endswith("/inputs/code_run.json")
+
     planted_cases = (
         planted_run(
             "planted_launch_type_with_a_capacity_provider_strategy_fails_closed",
@@ -1204,9 +1210,17 @@ def cases_catalog() -> dict[str, Scenario]:
             "code_digest_unreadable",
         ),
         planted_run(
+            "planted_wrong_bucket_for_the_code_run_binding_fails_closed",
+            Plant("PutObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}, code_binding_key),
+            refused["states"],
+            0,
+            no_record,
+            "was refused: NoSuchBucket",
+        ),
+        planted_run(
             "planted_wrong_bucket_for_the_launch_records_fails_closed",
-            Plant("PutObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}),
-            sent_refused | {"job": "failed"},
+            Plant("PutObject", lambda p: {**p, "Bucket": "nonexistent-review-bucket"}, launch_record_key),
+            sent_refused,
             0,
             no_task,
             "launch record store refused the call: NoSuchBucket",
