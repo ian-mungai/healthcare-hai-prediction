@@ -879,7 +879,7 @@ def pre_load_successor_guard(root: Path) -> bool:
         session = SimpleNamespace(spark_session=lambda *_args, **_kwargs: SimpleNamespace(stop=lambda: None), job_memory=lambda: "synthetic")
         patch.setitem(sys.modules, "scripts.lakehouse.session", session)
         patch.setattr(bronze, "load_retired", bronze.RetiredObjects)
-        patch.setattr(bronze, "discover", lambda *_args: ([first], [{"copy": {**retired, "retired": False}}]))
+        patch.setattr(bronze, "discover", lambda *_args, **_kwargs: ([first], [{"copy": {**retired, "retired": False}}]))
         patch.setattr(bronze_metadata, "read", lambda *_args: previous)
         patch.setattr(bronze, "load_objects", mutate)
         patch.setattr(bronze, "prune", mutate)
