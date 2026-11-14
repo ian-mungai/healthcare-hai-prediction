@@ -1047,8 +1047,8 @@ LAUNCHER_IMPORTED = (
 # Paths outside every pattern of the launcher group: no import, read or reviewed inventory_reads pattern of the suite reaches them, so a change to one skips
 # the stand-in or real launcher suite.
 LAUNCHER_OUTSIDE = (
-    "infra/main.tf",
-    "config/quality/mypy_runtimes.json",
+    "config/quality/shard_costs.json",
+    "config/quality/temporary_code.json",
     ".github/pull_request_template.md",
 )
 # Paths no file of the committed list names but one reviewed inventory_reads pattern matches (a new file in a folder the suite lists) still select it.
@@ -1061,7 +1061,7 @@ LAUNCHER_INSIDE_PATTERNS = (
     ".gitignore",
 )
 # The reviewer's reproduction: an exact read added beside the reviewed mount comparison of ROOT / "config" in the suite's docker_calls_check case.
-LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/mypy_runtimes.json").read_text())\n')
+LAUNCHER_EXACT_READ = ("    from scripts.quality import docker_calls\n", '    json.loads((ROOT / "config/quality/temporary_code.json").read_text())\n')
 # The recheck's reproductions: inventories whose root the round 1 scan did not read (a wrapped root, a keyword argument, a listing program by path).
 LAUNCHER_INVENTORY_READS = {
     "wrapped_rglob": '    for path in Path(ROOT).rglob("*.json"):\n        if path.is_file():\n            json.loads(path.read_text())\n',
@@ -1324,7 +1324,7 @@ def launcher_selection_cases(work: Path) -> list[dict[str, Any]]:
         },
         {
             "case": "launcher_list_names_an_exact_read_beside_an_ignored_folder",
-            "passed": any(line.startswith("config/quality/mypy_runtimes.json: the launcher suite needs it") for line in exact),
+            "passed": any(line.startswith("config/quality/temporary_code.json: the launcher suite needs it") for line in exact),
             "problems": exact[:4],
         },
         *(
