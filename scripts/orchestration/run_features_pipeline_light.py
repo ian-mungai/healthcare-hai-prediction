@@ -41,32 +41,8 @@ RUN = "20261022T120000Z-0a1b2c3d"
 GOLD_RUN = "20261021T110000Z-1a2b3c4d"
 FEATURES_DAG = "features_base_dag"
 BASE_DAG = FEATURES_DAG
-# The feature store DAG and the step DAG of the single features run are gone; their step chains stay as the work the broker's templates cover.
+# The feature store DAG and the step DAG of the single features run are gone.
 STORE_DAG = "feature_store_dag"
-# The work chain of each broker route; the tail (catalog_release, final_gate, release_run) is the broker's own.
-FEATURES_CHAIN = (
-    "acquire_run",
-    "catalog_up",
-    "snapshot_project",
-    "reserve_gold",
-    "pin_gold",
-    "read_gold",
-    "features_build",
-    "features_validate",
-    "seal_features",
-    "features_export",
-    "features_candidates",
-    "features_reconcile",
-    "features_backup",
-    "features_commit",
-    "record_features_snapshot",
-    "online_store_up",
-    "feast_apply",
-    "feast_materialize",
-    "run_record",
-)
-STORE_CHAIN = ("acquire_run", "catalog_up", "online_store_up", "feast_apply", "feast_materialize", "run_record")
-STEP_FIVE: tuple[str, ...] = ()
 REGISTRY_ID = "0a1b2c3d-1111-4222-8333-444455556666"
 ONLINE_NETWORK = "hai-0a1b2c3d-online-store"
 FAMILIES = {FEATURES_DAG: "features", STORE_DAG: "feature_store"}
@@ -1215,12 +1191,6 @@ def work_steps(dag: str) -> tuple[str, ...] | None:
 
 # Gold maintenance runs as the last phase of every gold job (owner decision, Nov 5 2026), so its DAG left the graph.
 RETIRED_DAGS = frozenset({"gold_maintenance_dag", "features_transform_dag", "feature_store_dag"})
-
-
-def build_tasks_family(dag: str) -> str | None:
-    path = ROOT / "dags" / f"{dag}.py"
-    match = re.search(r'build_tasks\(WORK_STEPS, "([a-z_]+)"\)', path.read_text()) if path.is_file() else None
-    return match.group(1) if match else None
 
 
 def case_graph(fixture: Fixture, scratch: Path) -> Checks:

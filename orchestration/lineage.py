@@ -11,7 +11,6 @@ import socket
 import sqlite3
 import stat
 import sys
-import threading
 import time
 import uuid
 from collections.abc import Iterator
@@ -40,7 +39,6 @@ MAX_RECORDS = 10000
 REQUEST_KEYS = ("request_version", "template", "run_id", "mode", "attempt", "dag_id", "task_id", "dag_run_id")
 SELECTOR_KEY = "input_run_id"
 LOG = logging.getLogger(__name__)
-OPENMETADATA_ROUTE = "/api/v1/openlineage/lineage"
 
 
 class LineageError(ValueError):
@@ -365,75 +363,6 @@ class Outbox:
         self.connection.execute("INSERT INTO events(id,payload,sequence) VALUES (?,?,?)", (event_id, payload, sequence))
         return 1
 
-    def enqueue_provider(self, envelope: dict[str, Any], *, defer: bool = False) -> int:
-        """Persist immutable native metadata and its exact correlation, deferring task delivery when requested."""
-        envelope = provider_events.validate(envelope)
-        caller, event = envelope["caller"], envelope["event"]
-        with self.connection:
-            if "task_id" in caller:
-                key = provider_events.caller_key(caller)
-                link = canonical({"caller": caller, "run_id": event["run"]["runId"], "parent": event["run"]["facets"]["parent"]})
-                previous = self.connection.execute("SELECT link FROM provider_runs WHERE caller=?", (key,)).fetchone()
-                if previous is not None and previous[0] != link:
-                    raise LineageError("provider correlation already names a different native run")
-                self.connection.execute("INSERT OR IGNORE INTO provider_runs(caller,link) VALUES (?,?)", (key, link))
-            raw = canonical(envelope)
-            previous = self.connection.execute("SELECT envelope FROM provider_events WHERE id=?", (envelope["id"],)).fetchone()
-            if previous is not None:
-                if previous[0] != raw:
-                    raise LineageError("native event identity already holds different bytes")
-                return 0
-            delayed = defer and "task_id" in caller
-            self.connection.execute(
-                "INSERT INTO provider_events(id,envelope,seen_cycle,flushed) VALUES (?,?,?,?)",
-                (envelope["id"], raw, self.record_cycle(), 0 if delayed else 1),
-            )
-            if delayed:
-                return 0
-            return self.enqueue_body(envelope["id"], event, 0)
-
-    def flush_provider(self, *, limit: int, deadline_seconds: float) -> int:
-        """Queue callbacks after two record traversals, carrying only already validated matching task metadata."""
-        if not 1 <= limit <= MAX_RECORDS or not 0 < deadline_seconds <= 300:
-            raise LineageError("native callback flush needs bounded batch and time limits")
-        deadline = time.monotonic() + deadline_seconds
-        queued = 0
-        with self.connection, self.queries_until(deadline):
-            rows = self.connection.execute(
-                "SELECT id,envelope FROM provider_events WHERE flushed=0 AND seen_cycle<=? "
-                "ORDER BY julianday(json_extract(envelope,'$.event.eventTime')),rowid LIMIT ?",
-                (self.record_cycle() - 2, limit),
-            ).fetchall()
-            for event_id, raw in rows:
-                if time.monotonic() >= deadline:
-                    raise LineageError("native callback flush exceeded its deadline")
-                envelope = provider_events.validate(json.loads(raw))
-                event = envelope["event"]
-                trusted = self.connection.execute(
-                    "SELECT payload,acked FROM events WHERE json_extract(payload,'$.run.runId')=? "
-                    "AND json_type(payload,'$.run.facets.haiIdentity')='object' "
-                    "AND json_extract(payload,'$.eventType') IN ('COMPLETE','FAIL','ABORT') "
-                    "AND id NOT IN (SELECT id FROM provider_events) "
-                    "ORDER BY julianday(json_extract(payload,'$.eventTime')) DESC,rowid DESC LIMIT 1",
-                    (event["run"]["runId"],),
-                ).fetchone()
-                if trusted is not None:
-                    if trusted[1] and event["eventType"] in ("START", "RUNNING"):
-                        self.connection.execute("UPDATE provider_events SET flushed=2 WHERE id=?", (event_id,))
-                        continue
-                    host = json.loads(trusted[0])
-                    facets = {key: value for key, value in host["run"]["facets"].items() if key in ("haiIdentity", "haiSnapshotStatus")}
-                    facets["haiIdentity"] = {**facets["haiIdentity"], "eventId": event_id}
-                    event = {
-                        **event,
-                        "inputs": host["inputs"],
-                        "outputs": [] if event["eventType"] in ("FAIL", "ABORT") else host["outputs"],
-                        "run": {**event["run"], "facets": {**event["run"]["facets"], **facets}},
-                    }
-                queued += self.enqueue_body(event_id, event, 0)
-                self.connection.execute("UPDATE provider_events SET flushed=1 WHERE id=?", (event_id,))
-        return queued
-
     def provider_run(self, request: dict[str, Any]) -> dict[str, Any] | None:
         """Resolve a native task run only from the persisted exact v2 caller fields."""
         row = self.connection.execute("SELECT link FROM provider_runs WHERE caller=?", (provider_events.caller_key(request),)).fetchone()
@@ -442,10 +371,6 @@ class Outbox:
     def pending(self, limit: int) -> list[tuple[str, str]]:
         """Return at most limit event identities and immutable JSON payloads that Marquez has not acknowledged."""
         return self._pending("marquez", limit)
-
-    def pending_openmetadata(self, limit: int) -> list[tuple[str, str]]:
-        """Return at most limit event identities and payloads that OpenMetadata has not answered."""
-        return self._pending("openmetadata", limit)
 
     def _pending(self, receiver: str, limit: int) -> list[tuple[str, str]]:
         """Select the events one receiver has not answered, in event order, holding back events whose native callbacks are still deferred."""
@@ -493,124 +418,6 @@ class Outbox:
                     break
         pending = self.connection.execute("SELECT COUNT(*) FROM events WHERE acked=0").fetchone()[0]
         return {"delivered": delivered, "pending": pending}
-
-    def deliver_openmetadata(
-        self, host: str, port: int, credential: str, *, limit: int = 100, deadline_seconds: float = 30, timeout: float = 3
-    ) -> dict[str, Any]:
-        """Send pending events to the OpenMetadata lineage API on loopback and record its created and unresolved edge counts for each event.
-
-        A reply with a body is recorded: state 1 when no dataset was unresolved, state 2 when OpenMetadata named unresolved datasets or the body could not
-        be read. State 2 events wait for ``replay_unresolved``. A refusal, an outage or a timeout leaves the event pending, stops the pass and is reported
-        in the result; none of them raises for an HTTP answer. The credential is only sent, never stored.
-        """
-        if host not in ("127.0.0.1", "::1") or not 1 <= port <= 65535 or not 0 < timeout <= 30 or not 0 < deadline_seconds <= 300 or not credential:
-            raise LineageError("OpenMetadata delivery needs loopback, a valid port, a credential and bounded positive timeouts")
-        deadline = time.monotonic() + deadline_seconds
-        delivered = 0
-        outcome: dict[str, Any] = {}
-        with self.queries_until(deadline):
-            for event_id, payload in self.pending_openmetadata(limit):
-                if deadline - time.monotonic() <= 0:
-                    break
-                with self.connection:
-                    self.connection.execute("BEGIN IMMEDIATE")
-                    row = self.connection.execute("SELECT om_state FROM events WHERE id=?", (event_id,)).fetchone()
-                    if row[0]:
-                        continue
-                    try:
-                        status, reply = post_openmetadata(host, port, payload, credential, min(deadline, time.monotonic() + timeout))
-                    except OSError as error:
-                        outcome["om_error"] = type(error).__name__
-                        break
-                    answered = openmetadata_answer(status, reply)
-                    if answered is None:
-                        outcome["om_http"] = status
-                        break
-                    state, result = answered
-                    self.connection.execute("UPDATE events SET om_state=?, om_result=? WHERE id=?", (state, canonical(result), event_id))
-                    delivered += 1
-        pending = self.connection.execute("SELECT COUNT(*) FROM events WHERE om_state=0").fetchone()[0]
-        return {"om_delivered": delivered, "om_pending": pending, **outcome}
-
-    def replay_unresolved(self) -> int:
-        """Queue every event whose datasets OpenMetadata could not resolve, so the next pass sends it again after the tables are ingested."""
-        with self.connection:
-            return self.connection.execute("UPDATE events SET om_state=0 WHERE om_state=2").rowcount
-
-    def openmetadata_report(self) -> dict[str, Any]:
-        """What OpenMetadata answered so far: events delivered and pending, created edges, and the unresolved events and datasets."""
-        delivered = pending = edges = unresolved_events = 0
-        unresolved: set[str] = set()
-        for state, result in self.connection.execute("SELECT om_state,om_result FROM events"):
-            if state == 0:
-                pending += 1
-                continue
-            delivered += 1
-            recorded = json.loads(result)
-            edges += recorded["edges_created"]
-            if state == 2:
-                unresolved_events += 1
-                unresolved.update(recorded["unresolved"])
-        return {
-            "events": delivered + pending,
-            "delivered": delivered,
-            "pending": pending,
-            "edges_created": edges,
-            "unresolved_events": unresolved_events,
-            "unresolved_datasets": sorted(unresolved),
-        }
-
-
-def openmetadata_answer(status: int, reply: bytes) -> tuple[int, dict[str, Any]] | None:
-    """The state and result to record for one OpenMetadata reply, or None when the event must stay pending (outage, refused credential, server error)."""
-    if status not in (200, 400):
-        return None
-    try:
-        body = json.loads(reply)
-    except ValueError:
-        body = None
-    if not isinstance(body, dict):
-        if status == 400:
-            return None
-        return 2, {"http": status, "edges_created": 0, "unresolved": [], "unreadable": True}
-    created = body.get("lineageEdgesCreated", 0)
-    named = body.get("unresolvedDatasets") or []
-    unresolved = sorted(item if isinstance(item, str) else canonical(item) for item in named) if isinstance(named, list) else [canonical(named)]
-    result = {"http": status, "status": str(body.get("status", "")), "edges_created": created if type(created) is int else 0, "unresolved": unresolved}
-    return (2 if unresolved or status == 400 else 1), result
-
-
-def http_post(host: str, port: int, route: str, payload: str, deadline: float, extra_headers: str = "") -> tuple[int, bytes]:
-    """POST JSON to a loopback address and return the status and at most 64 KiB of the body; the deadline covers connect, send and reply."""
-    data = payload.encode()
-    authority = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
-    lines = [f"POST {route} HTTP/1.1", f"Host: {authority}", "Content-Type: application/json", f"Content-Length: {len(data)}", "Connection: close"]
-    header = "\r\n".join(lines) + "\r\n" + extra_headers + "\r\n"
-    remaining = deadline - time.monotonic()
-    if remaining <= 0:
-        raise TimeoutError("lineage delivery deadline passed")
-    response = b""
-    with socket.create_connection((host, port), timeout=remaining) as connection:
-        connection.sendall(header.encode() + data)
-        while len(response) < 65536:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("lineage delivery deadline passed")
-            connection.settimeout(remaining)
-            chunk = connection.recv(4096)
-            if not chunk:
-                break
-            response += chunk
-    head, _, body = response.partition(b"\r\n\r\n")
-    status = head.split(b"\r\n", 1)[0].split(b" ")
-    if len(status) < 2 or status[0] not in (b"HTTP/1.0", b"HTTP/1.1") or not status[1].isdigit():
-        return 0, b""
-    return int(status[1]), body
-
-
-def post_openmetadata(host: str, port: int, payload: str, credential: str, deadline: float) -> tuple[int, bytes]:
-    """Send one event to the OpenMetadata OpenLineage route with the caller's bot credential."""
-    return http_post(host, port, OPENMETADATA_ROUTE, payload, deadline, f"Authorization: Bearer {credential}\r\n")
 
 
 def post_event(host: str, port: int, payload: str, deadline: float) -> bool:
@@ -714,131 +521,6 @@ def sweep(records: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: f
     finally:
         os.close(root_fd)
     return {"queued": queued, "scanned": scanned, "legacy_skipped": legacy_skipped, **({"deferred": deferred} if require_provider else {})}
-
-
-def collect_provider(folder: Path, outbox: Path, *, limit: int = 1000, deadline_seconds: float = 10) -> dict[str, int]:
-    """Collect only closed, sanitized provider envelopes through a held spool directory."""
-    if not 1 <= limit <= MAX_RECORDS or not 0 < deadline_seconds <= 300:
-        raise LineageError("provider collection needs bounded record and time limits")
-    deadline = time.monotonic() + deadline_seconds
-    directory = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-    scanned = queued = 0
-    try:
-        metadata = os.fstat(directory)
-        root = f"provider:{metadata.st_dev}:{metadata.st_ino}"
-        with Outbox(outbox) as box, box.queries_until(deadline):
-            cursor = box.cursor(root)
-            resuming = cursor is not None
-            for name in sorted(os.listdir(directory)):
-                if time.monotonic() >= deadline:
-                    raise LineageError("provider collection exceeded its deadline")
-                if not name.endswith(".json"):
-                    continue
-                if resuming:
-                    if name == cursor:
-                        resuming = False
-                    continue
-                if scanned >= limit:
-                    return {"provider_scanned": scanned, "provider_queued": queued}
-                envelope = provider_events.validate(json.loads(provider_events.read_at(directory, name), object_pairs_hook=unique_object))
-                if name != provider_events.file_name(envelope):
-                    raise LineageError("provider spool filename conflicts with its event identity")
-                queued += box.enqueue_provider(envelope, defer=True)
-                scanned += 1
-                box.checkpoint(root, name)
-            box.checkpoint(root, None)
-    finally:
-        os.close(directory)
-    return {"provider_scanned": scanned, "provider_queued": queued}
-
-
-class CompletionWorker:
-    """Collect durable records and deliver events outside broker completion and ledger locks."""
-
-    def __init__(
-        self,
-        records: Path,
-        provider: Path,
-        outbox: Path,
-        *,
-        port: int | None,
-        interval_seconds: float = 5,
-        pass_seconds: float = 10,
-        limit: int = 1000,
-        openmetadata_port: int | None = None,
-        openmetadata_token: str | None = None,
-    ) -> None:
-        if not 0 < interval_seconds <= 60 or not 0 < pass_seconds <= 60 or not 1 <= limit <= MAX_RECORDS:
-            raise LineageError("lineage worker needs bounded interval, pass and batch limits")
-        if port is not None and (type(port) is not int or not 1024 <= port <= 65535):
-            raise LineageError("lineage worker needs a valid local API port")
-        if openmetadata_port is not None and (type(openmetadata_port) is not int or not 1024 <= openmetadata_port <= 65535 or not openmetadata_token):
-            raise LineageError("OpenMetadata delivery needs a valid local API port and the caller's bot credential")
-        self.openmetadata_port, self.openmetadata_token = openmetadata_port, openmetadata_token
-        self.records, self.provider, self.outbox = records, provider, outbox
-        self.port, self.interval_seconds, self.pass_seconds, self.limit = port, interval_seconds, pass_seconds, limit
-        self.stopping = threading.Event()
-        self.changed = threading.Event()
-        self.thread = threading.Thread(target=self.run, name="lineage-outbox")
-        self.outcome: dict[str, Any] = {}
-        self.failures = 0
-
-    def start(self) -> None:
-        """Start one independent collector without waiting for storage or network delivery."""
-        self.thread.start()
-
-    def wake(self) -> None:
-        """Request an early bounded pass without running it in the caller."""
-        self.changed.set()
-
-    def run_once(self) -> dict[str, int]:
-        """Share one absolute deadline across provider collection, records and delivery."""
-        deadline = time.monotonic() + self.pass_seconds
-
-        def remaining() -> float:
-            value = deadline - time.monotonic()
-            if value <= 0:
-                raise LineageError("lineage pass exceeded its deadline")
-            return value
-
-        outcome: dict[str, Any] = collect_provider(self.provider, self.outbox, limit=self.limit, deadline_seconds=remaining())
-        outcome.update(sweep(self.records, self.outbox, limit=self.limit, deadline_seconds=remaining(), require_provider=True))
-        with Outbox(self.outbox) as box, box.queries_until(deadline):
-            outcome["provider_queued"] += box.flush_provider(limit=self.limit, deadline_seconds=remaining())
-            outcome["provider_deferred"] = box.connection.execute("SELECT COUNT(*) FROM provider_events WHERE flushed=0").fetchone()[0]
-            outcome["provider_covered"] = box.connection.execute("SELECT COUNT(*) FROM provider_events WHERE flushed=2").fetchone()[0]
-            outcome["record_cycle"] = box.record_cycle()
-            if self.port is not None:
-                outcome.update(box.deliver("127.0.0.1", self.port, limit=self.limit, deadline_seconds=remaining()))
-            if self.openmetadata_port is not None and self.openmetadata_token:
-                # An OpenMetadata problem is reported in the outcome and never fails the pass, so Marquez delivery and collection continue.
-                try:
-                    outcome.update(
-                        box.deliver_openmetadata("127.0.0.1", self.openmetadata_port, self.openmetadata_token, limit=self.limit, deadline_seconds=remaining())
-                    )
-                except (OSError, LineageError) as error:
-                    outcome["om_error"] = type(error).__name__
-        return outcome
-
-    def run(self) -> None:
-        while not self.stopping.is_set():
-            self.changed.clear()
-            try:
-                self.outcome = self.run_once()
-            except (OSError, ValueError, TypeError, sqlite3.Error) as error:
-                self.failures += 1
-                self.outcome = {"error": type(error).__name__, "failures": self.failures}
-                LOG.warning("lineage worker pass failed (%s)", type(error).__name__)
-            if not self.stopping.is_set():
-                self.changed.wait(self.interval_seconds)
-
-    def stop(self) -> None:
-        """Stop and join the collector within its pass deadline plus two seconds."""
-        self.stopping.set()
-        self.changed.set()
-        self.thread.join(timeout=self.pass_seconds + 2)
-        if self.thread.is_alive():
-            raise TimeoutError(f"lineage worker did not stop within {self.pass_seconds + 2:g} seconds")
 
 
 def main() -> int:

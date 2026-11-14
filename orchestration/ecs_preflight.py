@@ -54,7 +54,6 @@ DIRECT_JOBS_FILE = Path("config/orchestration/direct_jobs.json")
 TABLE_MAP_FILE = Path("config/lakehouse/bronze_tables.json")
 BRONZE_REQUEST_BYTES = 4096
 BRONZE_REQUEST_KEYS = {"tables", "target", "dry_run", "inventory_sha256"}
-APPROVAL_BYTES = 4096
 DIGEST = re.compile(r"[a-f0-9]{64}")
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 BRONZE_VARIABLES = ("BRONZE_TABLES", "BRONZE_TARGET", "BRONZE_DRY_RUN", "BRONZE_REQUEST_SHA256", "BRONZE_INVENTORY_SHA256")
@@ -153,23 +152,6 @@ def s3_digest_reader(s3: S3Reader, bucket: str) -> Callable[[str], str]:
         if not DIGEST.fullmatch(text):
             raise TaskRefused("code_digest_malformed")
         return text
-
-    return read
-
-
-def s3_object_reader(s3: S3Reader, bucket: str, name: str) -> Callable[[str], str | None]:
-    """Read a small staged record of a run (``lakehouse/run_stage/<run>/inputs/<name>``), or None while the owner has not staged it."""
-
-    def read(run_id: str) -> str | None:
-        try:
-            body = s3.get_object(Bucket=bucket, Key=f"lakehouse/run_stage/{run_id}/inputs/{name}")["Body"].read(APPROVAL_BYTES + 1)
-        except ClientError as error:
-            if error.response.get("Error", {}).get("Code") == "NoSuchKey":
-                return None
-            raise TaskUnavailable("staged_record_unreadable") from None
-        except BotoCoreError:
-            raise TaskUnavailable("staged_record_unreadable") from None
-        return str(body.decode(errors="replace"))
 
     return read
 

@@ -63,11 +63,6 @@ def reachable(family: int, target: str, port: int) -> bool:
     return True
 
 
-def unreachable_elsewhere(port: int) -> dict[str, bool]:
-    """For each non-loopback address, True when the connection to the port was refused or timed out."""
-    return {address: not reachable(family, target, port) for family, address, target in non_loopback_addresses()}
-
-
 def ipv6_loopback_open(port: int) -> bool:
     """True when ``::1`` accepts a connection on the port."""
     return reachable(socket.AF_INET6, "::1", port)

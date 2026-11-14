@@ -16,11 +16,9 @@ from jsonschema.exceptions import SchemaError
 
 FILES = ("manifest.json", "run_results.json")
 LIMIT = 32 * 1024**2
-MAX_MODELS = 1000
 ATTEMPT_ENV = "DBT_ENV_CUSTOM_ENV_HAI_ATTEMPT_ID"
 PARTIAL_PARSE_ENV = "DBT_PARTIAL_PARSE"
 CAPTURE_FAILED = "native dbt artifacts could not be captured for this attempt"
-CAPTURE_WITHHELD = "dbt artifact capture failed; the launcher's detail is withheld"
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,249}")
 SHA = re.compile(r"[a-f0-9]{64}")
 
@@ -148,92 +146,6 @@ def verified_documents(folder: Path, record: Any, attempt_id: str) -> tuple[dict
     if record["invocation_id"] != invocation:
         raise DbtLineageError("dbt invocation differs from the launcher attempt record")
     return manifest, results
-
-
-def model_edges(manifest: dict[str, Any], results: dict[str, Any], bindings: dict[str, Any], envelope: dict[str, Any]) -> list[dict[str, Any]]:
-    """Resolve only executed model dependencies using fixed row bindings; artifacts cannot invent datasets."""
-    nodes = {**manifest.get("sources", {}), **manifest["nodes"]}
-    inputs = {(item["namespace"], item["name"]) for item in envelope["inputs"] + envelope["outputs"]}
-    outputs = {(item["namespace"], item["name"]) for item in envelope["outputs"]}
-    edges = []
-    seen = set()
-    parent_cache: dict[str, set[tuple[str, str]]] = {}
-
-    def dataset(resource: str, model: str, allowed: set[tuple[str, str]]) -> dict[str, str]:
-        value = bindings.get(resource)
-        if not isinstance(value, dict) or set(value) != {"namespace", "name"} or (value.get("namespace"), value.get("name")) not in allowed:
-            raise DbtLineageError(f"model {model}: dependency {resource} is outside the declared lineage")
-        return dict(value)
-
-    def parents(resource: str, model: str, visiting: set[str]) -> set[tuple[str, str]]:
-        if len(visiting) > 100 or resource in visiting or resource not in nodes:
-            raise DbtLineageError(f"model {model}: dependency graph is missing, cyclic or too deep")
-        if resource in parent_cache:
-            return parent_cache[resource]
-        node = nodes[resource]
-        if not isinstance(node, dict):
-            raise DbtLineageError(f"model {model}: malformed dependency node")
-        dependencies = node.get("depends_on", {}).get("nodes", [])
-        if (
-            not isinstance(dependencies, list)
-            or len(dependencies) > MAX_MODELS
-            or any(not isinstance(item, str) or not ID.fullmatch(item) for item in dependencies)
-        ):
-            raise DbtLineageError(f"model {model}: malformed dependency identifiers")
-        found: set[tuple[str, str]] = set()
-        for dependency in dependencies:
-            if dependency not in nodes:
-                raise DbtLineageError(f"model {model}: undeclared dependency {dependency}")
-            if nodes[dependency].get("config", {}).get("materialized") == "ephemeral":
-                found.update(parents(dependency, model, visiting | {resource}))
-            else:
-                item = dataset(dependency, model, inputs)
-                found.add((item["namespace"], item["name"]))
-        parent_cache[resource] = found
-        return found
-
-    if len(results["results"]) > 10000 or len(nodes) > 10000:
-        raise DbtLineageError("dbt artifact has too many nodes or results")
-    for result in results["results"]:
-        resource = result.get("unique_id") if isinstance(result, dict) else None
-        if not isinstance(resource, str) or not ID.fullmatch(resource) or resource not in nodes or resource in seen:
-            raise DbtLineageError("dbt result repeats or lacks a valid manifest resource")
-        seen.add(resource)
-        node = nodes[resource]
-        if node.get("resource_type") not in ("model", "seed", "snapshot") or node.get("config", {}).get("materialized") == "ephemeral":
-            continue
-        status = result.get("status")
-        if status not in ("success", "pass", "warn", "error", "fail", "skipped"):
-            raise DbtLineageError(f"model {resource}: invalid result status")
-        output = dataset(resource, resource, outputs)
-        distinct = parents(resource, resource, set())
-        edges.append(
-            {
-                "model": resource,
-                "status": status,
-                "inputs": [{"namespace": namespace, "name": name} for namespace, name in sorted(distinct)],
-                "outputs": [output],
-            }
-        )
-        if len(edges) > MAX_MODELS:
-            raise DbtLineageError("dbt artifact has too many executed models")
-    return edges
-
-
-def from_attempt(folder: Path, attempt: dict[str, Any], invocation: dict[str, Any], intent: dict[str, Any]) -> dict[str, Any]:
-    manifest, results = verified_documents(folder, attempt.get("dbt_artifacts"), attempt["id"])
-    try:
-        models = model_edges(manifest, results, intent["dbt_nodes"], intent["lineage"])
-    except (TypeError, AttributeError, KeyError):
-        raise DbtLineageError("dbt model graph is malformed") from None
-    return {
-        "version": 1,
-        "invocation": invocation,
-        "attempt_id": attempt["id"],
-        "invocation_id": attempt["dbt_artifacts"]["invocation_id"],
-        "files": dict(attempt["dbt_artifacts"]["files"]),
-        "models": models,
-    }
 
 
 @cache

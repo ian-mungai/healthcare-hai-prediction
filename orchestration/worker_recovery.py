@@ -364,7 +364,6 @@ class Recovery:
         self.intent_grace = intent_grace
         self.guard_wait = guard_wait
         self.alert: dict[str, Any] | None = None
-        self.next_sweep = 0.0
         self.failed = False
         self.unresolved: list[dict[str, Any]] = []
         self.pending_intents: list[dict[str, Any]] = []
@@ -478,19 +477,7 @@ class Recovery:
             paused = [entry for entry in recovered if self._pauses(entry)]
             self.alert = {"kind": "worker_unproven", "entries": paused, "command": "python -m orchestration.launcher workers"} if paused else None
             self.failed = False
-            self.next_sweep = time.monotonic() + 30
             return paused
-        except (OSError, ValueError, TimeoutError):
-            self.failed = True
-            self.alert = {"kind": "worker_recovery_unavailable", "entries": [], "command": "python -m orchestration.launcher workers"}
-            raise
-
-    def refresh_closures(self, *, deadline: float) -> bool:
-        """Observe owner closures on each tick and request an immediate first evidence scan."""
-        try:
-            entries = [entry for entry in self.ledger.open_entries(deadline=deadline) if self._recovered(entry) and self._pauses(entry)]
-            self.alert = {"kind": "worker_unproven", "entries": entries, "command": "python -m orchestration.launcher workers"} if entries else None
-            return any(entry["evidence"] is None for entry in entries)
         except (OSError, ValueError, TimeoutError):
             self.failed = True
             self.alert = {"kind": "worker_recovery_unavailable", "entries": [], "command": "python -m orchestration.launcher workers"}

@@ -727,7 +727,6 @@ def case_check_compares_the_two_pointers() -> Check:
     }
 
 
-S3_SILVER = "silver"
 S3_FIELDS = [
     {"id": 1, "name": "county_sk", "required": False, "type": "string"},
     {"id": 2, "name": "visits", "required": False, "type": "long"},

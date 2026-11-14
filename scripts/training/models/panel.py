@@ -19,10 +19,9 @@ MINIMUM_FITTING_YEARS = 3
 
 @dataclass(frozen=True)
 class PanelFits:
-    """Fixed-effects estimates, their covariance and the estimated hospital effects on one panel design."""
+    """Fixed-effects estimates and the estimated hospital effects on one panel design."""
 
     fixed: Mapping[str, float]
-    fixed_covariance: Array
     effects: Mapping[str, float]
     log_likelihood: float | None = None
 
@@ -43,7 +42,6 @@ def native_fits(y: Array, matrix: Array, entities: tuple[str, ...], years: tuple
     effects = {entity: float(np.mean(residuals[entity_values == entity])) for entity in sorted(set(entities))}
     return PanelFits(
         fixed.params.to_dict(),
-        fixed.cov.loc[list(names), list(names)].to_numpy(),
         effects,
         float(fixed.loglik),
     )

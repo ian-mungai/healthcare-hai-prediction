@@ -60,7 +60,6 @@ BOUNDS = {
     "C047": (-5.0, 5.0),  # ratio
     "C048": (-1000.0, 1000.0),  # days of operating expense
 }
-DAYS_PER_YEAR = 365.0
 CHECKED = tuple(sorted(RULES))
 STATUSES = ("in_domain", "out_of_domain", "denominator_not_positive")
 MEASURES_SQL = (

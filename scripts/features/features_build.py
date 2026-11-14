@@ -75,7 +75,6 @@ INPUTS_SQL = (
     "? as gold_snapshot_set_sha256, ? as source_sha256, ? as feature_schema_sha256, ? as hai_outcome_controls_sha256"
 )
 RECEIPT_SQL = "create table main.feature_build_receipt (node varchar, resource_type varchar, status varchar)"
-SET_INPUTS_TABLE = "feature_set_inputs"
 SET_INPUTS_SQL = (
     "create table main.feature_set_inputs as select 'current' as build_key, ? as features_run_id, ? as feature_set, ? as base_run_id, ? as base_snapshot_set, "
     "? as base_snapshot_set_sha256, ? as source_sha256, ? as set_schema_sha256"

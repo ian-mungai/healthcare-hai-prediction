@@ -48,20 +48,6 @@ def safe_path(value: str) -> tuple[str, ...]:
     return parts
 
 
-def run_prefix(run_id: str, generation: int) -> str:
-    """Construct the checked stage prefix for exactly one run generation."""
-    if re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", run_id) is None or type(generation) is not int or generation < 1:
-        raise StageError("unsafe_run_prefix")
-    return f"lakehouse/run_stage/{run_id}/g{generation}/"
-
-
-def try_prefix(run_id: str, generation: int, try_id: str) -> str:
-    """Construct a try prefix using the accepted startedBy identifier syntax."""
-    if re.fullmatch(r"[A-Za-z0-9_-]{1,100}", try_id) is None:
-        raise StageError("unsafe_try_id")
-    return run_prefix(run_id, generation) + "tries/" + try_id + "/"
-
-
 def protected_path(parts: Sequence[str]) -> bool:
     """Recognize forbidden source names before opening their contents."""
     lowered = tuple(part.casefold() for part in parts)
@@ -276,24 +262,6 @@ def dbt_digest(root: Path, deadline: float) -> str:
         for member in inventory(root, (label,), deadline, include_bytecode=True):
             digest.update(member.path.encode() + b"\0" + bytes.fromhex(member.sha256))
     return digest.hexdigest()
-
-
-def pack_archive(root: Path, members: Sequence[Member], destination: Path, deadline: float) -> None:
-    """Create a deterministic archive from a previously frozen, rechecked manifest."""
-    code_digest(root, members, deadline)
-    with destination.open("xb") as output, tarfile.open(fileobj=output, mode="w", format=tarfile.USTAR_FORMAT) as archive:
-        for name, member in sorted(checked_members(members).items()):
-            check_deadline(deadline)
-            with held_file(root, name) as descriptor, os.fdopen(os.dup(descriptor), "rb") as reader:
-                before = fingerprint(os.fstat(descriptor))
-                entry = tarfile.TarInfo(name)
-                entry.size = member.size
-                entry.mode = 0o555 if member.executable else 0o444
-                archive.addfile(entry, reader)
-                digest, size = digest_descriptor(descriptor, deadline)
-                if before != fingerprint(os.fstat(descriptor)) or (digest, size) != (member.sha256, member.size):
-                    raise StageError("source_changed", 71)
-    code_digest(root, members, deadline)
 
 
 def extract_archive(source: Path, members: Sequence[Member], destination: Path, deadline: float, maximum_bytes: int = 2 << 30) -> None:

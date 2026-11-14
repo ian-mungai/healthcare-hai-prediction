@@ -15,7 +15,6 @@ DRIFT_RUN = "20261030T120000Z-d71f70a1"
 SERVE_RUN = "20261030T120000Z-5e5e5e5e"
 DIGEST = "ab" * 32
 INVENTORY = "cd" * 32
-SERVING_REQUEST = {"hai_type": "HAI_1", "candidate_version": "3", "percent": 10, "deploy_mode": "canary"}
 # Every DAG step launches on AWS, so the training parameters name the aws MLflow lane (lead decision, Nov 7 2026).
 TRAIN_PARAMS = {
     "run_id": RUN,

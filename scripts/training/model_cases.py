@@ -110,8 +110,7 @@ def panel_standin(y: Any, x: Any, entities: Any, years: Any, names: Any) -> Any:
     beta = np.r_[np.mean(y) - np.mean(x[:, 1:], axis=0) @ slopes, slopes]
     beta[0] -= 0.4
     effects = {entity: float(np.mean(np.asarray(y)[np.asarray(entities) == entity] - x[np.asarray(entities) == entity] @ beta)) for entity in unique}
-    covariance = np.eye(len(names)) * 0.2
-    return PanelFits(dict(zip(names, beta, strict=True)), covariance, effects)
+    return PanelFits(dict(zip(names, beta, strict=True)), effects)
 
 
 def scenarios() -> list[tuple[str, Callable[[], None]]]:
@@ -1016,17 +1015,6 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
             def to_dict(self) -> Any:
                 return dict(self.values)
 
-        class Covariance:
-            @property
-            def loc(self) -> Any:
-                return self
-
-            def __getitem__(self, keys: Any) -> Any:
-                return self
-
-            def to_numpy(self) -> Any:
-                return np.eye(len(names)) * 0.2
-
         class Effects:
             @property
             def iloc(self) -> Any:
@@ -1049,7 +1037,7 @@ def scenarios() -> list[tuple[str, Callable[[], None]]]:
                 pass
 
             def fit(self, **kwargs: Any) -> Any:
-                return SimpleNamespace(nobs=len(training.rows), params=Series(reference.fixed), cov=Covariance(), estimated_effects=Effects(), loglik=-10.0)
+                return SimpleNamespace(nobs=len(training.rows), params=Series(reference.fixed), estimated_effects=Effects(), loglik=-10.0)
 
         fixture_effects = Effects().iloc[:, 0].groupby(level="ccn").mean().to_dict()
         require(set(fixture_effects) == set(entities), "panel effect fixture lost its native indexing interface")

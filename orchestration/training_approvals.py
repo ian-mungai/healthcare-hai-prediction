@@ -15,7 +15,6 @@ from orchestration.training_contract import parameters_for
 
 SCOPE = "real_training"
 APPROVAL_KEYS = frozenset({"run_id", "dag_id", "scope", "approved_on"})
-RELEASE_ACTIONS = frozenset({"catalog_release", "gate_accepted", "gate_rejected", "release_accepted", "release_rejected"})
 
 
 def read_approval(state: Path, request: SubmissionRequest, *, today: date | None = None) -> dict[str, Any]:

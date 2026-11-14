@@ -47,10 +47,8 @@ SAVED = re.compile(
     r"|\.budgets/[0-9]{9}(\.settled)?\.json|\.attempts/[^/]+/[a-f0-9]{64}/[0-9]{3}\.json)"
 )
 INPUTS_NAME = "publisher_inputs.tar.gz"
-SAVE_EVERY = 25
 PRIOR_KEYS = {"key", "version_id", "sha256"}
 WORKSPACE = "/workspace"
-MANIFEST_FILE = "publisher_manifest.json"
 ClientFactory = Callable[[str, str], Any]
 
 
@@ -76,14 +74,6 @@ def fetch_inputs(s3: Any, environment: Mapping[str, str]) -> Path:
     except tarfile.FilterError:
         raise PublisherError("The staged inputs hold an unsafe path.") from None
     return inputs
-
-
-def queue_of(inputs: Path) -> Path:
-    """The queue the stage named inside the inputs. The archive's own unpacking already keeps it under the inputs folder."""
-    queue = inputs / json.loads((inputs / MANIFEST_FILE).read_text(encoding="utf-8"))["queue"]
-    if not queue.resolve().is_relative_to(inputs.resolve()) or not queue.is_file():
-        raise PublisherError("The staged manifest names no queue under the inputs.")
-    return queue
 
 
 def install_plan_inputs(mirror: Path, code_root: Path) -> None:

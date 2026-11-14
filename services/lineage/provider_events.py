@@ -162,15 +162,6 @@ def read_descriptor(descriptor: int) -> bytes:
     return data
 
 
-def read_at(directory: int, name: str) -> bytes:
-    """Read one bounded regular provider file through its held directory."""
-    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
-    try:
-        return read_descriptor(descriptor)
-    finally:
-        os.close(descriptor)
-
-
 def emit(folder: Path, event: Any) -> bool:
     """Persist projected events; surface directory-permission failures and report other errors safely."""
     try:

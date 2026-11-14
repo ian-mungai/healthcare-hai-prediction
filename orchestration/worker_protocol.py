@@ -16,11 +16,6 @@ from typing import Any
 
 MAX_FRAME = 16 * 1024 * 1024
 MAX_RECORD = 32 * 1024 * 1024
-MUTATING = frozenset(
-    {"run_task", "stop_task", "assume_role", "s3_put_small", "s3_upload_part", "s3_mpu_create", "s3_mpu_complete", "s3_mpu_abort", "s3_delete"}
-)
-SECRET_OPERATIONS = frozenset({"assume_role", "get_parameter"})
-CONTROL_OPERATIONS = frozenset({"run_task", "stop_task", "describe_tasks", "list_tasks", "assume_role", "caller_identity", "logs_get_events", "get_parameter"})
 KEYWORDS = frozenset(
     {
         "$defs",
@@ -186,38 +181,6 @@ def validate(frame: Mapping[str, Any], operation: str | None = None, request_id:
         definition = "error_reply" if frame.get("ok") is False else f"{operation}_reply"
     if definition not in schema["$defs"] or not _matches(dict(frame), schema["$defs"][definition], schema):
         raise ProtocolError("closed_frame_refused")
-
-
-def cap_seconds(operation: str) -> float:
-    """Read the operation cap from the same request schema used for validation."""
-    try:
-        return float(load_schema()["$defs"][f"{operation}_request"]["properties"]["budget_s"]["maximum"])
-    except KeyError as error:
-        raise ProtocolError("unknown_operation") from error
-
-
-def secret_bearing(operation: str, params: Mapping[str, Any]) -> bool:
-    """Identify calls whose request or reply must use a fresh memory-only worker."""
-    return (
-        operation in SECRET_OPERATIONS
-        or "session" in params
-        or (operation in {"s3_put_small", "s3_get_small", "s3_download"} and "grants" in params.get("key", "").split("/"))
-    )
-
-
-def error_reply(request_id: str, operation: str, kind: str, code: str, *, http_status: int | None = None, request_id_hash: str | None = None) -> dict[str, Any]:
-    """Return a typed error with no service body, exception text or session values."""
-    return {
-        "id": request_id,
-        "ok": False,
-        "error": {
-            "kind": kind,
-            "code": code,
-            "http_status": http_status,
-            "request_id": request_id_hash,
-            "effect_unknown": operation in MUTATING and kind in {"deadline", "worker_died", "protocol", "shutdown", "network"},
-        },
-    }
 
 
 def request_hash(value: str) -> str | None:

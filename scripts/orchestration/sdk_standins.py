@@ -40,7 +40,6 @@ class Event:
 
     kind: str
     connection: int
-    elapsed_s: float
 
 
 class WorkerStandin:
@@ -66,7 +65,7 @@ class WorkerStandin:
 
     def _record(self, kind: str, connection: int) -> None:
         with self._lock:
-            self._events.append(Event(kind, connection, time.monotonic() - self._started))
+            self._events.append(Event(kind, connection))
 
     def __enter__(self) -> WorkerStandin:
         if self._listener is not None or self._stop.is_set():

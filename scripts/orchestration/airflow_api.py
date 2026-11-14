@@ -180,14 +180,3 @@ class AirflowApi:
         if len(found) != total or len({item.get("dag_run_id") for item in found}) != len(found):
             raise AirflowApiError(f"the DAG run listing of {dag_id} is not a list of {total} distinct runs")
         return found
-
-    def wait_for_run(self, dag_id: str, dag_run_id: str, seconds: float) -> dict[str, Any]:
-        """Poll until the DAG run is in a terminal state; ``AirflowApiError`` when the time runs out."""
-        deadline = time.monotonic() + seconds
-        while True:
-            record = self.run(dag_id, dag_run_id)
-            if record["state"] in TERMINAL_RUN_STATES:
-                return record
-            if time.monotonic() > deadline:
-                raise AirflowApiError(f"run {dag_run_id} is still {record['state']} after {seconds:.0f} s")
-            time.sleep(2.0)
