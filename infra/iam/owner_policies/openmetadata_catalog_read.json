@@ -8,6 +8,16 @@
       "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/*"
     },
     {
+      "Sid": "ReadChainRecords",
+      "Effect": "Allow",
+      "Action": "s3:GetObject",
+      "Resource": [
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/gold_pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/silver_pins.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_runs/*/check.json"
+      ]
+    },
+    {
       "Sid": "ListDbtArtifacts",
       "Effect": "Allow",
       "Action": "s3:ListBucket",

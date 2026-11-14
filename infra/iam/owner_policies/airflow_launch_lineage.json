@@ -12,7 +12,10 @@
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/silver_pins.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/publish/commit.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/gold_pins.json",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/features_snapshot.json"
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/features_snapshot.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/silver/*/table_inputs.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/gold/*/table_inputs.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/metadata/dbt/features/*/table_inputs.json"
       ]
     }
   ]

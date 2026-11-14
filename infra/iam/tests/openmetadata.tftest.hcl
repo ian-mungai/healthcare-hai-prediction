@@ -89,19 +89,30 @@ run "prepared_role_reads_catalog_metadata_only" {
     condition = alltrue([
       for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement :
       statement.Effect == "Deny" || alltrue([for resource in flatten([statement.Resource]) :
-        resource == "arn:aws:s3:::${var.data_bucket_name}" || resource == "arn:aws:s3:::${var.data_bucket_name}/metadata/dbt/*"
+        contains([
+          "arn:aws:s3:::${var.data_bucket_name}",
+          "arn:aws:s3:::${var.data_bucket_name}/metadata/dbt/*",
+          "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/features/*/gold_pins.json",
+          "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/gold/*/silver_pins.json",
+          "arn:aws:s3:::${var.data_bucket_name}/lakehouse/bronze_runs/*/check.json",
+        ], resource)
       ])
     ])
-    error_message = "The catalog role reads the dbt artifacts only. The Glue connector reads the mirror registrations, so no Iceberg metadata file or data file is readable."
+    error_message = "The catalog role reads the dbt artifacts and three named records only: the two pin files that record a chain and the bronze run record. The Glue connector reads the mirror registrations, so no Iceberg metadata file or data file is readable."
   }
 
   assert {
     condition = (
-      !strcontains(aws_iam_role_policy.openmetadata_task["catalog_read"].policy, "lakehouse") &&
+      toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement : statement.Resource if statement.Effect == "Allow" && contains(flatten([statement.Action]), "s3:GetObject")])) == toset([
+        "arn:aws:s3:::${var.data_bucket_name}/metadata/dbt/*",
+        "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/features/*/gold_pins.json",
+        "arn:aws:s3:::${var.data_bucket_name}/lakehouse/layer_runs/gold/*/silver_pins.json",
+        "arn:aws:s3:::${var.data_bucket_name}/lakehouse/bronze_runs/*/check.json",
+      ]) &&
       toset(flatten([for statement in jsondecode(aws_iam_role_policy.openmetadata_task["catalog_read"].policy).Statement : statement.Condition.StringLike["s3:prefix"] if contains(flatten([statement.Action]), "s3:ListBucket")])) ==
       toset(["metadata/dbt/", "metadata/dbt/*"])
     )
-    error_message = "The catalog role lists only the dbt artifact prefix, nothing under the lakehouse."
+    error_message = "The catalog role lists only the dbt artifact prefix, nothing under the lakehouse, and reads under the lakehouse only the three named records."
   }
 
   assert {

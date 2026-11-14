@@ -208,6 +208,9 @@ locals {
         { name = "OM_API", value = coalesce(var.host_openmetadata_api, "unset") },
         { name = "RUN_ID", value = "" },
         { name = "POLARIS_URI", value = "" },
+        # The ID of the features run whose chain the dbt source ingests. The launch fills it from the metadata DAG's required features_run parameter; the task
+        # refuses an empty value and never falls back to a latest run (scripts/infrastructure/openmetadata_host_ingest.py).
+        { name = "FEATURES_RUN", value = "" },
       ])
       secrets = [
         { name = "OM_INGESTION_TOKEN", valueFrom = "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_ingestion_token_name}" },
@@ -267,7 +270,7 @@ locals {
     drift    = local.drift_run_variables
     promote  = { for step in local.promote_steps : step.name => step.variables if length(step.variables) > 0 }
     serve    = { for step in local.serve_steps : step.name => step.variables if length(step.variables) > 0 }
-    metadata = { ingest = ["RUN_ID", "POLARIS_URI"] }
+    metadata = { ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] }
   }
   host_dry_run = {
     silver   = { variable = "LAYER_DRY_RUN", value = "1" }

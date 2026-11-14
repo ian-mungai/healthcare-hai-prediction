@@ -496,7 +496,7 @@ run "run_task_and_dispatch_contract" {
       output.host_run_tasks["drift"].container_environment == output.drift_run_task.container_environment &&
       output.host_run_tasks["promote"].container_environment == output.promote_run_task.container_environment &&
       output.host_run_tasks["serve"].container_environment == output.serve_run_task.container_environment &&
-      jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI"] })
+      jsonencode(output.host_run_tasks["metadata"].container_environment) == jsonencode({ ingest = ["RUN_ID", "POLARIS_URI", "FEATURES_RUN"] })
     )
     error_message = "The host entries cover exactly the families of the job table and name the same container variables as the Fargate outputs."
   }

@@ -18,7 +18,7 @@ import tempfile
 import threading
 import time
 import urllib.parse
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -406,6 +406,157 @@ def host_ingest_environment(root: Path, **changes: str | None) -> tuple[list[str
         else:
             env[name] = value
     return ["--config-dir", str(INGESTION), "--work-dir", str(root / "work"), "glue", "dbt"], env
+
+
+BRONZE_RUN = "20261104T100000Z-abcdef01"
+BRONZE_KEY = f"lakehouse/bronze_runs/{BRONZE_RUN}/check.json"
+
+
+def bronze_record(files: dict[str, int], run: str = BRONZE_RUN, version: str = "v1") -> dict[str, Any]:
+    """A bronze run record in the shape the bronze check phase writes, with ``files[table]`` loaded objects for each table."""
+    tables = sorted(files)
+    objects = [
+        {
+            "table": table,
+            "bucket": "example-acquisition-bucket",
+            "key": f"cms/{table}/file_{index:03d}.csv",
+            "version_id": f"{version}-{index}",
+            "sha256": f"{index:064x}",
+            "byte_count": 10 + index,
+        }
+        for table in tables
+        for index in range(files[table])
+    ]
+    return {
+        "schema_version": 1,
+        "run_id": run,
+        "target": "real",
+        "namespaces": ["bronze", "bronze_dictionary"],
+        "tables": tables,
+        "report_sha256": "d" * 64,
+        "metadata_generation": "generation-0001",
+        "snapshots": {table: 50 + index for index, table in enumerate(tables)},
+        "objects": objects,
+    }
+
+
+class FakeCatalog:
+    """A stand-in of OpenMetadata's table API: a lookup by name and a JSON patch of the description, with every call kept."""
+
+    def __init__(self, descriptions: dict[str, str]) -> None:
+        self.tables = {f"glue_mirror.hai_lakehouse.hai_mirror_bronze.{name}": {"id": f"id-{name}", "description": text} for name, text in descriptions.items()}
+        self.calls: list[tuple[str, str, dict[str, str], bytes | None]] = []
+        self.fail_patch = False
+
+    def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
+        self.calls.append((method, url, dict(headers), body))
+        path = url.split("/api/v1/tables/", 1)[1]
+        if method == "GET":
+            name = path.split("?", 1)[0].removeprefix("name/")
+            table = self.tables.get(name)
+            return (200, dict(table)) if table else (404, None)
+        if self.fail_patch:
+            return 500, None
+        table = next(item for item in self.tables.values() if item["id"] == path)
+        operations = json.loads(body or b"[]")
+        require(len(operations) == 1 and operations[0]["op"] == "add" and operations[0]["path"] == "/description", operations)
+        table["description"] = operations[0]["value"]
+        return 200, None
+
+    def patches(self) -> int:
+        return len([call for call in self.calls if call[0] == "PATCH"])
+
+
+def raw_files_environment(**changes: str) -> dict[str, str]:
+    return {"OM_API": HOST_API, "OM_INGESTION_TOKEN": BEARER_VALUE, "DATA_BUCKET_NAME": "example-project-data-dev", **changes}
+
+
+def run_raw_files(args: list[str], env: dict[str, str], keys: dict[str, bytes], catalog: FakeCatalog) -> tuple[int, str, str]:
+    from scripts.infrastructure import openmetadata_raw_files as writer
+
+    with quiet() as (out, err):
+        code = writer.main(args, env=env, s3_client=FakeS3(keys), http=catalog)
+    return code, out.getvalue(), err.getvalue()
+
+
+def raw_files_are_written_onto_each_bronze_table() -> None:
+    """Each table the bronze run loaded gets its object keys, versions, SHA-256, sizes, run and snapshot in a marked block of its description, over the
+    catalog API with the bot token, and nothing about the token reaches the output."""
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2, "cms_hai_state": 1})).encode()}
+    catalog = FakeCatalog({"cms_hai_hospital": "", "cms_hai_state": ""})
+    code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
+    require(code == 0 and "2 written" in out, (code, out, err))
+    hospital = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    for needle in (BRONZE_RUN, "s3://example-acquisition-bucket/cms/cms_hai_hospital/file_000.csv", "version v1-1", f"sha256 {1:064x}", "bytes 11", "2 files"):
+        require(needle in hospital, f"the description lacks {needle!r}: {hospital}")
+    require(hospital.startswith("<!-- hai-raw-files:start -->") and hospital.endswith("<!-- hai-raw-files:end -->"), "the block is marked")
+    require(all(call[2]["Authorization"] == f"Bearer {BEARER_VALUE}" for call in catalog.calls), "every call carries the bot token")
+    require(any(call[0] == "PATCH" and call[2]["Content-Type"] == "application/json-patch+json" for call in catalog.calls), "a JSON patch")
+    require(BEARER_VALUE not in out + err, "the token reached the output")
+
+
+def raw_files_write_is_idempotent_and_keeps_other_text() -> None:
+    """A repeat of the same run writes nothing. Text around the block stays. A later run replaces the block only, so one block is left."""
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode()}
+    catalog = FakeCatalog({"cms_hai_hospital": "Hospital measures from CMS."})
+    require(run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)[0] == 0 and catalog.patches() == 1, "the first run writes")
+    first = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(first.startswith("Hospital measures from CMS.\n\n<!-- hai-raw-files:start -->"), f"the existing text is kept: {first[:80]}")
+    code, out, _ = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
+    require(code == 0 and catalog.patches() == 1 and "1 unchanged" in out, f"a repeat wrote again: {catalog.patches()} patches, {out}")
+    later = "20261105T100000Z-abcdef02"
+    keys[f"lakehouse/bronze_runs/{later}/check.json"] = json.dumps(bronze_record({"cms_hai_hospital": 3}, later, "w")).encode()
+    require(run_raw_files(["--bronze-run", later], raw_files_environment(), keys, catalog)[0] == 0 and catalog.patches() == 2, "a later run writes once")
+    second = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(
+        second.count("hai-raw-files:start") == 1 and later in second and BRONZE_RUN not in second and second.startswith("Hospital measures from CMS."), second
+    )
+
+
+def raw_files_list_is_capped() -> None:
+    """A table with more files than the cap lists the first ones in key order and says how many more, and names the run record."""
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 60})).encode()}
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    require(run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)[0] == 0, "written")
+    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(text.count("- s3://") == 50 and "and 10 more files" in text and BRONZE_KEY in text and "60 files" in text, text[-300:])
+
+
+def raw_files_writer_refuses_and_fails_visibly() -> None:
+    """An unusable catalog address, a missing token or a run that is not a run ID is refused before any call. A missing or wrong record, a table absent from
+    the catalog, a refused update and an unreachable catalog each end with exit code 1 that names the cause and never the token."""
+    from scripts.infrastructure import openmetadata_raw_files as writer
+
+    good = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode()}
+    for label, changes, args in (
+        ("address", {"OM_API": "http://127.0.0.1:8585/api"}, ["--bronze-run", BRONZE_RUN]),
+        ("token", {"OM_INGESTION_TOKEN": ""}, ["--bronze-run", BRONZE_RUN]),
+        ("latest", {}, ["--bronze-run", "latest"]),
+    ):
+        catalog = FakeCatalog({"cms_hai_hospital": ""})
+        code, _, err = run_raw_files(args, raw_files_environment(**changes), good, catalog)
+        require(code == 2 and not catalog.calls and BEARER_VALUE not in err, f"{label}: code {code}, {err}")
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), {}, catalog)
+    require(code == 1 and BRONZE_KEY in err and "missing" in err and not catalog.calls, (code, err))
+    wrong = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1}, run="20261104T100000Z-ffffffff")).encode()}
+    code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), wrong, FakeCatalog({}))
+    require(code == 1 and BRONZE_KEY in err and "another run" in err, (code, err))
+    two = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1, "cms_hai_state": 1})).encode()}
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), two, catalog)
+    require(code == 1 and "1 written" in out and "cms_hai_state" in err, f"an absent table is named and the others are written: {code}, {out}, {err}")
+    broken = FakeCatalog({"cms_hai_hospital": ""})
+    broken.fail_patch = True
+    code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), good, broken)
+    require(code == 1 and "HTTP 500" in err and BEARER_VALUE not in err, (code, err))
+
+    def unreachable(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
+        raise writer.WriteFailed("the catalog did not answer: ConnectionRefusedError")
+
+    with quiet() as (_, stderr):
+        code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=FakeS3(good), http=unreachable)
+    require(code == 1 and "ConnectionRefusedError" in stderr.getvalue() and BEARER_VALUE not in stderr.getvalue(), (code, stderr.getvalue()))
 
 
 def host_ingest_aims_both_sources_at_the_persistent_catalog() -> None:
@@ -1278,6 +1429,10 @@ CASES: list[Callable[[], None]] = [
     ingest_names_a_missing_variable_but_not_a_value,
     ingest_fails_when_the_workflow_fails_without_echoing_the_config,
     ingest_dbt_downloads_the_artifacts_and_fails_without_a_manifest,
+    raw_files_are_written_onto_each_bronze_table,
+    raw_files_write_is_idempotent_and_keeps_other_text,
+    raw_files_list_is_capped,
+    raw_files_writer_refuses_and_fails_visibly,
     chain_follows_the_recorded_pins,
     chain_refuses_a_missing_or_mismatched_pin,
     host_ingest_ingests_the_three_recorded_layers,

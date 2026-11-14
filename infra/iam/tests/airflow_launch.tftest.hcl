@@ -896,10 +896,13 @@ run "launch_role_reads_only_the_lineage_records_of_layer_runs" {
             "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/gold/*/publish/commit.json",
             "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/gold_pins.json",
             "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/features_snapshot.json",
+            "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/silver/*/table_inputs.json",
+            "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/gold/*/table_inputs.json",
+            "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/features/*/table_inputs.json",
           ]
         },
       ]
     )
-    error_message = "The launch role reads only the pin, pin claim and output records that the lineage of a layer run rebuilds its versions from, and writes or lists nothing under lakehouse/layer_runs/."
+    error_message = "The launch role reads only the pin, pin claim and output records and the per-table inputs record that the lineage of a layer run rebuilds its events from, and writes or lists nothing under lakehouse/layer_runs/."
   }
 }
