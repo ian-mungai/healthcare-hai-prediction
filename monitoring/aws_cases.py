@@ -402,6 +402,9 @@ def current_cli_reads_the_model_run_it_is_given(folder: Path) -> Problems:
     problems: Problems = []
     with (
         mock.patch.dict(os.environ, TASK_READER_VARIABLES, clear=True),
+        mock.patch.object(importlib.import_module("scripts.lakehouse.task_capacity"), "apply", lambda: None),
+        mock.patch.object(startup_check, "open_connection", lambda *_arguments: None),
+        mock.patch.object(startup_check, "ISOLATED", False),
         mock.patch.object(current_window, "open_reader", open_reader),
         mock.patch.object(current_window, "build", spy),
         contextlib.redirect_stdout(io.StringIO()),
