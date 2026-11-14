@@ -140,7 +140,8 @@ resource "aws_iam_role_policy" "airflow_launch_records" {
 }
 
 # The lineage of a layer job rebuilds its dataset versions from the run's pin file, its pin claim and its output record
-# (orchestration/ecs_lineage.py). The scheduler reads those named records only: nothing else under lakehouse/layer_runs/, no write and no listing.
+# (orchestration/ecs_lineage.py). The launch jobs policy already reads those under lakehouse/layer_runs/ (ReadLayerRunRecords), so this policy adds only the
+# per-table inputs record of the dbt copy under metadata/dbt/. No write and no listing.
 resource "aws_iam_role_policy" "airflow_launch_lineage" {
   count = var.airflow_launch_prepared ? 1 : 0
 

@@ -410,6 +410,7 @@ NOT_UPLOADED = {
     "manifest.json": "the gold dbt copy, the gold export and the silver_input folder, which the upload skips",
     "catalog.json": "the gold dbt copy to metadata/dbt",
     "run_results.json": "the gold dbt copy to metadata/dbt",
+    "table_inputs.json": "the per-run dbt copy to metadata/dbt/<layer>/<run>, beside manifest.json",
     "silver_pins.json": "gold layer",
     "gold_pins.json": "features layer",
     "base_pins.json": "features layer (the pin of a model set run)",

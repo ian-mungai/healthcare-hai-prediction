@@ -913,13 +913,6 @@ run "launch_role_reads_only_the_lineage_records_of_layer_runs" {
           Effect = "Allow"
           Action = "s3:GetObject"
           Resource = [
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/pins.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/state/pinned.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/silver/*/silver_snapshot.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/gold/*/silver_pins.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/gold/*/publish/commit.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/gold_pins.json",
-            "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/features_snapshot.json",
             "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/silver/*/table_inputs.json",
             "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/gold/*/table_inputs.json",
             "arn:aws:s3:::example-project-ci-bucket/metadata/dbt/features/*/table_inputs.json",
@@ -927,6 +920,6 @@ run "launch_role_reads_only_the_lineage_records_of_layer_runs" {
         },
       ]
     )
-    error_message = "The launch role reads only the pin, pin claim and output records and the per-table inputs record that the lineage of a layer run rebuilds its events from, and writes or lists nothing under lakehouse/layer_runs/."
+    error_message = "The lineage policy of the launch role reads only the per-table inputs record that the lineage of a layer run rebuilds its events from, and writes or lists nothing. The pin, pin claim and output records come from ReadLayerRunRecords."
   }
 }
