@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib
 import json
 import re
@@ -11,6 +12,7 @@ import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -335,6 +337,24 @@ def test_a_training_run_with_a_base_starts_the_research_through_the_mapped_trigg
     )
     check(request[0]["trigger_run_id"] == real_image_dags.research_trigger_run(str(step.params["run_id"])), "the expected trigger run id differs")
     check(request[0]["conf"]["run_id"] == contract.research_run_id(base), "the research run is not derived from the base")
+
+
+def _serve_rig(prefix: str, run: str, request_hash: str) -> Any:
+    claim = {"event": "claim", "run_id": run, "job": "serve", "bound": {"code_digest": "d", "request_hash": request_hash, "input_run": "latest"}}
+    key = f"{prefix}/{run}/serve/claim.json"
+    return SimpleNamespace(launcher=SimpleNamespace(store=SimpleNamespace(prefix=prefix)), records=SimpleNamespace(objects={key: json.dumps(claim).encode()}))
+
+
+def test_the_serving_request_digest_is_the_hash_the_claim_binds_not_a_container_variable() -> None:
+    body = json.dumps({"hai_type": "HAI_1", "deploy_mode": "stable"}, sort_keys=True, separators=(",", ":"))
+    environment = {"serve": {"SERVING_REQUEST": body}}
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    real_image_dags.serving_request_is({"hai_type": "HAI_1", "deploy_mode": "stable"})(environment)
+    real_image_dags.serving_request_is_bound(_serve_rig("records", "run-1", digest), "run-1", environment)
+    with pytest.raises(real_image_dags.Expectation, match="binds the request hash"):
+        real_image_dags.serving_request_is_bound(_serve_rig("records", "run-1", "0" * 64), "run-1", environment)
+    with pytest.raises(real_image_dags.Expectation, match="no claim record"):
+        real_image_dags.serving_request_is_bound(_serve_rig("records", "run-2", digest), "run-1", environment)
 
 
 def test_the_rig_names_none_of_the_retired_inputs() -> None:

@@ -414,7 +414,10 @@ def check_run(rig: Any, step: Step, facts: dict[str, Any], calls: list[dict[str,
         f"{where}: the record names no task of the cluster",
     )
     if step.sent is not None:
-        step.sent({item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in first["overrides"]["containerOverrides"]})
+        containers = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in first["overrides"]["containerOverrides"]}
+        step.sent(containers)
+        if "SERVING_REQUEST" in containers.get("serve", {}):
+            serving_request_is_bound(rig, run_id, containers)
     del cases
 
 
@@ -670,14 +673,24 @@ def bridge_conformance(rig: Any) -> None:
 
 
 def serving_request_is(expected: Mapping[str, Any]) -> Callable[[dict[str, dict[str, str]]], None]:
-    """A check of the serve container's environment: the request the preflight derived from the closed launch request, and the digest the job verifies."""
+    """A check of the serve container's environment: the request the preflight derived from the closed launch request."""
 
     def check(environment: dict[str, dict[str, str]]) -> None:
         body = environment["serve"]["SERVING_REQUEST"]
         require(json.loads(body) == dict(expected), f"the derived serving request is {body}, not {dict(expected)}")
-        require(environment["serve"]["SERVING_REQUEST_SHA256"] == hashlib.sha256(body.encode()).hexdigest(), "the serving request digest is not the request's")
 
     return check
+
+
+def serving_request_is_bound(rig: Any, run: str, environment: dict[str, dict[str, str]]) -> None:
+    """Break unless the claim of the serve launch binds the digest of the request the serve container got: the digest is the launch's request hash, which a
+    reattached attempt must share, and no container variable."""
+    body = environment["serve"]["SERVING_REQUEST"]
+    claim = launch_records(rig, run, "serve").get("claim")
+    if claim is None:
+        raise Expectation(f"the serve launch of {run} has no claim record")
+    bound = claim["bound"]["request_hash"]
+    require(bound == hashlib.sha256(body.encode()).hexdigest(), f"the claim of {run} binds the request hash {bound}, not the digest of the serving request")
 
 
 def drift_inputs_are(model: str, features_run: str, code_run: str) -> Callable[[dict[str, dict[str, str]]], None]:
@@ -925,6 +938,8 @@ def cases_catalog() -> dict[str, Scenario]:
         require(parameters == expected, f"the chain sent the parameters {parameters}")
         serving_request_is(canary_request | {"research_run": research})(environments[1])
         serving_request_is(stable_request)(environments[4])
+        for run, environment in ((runs[1], environments[1]), (runs[4], environments[4])):
+            serving_request_is_bound(rig, run, environment)
         for run, job in zip(runs, ("promote", "serve", "promote", "promote", "serve", "promote"), strict=True):
             end = rig.end(run, job)
             require(end is not None and end["outcome"] == "succeeded", f"{job} of {run} has no success record: {end}")
