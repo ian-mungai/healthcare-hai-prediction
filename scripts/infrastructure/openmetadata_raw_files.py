@@ -11,9 +11,15 @@ written, so repeating a run changes nothing.
 The catalog address and the bot token come from ``OM_API`` and ``OM_INGESTION_TOKEN`` and the bucket from ``DATA_BUCKET_NAME``, as for the host
 ingestion. Exit codes: 0 done, 1 a record or a table failed, 2 refused. Output names tables, keys and exception classes and never prints the token.
 
-Recorded gaps: the receipt ids and the acquisition run are not in the run record. They are in the unit completion records beside the raw objects,
-which need a mapping from table to unit and a read grant on the raw prefix, and they are not written here. The bronze run IDs are not recorded by
-silver's pins either, so the caller names them.
+Acquisition identities: the run record names each loaded file by key and exact version. Each file is matched, by that key and version, to the unit
+completion record that names it (``scripts/acquisition/completion_record.py``, under ``raw/ingestion_units/``, the deployed capture root,
+read by listing and checked against its own key). The table's text then carries, for each unit that stored its files, the acquisition run (``run_id``
+of the record), the unit, the source, the collection, the retrieval time and the receipt object the record names (key, version, SHA-256). Where two
+records name one object version, the earliest capture is the one that stored it: retrieval times are compared as instants, and equal instants by unit
+key and then payload digest. A file that no record names says so on its line.
+
+Recorded limits: the receipt is identified by the object the completion record names, not by the snapshot ID inside the receipt body, which would need
+one more read for each unit. The bronze run is the one the caller names (the host task takes it from silver's launch claim).
 """
 
 from __future__ import annotations
@@ -26,13 +32,19 @@ import re
 import sys
 import urllib.parse
 from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 from typing import Any
 
+from scripts.acquisition.raw_root import RAW_ROOT
 from scripts.infrastructure import openmetadata_host_ingest as host_ingest
 
 START = "<!-- hai-raw-files:start -->"
 END = "<!-- hai-raw-files:end -->"
 MAX_FILES = 50
+MAX_UNITS = 20  # acquisition lines of one table; more are counted
+MAX_RECORDS = 20_000  # unit completion records read for one run
+RECORD_BYTES = 2 * 1024**2
+CAPTURE_ROOTS = (RAW_ROOT,)  # the deployed capture root (infra/jobs/publisher.tf capture_root): the only place this writer looks for completion records
 SERVICE, DATABASE, SCHEMA = "glue_mirror", "hai_lakehouse", "hai_mirror_bronze"
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 RECORD_KEY = "lakehouse/bronze_runs/{run}/check.json"
@@ -46,15 +58,118 @@ class WriteFailed(RuntimeError):
     """A record or a table could not be handled. The message names it and never holds the token."""
 
 
-def block_text(table: str, run: str, key: str, objects: Sequence[Mapping[str, Any]], snapshot: int) -> str:
-    """The marked block of one table: its run, snapshot and the files it was loaded from, at most ``MAX_FILES`` of them in key order."""
+Acquisition = Mapping[tuple[str, str], Mapping[str, Any]]  # (object key, object version) -> the completion record that stored that version first
+
+
+def record_key_of(info: Mapping[str, Any]) -> tuple[datetime, str, str]:
+    """The order of the captures: the retrieval instant, then the unit key and the payload digest, so two records with one instant have one winner."""
+    return (info["instant"], str(info["unit_key"]), str(info["payload_sha256"]))
+
+
+def instant(value: Any, key: str) -> datetime:
+    """A retrieval time as a timezone-aware instant. ``...09:00:00Z`` and ``...09:00:00.100000Z`` order by their value, not by their text. A time that is not
+    an ISO 8601 date-time with an offset cannot be ordered, so it stops the write by the record's key."""
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00")) if isinstance(value, str) and len(value) <= 40 else None
+    except ValueError:
+        parsed = None
+    if parsed is None or parsed.utcoffset() is None:
+        raise WriteFailed(f"{key}: the retrieval time {str(value)[:50]!r} is not a date-time with an offset")
+    return parsed
+
+
+def acquisition_index(s3: Any, bucket: str) -> dict[tuple[str, str], dict[str, Any]]:
+    """Every object version that a unit completion record of the bucket names, with the earliest record that names it (the capture that stored it).
+
+    The records are read from ``raw/ingestion_units/``, the deployed capture root, by their listing, never by a guess of a unit key. A record at the bucket
+    root is never listed or read. Each is checked against its own key (``completion_record.parse``). A listing past ``MAX_RECORDS``, an unreadable record or
+    a refused one
+    stops the write by its key.
+    """
+    from botocore.exceptions import BotoCoreError, ClientError
+
+    from scripts.acquisition import completion_record as records
+
+    found: list[tuple[str, str]] = []
+    for root in CAPTURE_ROOTS:
+        prefix = f"{root}{records.UNITS_FOLDER}"
+        token: str | None = None
+        while True:
+            try:
+                page = s3.list_objects_v2(Bucket=bucket, Prefix=prefix, **({"ContinuationToken": token} if token else {}))
+            except ClientError as error:
+                raise WriteFailed(f"{prefix}: {error.response.get('Error', {}).get('Code', 'ClientError')}") from None
+            except BotoCoreError as error:
+                raise WriteFailed(f"{prefix}: {type(error).__name__}") from None
+            found += [(root, item["Key"]) for item in page.get("Contents", [])]
+            if len(found) > MAX_RECORDS:
+                raise WriteFailed(f"{prefix}: more than {MAX_RECORDS} completion records")
+            if not page.get("IsTruncated"):
+                break
+            token = page["NextContinuationToken"]
+    index: dict[tuple[str, str], dict[str, Any]] = {}
+    for root, key in sorted(found):
+        try:
+            body = s3.get_object(Bucket=bucket, Key=key)["Body"].read(RECORD_BYTES + 1)
+        except ClientError as error:
+            raise WriteFailed(f"{key}: {error.response.get('Error', {}).get('Code', 'ClientError')}") from None
+        except BotoCoreError as error:
+            raise WriteFailed(f"{key}: {type(error).__name__}") from None
+        if len(body) > RECORD_BYTES:
+            raise WriteFailed(f"{key}: larger than {RECORD_BYTES} bytes")
+        try:
+            record = records.parse(body, key=key, root=root)
+        except records.RecordError as error:
+            raise WriteFailed(f"{key}: {error}") from None
+        info = {name: record[name] for name in ("unit_key", "payload_sha256", "run_id", "source_id", "collection", "retrieved_at_utc", "receipt")}
+        info["instant"] = instant(record["retrieved_at_utc"], key)
+        for item in records.objects_named(record):
+            current = index.get((item["key"], item["version_id"]))
+            if current is None or record_key_of(info) < record_key_of(current):
+                index[(item["key"], item["version_id"])] = info
+    return index
+
+
+def acquisition_lines(files: Sequence[Mapping[str, Any]], acquisition: Acquisition, bucket: str) -> list[str]:
+    """One line for each unit completion record that stored files of the table: its acquisition run, unit, source, collection, retrieval time and receipt."""
+    units: dict[tuple[datetime, str, str], tuple[Mapping[str, Any], int]] = {}
+    for item in files:
+        info = acquisition.get((item["key"], item["version_id"]))
+        if info is not None:
+            key = record_key_of(info)
+            units[key] = (info, units.get(key, (info, 0))[1] + 1)
+    lines = []
+    for key in sorted(units)[:MAX_UNITS]:
+        info, count = units[key]
+        receipt = info["receipt"]
+        lines.append(
+            f"Stored by acquisition run {info['run_id']}, unit {info['unit_key']}, source {info['source_id']}, collection {info['collection']}, "
+            f"retrieved {info['retrieved_at_utc']}; receipt s3://{bucket}/{receipt['key']} version {receipt['version_id']} "
+            f"sha256 {receipt['sha256']}: {count} files"
+        )
+    if len(units) > MAX_UNITS:
+        lines.append(f"and {len(units) - MAX_UNITS} more acquisition records.")
+    return lines
+
+
+def block_text(
+    table: str, run: str, key: str, objects: Sequence[Mapping[str, Any]], snapshot: int, acquisition: Acquisition | None = None, bucket: str = ""
+) -> str:
+    """The marked block of one table: its run, snapshot, the acquisition run and receipt of each unit that stored its files, and the files it was loaded from,
+    at most ``MAX_FILES`` of them in key order. A file that no completion record names with that exact version says so."""
     files = sorted(objects, key=lambda item: (item["key"], item["version_id"]))
+    known = acquisition or {}
+    recorded = sum(1 for item in files if (item["key"], item["version_id"]) in known)
     lines = [
         START,
-        f"Raw files loaded into {table} by bronze run {run} (table snapshot {snapshot}): {len(files)} files, {sum(item['byte_count'] for item in files)} bytes",
+        f"Raw files loaded into {table} by bronze run {run} (table snapshot {snapshot}): {len(files)} files, "
+        f"{sum(item['byte_count'] for item in files)} bytes; {recorded} of {len(files)} files have an acquisition record",
+        *acquisition_lines(files, known, bucket),
     ]
     lines += [
-        f"- s3://{item['bucket']}/{item['key']} version {item['version_id']} sha256 {item['sha256']} bytes {item['byte_count']}" for item in files[:MAX_FILES]
+        f"- s3://{item['bucket']}/{item['key']} version {item['version_id']} sha256 {item['sha256']} bytes {item['byte_count']}"
+        + ("" if (item["key"], item["version_id"]) in known else "; no completion record names this file version")
+        for item in files[:MAX_FILES]
     ]
     if len(files) > MAX_FILES:
         lines.append(f"and {len(files) - MAX_FILES} more files; the full list is the run record {key}.")
@@ -86,7 +201,11 @@ def run_blocks(s3: Any, bucket: str, run: str) -> dict[str, str]:
         raise WriteFailed(str(error)) from None
     except (ClientError, BotoCoreError) as error:
         raise WriteFailed(f"{key}: {type(error).__name__}") from None
-    return {table: block_text(table, run, key, [item for item in objects if item["table"] == table], snapshots[table]) for table in sorted(snapshots)}
+    acquisition = acquisition_index(s3, bucket)
+    return {
+        table: block_text(table, run, key, [item for item in objects if item["table"] == table], snapshots[table], acquisition, bucket)
+        for table in sorted(snapshots)
+    }
 
 
 def http_request(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:

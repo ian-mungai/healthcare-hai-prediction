@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.infrastructure.openmetadata_bootstrap import ADMIN_EMAIL
 from scripts.process import run_command
@@ -237,9 +238,23 @@ def ingest_fails_when_the_workflow_fails_without_echoing_the_config() -> None:
 
 
 class FakeS3:
-    def __init__(self, keys: dict[str, bytes]) -> None:
+    def __init__(self, keys: dict[str, bytes], page: int = 1000, deny: set[str] | None = None) -> None:
         self.keys = keys
         self.requested: list[str] = []
+        self.page = page
+        self.deny = deny or set()
+        self.listings: list[str] = []
+
+    def list_objects_v2(self, *, Bucket: str, Prefix: str = "", ContinuationToken: str | None = None, **_: Any) -> dict[str, Any]:
+        """A paged listing in key order: ``page`` keys per answer, the next start in ``NextContinuationToken``."""
+        self.listings.append(f"{Bucket}/{Prefix}")
+        names = sorted(key for key in self.keys if key.startswith(Prefix))
+        start = int(ContinuationToken or 0)
+        chunk = names[start : start + self.page]
+        found: dict[str, Any] = {"Contents": [{"Key": key} for key in chunk], "IsTruncated": start + self.page < len(names)}
+        if found["IsTruncated"]:
+            found["NextContinuationToken"] = str(start + self.page)
+        return found
 
     def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
         import io
@@ -247,6 +262,8 @@ class FakeS3:
         from botocore.exceptions import ClientError
 
         self.requested.append(f"{Bucket}/{Key}")
+        if Key in self.deny:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "Access Denied"}}, "GetObject")
         if Key not in self.keys:
             raise ClientError({"Error": {"Code": "NoSuchKey", "Message": "The specified key does not exist."}}, "GetObject")
         return {"Body": io.BytesIO(self.keys[Key])}
@@ -493,6 +510,218 @@ def raw_files_are_written_onto_each_bronze_table() -> None:
     require(all(call[2]["Authorization"] == f"Bearer {BEARER_VALUE}" for call in catalog.calls), "every call carries the bot token")
     require(any(call[0] == "PATCH" and call[2]["Content-Type"] == "application/json-patch+json" for call in catalog.calls), "a JSON patch")
     require(BEARER_VALUE not in out + err, "the token reached the output")
+
+
+def unit_completion(root: str, unit: str, run: str, files: list[tuple[str, str, str, int]], retrieved: str = "2026-10-01T09:00:00Z") -> tuple[str, bytes]:
+    """The key and bytes of one unit completion record as the acquisition writer stores them, naming ``files`` (key, version, SHA-256, size) as its data."""
+    from scripts.acquisition import completion_record as records
+
+    key = records.unit_key({"unit": unit})
+    data = [
+        {"key": name, "version_id": version, "sha256": digest, "byte_count": size, "role": "data", "stored_file_name": name.rsplit("/", 1)[1]}
+        for name, version, digest, size in files
+    ]
+    receipt = {"key": f"cms/receipts/{unit}.json", "version_id": f"r-{unit}", "sha256": records.sha256_text(f"receipt {unit}".encode()), "byte_count": 100}
+    manifest = {"key": f"cms/manifests/{unit}.json", "version_id": f"m-{unit}", "sha256": records.sha256_text(f"manifest {unit}".encode()), "byte_count": 50}
+    record = records.build(
+        key=key, source_id=f"source_{unit}", collection="cms/hospitals", mode="real", run_id=run, code_sha256="c" * 64, bundle_sha256="b" * 64,
+        retrieved_at_utc=retrieved, receipt=receipt, manifests=[manifest], data_objects=data,
+    )  # fmt: skip
+    return records.record_key(root, key, record["payload_sha256"]), records.encode(record)
+
+
+def object_of(table: str, index: int, version: str = "v1") -> tuple[str, str, str, int]:
+    return f"cms/{table}/file_{index:03d}.csv", f"{version}-{index}", f"{index:064x}", 10 + index
+
+
+ACQ_RUN_A, ACQ_RUN_B = "20261001T090000Z-aaaaaaa1", "20261002T090000Z-bbbbbbb2"
+
+
+def raw_files_name_their_receipt_and_acquisition_run() -> None:
+    """Each file of a bronze table is matched, by object key and exact version, to the unit completion record that names it, and the table's text carries
+    that record's acquisition run, unit, source, collection, retrieval time and receipt (key, version, SHA-256). Only the deployed capture root raw/ is
+    read (infra/jobs/publisher.tf capture_root), the records are paged, and a repeat of the run writes nothing."""
+    from scripts.acquisition import completion_record as records
+
+    key_a, body_a = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0), object_of("cms_hai_hospital", 1)])
+    key_b, body_b = unit_completion("raw/", "beta", ACQ_RUN_B, [object_of("cms_hai_state", 0)], "2026-10-02T09:00:00Z")
+    from scripts.acquisition import raw_root
+
+    require(
+        key_b.startswith(raw_root.RAW_ROOT) and 'capture_root          = "raw/"' in (REPO / "infra/jobs/publisher.tf").read_text(),
+        "raw/ is the deployed capture root",
+    )
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2, "cms_hai_state": 1})).encode(), key_a: body_a, key_b: body_b}
+    catalog = FakeCatalog({"cms_hai_hospital": "", "cms_hai_state": ""})
+    s3 = FakeS3(keys, page=1)
+    from scripts.infrastructure import openmetadata_raw_files as writer
+
+    with quiet() as (out, err):
+        code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=s3, http=catalog)
+    require(code == 0, (code, err.getvalue()))
+    hospital = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    unit_a = records.unit_key({"unit": "alpha"})
+    for needle in (
+        f"acquisition run {ACQ_RUN_A}",
+        f"unit {unit_a}",
+        "source source_alpha",
+        "collection cms/hospitals",
+        "retrieved 2026-10-01T09:00:00Z",
+        "receipt s3://example-project-data-dev/cms/receipts/alpha.json version r-alpha",
+        f"sha256 {records.sha256_text(b'receipt alpha')}",
+    ):
+        require(needle in hospital, f"the description lacks {needle!r}: {hospital}")
+    require("2 of 2 files have an acquisition record" in hospital, hospital)
+    state = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_state"]["description"]
+    require(f"acquisition run {ACQ_RUN_B}" in state and f"unit {records.unit_key({'unit': 'beta'})}" in state, state)
+    require(s3.listings and all(item.endswith("/raw/ingestion_units/") for item in s3.listings), f"only the capture root raw/ is listed: {s3.listings}")
+    again = FakeS3(keys, page=1)
+    with quiet() as (out, err):
+        require(writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=again, http=catalog) == 0, err.getvalue())
+    require(catalog.patches() == 2 and "2 unchanged" in out.getvalue(), f"a repeat wrote again: {catalog.patches()} patches, {out.getvalue()}")
+    require(BEARER_VALUE not in out.getvalue() + err.getvalue(), "the token reached the output")
+
+
+def raw_files_without_a_completion_record_say_so() -> None:
+    """A file that no completion record names with that exact version is listed with the plain statement that none does, and the header counts the files that
+    have a record. The write still happens: a table is not left without its files because one of them predates the records."""
+    key_a, body_a = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)])
+    other_version = unit_completion("raw/", "gamma", ACQ_RUN_B, [object_of("cms_hai_hospital", 1, version="old")])
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode(), key_a: body_a, other_version[0]: other_version[1]}
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    code, out, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), keys, catalog)
+    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(code == 0 and "1 of 2 files have an acquisition record" in text, (code, err, text))
+    require(text.count("no completion record names this file version") == 1 and f"acquisition run {ACQ_RUN_B}" not in text, text)
+
+
+def acquisition_records_that_are_wrong_stop_the_write() -> None:
+    """A completion record that is renamed, edited, unreadable or denied stops the write by its key, a listing past the bound fails, nothing is written to the
+    catalog, and no secret reaches the output."""
+    from scripts.infrastructure import openmetadata_raw_files as writer
+
+    key_a, body_a = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)])
+    record = json.loads(body_a)
+    record["run_id"] = ""
+    cases: dict[str, tuple[dict[str, bytes], set[str], str]] = {
+        "copied under another key": (
+            {key_a.replace("ingestion_units/", "ingestion_units/" + "0" * 64 + "/"): body_a},
+            set(),
+            "differs from the unit and payload",
+        ),
+        "edited": ({key_a: json.dumps(record).encode()}, set(), "empty or non-text"),
+        "not JSON": ({key_a: b"[nope"}, set(), "not JSON"),
+        "denied": ({key_a: body_a}, {key_a}, "AccessDenied"),
+    }
+    for label, (records, deny, phrase) in cases.items():
+        keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode()} | records
+        catalog = FakeCatalog({"cms_hai_hospital": ""})
+        with quiet() as (_, err):
+            code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=FakeS3(keys, deny=deny), http=catalog)
+        stored = err.getvalue()
+        require(code == 1 and catalog.patches() == 0 and phrase in stored and BEARER_VALUE not in stored, f"{label}: code {code}, {stored}")
+        require("ingestion_units/" in stored, f"{label}: the refusal names the record key: {stored}")
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode()}
+    for index in range(3):
+        keys.update([unit_completion("raw/", f"unit{index}", ACQ_RUN_A, [object_of("cms_hai_hospital", 5 + index)])])
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    with quiet() as (_, err), mock.patch.object(writer, "MAX_RECORDS", 2):
+        code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=FakeS3(keys, page=2), http=catalog)
+    require(code == 1 and catalog.patches() == 0 and "more than 2 completion records" in err.getvalue(), (code, err.getvalue()))
+
+
+def an_object_named_by_two_records_takes_the_earliest_capture() -> None:
+    """Two completion records can name one stored object version (a later capture found it unchanged). The acquisition run is the one that stored it: the
+    record with the earliest retrieval time, so the text does not change when a later record is added."""
+    first = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)], "2026-10-01T09:00:00Z")
+    later = unit_completion("raw/", "delta", ACQ_RUN_B, [object_of("cms_hai_hospital", 0)], "2026-10-05T09:00:00Z")
+    base = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode(), first[0]: first[1]}
+    texts = []
+    for extra in ({}, {later[0]: later[1]}):
+        catalog = FakeCatalog({"cms_hai_hospital": ""})
+        run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), base | extra, catalog)
+        texts.append(catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"])
+    require(texts[0] == texts[1] and f"acquisition run {ACQ_RUN_A}" in texts[0] and ACQ_RUN_B not in texts[0], texts)
+
+
+def a_bucket_root_completion_record_is_not_read() -> None:
+    """The deployed capture root is raw/, so the writer lists and reads ``raw/ingestion_units/`` only. A record at the bucket root, valid or not, is never
+    listed or read: it neither attributes a file nor stops the write, and a role that grants no bucket-root read is enough."""
+    from scripts.infrastructure import openmetadata_raw_files as writer
+
+    require(writer.CAPTURE_ROOTS == ("raw/",), f"the writer's roots: {writer.CAPTURE_ROOTS}")
+    legacy = unit_completion("", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)])
+    broken = ("ingestion_units/" + "0" * 64 + "/" + "1" * 64 + ".json", b"[not a record")
+    current = unit_completion("raw/", "delta", ACQ_RUN_B, [object_of("cms_hai_hospital", 1)])
+    keys = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode(), legacy[0]: legacy[1], broken[0]: broken[1], current[0]: current[1]}
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    s3 = FakeS3(keys)
+    with quiet() as (_, err):
+        code = writer.main(["--bronze-run", BRONZE_RUN], env=raw_files_environment(), s3_client=s3, http=catalog)
+    text = catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+    require(code == 0, (code, err.getvalue()))
+    require(
+        not [item for item in s3.requested if "/ingestion_units/" in item and "/raw/ingestion_units/" not in item],
+        f"a bucket-root record was read: {s3.requested}",
+    )
+    require(all(item.endswith("/raw/ingestion_units/") for item in s3.listings), f"a bucket-root listing: {s3.listings}")
+    require(f"acquisition run {ACQ_RUN_B}" in text and f"acquisition run {ACQ_RUN_A}" not in text, text)
+    require("1 of 2 files have an acquisition record" in text and text.count("no completion record names this file version") == 1, text)
+
+
+def description_after(files: dict[str, bytes]) -> str:
+    catalog = FakeCatalog({"cms_hai_hospital": ""})
+    code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), files, catalog)
+    require(code == 0, (code, err))
+    return catalog.tables["glue_mirror.hai_lakehouse.hai_mirror_bronze.cms_hai_hospital"]["description"]
+
+
+def sub_second_capture_times_are_compared_as_instants() -> None:
+    """Retrieval times are compared as instants, not as text: ``...09:00:00.100000Z`` is 0.1 s after ``...09:00:00Z`` although its text sorts before it
+    (a point sorts before ``Z``). Two records name one object version, and the earlier capture's run and receipt are the ones written."""
+    first = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)], "2026-10-01T09:00:00Z")
+    later = unit_completion("raw/", "delta", ACQ_RUN_B, [object_of("cms_hai_hospital", 0)], "2026-10-01T09:00:00.100000Z")
+    text = description_after({BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode(), first[0]: first[1], later[0]: later[1]})
+    require(f"acquisition run {ACQ_RUN_A}" in text and "cms/receipts/alpha.json" in text, text)
+    require(ACQ_RUN_B not in text and "cms/receipts/delta.json" not in text, f"the later capture was chosen: {text}")
+
+
+def equal_capture_instants_choose_by_unit_then_payload() -> None:
+    """Two records with the same instant, written differently (``Z``, ``.000000Z``, ``+00:00``), name one object version. The choice does not depend on how
+    the times are written or on the order the records are listed: the smaller unit key wins, and for one unit the smaller payload digest."""
+    from scripts.acquisition import completion_record as records
+
+    forms = ("2026-10-01T09:00:00Z", "2026-10-01T09:00:00.000000Z", "2026-10-01T09:00:00+00:00")
+    units = {"alpha": ACQ_RUN_A, "delta": ACQ_RUN_B}
+    wanted = min(units, key=lambda unit: records.unit_key({"unit": unit}))
+    for first, second in ((forms[0], forms[1]), (forms[1], forms[2]), (forms[2], forms[0])):
+        a = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)], first)
+        d = unit_completion("raw/", "delta", ACQ_RUN_B, [object_of("cms_hai_hospital", 0)], second)
+        texts = set()
+        for order in ((a, d), (d, a)):
+            files = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode()} | {key: body for key, body in order}
+            texts.add(description_after(files))
+        require(len(texts) == 1, f"the choice changed with the listing order for {first} and {second}")
+        text = texts.pop()
+        require(
+            f"acquisition run {units[wanted]}" in text and f"cms/receipts/{wanted}.json" in text,
+            f"the smaller unit key, {wanted}, was not chosen for {first} and {second}: {text}",
+        )
+
+
+def a_completion_record_without_a_usable_time_stops_the_write() -> None:
+    """A retrieval time that is not an ISO 8601 date-time with an offset (text, or no offset) cannot be ordered, so it stops the write by the record's key
+    and nothing is written. An offset other than UTC is an instant like any other."""
+    for label, stamp in (("text", "yesterday"), ("no offset", "2026-10-01T09:00:00"), ("too long", "2026-10-01T09:00:00Z" + "0" * 40)):
+        record = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)], stamp)
+        catalog = FakeCatalog({"cms_hai_hospital": ""})
+        files = {BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode(), record[0]: record[1]}
+        code, _, err = run_raw_files(["--bronze-run", BRONZE_RUN], raw_files_environment(), files, catalog)
+        require(code == 1 and catalog.patches() == 0 and record[0] in err and "not a date-time with an offset" in err, f"{label}: code {code}, {err}")
+    shifted = unit_completion("raw/", "alpha", ACQ_RUN_A, [object_of("cms_hai_hospital", 0)], "2026-10-01T10:30:00+01:00")  # 09:30 UTC
+    same = unit_completion("raw/", "delta", ACQ_RUN_B, [object_of("cms_hai_hospital", 0)], "2026-10-01T09:45:00Z")
+    text = description_after({BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 1})).encode(), shifted[0]: shifted[1], same[0]: same[1]})
+    require(f"acquisition run {ACQ_RUN_A}" in text, f"09:30 UTC is earlier than 09:45 UTC: {text}")
 
 
 def raw_files_write_is_idempotent_and_keeps_other_text() -> None:
@@ -1525,6 +1754,14 @@ CASES: list[Callable[[], None]] = [
     raw_files_are_written_onto_each_bronze_table,
     raw_files_write_is_idempotent_and_keeps_other_text,
     raw_files_list_is_capped,
+    raw_files_name_their_receipt_and_acquisition_run,
+    raw_files_without_a_completion_record_say_so,
+    acquisition_records_that_are_wrong_stop_the_write,
+    an_object_named_by_two_records_takes_the_earliest_capture,
+    sub_second_capture_times_are_compared_as_instants,
+    equal_capture_instants_choose_by_unit_then_payload,
+    a_completion_record_without_a_usable_time_stops_the_write,
+    a_bucket_root_completion_record_is_not_read,
     raw_files_writer_refuses_and_fails_visibly,
     chain_follows_the_recorded_pins,
     chain_names_the_bronze_run_of_silvers_claim,

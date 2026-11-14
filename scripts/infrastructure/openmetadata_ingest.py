@@ -60,6 +60,7 @@ SERVER_URL = re.compile(r"^http://(?:[0-9]{1,3}\.){3}[0-9]{1,3}:[0-9]{2,5}/api$"
 DBT_FILES = ("manifest.json", "catalog.json", "run_results.json")
 DBT_PREFIX = "metadata/dbt/"
 DBT_PATH_KEYS = {"catalog.json": "dbtCatalogFilePath", "run_results.json": "dbtRunResultsFilePath"}
+SQL_RELATION = re.compile(r'(?<![\w."])"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?')  # a three-part relation of compiled SQL
 DBT_LAYERS = ("silver", "gold", "features")  # one dbt workflow per layer run, in chain order
 DBT_RUN_PREFIX = "metadata/dbt/{layer}/{run}/"  # the write-once copy of each layer run (scripts/lakehouse/layer_run.py)
 DBT_RUN = re.compile(r"^(silver|gold|features)=([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8})$")
@@ -162,10 +163,20 @@ def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
             node["database"], node["schema"] = mapping["database"], schemas[fqn[1]]
             moved[key] = schemas[fqn[1]]
     sources: dict[str, str] = {}
+    relations: dict[tuple[str, str, str], str] = {}
     for key, node in (manifest.get("sources") or {}).items():
         if node.get("resource_type") == "source" and node.get("schema") in schemas:
+            table = str(node.get("identifier") or node["name"])
+            relations[(str(node.get("database", "")), str(node["schema"]), table)] = f'"{mapping["database"]}"."{schemas[node["schema"]]}"."{table}"'
             sources[key] = schemas[node["schema"]]
             node["database"], node["schema"] = mapping["database"], sources[key]
+    if relations:
+        # The compiled SQL of every node names a source as the build did (lakehouse.bronze.<table>, quoted or not). OpenMetadata's query lineage looks an
+        # explicit database and schema up before anything else, so the SQL names the mirror table the source was just placed at. A rewritten copy has none left.
+        for node in (manifest.get("nodes") or {}).values():
+            for field in ("compiled_code", "compiled_sql"):
+                if isinstance(node.get(field), str):
+                    node[field] = SQL_RELATION.sub(lambda match: relations.get((match.group(1), match.group(2), match.group(3)), match.group(0)), node[field])
     manifest_path.write_text(json.dumps(manifest))
     catalog_path = folder / "catalog.json"
     if catalog_path.is_file():

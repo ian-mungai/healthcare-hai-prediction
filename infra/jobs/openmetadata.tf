@@ -238,7 +238,7 @@ locals {
     },
     {
       name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = true, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
-      environment = [{ name = "RUN_ID", value = "" }, { name = "FEATURES_RUN", value = "" }]
+      environment = [{ name = "RUN_ID", value = "" }]
       secrets     = [{ name = "OM_INGESTION_TOKEN", valueFrom = local.om_token_arn }]
       entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "dbt"], local.om_persistent_ingest)
     },
@@ -281,7 +281,7 @@ locals {
       },
       {
         name        = "ingest_dbt", image = "ingestion", user = "10001:10001", essential = false, writable = false, after = [["ingest_polaris", "COMPLETE"]], workdir = "/workspace"
-        environment = [{ name = "RUN_ID", value = "" }, { name = "FEATURES_RUN", value = "" }]
+        environment = [{ name = "RUN_ID", value = "" }]
         secrets     = []
         entry       = concat(["python", "${local.om_python}/openmetadata_ingest.py", "dbt"], local.om_ingest)
       },

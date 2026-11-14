@@ -12,9 +12,10 @@ The rewrite moves each published model to that table, using the table sets the p
 compiled SQL (quoted or not), the ``catalog.json`` metadata and the ``run_results.json`` relation names. A manifest holds every enabled model of the project,
 selected or not, so a model with no published table (the model-set matrices, the cost-report domain check) stays exactly as dbt built it and is named by
 ``unpublished``; it is never a reason to refuse the file. A published model built anywhere but ``<build database>.main`` is refused by name. The places are the
-same names whether the mirror is switched on or not. The bronze sources keep the dbt catalog ``lakehouse`` and schema ``bronze``: this rewrite moves models
-only, and the ingestion places the sources in ``hai_mirror_bronze``. The ingestion (``openmetadata_ingest.place_models``) puts the models in the same places
-too, so a copy that this rewrite made is not moved again. The output is canonical JSON, so the same input gives the same bytes.
+same names whether the mirror is switched on or not. The source nodes stay as dbt wrote them, and the ingestion places them in ``hai_mirror_bronze``; the
+compiled SQL of every node that reads a declared source names its mirror table (``rewrite_source_sql``), so the query lineage of OpenMetadata, which looks
+an explicit database and schema up first, finds it. The ingestion (``openmetadata_ingest.place_models``) puts the models in the same places too, so a copy
+that this rewrite made is not moved again. The output is canonical JSON, so the same input gives the same bytes.
 """
 
 from __future__ import annotations
@@ -32,6 +33,7 @@ MIRROR_FILE = Path("config/lakehouse/athena_mirror.json")
 GLUE_FILE = Path("config/metadata/ingestion/glue.json")
 BUILD_DATABASES = ("staging", "features", "model_set")  # the databases of the DuckDB build files of the layer jobs, each with the schema main
 BUILD_SCHEMA = "main"
+ANY_RELATION = re.compile(r'(?<![\w."])"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?\s*\.\s*"?([A-Za-z0-9_]+)"?')
 BUILD_RELATION = re.compile(r'(?<![\w."])"?(staging|features|model_set)"?\s*\.\s*"?main"?\s*\.\s*"?([A-Za-z0-9_]+)"?')
 
 
@@ -88,6 +90,26 @@ def rewrite_sql(sql: str, tables: Mapping[str, str]) -> str:
     return BUILD_RELATION.sub(move, sql)
 
 
+def source_moves(manifest: Mapping[str, Any]) -> dict[tuple[str, str, str], str]:
+    """The relation of each declared source whose schema is a mirrored namespace (bronze) as the dbt build names it, with the mirror table it becomes."""
+    schemas = mirror_schemas()
+    moves: dict[tuple[str, str, str], str] = {}
+    for node in manifest.get("sources", {}).values():
+        if node.get("schema") in schemas and node.get("database"):
+            table = str(node.get("identifier") or node["name"])
+            moves[(str(node["database"]), str(node["schema"]), table)] = relation(str(node["schema"]), table)
+    return moves
+
+
+def rewrite_source_sql(sql: str, moves: Mapping[tuple[str, str, str], str]) -> str:
+    """Every relation of compiled SQL that names a declared source (``lakehouse.bronze.<table>``, quoted or not) as the mirror table of that source.
+    OpenMetadata's query lineage resolves an explicit database and schema before anything else, so SQL that kept the build's name would look for a
+    table that does not exist."""
+    if not moves:
+        return sql
+    return ANY_RELATION.sub(lambda match: moves.get((match.group(1), match.group(2), match.group(3)), match.group(0)), sql)
+
+
 def model_name(node: Mapping[str, Any]) -> str:
     return str(node.get("alias") or node["name"])
 
@@ -103,6 +125,7 @@ def rewrite_manifest(manifest: Mapping[str, Any], tables: Mapping[str, str]) -> 
     as built. The input is not changed."""
     result = copy.deepcopy(dict(manifest))
     nodes = result.get("nodes", {})
+    moves = source_moves(result)
     for key in sorted(nodes):
         node = nodes[key]
         if node.get("resource_type") == "model":
@@ -115,7 +138,7 @@ def rewrite_manifest(manifest: Mapping[str, Any], tables: Mapping[str, str]) -> 
             node["database"], node["schema"], node["relation_name"] = database(), mirror_schemas()[layer], relation(layer, name)
         for field in ("compiled_code", "compiled_sql"):
             if isinstance(node.get(field), str):
-                node[field] = rewrite_sql(node[field], tables)
+                node[field] = rewrite_source_sql(rewrite_sql(node[field], tables), moves)
     return result
 
 

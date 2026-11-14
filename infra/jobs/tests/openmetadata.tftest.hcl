@@ -209,11 +209,11 @@ run "containers_follow_the_job_catalog" {
       toset(keys(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers)) &&
       alltrue([for container in jsondecode(output.openmetadata_container_definitions) : (
         length([for variable in container.environment : variable.name if variable.value == ""]) == 0 ||
-        toset([for variable in container.environment : variable.name if variable.value == ""]) == toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers[container.name])
+        toset([for variable in container.environment : variable.name if variable.value == ""]) == setsubtract(toset(jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.containers[container.name]), ["FEATURES_RUN"])
       )]) &&
       contains([for container in jsondecode(output.openmetadata_container_definitions) : container.name], jsondecode(file("${path.module}/../../config/orchestration/ecs_broker_jobs.json")).jobs.metadata.log_container)
     )
-    error_message = "Every container with an empty variable is named in the job catalog with exactly those variables, so no container of the catalog task starts with an empty run ID."
+    error_message = "Every container with an empty variable is named in the job catalog with exactly those variables, except FEATURES_RUN: the host metadata task takes it and the Fargate catalog task, which the host-only port deletes, declares none (the job table and the openmetadata_run_task output name it)."
   }
 }
 

@@ -15,7 +15,8 @@
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/features/*/gold_pins.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/layer_runs/gold/*/silver_pins.json",
         "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/launch_records/*/silver/claim.json",
-        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_runs/*/check.json"
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/lakehouse/bronze_runs/*/check.json",
+        "arn:aws:s3:::${DATA_BUCKET_NAME}/raw/ingestion_units/*"
       ]
     },
     {
@@ -26,6 +27,17 @@
       "Condition": {
         "StringLike": {
           "s3:prefix": ["metadata/dbt/", "metadata/dbt/*"]
+        }
+      }
+    },
+    {
+      "Sid": "ListAcquisitionRecords",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}",
+      "Condition": {
+        "StringLike": {
+          "s3:prefix": ["raw/ingestion_units/", "raw/ingestion_units/*"]
         }
       }
     },

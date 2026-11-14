@@ -96,14 +96,72 @@ def every_layer_maps_every_model() -> None:
 
 
 def rewritten_sql_names_only_published_tables() -> None:
-    """After the rewrite every three-part relation in compiled SQL is a table of the Glue mirror or a bronze source, quoted or not."""
+    """After the rewrite every three-part relation in compiled SQL is a table of the Glue mirror, quoted or not: a bronze source too, since the mirror has a
+    bronze database."""
     for layer in LAYER_MODELS:
         rewritten = artifacts.rewrite_manifest(manifest(layer), TABLES)
         for key, node in rewritten["nodes"].items():
             for database, schema, table in RELATION.findall(node.get("compiled_code", "")):
                 published = (database, schema) == ("hai_lakehouse", MIRROR.get(TABLES.get(table, "")))
-                source = (database, schema) == ("lakehouse", "bronze")
+                source = (database, schema, table) == ("hai_lakehouse", "hai_mirror_bronze", "cms_hai_hospital")
                 require(published or source, f"{layer} {key}: compiled SQL names {database}.{schema}.{table}")
+
+
+def bronze_source_sql_follows_its_source() -> None:
+    """The compiled SQL of a silver model reads its bronze source as ``lakehouse.bronze.<table>``, quoted or not. OpenMetadata's query lineage resolves an
+    explicit database and schema first, so the SQL must name the mirror table the manifest places the source at, through the artifact rewrite, through the
+    ingestion placement alone (a copy that was never rewritten) and through both."""
+    import re
+    import tempfile
+
+    from scripts.infrastructure.openmetadata_ingest import MAPPING_KEY, place_models
+
+    macro = (
+        (ROOT_CONFIG.parents[3] / "dbt/macros/canonical_rows.sql").read_text().replace("{% macro canonical_rows(table) %}", "").replace("{% endmacro %}", "")
+    )
+    expanded = macro.replace("{{ source('bronze', table) }}", '"lakehouse"."bronze"."cms_hai_hospital"').replace("{{ table }}", "cms_hai_hospital")
+    expanded = expanded.replace("{{ ref('stg_bronze__files') }}", '"staging"."main"."stg_bronze__files"')
+    unquoted = "select a.x from lakehouse.bronze.cms_hai_state as a join lakehouse . bronze . cms_hai_state as b on true"
+    base = manifest("silver")
+    base["nodes"]["model.hai.stg_cms_hai_hospital"] = {
+        **model("stg_cms_hai_hospital", expanded, layer="silver"),
+        "depends_on": {"nodes": ["source.hai.bronze.cms_hai_hospital"]},
+    }
+    base["nodes"]["model.hai.stg_cms_hai_state"] = {
+        **model("stg_cms_hai_state", unquoted, layer="silver"),
+        "depends_on": {"nodes": ["source.hai.bronze.cms_hai_state"]},
+    }
+    base["sources"]["source.hai.bronze.cms_hai_state"] = {"resource_type": "source", "name": "cms_hai_state", "database": "lakehouse", "schema": "bronze"}
+    tables = {**TABLES, "stg_cms_hai_hospital": "silver", "stg_cms_hai_state": "silver", "stg_bronze__files": "silver"}
+    mapping = json.loads(ROOT_CONFIG.read_text())[MAPPING_KEY]
+    old = re.compile(r'"?lakehouse"?\s*\.\s*"?bronze"?\s*\.')
+
+    def after_placement(document: dict[str, Any]) -> dict[str, Any]:
+        with tempfile.TemporaryDirectory() as folder:
+            (Path(folder) / "manifest.json").write_text(json.dumps(document))
+            place_models(Path(folder), mapping)
+            return dict(json.loads((Path(folder) / "manifest.json").read_text()))
+
+    rewritten = artifacts.rewrite_manifest(base, tables)
+    for label, document in (("rewrite", rewritten), ("placement alone", after_placement(copy.deepcopy(base))), ("both", after_placement(rewritten))):
+        for name in ("stg_cms_hai_hospital", "stg_cms_hai_state"):
+            sql = document["nodes"][f"model.hai.{name}"]["compiled_code"]
+            require(not old.search(sql), f"{label}: {name} still reads the old bronze identity: {sql[:200]}")
+            require(
+                "hai_lakehouse" in sql and "hai_mirror_bronze" in sql and name.removeprefix("stg_") in sql,
+                f"{label}: {name} does not read the mirror table: {sql[:200]}",
+            )
+        if label != "placement alone":
+            require('"hai_lakehouse"."hai_mirror_silver"."stg_bronze__files"' in document["nodes"]["model.hai.stg_cms_hai_hospital"]["compiled_code"], label)
+    require(
+        rewritten["sources"]["source.hai.bronze.cms_hai_hospital"] == base["sources"]["source.hai.bronze.cms_hai_hospital"], "the rewrite moves models only"
+    )
+    undeclared = copy.deepcopy(base)
+    undeclared["nodes"]["model.hai.stg_cms_hai_hospital"]["compiled_code"] = 'select * from "lakehouse"."bronze"."not_declared"'
+    require(
+        '"lakehouse"."bronze"."not_declared"' in artifacts.rewrite_manifest(undeclared, tables)["nodes"]["model.hai.stg_cms_hai_hospital"]["compiled_code"],
+        "an undeclared relation stays",
+    )
 
 
 def unpublished_models_stay_as_built() -> None:
@@ -526,6 +584,7 @@ def ingestion_fails_on_an_unreadable_artifact() -> None:
 CASES: dict[str, Callable[[], None]] = {
     "every_layer_maps_every_model": every_layer_maps_every_model,
     "rewritten_sql_names_only_published_tables": rewritten_sql_names_only_published_tables,
+    "bronze_source_sql_follows_its_source": bronze_source_sql_follows_its_source,
     "unpublished_models_stay_as_built": unpublished_models_stay_as_built,
     "unexpected_build_place_is_refused": unexpected_build_place_is_refused,
     "full_project_manifest_is_copied": full_project_manifest_is_copied,
