@@ -225,7 +225,10 @@ def test_the_first_phase_of_every_job_checks_every_service_the_job_uses() -> Non
 
 
 def test_the_first_container_of_each_job_receives_every_service_address_it_checks() -> None:
-    """The broker fills the empty variables of a container by name, so a container whose check needs an address must list the variable."""
+    """The broker fills the empty variables of a container by name, so a container whose check needs an address must list the variable.
+
+    The metadata task's OM_API is set by its task definition (infra/jobs/host.tf), not filled, so it is not listed here.
+    """
     jobs = json.loads((ROOT / "config/orchestration/ecs_broker_jobs.json").read_text())["jobs"]
     variables = {"polaris": "POLARIS_URI", "redis": "POLARIS_URI", "mlflow": "MLFLOW_TRACKING_URI"}
     missing = []
@@ -233,6 +236,8 @@ def test_the_first_container_of_each_job_receives_every_service_address_it_check
         for phase, services in phases.items():
             containers = jobs.get(job, {}).get("containers", {})
             missing += [
-                f"{job} {phase} lacks {variables[service]}" for service in services if phase in containers and variables.get(service) not in containers[phase]
+                f"{job} {phase} lacks {variables[service]}"
+                for service in services
+                if service in variables and phase in containers and variables[service] not in containers[phase]
             ]
     check(not missing, f"containers whose startup check needs an address they are not given: {missing}")
