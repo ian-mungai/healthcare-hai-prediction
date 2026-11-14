@@ -1094,6 +1094,13 @@ def queue_kind_without_cores(base: Path) -> dict[str, Any]:
     return case("worker_without_cores_stops_the_run_before_any_worker", base, body, config=document, durations=durations)
 
 
+def hook_document() -> dict[str, Any]:
+    """The recorded config with a core budget that admits every hook item at once, so only the combining step's own wait on its shards holds it back."""
+    document = json.loads((ROOT / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    document["core_budget"] = 64
+    return document
+
+
 def run_hook_items(sandbox: Sandbox, fail_shard: bool) -> tuple[dict[str, Any], dict[str, tuple[float, float]]]:
     """The hook items of part all (the shards, the lock group, the combining step) with the real config; each stand-in item runs 1 s."""
     queue_settings(sandbox, seconds={f"hook_samples_{index}": 1.0 for index in range(1, 5)}, exit={"hook_samples_2": 3} if fail_shard else {})
@@ -1112,7 +1119,7 @@ def hook_combine_waits_for_its_shards(base: Path) -> dict[str, Any]:
             and all(spans["hook_samples_combine"][0] >= spans[name][1] for name in shards),
         }
 
-    return case("hook_samples_combine_runs_after_its_shards", base, body)
+    return case("hook_samples_combine_runs_after_its_shards", base, body, config=hook_document())
 
 
 def hook_combine_skipped_after_a_failed_shard(base: Path) -> dict[str, Any]:
@@ -1126,7 +1133,7 @@ def hook_combine_skipped_after_a_failed_shard(base: Path) -> dict[str, Any]:
             "other_items_still_ran": all(name in spans for name in ("hook_samples_1", "hook_samples_3", "hook_samples_4", "hook_lock", "hook_code")),
         }
 
-    return case("hook_samples_combine_does_not_run_after_a_failed_shard", base, body)
+    return case("hook_samples_combine_does_not_run_after_a_failed_shard", base, body, config=hook_document())
 
 
 def queue_that_waits_for_itself(base: Path) -> dict[str, Any]:
