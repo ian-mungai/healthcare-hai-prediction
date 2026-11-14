@@ -91,3 +91,11 @@ def test_no_iam_role_or_binding_remains_for_the_retired_read_jobs() -> None:
     check(not found, f"these files still name a retired read job role: {found}")
     roles = (ROOT / "infra/iam/job_roles.tf").read_text()
     check('for name in ["execution", "try_writer"]' in roles, "the job roles are not just the execution and try writer roles")
+
+
+def test_the_fargate_identity_probe_and_its_tooling_are_gone() -> None:
+    check(not (ROOT / "infra/jobs/identity_probe").exists(), "the identity probe root is still present")
+    wrapper = (ROOT / "scripts/infrastructure/terraform.sh").read_text() + (ROOT / "scripts/infrastructure/render_jobs_config.py").read_text()
+    check("identity" + "-probe" not in wrapper, "the wrapper or the jobs renderer still takes the probe option")
+    schema = (ROOT / "data_contracts/infrastructure/jobs_preparation.schema.json").read_text()
+    check("identity" + "_probe" not in schema, "the jobs preparation contract still names the probe root")

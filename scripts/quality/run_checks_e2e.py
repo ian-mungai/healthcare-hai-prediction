@@ -3471,7 +3471,6 @@ def scratch_repo(root: Path, case: Case) -> Path:
     ).stdout.splitlines()
     if case.hook == "env-example":
         listed += [
-            "infra/jobs/identity_probe/probe.py",
             "orchestration/airflow_steps.py",
             "tests/startup_check_child_faults.py",
             "tests/startup_check_faults.py",

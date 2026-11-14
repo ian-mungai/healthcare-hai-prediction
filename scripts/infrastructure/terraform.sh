@@ -8,7 +8,6 @@ stack=storage
 admin_profile=""
 preparation_inputs=""
 preparation_sha256=""
-identity_probe=false
 mlflow_retention=false
 athena_retention=false
 keep_launch_hold=false
@@ -53,11 +52,6 @@ while [[ $# -gt 0 ]]; do
       jobs_sha256="$2"
       shift 2
       ;;
-    --identity-probe)
-      [[ "$identity_probe" == false ]] || { printf 'Select the identity probe once.\n' >&2; exit 2; }
-      identity_probe=true
-      shift
-      ;;
     --preparation-inputs)
       [[ -z "$preparation_inputs" && $# -ge 2 && "$2" != -* ]] || { printf 'Supply one preparation input path.\n' >&2; exit 2; }
       preparation_inputs="$2"
@@ -72,9 +66,6 @@ while [[ $# -gt 0 ]]; do
     *) break ;;
   esac
 done
-if [[ "$identity_probe" == true ]]; then
-  [[ "$stack" == jobs ]] || { printf 'The identity probe is allowed only with --jobs.\n' >&2; exit 2; }
-fi
 if [[ "$mlflow_retention" == true ]]; then
   [[ "$stack" == storage ]] || { printf 'The MLflow retention rule belongs to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
@@ -171,10 +162,6 @@ if [[ "$stack" == jobs ]]; then
   directory="$directory/jobs"
   renderer=scripts.infrastructure.render_jobs_config
   render_args=()
-  if [[ "$identity_probe" == true ]]; then
-    directory="$directory/identity_probe"
-    render_args+=(--identity-probe)
-  fi
   if [[ -n "$preparation_inputs" ]]; then
     render_args+=(--preparation-inputs "$preparation_inputs" --preparation-sha256 "$preparation_sha256")
   fi

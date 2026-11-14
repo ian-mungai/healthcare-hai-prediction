@@ -15,8 +15,7 @@
     },
     "root": {
       "enum": [
-        "jobs",
-        "identity_probe"
+        "jobs"
       ]
     },
     "variables": {
@@ -31,16 +30,6 @@
         },
         "variables": {
           "$ref": "#/$defs/read"
-        }
-      }
-    },
-    {
-      "properties": {
-        "root": {
-          "const": "identity_probe"
-        },
-        "variables": {
-          "$ref": "#/$defs/probe"
         }
       }
     }
@@ -722,95 +711,6 @@
           "properties": {
             "HAI_READ_RAW_ROOT": {
               "const": "true"
-            }
-          }
-        }
-      }
-    },
-    "probe": {
-      "type": "object",
-      "additionalProperties": false,
-      "properties": {
-        "probe_enabled": {
-          "type": "boolean"
-        },
-        "seed_image": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^[0-9]{12}\\.dkr\\.ecr\\.[a-z0-9-]+\\.amazonaws\\.com/[a-z0-9_]+@sha256:[a-f0-9]{64}$"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "execution_role_arn": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "task_role_arn": {
-          "anyOf": [
-            {
-              "type": "string",
-              "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+$"
-            },
-            {
-              "type": "null"
-            }
-          ]
-        },
-        "task_role_unique_id": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^AROA[A-Z0-9]{17}$"
-        },
-        "log_group_name": {
-          "type": [
-            "string",
-            "null"
-          ],
-          "pattern": "^[a-z][a-z0-9_]+_jobs_(dev|prod)$"
-        },
-        "foundation_network": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "additionalProperties": false,
-          "required": [
-            "subnet_ids",
-            "security_group_ids"
-          ],
-          "properties": {
-            "subnet_ids": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 16,
-              "uniqueItems": true,
-              "items": {
-                "type": "string",
-                "pattern": "^subnet-([a-f0-9]{8}|[a-f0-9]{17})$"
-              }
-            },
-            "security_group_ids": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 5,
-              "uniqueItems": true,
-              "items": {
-                "type": "string",
-                "pattern": "^sg-([a-f0-9]{8}|[a-f0-9]{17})$"
-              }
             }
           }
         }

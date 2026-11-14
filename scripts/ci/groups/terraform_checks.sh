@@ -25,7 +25,7 @@ terraform_checks() {
   export AWS_EC2_METADATA_DISABLED=true TF_IN_AUTOMATION=1 TF_INPUT=0
   touch "$AWS_CONFIG_FILE" "$AWS_SHARED_CREDENTIALS_FILE"
   # The stacks run one after the other: Terraform's provider cache is not safe for concurrent init.
-  for stack in storage iam platform alerts services modules/bronze_writer_job jobs jobs/identity_probe; do
+  for stack in storage iam platform alerts services modules/bronze_writer_job jobs; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"
@@ -73,7 +73,7 @@ terraform_checks() {
   # missing server fails the case.
   timed "terraform_checks: redis acl cases" bash .github/scripts/redis_acl_cases.sh
   static_failed=0
-  for stack in storage iam platform alerts services modules/bronze_writer_job jobs jobs/identity_probe; do
+  for stack in storage iam platform alerts services modules/bronze_writer_job jobs; do
     source_dir="$repo_root/infra"
     if [[ "$stack" != "storage" ]]; then
       source_dir="$repo_root/infra/$stack"

@@ -39,9 +39,7 @@ def _preparation(root: str = "jobs") -> dict[str, Any]:
     return {
         "schema_version": 1,
         "root": root,
-        "variables": {"jobs_enabled": True, "enabled_definitions": ["analytics_read"], "cloud_limits": {"max_tasks": 3, "max_vcpu": 16, "max_memory_gib": 120}}
-        if root == "jobs"
-        else {"probe_enabled": False},
+        "variables": {"jobs_enabled": True, "enabled_definitions": ["analytics_read"], "cloud_limits": {"max_tasks": 3, "max_vcpu": 16, "max_memory_gib": 120}},
     }
 
 
@@ -216,7 +214,7 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         ("changed_reviewed_bytes", document, "0" * 64, "preparation SHA-256"),
         ("base_identity_override", document | {"variables": document["variables"] | {"aws_profile": "example_admin"}}, None, "preparation contract"),
         ("unknown_preparation_input", document | {"variables": document["variables"] | {"unreviewed_secret": "synthetic"}}, None, "preparation contract"),
-        ("wrong_preparation_root", document | {"root": "identity_probe"}, None, "preparation contract"),
+        ("wrong_preparation_root", document | {"root": "services"}, None, "preparation contract"),
     ):
         result = invoke(altered, digest=digest)
         checks[name] = result.returncode == 2 and cause in result.stderr and output.read_bytes() == original
@@ -238,12 +236,6 @@ def _renderer_cases(folder: Path) -> dict[str, bool]:
         timeout=15,
     )
     checks["duplicate_preparation_field"] = result.returncode == 2 and "duplicate JSON field" in result.stderr and output.read_bytes() == original
-    checks["probe_inputs_are_separate"] = invoke(_preparation("identity_probe"), "--identity-probe").returncode == 0
-    probe_output = workspace / "infra/jobs/identity_probe/deployment.auto.tfvars.json"
-    checks["probe_omits_application_inputs"] = probe_output.exists() and json.loads(probe_output.read_text()) == {
-        key: value for key, value in values.items() if key != "data_bucket_name"
-    } | {"probe_enabled": False}
-
     binary = workspace / "bin"
     binary.mkdir()
     executable = binary / "terraform"
@@ -499,64 +491,6 @@ def _wrapper_cases(folder: Path) -> dict[str, bool]:
                 ],
             ),
         ),
-        (
-            "probe",
-            "plan",
-            "jobs/identity_probe",
-            _wrapper_result(
-                workspace,
-                env,
-                [
-                    "scripts/infrastructure/terraform.sh",
-                    "--jobs",
-                    "--identity-probe",
-                    "--preparation-inputs",
-                    "reviewed_inputs.json",
-                    "--preparation-sha256",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "plan",
-                ],
-            ),
-        ),
-        (
-            "probe",
-            "apply",
-            "jobs/identity_probe",
-            _wrapper_result(
-                workspace,
-                env,
-                [
-                    "scripts/infrastructure/terraform.sh",
-                    "--jobs",
-                    "--identity-probe",
-                    "--preparation-inputs",
-                    "reviewed_inputs.json",
-                    "--preparation-sha256",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "apply",
-                    "reviewed.tfplan",
-                ],
-            ),
-        ),
-        (
-            "probe",
-            "validate",
-            "jobs/identity_probe",
-            _wrapper_result(
-                workspace,
-                env,
-                [
-                    "scripts/infrastructure/terraform.sh",
-                    "--jobs",
-                    "--identity-probe",
-                    "--preparation-inputs",
-                    "reviewed_inputs.json",
-                    "--preparation-sha256",
-                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "validate",
-                ],
-            ),
-        ),
     )
     (folder / "wrapper_observed.json").write_text(
         json.dumps(
@@ -569,8 +503,6 @@ def _wrapper_cases(folder: Path) -> dict[str, bool]:
     )
     for name, action, directory, (result, calls) in cases:
         renderer_args = ["-m", "scripts.infrastructure.render_jobs_config"]
-        if name == "probe":
-            renderer_args += ["--identity-probe"]
         renderer_args += reviewed
         if action == "apply":
             renderer_args += ["--check-plan", f"{workspace}/infra/{directory}/reviewed.tfplan"]
@@ -623,7 +555,6 @@ def _wrapper_cases(folder: Path) -> dict[str, bool]:
                 ],
             ),
         ),
-        ("probe_is_jobs_only", "only with --jobs", _wrapper_result(workspace, env | {}, ["scripts/infrastructure/terraform.sh", "--identity-probe", "plan"])),
         (
             "direct_variables_stay_refused",
             "Set project inputs only",

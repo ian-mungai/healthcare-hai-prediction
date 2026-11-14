@@ -64,7 +64,7 @@ class Sample:
 
 SAMPLES = (
     *(
-        Sample(f"ruff_{folder}", "ruff", f"{folder}/lint probe.py", "value: int = missing_name\n", "value: int = 1\n", "F821")
+        Sample(f"ruff_{folder}", "ruff", f"{folder}/lint sample.py", "value: int = missing_name\n", "value: int = 1\n", "F821")
         for folder in ("dags", "orchestration", "services", "new_folder")
     ),
     Sample("ruff_hidden", "ruff", "services/.probe.py", "value: int = missing_name\n", "value: int = 1\n", "F821"),

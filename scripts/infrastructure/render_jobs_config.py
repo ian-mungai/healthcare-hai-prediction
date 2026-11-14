@@ -96,21 +96,17 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--env-file", type=Path, default=REPO_ROOT / ".env")
     parser.add_argument("--check", action="store_true")
-    parser.add_argument("--identity-probe", action="store_true")
     parser.add_argument("--preparation-inputs", type=Path)
     parser.add_argument("--preparation-sha256")
     parser.add_argument("--check-plan", type=Path)
     parser.add_argument("--verify-identity", action="store_true")
     arguments = parser.parse_args()
     try:
-        root = "identity_probe" if arguments.identity_probe else "jobs"
+        root = "jobs"
         prepared = preparation_values(arguments.preparation_inputs, arguments.preparation_sha256, root)
         storage, _ = load_configuration(arguments.env_file)
         values: dict[str, Any] = jobs_values(storage)
         directory = JOBS_DIRECTORY
-        if arguments.identity_probe:
-            values.pop("data_bucket_name")
-            directory /= "identity_probe"
         values.update(prepared)
         if root == "jobs" and (values.get("host_jobs_enabled") is True or values.get("publisher_job_enabled") is True):
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
