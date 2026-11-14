@@ -162,6 +162,9 @@ services:
       AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: sqlite:////tmp/airflow/airflow.db
       AIRFLOW__CORE__DAGS_FOLDER: /opt/hai/repo/dags
       AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      # Airflow reads the creation default once, when the check imports it, so the DAGs of the run are unpaused here and not in the rig (the training DAG's trigger
+      # of research_dag fails with a paused target).
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "false"
       AIRFLOW__OPENLINEAGE__DISABLED: "true"
     volumes:
       - ${HAI_ORCH_REPO}/dags:/opt/hai/dags:ro

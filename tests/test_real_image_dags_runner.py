@@ -17,6 +17,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+import yaml
 
 from scripts.orchestration import offline_checks, real_image_dags
 from scripts.orchestration import run_real_image_dags_e2e as runner
@@ -387,6 +388,13 @@ def test_the_rig_leaves_its_dags_unpaused_so_the_mapped_research_trigger_finds_r
     monkeypatch.setattr(os, "environ", dict(os.environ))
     real_image_dags.configure_airflow(str(tmp_path))
     check(os.environ["AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION"] == "false", "the rig creates DAGs paused, so the fail_when_dag_is_paused trigger fails")
+
+
+def test_the_airflow_check_service_sets_the_creation_default_the_check_needs_before_it_imports_airflow() -> None:
+    # in_image_checks imports Airflow before the rig runs, and Airflow reads the default once at import, so the rig's own setting comes too late in the image.
+    compose = yaml.safe_load((SOURCE_ROOT / "services/orchestration/docker-compose.orchestration.yaml").read_text())
+    environment = compose["services"]["airflow-check"]["environment"]
+    check(environment.get("AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION") == "false", f"the check image creates DAGs paused: {environment}")
 
 
 def test_the_rig_names_none_of_the_retired_inputs() -> None:
