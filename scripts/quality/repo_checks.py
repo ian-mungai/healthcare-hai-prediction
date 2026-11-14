@@ -562,6 +562,11 @@ def env_example() -> list[Finding]:
     return findings
 
 
+def is_workflow_file(path: str) -> bool:
+    """Return whether ``path`` is a workflow or composite action file: its input names belong to the action or workflow that takes them."""
+    return Path(path).name in ("action.yml", "action.yaml") or bool(re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", path))
+
+
 def input_line_numbers(path: str, text: str) -> set[int]:
     """Return the numbers (from 1) of the lines of a workflow or composite action file that only name inputs.
 
@@ -572,7 +577,7 @@ def input_line_numbers(path: str, text: str) -> set[int]:
     (``env: *params``), and a line that holds any other key, never count. A file that is not valid YAML counts nothing.
     """
     action = Path(path).name in ("action.yml", "action.yaml")
-    if not action and not re.fullmatch(r"\.github/workflows/[^/]+\.ya?ml", path):
+    if not is_workflow_file(path):
         return set()
     yaml = importlib.import_module("yaml")
     inputs = ("inputs",) if action else ("on", "workflow_call", "inputs")
@@ -1109,30 +1114,83 @@ def hcl_code(lines: list[str]) -> list[str]:
     return code
 
 
-def terraform_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
-    """Return the ``names`` that the Terraform files define as their own: an argument or attribute, a nested block and the labels of a declared block.
+STRUCTURED_SUFFIXES = {".json", ".yaml", ".yml", ".toml"}
+PATH_WORD = re.compile(r"[\w.-]*/[\w./-]*|[\w-]+\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b")
+LITERAL_TOKENS = {tokenize.STRING, tokenize.FSTRING_MIDDLE}
 
-    Comments and heredoc bodies declare nothing (see ``hcl_code``). Only a file that contains a name is read.
+
+def python_literals(lines: list[str], rewrite: Callable[[str], str], comments: bool = False) -> list[str]:
+    """Return the Python lines with the text of each string literal (and each comment, with ``comments``) replaced by ``rewrite`` of it.
+
+    ``rewrite`` returns text of the same length. Tokens read before a tokenizer error count, so a file that does not parse is still read as far as it goes.
     """
-    found: set[str] = set()
-    for path, lines in files.items():
-        if Path(path).suffix not in TERRAFORM_SUFFIXES or not any(name in "\n".join(lines) for name in names - found):
-            continue
-        code = hcl_code(lines)
-        for line in code:
-            block = TF_NESTED_BLOCK.match(line)
-            if key := config_key(line) or (block.group(1) if block else None):
-                found.add(key)
-        found |= {label for match in TF_BLOCK.findall("\n".join(code)) for label in match[1:] if label}
-    return found & names
+    rows = [list(line) for line in lines]
+    kinds = LITERAL_TOKENS | ({tokenize.COMMENT} if comments else set())
+    try:
+        for token in tokenize.generate_tokens(io.StringIO("\n".join(lines) + "\n").readline):
+            if token.type not in kinds:
+                continue
+            (first, start), (last, end) = token.start, token.end
+            for row in range(first, last + 1):
+                begin, stop = start if row == first else 0, end if row == last else len(rows[row - 1])
+                rows[row - 1][begin:stop] = list(rewrite("".join(rows[row - 1][begin:stop])))
+    except (tokenize.TokenError, SyntaxError):
+        pass
+    return ["".join(row) for row in rows]
 
 
-def structured_keys(path: str, text: str) -> set[str] | None:
-    """Return every key of a JSON, YAML or TOML document at any depth, whatever its indentation or line breaks.
+def blanked(text: str) -> str:
+    return re.sub(r"[^\n]", " ", text)
 
-    None means another format or text that does not parse.
 
-    A YAML block scalar or a JSON string that holds a key-like text declares no key.
+def without_paths(text: str) -> str:
+    return PATH_WORD.sub(lambda match: " " * len(match.group()), text)
+
+
+def python_declarations(lines: list[str]) -> set[str]:
+    """Return the names Python code declares: a function, class, parameter, assignment or annotated target, or attribute store.
+
+    Reading a name (an attribute access, a string key, a call keyword or an import) declares nothing. A file that does not parse is read by line for
+    definitions and assignments, with its strings and comments blanked.
+    """
+    try:
+        tree = ast.parse("\n".join(lines))
+    except SyntaxError:
+        view = "\n".join(python_literals(lines, blanked, comments=True))
+        return set(PY_DEFINITION.findall(view)) | set(PY_ASSIGNED.findall(view))
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            names.add(node.name)
+        elif isinstance(node, ast.arg):
+            names.add(node.arg)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            names.add(node.id)
+        elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+            names.add(node.attr)
+    return names
+
+
+def hcl_declarations(lines: list[str]) -> set[str]:
+    """Return the names Terraform code declares: an argument or attribute, a nested block and the labels of a declared block.
+
+    Comments and heredocs declare none.
+    """
+    code = hcl_code(lines)
+    names = {key for line in code if (key := config_key(line))}
+    names |= {block.group(1) for line in code if (block := TF_NESTED_BLOCK.match(line))}
+    return names | {label for match in TF_BLOCK.findall("\n".join(code)) for label in match[1:] if label}
+
+
+def hcl_blocks(lines: list[str]) -> set[tuple[str, str, str]]:
+    """Return the (kind, name, second name) of each block Terraform code declares, not counting a comment or a heredoc."""
+    return set(TF_BLOCK.findall("\n".join(hcl_code(lines))))
+
+
+def structured_declarations(path: str, text: str) -> tuple[set[str], set[str]] | None:
+    """Return the keys and the ``$id`` values of a JSON, YAML or TOML document at any depth, decoded, whatever its indentation or line breaks.
+
+    None means text that does not parse. A YAML block scalar or a JSON string that holds a key-like text declares no key.
     """
     suffix = Path(path).suffix
     yaml = importlib.import_module("yaml")
@@ -1141,82 +1199,61 @@ def structured_keys(path: str, text: str) -> set[str] | None:
             documents = [json.loads(text)]
         elif suffix in (".yaml", ".yml"):
             documents = list(yaml.safe_load_all(text))
-        elif suffix == ".toml":
-            documents = [tomllib.loads(text)]
         else:
-            return None
+            documents = [tomllib.loads(text)]
     except (ValueError, yaml.YAMLError):
         return None
     keys: set[str] = set()
+    ids: set[str] = set()
     pending = list(documents)
     while pending:
         node = pending.pop()
         if isinstance(node, dict):
             keys |= {str(key) for key in node}
-            pending.extend(node.values())
-        elif isinstance(node, list):
-            pending.extend(node)
-    return keys
-
-
-def declared_config_keys(files: dict[str, list[str]], names: set[str]) -> set[str]:
-    """Return the ``names`` that a remaining config file defines as a key: read from the parsed document, or by line when it does not parse or is INI."""
-    found: set[str] = set()
-    for path, lines in files.items():
-        text = "\n".join(lines)
-        if Path(path).suffix not in CONFIG_SUFFIXES or not any(name in text for name in names - found):
-            continue
-        keys = structured_keys(path, text)
-        found |= (keys if keys is not None else {key for line in lines if (key := config_key(line))}) & names
-    return found
-
-
-def declared_python_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
-    """Return the ``names`` that remaining Python code declares as its own: a function, class, parameter, assignment or annotated target, or attribute store.
-
-    Reading a name (an attribute access, a string key, a call keyword or an import) declares nothing. A file that does not parse is read by line for
-    definitions and assignments, with its docstrings, comments and strings blanked. Only a file that contains a name is parsed.
-    """
-    found: set[str] = set()
-    for path, lines in files.items():
-        source = "\n".join(lines)
-        pending = names - found
-        if not path.endswith(".py") or not any(name in source for name in pending):
-            continue
-        try:
-            tree = ast.parse(source, filename=path)
-        except SyntaxError:
-            view = "\n".join(python_code(lines))
-            found |= set(PY_DEFINITION.findall(view)) | set(PY_ASSIGNED.findall(view))
-            continue
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
-                found.add(node.name)
-            elif isinstance(node, ast.arg):
-                found.add(node.arg)
-            elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
-                found.add(node.id)
-            elif isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
-                found.add(node.attr)
-    return found & names
-
-
-def json_ids(text: str) -> set[str]:
-    """Return every decoded ``$id`` string of a JSON schema at any depth; text that does not parse is read by pattern with its escapes decoded."""
-    try:
-        document = json.loads(text)
-    except ValueError:
-        return {decoded_json_string(raw) for raw in SCHEMA_ID.findall(text)}
-    ids: set[str] = set()
-    pending = [document]
-    while pending:
-        node = pending.pop()
-        if isinstance(node, dict):
             ids |= {value for key, value in node.items() if key == "$id" and isinstance(value, str)}
             pending.extend(node.values())
         elif isinstance(node, list):
             pending.extend(node)
-    return ids
+    return keys, ids
+
+
+def declared_names(path: str, lines: list[str]) -> set[str]:
+    """Return every name the file declares as its own, read by the syntax of its kind.
+
+    The one model of this check: a name is *removed* when a changed or deleted file declared it before and no version of that file after the change
+    does. It is *live* when any remaining tracked file declares it as its own (this function). Every other mention in a file that describes current
+    behavior is a *reference* to the removed thing. A declaration is a key or ``$id`` of a parsed JSON, YAML or TOML document
+    (``structured_declarations``), an argument, nested block or block label of Terraform code without its comments and heredocs (``hcl_declarations``),
+    or a function, class, parameter, assignment or field of Python code without its strings and comments (``python_declarations``). A document that
+    does not parse is read by line. A written value (a dict literal key, a call keyword, a string) and a quoted example declare nothing, and a path or
+    a file name that holds the word is no reference to a key (``without_paths``).
+    """
+    suffix = Path(path).suffix
+    if suffix in STRUCTURED_SUFFIXES:
+        parsed = structured_declarations(path, "\n".join(lines))
+        if parsed is not None:
+            return parsed[0] | parsed[1]
+        ids = {decoded_json_string(raw) for raw in SCHEMA_ID.findall("\n".join(lines))} if suffix == ".json" else set()
+        return {key for line in lines if (key := config_key(line))} | ids
+    if suffix in TERRAFORM_SUFFIXES:
+        return hcl_declarations(lines)
+    if suffix == ".py":
+        return python_declarations(lines)
+    return {key for line in lines if (key := config_key(line))} if suffix in CONFIG_SUFFIXES else set()
+
+
+def live_names(files: dict[str, list[str]], names: set[str]) -> set[str]:
+    """Return the ``names`` that some remaining file declares as its own (``declared_names``).
+
+    Only a file that holds a name is read. A structured file that holds a backslash is read too: an escape can spell a name that its text does not hold.
+    """
+    live: set[str] = set()
+    for path, lines in files.items():
+        text = "\n".join(lines)
+        if not any(name in text for name in names - live) and not ("\\" in text and Path(path).suffix in STRUCTURED_SUFFIXES):
+            continue
+        live |= declared_names(path, lines) & names
+    return live
 
 
 def decoded_json_string(raw: str) -> str:
@@ -1228,18 +1265,44 @@ def decoded_json_string(raw: str) -> str:
     return decoded if isinstance(decoded, str) else raw
 
 
-def schema_ids_removed(removed: dict[str, list[str]], files: dict[str, list[str]]) -> set[str]:
-    """Return the ``$id`` values the change took away: each id a changed or deleted JSON file held before and no remaining version of it holds."""
+def changed_paths() -> list[str]:
+    """Return the paths the staged diff or, in CI, the pushed range modified or deleted, also when it only added lines to them."""
+    refs = [os.environ["PRE_COMMIT_FROM_REF"], os.environ["PRE_COMMIT_TO_REF"]] if "PRE_COMMIT_FROM_REF" in os.environ else ["--cached"]
+    return git("diff", *refs, "--name-only", "--diff-filter=MD").splitlines()
+
+
+def before_texts(paths: list[str]) -> dict[str, list[str]]:
+    """Return the lines before the change of each changed or deleted file whose syntax this check reads (structured and Terraform files)."""
     old_ref = os.environ.get("PRE_COMMIT_FROM_REF", "HEAD")
-    gone: set[str] = set()
-    for path in removed:
-        if Path(path).suffix != ".json":
+    before: dict[str, list[str]] = {}
+    for path in paths:
+        if Path(path).suffix in STRUCTURED_SUFFIXES | {".tf"}:
+            data = git_blob(f"{old_ref}:{path}")
+            if (codec := text_codec(data)) is not None:
+                before[path] = data.decode(codec).splitlines()
+    return before
+
+
+def removed_declarations(before: dict[str, list[str]], files: dict[str, list[str]], deleted: list[str]) -> tuple[set[str], set[str], set[str]]:
+    """Return the keys, the ``$id`` values and the paths read, for what the change took away: declared in a file before, not by the same file after.
+
+    The keys of a deleted file are left out: they are often data fields that code still writes. A workflow or action file is not read here, because the
+    names of its inputs belong to the action that takes them (``input_line_numbers``). Nor is a file whose old or new text does not parse.
+    """
+    keys: set[str] = set()
+    ids: set[str] = set()
+    read: set[str] = set()
+    for path, lines in before.items():
+        if Path(path).suffix not in STRUCTURED_SUFFIXES or is_workflow_file(path):
             continue
-        before = git_blob(f"{old_ref}:{path}")
-        codec = text_codec(before)
-        if codec is not None:
-            gone |= json_ids(before.decode(codec)) - (json_ids("\n".join(files[path])) if path in files else set())
-    return gone
+        old = structured_declarations(path, "\n".join(lines))
+        now = structured_declarations(path, "\n".join(files[path])) if path in files else (set(), set())
+        if old is None or now is None:
+            continue
+        read.add(path)
+        ids |= old[1] - now[1]
+        keys |= old[0] - now[0] if path not in deleted else set()
+    return keys, ids, read
 
 
 def decoded_json_line(line: str) -> str:
@@ -1258,16 +1321,15 @@ def file_name_pattern(name: str) -> re.Pattern[str]:
 
 
 def removed_definitions(
-    removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]], schema_ids: set[str]
+    removed: dict[str, list[str]], deleted: list[str], files: dict[str, list[str]], before: dict[str, list[str]]
 ) -> dict[str, dict[str, re.Pattern[str]]]:
     """Find the names the change removed, by kind, each with the pattern that marks a remaining reference.
 
-    A name counts as removed only when no remaining tracked file defines or uses it as its own: another config key or schema property, a Terraform
-    argument or block, or a Python function, class, parameter, assignment or field (see ``terraform_names`` and ``declared_python_names``). The top-level
-    names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local variable, a YAML column) is no
-    leftover. The module is checked by ``deleted_module_findings``. A deleted schema is checked by its file name, and every ``$id`` that a deleted or
-    edited JSON file no longer holds (``schema_ids``, decoded) is a name too, not the property names. A name removed from a file that stays is a plain
-    word unless a remaining file uses it as its own.
+    The model is ``declared_names``: a name counts as removed only when a changed or deleted file declared it before and no remaining tracked file declares
+    it as its own, whatever the format (another config key or schema property, a Terraform argument or block, a Python function, class, parameter,
+    assignment or field). The top-level names of a deleted Python module are not searched as plain words: a word it shared with unrelated code (a local
+    variable, a YAML column) is no leftover. The module is checked by ``deleted_module_findings``. A deleted schema is checked by its file name, and every
+    ``$id`` that a deleted or changed JSON file no longer declares is a name too, not the property names.
     """
 
     def gone(found: set[str], still: set[str]) -> set[str]:
@@ -1285,32 +1347,33 @@ def removed_definitions(
         if path.endswith(".sql") and re.search(r"(^|/)(models|snapshots)/", path):
             stem = re.escape(Path(path).stem)
             kinds["dbt"][Path(path).stem] = re.compile(rf"""ref\(\s*["']{stem}["']\s*\)|name:\s*{stem}\b|(?<![\w.]){stem}(?![\w.])""")
-    kinds["script"] |= {schema_id: file_name_pattern(schema_id) for schema_id in schema_ids}
     code_now, code_removed = joined(files, {".py"}), joined(removed, {".py"})
     for flag in gone(set(FLAG.findall(code_removed)), set(FLAG.findall(code_now))):
         kinds["flag"][flag] = re.compile(re.escape(flag) + r"(?![\w-])")
     env_now = set(ENV_READ.findall(code_now)) | {a or b for a, b in ENV_USE.findall(joined(files, {".sh", ".yml", ".yaml", ".json", ".tf", ".tpl", ".j2", ""}))}
     for name in gone(set(ENV_READ.findall(code_removed)), env_now):
         kinds["env"][name] = re.compile(rf"\b{name}\b")
-    python_now = set(PY_DEFINITION.findall(code_now)) | set(PY_ASSIGNED.findall(code_now))
     edited = {path: lines for path, lines in removed.items() if path not in deleted}
-    python_left = gone(set(PY_TOP_LEVEL.findall(joined(edited, {".py"}))), python_now)
-    for name in gone(python_left, declared_python_names(files, python_left)):
+    python_left = gone(set(PY_TOP_LEVEL.findall(joined(edited, {".py"}))), set())
+    removed_keys, removed_ids, parsed = removed_declarations(before, files, deleted)
+    # A changed file that does not parse on both sides is read by its removed lines.
+    unparsed = {path: lines for path, lines in edited.items() if path not in parsed}
+    config_removed = {key for key in removed_keys if re.search(r"[_-]|[a-z][A-Z]", key)}
+    config_removed |= {key for line in joined(unparsed, CONFIG_SUFFIXES).splitlines() if (key := config_key(line)) and re.search(r"[_-]|[a-z][A-Z]", key)}
+    config_left = gone(config_removed, set())
+    live = live_names(files, python_left | config_left | removed_ids)
+    kinds["script"] |= {schema_id: file_name_pattern(schema_id) for schema_id in removed_ids - live}
+    for name in python_left - live:
         kinds["python"][name] = re.compile(rf"(?<![\w./-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b)")
     removed_tasks = set(TASK_ID.findall(code_removed)) - set(TASK_ID.findall(code_now))
     # The same word still bound in module scope (function, class, import alias or assignment) is a live name of its own, not a task reference.
     for name in gone(removed_tasks, bound_names(files) if removed_tasks else set()):
         kinds["airflow"][name] = re.compile(rf"""["']{re.escape(name)}["']|^{re.escape(name)}$""")
-    # Keys of a deleted or untracked config file are often data fields the code still writes; only edited files count.
-    # Single-word keys (run, env, path) are schema vocabulary, not project settings.
-    config_removed = {key for line in joined(edited, CONFIG_SUFFIXES).splitlines() if (key := config_key(line)) and re.search(r"[_-]|[a-z][A-Z]", key)}
-    config_left = gone(config_removed, set())
-    live = declared_config_keys(files, config_left) | terraform_names(files, config_left) | declared_python_names(files, config_left)
     for name in config_left - live:
-        # The word inside a file name or a path (catalog.json, lakehouse/catalog) names a file, not the key. An attribute read before a method
-        # (response.name.json()) is no file name.
-        kinds["config"][name] = re.compile(rf"(?<![\w/-]){re.escape(name)}(?![\w/-]|\.(?:md|py|txt|json|ya?ml|toml|sh|sql|tf)\b(?!\())")
-    for kind, first, second in set(TF_BLOCK.findall(joined(removed, {".tf"}))) - set(TF_BLOCK.findall(joined(files, {".tf"}))):
+        kinds["config"][name] = re.compile(rf"(?<![\w-]){re.escape(name)}(?![\w-])")
+    old_blocks = {block for path, lines in before.items() if path.endswith(".tf") for block in hcl_blocks(lines)}
+    new_blocks = {block for path, lines in files.items() if path.endswith(".tf") for block in hcl_blocks(lines)}
+    for kind, first, second in old_blocks - new_blocks:
         one, two = re.escape(first), re.escape(second)
         reference = {
             "variable": rf"\bvar\.{one}\b",
@@ -1698,13 +1761,15 @@ def removed_names() -> list[Finding]:
     allowed, findings = read_allowlist(CLEANUP_ALLOWLIST, REMOVED_KINDS + UNUSED_KINDS, CLEANUP_RULE, "why the reference stays")
     removed, deleted = changed_lines_and_deletions()
     files = reference_files(record_skips=True)
-    kinds = removed_definitions(removed, deleted, files, schema_ids_removed(removed, files))
+    kinds = removed_definitions(removed, deleted, files, before_texts(changed_paths()))
     unchecked = mypy_uncovered_files() if kinds["python"] else set()
     findings += deleted_modules_left(removed, deleted, files, allowed)
     for kind, names in kinds.items():
         for name, pattern in sorted(names.items()):
             for path, lines in files.items():
                 view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
+                if view is not None and kind == "config":
+                    view = python_literals(view, without_paths) if path.endswith(".py") else [without_paths(line) for line in view]
                 if view is None or any(entry_kind == kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
                     continue
                 for number, line in enumerate(view, 1):
