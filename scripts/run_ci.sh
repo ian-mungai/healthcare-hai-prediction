@@ -42,8 +42,8 @@ source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
 part="${CI_PART:-all}"
 case "$part" in
-  all | core | core_static | core_sql_terraform | core_configuration | core_ci_tooling | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
-  *) printf 'CI_PART must be all, core, core_static, core_sql_terraform, core_configuration, core_ci_tooling, core_code_rules, core_orchestration_engine, core_orchestration_offline, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
+  all | core | core_static | core_sql_terraform | core_terraform_proofs | core_configuration | core_configuration_host | core_ci_tooling | core_ci_tooling_runtime | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
+  *) printf 'CI_PART must be all, core, core_static, core_sql_terraform, core_terraform_proofs, core_configuration, core_configuration_host, core_ci_tooling, core_ci_tooling_runtime, core_code_rules, core_orchestration_engine, core_orchestration_offline, launcher, reuse_gate, bronze, silver, gold, features, feature_sources, feature_columns, feature_store or gates, not %s\n' "$part" >&2; exit 2 ;;
 esac
 gold_units="checks writer_setup model_metadata_e2e"
 units="${CI_UNITS:-$gold_units}"
