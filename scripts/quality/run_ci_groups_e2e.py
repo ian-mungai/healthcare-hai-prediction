@@ -497,7 +497,7 @@ def docs_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     finally:
         restore(work)
         tooling.unlink(missing_ok=True)
-    required = ["repository_code_checks", "ci_tooling_checks"]
+    required = ["repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime"]
     checks = {
         "exit_zero": code == 0,
         "reached_the_end": PASS_LINES[part] in log,
@@ -3815,7 +3815,11 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]
     expected = [
         f"probe: {entry}"
-        for entry in (CORE[:1] + CORE[2:] if not staged else ["python_lint", "repository_code_checks", "ci_tooling_checks", "configuration_checks"])
+        for entry in (
+            CORE[:1] + CORE[2:]
+            if not staged
+            else ["python_lint", "repository_code_checks", "ci_tooling_checks", "ci_tooling_runtime", "configuration_checks", "configuration_host_checks"]
+        )
     ]
     if part == "all":
         expected += [f"probe: {entry}" for entry in ("lakehouse_bronze", "lakehouse_silver", *GOLD_STUBS, "reuse_gate_checks")]
@@ -3823,7 +3827,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
         # A failed shard of the hooks stops the combining steps of the run, as a failed acquisition shard does, while the other workers still run.
         expected += [] if fail_samples else [f"probe: lakehouse_features_combine {suite}/{count}" for suite, count in FEATURE_COUNTS.items()]
         expected += [f"probe: lakehouse_features_{suite} {index}/{count}" for suite, count in FEATURE_COUNTS.items() for index in range(1, count + 1)]
-        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "lock")] + HOOK_SHARD_LABELS
+        expected += [f"repository hooks: {group}" for group in ("privacy", "documentation", "code", "orphans", "lock")] + HOOK_SHARD_LABELS
         expected += [] if fail_samples else [HOOK_COMBINE_LABEL]
         expected += [f"launcher E2E shard {index}/2" for index in (1, 2)]
         expected += [f"probe: acquisition shard {index}/4" for index in range(1, 5)]
@@ -4617,10 +4621,11 @@ def dry_run_cases(work: Path, out: Path) -> list[dict[str, Any]]:
     local = local_plan_of(log)
     checks = {
         "exit_zero": code == 0 and PASS_LINES["all"] in log,
-        "only_its_group_and_the_repository_group_ran": sorted(local["items"]) == ["ci_tooling_checks", "repository_code_checks", "sql_style"],
+        "only_its_group_and_the_repository_group_ran": sorted(local["items"])
+        == ["ci_tooling_checks", "ci_tooling_runtime", "repository_code_checks", "sql_style"],
         # sql_style.sh lies below scripts/, which the reviewed inventory_reads patterns of code_digest.py and code_closure.py name, so the dry run starts it.
         "launcher_selected_by_a_scripts_path": "TIMED launcher E2E" in log
-        and local["groups"] == {"launcher", "ci_tooling_checks", "repository_code_checks", "sql_style"},
+        and local["groups"] == {"launcher", "ci_tooling_checks", "ci_tooling_runtime", "repository_code_checks", "sql_style"},
         "no_acquisition_shard_ran": not local["shards"] and not local["combine_runs"] and "ACQ " not in log,
     }
     cases.append({"case": "staged_body_edit_runs_only_its_group_items", "passed": all(checks.values()), "checks": checks, "exit": code})
