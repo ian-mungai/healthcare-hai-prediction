@@ -293,8 +293,9 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Estimate (no hosted run of the shards yet): about a quarter of the 18 minutes of cases plus about 6 minutes of setup. Resize from the first complete hosted run.
-    timeout-minutes: 30
+    # Hosted run 43685924350: all four shards reached the 26.6 minute budget of the former 30 minute timeout. The Mac runs one shard in 17 minutes (Nov 15 2026) and the
+    # hosted runner took 2.2 times the Mac for the orphan-files hook, so a shard needs about 37 minutes plus 1 minute of setup. Resize from the first complete hosted run.
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -853,8 +854,9 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 12.5 min (shard 1), shard 2 max 10.5 min.
-    timeout-minutes: 20
+    # Hosted runs 43284615034 and 43685924350: shard 1 took 16.1 and 16.3 minutes, shard 2 15.3 minutes and then over 20 minutes, 4 of them in the env-example gate
+    # that now takes seconds.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -909,10 +911,10 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Expected about 13 minutes with the setup (estimated from the 41 minutes of the unsharded run, whose tests take 39, over four shards). Resize
-    # from a complete hosted run.
-    # Measured job wall time on main (3 runs, Oct 28 2026): max 12.0 min (shard 1), shards 11.1 to 12.0 min.
-    timeout-minutes: 30
+    # Hosted run 43284615034 (Nov 12 2026), shard wall time: 14.9, 19.4, 20.5 and 24.4 minutes, its offline suites 12.4 to 21.7 minutes by shard. The balance of
+    # config/acquisition/shard_weights.json now follows those measured suite seconds (17.5 minutes of suites in each shard). Hosted run 43685924350 ran the
+    # unbalanced shards 3 and 4 past the former 30 minute timeout.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
