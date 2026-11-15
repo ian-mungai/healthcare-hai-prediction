@@ -17,5 +17,7 @@ WORKDIR /app
 COPY --chmod=0444 scripts/streamlit_app/__init__.py scripts/streamlit_app/app.py scripts/streamlit_app/client.py scripts/streamlit_app/view.py /app/scripts/streamlit_app/
 COPY --chmod=0444 services/streamlit/config.toml /app/.streamlit/config.toml
 
+# COPY --chmod=0444 also gives the folders it creates mode 0444 (seen with Docker 29), which a non-root user cannot enter: make every folder under /app readable and enterable.
+RUN find /app -type d -exec chmod 0555 {} +
 USER 10020
 ENTRYPOINT ["streamlit", "run", "scripts/streamlit_app/app.py"]

@@ -29,5 +29,7 @@ COPY --chmod=0444 data_contracts/serving/predictions.json /app/data_contracts/se
 COPY --chmod=0444 data_contracts/training/model_contract.json /app/data_contracts/training/model_contract.json
 COPY --chmod=0444 feature_store/feature_store_aws.yaml /app/feature_store/feature_store_aws.yaml
 
+# COPY --chmod=0444 also gives the folders it creates mode 0444 (seen with Docker 29), which a non-root user cannot enter: make every folder under /app readable and enterable.
+RUN find /app -type d -exec chmod 0555 {} +
 USER 10010
 ENTRYPOINT ["python", "-B", "-m", "scripts.serving.main"]
