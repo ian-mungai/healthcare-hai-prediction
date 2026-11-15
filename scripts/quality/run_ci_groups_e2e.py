@@ -2805,7 +2805,8 @@ HOOK_SHARD_LABELS = [f"repository hooks: samples shard {index}/{HOOK_SAMPLE_SHAR
 HOOK_COMBINE_LABEL = f"repository hooks: samples combine/{HOOK_SAMPLE_SHARDS}"
 HOOK_EXCLUSIVE_LABELS = [*HOOK_SHARD_LABELS, "repository hooks: lock"]
 CHECKS_SUITE = "run_checks_e2e"
-CHECKS_SHARD_BUDGET_SECONDS = 1500
+# The saved costs are hosted seconds from run 43730985805 (about 1916 s per shard of 4); 2100 s is about 1.1 times that load.
+CHECKS_SHARD_BUDGET_SECONDS = 2100
 
 # A pre-commit stand-in for the sharded samples group: it records each call with the shard environment that the hook entry reads, takes a second, and then
 # behaves as the real test-checks entry does for its shard (a manifest of every selected case), except as the files in its folder say.
