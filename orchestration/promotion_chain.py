@@ -14,7 +14,8 @@ its steps, each launched once under a run of its own (``training_contract.chain_
 3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result, unless the
    registry has no Production version.
 4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion,
-   and only when the features run the model trained on has a hold record (``online_hold.json``): with none there is nothing to release.
+   and only when the features run the model trained on has a hold record (``online_hold.json``): with none there is nothing to release. The check reads
+   the record only when the research record names a Production version or none of the key (see the first champion below).
 5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
    active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. A hold, a
    failed check or a failed canary deploy deploys nothing more: the canary stops getting traffic at its expiry, with no later step.
@@ -26,6 +27,11 @@ First champion (owner decision A, Nov 15 2026): when the research record names n
 has nothing to run a canary beside. Steps 1 and 2 are skipped, so the chain promotes a challenger whose verdict is ``pass`` or ``pass_baseline`` (research
 chooses only such a challenger) and goes on with the release check, the rollout and the notice. This is a one-time exception to the canary rule for the first
 champion only. A record without the key, or one that names a version, keeps the canary.
+
+The first champion also skips the release check (owner decision B, Nov 15 2026): a first deploy has no hold record, because ``feature_sets.online_action``
+returns ``load`` without a Production model, and the Airflow launch role may read only ``research/*`` and may not list, so a read of the missing hold key
+returns AccessDenied and would fail the chain. The chain never reads that key and never calls ``release_online`` for a first champion. With a Production
+version the check runs as before and still fails closed on a read that is denied. A record without the key keeps the check.
 
 The features run of the challenger is the one its training run read, which the research record names (``features_runs``). It is not derived from the base
 run, because the training runs read the run IDs the features DAGs chose.
@@ -225,6 +231,8 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
         step("canary check", canary)
 
     def release() -> None:
+        if challenger.first_champion:
+            return
         if steps.read(hold_key(challenger.features_run)) is not None:
             steps.release(challenger.model, challenger.features_run, run_of("release"))
 

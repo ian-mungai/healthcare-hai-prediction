@@ -195,6 +195,7 @@ class Recorder:
         self.types = tuple(challengers)
         self.failing = failing
         self.release_fails = False
+        self.denied: set[str] = set()
         self.pending: dict[str, bytes] = {}
 
     def launch(self, step: str, run: str, training: dict[str, Any]) -> None:
@@ -204,6 +205,8 @@ class Recorder:
 
     def read(self, key: str) -> bytes | None:
         self.reads.append(key)
+        if key in self.denied:
+            raise promotion_chain.RecordRefused(f"{key} cannot be read: AccessDenied")
         return self.objects.get(key)
 
     def release(self, model: str, features_run: str, run: str) -> None:
@@ -417,13 +420,15 @@ def the_chain_is_the_same_for_a_retry() -> None:
 
 def a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out() -> None:
     """With no Production model in the research record, the chain launches no canary deploy and no canary check, reads no canary result, promotes the
-    challenger, skips the release because no hold record exists for the features run it trained on, rolls out stable-only and announces it."""
+    challenger, never reads the hold record of the features run it trained on (the launch role may not list or read a missing key, and a first deploy has no
+    hold: owner decision B, Nov 15 2026), rolls out stable-only and announces it."""
     recorder = Recorder({"HAI_1": CHALLENGER, "HAI_2": None}, production=None, hold=False)
+    recorder.denied = {hold_key(run) for run in FEATURES_RUNS.values()}
     require(recorder.run() == [], "a clean first-champion chain reported a failure")
     expected = [("promote", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")]
     require(recorder.steps() == expected, f"steps: {recorder.steps()}")
     require(not [key for key in recorder.reads if "canary_" in key], f"the first champion read a canary result: {recorder.reads}")
-    require(hold_key(FEATURES_RUNS["m2"]) in recorder.reads, f"the hold record of the model's real features run was not read: {recorder.reads}")
+    require(not [key for key in recorder.reads if key in recorder.denied], f"the first champion read a hold key: {recorder.reads}")
     promote, rollout, notice = recorder.calls
     require(promote[3] == {"hai_type": "HAI_1", "model_version": "4", "promotion_mode": "promote", "mlflow": "aws"}, f"promotion: {promote[3]}")
     require(rollout[3] == {"hai_type": "HAI_1", "deploy_mode": "stable"}, f"rollout: {rollout[3]}")
@@ -449,6 +454,10 @@ def a_first_champion_does_not_need_a_canary_result_a_later_promotion_does() -> N
         ("serve_canary", "HAI_1") in unknown.steps() and ("promote", "HAI_1") not in unknown.steps(),
         f"a record without the key skipped the canary: {unknown.steps()}",
     )
+    keyless = Recorder({"HAI_1": CHALLENGER}, hold=True)
+    keyless.objects[training_contract.record_key("research", RESEARCH, "HAI_1")] = research_record("HAI_1", CHALLENGER, drop=("production_version",))
+    require(keyless.run() == [] and ("release", "m2") in keyless.steps(), f"a record without the key skipped the hold check: {keyless.steps()}")
+    require(hold_key(FEATURES_RUNS["m2"]) in keyless.reads, f"a record without the key did not read the hold record: {keyless.reads}")
     passed = Recorder({"HAI_1": CHALLENGER}, production="1", hold=False)
     require(passed.run() == [], "a later promotion with a passed canary failed")
     expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("promote", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")]
@@ -469,9 +478,27 @@ def the_release_is_skipped_without_a_hold_and_refused_with_one() -> None:
     first = Recorder({"HAI_1": CHALLENGER}, production=None, hold=True)
     first.release_fails = True
     failures = first.run()
-    require(len(failures) == 1 and "release" in failures[0], f"a first champion with a hold did not stop at the release: {failures}")
-    require(first.steps() == [("promote", "HAI_1"), ("release", "m2"), ("owner_notice", "HAI_1")], f"steps: {first.steps()}")
-    require(first.calls[-1][3]["outcome"] == "promoted_not_rolled_out", f"the notice: {first.calls[-1]}")
+    require(failures == [], f"a first champion was stopped by a hold it never reads: {failures}")
+    require(first.steps() == [("promote", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")], f"steps: {first.steps()}")
+    require(
+        not [key for key in first.reads if "online_hold" in key] and "release" not in dict(first.steps()),
+        f"a first champion read or released a hold: {first.reads}",
+    )
+
+    class Shipped(Recorder):
+        def release(self, model: str, features_run: str, run: str) -> None:
+            promotion_chain.release_online(None, {}, model, features_run, run)
+
+    held = Shipped({"HAI_1": CHALLENGER}, production="1", hold=True)
+    failures = held.run()
+    require(len(failures) == 1 and "release_online" in failures[0], f"a hold with a Production model was not refused by name: {failures}")
+    require(hold_key(FEATURES_RUNS["m2"]) in held.reads and ("serve_stable", "HAI_1") not in held.steps(), f"a hold did not stop the rollout: {held.steps()}")
+    require(held.calls[-1][3]["outcome"] == "promoted_not_rolled_out", f"the notice: {held.calls[-1]}")
+    denied = Recorder({"HAI_1": CHALLENGER}, production="1", hold=False)
+    denied.denied = {hold_key(FEATURES_RUNS["m2"])}
+    failures = denied.run()
+    require(len(failures) == 1 and "release" in failures[0] and "AccessDenied" in failures[0], f"a denied hold read did not fail closed: {failures}")
+    require(("serve_stable", "HAI_1") not in denied.steps() and denied.calls[-1][3]["outcome"] == "promoted_not_rolled_out", f"steps: {denied.steps()}")
     refusal = refuses(promotion_chain.StepFailed, lambda: promotion_chain.release_online(None, {}, "m2", FEATURES_RUNS["m2"], "run"))
     require("release_online" in str(refusal) and FEATURES_RUNS["m2"] in str(refusal), f"the shipped release step does not refuse by name: {refusal}")
     require(hold_key("x") == promotion_chain.hold_key("x"), "the chain reads another key than the features job writes")
@@ -611,19 +638,42 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
 
 
 def research_dag_promotes_a_first_champion_without_a_canary() -> None:
-    """No Production model: the DAG launches research, the promotion, the stable-only rollout and the notice, with no canary deploy or check and no release."""
+    """No Production model: the DAG launches research, the promotion, the stable-only rollout and the notice, with no canary deploy or check and no release.
+    It never reads a hold key: the launch role cannot read a missing key, so a read of one would be AccessDenied (owner decision B, Nov 15 2026)."""
     rig = Rig()
     for model in training_contract.PROMOTION_MODELS:
         trained(rig, model)
     staged_for_the_dag(rig, canary=None, production=None, hold=False)
+    rig.stage.denied |= {hold_key(run) for run in FEATURES_RUNS.values()}
     before = rig.tasks_started()
     with world(rig, "research_dag", dag_params()) as current:
         states = current.run_dag("research_dag.py")
     require(set(states.values()) == {"success"} and current.results["gate"] == "accepted", f"the DAG did not finish: {states} {current.results}")
     expected = [("", "research"), ("HAI_1", "promote"), ("HAI_1", "serve_stable"), ("HAI_1", "notify")]
     require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
+    require(not [entry for entry in rig.stage.log if "online_hold" in entry], f"the first champion read a hold key: {rig.stage.log}")
     notice = json.loads(rig.environment(rig.tasks_started() - 1)["promote"]["TRAINING_PARAMETERS"])
     require(notice["outcome"] == "promoted", f"the owner was told {notice['outcome']}")
+
+
+def research_dag_fails_closed_on_a_denied_hold_read_with_a_production_model() -> None:
+    """A Production model keeps the hold check: when the launch role is denied the hold key, the promotion stands, no rollout runs, the notice says the
+    promotion did not roll out and the DAG run fails naming the denied read."""
+    rig = Rig()
+    for model in training_contract.PROMOTION_MODELS:
+        trained(rig, model)
+    staged_for_the_dag(rig, hold=False)
+    rig.stage.denied |= {hold_key(run) for run in FEATURES_RUNS.values()}
+    before = rig.tasks_started()
+    with world(rig, "research_dag", dag_params()) as current:
+        states = current.run_dag("research_dag.py")
+    require(states["chain"] == "failed" and states["gate"] == "failed", f"states: {states}")
+    require("AccessDenied" in str(current.results["chain"]), f"the failure does not name the denied read: {current.results['chain']}")
+    require(any("online_hold" in entry for entry in rig.stage.log), "a Production model skipped the hold check")
+    expected = [("", "research"), ("HAI_1", "serve_canary"), ("HAI_1", "canary"), ("HAI_1", "promote"), ("HAI_1", "notify")]
+    require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
+    notice = json.loads(rig.environment(rig.tasks_started() - 1)["promote"]["TRAINING_PARAMETERS"])
+    require(notice["outcome"] == "promoted_not_rolled_out", f"the owner was told {notice['outcome']}")
 
 
 def research_dag_fails_after_the_notice_when_the_release_step_is_missing() -> None:
@@ -757,6 +807,7 @@ CASES: dict[str, Callable[[], None]] = {
     "research_dag_runs_the_chain_for_the_challenger": research_dag_runs_the_chain_for_the_challenger,
     "research_dag_fails_after_the_notice_when_the_release_step_is_missing": research_dag_fails_after_the_notice_when_the_release_step_is_missing,
     "research_dag_promotes_a_first_champion_without_a_canary": research_dag_promotes_a_first_champion_without_a_canary,
+    "research_dag_fails_closed_on_a_denied_hold_read_with_a_production_model": research_dag_fails_closed_on_a_denied_hold_read_with_a_production_model,
     "a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out": a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out,
     "a_first_champion_does_not_need_a_canary_result_a_later_promotion_does": a_first_champion_does_not_need_a_canary_result_a_later_promotion_does,
     "the_release_is_skipped_without_a_hold_and_refused_with_one": the_release_is_skipped_without_a_hold_and_refused_with_one,
