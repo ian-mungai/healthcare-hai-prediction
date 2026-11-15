@@ -61,7 +61,7 @@ DECLARED = {
 }
 OTHER_DECLARED = {"inputs": [glue("features", "f1")], "outputs": [glue("gold", "model_scores")]}
 TEMPLATE = {"silver": "silver_build", "gold": "gold_build", "features": "features_build"}
-DAG = {"silver": "silver_transform_dag", "gold": "gold_transform_dag", "features": "features_transform_dag"}
+DAG = {"silver": "silver_transform_dag", "gold": "gold_transform_dag", "features": "features_base_dag"}
 RUN_OF = {"silver": GOLD_INPUT, "gold": GOLD_RUN, "features": FEATURES_RUN}
 
 
