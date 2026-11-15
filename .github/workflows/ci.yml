@@ -939,10 +939,11 @@ jobs:
         with:
           python-version: "3.12"
 
+      # The capture specification test runs the real outgoing secret scan (scripts/quality/scan_secrets.py), which reads .tools/bin/gitleaks.
       - name: Install shared dependencies
         run: |
           python -m venv .venv
-          .venv/bin/python scripts/quality/install_tools.py --tool uv
+          .venv/bin/python scripts/quality/install_tools.py --tool uv --tool gitleaks
           .venv/bin/python -m scripts.quality.lock_env export host --output "$RUNNER_TEMP/host_lock"
           .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$RUNNER_TEMP/host_lock/requirements.txt"
 
