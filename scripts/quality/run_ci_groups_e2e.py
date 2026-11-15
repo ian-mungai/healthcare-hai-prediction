@@ -691,6 +691,19 @@ def list_only_case(work: Path, out: Path, part: str) -> dict[str, Any]:
     return {"case": f"list_only_prints_plan_{part}", "passed": all(checks.values()), "checks": checks, "exit": code}
 
 
+def hosted_part_cases(work: Path, out: Path) -> list[dict[str, Any]]:
+    """The dispatcher accepts every hosted Core part of ``parts`` (the hosted jobs pass them as CI_PART) and plans exactly the groups of that part."""
+    config = json.loads((work / "config/quality/ci_groups.json").read_text(encoding="utf-8"))
+    cases = []
+    for part, groups in config["parts"].items():
+        code, log, _ = run_entry(work, out, f"hosted_part_{part}", {"CI_LIST_ONLY": "1", "CI_SCOPE": "full", "CI_PART": part, "HAI_CI_REUSE": "off"})
+        planned = re.findall(r"^run (\w+)$", log, re.MULTILINE)
+        cases.append(
+            {"case": f"dispatcher_accepts_hosted_part_{part}", "passed": code == 0 and planned == groups, "exit": code, "planned": planned, "wanted": groups}
+        )
+    return cases
+
+
 def admission_case(work: Path, out: Path) -> dict[str, Any]:
     """Every worker that the full run creates has a limit in worker_limits: the run stops at its admission, before any worker starts, and names the workers."""
     code, log, _ = run_entry(work, out, "admission_all", {"CI_SCOPE": "full", "CI_PART": "all", "CI_ADMISSION_ONLY": "1"})
@@ -1797,6 +1810,7 @@ def real_run_cases(work: Path, out: Path, scratch: Path) -> list[dict[str, Any]]
     cases: list[dict[str, Any]] = []
     for part in ("all", "core", "launcher", "bronze", "silver", "gold", "features", "feature_sources", "feature_columns", "feature_store"):
         cases.append(list_only_case(work, out, part))
+    cases += hosted_part_cases(work, out)
     for part in ("core", "all", "launcher", "gold", "features", "feature_sources", "feature_columns"):
         cases.append(docs_only_case(work, out, part))
     for part in ("core", "all", "launcher", "silver", "features", "feature_sources", "feature_columns"):
@@ -7308,6 +7322,7 @@ def main() -> int:
     failed = [result["case"] for result in results if not result["passed"]]
     skipped = [
         "list_only_prints_plan_*",
+        "dispatcher_accepts_hosted_part_*",
         "docs_only_runs_gates*",
         "gate_failure_*",
         "layer_not_reached_*",
