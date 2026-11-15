@@ -46,27 +46,27 @@
     },
     {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "measured_minutes": 26,
-      "timeout_minutes": 65,
-      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
+      "measured_minutes": 34,
+      "timeout_minutes": 51,
+      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
     },
     {
       "job": "Repository Hooks (samples, shard 2 of 4)",
-      "measured_minutes": 33,
-      "timeout_minutes": 65,
-      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
+      "measured_minutes": 34,
+      "timeout_minutes": 51,
+      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
     },
     {
       "job": "Repository Hooks (samples, shard 3 of 4)",
-      "measured_minutes": 33,
-      "timeout_minutes": 65,
-      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
+      "measured_minutes": 34,
+      "timeout_minutes": 51,
+      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
     },
     {
       "job": "Repository Hooks (samples, shard 4 of 4)",
-      "measured_minutes": 43,
-      "timeout_minutes": 65,
-      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
+      "measured_minutes": 34,
+      "timeout_minutes": 51,
+      "basis": "estimate, Nov 15 2026: the per-case seconds of hosted run 43730985805 balance the four shards at about 1916 s of cases plus 88 s of setup, 33.4 minutes each (that run took 25.6 to 42.7 minutes before the rebalance); resize from the first hosted run of the balanced shards"
     },
     {
       "job": "Repository Hooks (samples)",

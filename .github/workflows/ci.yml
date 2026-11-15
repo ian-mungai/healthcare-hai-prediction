@@ -293,8 +293,9 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes. 65 minutes is 1.5 times the slowest shard.
-    timeout-minutes: 65
+    # Hosted run 43730985805 (Nov 15 2026) took 25.6 to 42.7 minutes per shard. Its per-case seconds now balance the shards at about 33.4 minutes each;
+    # 51 minutes is 1.5 times that. Resize from the first hosted run of the balanced shards.
+    timeout-minutes: 51
     strategy:
       fail-fast: false
       matrix:
