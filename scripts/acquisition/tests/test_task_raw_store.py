@@ -785,7 +785,7 @@ def repeats(*roles: str) -> dict[str, Any]:
     forgeries = {
         f"{role} name repeated as {as_role}, {where}": partial(repeated_name, role=as_role, first=where == "first")
         for role in roles
-        for as_role in {role, "layout", "data"}
+        for as_role in dict.fromkeys((role, "layout", "data"))
         for where in ("first", "last")
     }
     return forgeries | {f"{role} identity repeated": repeated_identity for role in roles}
