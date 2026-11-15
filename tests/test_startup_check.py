@@ -12,7 +12,16 @@ import pytest
 
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import layer_run
-from tests.startup_check_support import MLFLOW_URI, POLARIS_HOST, SERVICE_HOSTS, Network, host_environment, install_network, profile_with_extensions
+from tests.startup_check_support import (
+    MLFLOW_URI,
+    POLARIS_HOST,
+    REGISTRY_HOST,
+    SERVICE_HOSTS,
+    Network,
+    host_environment,
+    install_network,
+    profile_with_extensions,
+)
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -101,7 +110,8 @@ def test_a_host_job_with_everything_in_place_starts(monkeypatch: pytest.MonkeyPa
     lines = [line for line in first_lines(capsys) if line.startswith("startup_check:")]
     check(any("ok dbt_target lakehouse_task" in line for line in lines), f"the selected target is logged: {lines}")
     check({host for host, _ in network.seen} == {POLARIS_HOST, *SERVICE_HOSTS}, f"only the named endpoints were contacted: {network.seen}")
-    check({port for host, port in network.seen if host in SERVICE_HOSTS} == {443}, "S3 and ECR are reached on 443")
+    check({port for host, port in network.seen if host in SERVICE_HOSTS} == {443}, "S3 and the ECR API are reached on 443")
+    check(REGISTRY_HOST not in {host for host, _ in network.seen}, f"the bare registry host has no public DNS record and is never probed: {network.seen}")
 
 
 @pytest.mark.parametrize("layer", ["gold", "features"])

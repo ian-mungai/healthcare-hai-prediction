@@ -14,7 +14,9 @@ REGION = "us-west-2"
 POLARIS_HOST = "192.0.2.10"
 POLARIS_URI = f"http://{POLARIS_HOST}:8181/api/catalog"
 MLFLOW_URI = "http://192.0.2.10:5000"
-SERVICE_HOSTS = (f"s3.{REGION}.amazonaws.com", f"api.ecr.{REGION}.amazonaws.com", f"dkr.ecr.{REGION}.amazonaws.com")
+SERVICE_HOSTS = (f"s3.{REGION}.amazonaws.com", f"api.ecr.{REGION}.amazonaws.com")
+# The bare registry host has no public DNS record, so the check never probes it: a container that runs the check was already pulled from the registry.
+REGISTRY_HOST = f"dkr.ecr.{REGION}.amazonaws.com"
 FORBIDDEN = (
     "AWS_ACCESS_KEY_ID",
     "AWS_SECRET_ACCESS_KEY",

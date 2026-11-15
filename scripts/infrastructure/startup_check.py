@@ -4,8 +4,9 @@ A job on the EC2 host runs this at the start of its first code step, from the st
 fixed bound, and logs one line per check on stderr. Failures come first. A run outside an ECS task checks nothing.
 
 - ``check_phase`` and ``check_environment``: the task environment is recognised, the task credential source is the native provider, the host services the
-  job needs (Polaris, MLflow, OpenMetadata, Redis) accept a TCP connect at their configured addresses, and S3 and ECR accept a connect on 443. The connects run
-  side by side and share one bound. ``JOB_PHASES`` holds, for every host job, the phases that check and the services each needs.
+  job needs (Polaris, MLflow, OpenMetadata, Redis) accept a TCP connect at their configured addresses, and S3 and the ECR API accept a connect on 443. The
+  bare registry host (``dkr.ecr``) is not probed: it has no public DNS record, and a container that runs the check was already pulled from the registry.
+  The connects run side by side and share one bound. ``JOB_PHASES`` holds, for every host job, the phases that check and the services each needs.
 - ``check_build``: the dbt target that the build selects (``pipeline_build.build_target``) and, for a profile that lists DuckDB extensions, that its extension
   directory exists and holds each of them, so dbt downloads nothing.
 - ``check_files``: every repository-relative file that the job will read exists in the task. ``queue_files`` derives them from the collector plans of the
@@ -142,7 +143,7 @@ AWS_REGIONS = frozenset(
         "us-gov-west-1",
     )
 )
-AWS_HOST = re.compile(r"(s3|api\.ecr|dkr\.ecr)\.(" + "|".join(sorted(AWS_REGIONS)) + r")\.amazonaws\.com")
+AWS_HOST = re.compile(r"(s3|api\.ecr)\.(" + "|".join(sorted(AWS_REGIONS)) + r")\.amazonaws\.com")
 SPILL_CODE = "temporary_storage_settings_incomplete"
 CREDENTIAL_CODES = frozenset(
     {
@@ -1068,12 +1069,14 @@ def open_connection(host: str, port: int, timeout: float) -> None:
 
 
 def endpoint_targets() -> list[tuple[str, str, int]] | Finding:
+    """The AWS connect targets: S3 and the ECR API. The registry host ``dkr.ecr.<region>.amazonaws.com`` is left out on purpose. It resolves only through the
+    VPC interface endpoints with private DNS that this project keeps removed, and a container that runs the check was already pulled from the registry."""
     region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION", "")
     if not region:
         return Finding("region_unset", False, phrase("neither AWS_REGION nor AWS_DEFAULT_REGION is set"))
     if region not in AWS_REGIONS:
         return Finding("region_invalid", False, phrase("the region in AWS_REGION or AWS_DEFAULT_REGION is not a known AWS Region"))
-    return [("s3", f"s3.{region}.amazonaws.com", 443), ("ecr", f"api.ecr.{region}.amazonaws.com", 443), ("ecr", f"dkr.ecr.{region}.amazonaws.com", 443)]
+    return [("s3", f"s3.{region}.amazonaws.com", 443), ("ecr", f"api.ecr.{region}.amazonaws.com", 443)]
 
 
 def redis_target() -> tuple[str, str, int] | Finding:
@@ -1292,7 +1295,7 @@ def run_queue(job: str, queue: Path, *, controls: Path | None, keys: bool, roots
 
 # Each entry point runs inside the boundary. A failure ends as its fixed text and one ``StartupCheckError``; outside an ECS task it checks nothing.
 # ``check_phase``: the environment for one phase of a host job, with the services that ``JOB_PHASES`` lists for it. An unlisted phase checks nothing.
-# ``check_environment``: the first-step check: the task environment and credentials, the host services that the job needs, and S3 and ECR.
+# ``check_environment``: the first-step check: the task environment and credentials, the host services that the job needs, and S3 and the ECR API.
 # ``check_build``: the check at the start of the build: the target it would select and what that target needs on disk. A features build writes its own profile.
 # ``check_files``: every named file exists under the root that its reader uses (``code`` is the working folder). A listing must hold an entry.
 # ``check_queue_files``: the file check of a publisher queue. Outside a task it reads neither the queue nor any collector plan.

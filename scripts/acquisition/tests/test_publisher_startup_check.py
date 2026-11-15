@@ -128,10 +128,10 @@ def test_every_file_the_mmd_plan_load_reads_is_checked(monkeypatch: pytest.Monke
 
 def test_the_environment_is_checked_before_any_aws_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     host_environment(monkeypatch)
-    install_network(monkeypatch, Network(refuse={SERVICE_HOSTS[2]: TimeoutError("timed out")}))
+    install_network(monkeypatch, Network(refuse={SERVICE_HOSTS[1]: TimeoutError("timed out")}))
     mmd_tree(monkeypatch, tmp_path / "code")
     cloud = Cloud()
-    with pytest.raises(startup_check.StartupCheckError, match=rf"ecr_unreachable {SERVICE_HOSTS[2]}:443"):
+    with pytest.raises(startup_check.StartupCheckError, match=rf"ecr_unreachable {SERVICE_HOSTS[1]}:443"):
         run_job(monkeypatch, tmp_path / "workspace", cloud)
     check(cloud.calls == [] and cloud.puts == [], "no client was made and nothing was written")
 

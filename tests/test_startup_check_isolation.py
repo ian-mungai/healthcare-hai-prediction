@@ -317,13 +317,12 @@ def test_the_counts_the_job_and_the_label_come_from_the_request_and_never_from_t
         finding("task_environment", detail=[["l", "exec", "AWS_ECS_EC2"]]),
         finding("credentials", False, [["l", "cred", "task_credential_source_refused"]]),
         finding("s3"),
-        finding("ecr"),
         finding("ecr_unreachable", False, [["p", "timed out after"]]),
     )
     summary = startup_check.emit({**ENVIRONMENT_REQUEST, "job": "SYNTHETIC_FORGED_JOB"}, reports, 0.04)
     shown = capsys.readouterr().err
-    check("startup_check: unlisted environment: 5 checks, 2 failed, 0.0 s" in shown and "SYNTHETIC_FORGED_JOB" not in shown, shown)
-    expected = f"startup_check: FAILED ecr_unreachable dkr.ecr.us-west-2.amazonaws.com:443 timed out after {startup_check.CONNECT_SECONDS:g} s"
+    check("startup_check: unlisted environment: 4 checks, 2 failed, 0.0 s" in shown and "SYNTHETIC_FORGED_JOB" not in shown, shown)
+    expected = f"startup_check: FAILED ecr_unreachable api.ecr.us-west-2.amazonaws.com:443 timed out after {startup_check.CONNECT_SECONDS:g} s"
     check(expected in shown, f"the endpoint is the parent's own and the bound is its constant: {shown}")
     check(summary is not None and "credentials task_credential_source_refused" in summary, f"{summary}")
 
