@@ -4239,6 +4239,7 @@ def workflow_range_case(repo: Path, label: str, event: str, base: str, head: str
         checks["main_only_paths_do_not_select_groups"] = selected.get("changed") == 1 and selected.get("run") == [
             "repository_code_checks",
             "ci_tooling_checks",
+            "ci_tooling_runtime",
             "sql_style",
         ]
         checkout = next(step for step in steps if step.get("uses", "").startswith("actions/checkout@"))
