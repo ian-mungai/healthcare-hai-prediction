@@ -10,6 +10,7 @@ missing or failing job, an API error, a malformed answer, another event or branc
 when the answer is ``reuse=false`` and the summary names that cause. The stand-in records every call, and a case checks that each one is a read
 (``gh api --method GET``).
 The static cases read .github/workflows/ci.yml: the job list equals config/quality/ci_jobs.json, every checkout uses the pull request head, every
+job that reads uv.lock (Git LFS) checks out with ``lfs: true``, every
 heavy job waits for the plan job and runs unless it answers ``true`` (also for an empty answer), the reuse job runs the commit checks and the quick
 gates, and the plan job's token is read-only. Failure modes R1 to R18 and F1 to F9 (plans, local). The report goes to
 data/e2e/ci_reuse/<UTC>_<pid>/report.json with the revision and the SHA-256 of the files under test.
@@ -385,6 +386,25 @@ def condition_value(condition: str, reuse: str) -> bool:
     return True
 
 
+def lfs_readers(jobs: dict[str, Any]) -> list[str]:
+    """The jobs with a step that reads uv.lock (the dependency export ``lock_env`` or a path of uv.lock), which .gitattributes stores with Git LFS."""
+    readers = []
+    for key, definition in jobs.items():
+        steps = [step for step in definition["steps"] if not str(step.get("uses", "")).startswith("actions/checkout@")]
+        if any(term in f"{step.get('run', '')} {step.get('with', '')}" for step in steps for term in ("lock_env", "uv.lock")):
+            readers.append(key)
+    return readers
+
+
+def lfs_readers_without_lfs(jobs: dict[str, Any]) -> list[str]:
+    """The jobs from ``lfs_readers`` whose checkout step lacks ``with.lfs: true``, so they would read an LFS pointer file instead of the content."""
+    return [
+        key
+        for key in lfs_readers(jobs)
+        if not any(str(step.get("uses", "")).startswith("actions/checkout@") and step.get("with", {}).get("lfs") is True for step in jobs[key]["steps"])
+    ]
+
+
 def static_cases() -> list[dict[str, Any]]:
     document = workflow()
     jobs: dict[str, Any] = document["jobs"]
@@ -415,6 +435,12 @@ def static_cases() -> list[dict[str, Any]]:
             "passed": len(checkouts) >= 9 and all(step.get("with", {}).get("ref") == HEAD_REF for step in checkouts),
             "checkouts": len(checkouts),
             "without_the_head": [index for index, step in enumerate(checkouts) if step.get("with", {}).get("ref") != HEAD_REF],
+        },
+        {
+            "case": "jobs_reading_uv_lock_check_out_the_lfs_files",
+            "passed": len(lfs_readers(jobs)) >= 1 and not lfs_readers_without_lfs(jobs),
+            "jobs_reading_uv_lock": len(lfs_readers(jobs)),
+            "without_lfs": lfs_readers_without_lfs(jobs),
         },
         {
             "case": "heavy_jobs_wait_for_the_plan_and_run_on_an_empty_answer",
