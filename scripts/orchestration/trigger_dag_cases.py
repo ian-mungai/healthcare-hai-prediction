@@ -302,6 +302,136 @@ def publisher_cases() -> dict[str, bool]:
     }
 
 
+BASE = "20261110T010000Z-0b5e0001"
+RESEARCH_RUN = "20261110T010000Z-5e5ea4c1"
+HAI_TYPE = "HAI_1"
+
+
+class Ends(StandIn):
+    """A stand-in whose runs end in success at the first poll."""
+
+    def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+        record = super().run(dag_id, dag_run_id)
+        self.runs[dag_run_id] = "success"
+        return record
+
+
+def refused_quietly(arguments: list[str], words: str) -> bool:
+    """The command exits 1, names ``words`` and reads no secret and calls no API."""
+    api = Ends()
+    code, printed, error, _ = invoke(api, arguments)
+    return code == 1 and printed is None and words in error and not api.calls and api.token_reads == 0
+
+
+def first(api: StandIn) -> dict[str, Any]:
+    """The first conf the stand-in received, or an empty one when it received none."""
+    return api.confs[0] if api.confs else {}
+
+
+def base_run_cases() -> dict[str, bool]:
+    """A base run names the derived runs of the chain of ``orchestration.training_contract``: the training run of a model, the features run it fits on and the
+    research run. The conf must be the one the DAGs build for themselves, so a hand start joins the runs that the chain starts."""
+    from orchestration import training_contract as contract
+
+    train = ["--dag", "training_dag", "--mode", "real", "--model", "m1", "--base-run", BASE, "--wait-seconds", "5"]
+    features = contract.model_features_run_id(BASE, "m1")
+    trained = contract.trained_run_id(BASE, "m1")
+    api = Ends()
+    code, printed, _, _ = invoke(api, train)
+    sensitivity = Ends()
+    invoke(sensitivity, [*train, "--population", "sensitivity", "--hai-types", HAI_TYPE])
+    explicit = Ends()
+    explicit_code = invoke(explicit, [*train, "--run-id", trained, "--features-run", features])[0]
+    hand = Ends()
+    invoke(hand, ["--dag", "training_dag", "--mode", "real", "--model", "m3", "--wait-seconds", "5"])
+    other = Ends()
+    invoke(other, [*train[:5], "m4", *train[6:]])
+    expected_training = {
+        "run_id": trained,
+        "mode": "real",
+        "features_run": features,
+        "population": "primary",
+        "hai_types": list(contract.HAI_TYPES),
+        "trigger": "manual",
+        "mlflow": "aws",
+        "model": "m1",
+        "base_run": BASE,
+    }
+    research = ["--dag", "research_dag", "--mode", "real", "--base-run", BASE, "--wait-seconds", "5"]
+    research_api = Ends()
+    research_code, research_printed, _, _ = invoke(research_api, research)
+    types_api = Ends()
+    invoke(types_api, [*research, "--hai-types", HAI_TYPE, "--population", "sensitivity"])
+    chained = contract.research_requests("m1", trained, BASE, "primary", list(contract.HAI_TYPES), "aws")[0]["conf"]
+    serve = ["--dag", "serving_deploy_dag", "--mode", "real", "--hai-type", HAI_TYPE, "--wait-seconds", "5"]
+    canary_api, stable_api, unnamed_api = Ends(), Ends(), Ends()
+    canary_code = invoke(canary_api, [*serve, "--deploy-mode", "canary", "--research-run", RESEARCH_RUN])[0]
+    stable_code = invoke(stable_api, [*serve, "--deploy-mode", "stable"])[0]
+    invoke(unnamed_api, ["--dag", "model_promotion_dag", "--mode", "real", "--hai-type", HAI_TYPE, "--model-version", "7", "--wait-seconds", "5"])
+    return {
+        "training with a base run triggers the derived training run on the derived features run and names the base run": code == 0
+        and printed is not None
+        and printed["run_id"] == trained
+        and api.confs == [expected_training],
+        "the derived training run is the run the drift DAG chains for the model": trained
+        == contract.model_training_run_id(contract.model_drift_run_id(features), "m1"),
+        "the population and HAI types of a training run with a base run are sent as given": first(sensitivity).get("population") == "sensitivity"
+        and first(sensitivity).get("hai_types") == [HAI_TYPE]
+        and first(sensitivity).get("run_id") == trained,
+        "the run ID and the features run may be named when they are the derived ones": explicit_code == 0 and explicit.confs == [expected_training],
+        "another model derives its own runs": first(other).get("run_id") == contract.trained_run_id(BASE, "m4")
+        and first(other).get("features_run") == contract.model_features_run_id(BASE, "m4"),
+        "training without a base run keeps the hand start: latest features, no base run in the conf": "base_run" not in first(hand)
+        and first(hand).get("features_run") == "latest",
+        "a base run with another run ID is refused before any call": refused_quietly([*train, "--run-id", RUN], "derived"),
+        "a base run with another features run is refused before any call": refused_quietly([*train, "--features-run", BASE], "features"),
+        "a base run with no model is refused before any call": refused_quietly([*train[:4], *train[6:]], "model"),
+        "a base run that is not a run ID is refused before any call": refused_quietly([*train[:7], "latest", *train[8:]], "run ID"),
+        "a workflow that takes no base run refuses it before any call": all(
+            refused_quietly(["--dag", dag, "--mode", "real", "--base-run", BASE, *extra, "--wait-seconds", "5"], "base run")
+            for dag, extra in (
+                ("ingestion_dag", ()),
+                ("gold_transform_dag", ("--silver-snapshot-run", SILVER)),
+                ("model_promotion_dag", ("--hai-type", HAI_TYPE, "--model-version", "7")),
+                ("serving_deploy_dag", ("--hai-type", HAI_TYPE, "--deploy-mode", "stable")),
+            )
+        ),
+        "research triggers the research run derived from the base run with the conf the training DAG sends": research_code == 0
+        and research_printed is not None
+        and research_printed["run_id"] == contract.research_run_id(BASE)
+        and research_api.confs == [chained],
+        "the research population and HAI types are sent as given": first(types_api).get("hai_types") == [HAI_TYPE]
+        and first(types_api).get("population") == "sensitivity",
+        "research without a base run is refused before any call": refused_quietly(
+            ["--dag", "research_dag", "--mode", "real", "--wait-seconds", "5"], "base_run"
+        ),
+        "research with another run ID is refused before any call": refused_quietly([*research, "--run-id", RUN], "derived"),
+        "research on the local MLflow lane is refused before any call": refused_quietly([*research, "--mlflow", "local"], "mlflow=local"),
+        "a canary deploy names the research run and the type and the mode and nothing else": canary_code == 0
+        and canary_api.confs
+        == [{"run_id": first(canary_api).get("run_id"), "mode": "real", "hai_type": HAI_TYPE, "deploy_mode": "canary", "research_run": RESEARCH_RUN}],
+        "a stable deploy leaves the research run to the form": stable_code == 0
+        and stable_api.confs
+        == [{"run_id": first(stable_api).get("run_id"), "mode": "real", "hai_type": HAI_TYPE, "deploy_mode": "stable", "research_run": "latest"}],
+        "a canary deploy without a research run ID is refused before any call": refused_quietly([*serve, "--deploy-mode", "canary"], "research run")
+        and refused_quietly([*serve, "--deploy-mode", "canary", "--research-run", "latest"], "research run"),
+        "a stable deploy that names a research run is refused before any call": refused_quietly(
+            [*serve, "--deploy-mode", "stable", "--research-run", RESEARCH_RUN], "research run"
+        ),
+        "a deploy without a mode or with another mode is refused before any call": refused_quietly(serve, "serving")
+        and refused_quietly([*serve, "--deploy-mode", "rollout"], "serving"),
+        "a deploy without a type is refused before any call": refused_quietly(
+            ["--dag", "serving_deploy_dag", "--mode", "real", "--deploy-mode", "stable", "--wait-seconds", "5"], "serving"
+        ),
+        "a workflow that is not a deploy refuses a deploy mode and a research run before any call": refused_quietly(
+            [*train[:8], "--deploy-mode", "stable", "--wait-seconds", "5"], "deploy"
+        )
+        and refused_quietly(["--dag", "research_dag", "--mode", "real", "--base-run", BASE, "--research-run", RESEARCH_RUN, "--wait-seconds", "5"], "deploy"),
+        "the promotion of a version keeps its own options": unnamed_api.confs
+        == [{"run_id": first(unnamed_api).get("run_id"), "mode": "promote", "hai_type": HAI_TYPE, "model_version": "7", "mlflow": "aws"}],
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -309,6 +439,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "parse": parse_cases,
     "trigger": trigger_cases,
     "publisher request": publisher_cases,
+    "base run": base_run_cases,
 }
 
 

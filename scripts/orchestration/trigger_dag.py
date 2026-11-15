@@ -1,4 +1,4 @@
-"""Trigger one ingestion, silver, gold, features, feature store or training workflow run on the running orchestration stack and wait for its end.
+"""Trigger one ingestion, silver, gold, features, feature store, training, research or serving workflow run on the running stack and wait for its end.
 
 Every wait has a deadline.
 
@@ -9,6 +9,10 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag ingestion_dag --mode real --capture-root ingestion_test/<run id>/ --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --mode real --silver-snapshot-run <silver run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_base_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag training_dag --mode real --model m1 --base-run <base run id> --wait-seconds 14400
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag research_dag --mode real --base-run <base run id> --wait-seconds 14400
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag model_promotion_dag --mode real --hai-type HAI_1 --model-version <version> --wait-seconds 3600
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag serving_deploy_dag --mode real --hai-type HAI_1 --deploy-mode stable --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
 
@@ -16,6 +20,12 @@ A workflow whose job publishes from a producer run requires that run as a run ID
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
 does not accept: after the direct ECS launch every workflow here accepts only ``real`` (model promotion takes promote or rollback as
 ``--promotion-mode``).
+
+``--base-run`` names the run of ``features_base_dag`` whose model set a training or research run uses. The runs of the chain derive from it
+(``orchestration/training_contract.py``), so the trigger derives them and refuses any other value: ``training_dag`` takes the training run of its ``--model``
+on the features run of that model's set (``--run-id`` and ``--features-run`` may name only those) and sends the base run, so a run of m1, m2 or m4 starts
+``research_dag`` itself for the base. ``research_dag`` takes the research run of the base (``--run-id`` may name only that run). The run ID that is printed is
+the research run that ``serving_deploy_dag`` takes as ``--research-run``: a canary needs it, a stable deploy takes none. No other workflow takes ``--base-run``.
 
 ``ingestion_dag`` also takes ``--run-kind`` (``bootstrap``, the form's default, or ``monthly``) and ``--capture-root`` (``raw/``, the form's default, or one
 ``ingestion_test/<run id>/`` folder). Both are checked exactly as the launch preflight checks a publisher request (``require_publisher_request``), before the
@@ -45,7 +55,16 @@ from orchestration.ecs_launch import LaunchRefused
 from orchestration.ecs_preflight import require_publisher_request
 from orchestration.interface import SubmissionRequest
 from orchestration.training_contract import DAGS as TRAINING_DAGS
-from orchestration.training_contract import HAI_TYPES, LAUNCH_LANES, MODELS, parameters_for
+from orchestration.training_contract import (
+    HAI_TYPES,
+    LAUNCH_LANES,
+    MODELS,
+    model_features_run_id,
+    parameters_for,
+    research_run_id,
+    serving_parameters_for,
+    trained_run_id,
+)
 from scripts.infrastructure import secret_store
 from scripts.orchestration.airflow_api import TERMINAL_RUN_STATES, AirflowApi, AirflowApiError
 
@@ -53,7 +72,11 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 # The producer-run parameter each workflow's form requires, by workflow.
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_base_dag": "gold_snapshot_run"}
-DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *TRAINING_DAGS)
+RESEARCH_DAG = "research_dag"
+SERVING_DAG = "serving_deploy_dag"
+# The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
+PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
+DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG)
 # The modes each workflow's form accepts. A workflow the table does not name takes MODES.
 FORM_MODES = {dag: ("real",) for dag in DAGS}
 MODES = ("real",)
@@ -100,9 +123,12 @@ def run_conf(
         conf |= publisher_conf(dag, mode, run_id, given_publisher)
     elif any(value is not None for value in given_publisher.values()):
         raise TriggerError(f"refused: {dag} takes no run kind and no capture root, only ingestion_dag does")
-    if dag in TRAINING_DAGS:
-        if silver_snapshot_run is not None or gold_snapshot_run is not None:
-            raise TriggerError("refused: a training workflow reads no silver or gold snapshot run")
+    if dag in (*PARAMETER_DAGS, SERVING_DAG) and (silver_snapshot_run is not None or gold_snapshot_run is not None):
+        raise TriggerError("refused: a training, research or serving workflow reads no silver or gold snapshot run")
+    if dag == SERVING_DAG:
+        conf.update(serving_conf(training or {}))
+        return conf
+    if dag in PARAMETER_DAGS:
         try:
             # A DAG step launches on AWS through the direct launch library, so only the aws MLflow lane is accepted (local is refused by name).
             selected = parameters_for(dag, training or {}, LAUNCH_LANES)
@@ -115,7 +141,7 @@ def run_conf(
             conf.update(selected)
         return conf
     if training is not None:
-        raise TriggerError("refused: training parameters belong only to training workflows")
+        raise TriggerError("refused: training parameters belong only to training, research and serving workflows")
     given = {"silver_snapshot_run": silver_snapshot_run, "gold_snapshot_run": gold_snapshot_run}
     needed = PRODUCER_RUNS.get(dag)
     for name, value in given.items():
@@ -128,6 +154,52 @@ def run_conf(
             raise TriggerError(f"refused: {dag} needs {flag} as a run ID (not latest), the producer run its job publishes from; got {value!r}")
         conf[needed] = value
     return conf
+
+
+def serving_conf(given: dict[str, Any]) -> dict[str, str]:
+    """The request of a deploy: the type and the mode as the serve family's closed request takes them, and the research run. A canary names a research run
+    ID, as the serve preflight needs its record to derive the challenger; a stable deploy names none and leaves ``latest`` to the form."""
+    try:
+        closed = serving_parameters_for({name: given.get(name) for name in ("hai_type", "deploy_mode")})
+    except ValueError as error:
+        raise TriggerError(f"refused: serving: {error}") from None
+    research = given.get("research_run")
+    if closed["deploy_mode"] == "canary":
+        if research is None or not RUN_ID.fullmatch(research):
+            raise TriggerError(
+                f"refused: a canary deploy needs --research-run as a research run ID (not latest), the run whose record names the challenger; got {research!r}"
+            )
+        return {**closed, "research_run": research}
+    if research is not None:
+        raise TriggerError("refused: a stable deploy deploys the Production version and takes no research run")
+    return {**closed, "research_run": "latest"}
+
+
+def base_run_plan(
+    dag: str, base_run: str | None, model: str | None, run_id: str | None, features_run: str | None
+) -> tuple[str | None, str | None, dict[str, str]]:
+    """The run ID, the features run and the extra conf that a base run fixes for a training or research run.
+
+    The training run of a model on a base run, the features run of its set and the research run are the runs the features, drift and training DAGs derive
+    from the base run, so a run that names any other ID would belong to no chain. A value left out is derived; a value that is named must be the derived one.
+    """
+    if base_run is None:
+        return run_id, features_run, {}
+    if dag not in (*TRAINING_DAGS[:1], RESEARCH_DAG):
+        raise TriggerError(f"refused: {dag} takes no base run, only training_dag and research_dag do")
+    if not RUN_ID.fullmatch(base_run):
+        raise TriggerError(f"refused: --base-run must be a base publication run ID, not {base_run!r}")
+    if dag == RESEARCH_DAG:
+        derived, features, extra = research_run_id(base_run), features_run, {}
+    else:
+        if model not in MODELS:
+            raise TriggerError(f"refused: --base-run needs --model, one of {', '.join(MODELS)}, to derive the training run")
+        derived, features, extra = trained_run_id(base_run, model), model_features_run_id(base_run, model), {"base_run": base_run}
+        if features_run is not None and features_run != features:
+            raise TriggerError(f"refused: with --base-run the features run is the one of the model's set, {features}, not {features_run!r}")
+    if run_id is not None and run_id != derived:
+        raise TriggerError(f"refused: with --base-run the run ID is the derived run {derived}, not {run_id!r}")
+    return derived, features, extra
 
 
 def publisher_conf(dag: str, mode: str, run_id: str, given: dict[str, str | None]) -> dict[str, str]:
@@ -246,7 +318,12 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--run-kind", help="ingestion_dag only: bootstrap (the form's default) or monthly")
     cli.add_argument("--capture-root", help="ingestion_dag only: raw/ (the form's default) or ingestion_test/<run id>/")
     cli.add_argument("--gold-snapshot-run", help="features and feature store only, required: the committed gold run (a run ID) they publish from")
-    cli.add_argument("--features-run", default="latest")
+    cli.add_argument(
+        "--base-run", help="training_dag and research_dag: the features_base_dag run whose model set is trained or researched; derives the run IDs"
+    )
+    cli.add_argument(
+        "--features-run", help="training_dag only: the features run to fit on (latest, the default, or a run ID; with --base-run only the model set's run)"
+    )
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
@@ -255,6 +332,8 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
+    cli.add_argument("--deploy-mode", help="serving_deploy_dag only, required: canary or stable")
+    cli.add_argument("--research-run", help="serving_deploy_dag canary only, required: the research run (a run ID) whose record names the challenger")
     cli.add_argument("--wait-seconds", type=float, required=True, help=f"the deadline of the whole wait, at most {MAX_WAIT_SECONDS} s")
     action = cli.add_mutually_exclusive_group()
     action.add_argument("--status", action="store_true", help="read the state of the run --run-id and change nothing")
@@ -277,21 +356,32 @@ def main(argv: list[str] | None = None) -> int:
             )
             sys.stdout.write(json.dumps(found) + "\n")
             return 0
+        if args.dag != SERVING_DAG and (args.deploy_mode is not None or args.research_run is not None):
+            raise TriggerError(f"refused: {args.dag} takes no deploy mode and no research run, only {SERVING_DAG} does")
+        if args.dag != "training_dag" and args.features_run is not None:
+            raise TriggerError(f"refused: {args.dag} takes no features run, only training_dag does")
+        run_id, features_run, extra = base_run_plan(args.dag, args.base_run, args.model, args.run_id, args.features_run)
         training = None
         if args.dag == "training_dag":
+            args.features_run = "latest" if features_run is None else features_run
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow", "model")}
+        elif args.dag == RESEARCH_DAG:
+            training = {name: getattr(args, name) for name in ("base_run", "population", "hai_types", "mlflow")}
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
+        elif args.dag == SERVING_DAG:
+            training = {"hai_type": args.hai_type, "deploy_mode": args.deploy_mode, "research_run": args.research_run}
         conf = run_conf(
             args.dag,
             args.mode,
-            new_run_id() if args.run_id is None else args.run_id,
+            new_run_id() if run_id is None else run_id,
             args.silver_snapshot_run,
             training,
             args.gold_snapshot_run,
             args.run_kind,
             args.capture_root,
         )
+        conf |= extra
         token_secret = read_token_secret(deadline)
         result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), token_secret, deadline=deadline))
     except (TriggerError, secret_store.SecretStoreError) as error:
