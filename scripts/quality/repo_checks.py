@@ -1592,7 +1592,10 @@ def orphan_files() -> list[Finding]:
         if path.endswith(".py"):
             patterns.append(rf"(?<![\w-])(?:import|from|-m)\s+(?:[\w.]+\.)?{re.escape(Path(path).stem)}\b")  # \b cannot precede -m
         pattern = re.compile("|".join(patterns))
-        if not any(other != path and pattern.search(text) for other, text in texts.items()):
+        # Every alternative of the pattern holds one of these strings as written (the path, the name, the last two folders, the module name), so a text
+        # that holds none of them cannot match and is not searched.
+        literals = [path, name, *(["/".join(parts[-2:])] if len(parts) >= 2 else []), *([Path(path).stem] if path.endswith(".py") else [])]
+        if not any(other != path and any(literal in text for literal in literals) and pattern.search(text) for other, text in texts.items()):
             fix = f"delete it, link it from the file that uses it, or add 'orphan {path} -- <why it stays> -- <expiry>' to {CLEANUP_ALLOWLIST}"
             findings.append(Finding(path, "no other tracked file references it", CLEANUP_RULE, fix))
     return findings
