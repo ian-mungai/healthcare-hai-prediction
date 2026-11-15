@@ -1208,6 +1208,23 @@ def job_project_cases() -> Iterator[Case]:
             request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
             False,
         )
+    # The services apply registers the model API and dashboard task definitions with the serving execution role and each service's task role (infra/services).
+    for name in SERVING_ROLE_NAMES:
+        yield Case(
+            f"serving pass: {name} to ECS tasks",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            True,
+            "PassServingRoles",
+        )
+        for service in ("ec2.amazonaws.com", "ecs.amazonaws.com", "dlm.amazonaws.com"):
+            yield Case(f"serving pass: {name} to {service}", request("iam:PassRole", role(name), extra={"iam:PassedToService": service}, region=None), False)
+        yield Case(f"serving pass: {name} without a service", request("iam:PassRole", role(name), region=None), False)
+    for name in ("serving_execution_extra", "model_api_task_extra", "streamlit_task_extra", "serving", "model_api", "streamlit", "model_api_execution"):
+        yield Case(
+            f"serving pass: refuse {name}",
+            request("iam:PassRole", role(name), extra={"iam:PassedToService": "ecs-tasks.amazonaws.com"}, region=None),
+            False,
+        )
     for name in ("job_train_task_extra", "mlflow_task_extra", "job_train", "mlflow", "host_code_fetch_task_extra", "host_code_fetch", "code_fetch_task"):
         yield Case(
             f"training pass: refuse {name}",
@@ -2985,6 +3002,13 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
     def publisher_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassPublisherTaskRole")["Condition"]
 
+    def serving_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
+        del by_sid(documents, "iam", "PassServingRoles")["Condition"]
+
+    def serving_pass_without_streamlit_role(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassServingRoles")
+        statement["Resource"] = [item for item in as_list(statement["Resource"]) if item != role("streamlit_task")]
+
     def training_pass_without_code_fetch_role(documents: dict[str, dict[str, Any]]) -> None:
         statement = by_sid(documents, "iam", "PassTrainingRoles")
         statement["Resource"] = [item for item in as_list(statement["Resource"]) if item != role("host_code_fetch_task")]
@@ -3191,6 +3215,12 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
                 "publisher pass: job_publisher_task without a service",
                 publisher_pass_without_service_condition,
             ),
+            "serving PassRole resource widened": (
+                "serving pass: refuse serving_execution_extra",
+                job_resource("iam", "PassServingRoles", 0, role("serving_execution*")),
+            ),
+            "serving PassRole lacks the dashboard task role": ("serving pass: streamlit_task to ECS tasks", serving_pass_without_streamlit_role),
+            "serving PassRole service condition removed": ("serving pass: serving_execution without a service", serving_pass_without_service_condition),
             "training PassRole service condition removed": ("training pass: job_train_task without a service", training_pass_without_service_condition),
             "layer PassRole writer-family wildcard": (
                 "job pass: refuse job_write_other_task",

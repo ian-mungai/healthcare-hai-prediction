@@ -529,6 +529,30 @@
       }
     },
     {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_serving_execution_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_model_api_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
+      "role": "project_user",
+      "action": "iam:PassRole",
+      "resource": "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_streamlit_task_${ENVIRONMENT}",
+      "context": {
+        "iam:PassedToService": "ecs-tasks.amazonaws.com"
+      }
+    },
+    {
       "role": "airflow_launch",
       "action": "ecs:RunTask",
       "resource": "arn:aws:ecs:${AWS_REGION}:${AWS_ACCOUNT_ID}:task-definition/${PROJECT_NAME}_${ENVIRONMENT}_job_train_host:1",
