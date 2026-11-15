@@ -46,33 +46,33 @@
     },
     {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "estimate, Nov 15 2026: the Mac runs one test-checks shard in 17 minutes (771 s of user time), 2.2 times that on a hosted runner (the orphan-files hook took 2361 s hosted and 1090 s on the Mac) is about 37 minutes, plus about 1 minute of setup; the first hosted run of the shards (43685924350) stopped all four at the 26.6 minute budget of the former 30 minute timeout"
+      "measured_minutes": 26,
+      "timeout_minutes": 65,
+      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
     },
     {
       "job": "Repository Hooks (samples, shard 2 of 4)",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "estimate, Nov 15 2026: the Mac runs one test-checks shard in 17 minutes (771 s of user time), 2.2 times that on a hosted runner (the orphan-files hook took 2361 s hosted and 1090 s on the Mac) is about 37 minutes, plus about 1 minute of setup; the first hosted run of the shards (43685924350) stopped all four at the 26.6 minute budget of the former 30 minute timeout"
+      "measured_minutes": 33,
+      "timeout_minutes": 65,
+      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
     },
     {
       "job": "Repository Hooks (samples, shard 3 of 4)",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "estimate, Nov 15 2026: the Mac runs one test-checks shard in 17 minutes (771 s of user time), 2.2 times that on a hosted runner (the orphan-files hook took 2361 s hosted and 1090 s on the Mac) is about 37 minutes, plus about 1 minute of setup; the first hosted run of the shards (43685924350) stopped all four at the 26.6 minute budget of the former 30 minute timeout"
+      "measured_minutes": 33,
+      "timeout_minutes": 65,
+      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
     },
     {
       "job": "Repository Hooks (samples, shard 4 of 4)",
-      "measured_minutes": 38,
-      "timeout_minutes": 60,
-      "basis": "estimate, Nov 15 2026: the Mac runs one test-checks shard in 17 minutes (771 s of user time), 2.2 times that on a hosted runner (the orphan-files hook took 2361 s hosted and 1090 s on the Mac) is about 37 minutes, plus about 1 minute of setup; the first hosted run of the shards (43685924350) stopped all four at the 26.6 minute budget of the former 30 minute timeout"
+      "measured_minutes": 43,
+      "timeout_minutes": 65,
+      "basis": "hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes; one timeout serves the matrix, 1.5 times the slowest shard"
     },
     {
       "job": "Repository Hooks (samples)",
-      "measured_minutes": 4,
-      "timeout_minutes": 10,
-      "basis": "estimate, about 2 minutes of setup and the combining step"
+      "measured_minutes": 1,
+      "timeout_minutes": 5,
+      "basis": "hosted run 43730985805 (Nov 15 2026): 0.8 minutes, of which the checkout with Git LFS took 11 seconds"
     },
     {
       "job": "Core Static Checks",
@@ -298,15 +298,15 @@
     },
     {
       "job": "Launcher E2E (Shard 1 of 2)",
-      "measured_minutes": 18,
+      "measured_minutes": 16,
       "timeout_minutes": 30,
-      "basis": "hosted run 43284615034 (Nov 12 2026): 16.1 and 15.3 minutes; run 43685924350: shard 1 16.3 minutes, shard 2 over 20 minutes with 4.3 minutes in the env-example gate, which takes 2 seconds now"
+      "basis": "hosted run 43730985805 (Nov 15 2026): shard 1 15.5 minutes, shard 2 16.7 minutes, after the env-example gate dropped to seconds"
     },
     {
       "job": "Launcher E2E (Shard 2 of 2)",
-      "measured_minutes": 18,
+      "measured_minutes": 17,
       "timeout_minutes": 30,
-      "basis": "hosted run 43284615034 (Nov 12 2026): 16.1 and 15.3 minutes; run 43685924350: shard 1 16.3 minutes, shard 2 over 20 minutes with 4.3 minutes in the env-example gate, which takes 2 seconds now"
+      "basis": "hosted run 43730985805 (Nov 15 2026): shard 1 15.5 minutes, shard 2 16.7 minutes, after the env-example gate dropped to seconds"
     },
     {
       "job": "Acquisition Checks (Shard 1 of 4)",

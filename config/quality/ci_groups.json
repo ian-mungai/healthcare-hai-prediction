@@ -527,12 +527,12 @@
     },
     "hook_samples": {
       "job": "Repository Hooks (samples, shard 1 of 4)",
-      "minutes": 60,
+      "minutes": 65,
       "cores": 2
     },
     "hook_samples_combine": {
       "job": "Repository Hooks (samples)",
-      "minutes": 10,
+      "minutes": 5,
       "cores": 1
     },
     "acquisition_shard": {

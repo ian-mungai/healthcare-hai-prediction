@@ -293,9 +293,8 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Hosted run 43685924350: all four shards reached the 26.6 minute budget of the former 30 minute timeout. The Mac runs one shard in 17 minutes (Nov 15 2026) and the
-    # hosted runner took 2.2 times the Mac for the orphan-files hook, so a shard needs about 37 minutes plus 1 minute of setup. Resize from the first complete hosted run.
-    timeout-minutes: 60
+    # Hosted run 43730985805 (Nov 15 2026): shards 1 to 4 took 25.6, 33.0, 32.2 and 42.7 minutes. 65 minutes is 1.5 times the slowest shard.
+    timeout-minutes: 65
     strategy:
       fail-fast: false
       matrix:
@@ -352,8 +351,8 @@ jobs:
     # Runs after a failed shard too, so that the failure shows here and a skipped gate never counts as a pass; a cancelled run needs no verdict.
     if: ${{ !cancelled() && needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Estimate: about 2 minutes of setup and the combining step. Resize from the first complete hosted run.
-    timeout-minutes: 10
+    # Hosted run 43730985805 (Nov 15 2026): 0.8 minutes, of which the checkout with Git LFS took 11 seconds.
+    timeout-minutes: 5
     steps:
       - name: Require every shard job to have succeeded
         env:
@@ -860,8 +859,7 @@ jobs:
     needs: plan
     if: ${{ needs.plan.outputs.reuse != 'true' }}
     runs-on: ubuntu-24.04
-    # Hosted runs 43284615034 and 43685924350: shard 1 took 16.1 and 16.3 minutes, shard 2 15.3 minutes and then over 20 minutes, 4 of them in the env-example gate
-    # that now takes seconds.
+    # Hosted run 43730985805 (Nov 15 2026): shard 1 took 15.5 minutes and shard 2 16.7 minutes, after the env-example gate dropped to seconds.
     timeout-minutes: 30
     strategy:
       fail-fast: false
