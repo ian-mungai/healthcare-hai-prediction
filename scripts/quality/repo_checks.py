@@ -553,10 +553,11 @@ def env_example() -> list[Finding]:
                     fix = f"add {name}= with a comment to .env.example"
                     findings.append(Finding(f"{path}:{number}", f"{name} is read but not in .env.example", f"{POLICY}: docs match the code", fix))
     if example.exists():
-        others = "\n".join("\n".join(lines) for path, lines in reference_files().items() if path != ".env.example")
+        # A name is a whole word of the other files exactly when it is one of their \w+ runs: one pass over them, not one search of all their text per name.
+        words = {word for path, lines in reference_files().items() if path != ".env.example" for line in lines for word in re.findall(r"\w+", line)}
         for number, line in enumerate(example.read_text().splitlines(), 1):
             match = ENV_EXAMPLE_NAME.match(line)
-            if match and not re.search(rf"\b{match.group(1)}\b", others):
+            if match and match.group(1) not in words:
                 fix = f"remove {match.group(1)} from .env.example, or restore the code that reads it"
                 findings.append(Finding(f".env.example:{number}", f"{match.group(1)} is documented but nothing reads it", CLEANUP_RULE, fix))
     return findings
@@ -1779,12 +1780,22 @@ def removed_names() -> list[Finding]:
     unchecked = mypy_uncovered_files() if kinds["python"] else set()
     findings += deleted_modules_left(removed, deleted, files, allowed)
     for kind, names in kinds.items():
+        # The text searched in a file depends on the kind and the file, not on the name: read it once for all the names of the kind.
+        views: dict[str, list[str] | None] = {}
+        blobs: dict[str, str] = {}
         for name, pattern in sorted(names.items()):
             for path, lines in files.items():
-                view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
-                if view is not None and kind == "config":
-                    view = python_literals(view, without_paths) if path.endswith(".py") else [without_paths(line) for line in view]
-                if view is None or any(entry_kind == kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                if path not in views:
+                    view = search_view(kind, path, lines) if kind != "python" or path in unchecked else None
+                    if view is not None and kind == "config":
+                        view = python_literals(view, without_paths) if path.endswith(".py") else [without_paths(line) for line in view]
+                    if view is not None and any(entry_kind == kind and fnmatch.fnmatch(path, glob) for entry_kind, glob in allowed):
+                        view = None
+                    views[path] = view
+                    blobs[path] = "\n".join(view) if view is not None else ""
+                view = views[path]
+                # Every pattern of a kind but dependency holds the removed name as written, so a file whose text lacks the name has no reference to it.
+                if view is None or (kind != "dependency" and name not in blobs[path]):
                     continue
                 for number, line in enumerate(view, 1):
                     if pattern.search(line):
