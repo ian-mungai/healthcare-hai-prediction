@@ -184,14 +184,23 @@ def canary_result(research_run: str, record: Mapping[str, Any], decision: Mappin
     }
 
 
+FIRST_CHAMPION = (
+    " It is the first champion of its infection type and was promoted without a canary under the owner's one-time exception"
+    " (decision A, Nov 15 2026): no Production model existed to run a canary beside."
+)
+
+
 def notice_detail(record: Mapping[str, Any], canary: Mapping[str, Any] | None, outcome: str) -> str:
-    """What the owner reads about a type's challenger: the model and version, and for a hold the failed checks of the canary or that none was stored."""
+    """What the owner reads about a type's challenger: the model and version, for a hold the failed checks of the canary or that none was stored, and for a
+    promotion of a first champion (a record whose ``production_version`` is None) that it went without a canary under the owner's one-time exception."""
     challenger = record["promotion"]["challenger"]
     candidate = f"{challenger['model']} version {challenger['version']}"
+    first = FIRST_CHAMPION if "production_version" in record["promotion"] and record["promotion"]["production_version"] is None else ""
     if outcome == "promoted":
-        return f"{candidate} is the Production model and the API serves it alone."
+        return f"{candidate} is the Production model and the API serves it alone.{first}"
     if outcome == "promoted_not_rolled_out":
-        return f"{candidate} is the Production model, but its release or rollout failed, so the API still serves the earlier deployment."
+        served = "the API serves no model of this type yet" if first else "the API still serves the earlier deployment"
+        return f"{candidate} is the Production model, but its release or rollout failed, so {served}.{first}"
     reason = (
         "no canary result was stored" if canary is None else f"the canary failed {', '.join(canary['failed'])}" if canary["failed"] else "the canary passed"
     )

@@ -11,14 +11,24 @@ its steps, each launched once under a run of its own (``training_contract.chain_
    The serve preflight derives the version from the type's research record and the share and the lifetime from the job table. The deployment record
    carries the canary's expiry, and the model API serves the canary only before it.
 2. ``canary_check`` judges the canary replay stored for the research run and stores its result. The chain reads that result and goes on only for ``promote``.
-3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result.
-4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion.
+3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result, unless the
+   registry has no Production version.
+4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion,
+   and only when the features run the model trained on has a hold record (``online_hold.json``): with none there is nothing to release.
 5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
    active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. A hold, a
    failed check or a failed canary deploy deploys nothing more: the canary stops getting traffic at its expiry, with no later step.
 6. ``owner_notice`` tells the owner what happened: ``promoted`` only when the promotion and the rollout both ended, ``promoted_not_rolled_out`` when the
    promotion stands but the release or the rollout failed, and ``held`` after a hold, a failed canary deploy or check, or a canary result that does not name
    this candidate.
+
+First champion (owner decision A, Nov 15 2026): when the research record names no Production version (``promotion.production_version`` is None), the type
+has nothing to run a canary beside. Steps 1 and 2 are skipped, so the chain promotes a challenger whose verdict is ``pass`` or ``pass_baseline`` (research
+chooses only such a challenger) and goes on with the release check, the rollout and the notice. This is a one-time exception to the canary rule for the first
+champion only. A record without the key, or one that names a version, keeps the canary.
+
+The features run of the challenger is the one its training run read, which the research record names (``features_runs``). It is not derived from the base
+run, because the training runs read the run IDs the features DAGs chose.
 
 One type failing never stops another type's chain. A failed promotion is not announced, because the Production alias may have moved: the failure is the signal,
 and the owner resolves it with the promotion tooling. A failed release or rollout leaves the promotion standing, is announced as such and is reported as a
@@ -28,13 +38,15 @@ failure. ``run_types`` returns every failure; the caller fails the DAG task with
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from orchestration.training_contract import PROMOTION_MODELS, chain_run_id, model_features_run_id, record_key, trained_run_id
+from orchestration.training_contract import PROMOTION_MODELS, RUN_ID, chain_run_id, record_key, trained_run_id
 
 TRAIN_JOB = "train"
+HOLD_PREFIX, HOLD_NAME = "lakehouse/layer_runs/features", "online_hold.json"  # where scripts.features.feast_sets writes the hold (a case compares them)
 Launch = Callable[[str, str, dict[str, Any]], None]
 Read = Callable[[str], bytes | None]
 Release = Callable[[str, str, str], None]
@@ -58,12 +70,14 @@ class RunStore(Protocol):
 
 @dataclass(frozen=True)
 class Challenger:
-    """The challenger of one infection type: the model and registered version research chose, and the run of the model set that trained it."""
+    """The challenger of one infection type: the model and registered version research chose, the features run its training run read and whether the
+    registry has no Production version for the type (the first champion, which has no canary)."""
 
     hai_type: str
     model: str
     version: str
     features_run: str
+    first_champion: bool = False
 
 
 def trained(store: RunStore, run_id: str) -> bool:
@@ -94,13 +108,23 @@ def parse(read: Read, key: str) -> dict[str, Any]:
     return document
 
 
-def challenger_named(read: Read, research_run: str, hai_type: str) -> tuple[str, str] | None:
-    """The model and version of the challenger in the type's research record, or None for a type without one. A record that does not name a promotable
-    candidate is refused."""
+def hold_key(features_run: str) -> str:
+    """The data bucket key of the held online load of a features run: it exists only when the features job held that run's load."""
+    return f"{HOLD_PREFIX}/{features_run}/{HOLD_NAME}"
+
+
+def research_document(read: Read, research_run: str, hai_type: str) -> tuple[str, dict[str, Any]]:
+    """The key and the document of the type's research record, which must be a record of that type."""
     key = record_key("research", research_run, hai_type)
     document = parse(read, key)
     if document.get("hai_type") != hai_type:
         raise RecordRefused(f"{key} is a record of {document.get('hai_type')}")
+    return key, document
+
+
+def named_in(key: str, document: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The model and version of the challenger in a research record, or None for a type without one. A record that does not name a promotable candidate is
+    refused."""
     promotion = document.get("promotion")
     challenger = promotion.get("challenger") if isinstance(promotion, dict) else None
     if challenger is None:
@@ -111,10 +135,36 @@ def challenger_named(read: Read, research_run: str, hai_type: str) -> tuple[str,
     return str(model), version
 
 
-def challenger_of(read: Read, research_run: str, base_run: str, hai_type: str) -> Challenger | None:
-    """The challenger in the type's research record, or None for a type without one."""
-    named = challenger_named(read, research_run, hai_type)
-    return None if named is None else Challenger(hai_type, named[0], named[1], model_features_run_id(base_run, named[0]))
+def challenger_named(read: Read, research_run: str, hai_type: str) -> tuple[str, str] | None:
+    """The model and version of the challenger in the type's research record, or None for a type without one. A record that does not name a promotable
+    candidate is refused."""
+    key, document = research_document(read, research_run, hai_type)
+    return named_in(key, document)
+
+
+def challenger_of(read: Read, research_run: str, hai_type: str) -> Challenger | None:
+    """The challenger in the type's research record with its features run and whether it is the first champion, or None for a type without a challenger.
+
+    The features run is the one the record names for the model. A record that names none, or names a malformed one, is refused, because the hold check needs
+    the real run. The challenger is the first champion only when the record carries ``production_version`` and it is None: a record without the key is of
+    unknown state and keeps the canary.
+    """
+    key, document = research_document(read, research_run, hai_type)
+    named = named_in(key, document)
+    if named is None:
+        return None
+    runs = document.get("features_runs")
+    features_run = runs.get(named[0]) if isinstance(runs, dict) else None
+    if not isinstance(features_run, str) or not re.fullmatch(RUN_ID, features_run):
+        raise RecordRefused(f"{key} names no features run for {named[0]}")
+    promotion = document["promotion"]
+    if (
+        "production_version" in promotion
+        and promotion["production_version"] is not None
+        and not (isinstance(promotion["production_version"], str) and promotion["production_version"])
+    ):
+        raise RecordRefused(f"{key} names a Production version that is not a version number or None")
+    return Challenger(hai_type, named[0], named[1], features_run, "production_version" in promotion and promotion["production_version"] is None)
 
 
 def canary_decision(read: Read, research_run: str, challenger: Challenger) -> str:
@@ -169,25 +219,32 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
         steps.launch("canary_check", run_of("canary"), {"research_run": research_run, "hai_type": hai_type, "mlflow": "aws"})
         decision.append(canary_decision(steps.read, research_run, challenger))
 
-    if step("canary deploy", serve("canary", "canary_deploy")):
+    if challenger.first_champion:
+        decision.append("promote")
+    elif step("canary deploy", serve("canary", "canary_deploy")):
         step("canary check", canary)
+
+    def release() -> None:
+        if steps.read(hold_key(challenger.features_run)) is not None:
+            steps.release(challenger.model, challenger.features_run, run_of("release"))
+
     if decision == ["promote"]:
         promotion = {"hai_type": hai_type, "model_version": challenger.version, "promotion_mode": "promote", "mlflow": "aws"}
         if not step("promotion", lambda: steps.launch("promote", run_of("promote"), promotion)):
             return
-        released = step("release", lambda: steps.release(challenger.model, challenger.features_run, run_of("release")))
+        released = step("release", release)
         outcome = "promoted" if released and step("rollout", serve("stable", "stable_deploy")) else "promoted_not_rolled_out"
     notice = {"research_run": research_run, "hai_type": hai_type, "outcome": outcome, "mlflow": "aws"}
     step("owner notice", lambda: steps.launch("owner_notice", run_of("notice"), notice))
 
 
-def run_types(base_run: str, research_run: str, hai_types: Sequence[str], *, launch: Launch, read: Read, release: Release) -> list[str]:
+def run_types(research_run: str, hai_types: Sequence[str], *, launch: Launch, read: Read, release: Release) -> list[str]:
     """Run the chain of each listed type that has a challenger and return every failure, in order. The types run one after the other, each isolated."""
     failures: list[str] = []
     steps = Steps(launch, read, release)
     for hai_type in hai_types:
         try:
-            challenger = challenger_of(read, research_run, base_run, hai_type)
+            challenger = challenger_of(read, research_run, hai_type)
         except RecordRefused as error:
             failures.append(f"{hai_type} research record: {error}")
             continue

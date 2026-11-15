@@ -236,6 +236,18 @@ def auto_promotion_cases(cases: Cases, folder: Path) -> None:
         require("failed" in said["promoted_not_rolled_out"] and "earlier deployment" in said["promoted_not_rolled_out"], f"not rolled out: {said}")
         require("stays a challenger" in said["held"] and "within_time_limit" in said["held"], f"held: {said['held']}")
         require(said["promoted"] != said["promoted_not_rolled_out"], "a failed rollout reads as a completed one")
+        first = {**RESEARCH, "promotion": {**RESEARCH["promotion"], "production_version": None}}
+        for outcome in ("promoted", "promoted_not_rolled_out"):
+            text = auto_promotion.notice_detail(first, None, outcome)
+            require(
+                "first champion" in text and "without a canary" in text and "one-time exception" in text, f"a first champion ({outcome}) is not said: {text}"
+            )
+            require(
+                "first champion"
+                not in auto_promotion.notice_detail({**RESEARCH, "promotion": {**RESEARCH["promotion"], "production_version": "3"}}, canary, outcome),
+                "a later promotion is called the first champion",
+            )
+        require("without a canary" not in said["promoted"], f"a record with no production_version is called a first champion: {said['promoted']}")
         sent: list[dict[str, Any]] = []
 
         def publish(**kwargs: Any) -> dict[str, str]:

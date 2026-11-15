@@ -233,7 +233,7 @@ def test_the_research_scenario_trains_the_three_models_on_one_base_and_researche
     check(research[1].starts == 0, "the second research run for the base starts a task again")
 
 
-def _chain_steps(objects: dict[str, bytes], base: str, research: str) -> tuple[list[str], list[dict[str, Any]], list[str]]:
+def _chain_steps(objects: dict[str, bytes], research: str) -> tuple[list[str], list[dict[str, Any]], list[str]]:
     """The failures, the launch parameters and the steps of the promotion chain over the staged records, with the launches and the release recorded."""
     chain = importlib.import_module("orchestration.promotion_chain")
     launched: list[tuple[str, dict[str, Any]]] = []
@@ -241,7 +241,7 @@ def _chain_steps(objects: dict[str, bytes], base: str, research: str) -> tuple[l
     def launch(step: str, run: str, parameters: dict[str, Any]) -> None:
         launched.append((step, parameters))
 
-    failures = chain.run_types(base, research, ["HAI_1", "HAI_2"], launch=launch, read=objects.get, release=lambda model, features_run, run: None)
+    failures = chain.run_types(research, ["HAI_1", "HAI_2"], launch=launch, read=objects.get, release=lambda model, features_run, run: None)
     return failures, [parameters for _, parameters in launched], [step for step, _ in launched]
 
 
@@ -253,7 +253,7 @@ def test_the_staged_research_records_drive_the_chain_through_the_promotion() -> 
         ("hold", ["serve_deploy", "canary_check", "owner_notice"]),
     ):
         objects = real_image_dags.research_objects(cases.SERVE_BASE, cases.SERVE_RESEARCH, {"HAI_1": challenger, "HAI_2": None}, decision)
-        failures, parameters, steps = _chain_steps(objects, cases.SERVE_BASE, cases.SERVE_RESEARCH)
+        failures, parameters, steps = _chain_steps(objects, cases.SERVE_RESEARCH)
         check(not failures and steps == expected, f"{decision}: failures {failures}, steps {steps}")
         check(parameters[-1]["outcome"] == ("promoted" if decision == "promote" else "held"), f"{decision}: the notice says {parameters[-1]}")
 

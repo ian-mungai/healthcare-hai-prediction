@@ -89,8 +89,24 @@ def research_cases(cases: Any, folder: Path) -> None:
     def never_moves_production() -> None:
         tracking, fixtures = finished_models(folder / "production")
         tracking.models[NAME]["aliases"]["production"] = "1"
-        require(research(folder / "production_research", fixtures["m2"])[0] == 0, "research failed")
+        code, _, error, output = research(folder / "production_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
         require(tracking.models[NAME]["aliases"]["production"] == "1", "research moved the production alias")
+        document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
+        require(document["promotion"]["production_version"] == "1", f"the record does not name the Production version: {document['promotion']}")
+
+    def records_the_features_runs_the_models_trained_on_and_no_production() -> None:
+        """The record names, for each model, the features run its training run read (the tag of its parent run, not a run derived from the base run), and
+        records that no Production model exists (``production_version`` is None, present in the record) so the promotion chain can tell a first champion."""
+        tracking, fixtures = finished_models(folder / "identity_runs")
+        real = {model: f"20261023T00000{position}Z-1234abcd" for position, model in enumerate(("m1", "m2", "m4"), start=1)}
+        for model, run in real.items():
+            parent_of(tracking, model)["tags"]["features_run_id"] = run
+        code, _, error, output = research(folder / "identity_runs_research", fixtures["m2"])
+        require(code == 0, f"research failed: {error}")
+        document = json.loads((output / f"research_{HAI_TYPE}.json").read_text())
+        require(document["features_runs"] == real, f"the record's features runs: {document['features_runs']}, not {real}")
+        require("production_version" in document["promotion"] and document["promotion"]["production_version"] is None, f"{document['promotion']}")
 
     def refuses_a_missing_model() -> None:
         tracking, fixtures = finished_models(folder / "missing", models=("m1", "m2"))
@@ -218,7 +234,8 @@ def research_cases(cases: Any, folder: Path) -> None:
 
     cases.check("research_compares_two_models_and_chooses_one_challenger_per_type", compares_and_chooses)
     cases.check("research_phase_stores_each_record_once_and_refuses_another_record", phase_publishes_each_record_once)
-    cases.check("research_never_moves_the_production_alias", never_moves_production)
+    cases.check("research_never_moves_the_production_alias_and_records_its_version", never_moves_production)
+    cases.check("research_records_the_features_runs_and_no_production", records_the_features_runs_the_models_trained_on_and_no_production)
     cases.check("research_refuses_when_a_model_has_no_finished_run", refuses_a_missing_model)
     cases.check("research_refuses_runs_of_another_base_run", refuses_runs_of_another_base)
     cases.check("research_refuses_runs_on_other_holdout_windows", refuses_other_windows)

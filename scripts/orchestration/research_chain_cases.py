@@ -19,6 +19,7 @@ from botocore.exceptions import ClientError
 from orchestration import airflow_steps, graph, promotion_chain, training_contract
 from orchestration.ecs_launch import LaunchRefused
 from orchestration.interface import SubmissionRequest
+from scripts.features import feast_sets
 from scripts.orchestration.airflow_mode_cases import RUN_KEY, FormRefused, Rig, task_graph, world
 from scripts.orchestration.ecs_adapter_cases import require
 from scripts.orchestration.ecs_launch_cases import refuses
@@ -29,6 +30,11 @@ RESEARCH = training_contract.research_run_id(BASE)
 TYPE = "HAI_1"
 RESEARCH_PARAMS = {"base_run": BASE, "population": "primary", "hai_types": ["HAI_1", "HAI_2"], "mlflow": "aws"}
 CHALLENGER = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
+FEATURES_RUNS = {
+    "m1": "20261109T010101Z-0a0a0a01",
+    "m2": "20261109T010102Z-0a0a0a02",
+    "m4": "20261109T010104Z-0a0a0a04",
+}  # the runs the models trained on: not derived
 PHASES = {"research": "research", "canary_check": "canary", "promote": "promote", "owner_notice": "notify"}
 
 
@@ -124,14 +130,18 @@ def research_dag_step_launches_with_its_form() -> None:
     require("mlflow=aws" in str(error), f"the refusal of the local lane does not name its fix: {error}")
 
 
-def research_record(hai_type: str, challenger: Mapping[str, Any] | None) -> bytes:
-    document = {
-        "schema": 1,
-        "hai_type": hai_type,
-        "base_run": BASE,
-        "runs": {},
-        "promotion": {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger},
-    }
+def hold_key(features_run: str) -> str:
+    return f"{feast_sets.RUN_PREFIX}/{features_run}/{feast_sets.HOLD_NAME}"
+
+
+def research_record(hai_type: str, challenger: Mapping[str, Any] | None, production: Any = "1", drop: tuple[str, ...] = ()) -> bytes:
+    """A research record: ``production`` is the version the Production alias named when the research ran (None for no Production model), ``drop`` names keys
+    an older record lacks (``production_version``, ``features_runs``)."""
+    promotion = {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger, "production_version": production}
+    document = {"schema": 1, "hai_type": hai_type, "base_run": BASE, "runs": {}, "features_runs": FEATURES_RUNS, "promotion": promotion}
+    for name in drop:
+        document.pop(name, None)
+        promotion.pop(name, None)
     return json.dumps(document).encode()
 
 
@@ -150,20 +160,37 @@ def canary_record(
     return json.dumps(document).encode()
 
 
-def stage_records(objects: dict[str, bytes], challengers: Mapping[str, Mapping[str, Any] | None], canary: str | None = "promote") -> None:
-    """What the research and canary phases would have stored: a research record for each type and a canary result for each type with a challenger."""
+def stage_records(
+    objects: dict[str, bytes],
+    challengers: Mapping[str, Mapping[str, Any] | None],
+    canary: str | None = "promote",
+    production: str | None = "1",
+    hold: bool = True,
+) -> None:
+    """What the research and canary phases would have stored: a research record for each type, a canary result for each type with a challenger (none for a
+    first champion, which has no canary) and, when ``hold`` is set, the held online load of each challenger's real features run."""
     for hai_type, challenger in challengers.items():
-        objects[training_contract.record_key("research", RESEARCH, hai_type)] = research_record(hai_type, challenger)
-        if challenger is not None and canary is not None:
+        objects[training_contract.record_key("research", RESEARCH, hai_type)] = research_record(hai_type, challenger, production)
+        if challenger is not None and canary is not None and production is not None:
             objects[training_contract.record_key("canary", RESEARCH, hai_type)] = canary_record(hai_type, canary, challenger=challenger)
+        if challenger is not None and hold:
+            objects[hold_key(FEATURES_RUNS[challenger["model"]])] = b'{"held": true}\n'
 
 
 class Recorder:
     """Stand-ins for the three things the chain calls: a launch of a step, a read of a stored record and the release of a held online load."""
 
-    def __init__(self, challengers: Mapping[str, Mapping[str, Any] | None], canary: str | None = "promote", failing: tuple[tuple[str, str], ...] = ()) -> None:
+    def __init__(
+        self,
+        challengers: Mapping[str, Mapping[str, Any] | None],
+        canary: str | None = "promote",
+        failing: tuple[tuple[str, str], ...] = (),
+        production: str | None = "1",
+        hold: bool = True,
+    ) -> None:
         self.objects: dict[str, bytes] = {}
-        stage_records(self.objects, challengers, canary)
+        stage_records(self.objects, challengers, canary, production, hold)
+        self.reads: list[str] = []
         self.calls: list[tuple[Any, ...]] = []
         self.types = tuple(challengers)
         self.failing = failing
@@ -176,6 +203,7 @@ class Recorder:
             raise promotion_chain.StepFailed(f"{step} of {training['hai_type']} failed")
 
     def read(self, key: str) -> bytes | None:
+        self.reads.append(key)
         return self.objects.get(key)
 
     def release(self, model: str, features_run: str, run: str) -> None:
@@ -188,9 +216,7 @@ class Recorder:
         return [(f"serve_{call[3]['deploy_mode']}" if call[0] == "serve_deploy" else call[0], call[1]) for call in self.calls]
 
     def run(self, hai_types: tuple[str, ...] | None = None) -> list[str]:
-        return promotion_chain.run_types(
-            BASE, RESEARCH, self.types if hai_types is None else hai_types, launch=self.launch, read=self.read, release=self.release
-        )
+        return promotion_chain.run_types(RESEARCH, self.types if hai_types is None else hai_types, launch=self.launch, read=self.read, release=self.release)
 
 
 def a_challenger_is_deployed_promoted_rolled_out_and_announced() -> None:
@@ -213,7 +239,7 @@ def a_challenger_is_deployed_promoted_rolled_out_and_announced() -> None:
     require(canary[2] == training_contract.chain_run_id(RESEARCH, "HAI_1", "canary") and canary[3] == chain_parameters("canary_check"), f"canary: {canary}")
     require(promote[2] == training_contract.chain_run_id(RESEARCH, "HAI_1", "promote"), f"the promotion run: {promote[2]}")
     require(promote[3] == {"hai_type": "HAI_1", "model_version": "4", "promotion_mode": "promote", "mlflow": "aws"}, f"promotion: {promote[3]}")
-    require(release[2] == training_contract.model_features_run_id(BASE, "m2"), f"the release names the run of the model's set: {release[2]}")
+    require(release[2] == FEATURES_RUNS["m2"], f"the release names the run the model trained on: {release[2]}")
     require(rollout[2] == training_contract.chain_run_id(RESEARCH, "HAI_1", "stable_deploy"), f"the rollout run: {rollout[2]}")
     require(rollout[3] == {"hai_type": "HAI_1", "deploy_mode": "stable"}, f"the rollout names more than the type and the mode: {rollout[3]}")
     require(notice[3] == {**chain_parameters("owner_notice"), "outcome": "promoted"}, f"notice: {notice[3]}")
@@ -389,6 +415,80 @@ def the_chain_is_the_same_for_a_retry() -> None:
     require(second.calls[: len(first.calls)] == first.calls == second.calls[len(first.calls) :], "a retry named other runs or parameters than the first pass")
 
 
+def a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out() -> None:
+    """With no Production model in the research record, the chain launches no canary deploy and no canary check, reads no canary result, promotes the
+    challenger, skips the release because no hold record exists for the features run it trained on, rolls out stable-only and announces it."""
+    recorder = Recorder({"HAI_1": CHALLENGER, "HAI_2": None}, production=None, hold=False)
+    require(recorder.run() == [], "a clean first-champion chain reported a failure")
+    expected = [("promote", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")]
+    require(recorder.steps() == expected, f"steps: {recorder.steps()}")
+    require(not [key for key in recorder.reads if "canary_" in key], f"the first champion read a canary result: {recorder.reads}")
+    require(hold_key(FEATURES_RUNS["m2"]) in recorder.reads, f"the hold record of the model's real features run was not read: {recorder.reads}")
+    promote, rollout, notice = recorder.calls
+    require(promote[3] == {"hai_type": "HAI_1", "model_version": "4", "promotion_mode": "promote", "mlflow": "aws"}, f"promotion: {promote[3]}")
+    require(rollout[3] == {"hai_type": "HAI_1", "deploy_mode": "stable"}, f"rollout: {rollout[3]}")
+    require(notice[3] == {**chain_parameters("owner_notice"), "outcome": "promoted"}, f"notice: {notice[3]}")
+    both = Recorder({"HAI_1": CHALLENGER, "HAI_2": {**CHALLENGER, "model": "m4", "version": "7"}}, production=None, hold=False)
+    require(
+        both.run() == [] and [name for name, hai_type in both.steps() if hai_type == "HAI_2"] == ["promote", "serve_stable", "owner_notice"], "HAI_2 differs"
+    )
+
+
+def a_first_champion_does_not_need_a_canary_result_a_later_promotion_does() -> None:
+    """A research record that names a Production version, or none of the key at all, keeps the canary: only an explicit empty Production skips it."""
+    later = Recorder({"HAI_1": CHALLENGER}, canary=None, production="1", hold=False)
+    failures = later.run()
+    require(
+        len(failures) == 1 and ("promote", "HAI_1") not in later.steps() and later.calls[-1][3]["outcome"] == "held",
+        f"a later promotion went on: {later.steps()}",
+    )
+    unknown = Recorder({"HAI_1": CHALLENGER}, canary=None, hold=False)
+    unknown.objects[training_contract.record_key("research", RESEARCH, "HAI_1")] = research_record("HAI_1", CHALLENGER, drop=("production_version",))
+    failures = unknown.run()
+    require(
+        ("serve_canary", "HAI_1") in unknown.steps() and ("promote", "HAI_1") not in unknown.steps(),
+        f"a record without the key skipped the canary: {unknown.steps()}",
+    )
+    passed = Recorder({"HAI_1": CHALLENGER}, production="1", hold=False)
+    require(passed.run() == [], "a later promotion with a passed canary failed")
+    expected = [("serve_canary", "HAI_1"), ("canary_check", "HAI_1"), ("promote", "HAI_1"), ("serve_stable", "HAI_1"), ("owner_notice", "HAI_1")]
+    require(passed.steps() == expected, f"a later promotion without a hold: {passed.steps()}")
+
+
+def the_release_is_skipped_without_a_hold_and_refused_with_one() -> None:
+    """The release runs only for a held online load of the features run the model trained on, which the research record names (not the derived run). A
+    hold on the derived run's key does not count. The shipped release step still refuses by name."""
+    held = Recorder({"HAI_1": CHALLENGER}, hold=False)
+    derived = training_contract.model_features_run_id(BASE, "m2")
+    require(derived != FEATURES_RUNS["m2"], "the fixture's real features run equals the derived run")
+    held.objects[hold_key(derived)] = b"{}"
+    require(held.run() == [] and "release" not in dict(held.steps()), f"a hold on the derived run released the set: {held.steps()}")
+    real = Recorder({"HAI_1": CHALLENGER}, hold=True)
+    require(real.run() == [] and ("release", "m2") in real.steps(), f"a hold on the real features run was not released: {real.steps()}")
+    require([call for call in real.calls if call[0] == "release"][0][2] == FEATURES_RUNS["m2"], "the release named another run")
+    first = Recorder({"HAI_1": CHALLENGER}, production=None, hold=True)
+    first.release_fails = True
+    failures = first.run()
+    require(len(failures) == 1 and "release" in failures[0], f"a first champion with a hold did not stop at the release: {failures}")
+    require(first.steps() == [("promote", "HAI_1"), ("release", "m2"), ("owner_notice", "HAI_1")], f"steps: {first.steps()}")
+    require(first.calls[-1][3]["outcome"] == "promoted_not_rolled_out", f"the notice: {first.calls[-1]}")
+    refusal = refuses(promotion_chain.StepFailed, lambda: promotion_chain.release_online(None, {}, "m2", FEATURES_RUNS["m2"], "run"))
+    require("release_online" in str(refusal) and FEATURES_RUNS["m2"] in str(refusal), f"the shipped release step does not refuse by name: {refusal}")
+    require(hold_key("x") == promotion_chain.hold_key("x"), "the chain reads another key than the features job writes")
+
+
+def research_records_without_a_real_features_run_are_refused() -> None:
+    for name, record in (
+        ("no_map", research_record("HAI_1", CHALLENGER, drop=("features_runs",))),
+        ("bad_run", research_record("HAI_1", CHALLENGER).replace(FEATURES_RUNS["m2"].encode(), b"not-a-run")),
+        ("bad_production", research_record("HAI_1", CHALLENGER, production=4)),
+    ):
+        recorder = Recorder({"HAI_1": CHALLENGER})
+        recorder.objects[training_contract.record_key("research", RESEARCH, "HAI_1")] = record
+        failures = recorder.run(("HAI_1",))
+        require(len(failures) == 1 and not recorder.calls, f"{name}: failures {failures}, calls {recorder.calls}")
+
+
 OTHER_BASE = "20261108T000000Z-b45e0002"
 TRAIN_FORM = {"features_run": "latest", "population": "primary", "hai_types": ["HAI_1"], "trigger": "manual", "mlflow": "aws"}
 
@@ -418,8 +518,8 @@ def dag_params(**changes: Any) -> dict[str, Any]:
     return {"run_id": RESEARCH, "mode": "real", **RESEARCH_PARAMS, **changes}
 
 
-def staged_for_the_dag(rig: Rig, canary: str | None = "promote") -> None:
-    stage_records(rig.stage.objects, {"HAI_1": CHALLENGER, "HAI_2": None}, canary)
+def staged_for_the_dag(rig: Rig, canary: str | None = "promote", production: str | None = "1", hold: bool = True) -> None:
+    stage_records(rig.stage.objects, {"HAI_1": CHALLENGER, "HAI_2": None}, canary, production, hold)
 
 
 def research_dag_form_and_graph() -> None:
@@ -500,7 +600,7 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
         f"the derived stable request: {stable_request}",
     )
     require(json.loads(environments[5]["promote"]["TRAINING_PARAMETERS"])["outcome"] == "promoted", "the owner was not told promoted")
-    require(released == [("m2", training_contract.model_features_run_id(BASE, "m2"))], f"release: {released}")
+    require(released == [("m2", FEATURES_RUNS["m2"])], f"release: {released}")
     for run in (RESEARCH, *runs):
         bound = json.loads(rig.stage.objects[RUN_KEY.format(run=run, name="code_run.json")])
         require(bound == {"code_run": training_contract.trained_run_id(BASE, "m1")}, f"{run} is bound to {bound}, not to the code the models trained with")
@@ -508,6 +608,22 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     with world(rig, "research_dag", dag_params()) as current, mock.patch.object(promotion_chain, "release_online", lambda *arguments: None):
         current.run_dag("research_dag.py")
     require(rig.tasks_started() == again, "a second run of the DAG for the same base launched again")
+
+
+def research_dag_promotes_a_first_champion_without_a_canary() -> None:
+    """No Production model: the DAG launches research, the promotion, the stable-only rollout and the notice, with no canary deploy or check and no release."""
+    rig = Rig()
+    for model in training_contract.PROMOTION_MODELS:
+        trained(rig, model)
+    staged_for_the_dag(rig, canary=None, production=None, hold=False)
+    before = rig.tasks_started()
+    with world(rig, "research_dag", dag_params()) as current:
+        states = current.run_dag("research_dag.py")
+    require(set(states.values()) == {"success"} and current.results["gate"] == "accepted", f"the DAG did not finish: {states} {current.results}")
+    expected = [("", "research"), ("HAI_1", "promote"), ("HAI_1", "serve_stable"), ("HAI_1", "notify")]
+    require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
+    notice = json.loads(rig.environment(rig.tasks_started() - 1)["promote"]["TRAINING_PARAMETERS"])
+    require(notice["outcome"] == "promoted", f"the owner was told {notice['outcome']}")
 
 
 def research_dag_fails_after_the_notice_when_the_release_step_is_missing() -> None:
@@ -640,6 +756,11 @@ CASES: dict[str, Callable[[], None]] = {
     "research_dag_skips_until_three_models_trained": research_dag_skips_until_three_models_trained,
     "research_dag_runs_the_chain_for_the_challenger": research_dag_runs_the_chain_for_the_challenger,
     "research_dag_fails_after_the_notice_when_the_release_step_is_missing": research_dag_fails_after_the_notice_when_the_release_step_is_missing,
+    "research_dag_promotes_a_first_champion_without_a_canary": research_dag_promotes_a_first_champion_without_a_canary,
+    "a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out": a_first_champion_skips_the_canary_and_is_promoted_and_rolled_out,
+    "a_first_champion_does_not_need_a_canary_result_a_later_promotion_does": a_first_champion_does_not_need_a_canary_result_a_later_promotion_does,
+    "the_release_is_skipped_without_a_hold_and_refused_with_one": the_release_is_skipped_without_a_hold_and_refused_with_one,
+    "research_records_without_a_real_features_run_are_refused": research_records_without_a_real_features_run_are_refused,
     "research_dag_refuses_the_local_lane_before_anything_runs": research_dag_refuses_the_local_lane_before_anything_runs,
     "every_promote_step_gets_its_phase": every_promote_step_gets_its_phase,
     "no_other_job_is_told_a_phase": no_other_job_is_told_a_phase,

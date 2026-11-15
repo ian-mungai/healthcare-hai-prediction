@@ -1436,6 +1436,7 @@ def case_chain_rollout(c: Checker) -> None:
         """A recorder whose bucket holds the research record of the research run, and whose canary result, when there is one, is stored when the check runs."""
         recorder = chain.Recorder({})
         recorder.objects[training_contract.record_key("research", research, HAI)] = chain.research_record(HAI, challenger)
+        recorder.objects[chain.hold_key(chain.FEATURES_RUNS[challenger["model"]])] = b"{}"
         if decision is not None:
             recorder.pending[training_contract.record_key("canary", research, HAI)] = chain.canary_record(
                 HAI, decision, challenger=challenger, changes={"research_run": research}
@@ -1485,7 +1486,7 @@ def case_chain_rollout(c: Checker) -> None:
             if step == "promote":
                 w.registry.aliases["production"] = params["model_version"]
 
-        failures = promotion_chain.run_types(chain.BASE, research, [HAI], launch=launch, read=recorder.read, release=recorder.release)
+        failures = promotion_chain.run_types(research, [HAI], launch=launch, read=recorder.read, release=recorder.release)
         seen["after"] = health(w)
         seen["alias"] = w.registry.aliases["production"]
         seen["live"] = traffic(w)
@@ -1565,6 +1566,22 @@ def case_chain_rollout(c: Checker) -> None:
         and seen["live"] == both
         and seen["expired"] == stable_only,
     )
+    with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:
+        w.registry.aliases.pop("production", None)
+        recorder = recorder_for(chain.RESEARCH, chain.CHALLENGER, None)
+        recorder.objects[training_contract.record_key("research", chain.RESEARCH, HAI)] = chain.research_record(HAI, chain.CHALLENGER, production=None)
+        recorder.objects.pop(chain.hold_key(chain.FEATURES_RUNS[chain.CHALLENGER["model"]]))
+        failures, calls, seen = run_chain(w, recorder)
+        c.check(
+            "with no Production model the first champion is promoted with no canary, rolled out stable-only by the real deploy action and announced",
+            failures == []
+            and names(calls) == ["promote", "serve_deploy:stable", "owner_notice"]
+            and calls[-1][3]["outcome"] == "promoted"
+            and seen["alias"] == CANDIDATE
+            and seen["after"] == (CANDIDATE, None)
+            and seen["live"] == promoted
+            and seen["expired"] == promoted,
+        )
     other_research = training_contract.research_run_id("20261108T000000Z-b45e0002")
     newer = {**chain.CHALLENGER, "version": "5"}
     with world(count=200, deployment=False, rate=10**6, burst=10**6, capacity=10**6) as w:

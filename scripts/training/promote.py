@@ -70,7 +70,10 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
 
     A version that passed against the intercept + CMI baseline (``pass_baseline``) can become only the first champion: once production names another
     version, a new version must pass against that champion. A forward promotion also needs the passed canary result that ``auto_promotion record`` tags on
-    the version, bound to the version number and its model run. Production naming this version already (a retry after the alias moved) is accepted.
+    the version, bound to the version number and its model run. The one exception is the first champion (owner decision A, Nov 15 2026): while production
+    names no version, a version with the verdict ``pass`` or ``pass_baseline`` moves production with no canary result, because no canary can run beside a
+    Production model that does not exist. Production naming this version already (a retry after the alias moved) is accepted without a canary result, since
+    the retry moves no alias.
     """
     tags = dict(getattr(version, "tags", {}) or {})
     verdict = tags.get(VERDICT_TAG, "none")
@@ -81,7 +84,7 @@ def check_version(version: Any, mode: str, number: str, current: str | None) -> 
         )
     if mode == "promote" and verdict not in ("pass", "pass_baseline"):
         raise JobFailure("version_not_promotable", f"version {number} has the verdict {verdict}, not pass")
-    if mode == "promote":
+    if mode == "promote" and current not in (None, number):
         check_canary(version, number)
     if mode == "rollback" and PROMOTED_TAG not in tags:
         raise JobFailure("rollback_target_never_promoted", f"version {number} was never in production")

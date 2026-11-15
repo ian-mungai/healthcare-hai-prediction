@@ -771,9 +771,17 @@ def drift_objects(drift_run: str, model: str, *, gated: bool = True) -> dict[str
     return {f"drift/{drift_run}/drift_HAI_1.json": body, f"drift/{drift_run}/_complete.json": json.dumps(marker, sort_keys=True).encode()}
 
 
-def research_objects(base_run: str, research_run: str, challengers: Mapping[str, Mapping[str, Any] | None], canary: str | None) -> dict[str, bytes]:
-    """The records that the research phase and the canary check store: a research record for each type, and a canary result for each type with a challenger
-    when ``canary`` names a decision (promote or hold)."""
+def research_objects(
+    base_run: str,
+    research_run: str,
+    challengers: Mapping[str, Mapping[str, Any] | None],
+    canary: str | None,
+    production: str | None = "1",
+    hold: bool = True,
+) -> dict[str, bytes]:
+    """The records that the research phase, the canary check and the features job store: a research record for each type (naming the Production version
+    the research saw, None for none, and the features run of each model), a canary result for each type with a challenger when ``canary`` names a decision
+    (promote or hold) and a held online load for each challenger's features run when ``hold`` is set."""
     import importlib
 
     training = importlib.import_module("orchestration.training_contract")
@@ -784,10 +792,13 @@ def research_objects(base_run: str, research_run: str, challengers: Mapping[str,
             "hai_type": hai_type,
             "base_run": base_run,
             "runs": {},
-            "promotion": {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger},
+            "features_runs": {model: training.model_features_run_id(base_run, model) for model in training.PROMOTION_MODELS},
+            "promotion": {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger, "production_version": production},
         }
         found[training.record_key("research", research_run, hai_type)] = json.dumps(research).encode()
-        if challenger is not None and canary is not None:
+        if challenger is not None and hold:
+            found[f"lakehouse/layer_runs/features/{research['features_runs'][challenger['model']]}/online_hold.json"] = b'{"held": true}\n'
+        if challenger is not None and canary is not None and production is not None:
             result = {
                 "schema": 1,
                 "research_run": research_run,

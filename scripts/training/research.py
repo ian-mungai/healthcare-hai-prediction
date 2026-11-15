@@ -8,6 +8,10 @@ refuses by name when one is missing (``research_models_missing``) or changed (``
 - reads the verdict that each promotion-eligible run gave its own version under the owner's promotion rule and sets the ``challenger`` alias on the
   eligible version with the lowest holdout RMSE, one challenger per type.
 
+The record also names what the promotion chain cannot read from MLflow: ``features_runs`` (the features run each chosen model run trained on, from its parent
+run's ``features_run_id`` tag, which is not derived from the base run) and ``promotion.production_version`` (the version the ``production`` alias names,
+or None when the registered model has no Production version, which makes the challenger the first champion).
+
 Each run's holdout table (``holdout_predictions.parquet``) must hold the same hospital-windows with the same observed outcomes, or the action refuses with
 ``research_holdouts_differ``. The record is logged before the ``challenger`` alias moves, and a research run that has a complete record keeps the runs that
 record names. It never moves the ``production`` alias.
@@ -165,6 +169,7 @@ def research_type(store: Any, parameters: Mapping[str, Any], hai_type: str, run:
     except ModelError as error:
         raise JobFailure("research_rows_differ", str(error)) from None
     name = contract["registered_models"][hai_type]
+    production = registry.champion(store, name)
     candidates = [candidate_of(store, name, model, parents[model]) for model in NEEDED]
     if len({parents[model].data.metrics.get("comparison_holdout_rows") for model in NEEDED}) != 1:
         raise JobFailure("research_holdouts_differ", f"the {hai_type} runs of {', '.join(NEEDED)} scored holdouts of other sizes")
@@ -179,10 +184,12 @@ def research_type(store: Any, parameters: Mapping[str, Any], hai_type: str, run:
         "base_run": parameters["base_run"],
         "population": parameters["population"],
         "runs": {model: parents[model].data.tags["run_id"] for model in NEEDED},
+        "features_runs": {model: parents[model].data.tags["features_run_id"] for model in NEEDED},
         "rq1": rq1,
         "rq4": rq4,
         "promotion": {
             "registered_model": name,
+            "production_version": None if production is None else str(production.version),
             "candidates": candidates,
             "challenger": None if winner is None else {key: winner[key] for key in ("model", "version", "verdict", "source_run")},
             "challenger_predictions": None if winner is None else holdouts[winner["model"]][1],

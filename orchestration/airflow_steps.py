@@ -447,9 +447,7 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
     def release(model: str, features_run: str, run: str) -> None:
         promotion_chain.release_online(found, context, model, features_run, run)
 
-    failures = promotion_chain.run_types(
-        str(training["base_run"]), request.run_id, list(training["hai_types"]), launch=launch_step_of, read=read, release=release
-    )
+    failures = promotion_chain.run_types(request.run_id, list(training["hai_types"]), launch=launch_step_of, read=read, release=release)
     if failures:
         raise RuntimeError("the promotion chain failed: " + "; ".join(failures))
     return "chained"

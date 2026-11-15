@@ -1752,6 +1752,22 @@ def promote_cases(cases: Any, folder: Path) -> None:
         code, _, error = promote_call(fixture, folder / "first_champion_new_task")
         require(code == 0 and alias(fixture) == "2", f"a rerun after the first champion's alias moved was refused: {code} {error}")
 
+    def first_champion_needs_no_canary_result() -> None:
+        """With no Production model, a version whose verdict is pass or pass_baseline becomes the first champion with no canary result (the owner's one-time
+        exception of Nov 15 2026); a failed verdict still does not."""
+        for verdict, moves in (("pass_baseline", True), ("pass", True), ("fail:rmse_improvement", False)):
+            fixture, bucket = Fixture(folder / f"first_no_canary_{verdict.split(':')[0]}"), receipt_bucket()
+            fixture.tracking.models[MODEL] = {"tags": {}, "versions": [], "aliases": {}}
+            fixture.tracking.create_model_version(MODEL, "runs:/x/model", run_id="x", tags={"promotion_verdict": verdict})
+            fixture.tracking.set_registered_model_alias(MODEL, "challenger", "1")
+            code, _, error = promote_in(fixture, folder / f"first_no_canary_{verdict.split(':')[0]}_work", bucket, {**PROMOTION, "model_version": "1"})
+            require((code == 0) == moves, f"verdict {verdict} with no champion and no canary result: {code} {error}")
+            production = fixture.tracking.models[MODEL]["aliases"].get("production")
+            require((production == "1") == moves, f"verdict {verdict}: production is {production}")
+            if moves:
+                code, _, error = promote_call(fixture, folder / f"first_no_canary_{verdict}_retry", {**PROMOTION, "model_version": "1"})
+                require(code == 0, f"a rerun after the first champion moved, with no canary result, was refused: {error}")
+
     def baseline_pass_needs_no_champion() -> None:
         fixture = registry_fixture(folder / "baseline_after_champion")
         fixture.tracking.find_version(MODEL, "2")["tags"]["promotion_verdict"] = "pass_baseline"
@@ -1786,6 +1802,7 @@ def promote_cases(cases: Any, folder: Path) -> None:
     cases.check("promote_refuses_a_canary_result_of_another_version_run_or_verdict", canary_result_of_another_candidate_is_refused)
     cases.check("promote_rollback_needs_no_canary_result", rollback_needs_no_canary_result)
     cases.check("promote_first_champion_from_a_baseline_pass", first_champion_promoted)
+    cases.check("promote_first_champion_needs_no_canary_result_but_a_later_promotion_does", first_champion_needs_no_canary_result)
     cases.check("promote_refuses_a_baseline_pass_once_a_champion_exists", baseline_pass_needs_no_champion)
     cases.check("promote_refuses_a_second_run_while_an_interrupted_run_is_unresolved", rolled_back_run_cannot_repeat_the_move)
     cases.check("promote_pending_alias_request_cannot_revert_a_later_promotion", pending_alias_request_cannot_revert_a_later_promotion)
