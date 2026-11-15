@@ -327,6 +327,10 @@ jobs:
 
       - *setup_deps
 
+      - name: Install import-linter for the typecheck-importers samples
+        shell: bash
+        run: .venv/bin/python -m scripts.quality.install_lint_tools --tool import-linter
+
       - name: Run this shard of the test-checks hook
         env:
           RANGE_START: ${{ needs.plan.outputs.check_start }}
