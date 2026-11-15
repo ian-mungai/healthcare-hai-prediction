@@ -370,6 +370,8 @@ jobs:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 0
+          # uv.lock is stored with Git LFS (.gitattributes); the dependency export below reads it.
+          lfs: true
 
       - *setup_py
 
