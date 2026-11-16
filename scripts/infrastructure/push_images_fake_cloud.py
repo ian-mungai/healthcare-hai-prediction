@@ -5,7 +5,8 @@ It keeps the images of one fake registry in ``ecr.json`` under the folder named 
 nothing matches. Only a successful ``docker push`` changes the registry: it adds the pushed tag with the digest in ``PUSH_IMAGES_FAKE_DIGEST`` and
 replaces ``ecr.json`` by rename, so a concurrent reader never sees a partial file. A push is refused for a tag that exists, as an immutable
 repository does, and for an image that was not tagged first, as docker does. ``docker login --password-stdin`` reads its input to the end, as docker
-does. ``docker image inspect`` prints ``PUSH_IMAGES_FAKE_PLATFORM`` (default linux/arm64). Every other docker command succeeds.
+does. ``docker image inspect`` prints ``PUSH_IMAGES_FAKE_PLATFORM`` (default linux/arm64). ``docker run`` prints ``ok``, or fails with a permission error
+when ``PUSH_IMAGES_FAKE_RUN`` is ``closed``. Every other docker command succeeds.
 It decides nothing that the cases prove: whether a plan skips, pushes or stops comes only from
 the shell lines of the plan. It imports nothing from the repository, so it runs with ``python -I push_images_fake_cloud.py aws|docker <arguments>``.
 """
@@ -63,6 +64,11 @@ def docker(arguments: list[str], images: list[dict[str, str]]) -> int:
         save(images)
     elif arguments[:1] == ["login"] and "--password-stdin" in arguments:
         sys.stdin.read()
+    elif arguments[:1] == ["run"]:
+        if os.environ.get("PUSH_IMAGES_FAKE_RUN") == "closed":
+            sys.stderr.write("PermissionError: [Errno 13] Permission denied: '/app/scripts/serving'\n")
+            return 1
+        sys.stdout.write("ok\n")
     elif arguments[:2] == ["image", "inspect"]:
         sys.stdout.write(os.environ.get("PUSH_IMAGES_FAKE_PLATFORM", "linux/arm64") + "\n")
     return 0

@@ -20,6 +20,11 @@ the push when ECR already holds the digest under any tag, and asks ECR for the p
 only a digest equal to the pin for these images and writes it to the variable file and to ``config/metadata/images.json`` together. ``check
 --require-resolved`` is the activation check: it fails while a digest in that file is still ``TO_RESOLVE`` or the two files disagree. The finite catalog
 task's database image is not part of this list.
+
+A built image whose Dockerfile gives COPY --chmod a mode without read and search permission for other users names its ``entry_check`` in the list: the
+modules and files that its non-root user must read. ``check`` refuses such an image without one, and ``plan`` prints a ``docker run`` line after the build
+that runs the image as its own user, with no network, and stops the plan unless every named module and file can be read. Docker 29 gave the folders that
+``COPY --chmod=0444`` created the mode 0444, and the model API and page tasks exited 1 at start (Nov 15 2026).
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 from pathlib import Path
@@ -52,6 +58,13 @@ PINNED = re.compile(r"@sha256:[0-9a-f]{64}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 NAME = re.compile(r"^[a-z][a-z0-9_]*$")
 URL = re.compile(r"^[0-9]{12}\.dkr\.ecr\.[a-z0-9-]+\.amazonaws\.com/[a-z0-9._/-]+$")
+MODULE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
+CHMOD_COPY = re.compile(r"^\s*COPY\s+(?:\S+\s+)*?--chmod=([0-7]{3,4})\b", re.IGNORECASE | re.MULTILINE)
+ENTRY_KEYS = ("modules", "files")
+# The program of the entry run: it reads the first byte of each named file and of the file of each named module, as the user of the image.
+ENTRY_PROGRAM = (
+    'import importlib.util as u, sys; [open(u.find_spec(a[7:]).origin if a.startswith("module:") else a[5:], "rb").read(1) for a in sys.argv[1:]]; print("ok")'
+)
 FROM_LINE = re.compile(r"^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?\s*$", re.IGNORECASE)
 
 
@@ -84,6 +97,40 @@ def dockerfile_problems(context: Path, root: Path, name: str = "Dockerfile") -> 
         if stage:
             stages.add(stage)
     return problems
+
+
+def entry_problems(name: str, image: dict[str, Any], dockerfile: Path | None) -> list[str]:
+    """The ``entry_check`` of an image names the modules and files its user must read; a Dockerfile that sets modes with COPY --chmod needs one."""
+    entry = image.get("entry_check")
+    if entry is None:
+        closed = (
+            dockerfile is not None
+            and dockerfile.is_file()
+            and any(int(mode, 8) & 0o005 != 0o005 for mode in CHMOD_COPY.findall(dockerfile.read_text(encoding="utf-8")))
+        )
+        message = f"{name}: a COPY --chmod mode has no read and search permission for other users, so entry_check must name what the image user reads"
+        return [message] if closed else []
+    if image.get("kind") not in ("build", "source"):
+        return [f"{name}: entry_check belongs to an image that the list builds"]
+    if not isinstance(entry, dict):
+        return [f"{name}: entry_check must be an object with modules and files"]
+    problems = [f"{name}: entry_check has the unknown key {key}" for key in entry if key not in ENTRY_KEYS]
+    for key in ENTRY_KEYS:
+        values = entry.get(key, [])
+        if not isinstance(values, list) or not all(isinstance(value, str) and value for value in values):
+            problems.append(f"{name}: entry_check {key} must be a list of names")
+        elif key == "modules" and not all(MODULE.match(value) for value in values):
+            problems.append(f"{name}: entry_check modules must be dotted module names")
+    if not problems and not any(entry.get(key) for key in ENTRY_KEYS):
+        problems.append(f"{name}: entry_check names no module or file to read")
+    return problems
+
+
+def entry_line(local: str, entry: dict[str, Any]) -> str:
+    """The plan line that runs the built image as its own user and stops the plan unless every named module and file can be read."""
+    names = [f"module:{value}" for value in entry.get("modules", [])] + [f"file:{value}" for value in entry.get("files", [])]
+    command = f"docker run --rm --network none --entrypoint python {local} -B -c {shlex.quote(ENTRY_PROGRAM)} {' '.join(shlex.quote(name) for name in names)}"
+    return f'[ "$({command})" = ok ]   # it runs as the image USER; a closed folder or file stops the plan before the tag'
 
 
 def openmetadata_problems(images: dict[str, dict[str, Any]], metadata: dict[str, Any]) -> list[str]:
@@ -167,11 +214,15 @@ def check(config: dict[str, Any], root: Path = ROOT) -> list[str]:
                 if context.is_dir()
                 else [f"{name}: build context {image.get('context')} does not exist"]
             )
+            dockerfile = context / str(image.get("dockerfile", "Dockerfile")) if context.is_dir() else None
+            problems.extend(entry_problems(name, image, dockerfile))
             for build_name, path in dict(image.get("build_contexts", {})).items():
                 if not (root / str(path)).is_dir():
                     problems.append(f"{name}: build context {build_name} points to {path}, which does not exist")
             if not isinstance(image.get("local_tag"), str) or not image["local_tag"]:
                 problems.append(f"{name}: local_tag is required")
+        if image.get("kind") in ("mirror", "blocked") and "entry_check" in image:
+            problems.extend(entry_problems(name, image, None))
         owner = seen_tags.setdefault(f"{name}:{image.get('tag')}", name)
         if owner != name:
             problems.append(f"{name}: repeats a tag of {owner}")
@@ -214,6 +265,8 @@ def image_lines(name: str, image: dict[str, Any], url: str, profile: str, region
         )
         tag = ""
     lines.append(f"docker image inspect --format '{{{{.Os}}}}/{{{{.Architecture}}}}' {local}   # must print {PLATFORM}")
+    if image.get("entry_check"):
+        lines.append(entry_line(local, image["entry_check"]))
     if tag:
         lines.append(f"{tag_variable}={tag}")
     else:

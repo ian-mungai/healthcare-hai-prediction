@@ -381,7 +381,7 @@ def publisher_analytics_image() -> dict[str, bool]:
 
 
 @contextlib.contextmanager
-def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "linux/arm64") -> Iterator[tuple[Path, dict[str, str]]]:
+def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "linux/arm64", run: str = "ok") -> Iterator[tuple[Path, dict[str, str]]]:
     """A scratch folder with the stand-in ``aws`` and ``docker`` first on a PATH that holds only ``/usr/bin`` and ``/bin`` besides, and a registry."""
     with tempfile.TemporaryDirectory(prefix="push_images_shell_") as directory:
         folder = Path(directory)
@@ -397,17 +397,21 @@ def sandbox(images: list[dict[str, str]], pushed_digest: str, platform: str = "l
             "PUSH_IMAGES_FAKE_STATE": str(folder),
             "PUSH_IMAGES_FAKE_DIGEST": pushed_digest,
             "PUSH_IMAGES_FAKE_PLATFORM": platform,
+            "PUSH_IMAGES_FAKE_RUN": run,
         }
         yield folder, environment
 
 
 def run_plan(
-    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64"
+    images: list[dict[str, str]], pushed_digest: str, name: str = "openmetadata_server", platform: str = "linux/arm64", run: str = "ok"
 ) -> tuple[int, list[str], list[dict[str, str]]]:
-    """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards."""
-    with sandbox(images, pushed_digest, platform) as (folder, environment):
+    """Run the printed plan of one image as shell against the fake registry: the exit code, the commands the stand-in saw and the registry afterwards.
+
+    The line that writes the requirement files from the lock is left out: it needs the repository, and the plan runs in a scratch folder."""
+    with sandbox(images, pushed_digest, platform, run) as (folder, environment):
         urls = push_images.repository_urls(repository_urls(folder))
-        (folder / "plan.sh").write_text("\n".join(push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name])) + "\n", encoding="utf-8")
+        lines = [line for line in push_images.plan(real_config(), urls, "example_profile", "us-west-2", [name]) if "scripts.quality.lock_env" not in line]
+        (folder / "plan.sh").write_text("\n".join(lines) + "\n", encoding="utf-8")
         result = run_command("sh", ["-e", "plan.sh"], cwd=folder, env=environment, timeout=60)
         commands = (folder / "commands.log").read_text(encoding="utf-8").splitlines()
         registry = json.loads((folder / "ecr.json").read_text(encoding="utf-8"))
@@ -645,6 +649,78 @@ def no_program() -> dict[str, bool]:
     return {"check, plan and record all exit zero without starting a program": codes == [0, 0, 0] and not STARTS}
 
 
+ENTRY_IMAGES = {
+    "model_api": ["module:scripts.serving.main", "file:data_contracts/serving/predictions.json", "file:feature_store/feature_store_aws.yaml"],
+    "streamlit": ["file:scripts/streamlit_app/app.py", "file:.streamlit/config.toml"],
+    "mlflow": ["file:/opt/mlflow/start_server.py"],
+    "training": ["file:/opt/hai/fetch_code.py"],
+}
+
+
+def entry_checks() -> dict[str, bool]:
+    """An image that sets file modes with COPY --chmod names the entries that its user must reach, and the plan runs the image as that user."""
+    config = real_config()
+    with tempfile.TemporaryDirectory(prefix="push_images_entry_") as directory:
+        urls = push_images.repository_urls(repository_urls(Path(directory)))
+    plans = {name: push_images.plan(config, urls, "example_profile", "us-west-2", [name]) for name in (*ENTRY_IMAGES, "drift")}
+
+    def runs(name: str) -> list[str]:
+        return [line for line in plans[name] if "docker run" in line]
+
+    def first(name: str) -> str:
+        return next(iter(runs(name)), "")
+
+    def order(name: str) -> list[int]:
+        """The line numbers of the platform check, the run and the tag assignment of one plan, or an empty list when the plan lacks one."""
+        starts = ("docker image inspect --format '{{.Os}}", "[", "TAG_")
+        found = [next((i for i, line in enumerate(plans[name]) if line.startswith(start) and (start != "[" or "docker run" in line)), -1) for start in starts]
+        return found if -1 not in found else []
+
+    def problems(changed: dict[str, Any]) -> str:
+        return "\n".join(push_images.check(changed))
+
+    without = copy.deepcopy(config)
+    without["images"]["model_api"].pop("entry_check", None)
+    string_modules = copy.deepcopy(config)
+    string_modules["images"]["model_api"]["entry_check"] = {"modules": "scripts.serving.main"}
+    empty = copy.deepcopy(config)
+    empty["images"]["streamlit"]["entry_check"] = {"files": []}
+    unknown_key = copy.deepcopy(config)
+    unknown_key["images"]["streamlit"].setdefault("entry_check", {})["user"] = "root"
+    on_mirror = copy.deepcopy(config)
+    on_mirror["images"]["redis"]["entry_check"] = {"files": ["/etc/redis"]}
+    ok = run_plan([], OTHER, "model_api", run="ok")
+    closed = run_plan([], OTHER, "model_api", run="closed")
+    return {
+        "the list is valid with the entry checks": push_images.check(config) == [],
+        "each image of the list that uses COPY --chmod names its entries": all(
+            [f"module:{m}" for m in images_entry.get("modules", [])] + [f"file:{f}" for f in images_entry.get("files", [])] == ENTRY_IMAGES[name]
+            for name, images_entry in ((name, config["images"][name].get("entry_check", {})) for name in ENTRY_IMAGES)
+        ),
+        "each such plan runs the built image once, after the platform check and before any tag": all(
+            len(runs(name)) == 1 and order(name) != [] and order(name) == sorted(order(name)) for name in ENTRY_IMAGES
+        ),
+        "the run keeps the user of the image and starts no network": all(
+            "--user" not in first(name) and "--network none" in first(name) and "--entrypoint python" in first(name) for name in ENTRY_IMAGES
+        ),
+        "the run reads each entry of the list": all(all(entry in first(name) for entry in ENTRY_IMAGES[name]) for name in ENTRY_IMAGES),
+        "the plan stops unless the run prints ok": all(
+            '"$(docker run' in first(name) and first(name).lstrip().startswith("[") and "= ok ]" in first(name) for name in ENTRY_IMAGES
+        ),
+        "an image without entries has no run": runs("drift") == [],
+        "a Dockerfile with COPY --chmod and no entries is refused": "model_api" in problems(without) and "entry_check" in problems(without),
+        "entries that are not lists of names are refused": "model_api" in problems(string_modules) and "modules" in problems(string_modules),
+        "an entry check with nothing to read is refused": "streamlit" in problems(empty) and "entry_check" in problems(empty),
+        "an unknown key of the entry check is refused": "streamlit" in problems(unknown_key) and "user" in problems(unknown_key),
+        "an entry check on a mirror is refused": "redis" in problems(on_mirror) and "entry_check" in problems(on_mirror),
+        "a run that prints ok lets the plan push once": ok[0] == 0 and sum(line.startswith("docker run") for line in ok[1]) == 1 and len(ok[2]) == 1,
+        "a run that cannot enter a folder stops the plan before the tag and the push": closed[0] != 0
+        and sum(line.startswith("docker run") for line in closed[1]) == 1
+        and not any(line.startswith(("docker tag", "docker push")) for line in closed[1])
+        and closed[2] == [],
+    }
+
+
 AUDITED: list[object] = []
 
 
@@ -654,6 +730,7 @@ CASES: dict[str, Case] = {
     "repository_groups": repository_groups,
     "plan_lines": plan_lines,
     "drift_image": drift_image,
+    "entry_checks": entry_checks,
     "publisher_analytics_image": publisher_analytics_image,
     "plan_execution": plan_execution,
     "registry_file": registry_file,

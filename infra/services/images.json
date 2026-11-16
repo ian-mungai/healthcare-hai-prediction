@@ -105,7 +105,10 @@
       "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64",
       "repository_group": "always",
-      "runs_as": "ECS service on the host when mlflow_enabled is true"
+      "runs_as": "ECS service on the host when mlflow_enabled is true",
+      "entry_check": {
+        "files": ["/opt/mlflow/start_server.py"]
+      }
     },
     "training": {
       "kind": "build",
@@ -114,7 +117,10 @@
       "tag": "3.17.2-arm64",
       "arm64": "base pin lists linux/arm64 and the DVC lock lists Apple silicon, x86 Linux and Arm Linux hashes; the linux/arm64 build has not been run yet",
       "repository_group": "always",
-      "runs_as": "job task"
+      "runs_as": "job task",
+      "entry_check": {
+        "files": ["/opt/hai/fetch_code.py"]
+      }
     },
     "feature_store": {
       "kind": "build",
@@ -208,7 +214,11 @@
       "tag": "1-arm64",
       "arm64": "base pin lists linux/arm64; the lock needs the owner's compile on the training lock, and the linux/arm64 build has not been run yet",
       "repository_group": "serving",
-      "runs_as": "ECS service on the host when model_api_enabled is true"
+      "runs_as": "ECS service on the host when model_api_enabled is true",
+      "entry_check": {
+        "modules": ["scripts.serving.main"],
+        "files": ["data_contracts/serving/predictions.json", "feature_store/feature_store_aws.yaml"]
+      }
     },
     "streamlit": {
       "kind": "build",
@@ -218,7 +228,10 @@
       "tag": "1-arm64",
       "arm64": "base pin lists linux/arm64; the lock needs the owner's compile, and the linux/arm64 build has not been run yet",
       "repository_group": "serving",
-      "runs_as": "ECS service on the host when streamlit_enabled is true"
+      "runs_as": "ECS service on the host when streamlit_enabled is true",
+      "entry_check": {
+        "files": ["scripts/streamlit_app/app.py", ".streamlit/config.toml"]
+      }
     },
     "openmetadata_server": {
       "kind": "mirror",
