@@ -437,11 +437,16 @@ def _host_address_cases(
     binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
     platform_directory = str((workspace / "infra/platform").resolve())
 
-    def answer(address_text: str, address_code: int) -> None:
+    topic = "arn:aws:sns:us-west-2:111111111111:example_project_alerts_dev"
+
+    def answer(address_text: str, address_code: int, topic_text: str | None = None, topic_code: int = 0) -> None:
+        topic_text = json.dumps(topic) if topic_text is None else topic_text
         tool.write_text(
             f"#!{sys.executable}\nimport json, sys\n"
             f"open({str(calls)!r}, 'a').write(json.dumps(sys.argv[1:]) + '\\n')\n"
             f"if sys.argv[1] == {'-chdir=' + platform_directory!r}:\n"
+            f"    if sys.argv[-1] == 'alerts_topic_arn':\n"
+            f"        sys.stdout.write({topic_text!r})\n        sys.exit({topic_code})\n"
             f"    sys.stdout.write({address_text!r})\n    sys.exit({address_code})\n"
             f"sys.stdout.write({json.dumps(binding)!r})\n"
         )
@@ -473,6 +478,7 @@ def _host_address_cases(
         return [call for call in asked if call[0] == "-chdir=" + platform_directory]
 
     ask = ["-chdir=" + platform_directory, "output", "-json", "host_private_ip"]
+    topic_ask = ["-chdir=" + platform_directory, "output", "-json", "alerts_topic_arn"]
     metadata = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["metadata", "silver"]}
     # The reviewed file lists the host families; the list holding every family is Terraform's default and names metadata.
     default_families = [
@@ -483,19 +489,60 @@ def _host_address_cases(
     explicit_default = omitted | {"host_jobs": default_families}
     checks: dict[str, bool] = {}
     answer(json.dumps("10.40.0.20"), 0)
-    for name, variables in (
-        ("the_metadata_host_job", metadata),
-        ("the_explicit_default_host_families", explicit_default),
+    for name, variables, asks, with_topic in (
+        ("the_metadata_host_job", metadata, [ask], False),
+        ("the_explicit_default_host_families", explicit_default, [ask, topic_ask], True),
     ):
         calls.unlink(missing_ok=True)
         result = invoke(variables)
         checks[f"{name}_gets_host_private_ip_from_the_platform_output"] = (
             result.returncode == 0
-            and platform_asks() == [ask]
+            and platform_asks() == asks
             and json.loads(output.read_text()).get("host_private_ip") == "10.40.0.20"
             and "10.40.0.20" not in result.stdout + result.stderr
         )
+        checks[f"{name}_{'gets' if with_topic else 'does_not_get'}_alerts_topic_arn_from_the_platform_output"] = (
+            result.returncode == 0 and ("alerts_topic_arn" in json.loads(output.read_text())) == with_topic
+        )
     rendered = output.read_bytes()
+    promote_only = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["promote", "silver"]}
+    metadata_and_promote = document["variables"] | {"host_jobs_enabled": True, "host_jobs": ["metadata", "promote"]}
+    for name, variables, asks in (
+        ("the_promote_host_job", promote_only, [topic_ask]),
+        ("the_metadata_and_promote_host_jobs", metadata_and_promote, [ask, topic_ask]),
+    ):
+        calls.unlink(missing_ok=True)
+        result = invoke(variables)
+        rendered_inputs = json.loads(output.read_text())
+        checks[f"{name}_gets_alerts_topic_arn_from_the_platform_output"] = (
+            result.returncode == 0
+            and platform_asks() == asks
+            and rendered_inputs.get("alerts_topic_arn") == topic
+            and ("host_private_ip" in rendered_inputs) == (ask in asks)
+            and topic not in result.stdout + result.stderr
+        )
+    rendered = output.read_bytes()
+    for name, text, code in (
+        ("a_failed_platform_output", "", 1),
+        ("a_null_topic", "null", 0),
+        ("a_topic_that_is_not_text", "20", 0),
+        ("an_empty_topic", json.dumps(""), 0),
+        ("a_topic_with_a_wildcard", json.dumps("arn:aws:sns:us-west-2:111111111111:*"), 0),
+        ("a_topic_from_another_region", json.dumps("arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"), 0),
+        ("a_topic_from_another_account", json.dumps(f"arn:aws:sns:us-west-2:{'2' * 12}:example_project_alerts_dev"), 0),
+        ("a_topic_of_another_project", json.dumps("arn:aws:sns:us-west-2:111111111111:other_project_alerts_dev"), 0),
+        ("a_topic_of_another_environment", json.dumps("arn:aws:sns:us-west-2:111111111111:example_project_alerts_prod"), 0),
+        ("the_budget_topic", json.dumps("arn:aws:sns:us-west-2:111111111111:example_project_budget_alerts_dev"), 0),
+        ("a_subscription_arn", json.dumps(topic + ":01234567-89ab-cdef-0123-456789abcdef"), 0),
+    ):
+        answer(json.dumps("10.40.0.20"), 0, text, code)
+        for label, variables in (("promote", promote_only), ("explicit_default_families", explicit_default)):
+            result = invoke(variables)
+            checks[f"alerts_topic_refuses_{name}_for_{label}"] = (
+                result.returncode == 2 and "alerts_topic_arn" in result.stderr and output.read_bytes() == rendered
+            )
+    checks["alerts_topic_refusal_asks_for_a_platform_apply"] = "apply the platform stack" in result.stderr.lower()
+    answer(json.dumps("10.40.0.20"), 0)
     for name, text, code in (
         ("a_failed_platform_output", "", 1),
         ("a_null_address", "null", 0),
@@ -544,12 +591,13 @@ def _host_address_cases(
         calls.unlink(missing_ok=True)
         result = invoke(variables)
         checks[f"{name}_reads_no_platform_output"] = (
-            result.returncode == 0 and platform_asks() == [] and "host_private_ip" not in json.loads(output.read_text())
+            result.returncode == 0 and platform_asks() == [] and not {"host_private_ip", "alerts_topic_arn"} & json.loads(output.read_text()).keys()
         )
     rendered = output.read_bytes()
     # The schema refuses every key it does not list, so a made-up key proves the refusal without naming any removed input.
     for label, key, typed in (
         ("host_private_ip", "host_private_ip", "10.40.0.20"),
+        ("alerts_topic_arn", "alerts_topic_arn", topic),
         ("any_unknown_key", "zz_unregistered_probe_key", "any value"),
     ):
         result = invoke(metadata | {key: typed})

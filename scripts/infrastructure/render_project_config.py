@@ -47,7 +47,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "host_code_fetch_prepared",
 )
 # Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
-OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix")
+OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix", "alerts_topic_arn")
 # Lists that may be left out: the job families the Airflow launch role may start.
 OPTIONAL_PREPARATION_LISTS = ("airflow_launch_families",)
 HOST_JOB_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
@@ -56,6 +56,8 @@ LAUNCH_FAMILIES = (*HOST_JOB_FAMILIES, "publisher")
 # The exact ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value.
 PUBLISHER_SECRET_NAMES = frozenset({"census_api_key", "bls_api_key", "hud_api_key"})
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS, "publisher_secret_arns"})
+# The same rule as the alerts_topic_arn validation in infra/iam/training_variables.tf: one SNS topic ARN, with no wildcard.
+ALERTS_TOPIC = re.compile(r"arn:aws:sns:[a-z0-9-]+:[0-9]{12}:[A-Za-z0-9_-]{1,256}")
 OWNER_USER = re.compile(r"[A-Za-z0-9_+=,.@-]{1,64}")
 REGISTRY_KEY = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,500}")
 MANIFEST_PREFIX = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./-]{0,200}[A-Za-z0-9_]")
@@ -176,6 +178,11 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
     owner = document.get("athena_owner_user", "")
     if not isinstance(owner, str) or (owner and not OWNER_USER.fullmatch(owner)):
         raise ConfigurationError("Set athena_owner_user to empty or one IAM user name in the IAM preparation file.")
+    topic = document.get("alerts_topic_arn")
+    if "alerts_topic_arn" in document and (not isinstance(topic, str) or not ALERTS_TOPIC.fullmatch(topic)):
+        raise ConfigurationError(
+            "Set alerts_topic_arn to the ARN of the platform alerts topic (the platform output alerts_topic_arn), or leave it out, in the IAM preparation file."
+        )
     for name, pattern in (("model_api_registry_key", REGISTRY_KEY), ("model_api_manifest_prefix", MANIFEST_PREFIX)):
         value = document.get(name, "")
         if not isinstance(value, str) or (value and (not pattern.fullmatch(value) or value.startswith("lakehouse/serving"))):

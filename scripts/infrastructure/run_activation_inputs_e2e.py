@@ -146,6 +146,13 @@ ROWS: list[Row] = [
         {"census_api_key": f"arn:aws:secretsmanager:us-west-2:{'1' * 12}:secret:census_api_key-*"},
     ),
     Row("iam", "athena_owner_user", "example_owner", 5),
+    Row(
+        "iam",
+        "alerts_topic_arn",
+        f"arn:aws:sns:us-west-2:{'1' * 12}:example_project_alerts_dev",
+        5,
+        refuse=("", f"arn:aws:sns:us-west-2:{'1' * 12}:*", f"arn:aws:sqs:us-west-2:{'1' * 12}:example_project_alerts_dev"),
+    ),
     Row("iam", "model_api_registry_key", "lakehouse/feast/registry.pb", "/rooted/registry.pb"),
     Row("iam", "model_api_manifest_prefix", "serving/deployments", "serving/deployments/"),
     Row(

@@ -447,6 +447,37 @@ def test_optional_preparation_flag_must_be_a_boolean_and_is_not_echoed(tmp_path:
     check(name in str(refusal.value) and "synthetic-value" not in str(refusal.value), "the message names the input and never echoes the value")
 
 
+ALERTS_TOPIC = "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"
+
+
+def test_alerts_topic_is_absent_by_default_and_read_when_set(tmp_path: Path) -> None:
+    default = renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path))
+    check("alerts_topic_arn" not in default, "an unset topic stays out of the rendered inputs, so the stack default (no publish grant) applies")
+    document = renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, training_prepared=True, alerts_topic_arn=ALERTS_TOPIC))
+    check(document["alerts_topic_arn"] == ALERTS_TOPIC, "the platform alerts topic is rendered as typed")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "",
+        5,
+        None,
+        "not an arn",
+        "arn:aws:sns:eu-west-1:111111111111:*",
+        "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev:01234567-89ab-cdef-0123-456789abcdef",
+        "arn:aws:sqs:eu-west-1:111111111111:example_project_alerts_dev",
+        "arn:aws:sns:eu-west-1:11111111111:example_project_alerts_dev",
+    ],
+)
+def test_alerts_topic_must_be_one_topic_arn_and_is_not_echoed(tmp_path: Path, value: Any) -> None:
+    with pytest.raises(ConfigurationError) as refusal:
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, alerts_topic_arn=value))
+    message = str(refusal.value)
+    echoed = isinstance(value, str) and bool(value) and value in message
+    check("Set alerts_topic_arn to" in message and not echoed, "the message names the input and never echoes the value")
+
+
 def test_unknown_preparation_input_is_still_refused(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError):
         renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, example_extra_input=True))

@@ -87,6 +87,29 @@ def host_private_ip(directory: Path = PLATFORM_DIRECTORY) -> str:
     return str(address)
 
 
+def alerts_topic_arn(storage: dict[str, str], directory: Path = PLATFORM_DIRECTORY) -> str:
+    """Return the platform alerts topic from the platform stack output alerts_topic_arn, or refuse; the reviewed file never carries it.
+
+    Only this project's topic of the environment, region and account is accepted, the same one the alerts and IAM stacks accept.
+    """
+    refusal = ConfigurationError(
+        "The promote host job needs the alerts topic of this project, environment, region and account from the platform stack output "
+        "alerts_topic_arn. Apply the platform stack, then render again. No Terraform action was run."
+    )
+    try:
+        result = run_command("terraform", [f"-chdir={directory}", "output", "-json", "alerts_topic_arn"], timeout=120)
+    except (OSError, TimeoutExpired):
+        raise refusal from None
+    try:
+        topic = json.loads(result.stdout) if result.returncode == 0 else None
+    except ValueError:
+        topic = None
+    expected = f"arn:aws:sns:{storage['aws_region']}:{storage['expected_account_id']}:{storage['project_name']}_alerts_{storage['environment']}"
+    if topic != expected:
+        raise refusal
+    return expected
+
+
 def needs_host_address(values: dict[str, Any]) -> bool:
     """True when the metadata host job is selected: the only job that calls the host's services by address.
 
@@ -100,6 +123,14 @@ def needs_host_address(values: dict[str, Any]) -> bool:
             "(Terraform's default list is not read). No Terraform action was run."
         )
     return host_jobs_on and "metadata" in values["host_jobs"]
+
+
+def needs_alerts_topic(values: dict[str, Any]) -> bool:
+    """True when the promote host job is selected: the only job that publishes the owner notice to the alerts topic.
+
+    Call it after needs_host_address, which refuses a missing host_jobs list by name.
+    """
+    return values.get("host_jobs_enabled") is True and "promote" in values.get("host_jobs", [])
 
 
 def verify_jobs_plan(plan: dict[str, Any], expected: dict[str, Any]) -> None:
@@ -152,6 +183,8 @@ def main() -> int:
             values["host_job_memory_mib"], values["host_capacity_binding"] = host_job_room()
         if address_needed:
             values["host_private_ip"] = host_private_ip()
+        if needs_alerts_topic(values):
+            values["alerts_topic_arn"] = alerts_topic_arn(storage)
         if arguments.check_plan:
             try:
                 result = run_command("terraform", [f"-chdir={directory}", "show", "-json", str(arguments.check_plan.resolve())], timeout=120)

@@ -1256,6 +1256,7 @@ def run_preparation_plan_cases(evidence: Evidence, sources: dict[str, bytes], re
         "monitoring_enabled": {**prepared, "monitoring_enabled": True},
         "athena_mirror_prepared": {**prepared, "athena_mirror_prepared": True},
         "athena_owner_user": {**prepared, "athena_owner_user": "example_owner"},
+        "alerts_topic_arn": {**prepared, "alerts_topic_arn": "arn:aws:sns:eu-west-1:111111111111:example_project_alerts_dev"},
     }
     saved_prepared = plan("prep_plan_prepared", workspace, stack, terraform, prepared)
     step, result = check("prep_plan_prepared_accepted", workspace, saved_prepared)
