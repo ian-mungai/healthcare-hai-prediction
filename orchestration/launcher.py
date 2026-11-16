@@ -501,6 +501,28 @@ class DockerError(Exception):
         self.message: DockerReason = message
 
 
+class MountSourceMissing(DockerError):
+    """The daemon refused a create and the specification binds a source that does not exist on the host. It names the sources by their path from the
+    checkout, which the launcher composed itself; the daemon's text is still never kept."""
+
+    def __init__(self, status: int, sources: Sequence[str]) -> None:
+        super().__init__(status, docker_reason(status))
+        self.sources = list(sources)
+        self.args = (f"Docker {status}: {docker_reason(status)}; bind mount source {', '.join(self.sources)} does not exist",)
+
+
+def missing_bind_sources(body: Mapping[str, Any], roots: Sequence[Path]) -> list[str]:
+    """The bind sources of a create body that do not exist, each as its path from the first root that holds it (the absolute path when none does)."""
+    missing = []
+    for mount in (body.get("HostConfig") or {}).get("Mounts") or []:
+        source = Path(str(mount["Source"]))
+        if mount.get("Type", "bind") != "bind" or source.exists():
+            continue
+        shown = next((source.relative_to(root).as_posix() for root in roots if source.is_relative_to(root)), str(source))
+        missing.append(shown)
+    return sorted(set(missing))
+
+
 def failure_text(error: object) -> str:
     """The text a record may keep for a failure: a Docker error as its status and reason, a launcher refusal as the launcher composed it, any other
     exception as its type name."""
@@ -4791,6 +4813,10 @@ class Launcher:
         try:
             return self.docker.create(name, body, self.timings.create_timeout)
         except DockerError as error:
+            if error.status == 400:
+                missing = missing_bind_sources(body, [self.cfg.root])
+                if missing:
+                    raise MountSourceMissing(error.status, missing) from error
             if error.status != 409:
                 raise
             existing = self.docker.inspect(name)
@@ -9646,6 +9672,11 @@ class AttemptResult:
     def ok(self) -> bool:
         """True when the attempt ran and exited with code 0."""
         return self.reason == "exited" and self.exit_code == 0
+
+    @property
+    def error_text(self) -> str:
+        """Why the attempt failed: its error output, else its output, else the reason the launcher recorded (never daemon text); the last 1000 characters."""
+        return (self.stderr or self.stdout or str(self.record.get("detail") or ""))[-1000:]
 
 
 class ReleaseOutcome(enum.StrEnum):

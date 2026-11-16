@@ -92,3 +92,11 @@ Replace `<HOST_INSTANCE_ID>` with the instance ID of the host (the instance tagg
    ```
 
 3. Open `http://127.0.0.1:<LOCAL_PORT>` in a browser. A health path answers at `http://127.0.0.1:<LOCAL_PORT><PATH>`.
+
+## Worktrees
+
+Create each worktree under `.worktrees/` of the main checkout, then run this from the main checkout (or any worktree that has a `.venv`) to make or check every Git-ignored input of the new one: the `.venv` and `.tools` links, the dbt package folders, the `.terraform` folder of each stack, `.env`, `infra/deployment.auto.tfvars.json` and the generated requirement and pin files, such as `services/orchestration/constraints-3.12.txt`. It copies from the main checkout, never overwrites a file that differs, copies no Terraform state file and changes nothing on a second run. It prints what it did and exits 1 with the missing item named.
+
+```sh
+.venv/bin/python -m scripts.quality.worktree_setup .worktrees/<name>
+```

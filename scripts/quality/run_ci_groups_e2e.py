@@ -1443,6 +1443,10 @@ HOSTED_ENTRY_POINTS = {
             "scripts.quality.run_scratch_worktree_e2e",
             ("scripts/quality/run_scratch_worktree_e2e.py", "scripts/quality/scratch_worktree.py", "scripts/acquisition/run_checks_ci_e2e.sh"),
         ),
+        (
+            "scripts.quality.run_worktree_setup_e2e",
+            ("scripts/quality/run_worktree_setup_e2e.py", "scripts/quality/worktree_setup.py", "scripts/quality/lock_env.py"),
+        ),
     ),
     "configuration_checks": (
         ("scripts.infrastructure.run_secret_store_e2e", ("scripts/infrastructure/run_secret_store_e2e.py", "scripts/infrastructure/secret_store.py")),

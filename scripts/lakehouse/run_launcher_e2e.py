@@ -5756,6 +5756,47 @@ def mount_containment_depth_and_case(env: Env) -> dict[str, bool]:
     return results
 
 
+@case("missing_mount_source_named")
+def missing_mount_source_named(env: Env) -> dict[str, bool]:
+    """A create the daemon refuses while a bind source is missing ends the attempt with that source named by its path from the checkout, never with the
+    daemon's text; a refusal with every source present, and a create the daemon accepts for a missing source, are unchanged."""
+    env.start()
+    alloc = env.allocate()
+    principal = env.alloc_principal(alloc)
+    case_folder, _ = env.case_folders("gone")
+    shown = case_folder.relative_to(ROOT).as_posix()
+    daemon_text = "invalid mount config for type bind: bind source path does not exist"
+
+    def refused_create(launch: str, remove_source: bool) -> dict[str, Any]:
+        gate = env.daemon.add_gate("create", "before", match=lambda c: f"-{launch}-" in c["name"])
+        attempt_id = env.submit(principal, launch=launch, params=env.fixture_params("gone"))["attempt_id"]
+        gate.wait_reached()
+        if remove_source:
+            shutil.rmtree(case_folder)
+        env.daemon.error_replies["create"] = [(400, daemon_text)]
+        gate.release()
+        return env.wait_ended(attempt_id, 40)
+
+    missing = refused_create("m1", remove_source=True)
+    case_folder.mkdir(parents=True)
+    present = refused_create("m2", remove_source=False)
+    body = {
+        "HostConfig": {
+            "Mounts": [{"Type": "bind", "Source": str(case_folder / "absent"), "Target": "/x"}, {"Type": "bind", "Source": "/nonexistent/abs", "Target": "/y"}]
+        }
+    }
+    ended = launcher.AttemptResult("a", "create_failed", None, "", "", {"detail": "Docker 400: request refused; bind mount source gone does not exist"})
+    return {
+        "the attempt ended create_failed": missing["reason"] == "create_failed",
+        "the record names the missing source by its path from the checkout": shown in missing["detail"] and "does not exist" in missing["detail"],
+        "the record keeps no daemon text": daemon_text not in missing["detail"] and str(ROOT) not in missing["detail"],
+        "a refusal with every source present keeps the plain reason": present["detail"] == "Docker 400: request refused",
+        "missing_bind_sources names a source of the checkout by its relative path": (shown + "/absent") in launcher.missing_bind_sources(body, [ROOT]),
+        "missing_bind_sources keeps the absolute path of a source outside the roots": "/nonexistent/abs" in launcher.missing_bind_sources(body, [ROOT]),
+        "the in-image check reports the recorded reason when the attempt left no output": ended.error_text == ended.record["detail"],
+    }
+
+
 @case("mount_and_argument_refusals")
 def mount_and_argument_refusals(env: Env) -> dict[str, bool]:
     """913 and 916: mounts that contain the token root or a secrets folder, other folders and every dbt option outside the closed schema are refused."""
@@ -10965,6 +11006,7 @@ ALL_CASES = (
     replay_and_token_store,
     token_not_disclosed,
     mount_and_argument_refusals,
+    missing_mount_source_named,
     bronze_argument_schema,
     mount_containment_depth_and_case,
     kit_launcher_ownership,

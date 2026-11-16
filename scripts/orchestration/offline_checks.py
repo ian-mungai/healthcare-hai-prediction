@@ -486,7 +486,7 @@ def in_image(platform: dict[str, Any], test_registry: str | None) -> dict[str, A
         client.release_allocation(allocation)
     lines = [line for line in result.stdout.splitlines() if line.startswith("IN_IMAGE ")]
     if not result.ok or not lines:
-        return {"error": (result.stderr or result.stdout)[-1000:], "reason": result.reason, "exit_code": result.exit_code, "image": description}
+        return {"error": result.error_text, "reason": result.reason, "exit_code": result.exit_code, "image": description}
     if len(lines) != 1:
         return {"error": "expected exactly one IN_IMAGE report", "image": description}
     try:
