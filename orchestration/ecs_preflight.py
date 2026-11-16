@@ -42,6 +42,7 @@ from orchestration.training_contract import (
     model_training_run_id,
     parameters_for,
     record_key,
+    research_attempt_of,
     serving_parameters_for,
     trained_run_id,
 )
@@ -638,9 +639,9 @@ class Preflight:
             drift_model(request)
         research_code = None
         if request.template == "research" and request.dag_id == "research_dag":
-            # Research compares the models' runs, so it runs the code the first of them trained with.
-            research_code = self.code_runs.resolve(trained_run_id(str((request.training or {})["base_run"]), PROMOTION_MODELS[0]))
-        bind = research_code is not None
+            research_code, bind = self.research_code_run(request)
+        else:
+            bind = False
         if research_code is None and row.get("needs_publisher_run_request"):
             research_code, bind = self.publisher_code_run(request)
         spec = self.spec(request, job, research_code)
@@ -651,6 +652,35 @@ class Preflight:
         # reserve, its own memory for a family that reserves its own size. The fit probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=job_memory)
         return replace(spec, task_definition=revision, need=need)
+
+    def research_code_run(self, request: SubmissionRequest) -> tuple[str, bool]:
+        """The code run of a research run and whether the run still needs binding to it.
+
+        Research compares the models' runs, so attempt 1 runs the code the first of them trained with and is bound to it. A later attempt exists to run
+        fixed code, so it runs the code staged for its own run (or the run its owner bound it to), never the first model's: the run's own ``code.sha256``
+        must be staged, or the launch is refused by name. Its promotion chain follows it (``airflow_steps.research_chain_step``). The attempt is not bound:
+        it resolves to its own staged code, which is written once.
+        """
+        training = request.training or {}
+        try:
+            attempt = research_attempt_of(training.get("research_attempt", 1))
+        except ValueError as error:
+            raise LaunchRefused(str(error)) from None
+        if attempt == 1:
+            return self.code_runs.resolve(trained_run_id(str(training["base_run"]), PROMOTION_MODELS[0])), True
+        code_run = self.code_runs.resolve(request.run_id)
+        try:
+            self.code_digest(code_run)
+        except TaskUnavailable as error:
+            if str(error) != "code_digest_not_staged":
+                raise InputNotReady(str(error)) from None
+            raise LaunchRefused(
+                f"research attempt {attempt} of run {request.run_id} runs fixed code, so it needs its own staged code: "
+                f"lakehouse/run_stage/{code_run}/inputs/code.sha256 is not staged. It does not use the code of the first model's training run"
+            ) from None
+        except TaskRefused as error:
+            raise LaunchRefused(str(error)) from None
+        return code_run, False
 
     def publisher_code_run(self, request: SubmissionRequest) -> tuple[str | None, bool]:
         """The code run of a publisher run and whether the run still needs binding to it.

@@ -137,7 +137,7 @@ def research_dag_runs_a_later_attempt_as_a_run_of_its_own() -> None:
     require(second != RESEARCH, "the second attempt derives the first attempt's run")
     for attempt, run, expected in ((2, second, {**RESEARCH_PARAMS, "research_attempt": 2}), (1, RESEARCH, RESEARCH_PARAMS)):
         rig = Rig()
-        rig.stage_runs(training_contract.trained_run_id(BASE, "m1"))
+        rig.stage_runs(run if attempt > 1 else training_contract.trained_run_id(BASE, "m1"))  # a later attempt runs the code staged for its own run
         with world(rig, "research_dag", dag_params(run_id=run, research_attempt=attempt)) as current:
             require(current.step("research") == "succeeded", f"the research step of attempt {attempt} did not pass")
         promote = rig.environment()["promote"]
@@ -153,6 +153,74 @@ def research_dag_runs_a_later_attempt_as_a_run_of_its_own() -> None:
     rig.stage_runs(second)
     error = refuses(LaunchRefused, partial(rig.preflight.prepare, request_for("research", second, {**RESEARCH_PARAMS, "research_attempt": 1})))
     require("research_attempt" in str(error), f"the preflight took the attempt 1 spelled out: {error}")
+
+
+def code_runs_of(spec: Any) -> set[str]:
+    """The code runs a launch spec tells its containers."""
+    return {values["CODE_RUN_ID"] for values in spec.environment.values() if "CODE_RUN_ID" in values}
+
+
+def a_later_attempt_runs_the_code_staged_for_its_own_run() -> None:
+    """Attempt 1 runs the code the first model trained with and binds to it. A later attempt exists to run fixed code, so it runs the code staged for its own
+    research run, never the first model's: with only its own code staged it launches with that code and the first model's code is not read. A binding the owner
+    wrote for the research run is honored."""
+    second, first_model = training_contract.research_run_id(BASE, 2), training_contract.trained_run_id(BASE, "m1")
+    later = {**RESEARCH_PARAMS, "research_attempt": 2}
+    rig = Rig()
+    rig.stage_runs(first_model)
+    spec = rig.preflight.prepare(request_for("research", RESEARCH, RESEARCH_PARAMS))
+    require(spec is not None and code_runs_of(spec) == {first_model}, f"attempt 1 did not run the first model's code: {spec}")
+    require(rig.preflight.code_runs.stored(RESEARCH) == first_model, "attempt 1 is not bound to the first model's code")
+    rig = Rig()
+    rig.stage_runs(second)
+    spec = rig.preflight.prepare(request_for("research", second, later))
+    require(spec is not None and code_runs_of(spec) == {second}, f"attempt 2 did not run its own staged code: {spec}")
+    require(spec.bound["code_digest"] == rig.stage.objects[RUN_KEY.format(run=second, name="code.sha256")].decode().strip(), "attempt 2 bound another digest")
+    require(not [entry for entry in rig.stage.log if first_model in entry], f"attempt 2 read the first model's code: {rig.stage.log}")
+    rig = Rig()
+    rig.stage_runs(first_model)
+    rig.stage.objects[RUN_KEY.format(run=second, name="code_run.json")] = json.dumps({"code_run": first_model}).encode()
+    spec = rig.preflight.prepare(request_for("research", second, later))
+    require(spec is not None and code_runs_of(spec) == {first_model}, f"a binding of attempt 2 was not honored: {spec}")
+
+
+def a_later_attempt_without_staged_code_is_refused_by_name() -> None:
+    """A later attempt with nothing staged for its research run is refused naming the run and the missing object, even when the first model's code is staged:
+    it never falls back to that code. The refusal comes before any binding, launch record or task."""
+    second, first_model = training_contract.research_run_id(BASE, 2), training_contract.trained_run_id(BASE, "m1")
+    rig = Rig()
+    rig.stage_runs(first_model, RESEARCH)
+    error = refuses(LaunchRefused, partial(rig.preflight.prepare, request_for("research", second, {**RESEARCH_PARAMS, "research_attempt": 2})))
+    require(second in str(error) and "code.sha256" in str(error) and "attempt 2" in str(error), f"the refusal does not name the run and the object: {error}")
+    require(not rig.ecs.calls and not rig.records.calls, "a refused attempt reached the cloud or the launch records")
+    require(RUN_KEY.format(run=second, name="code_run.json") not in rig.stage.objects, "a refused attempt was bound to a code run")
+
+
+def the_chain_of_a_later_attempt_runs_the_code_of_its_research_run() -> None:
+    """The whole DAG of a later attempt, with all three models trained and the first model's code staged: the research task and each launching step of the
+    attempt's chain bind their runs to the code staged for the attempt's research run and launch with it, not with the first model's code."""
+    second = training_contract.research_run_id(BASE, 2)
+    rig = Rig()
+    for model in training_contract.PROMOTION_MODELS:
+        trained(rig, model)
+    rig.stage_runs(second)
+    staged_for_the_dag(rig, research=second)
+    before = rig.tasks_started()
+    with (
+        world(rig, "research_dag", dag_params(run_id=second, research_attempt=2)) as current,
+        mock.patch.object(promotion_chain, "release_online", lambda *arguments: None),
+    ):
+        states = current.run_dag("research_dag.py")
+    require(set(states.values()) == {"success"} and current.results["gate"] == "accepted", f"the DAG of attempt 2 did not finish: {states} {current.results}")
+    expected = [("", "research"), ("HAI_1", "serve_canary"), ("HAI_1", "canary"), ("HAI_1", "promote"), ("HAI_1", "serve_stable"), ("HAI_1", "notify")]
+    require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
+    for index in range(before, rig.tasks_started()):
+        named = code_runs_of(SimpleNamespace(environment=rig.environment(index)))
+        require(named == {second}, f"task {index - before} ran the code of {named}, not of its research run {second}")
+    for step in ("canary_deploy", "canary", "promote", "stable_deploy", "notice"):
+        run = training_contract.chain_run_id(second, "HAI_1", step)
+        bound = json.loads(rig.stage.objects[RUN_KEY.format(run=run, name="code_run.json")])
+        require(bound == {"code_run": second}, f"{step} of attempt 2 is bound to {bound}, not to the code of its research run")
 
 
 def hold_key(features_run: str) -> str:
@@ -171,11 +239,16 @@ def research_record(hai_type: str, challenger: Mapping[str, Any] | None, product
 
 
 def canary_record(
-    hai_type: str, decision: str, failed: tuple[str, ...] = (), challenger: Mapping[str, Any] = CHALLENGER, changes: dict[str, Any] | None = None
+    hai_type: str,
+    decision: str,
+    failed: tuple[str, ...] = (),
+    challenger: Mapping[str, Any] = CHALLENGER,
+    changes: dict[str, Any] | None = None,
+    research: str = RESEARCH,
 ) -> bytes:
     document = {
         "schema": 1,
-        "research_run": RESEARCH,
+        "research_run": research,
         "hai_type": hai_type,
         "model": challenger["model"],
         "version": challenger["version"],
@@ -191,13 +264,14 @@ def stage_records(
     canary: str | None = "promote",
     production: str | None = "1",
     hold: bool = True,
+    research: str = RESEARCH,
 ) -> None:
     """What the research and canary phases would have stored: a research record for each type, a canary result for each type with a challenger (none for a
     first champion, which has no canary) and, when ``hold`` is set, the held online load of each challenger's real features run."""
     for hai_type, challenger in challengers.items():
-        objects[training_contract.record_key("research", RESEARCH, hai_type)] = research_record(hai_type, challenger, production)
+        objects[training_contract.record_key("research", research, hai_type)] = research_record(hai_type, challenger, production)
         if challenger is not None and canary is not None and production is not None:
-            objects[training_contract.record_key("canary", RESEARCH, hai_type)] = canary_record(hai_type, canary, challenger=challenger)
+            objects[training_contract.record_key("canary", research, hai_type)] = canary_record(hai_type, canary, challenger=challenger, research=research)
         if challenger is not None and hold:
             objects[hold_key(FEATURES_RUNS[challenger["model"]])] = b'{"held": true}\n'
 
@@ -570,8 +644,8 @@ def dag_params(**changes: Any) -> dict[str, Any]:
     return {"run_id": RESEARCH, "mode": "real", **RESEARCH_PARAMS, **changes}
 
 
-def staged_for_the_dag(rig: Rig, canary: str | None = "promote", production: str | None = "1", hold: bool = True) -> None:
-    stage_records(rig.stage.objects, {"HAI_1": CHALLENGER, "HAI_2": None}, canary, production, hold)
+def staged_for_the_dag(rig: Rig, canary: str | None = "promote", production: str | None = "1", hold: bool = True, research: str = RESEARCH) -> None:
+    stage_records(rig.stage.objects, {"HAI_1": CHALLENGER, "HAI_2": None}, canary, production, hold, research)
 
 
 def research_dag_form_and_graph() -> None:
@@ -843,4 +917,7 @@ CASES: dict[str, Callable[[], None]] = {
     "steps_refuse_the_parameters_of_another_step": steps_refuse_the_parameters_of_another_step,
     "research_dag_step_launches_with_its_form": research_dag_step_launches_with_its_form,
     "research_dag_runs_a_later_attempt_as_a_run_of_its_own": research_dag_runs_a_later_attempt_as_a_run_of_its_own,
+    "a_later_attempt_runs_the_code_staged_for_its_own_run": a_later_attempt_runs_the_code_staged_for_its_own_run,
+    "a_later_attempt_without_staged_code_is_refused_by_name": a_later_attempt_without_staged_code_is_refused_by_name,
+    "the_chain_of_a_later_attempt_runs_the_code_of_its_research_run": the_chain_of_a_later_attempt_runs_the_code_of_its_research_run,
 }
