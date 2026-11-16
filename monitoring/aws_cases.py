@@ -13,8 +13,10 @@ import importlib
 import io
 import json
 import os
+import sys
 from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
@@ -23,6 +25,7 @@ from monitoring.drift_check import HAI_TYPES, CheckError
 from scripts.infrastructure import startup_check
 from scripts.process import run_command
 from scripts.training import lane_b_cases
+from scripts.training.presigned_probe import PROXY_SWITCH, ProbingClient
 
 ROOT = Path(__file__).resolve().parents[1]
 PYTHON = str(ROOT / ".venv/bin/python")
@@ -449,10 +452,52 @@ def publish_cli_refuses_a_bad_bucket_name(folder: Path) -> Problems:
     return [] if done.returncode == 2 and "bucket_invalid" in text else [f"expected exit 2 naming bucket_invalid, got {done.returncode}: {text[:300]}"]
 
 
+def presigned_modules(client: Any) -> dict[str, Any]:
+    """The ``sys.modules`` entry that gives ``client`` for ``import_module("mlflow.tracking")``, as a job gets it over an S3 artifact server."""
+    return {"mlflow.tracking": SimpleNamespace(MlflowClient=lambda **arguments: client)}
+
+
+def baseline_phase_reads_artifacts_through_the_tracking_server(folder: Path) -> Problems:
+    """The task's baseline phase opens its own MLflow client. A client with no download setting reads each artifact straight from S3 with a presigned URL,
+    which the task cannot reach (the live failure ``artifact_missing: bundle/feature_list.json``), so every download must go through the tracking server."""
+    baseline, work = workspace_with_two_baselines(folder)
+    client = ProbingClient(baseline.store)
+    module = aws_run()
+    with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow:5100"}), mock.patch.dict(sys.modules, presigned_modules(client)):
+        os.environ.pop(PROXY_SWITCH, None)
+        try:
+            done = module.baseline_phase(module.open_store(), work, RUN, project=baseline.work.project)
+        except CheckError as error:
+            return [f"the baseline phase failed: {error}"]
+    problems = [] if client.direct_reads == 0 else [f"{client.direct_reads} artifact downloads went to S3 with a presigned URL"]
+    return problems + ([] if done["monitored"] == ["HAI_1"] else [f"the phase monitored {done['monitored']}"])
+
+
+def baseline_cli_reads_artifacts_through_the_tracking_server(folder: Path) -> Problems:
+    """The baseline command opens its own client too: it reads an artifact through the tracking server, never with a presigned URL."""
+    module = importlib.import_module("monitoring.baseline")
+    baseline = reader_cases.Baseline(folder)
+    client = ProbingClient(baseline.store)
+    scratch = folder / "scratch"
+    scratch.mkdir()
+
+    def fetch(store: Any, hai_type: str, out: Path, **options: Any) -> Any:
+        store.download_artifacts("run1", "bundle/feature_list.json", str(scratch))
+        return SimpleNamespace(hai_type=hai_type, run_id="run1", version="1")
+
+    arguments = ["--hai-type", "HAI_1", "--tracking-uri", "http://mlflow:5100", "--out", str(folder / "out")]
+    with mock.patch.dict(os.environ), mock.patch.dict(sys.modules, presigned_modules(client)), mock.patch.object(module, "fetch", fetch):
+        os.environ.pop(PROXY_SWITCH, None)
+        code = module.main(arguments)
+    return [] if code == 0 and client.direct_reads == 0 else [f"exit {code}, {client.direct_reads} artifact downloads went to S3 with a presigned URL"]
+
+
 def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
     return [
         ("task_baseline_fetches_the_monitorable_types", baseline_phase_fetches_the_monitorable_types),
         ("task_baseline_resumes", baseline_phase_resumes),
+        ("task_baseline_reads_artifacts_through_the_tracking_server", baseline_phase_reads_artifacts_through_the_tracking_server),
+        ("task_baseline_cli_reads_artifacts_through_the_tracking_server", baseline_cli_reads_artifacts_through_the_tracking_server),
         ("task_baseline_fails_on_a_broken_type", baseline_phase_fails_on_a_broken_type),
         ("task_baseline_with_nothing_to_monitor", baseline_phase_with_nothing_to_monitor),
         ("task_current_reads_each_monitored_type", current_phase_reads_each_monitored_type),

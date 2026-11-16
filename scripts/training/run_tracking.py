@@ -102,14 +102,20 @@ class TypePlan:
     snapshots: Mapping[str, str]
 
 
-def open_store(uri: str) -> TrackingStore:
-    """Open the MLflow client for the tracking URI the job is given; the training image carries the library.
+def keep_downloads_on_tracking_server() -> None:
+    """Make every run artifact download of this process go through the tracking server; call it before the MLflow client exists.
 
     A job reaches the tracking server only. The 3.17.2 client, with no setting, asks the server's ``/server-info``; the server advertises presigned downloads
     for an S3 artifact destination, and the client then reads each file straight from S3 and hides a failure of that read behind "Failed to download
-    artifacts from path". Setting ``false`` before the client exists keeps every download on the tracking server.
+    artifacts from path". Setting ``false`` before the client exists keeps every download on the tracking server. Every job that opens an MLflow client calls
+    this one function (``open_store`` here and the drift task's and command's clients in ``monitoring``).
     """
     os.environ[PROXY_DOWNLOADS] = "false"
+
+
+def open_store(uri: str) -> TrackingStore:
+    """Open the MLflow client for the tracking URI the job is given; the training image carries the library."""
+    keep_downloads_on_tracking_server()
     client: TrackingStore = importlib.import_module("mlflow.tracking").MlflowClient(tracking_uri=uri)
     return client
 

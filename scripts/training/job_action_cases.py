@@ -46,6 +46,7 @@ from scripts.training.model_cases import panel_standin, request
 from scripts.training.model_test_support import libraries
 from scripts.training.models import panel, suite
 from scripts.training.models.common import REGISTRABLE, SLOTS, NotEstimable
+from scripts.training.presigned_probe import ProbingClient
 from scripts.training.step_records import file_sha256, verify_done, write_done
 
 REAL = Path(__file__).resolve().parents[2]
@@ -361,6 +362,9 @@ def standins(fixture: Fixture) -> Iterator[None]:
         mock.patch.object(panel, "native_fits", side_effect=panel_standin),
     ):
         yield
+
+
+REAL_OPEN_STORE = run_tracking.open_store
 
 
 class NotFound(Exception):
@@ -1540,6 +1544,24 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
         code, _, error = run_promotion(fixture)
         require(code == job.EXIT_FAILED and failure_of(error) == "holdout_leak" and listing(fixture.out) == [], f"{code} {error}")
 
+    def reads_the_champion_features_through_the_tracking_server() -> None:
+        """The check opens its store with the real ``run_tracking.open_store`` and reads the champion's ``bundle/feature_list.json`` (the download of
+        ``champion_predictions``). A client with no download setting reads it from S3 with a presigned URL, which the job cannot reach."""
+        fixture = promoted(folder / "presigned", Predictor(LABEL, constant=3.0))
+        client = ProbingClient(fixture.tracking)
+        library = SimpleNamespace(import_module=lambda name: SimpleNamespace(MlflowClient=lambda tracking_uri: client))
+        with (
+            standins(fixture),
+            mock.patch.object(run_tracking, "open_store", REAL_OPEN_STORE),
+            mock.patch.object(run_tracking, "importlib", library),
+            mock.patch.object(promotion_check, "load_pipeline", side_effect=lambda uri: fixture.champion),
+        ):
+            code, _, error = call(fixture.arguments("promotion_check", None))
+        require(
+            code == 0 and client.direct_reads == 0,
+            f"promotion_check read the champion's features over the presigned path ({client.direct_reads} reads): {code} {error}",
+        )
+
     def champion_columns() -> None:
         fixture = promoted(folder / "columns", Predictor(LABEL, constant=3.0))
         feature_list = next(fixture.tracking.root.glob("*/bundle/feature_list.json"))
@@ -1802,6 +1824,7 @@ def promotion_check_cases(cases: Any, folder: Path) -> None:
     cases.check("job_promotion_check_champion_reads_only_the_missing_alias_answer_as_none", champion_reads_only_the_missing_alias_answer_as_none)
     cases.check("job_promotion_check_champion_load_deadline_named", champion_deadline)
     cases.check("job_promotion_check_needs_tracking_uri", no_uri)
+    cases.check("job_promotion_check_reads_the_champion_features_through_the_tracking_server", reads_the_champion_features_through_the_tracking_server)
 
 
 def staged(folder: Path, *, baseline: bool = True, **options: Any) -> Fixture:

@@ -38,7 +38,7 @@ from orchestration.training_contract import MODELS, RUN_ID
 from scripts import resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
-from scripts.training import dvc_baseline
+from scripts.training import dvc_baseline, run_tracking
 
 ROOT = Path(__file__).resolve().parents[1]
 PHASES = ("baseline", "current", "check", "publish")
@@ -291,6 +291,7 @@ def open_store() -> Any:
     uri = os.environ.get("MLFLOW_TRACKING_URI", "")
     if not uri:
         raise CheckError("tracking_uri_missing", "set MLFLOW_TRACKING_URI to the MLflow service address")
+    run_tracking.keep_downloads_on_tracking_server()
     return client(tracking_uri=uri, registry_uri=uri)
 
 

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import contextlib
 import json
-import os
 import shutil
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +15,7 @@ from orchestration import training_contract
 from scripts.training import aws_run_cases, job, promote_receipt, run_tracking
 from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
 from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
+from scripts.training.presigned_probe import ProbingClient
 
 RESEARCH_RUN = "20261024T000009Z-1234abcd"
 RUNS = {"m1": "20261024T000001Z-1234abcd", "m2": "20261024T000002Z-1234abcd", "m4": "20261024T000004Z-1234abcd"}
@@ -61,32 +61,6 @@ def research(folder: Path, anchor: Fixture, opening: Callable[[str], Any] | None
 def parent_of(tracking: FileTracking, model: str) -> dict[str, Any]:
     """Return the parent run a model logged."""
     return next(run for run in tracking.parents().values() if run["tags"]["model"] == model)
-
-
-PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
-
-
-class ProbingClient:
-    """The MLflow 3.17.2 client over an artifact server that stores artifacts in S3.
-
-    A client with no ``MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD`` setting asks ``/server-info``, which advertises presigned downloads for an S3 destination, and
-    fetches each file straight from S3 with the presigned URL. The ECS task reaches the tracking server only. When that second request fails, MLflow hides the
-    cause and ``RunsArtifactRepository.download_artifacts`` raises the one generic message. A client with the setting ``false`` streams the file through the
-    tracking server, as the owner's port-forwarded request does.
-    """
-
-    def __init__(self, tracking: Any) -> None:
-        self.tracking = tracking
-        self.direct_reads = 0
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.tracking, name)
-
-    def download_artifacts(self, run_id: str, path: str, dst_path: str | None = None) -> str:
-        if os.environ.get(PROXY_SWITCH, "").lower() != "false":
-            self.direct_reads += 1
-            raise Exception(f"Failed to download artifacts from path {path.rsplit('/', 1)[-1]!r}, please ensure that the path is correct.")
-        return self.tracking.download_artifacts(run_id, path, dst_path)
 
 
 def research_cases(cases: Any, folder: Path) -> None:

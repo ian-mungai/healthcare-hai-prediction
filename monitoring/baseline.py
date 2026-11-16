@@ -24,7 +24,7 @@ from typing import Any
 
 from monitoring import drift_config
 from monitoring.drift_check import HAI_TYPES, POPULATIONS, CheckError, deadline
-from scripts.training import dvc_baseline, registry
+from scripts.training import dvc_baseline, registry, run_tracking
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_CONTRACT = ROOT / "data_contracts/training/model_contract.json"
@@ -120,6 +120,7 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         config, _ = drift_config.load(arguments.config)
+        run_tracking.keep_downloads_on_tracking_server()
         try:
             client = importlib.import_module("mlflow.tracking").MlflowClient(tracking_uri=arguments.tracking_uri, registry_uri=arguments.tracking_uri)
         except ImportError as error:
