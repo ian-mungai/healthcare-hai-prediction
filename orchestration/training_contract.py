@@ -320,6 +320,24 @@ def chain_parameters_for(step: str, raw: Mapping[str, Any], lanes: tuple[str, ..
     return dict(raw)
 
 
+RELEASE_KEYS = frozenset({"hai_type", "model", "features_run"})
+
+
+def release_parameters_for(raw: Mapping[str, Any]) -> dict[str, str]:
+    """Validate the closed parameters of the release step of the promotion chain: the infection type, the promotable model of its challenger and the ID of the
+    features run that model trained on. The release phase of the features family releases that run's held online load (``scripts.features.online_release``)
+    and nothing else, so the request has no mode, no lane and no other run."""
+    if not isinstance(raw, Mapping) or set(raw) != RELEASE_KEYS:
+        raise ValueError(f"release parameters must name {', '.join(sorted(RELEASE_KEYS))} and nothing else")
+    if raw["hai_type"] not in HAI_TYPES:
+        raise ValueError("hai_type must be a supported HAI type")
+    if raw["model"] not in PROMOTION_MODELS:
+        raise ValueError(f"model must be one of {', '.join(PROMOTION_MODELS)}")
+    if not isinstance(raw["features_run"], str) or not re.fullmatch(RUN_ID, raw["features_run"]):
+        raise ValueError("features_run must be the ID of a features run")
+    return {name: str(raw[name]) for name in sorted(RELEASE_KEYS)}
+
+
 def research_requests(model: str, training_run: str, base_run: str, population: str, hai_types: Sequence[str], mlflow: str) -> list[dict[str, Any]]:
     """The one request for ``research_dag`` that a finished training run of ``model`` makes, or none.
 

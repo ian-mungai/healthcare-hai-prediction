@@ -81,7 +81,9 @@
                   "HAI_CAPTURE_ROOT",
                   "PUBLISHER_ORIGINAL_RUN",
                   "PUBLISHER_RETRY_DAY",
-                  "PHASE"
+                  "PHASE",
+                  "LAYER_PHASE",
+                  "RELEASE_MODEL"
                 ]
               }
             }

@@ -46,8 +46,6 @@ SUBSTITUTIONS = (
     "airflow_steps.UNAVAILABLE_SECONDS is 1 second: a staged input that is not there yet is waited for one second, not ten minutes",
     "the layer acceptance report (orchestration/layer_report.py): its listing, closing evidence and acceptance functions are replaced by the stand-ins of the "
     "airflow_mode_cases rig, because they read the S3 object versions, the ECS hosts and the staged code archive, which the bridge does not model",
-    "the release of a model set's held online load (promotion_chain.release_online) in the one research scenario that names it: a recorder there only, "
-    "because the features family has no release step in the job table yet; its own scenario runs the shipped function and expects its refusal by name",
     "the fake task ends at its first status read (finish_after 1) and its exit codes are planned by the scenario",
     "USER is set when the environment has none: the check runs python without the image entrypoint that adds the passwd entry for the user id",
     "the Airflow metadata database is SQLite in a temporary folder and DAG.test() runs the tasks in process (no scheduler, no API server)",
@@ -110,21 +108,6 @@ def planted(plant: Plant | None) -> Iterator[None]:
         yield
 
 
-@contextlib.contextmanager
-def release_replaced(rig: Any, replaced: bool) -> Iterator[None]:
-    """Replace the research chain's release of a model set's held online load with a recorder in the block when ``replaced``."""
-    if not replaced:
-        yield
-        return
-    from orchestration import airflow_steps
-
-    def record(found: Any, context: Any, model: str, features_run: str, run: str) -> None:
-        rig.reports.append(f"release {model} {features_run} {run}")
-
-    with mock.patch.object(airflow_steps.promotion_chain, "release_online", record):
-        yield
-
-
 @dataclass(frozen=True)
 class Step:
     """One DAG run of a scenario: the DAG, its trigger values and what the run must do.
@@ -132,9 +115,8 @@ class Step:
     ``states`` maps task ids to the states they must end in (``None`` means every task of the DAG ends in ``success``), ``starts`` is the number of RunTask
     calls the run sends, and ``family`` the host task definition family they name. ``reason`` is text each failing task's error must contain, ``skip`` the
     tasks that need the Airflow API server or other DAGs (they are marked as passed and not run), ``skipped`` the tasks that must end skipped (a mapped trigger
-    with no request, a research run that waits), ``plan`` the exit code per container of the task and ``release_recorded`` that the research chain's release
-    of the held online load is a recorder, ``sent`` a check of the environment of each container of the first RunTask call and ``after`` a check of the rig
-    once the run ended."""
+    with no request, a research run that waits), ``plan`` the exit code per container of the task, ``sent`` a check of the environment of each container of
+    the first RunTask call and ``after`` a check of the rig once the run ended."""
 
     dag_id: str
     params: Mapping[str, Any]
@@ -151,7 +133,6 @@ class Step:
     plant: Plant | None = None
     check: Callable[[Any, dict[str, Any]], None] | None = None
     skipped: tuple[str, ...] = ()
-    release_recorded: bool = False
     sent: Callable[[dict[str, dict[str, str]]], None] | None = None
     after: Callable[[Any], None] | None = None
 
@@ -347,7 +328,6 @@ def run_step(bag: Any, rig: Any, step: Step, scratch: str) -> dict[str, Any]:
             ),
             observer.watching(),
             planted(step.plant),
-            release_replaced(rig, step.release_recorded),
         ):
             run = dag.test(run_conf=dict(step.params), mark_success_pattern=step.skip)
         states = states_of(run)
@@ -777,11 +757,10 @@ def research_objects(
     challengers: Mapping[str, Mapping[str, Any] | None],
     canary: str | None,
     production: str | None = "1",
-    hold: bool = True,
 ) -> dict[str, bytes]:
-    """The records that the research phase, the canary check and the features job store: a research record for each type (naming the Production version
-    the research saw, None for none, and the features run of each model), a canary result for each type with a challenger when ``canary`` names a decision
-    (promote or hold) and a held online load for each challenger's features run when ``hold`` is set."""
+    """The records that the research phase and the canary check store: a research record for each type (naming the Production version the research saw,
+    None for none, and the features run of each model) and a canary result for each type with a challenger when ``canary`` names a decision (promote or
+    hold). The features job's hold record is not staged: the chain reads none, and the release phase reads its own."""
     import importlib
 
     training = importlib.import_module("orchestration.training_contract")
@@ -797,8 +776,6 @@ def research_objects(
             "promotion": {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger, "production_version": production},
         }
         found[training.record_key("research", research_run, hai_type)] = json.dumps(research).encode()
-        if challenger is not None and hold:
-            found[f"lakehouse/layer_runs/features/{features_runs[challenger['model']]}/online_hold.json"] = b'{"held": true}\n'
         if challenger is not None and canary is not None and production is not None:
             result = {
                 "schema": 1,
@@ -947,15 +924,12 @@ def cases_catalog() -> dict[str, Scenario]:
         return Step("training_dag", params, 1, family("train"), skipped=("trigger_research",))
 
     def stage_first_champion(rig: Any) -> None:
-        """A research record that names no Production version, no canary result and no held online load, and a hold read the launch role would be denied."""
-        rig.stage.objects.update(research_objects(base, research, {"HAI_1": challenger, "HAI_2": None}, None, production=None, hold=False))
-        rig.stage.denied |= {
-            f"lakehouse/layer_runs/features/{training.model_features_run_id(base, model)}/online_hold.json" for model in training.PROMOTION_MODELS
-        }
+        """A research record that names no Production version and no canary result."""
+        rig.stage.objects.update(research_objects(base, research, {"HAI_1": challenger, "HAI_2": None}, None, production=None))
 
     def first_champion_ran(rig: Any, facts: dict[str, Any]) -> None:
-        """Research, the promotion, the stable-only rollout and the owner notice: four tasks, no canary deploy or check, no release and no read of a hold key,
-        and the research record the chain read names no Production version, which makes the notice say the one-time exception (the text is checked in
+        """Research, the promotion, the stable-only rollout and the owner notice: four tasks, no canary deploy or check, no release task and no read of a
+        hold key, and the research record the chain read names no Production version, which makes the notice say the one-time exception (the text is checked in
         ``scripts.training.auto_promotion_cases``, because the training code is not in the Airflow image)."""
         first = rig.tasks_started() - facts["run_task_calls"]
         environments = [rig.environment(first + index) for index in range(4)]
@@ -979,21 +953,57 @@ def cases_catalog() -> dict[str, Scenario]:
             require(end is not None and end["outcome"] == "succeeded", f"{job} of {run} has no success record: {end}")
         started = [entry for entry in rig.stage.log if "online_hold" in entry]
         require(not started, f"the first champion read a hold key: {started}")
-        require(not [item for item in rig.reports if item.startswith("release ")], "the first champion released a held online load")
+        require(not [item for item in environments if "release" in item], "the first champion launched the release phase")
         record = json.loads(rig.stage.objects[training.record_key("research", research, "HAI_1")])
         promotion = record["promotion"]
         require("production_version" in promotion and promotion["production_version"] is None, f"the research record names a Production version: {promotion}")
 
-    def closed_after_the_notice(rig: Any, facts: dict[str, Any]) -> None:
-        """With a Production model the chain reads the hold key and the launch role is denied it (``STAGE_PREFIXES`` hold no layer run), so the chain fails
-        closed by name after the promotion: it launches research, the canary deploy and check, the promotion and the notice, no rollout and no release."""
+    release_run = training.chain_run_id(research, "HAI_1", "release")
+    release_features = training.model_features_run_id(base, challenger["model"])
+
+    def release_task(environment: dict[str, dict[str, str]]) -> None:
+        """The release task of the features family: it runs only the release phase, for the challenger's model and the features run its training run read."""
+        task = environment["release"]
+        require(task["RUN_ID"] == release_run, f"the release ran {task['RUN_ID']}, not {release_run}")
+        require(
+            (task["LAYER_PHASE"], task["RELEASE_MODEL"], task["FEATURES_RUN"]) == ("release", challenger["model"], release_features),
+            f"the release container was told {task}",
+        )
+        other = {name: container["LAYER_PHASE"] for name, container in environment.items() if name != "release" and "LAYER_PHASE" in container}
+        require(set(other.values()) == {"release"} and "pin" in other, f"a build phase was not told the release phase: {other}")
+
+    def chain_with_release_ran(rig: Any, facts: dict[str, Any]) -> None:
+        """With a Production model: research, the canary deploy and check, the promotion, the release phase of the features family, the stable-only rollout
+        and the owner notice: seven tasks in that order, each under the chain run of its own, and no read of a hold key (the release phase reads its own)."""
         first = rig.tasks_started() - facts["run_task_calls"]
-        found = [item["serve"] if "serve" in item else item["promote"] for item in (rig.environment(first + index) for index in range(5))]
-        phases = [item.get("PHASE") for item in found]
-        require(phases == ["research", None, "canary", "promote", "notify"], f"the chain ran the phases {phases}, not the five before the release")
-        notice = json.loads(found[4]["TRAINING_PARAMETERS"])
+        environments = [rig.environment(first + index) for index in range(7)]
+        found = [item["serve"] if "serve" in item else item["release"] if "release" in item else item["promote"] for item in environments]
+        runs = [
+            research,
+            *(training.chain_run_id(research, "HAI_1", step) for step in ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")),
+        ]
+        require([item["RUN_ID"] for item in found] == runs, f"the chain ran under {[item['RUN_ID'] for item in found]}, not {runs}")
+        require([item.get("PHASE") for item in found] == ["research", None, "canary", "promote", None, None, "notify"], f"the chain ran {found}")
+        release_task(environments[4])
+        for run, job in zip(runs, ("promote", "serve", "promote", "promote", "features", "serve", "promote"), strict=True):
+            end = rig.end(run, job)
+            require(end is not None and end["outcome"] == "succeeded", f"{job} of {run} has no success record: {end}")
+        require(json.loads(found[6]["TRAINING_PARAMETERS"])["outcome"] == "promoted", "the owner was not told promoted")
+        started = [entry for entry in rig.stage.log if "online_hold" in entry]
+        require(not started, f"the chain read a hold key: {started}")
+
+    def closed_after_the_notice(rig: Any, facts: dict[str, Any]) -> None:
+        """With a Production model whose release phase refuses (its container exits 1), the chain fails closed by name after the promotion: it launches
+        research, the canary deploy and check, the promotion, the release and the notice, and no rollout."""
+        first = rig.tasks_started() - facts["run_task_calls"]
+        environments = [rig.environment(first + index) for index in range(6)]
+        found = [item["serve"] if "serve" in item else item["release"] if "release" in item else item["promote"] for item in environments]
+        require([item.get("PHASE") for item in found] == ["research", None, "canary", "promote", None, "notify"], f"the chain ran {found}")
+        release_task(environments[4])
+        end = rig.end(release_run, "features")
+        require(end is not None and end["outcome"] == "failed", f"the refused release left {end}")
+        notice = json.loads(found[5]["TRAINING_PARAMETERS"])
         require(notice["outcome"] == "promoted_not_rolled_out", f"the owner was told {notice['outcome']}")
-        require(not [item for item in rig.reports if item.startswith("release ")], "a release ran although the hold read was denied")
 
     def research_started(rig: Any) -> None:
         found = triggered_confs("research_dag", research_trigger_run(trigger_run))
@@ -1006,11 +1016,10 @@ def cases_catalog() -> dict[str, Scenario]:
     trigger_run = training.trained_run_id(trigger_base, "m4")
     waiting = {"ready": "skipped", "research": "skipped", "chain": "skipped", "gate": DONE_STATE}
 
-    def hold_denied(starts: int, **changes: Any) -> Step:
-        """A research run with a Production model: its hold read is denied, so the chain fails closed by name (the run fails at the chain and the gate)."""
+    def release_refused(starts: int, **changes: Any) -> Step:
+        """A research run with a Production model whose release phase refuses: the chain fails closed by name (the run fails at the chain and the gate)."""
         states = {"ready": DONE_STATE, "research": DONE_STATE, "chain": "failed", "gate": "failed"}
-        reason = "online_hold.json cannot be read: AccessDenied"
-        return Step("research_dag", research_params, starts, states=states, run_state="failed", reason=reason, **changes)
+        return Step("research_dag", research_params, starts, states=states, run_state="failed", reason="HAI_1 release:", **changes)
 
     research_cases = (
         Scenario(
@@ -1018,9 +1027,9 @@ def cases_catalog() -> dict[str, Scenario]:
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                hold_denied(5, check=closed_after_the_notice, release_recorded=True, prepare=stage_research),
+                Step("research_dag", research_params, 7, check=chain_with_release_ran, prepare=stage_research),
                 # A second run for the base joins the launches of the first and starts nothing again.
-                hold_denied(0, check=joined, release_recorded=True),
+                Step("research_dag", research_params, 0, check=joined),
             ),
             make_rig,
         ),
@@ -1029,16 +1038,16 @@ def cases_catalog() -> dict[str, Scenario]:
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                Step("research_dag", research_params, 4, check=first_champion_ran, release_recorded=True, prepare=stage_first_champion),
+                Step("research_dag", research_params, 4, check=first_champion_ran, prepare=stage_first_champion),
             ),
             make_rig,
         ),
         Scenario(
-            "research_dag_fails_after_the_notice_when_the_release_step_is_missing",
+            "research_dag_fails_after_the_notice_when_the_release_is_refused",
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                hold_denied(5, check=closed_after_the_notice, prepare=stage_research),
+                release_refused(6, check=closed_after_the_notice, plan={"release": 1}, prepare=stage_research),
             ),
             make_rig,
         ),

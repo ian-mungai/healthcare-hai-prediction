@@ -57,15 +57,18 @@ locals {
       upload   = ["RUN_ID", "CODE_RUN_ID"]
       maintain = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"]
     }
+    # LAYER_PHASE tells a phase which one phase the launch runs: empty for a features build, release for a release launch (scripts/lakehouse/layer_run.py).
+    # The release phase has no pin and no feature set: it takes the model set and the features run whose held online load it releases.
     features = {
       fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET"]
-      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
-      validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
-      export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
-      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
-      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET"]
-      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      pin      = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      build    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
+      validate = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      export   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      publish  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
+      upload   = ["RUN_ID", "CODE_RUN_ID", "FEATURE_SET", "LAYER_PHASE"]
+      feast    = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"]
+      release  = ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"]
     }
   }
   layer_driver = "cd /workspace/code && python -m scripts.lakehouse.layer_run %s --layer %s --run \"$RUN_ID\""
@@ -74,7 +77,7 @@ locals {
     import boto3, hashlib, os, re, tarfile; d = os.environ["DATA_BUCKET_NAME"]; r = os.environ["CODE_RUN_ID"]; assert re.fullmatch(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}", r), "CODE_RUN_ID is not a run ID"; p = "/workspace/code.tar.gz"; boto3.client("s3").download_file(d, "lakehouse/run_stage/" + r + "/inputs/code.tar.gz", p); assert hashlib.sha256(open(p, "rb").read()).hexdigest() == os.environ["CODE_SHA256"], "code.tar.gz differs from CODE_SHA256"; tarfile.open(p).extractall("/workspace/code", filter="data")
   EOT
   )
-  layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store" }
+  layer_phase_images = { fetch = "spark", pin = "spark", build = "analytics", validate = "quality", verify = "spark", export = "quality", publish = "spark", upload = "spark", maintain = "spark", feast = "feature_store", release = "feature_store" }
   # The silver build reads the catalog through dbt, whose profile names the pair DBT_ENV_SECRET_POLARIS_CLIENT_ID and _SECRET so that dbt scrubs them from its logs.
   layer_build_secrets = [for item in local.reader_parameters : { name = "DBT_ENV_SECRET_${item.name}", valueFrom = item.valueFrom }]
   # Gold maintenance commits snapshot removal to the catalog, so it holds the gold writer pair; it is a gold phase only.
@@ -82,13 +85,14 @@ locals {
     pin      = "reader"
     verify   = "reader"
     feast    = "reader"
+    release  = "reader"
     publish  = "writer"
     maintain = "writer"
   }
   layer_phases = {
     silver   = ["fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"]
     gold     = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "maintain"]
-    features = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
+    features = ["fetch", "pin", "build", "validate", "export", "publish", "upload", "feast", "release"]
   }
   layer_steps = {
     for layer in local.layer_jobs : layer => concat(
@@ -130,7 +134,7 @@ locals {
             { name = "HAI_DUCKDB_TEMP_DIRECTORY", value = "/workspace/duckdb_spill" },
           ],
           [for name in lookup(local.layer_run_variables[layer], step.name, []) : { name = name, value = "" }],
-          step.name == "feast" ? [
+          contains(["feast", "release"], step.name) ? [
             { name = "FEAST_PROFILE", value = "aws" },
             { name = "FEAST_REGISTRY_BUCKET", value = var.data_bucket_name },
           ] : []

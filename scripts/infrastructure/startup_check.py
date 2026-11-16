@@ -91,7 +91,7 @@ DEFAULT_PORTS = {"http": 80, "https": 443}
 JOB_PHASES: dict[str, dict[str, tuple[str, ...]]] = {
     "silver": {"pin": ("polaris",)},
     "gold": {"pin": ("polaris",)},
-    "features": {"pin": ("polaris", "redis"), "feast": ("polaris", "redis")},
+    "features": {"pin": ("polaris", "redis"), "feast": ("polaris", "redis"), "release": ("polaris", "redis")},
     "bronze": {"pin": ("polaris",), "load": ("polaris",)},
     "train": {"prepare": ("polaris", "mlflow"), "extract": ("polaris",), "train": ("mlflow",)},
     "promote": {"promote": ("mlflow",)},

@@ -428,8 +428,10 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
     training = request.training or {}
 
     def launch_step_of(template: str, run: str, parameters: dict[str, Any]) -> None:
-        # The serve step derives its candidate from the research record of the run it deploys from, so it names that run as its input.
-        step = replace(request, template=template, run_id=run, input_run_id=request.run_id if template == "serve_deploy" else None, training=parameters)
+        # The serve step derives its candidate from the research record of the run it deploys from, so it names that run as its input. The release phase of
+        # the features family names the features run whose held online load it releases.
+        inputs = {"serve_deploy": request.run_id, "release_online": parameters.get("features_run")}
+        step = replace(request, template=template, run_id=run, input_run_id=inputs.get(template), training=parameters)
         try:
             found.preflight.code_runs.bind(run, found.preflight.code_runs.resolve(request.run_id))
             spec = prepared(found, step)
@@ -444,10 +446,7 @@ def research_chain_step(request: SubmissionRequest, context: Mapping[str, Any]) 
             raise promotion_chain.RecordRefused("these launch services cannot read the data bucket")
         return found.read_object(key)
 
-    def release(model: str, features_run: str, run: str) -> None:
-        promotion_chain.release_online(found, context, model, features_run, run)
-
-    failures = promotion_chain.run_types(request.run_id, list(training["hai_types"]), launch=launch_step_of, read=read, release=release)
+    failures = promotion_chain.run_types(request.run_id, list(training["hai_types"]), launch=launch_step_of, read=read)
     if failures:
         raise RuntimeError("the promotion chain failed: " + "; ".join(failures))
     return "chained"

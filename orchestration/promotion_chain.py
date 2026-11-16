@@ -13,9 +13,11 @@ its steps, each launched once under a run of its own (``training_contract.chain_
 2. ``canary_check`` judges the canary replay stored for the research run and stores its result. The chain reads that result and goes on only for ``promote``.
 3. ``promote`` moves the Production alias to the challenger's version. The promote action refuses a version without a passed canary result, unless the
    registry has no Production version.
-4. ``release`` loads the model set's held online data, when the promoted model's feature schema differs from the served one. It runs only after the promotion,
-   and only when the features run the model trained on has a hold record (``online_hold.json``): with none there is nothing to release. The check reads
-   the record only when the research record names a Production version or none of the key (see the first champion below).
+4. ``release_online`` launches the release phase of the features family for the promoted model's set and the features run the model trained on. The phase
+   (``scripts.features.online_release``) reads its own hold record (``online_hold.json``) and ends ``released`` (it loaded the held online data, once),
+   ``already_released`` or ``not_held`` (the run loaded itself online, so there is nothing to release), all of which pass, or it refuses by name and the launch
+   fails. It runs only after the promotion, and only when the research record names a Production version or none of the key (see the first champion below).
+   The chain reads no hold record: the Airflow launch role reads only ``research/*`` and may not list, and the features writer role may read the hold.
 5. ``stable_deploy`` asks the serve family for a stable-only deployment (the mode stable): the serve job writes the Production version alone and reads the
    active deployment back, so the API refreshes to the promoted version and the canary share ends. It runs only after a promotion and its release. A hold, a
    failed check or a failed canary deploy deploys nothing more: the canary stops getting traffic at its expiry, with no later step.
@@ -28,17 +30,18 @@ has nothing to run a canary beside. Steps 1 and 2 are skipped, so the chain prom
 chooses only such a challenger) and goes on with the release check, the rollout and the notice. This is a one-time exception to the canary rule for the first
 champion only. A record without the key, or one that names a version, keeps the canary.
 
-The first champion also skips the release check (owner decision B, Nov 15 2026): a first deploy has no hold record, because ``feature_sets.online_action``
-returns ``load`` without a Production model, and the Airflow launch role may read only ``research/*`` and may not list, so a read of the missing hold key
-returns AccessDenied and would fail the chain. The chain never reads that key and never calls ``release_online`` for a first champion. With a Production
-version the check runs as before and still fails closed on a read that is denied. A record without the key keeps the check.
+The first champion also skips the release (owner decision B, Nov 15 2026): a first deploy has no hold record, because ``feature_sets.online_action``
+returns ``load`` without a Production model, so there is nothing to release and the chain launches no release for a first champion. With a Production
+version the release is launched (owner decision A, Nov 15 2026: a ``release`` phase of the features family, not a read of the hold in Airflow). A record
+without the key keeps the release.
 
 The features run of the challenger is the one its training run read, which the research record names (``features_runs``). It is not derived from the base
-run, because the training runs read the run IDs the features DAGs chose.
+run, because the training runs read the run IDs the features DAGs chose. The release launch runs under the chain run of its own and names that features run
+in its closed parameters (``training_contract.release_parameters_for``), so a retry joins it.
 
 One type failing never stops another type's chain. A failed promotion is not announced, because the Production alias may have moved: the failure is the signal,
 and the owner resolves it with the promotion tooling. A failed release or rollout leaves the promotion standing, is announced as such and is reported as a
-failure. ``run_types`` returns every failure; the caller fails the DAG task with them.
+failure; a release the phase refuses fails by name and stops the rollout. ``run_types`` returns every failure; the caller fails the DAG task with them.
 """
 
 from __future__ import annotations
@@ -52,10 +55,8 @@ from typing import Any, Protocol
 from orchestration.training_contract import PROMOTION_MODELS, RUN_ID, chain_run_id, record_key, trained_run_id
 
 TRAIN_JOB = "train"
-HOLD_PREFIX, HOLD_NAME = "lakehouse/layer_runs/features", "online_hold.json"  # where scripts.features.feast_sets writes the hold (a case compares them)
 Launch = Callable[[str, str, dict[str, Any]], None]
 Read = Callable[[str], bytes | None]
-Release = Callable[[str, str, str], None]
 
 
 class StepFailed(RuntimeError):
@@ -112,11 +113,6 @@ def parse(read: Read, key: str) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise RecordRefused(f"{key} is not a JSON object")
     return document
-
-
-def hold_key(features_run: str) -> str:
-    """The data bucket key of the held online load of a features run: it exists only when the features job held that run's load."""
-    return f"{HOLD_PREFIX}/{features_run}/{HOLD_NAME}"
 
 
 def research_document(read: Read, research_run: str, hai_type: str) -> tuple[str, dict[str, Any]]:
@@ -193,11 +189,10 @@ def stored_decision(read: Read, research_run: str, hai_type: str, model: str, ve
 
 @dataclass(frozen=True)
 class Steps:
-    """What the chain calls: a launch of one step under a run, a read of a stored record and the release of a model set's held online load."""
+    """What the chain calls: a launch of one step under a run and a read of a stored record."""
 
     launch: Launch
     read: Read
-    release: Release
 
 
 def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures: list[str]) -> None:
@@ -233,8 +228,7 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
     def release() -> None:
         if challenger.first_champion:
             return
-        if steps.read(hold_key(challenger.features_run)) is not None:
-            steps.release(challenger.model, challenger.features_run, run_of("release"))
+        steps.launch("release_online", run_of("release"), {"hai_type": hai_type, "model": challenger.model, "features_run": challenger.features_run})
 
     if decision == ["promote"]:
         promotion = {"hai_type": hai_type, "model_version": challenger.version, "promotion_mode": "promote", "mlflow": "aws"}
@@ -246,10 +240,10 @@ def type_chain(challenger: Challenger, research_run: str, steps: Steps, failures
     step("owner notice", lambda: steps.launch("owner_notice", run_of("notice"), notice))
 
 
-def run_types(research_run: str, hai_types: Sequence[str], *, launch: Launch, read: Read, release: Release) -> list[str]:
+def run_types(research_run: str, hai_types: Sequence[str], *, launch: Launch, read: Read) -> list[str]:
     """Run the chain of each listed type that has a challenger and return every failure, in order. The types run one after the other, each isolated."""
     failures: list[str] = []
-    steps = Steps(launch, read, release)
+    steps = Steps(launch, read)
     for hai_type in hai_types:
         try:
             challenger = challenger_of(read, research_run, hai_type)
@@ -259,8 +253,3 @@ def run_types(research_run: str, hai_types: Sequence[str], *, launch: Launch, re
         if challenger is not None:
             type_chain(challenger, research_run, steps, failures)
     return failures
-
-
-def release_online(found: Any, context: Mapping[str, Any], model: str, features_run: str, run: str) -> None:
-    """Release a model set's held online data through the features family's release step. That step has no job in the table yet, so this refuses by name."""
-    raise StepFailed(f"the release_online step of the features family is not built: the held online load of {model} for {features_run} stays held (run {run})")

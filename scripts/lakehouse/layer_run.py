@@ -6,7 +6,14 @@ Each ECS container of a job runs one phase on the shared ``/workspace`` (the con
 
 - silver: ``pin``, ``build``, ``validate``, ``verify``, ``export``, ``publish``, ``upload``
 - gold: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``maintain``
-- features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``feast``
+- features: ``pin``, ``build``, ``validate``, ``export``, ``publish``, ``upload``, ``feast``, and ``release``
+
+``release`` is the last container of the features task and the only phase that is not a build step (owner decision A, Nov 15 2026): it releases the held
+online load of a model set after its model was promoted (``scripts.features.online_release``, which reads the hold record of the features run itself). The
+launch names the phase in ``LAYER_PHASE``. A features build leaves it empty: every build phase runs and ``release`` ends at once. A release launch sets it to
+``release``: every build phase ends at once, because they have nothing to do for a run that is already published, and only ``release`` works, for the model in
+``RELEASE_MODEL`` and the features run in ``FEATURES_RUN``. The release has no pin and no run folder of its own: the run of the launch only names its launch
+record.
 
 A features job takes ``FEATURE_SET`` (``--feature-set``): empty is the single path that builds every table, ``base`` the same tables as the base of the model
 sets, ``m1`` to ``m6`` one model table each. A model set pins the newest committed base run (``INPUT_RUN_ID`` names it; an older base run is refused) and
@@ -79,6 +86,8 @@ PHASES = {
     "gold": ("pin", "build", "validate", "export", "publish", "upload", "maintain"),
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
 }
+RELEASE_PHASE = "release"  # the last container of the features task: it runs only in a launch that names it in LAYER_PHASE
+PHASE_VARIABLE, MODEL_VARIABLE, FEATURES_RUN_VARIABLE = "LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN"
 STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
 BUCKET_FILE = Path("/workspace/infra/deployment.auto.tfvars.json")  # the path gold_publish.build_store reads for the backup bucket
@@ -921,6 +930,17 @@ def feast(job: Job, bucket: str, client: Any) -> None:
             client.upload_file(str(job.folder / name), bucket, key)
 
 
+def release(job: Job) -> None:
+    """Release the held online load of the model set that the launch names, for the features run it names (``scripts.features.online_release``). The module
+    reads the hold itself and ends released, already released or not held (exit 0), or refuses by name (exit 1)."""
+    model, run = os.environ.get(MODEL_VARIABLE, ""), os.environ.get(FEATURES_RUN_VARIABLE, "")
+    if not model:
+        raise StepError(f"{MODEL_VARIABLE} is not set: a release names the model set whose held online load it releases")
+    if not RUN_ID.fullmatch(run):
+        raise StepError(f"{FEATURES_RUN_VARIABLE} {run!r} is not a features run ID: a release names the run it releases")
+    run_module(job, "scripts.features.online_release", ["--model", model, "--features-run", run, "--mode", job.mode])
+
+
 def apply_identity(record: Mapping[str, Any]) -> dict[str, Any]:
     """What a Feast apply record says of the publication it applied: the run, its publication and, for a model set, the set and the base publication it read.
     The Feast version and the object counts are not part of it, so a repeat of the same apply has the same identity."""
@@ -1105,6 +1125,8 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         sys.stdout.write(json.dumps({"dry_run": True, "maintenance": "not run"}) + "\n")
     elif phase == "feast" and job.dry_run:
         sys.stdout.write(json.dumps({"dry_run": True, "feast": "not applied"}) + "\n")
+    elif phase == RELEASE_PHASE and job.dry_run:
+        sys.stdout.write(json.dumps({"dry_run": True, "release": "not run"}) + "\n")
     elif phase == "publish" and job.dry_run:
         plan = plan_publish(job)
         if plan["unknown"] or plan["catalog_error"]:
@@ -1118,6 +1140,8 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
         sys.stdout.write(json.dumps({"uploaded": uploaded, "dbt_files": dbt_files, "dbt_run_files": upload_dbt_run_artifacts(job, args.bucket, client)}) + "\n")
     elif phase == "feast":
         feast(job, args.bucket, s3_client())
+    elif phase == RELEASE_PHASE:
+        release(job)
     elif phase == "publish":
         publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:
@@ -1126,7 +1150,7 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
 
 def startup(job: Job, phase: str) -> None:
     """The host job startup check at the first code step (pin), at the start of the build (whose image holds the DuckDB extensions) and before Feast."""
-    if phase in ("pin", "feast"):
+    if phase in ("pin", "feast", RELEASE_PHASE):
         startup_check.check_phase(job.layer, phase)
     elif phase == "build":
         startup_check.check_build(job.layer, job.mode, job.folder / "snapshot/project/profiles.yml")
@@ -1134,7 +1158,7 @@ def startup(job: Job, phase: str) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("phase", choices=sorted({phase for phases in PHASES.values() for phase in phases}))
+    parser.add_argument("phase", choices=sorted({*(phase for phases in PHASES.values() for phase in phases), RELEASE_PHASE}))
     parser.add_argument("--layer", required=True, choices=sorted(PHASES))
     parser.add_argument("--run", required=True)
     parser.add_argument("--input-run", default=os.environ.get("INPUT_RUN_ID", ""), help="gold and features: the committed silver or gold run to pin")
@@ -1160,10 +1184,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         help=f"publish: print and save the plan and write nothing; upload, maintain and feast do nothing (also set by {DRY_ENV}=1)",
     )
     args = parser.parse_args(argv)
-    if args.phase not in PHASES[args.layer]:
+    if args.phase not in (*PHASES[args.layer], *((RELEASE_PHASE,) if args.layer == "features" else ())):
         parser.error(f"{args.phase} is not a phase of {args.layer}")
     if not RUN_ID.fullmatch(args.run):
         parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
+    selected = os.environ.get(PHASE_VARIABLE, "")
+    if selected and (args.layer != "features" or selected not in (*PHASES["features"], RELEASE_PHASE)):
+        parser.error(f"{PHASE_VARIABLE} {selected!r} is not a phase of the features task: it applies to the features layer only")
+    if selected != args.phase and (selected or args.phase == RELEASE_PHASE):
+        # A launch that names one phase leaves every other idle; a build, which names none, runs every phase but the release.
+        sys.stdout.write(json.dumps({"phase": args.phase, "skipped": True, "launch_phase": selected or "build"}) + "\n")
+        return 0
     try:
         chosen = feature_sets.checked(args.feature_set)
     except PublishError as error:
@@ -1182,14 +1213,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         if dry:
             mark_dry(job)
             job = replace(job, dry_run=True)
-        if args.phase in ("publish", "upload", "feast") and not args.bucket and args.mode == "real" and not dry:
+        if args.phase in ("publish", "upload", "feast", RELEASE_PHASE) and not args.bucket and args.mode == "real" and not dry:
             raise StepError("DATA_BUCKET_NAME (or --bucket) is not set")
         if not args.code_run_id or not RUN_ID.fullmatch(args.code_run_id):
             raise StepError("CODE_RUN_ID is not set to a run ID: it names the run whose staged code the task fetches (the run itself for a standalone run)")
         startup(job, args.phase)
         task_capacity.apply(capacity_profile(args.layer, args.phase))
         with task_deadline(job):
-            if args.phase != "pin":
+            if args.phase not in ("pin", RELEASE_PHASE):
                 check_code_run(job)
                 check_feature_set(job)
             dispatch(job, args.phase, args)

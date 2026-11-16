@@ -1705,6 +1705,15 @@ def features_job_names_its_feature_set() -> None:
         set(named) == {"pin", "build", "validate", "export", "publish", "upload", "feast"} and set(named.values()) == {"base"},
         f"the features containers did not all get FEATURE_SET=base: {named}",
     )
+    phases = {container: values["LAYER_PHASE"] for container, values in sent.items() if "LAYER_PHASE" in values}
+    require(
+        set(phases) == {"pin", "build", "validate", "export", "publish", "upload", "feast", "release"} and set(phases.values()) == {""},
+        f"a features build was told to run one phase only: {phases}",
+    )
+    require(
+        sent["release"]["RELEASE_MODEL"] == "" and sent["release"]["FEATURES_RUN"] == "",
+        f"a features build was told to release a model set's online load: {sent['release']}",
+    )
     rig.stage_runs(OTHER_RUN)
     started = rig.tasks_started()
     with world(rig, "gold_transform_dag", {"run_id": OTHER_RUN, "mode": "real", GOLD_RUN_PARAMETER: gold}) as current:

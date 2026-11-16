@@ -146,40 +146,55 @@
           "CODE_SHA256",
           "POLARIS_URI",
           "INPUT_RUN_ID",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "build": [
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "validate": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "export": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "publish": [
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "upload": [
           "RUN_ID",
           "CODE_RUN_ID",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
         ],
         "feast": [
           "RUN_ID",
           "CODE_RUN_ID",
           "POLARIS_URI",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LAYER_PHASE"
+        ],
+        "release": [
+          "RUN_ID",
+          "CODE_RUN_ID",
+          "POLARIS_URI",
+          "FEATURES_RUN",
+          "RELEASE_MODEL",
+          "LAYER_PHASE"
         ]
       },
       "chain": true,
@@ -374,6 +389,7 @@
     "record_features_snapshot": "features",
     "record_silver_snapshot": "silver",
     "release_accepted": null,
+    "release_online": "features",
     "release_rejected": null,
     "research": "promote",
     "reserve_gold": null,

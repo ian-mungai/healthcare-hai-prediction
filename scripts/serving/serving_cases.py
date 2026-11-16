@@ -1446,7 +1446,6 @@ def case_chain_rollout(c: Checker) -> None:
         """A recorder whose bucket holds the research record of the research run, and whose canary result, when there is one, is stored when the check runs."""
         recorder = chain.Recorder({})
         recorder.objects[training_contract.record_key("research", research, HAI)] = chain.research_record(HAI, challenger)
-        recorder.objects[chain.hold_key(chain.FEATURES_RUNS[challenger["model"]])] = b"{}"
         if decision is not None:
             recorder.pending[training_contract.record_key("canary", research, HAI)] = chain.canary_record(
                 HAI, decision, challenger=challenger, changes={"research_run": research}
@@ -1464,7 +1463,6 @@ def case_chain_rollout(c: Checker) -> None:
     ) -> tuple[list[str], list[tuple[Any, ...]], dict[str, Any]]:
         """Run the chain of the research run against the world's registry, manifest store and API, then read what the API serves at the end of the chain and
         after the canary's lifetime, with no step in between."""
-        recorder.release_fails = release_fails
         seen: dict[str, Any] = {}
 
         def launch(step: str, run: str, params: dict[str, Any]) -> None:
@@ -1495,8 +1493,10 @@ def case_chain_rollout(c: Checker) -> None:
                     raise promotion_chain.StepFailed(f"{step} {params['deploy_mode']} timed out after its write")
             if step == "promote":
                 w.registry.aliases["production"] = params["model_version"]
+            if step == "release_online" and release_fails:
+                raise promotion_chain.StepFailed("the release task failed")
 
-        failures = promotion_chain.run_types(research, [HAI], launch=launch, read=recorder.read, release=recorder.release)
+        failures = promotion_chain.run_types(research, [HAI], launch=launch, read=recorder.read)
         seen["after"] = health(w)
         seen["alias"] = w.registry.aliases["production"]
         seen["live"] = traffic(w)
@@ -1515,7 +1515,7 @@ def case_chain_rollout(c: Checker) -> None:
     failures, calls, seen = scenario()
     c.check(
         "a passed canary is deployed first, checked, promoted, released, rolled out stable-only and then announced",
-        failures == [] and names(calls) == ["serve_deploy:canary", "canary_check", "promote", "release", "serve_deploy:stable", "owner_notice"],
+        failures == [] and names(calls) == ["serve_deploy:canary", "canary_check", "promote", "release_online", "serve_deploy:stable", "owner_notice"],
     )
     c.check("the API serves the canary when the check runs", seen["at_the_check"] == (PRODUCTION, CANDIDATE))
     c.check(
@@ -1580,7 +1580,6 @@ def case_chain_rollout(c: Checker) -> None:
         w.registry.aliases.pop("production", None)
         recorder = recorder_for(chain.RESEARCH, chain.CHALLENGER, None)
         recorder.objects[training_contract.record_key("research", chain.RESEARCH, HAI)] = chain.research_record(HAI, chain.CHALLENGER, production=None)
-        recorder.objects.pop(chain.hold_key(chain.FEATURES_RUNS[chain.CHALLENGER["model"]]))
         failures, calls, seen = run_chain(w, recorder)
         c.check(
             "with no Production model the first champion is promoted with no canary, rolled out stable-only by the real deploy action and announced",

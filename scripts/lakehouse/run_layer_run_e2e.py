@@ -227,6 +227,12 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
             }
             record |= {"schema": 1, "mode": job.mode, "publication": publication}
         (folder / f"feast_{step}.json").write_text(json.dumps(record) + "\n")
+    elif name == "online_release":
+        if "release_fails" in DEFECTS:
+            fail(module)
+        shared_write(
+            "release", model=option(arguments, "--model"), features_run=option(arguments, "--features-run"), mode=option(arguments, "--mode"), run=job.run
+        )
     elif name == "gold_maintenance":
         maintain_step(job, arguments)
     else:
@@ -1378,6 +1384,68 @@ def case_dry_run_from_the_environment(case: Case) -> None:
     require(len(writes()) == before, "LAYER_DRY_RUN=1 behaves as --dry-run")
 
 
+RELEASE_RUN = "20261030T050607Z-5f607182"  # the run of a release launch: its own ID, never the features run it releases
+RELEASE_ENVIRONMENT = {"LAYER_PHASE": "release", "RELEASE_MODEL": "m2", "FEATURES_RUN": FEATURES_RUN}
+
+
+def release_phase(case: Case, phase: str = "release", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
+    """One phase of a release launch: the variables the launch gives the containers of the features task, changed by ``changes``. No run before it: the
+    release has no pin and no run folder of its own to rely on."""
+    with mock.patch.dict(os.environ, {**RELEASE_ENVIRONMENT, **changes}):
+        return case.phase(layer, phase, label="release", run=RELEASE_RUN, extra=extra)
+
+
+def case_release_phase_releases_the_run_the_launch_names(case: Case) -> None:
+    require(release_phase(case) == 0, case.err)
+    released = [item for item in writes() if item["kind"] == "release"]
+    require(
+        released == [{"kind": "release", "model": "m2", "features_run": FEATURES_RUN, "mode": "real", "run": RELEASE_RUN}],
+        f"the release module was not run once for the model and the features run of the launch: {released}",
+    )
+    require(kinds() == ["release"], f"the release wrote something else: {kinds()}")
+
+
+def case_release_phase_runs_only_when_the_launch_asks(case: Case) -> None:
+    for environment in ({"LAYER_PHASE": ""}, {"LAYER_PHASE": "", "RELEASE_MODEL": "", "FEATURES_RUN": ""}):
+        require(release_phase(case, **environment) == 0, case.err)
+    require(kinds() == [], f"a features build released a model set's online load: {kinds()}")
+    require("release" in case.out and "skipped" in case.out, case.out)
+
+
+def case_a_release_launch_skips_every_build_phase(case: Case) -> None:
+    for phase in layer_run.PHASES["features"]:
+        require(release_phase(case, phase) == 0, f"{phase}: {case.err}")
+    require(kinds() == [], f"a build phase worked in a release launch: {kinds()}")
+    require(not list((case.root / "release_features").rglob("*.json")), "a build phase left a record in a release launch")
+    require(case.out.count("skipped") == len(layer_run.PHASES["features"]), case.out)
+
+
+def case_a_release_without_its_model_or_run_fails_by_name(case: Case) -> None:
+    for name, value in (("RELEASE_MODEL", ""), ("FEATURES_RUN", ""), ("FEATURES_RUN", "latest")):
+        case.err = ""
+        require(release_phase(case, **{name: value}) != 0 and name in case.err, f"{name}={value!r}: {case.err}")
+    require(kinds() == [], f"a release that names no model or run released something: {kinds()}")
+
+
+def case_a_refused_release_fails_the_phase(case: Case) -> None:
+    DEFECTS.add("release_fails")
+    require(release_phase(case) != 0 and "online_release" in case.err and "release" in case.err, case.err)
+    require(kinds() == [], f"a refused release wrote something: {kinds()}")
+
+
+def case_a_dry_release_loads_nothing(case: Case) -> None:
+    require(release_phase(case, extra=["--dry-run"]) == 0, case.err)
+    require(kinds() == [] and "dry_run" in case.out, f"{kinds()} {case.out}")
+
+
+def case_layer_phase_names_one_phase_of_a_features_task(case: Case) -> None:
+    require(release_phase(case, LAYER_PHASE="bogus") != 0 and "LAYER_PHASE" in case.err, case.err)
+    for layer, phase in (("silver", "release"), ("gold", "release"), ("silver", "build"), ("gold", "build")):
+        case.err = ""
+        require(release_phase(case, phase, layer) != 0, f"{layer} {phase} took a release launch's phase")
+    require(kinds() == [], f"{kinds()}")
+
+
 def case_phase_not_in_layer(case: Case) -> None:
     require(case.phase("gold", "verify") != 0 and "not a phase of gold" in case.err, case.err)
     require(case.phase("features", "verify") != 0, case.err)
@@ -1475,6 +1543,13 @@ CASES: dict[str, Callable[[Case], None]] = {
     "dry run marks an already committed run as blocked": case_dry_run_flags_a_committed_run,
     "LAYER_DRY_RUN=1 starts a dry run": case_dry_run_from_the_environment,
     "a phase outside the layer exits non-zero": case_phase_not_in_layer,
+    "release: the phase releases the run the launch names and nothing else": case_release_phase_releases_the_run_the_launch_names,
+    "release: a features build leaves the release phase idle": case_release_phase_runs_only_when_the_launch_asks,
+    "release: a release launch skips every build phase": case_a_release_launch_skips_every_build_phase,
+    "release: a missing model or run fails by name": case_a_release_without_its_model_or_run_fails_by_name,
+    "release: a refused release fails the phase": case_a_refused_release_fails_the_phase,
+    "release: a dry run loads nothing": case_a_dry_release_loads_nothing,
+    "release: LAYER_PHASE names one phase of a features task only": case_layer_phase_names_one_phase_of_a_features_task,
 }
 
 

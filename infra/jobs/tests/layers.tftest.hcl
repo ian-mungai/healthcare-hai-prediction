@@ -74,7 +74,7 @@ run "containers_follow_the_job_catalog_in_order" {
     condition = (
       [for container in [for entry in jsondecode(output.host_container_definitions["silver"]) : entry if entry.name != "guard"] : container.name] == ["init", "fetch", "pin", "build", "validate", "verify", "export", "publish", "upload"] &&
       [for container in [for entry in jsondecode(output.host_container_definitions["gold"]) : entry if entry.name != "guard"] : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "maintain"] &&
-      [for container in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"] : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "feast"]
+      [for container in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"] : container.name] == ["init", "fetch", "pin", "build", "validate", "export", "publish", "upload", "feast", "release"]
     )
     error_message = "Each layer runs the table's containers in pipeline order after the volume ownership step."
   }
@@ -157,7 +157,7 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
       for container in slice([for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"], 2, length([for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"])) :
-      contains(["feast", "maintain"], container.name) || (layer == "silver" && container.name == "upload") || container.command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run ${container.name} --layer ${layer} --run \"$RUN_ID\""]
+      contains(["release", "maintain"], container.name) || (layer == "silver" && container.name == "upload") || container.command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run ${container.name} --layer ${layer} --run \"$RUN_ID\""]
     ])])
     error_message = "Every phase container runs the driver phase of its own name for its own layer, and no other layer."
   }
@@ -169,13 +169,30 @@ run "each_phase_runs_the_driver_for_its_own_layer" {
 
   assert {
     condition = (
-      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].command == ["(cd /workspace/code && python -m scripts.lakehouse.layer_run feast --layer features --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"] &&
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].command == ["cd /workspace/code && python -m scripts.lakehouse.layer_run feast --layer features --run \"$RUN_ID\""] &&
       [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].image == var.train_images.feature_store &&
       contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
       !anytrue([for entry in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment : entry.name == "FEAST_REDIS_HOST"]) &&
       contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][8].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" })
     )
     error_message = "The features job applies Feast from the feature store image on the AWS profile."
+  }
+
+  assert {
+    condition = (
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].name == "release" &&
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].command == ["(cd /workspace/code && python -m scripts.lakehouse.layer_run release --layer features --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"] &&
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].dependsOn == [{ containerName = "feast", condition = "SUCCESS" }] &&
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].essential &&
+      [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].image == var.train_images.feature_store &&
+      contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].environment, { name = "FEAST_PROFILE", value = "aws" }) &&
+      !anytrue([for entry in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].environment : entry.name == "FEAST_REDIS_HOST"]) &&
+      contains([for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].environment, { name = "FEAST_REGISTRY_BUCKET", value = "example-project-data-dev" }) &&
+      toset([for item in [for entry in jsondecode(output.host_container_definitions["features"]) : entry if entry.name != "guard"][9].environment : item.name if item.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"]) &&
+      !contains([for entry in jsondecode(output.host_container_definitions["silver"]) : entry.name], "release") &&
+      !contains([for entry in jsondecode(output.host_container_definitions["gold"]) : entry.name], "release")
+    )
+    error_message = "The features job ends with the release phase: the last, essential container on the feature store image and the AWS profile, which a release launch fills with its model and features run (LAYER_PHASE, RELEASE_MODEL, FEATURES_RUN). Silver and gold have none."
   }
 
   assert {
@@ -252,7 +269,7 @@ run "secrets_reach_only_the_phases_that_need_them" {
   assert {
     condition = alltrue([for layer in ["silver", "gold", "features"] : alltrue([
       for container in [for entry in jsondecode(output.host_container_definitions[layer]) : entry if entry.name != "guard"] : jsonencode(container.secrets) == jsonencode(
-        contains(["pin", "verify", "feast"], container.name) ? [
+        contains(["pin", "verify", "feast", "release"], container.name) ? [
           { name = "POLARIS_CLIENT_ID", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_id" },
           { name = "POLARIS_CLIENT_SECRET", valueFrom = "arn:aws:ssm:us-west-2:111111111111:parameter/example_project/aws_polaris_reader_client_secret" },
           ] : (layer == "silver" && container.name == "build" ? [
@@ -264,7 +281,7 @@ run "secrets_reach_only_the_phases_that_need_them" {
         ] : [])
       )
     ])])
-    error_message = "The reader pair reaches the pin, verify and feast phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and gold maintenance, and no other phase holds a credential."
+    error_message = "The reader pair reaches the pin, verify, feast and release phases and, under the names dbt scrubs from its logs, the silver build. The layer's own writer pair reaches only its publish phase and gold maintenance, and no other phase holds a credential."
   }
 
   assert {
@@ -273,7 +290,7 @@ run "secrets_reach_only_the_phases_that_need_them" {
   }
 
   assert {
-    condition     = toset(output.host_secret_flow.containers_checked) == toset(["host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_gold/maintain", "host_features/pin", "host_features/publish", "host_features/feast"])
+    condition     = toset(output.host_secret_flow.containers_checked) == toset(["host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_gold/maintain", "host_features/pin", "host_features/publish", "host_features/feast", "host_features/release"])
     error_message = "The shared check follows every container that receives a secret."
   }
 }
@@ -349,8 +366,9 @@ run "run_task_contract" {
       output.host_run_tasks["gold"].network == "lakehouse" && output.host_run_tasks["gold"].propagate_tags == "TASK_DEFINITION" &&
       output.host_run_tasks["gold"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID"] &&
       output.host_run_tasks["silver"].container_environment["verify"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI"] &&
-      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET"] &&
-      output.host_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET"]
+      output.host_run_tasks["features"].container_environment["pin"] == ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256", "POLARIS_URI", "INPUT_RUN_ID", "FEATURE_SET", "LAYER_PHASE"] &&
+      output.host_run_tasks["features"].container_environment["feast"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET", "LAYER_PHASE"] &&
+      output.host_run_tasks["features"].container_environment["release"] == ["RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"]
     )
     error_message = "The output names the on-demand private placement, the layer's role key and the variables each container needs."
   }

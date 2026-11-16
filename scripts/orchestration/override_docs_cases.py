@@ -34,6 +34,8 @@ VALUES = {
     "BRONZE_TARGET": "bronze_e2e",
     "HAI_DEADLINE_UTC": "2026-10-30T12:00:00Z",
     "PHASE": "promote",
+    "LAYER_PHASE": "release",
+    "RELEASE_MODEL": "m2",
 }
 
 
@@ -69,6 +71,64 @@ def check_overrides(table: dict) -> None:
             built = {item["name"]: [pair["name"] for pair in item["environment"]] for item in document["containerOverrides"]}
             wanted = {container: [*variables, *([job_overrides.DRY_RUN_VARIABLE] if dry_run else [])] for container, variables in row["containers"].items()}
             require(built == wanted, f"the {job} overrides fill {built}, the task needs {wanted}")
+
+
+def a_features_build_leaves_the_release_variables_empty() -> None:
+    """A features task that is not a release gets the three release variables empty, so a hand-started build needs no value for them: the release phase
+    ends at once and every build phase runs. The metadata job, which reads FEATURES_RUN too, still refuses it when it is missing."""
+    build_values = {name: value for name, value in VALUES.items() if name not in ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")}
+    document = job_overrides.build("features", build_values)
+    held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
+    require(
+        held["release"]
+        == {
+            **{name: build_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI")},
+            **dict.fromkeys(("FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"), ""),
+        },
+        f"{held['release']}",
+    )
+    require(all(container.get("LAYER_PHASE", "") == "" for container in held.values()), f"a build was told a phase: {held}")
+    try:
+        job_overrides.build("metadata", {name: value for name, value in VALUES.items() if name != "FEATURES_RUN"})
+    except job_overrides.OverrideError as error:
+        require("FEATURES_RUN" in str(error), f"the refusal does not name the variable: {error}")
+    else:
+        require(False, "the metadata job was built without the features run it ingests")
+
+
+def a_release_names_its_model_and_run() -> None:
+    """A hand-started release (LAYER_PHASE release) needs the model set and the features run it releases, by name, and fills the release container."""
+    for missing in ("RELEASE_MODEL", "FEATURES_RUN"):
+        try:
+            job_overrides.build("features", {name: value for name, value in VALUES.items() if name != missing})
+        except job_overrides.OverrideError as error:
+            require(missing in str(error), f"the refusal does not name {missing}: {error}")
+        else:
+            require(False, f"a release without {missing} was built")
+    done = run_command(
+        sys.executable,
+        ["-m", "scripts.orchestration.job_overrides", "--job", "features", "--run", RUN, "--code-run", RUN, "--code-sha256", "ab" * 32]
+        + [
+            "--polaris-uri",
+            VALUES["POLARIS_URI"],
+            "--input-run",
+            VALUES["INPUT_RUN_ID"],
+            "--layer-phase",
+            "release",
+            "--release-model",
+            "m2",
+            "--features-run",
+            VALUES["FEATURES_RUN"],
+        ],
+        cwd=ROOT,
+        timeout=60,
+    )
+    require(done.returncode == 0, f"{done.returncode}: {done.stderr.strip()[-200:]}")
+    release = next(item for item in json.loads(done.stdout)["containerOverrides"] if item["name"] == "release")
+    require(
+        {pair["name"]: pair["value"] for pair in release["environment"]}["RELEASE_MODEL"] == "m2" and len(release["environment"]) == 6,
+        f"the release container: {release}",
+    )
 
 
 def the_generator_builds_no_serving_request() -> None:
@@ -111,4 +171,6 @@ CASES: dict[str, Callable[[], None]] = {
     "the_generator_builds_no_serving_request": the_generator_builds_no_serving_request,
     "the_generator_refuses_a_missing_value_by_name": the_generator_refuses_a_missing_value_by_name,
     "a_job_variable_without_a_sample_fails_the_check": a_job_variable_without_a_sample_fails_the_check,
+    "a_features_build_leaves_the_release_variables_empty": a_features_build_leaves_the_release_variables_empty,
+    "a_release_names_its_model_and_run": a_release_names_its_model_and_run,
 }

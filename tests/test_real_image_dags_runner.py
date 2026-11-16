@@ -234,14 +234,14 @@ def test_the_research_scenario_trains_the_three_models_on_one_base_and_researche
 
 
 def _chain_steps(objects: dict[str, bytes], research: str) -> tuple[list[str], list[dict[str, Any]], list[str]]:
-    """The failures, the launch parameters and the steps of the promotion chain over the staged records, with the launches and the release recorded."""
+    """The failures, the launch parameters and the steps of the promotion chain over the staged records, with the launches recorded."""
     chain = importlib.import_module("orchestration.promotion_chain")
     launched: list[tuple[str, dict[str, Any]]] = []
 
     def launch(step: str, run: str, parameters: dict[str, Any]) -> None:
         launched.append((step, parameters))
 
-    failures = chain.run_types(research, ["HAI_1", "HAI_2"], launch=launch, read=objects.get, release=lambda model, features_run, run: None)
+    failures = chain.run_types(research, ["HAI_1", "HAI_2"], launch=launch, read=objects.get)
     return failures, [parameters for _, parameters in launched], [step for step, _ in launched]
 
 
@@ -249,7 +249,7 @@ def test_the_staged_research_records_drive_the_chain_through_the_promotion() -> 
     cases = real_image_dags.rig_modules().cases
     challenger = {"model": "m2", "version": "4", "verdict": "pass", "source_run": "mlrun4"}
     for decision, expected in (
-        ("promote", ["serve_deploy", "canary_check", "promote", "serve_deploy", "owner_notice"]),
+        ("promote", ["serve_deploy", "canary_check", "promote", "release_online", "serve_deploy", "owner_notice"]),
         ("hold", ["serve_deploy", "canary_check", "owner_notice"]),
     ):
         objects = real_image_dags.research_objects(cases.SERVE_BASE, cases.SERVE_RESEARCH, {"HAI_1": challenger, "HAI_2": None}, decision)
@@ -312,27 +312,23 @@ def test_a_first_champion_has_its_own_real_image_scenario() -> None:
     first = real_image_dags.cases_catalog()["research_dag_promotes_a_first_champion_without_a_canary"]
     research = [step for step in first.steps if step.dag_id == "research_dag"]
     check(len(research) == 1 and research[0].starts == 4 and research[0].run_state == "success", f"the first-champion research step: {research}")
-    check(research[0].release_recorded and research[0].check is not None, "the first-champion step records its release and checks the chain")
+    check(research[0].check is not None, "the first-champion step does not check the chain")
     check(not [step for step in first.steps if step.dag_id == "serving_deploy_dag"], "the first-champion scenario deploys a canary or a stable serve by form")
 
 
-def test_the_missing_release_step_has_an_unpatched_scenario() -> None:
+def test_the_release_phase_runs_for_real_and_a_refusal_fails_closed() -> None:
     catalog = real_image_dags.cases_catalog()
-    recorded = catalog["research_dag_promotes_a_challenger_with_a_recorded_release"]
-    missing = catalog["research_dag_fails_after_the_notice_when_the_release_step_is_missing"]
-    check([step.release_recorded for step in recorded.steps if step.dag_id == "research_dag"] == [True, True], "the recorder case does not name its recorder")
-    research = [step for step in missing.steps if step.dag_id == "research_dag"]
-    check(len(research) == 1 and not research[0].release_recorded, "the missing-release scenario replaces the release")
-    check(
-        research[0].starts == 5 and research[0].run_state == "failed" and research[0].reason == "online_hold.json cannot be read: AccessDenied",
-        f"the missing-release step: {research[0]}",
-    )
+    released = catalog["research_dag_promotes_a_challenger_with_a_recorded_release"]
+    refused = catalog["research_dag_fails_after_the_notice_when_the_release_is_refused"]
+    chain = [step for step in released.steps if step.dag_id == "research_dag"]
+    check([step.starts for step in chain] == [7, 0] and all(step.run_state == "success" for step in chain), f"the release scenario: {chain}")
+    check(chain[0].check is not None, "the release scenario does not check the seven tasks of the chain")
+    research = [step for step in refused.steps if step.dag_id == "research_dag"]
+    check(len(research) == 1 and research[0].starts == 6 and research[0].run_state == "failed", f"the refused-release step: {research}")
+    check(research[0].plan == {"release": 1} and research[0].reason == "HAI_1 release:", f"the release is not refused by name: {research[0]}")
     check(research[0].states == {"ready": "success", "research": "success", "chain": "failed", "gate": "failed"}, f"its states: {research[0].states}")
-    check(not any(step.release_recorded for step in missing.steps), "a step of the missing-release scenario replaces the release")
-    check(
-        "release_online" in " ".join(real_image_dags.SUBSTITUTIONS) and "only" in " ".join(real_image_dags.SUBSTITUTIONS),
-        "the recorder substitution is not scoped",
-    )
+    check(not [item for item in real_image_dags.SUBSTITUTIONS if "release" in item and "recorder" in item], "a substitution still replaces the release")
+    check(not hasattr(real_image_dags.Step, "release_recorded"), "a step can still replace the release with a recorder")
 
 
 def test_a_training_run_with_a_base_starts_the_research_through_the_mapped_trigger() -> None:

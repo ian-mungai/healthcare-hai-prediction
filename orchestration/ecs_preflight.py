@@ -43,6 +43,7 @@ from orchestration.training_contract import (
     model_training_run_id,
     parameters_for,
     record_key,
+    release_parameters_for,
     research_attempt_of,
     serving_parameters_for,
     trained_run_id,
@@ -96,6 +97,11 @@ BINDING_FORM = re.compile(
 PHASES = {"promote": "promote", "research": "research", "canary_check": "canary", "owner_notice": "notify"}
 # The steps that the research DAG launches with their own closed parameters, besides its research step.
 CHAIN_TEMPLATES = ("canary_check", "owner_notice", "promote")
+# The release of a model set's held online load runs as a phase of the features family (owner decision A, Nov 15 2026): the features task holds the release
+# container beside its build phases, and LAYER_PHASE tells every phase container which one phase this launch runs. A features build leaves it empty and runs
+# every phase but the release; the release step names ``release``, so the build phases end at once and only the release phase works.
+RELEASE_TEMPLATE = "release_online"
+LAYER_PHASES = {RELEASE_TEMPLATE: "release"}
 
 
 def phase_of(template: str) -> str:
@@ -113,6 +119,20 @@ def features_run_of(request: SubmissionRequest) -> str:
     if run is None or not RUN_ID.fullmatch(run):
         raise LaunchRefused(f"the metadata job needs FEATURES_RUN, the ID of the features run to ingest, not {run or 'latest'!r}: there is no latest run")
     return run
+
+
+def release_model_of(request: SubmissionRequest) -> str:
+    """The model set whose held online load the release step releases, after the closed parameters of the step (``release_parameters_for``) and the run
+    check: the features run in the parameters is the input run of the request, so the launch binds the run it releases and no other."""
+    try:
+        parameters = release_parameters_for(request.training or {})
+    except ValueError as error:
+        raise LaunchRefused(str(error)) from None
+    if request.input_run_id != parameters["features_run"]:
+        raise LaunchRefused(
+            f"the {RELEASE_TEMPLATE} step needs the features run {parameters['features_run']} as its input run, not {request.input_run_id or 'none'}"
+        )
+    return parameters["model"]
 
 
 def feature_set_of(dag_id: str) -> str:
@@ -636,7 +656,10 @@ class Preflight:
         # A model set builds from the passed features job of its base run (the base family), and a drift check reads the passed features job of its model run,
         # which is in the family of its set. A drift check of a model outside the contract has no such job: drift_model refuses it by name below.
         drift_features = f"features_{(request.training or {}).get('model')}"
-        if request.dag_id in FEATURE_DAGS:
+        if request.template == RELEASE_TEMPLATE:
+            after = None  # the release names the features run it releases, which the phase checks for itself; there is no layer before it
+            release_model_of(request)
+        elif request.dag_id in FEATURE_DAGS:
             after = self.steps[request.template]
         elif request.dag_id == DRIFT_DAG:
             after = drift_features if drift_features in self.jobs else None
@@ -904,7 +927,11 @@ class Preflight:
             return cache["digest"]
 
         training = json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":"))
-        names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id == DRIFT_DAG
+        releasing = request.template == RELEASE_TEMPLATE
+        names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id == DRIFT_DAG or releasing
+        containers, log_container = self.containers(job)
+        # A features task holds the release container: a features build leaves its three variables empty, and only the release step fills them.
+        holds_release = "release" in containers
         values: dict[str, Callable[[], str]] = {
             "RUN_ID": lambda: request.run_id,
             "CODE_RUN_ID": lambda: code_run,
@@ -913,15 +940,16 @@ class Preflight:
             "POLARIS_URI": lambda: self.settings.polaris_uri,
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
-            "FEATURES_RUN": lambda: features_run_of(request),
-            "FEATURE_SET": lambda: drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
+            "FEATURES_RUN": lambda: "" if holds_release and not releasing else features_run_of(request),
+            "FEATURE_SET": lambda: "" if releasing else drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
+            "LAYER_PHASE": lambda: LAYER_PHASES.get(request.template, ""),
+            "RELEASE_MODEL": lambda: release_model_of(request) if releasing else "",
             "PHASE": lambda: phase_of(request.template),
             **{
                 name: partial(fixed.__getitem__, name)
                 for name in (*BRONZE_VARIABLES, *SERVING_VARIABLES, *PUBLISHER_VARIABLES, *RETRY_VARIABLES, DEADLINE_VARIABLE)
             },
         }
-        containers, log_container = self.containers(job)
         environment = {
             container: {name: values[name]() for name in names if name not in RETRY_VARIABLES or name in fixed} for container, names in containers.items()
         }
