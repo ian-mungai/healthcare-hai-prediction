@@ -338,6 +338,26 @@ run "database_script_creates_the_logical_database_only_with_the_flag" {
   }
 }
 
+# The ingestion image keeps Python, boto3 and the metadata command in a virtual environment under the airflow user's home folder, which is mode 770 owned by
+# airflow:root. A user outside group 0 cannot enter it and python resolves to the bare system install with no boto3 (seen live Nov 15 2026; checked in the pinned
+# image sha256:cd28c0b1...). Group 0 reads the environment and holds no root power: the capabilities stay dropped.
+run "bootstrap_user_is_in_the_image_group_that_reads_its_python_environment" {
+  command = plan
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].user == "10001:0"
+    error_message = "The bootstrap runs as user 10001 in group 0, the group that can read the ingestion image's Python environment (boto3 lives there)."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].linuxParameters.capabilities.drop == ["ALL"]
+      && jsondecode(aws_ecs_task_definition.one_shot["openmetadata_bootstrap"].container_definitions)[0].readonlyRootFilesystem
+    )
+    error_message = "Group 0 gives no capability: all are dropped and the root filesystem stays read-only."
+  }
+}
+
 run "bootstrap_reads_one_password_and_names_the_token_parameters" {
   command = plan
 

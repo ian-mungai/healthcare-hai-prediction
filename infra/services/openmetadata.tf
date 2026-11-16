@@ -138,7 +138,7 @@ locals {
     merge(local.container_defaults, {
       name                   = "openmetadata_bootstrap"
       image                  = lookup(local.image, "openmetadata_ingestion", "")
-      user                   = "10001:10001"
+      user                   = "10001:0" # group 0 reads the image's Python environment, which the airflow user's home folder keeps at mode 770 airflow:root; boto3 is there
       readonlyRootFilesystem = true
       memory                 = var.openmetadata_memory_mib.bootstrap.limit
       memoryReservation      = var.openmetadata_memory_mib.bootstrap.reservation
