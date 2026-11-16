@@ -15,6 +15,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import sys
 import tempfile
@@ -33,7 +34,7 @@ from scripts.features import feast_aws_cases, online_cases
 from scripts.features import online_protocol as online
 from scripts.features.feast_harness import Checker, settle_threads, stop_worker
 from scripts.infrastructure import push_images, secret_store
-from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, predictions, replay, service
+from scripts.serving import body, canary, deploy, deploy_job, iceberg_sink, keys, limiter, manifests, metrics, mlflow_loader, predictions, replay, service
 
 ROOT = Path(__file__).resolve().parents[2]
 HAI = "HAI_1"
@@ -2556,6 +2557,65 @@ def case_liveness_without_a_deployment(c: Checker) -> None:
         c.check("a service with a stable model answers both 200", w.api.live().status == 200 and w.api.health().status == 200)
 
 
+PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
+
+
+class ProbingMlflow:
+    """The MLflow 3.17.2 client over an artifact server that stores artifacts in S3.
+
+    A client with no ``MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD`` setting asks ``/server-info``, which advertises presigned downloads for an S3 destination, and
+    reads each file straight from S3. The ECS task reaches the tracking server only, so that read fails and MLflow hides the cause behind one generic
+    ``MlflowException``. With the setting ``false`` the client streams each file through the tracking server. Both artifact entry points of the loader (the
+    run file download and the ``models:/`` model download) check the setting when they are called.
+    """
+
+    def __init__(self, listing: Path) -> None:
+        self.listing = listing
+        self.direct_reads = 0
+        self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
+        self.sklearn = SimpleNamespace(load_model=self.load_model)
+        self.MlflowClient = lambda: SimpleNamespace(
+            get_model_version=lambda name, version: SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1"})
+        )
+
+    def proxied(self, what: str) -> bool:
+        if os.environ.get(PROXY_SWITCH, "").lower() == "false":
+            return True
+        self.direct_reads += 1
+        raise RuntimeError(f"MlflowException: Failed to download artifacts from path {what!r}, please ensure that the path is correct.")
+
+    def download_artifacts(self, run_id: str, artifact_path: str) -> str:
+        self.proxied(artifact_path)
+        return str(self.listing)
+
+    def load_model(self, uri: str) -> Any:
+        self.proxied(uri)
+        return SimpleNamespace(predict=lambda frame: [0.25])
+
+
+def case_loader_reads_artifacts_through_the_tracking_server(c: Checker) -> None:
+    """The loader keeps every artifact download on the tracking server: the presigned path that an S3 artifact store advertises is unreachable from the task."""
+    with tempfile.TemporaryDirectory() as folder:
+        listing = Path(folder) / "feature_list.json"
+        listing.write_text(json.dumps({"references": ["a:1"], "columns": ["a"]}))
+        library = ProbingMlflow(listing)
+        frames = SimpleNamespace(DataFrame=lambda rows: rows)
+        environment = {key: value for key, value in os.environ.items() if key != PROXY_SWITCH}
+        with mock.patch.dict(sys.modules, {"mlflow": library, "pandas": frames}), mock.patch.dict(os.environ, environment, clear=True):
+            try:
+                model = mlflow_loader.MlflowLoader().load(HAI, PRODUCTION)
+                failure = ""
+            except RuntimeError as error:
+                model, failure = None, str(error)
+            c.check("the loader loads the version without a direct read of the artifact store", model is not None and library.direct_reads == 0 and not failure)
+            c.check(
+                "the loaded version carries its feature references and schema hash",
+                model is not None and model.references == ("a:1",) and model.schema_hash == "hash1",
+            )
+            c.check("the loaded model predicts", model is not None and model.predict({"a:1": 1.0}) == 0.25)
+            c.check("the setting is false for every later download in the process", os.environ.get(PROXY_SWITCH) == "false")
+
+
 def case_metrics(c: Checker) -> None:
     """The /metrics text has the names, types and labels of the monitoring contract, counts every answer, bounds its series and holds no key or hospital."""
     contract = json.loads((ROOT / "data_contracts/serving/metrics.json").read_text())["metrics"]
@@ -2701,6 +2761,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "replay_http_drip": (case_replay_http_drip, "timeout network"),
     "previous_record_format": (case_previous_record_format, "deploy compatibility"),
     "liveness_without_a_deployment": (case_liveness_without_a_deployment, "api monitoring"),
+    "loader_reads_artifacts_through_the_tracking_server": (case_loader_reads_artifacts_through_the_tracking_server, "api mlflow"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }

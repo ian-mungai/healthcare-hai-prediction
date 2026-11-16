@@ -11,6 +11,7 @@ import gc
 import importlib
 import json
 import math
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -19,6 +20,7 @@ from scripts.serving.service import LoadedModel
 
 CONTRACT = Path(__file__).resolve().parents[2] / "data_contracts/training/model_contract.json"
 FEATURE_LIST = "bundle/feature_list.json"
+PROXY_DOWNLOADS = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
 
 
 class MlflowLoader:
@@ -26,6 +28,10 @@ class MlflowLoader:
         self._contract = json.loads(CONTRACT.read_text())
 
     def load(self, hai_type: str, version: str) -> LoadedModel:
+        # The task reaches the tracking server only. With no setting, the 3.17.2 client asks the server's /server-info, which advertises presigned downloads
+        # for an S3 artifact destination, and reads each file straight from S3. A failure of that read is hidden behind one MlflowException. Setting
+        # ``false`` before any client or download exists keeps the run file download and the models:/ model download on the tracking server.
+        os.environ[PROXY_DOWNLOADS] = "false"
         mlflow = importlib.import_module("mlflow")
         pandas = importlib.import_module("pandas")
         name = self._contract["registered_models"][hai_type]
