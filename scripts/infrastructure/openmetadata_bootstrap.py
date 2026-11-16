@@ -14,6 +14,8 @@ import base64
 import http.client
 import json
 import os
+import re
+import string
 import sys
 import time
 import urllib.parse
@@ -24,10 +26,19 @@ from typing import Any
 ADMIN_EMAIL = "admin@example.org"
 FACTORY_LOGIN_VALUE = "admin"
 REQUEST_SECONDS = 10
+DETAIL_LIMIT = 300
+# OpenMetadata 2.0.7 PasswordUtil.validatePassword (Passay 1.6.6): 8 to 56 characters, no white space, one upper case letter, one lower case letter,
+# one digit and one special character; the ASCII specials of Passay's EnglishCharacterData.Special are string.punctuation.
+POLICY_TEXT = (
+    "the OpenMetadata password policy (8 to 56 characters, no white space, one upper case letter, one lower case letter, one digit and one special character)"
+)
 
 
 def call(method: str, url: str, body: Mapping[str, Any] | None = None, session: str = "") -> tuple[int, Any]:
-    """Send one JSON request to a plain-HTTP address and return the status and parsed body. Status 0 means the server did not answer."""
+    """Send one JSON request to a plain-HTTP address and return the status and parsed body. Status 0 means the server did not answer.
+
+    A body that is not JSON (the server answers a changed password with the plain text ``Password Updated Successfully``) comes back as ``{"message": text}``.
+    """
     parts = urllib.parse.urlsplit(url)
     headers = {"Content-Type": "application/json"}
     if session:
@@ -37,11 +48,38 @@ def call(method: str, url: str, body: Mapping[str, Any] | None = None, session: 
         connection.request(method, parts.path + (f"?{parts.query}" if parts.query else ""), json.dumps(body) if body is not None else None, headers)
         reply = connection.getresponse()
         raw = reply.read()
-        return reply.status, json.loads(raw) if raw else {}
-    except (OSError, http.client.HTTPException, ValueError):
+        status = reply.status
+    except (OSError, http.client.HTTPException):
         return 0, {}
     finally:
         connection.close()
+    try:
+        return status, json.loads(raw) if raw else {}
+    except ValueError:
+        return status, {"message": raw.decode("utf-8", "replace")}
+
+
+def refusal_detail(status: int, reply: Any, *secrets: str) -> str:
+    """Name the HTTP status and the server's message of a refused request; the given secrets are blanked and the text is cut short."""
+    message = reply.get("message") if isinstance(reply, dict) else None
+    text = " ".join(str(message).split())[:DETAIL_LIMIT] if message else "no message"
+    for secret in secrets:
+        if secret:
+            text = text.replace(secret, "***")
+    return f"HTTP {status}: {text}" if status else "no answer from the server"
+
+
+def password_problem(value: str) -> str:
+    """Return a sentence that names the policy when the server would refuse ``value`` as a new administrator password, otherwise an empty string."""
+    fine = (
+        8 <= len(value) <= 56
+        and re.search(r"\s", value) is None
+        and any(character in string.ascii_uppercase for character in value)
+        and any(character in string.ascii_lowercase for character in value)
+        and any(character in string.digits for character in value)
+        and any(character in string.punctuation for character in value)
+    )
+    return "" if fine else f"the stored administrator password breaks {POLICY_TEXT}; replace the stored parameter with a password that meets it"
 
 
 def login(base: str, secret: str) -> str:
@@ -87,9 +125,13 @@ def main(argv: list[str], env: Mapping[str, str] | None = None) -> int:
         session = login(options.base, FACTORY_LOGIN_VALUE)
         if not session:
             return fail("neither the stored administrator password nor the default one logs in")
+        problem = password_problem(new_secret)
+        if problem:
+            return fail(problem)
         body = {"username": "admin", "oldPassword": FACTORY_LOGIN_VALUE, "newPassword": new_secret, "confirmPassword": new_secret, "requestType": "SELF"}
-        if call("PUT", f"{options.base}/v1/users/changePassword", body, session)[0] != 200:
-            return fail("the administrator password change was refused")
+        status, reply = call("PUT", f"{options.base}/v1/users/changePassword", body, session)
+        if status != 200:
+            return fail(f"the administrator password change was refused ({refusal_detail(status, reply, new_secret)})")
         session = login(options.base, new_secret)
         if not session:
             return fail("the new administrator password does not log in")

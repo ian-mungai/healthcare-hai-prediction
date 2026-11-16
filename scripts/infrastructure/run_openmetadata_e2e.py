@@ -81,7 +81,7 @@ class Stand(ThreadingHTTPServer):
                 body = json.loads(raw) if raw else {}
                 outer.calls.append((self.command, self.path, body))
                 status, payload = routes(self.command, self.path, body)
-                data = json.dumps(payload).encode()
+                data = payload.encode() if isinstance(payload, str) else json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(data)))
@@ -1094,7 +1094,7 @@ def om_routes(state: dict[str, Any]) -> Callable[[str, str, dict[str, Any]], tup
             if body.get("oldPassword") != state["password"]:
                 return 400, {}
             state["password"] = body["newPassword"]
-            return 200, {}
+            return 200, "Password Updated Successfully"
         if path == "/api/v1/bots/name/ingestion-bot":
             return 200, {"botUser": {"id": "bot-user-id"}}
         if path == "/api/v1/users/auth-mechanism/bot-user-id":

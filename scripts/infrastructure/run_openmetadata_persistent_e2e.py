@@ -88,6 +88,7 @@ class FakeServer:
         }
         self.refuse_settings = False
         self.settings_writes = 0
+        self.password_refusal: tuple[int, str] | None = None
 
 
 @contextlib.contextmanager
@@ -102,6 +103,14 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
         def reply(self, status: int, body: dict[str, Any] | None = None) -> None:
             data = json.dumps(body or {}).encode()
             self.send_response(status)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def reply_text(self, status: int, text: str) -> None:
+            data = text.encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "text/plain")
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
@@ -160,11 +169,14 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     state.settings_writes += 1
                     return self.reply(200, request)
                 if self.path == "/api/v1/users/changePassword":
+                    # UserResource.changeUserPassword of 2.0.7 answers a success with the plain text below, not JSON, and a refusal with {"code", "message"}.
+                    if state.password_refusal is not None:
+                        return self.reply(state.password_refusal[0], {"code": state.password_refusal[0], "message": state.password_refusal[1]})
                     if request["oldPassword"] != state.admin or request["newPassword"] != request["confirmPassword"]:
-                        return self.reply(400)
+                        return self.reply(400, {"code": 400, "message": "Old Password is not correct"})
                     state.admin = request["newPassword"]
                     state.password_changes += 1
-                    return self.reply(200)
+                    return self.reply_text(200, "Password Updated Successfully")
                 if self.path == "/api/v1/users":
                     require(request.get("isBot") is True and request["authenticationMechanism"]["authType"] == "JWT", "a bot user must be a JWT bot")
                     require(request["email"] == f"{request['name']}@example.org", "a bot email is on the reserved domain the server is configured with")
@@ -357,8 +369,54 @@ def openlineage_settings_already_off_are_left_alone() -> None:
         require(code == 0 and state.settings_writes == 0, f"settings that are already right must not be written: {state.settings_writes} {err}")
 
 
+def refused_password_change_shows_status_and_server_message() -> None:
+    with open_metadata() as (state, base):
+        state.password_refusal = (
+            400,
+            f"Password must be of minimum 8 characters, with one special, one Upper, one lower case character, and one Digit. {ADMIN_VALUE}",
+        )
+        store = FakeParameterStore()
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "administrator password change was refused" in err, f"a refused change must fail and say so: {code} {err}")
+        require("HTTP 400" in err and "Password must be of minimum 8 characters" in err, f"the status and the server's reason must be shown: {err}")
+        require(state.password_changes == 0 and store.writes == [], "nothing may change after a refused password change")
+        assert_no_values(out, err)
+        OBSERVED["refused_password_change"] = {"exit": code, "stderr_has_status": True}
+
+
+def stored_password_outside_the_server_policy_is_refused_first() -> None:
+    bad = {
+        "longer than 56 characters": "Aa1!" + "x" * 53,
+        "shorter than 8 characters": "Aa1!xyz",
+        "no special character": "Aa1" + "x" * 20,
+        "no digit": "Aa!" + "x" * 20,
+        "no upper case letter": "aa1!" + "x" * 20,
+        "no lower case letter": "AA1!" + "X" * 20,
+        "white space": "Aa1! " + "x" * 20,
+    }
+    for name, value in bad.items():
+        with open_metadata() as (state, base):
+            store = FakeParameterStore()
+            code, out, err = run(environment(base, OM_ADMIN_PASSWORD=value), store)
+            require(code == 1 and "OpenMetadata password policy" in err and "8 to 56" in err, f"{name}: the policy must be named: {code} {err}")
+            require(not [call for call in state.calls if call[0] == "PUT"] and state.password_changes == 0, f"{name}: no change request may be sent")
+            require(store.writes == [], f"{name}: nothing may be written")
+            require(value not in out + err, f"{name}: the password reached the output")
+    with open_metadata() as (state, base):
+        state.admin = "Aa1!" + "x" * 53
+        code, _out, err = run(environment(base, OM_ADMIN_PASSWORD=state.admin), FakeParameterStore())
+        require(code == 0, f"a stored password that already logs in is never judged by the policy: {err}")
+    with open_metadata() as (state, base):
+        value = "Aa1!" + "x" * 52
+        code, _out, err = run(environment(base, OM_ADMIN_PASSWORD=value), FakeParameterStore())
+        require(code == 0 and state.admin == value, f"a 56-character password is within the policy: {err}")
+    OBSERVED["password_policy"] = sorted(bad)
+
+
 CASES: dict[str, Callable[[], None]] = {
     "fresh_start": fresh_start,
+    "refused_password_change_shows_status_and_server_message": refused_password_change_shows_status_and_server_message,
+    "stored_password_outside_the_server_policy_is_refused_first": stored_password_outside_the_server_policy_is_refused_first,
     "openlineage_settings_refusal_fails_visibly": openlineage_settings_refusal_fails_visibly,
     "openlineage_settings_already_off_are_left_alone": openlineage_settings_already_off_are_left_alone,
     "rerun_changes_nothing": rerun_changes_nothing,
