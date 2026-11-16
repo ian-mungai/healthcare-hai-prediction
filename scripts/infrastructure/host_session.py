@@ -1,9 +1,15 @@
-"""Start and stop the AWS host control plane for a working session: ``start``, ``bootstrap``, ``stop`` and ``status``.
+"""Start and stop the AWS host control plane for a working session: ``start``, ``refresh``, ``bootstrap``, ``stop`` and ``status``.
 
 Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.host_session start``. The profile and region come from ``.env`` through
 ``load_configuration``. The cluster, the host group, the capacity provider, the service names and the one-shot task families come from the
 ``terraform output -json`` of the platform and services stacks. Every AWS call goes through ``AwsCli`` with the project profile. Every wait has a
 deadline and fails visibly. Output names no account ID and no ARN, and shows a provider reason only as a fixed category.
+
+``refresh`` places new code on a host that is already on and redeploys every service. It never changes the desired capacity and never stops the host. The
+service and one-shot names come from the services state of the checkout it runs in (``infra/services/terraform.tfstate``). The state is a local file, so a
+checkout whose copy is older than the applied stack names fewer services than the stack has. Run ``refresh`` from the checkout that holds the newest
+services state; ``refresh`` and ``status`` print the serial of the state they read (``services_state: serial <n>``), and ``refresh`` refuses a name that
+ECS does not have.
 """
 
 from __future__ import annotations
@@ -29,6 +35,8 @@ from scripts.process import CompletedProcess
 
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
 BOOTSTRAP_MARKER = REPO_ROOT / "data" / "host_session" / "polaris_bootstrap.launched"
+STATE_FILE = "terraform.tfstate"
+MISSING = "MISSING"
 REGISTRATION_SECONDS = 600
 HOST_PREPARE_SECONDS = 600
 BOOTSTRAP_SECONDS = 600
@@ -163,6 +171,7 @@ class Names:
     project_tag: str
     services: dict[str, str]
     one_shot: dict[str, str]
+    state_serial: int | None = None
 
 
 def tolerant_runner(*args: Any, **kwargs: Any) -> CompletedProcess[str]:
@@ -183,6 +192,16 @@ def output_value(document: dict[str, Any], name: str, kind: type) -> Any:
     if not isinstance(value, kind) or not value:
         raise ConfigurationError(f"The Terraform output {name} is missing or has the wrong type.")
     return value
+
+
+def services_state_serial(directory: Path) -> int | None:
+    """The serial of the local services state file in ``directory``, or None when the file is absent, unreadable or has no whole-number serial."""
+    try:
+        document = json.loads((directory / STATE_FILE).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    serial = document.get("serial") if isinstance(document, dict) else None
+    return serial if isinstance(serial, int) and not isinstance(serial, bool) else None
 
 
 def limit(remaining: Callable[[], float] | None) -> dict[str, float]:
@@ -215,6 +234,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
             key: str(one_shot[key]["task_definition"])
             for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH) if optional in one_shot))
         },
+        state_serial=services_state_serial(SERVICES_DIRECTORY),
     )
 
 
@@ -222,9 +242,16 @@ class Session:
     """One host session: the AWS adapter, the names, the clock and a step report."""
 
     def __init__(
-        self, cli: AwsCli, names: Names, clock: Clock | None = None, marker: Path = BOOTSTRAP_MARKER, report: Callable[[str], None] | None = None
+        self,
+        cli: AwsCli,
+        names: Names,
+        clock: Clock | None = None,
+        marker: Path = BOOTSTRAP_MARKER,
+        report: Callable[[str], None] | None = None,
+        job_prefix: str | None = None,
     ) -> None:
-        self.cli, self.names, self.clock, self.marker = cli, names, clock or Clock(), marker
+        """``job_prefix`` is the start of the job task families of the project and environment; ``refresh`` needs it to find the running job tasks."""
+        self.cli, self.names, self.clock, self.marker, self.job_prefix = cli, names, clock or Clock(), marker, job_prefix
         self.deadline: float | None = None
         self.launch_tokens: dict[str, str] = {}
         self.report = report or (lambda line: sys.stdout.write(line + "\n"))
@@ -284,19 +311,26 @@ class Session:
         described = self.call("ecs", "describe-container-instances", ["--cluster", self.names.cluster, "--container-instances", *arns])
         return [item for item in described.get("containerInstances", []) if item.get("status") == "ACTIVE" and item.get("agentConnected") is True]
 
-    def service_states(self) -> list[dict[str, Any]]:
-        """Every project service as ECS describes it, in the session's order."""
+    def lookup_services(self) -> tuple[list[dict[str, Any]], list[str]]:
+        """The project services ECS has, as it describes them in the session's order, and the names it reports absent (a ``MISSING`` failure entry).
+
+        A failure entry of any other reason raises. The state names a service that the apply has not created yet when an apply was interrupted.
+        """
         names = list(self.names.services.values())
         found: dict[str, dict[str, Any]] = {}
         for index in range(0, len(names), DESCRIBE_SERVICES_LIMIT):
             described = self.call("ecs", "describe-services", ["--cluster", self.names.cluster, "--services", *names[index : index + DESCRIBE_SERVICES_LIMIT]])
-            if described.get("failures"):
+            if any(item.get("reason") != MISSING for item in described.get("failures", [])):
                 raise HostSessionError("describe-services reported failures")
             found.update({item["serviceName"]: item for item in described.get("services", [])})
-        missing = [name for name in names if name not in found]
-        if missing:
-            raise HostSessionError(f"services not found: {', '.join(missing)}")
-        return [found[name] for name in names]
+        return [found[name] for name in names if name in found], [name for name in names if name not in found]
+
+    def service_states(self) -> list[dict[str, Any]]:
+        """Every project service as ECS describes it, in the session's order; a service ECS does not have raises."""
+        found, absent = self.lookup_services()
+        if absent:
+            raise HostSessionError(f"services not found: {', '.join(absent)}")
+        return found
 
     @staticmethod
     def settled(service: dict[str, Any]) -> bool:
@@ -513,7 +547,9 @@ class Session:
         try:
             self.one_shot(OPENMETADATA_BOOTSTRAP, OPENMETADATA_BOOTSTRAP_SECONDS)
         except HostSessionError as error:
-            self.step("openmetadata_bootstrap_failed", f"{error}; the host stays on and the data chain is not affected; run start again to repeat it")
+            self.step(
+                "openmetadata_bootstrap_failed", f"{error}; the host stays on and the data chain is not affected; run start or refresh again to repeat it"
+            )
 
     def service_stopped(self, name: str) -> bool:
         """True when ECS shows no running and no pending task for the named service."""
@@ -614,6 +650,56 @@ class Session:
             if not succeeded:
                 self.stop_after_failure("start", keep_on)
 
+    def state_report(self) -> str:
+        """What the session read its names from: the serial of the services state and the number of services and one-shot tasks."""
+        serial = "unknown" if self.names.state_serial is None else str(self.names.state_serial)
+        return f"serial {serial}; {len(self.names.services)} service(s), {len(self.names.one_shot)} one-shot task(s)"
+
+    def check_refreshable(self, code: tuple[str, str] | None) -> None:
+        """Refuse a refresh before it changes anything: code the stack cannot place, a host that is not one registered instance in the capacity provider,
+        a running job task or a service in the state that ECS does not have. ``TaskCleanup`` lists the job tasks as ``aws_tasks list`` does; it is imported
+        here because ``aws_tasks`` imports this module."""
+        from scripts.infrastructure.aws_tasks import TaskCleanup
+
+        if code is not None and CODE_FETCH not in self.names.one_shot:
+            raise HostSessionError("--code-run needs the code_fetch one-shot; apply the services stack with code_fetch_task_role_arn first")
+        group, active = self.group_state(), self.active_instances()
+        counts = f"desired capacity {group.get('DesiredCapacity')}, group instances {len(group.get('Instances', []))}, active container instances {len(active)}"
+        if group.get("DesiredCapacity") != 1 or len(group.get("Instances", [])) != 1 or len(active) != 1:
+            raise HostSessionError(f"refresh refused: it needs exactly one registered container instance ({counts}); run start to turn the host on")
+        if active[0].get("capacityProviderName") != self.names.provider:
+            raise HostSessionError("refresh refused: the container instance is registered but is not in the capacity provider; run start or wait")
+        if self.job_prefix is None:
+            raise HostSessionError("refresh refused: the session has no job task family prefix, so running job tasks cannot be checked")
+        tasks = TaskCleanup(self, self.job_prefix).list_tasks()
+        if tasks:
+            shown = ", ".join(f"{task.family} {task.suffix}" for task in tasks)
+            raise HostSessionError(f"refresh refused: {len(tasks)} job task(s) running ({shown}); wait for them or run aws_tasks stop")
+        _, absent = self.lookup_services()
+        if absent:
+            raise HostSessionError(
+                f"refresh refused: ECS does not have {', '.join(absent)}, which the services state names (state {self.state_report()}); "
+                "apply the services stack, or run refresh from the checkout that holds the newest services state"
+            )
+
+    def refresh(self, code: tuple[str, str] | None = None) -> None:
+        """New code on a host that is on: host_prepare, the code checkout, every service of the services state redeployed and stable, the catalog bootstrap.
+
+        The host must be exactly one registered container instance and no job task may run; refresh never changes the desired capacity. A failure after
+        the checks, an interruption or SIGTERM never stops the host: it is reported and the host stays on, so the owner reads what failed and runs it again.
+        """
+        self.step("services_state", self.state_report())
+        self.check_refreshable(code)
+        self.step("refresh_checked", "one registered instance, no job task running, every named service present")
+        try:
+            self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
+            self.place_code(code)
+            self.deploy_services()
+            self.openmetadata_bootstrap()
+        except HostSessionError as error:
+            self.step("refresh_failed", f"the host stays on and is not stopped; read the failure above and run refresh again ({error})")
+            raise
+
     def bootstrap(self, again: bool = False, keep_on: bool = False) -> None:
         """Run polaris_bootstrap once, only after postgres and polaris are stable. Once begun, any failure or SIGTERM stops the host unless ``keep_on``."""
         if self.marker.exists() and not again:
@@ -634,6 +720,7 @@ class Session:
     def status(self) -> dict[str, Any]:
         """Host, container instance and per-service counts; read only."""
         group = self.group_state()
+        found, absent = self.lookup_services()
         services = {
             item["serviceName"]: {
                 "desired": item.get("desiredCount"),
@@ -641,9 +728,11 @@ class Session:
                 "pending": item.get("pendingCount"),
                 "rollout": [deployment.get("rolloutState") for deployment in item.get("deployments", [])],
             }
-            for item in self.service_states()
+            for item in found
         }
         return {
+            "absent_services": absent,
+            "services_state_serial": self.names.state_serial,
             "desired_capacity": group.get("DesiredCapacity"),
             "group_instances": len(group.get("Instances", [])),
             "active_container_instances": len(self.active_instances()),
@@ -655,6 +744,7 @@ def open_session() -> Session:
     """The session of the project profile, with the names read from the Terraform outputs. Raises ConfigurationError."""
     settings, _ = load_configuration(REPO_ROOT / ".env")
     session = Session(AwsCli(settings, tolerant_runner), load_names(settings))
+    session.job_prefix = f"{settings['project_name']}_{settings['environment']}_job_"
     return session
 
 
@@ -666,6 +756,9 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
     start.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
     start.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
+    refresh = commands.add_parser("refresh", help="new code on a running host: host_prepare, the code checkout, redeploy every service, never stops the host")
+    refresh.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
+    refresh.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
     bootstrap = commands.add_parser("bootstrap", help="run polaris_bootstrap once")
     bootstrap.add_argument("--again", action="store_true", help="run it again although it already ran")
     bootstrap.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
@@ -678,7 +771,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run one subcommand and return 0 on success, 1 on a failed, interrupted or terminated step, 2 on a configuration error."""
     arguments = build_parser().parse_args(argv)
     code = None
-    if arguments.command == "start" and (arguments.code_run is not None or arguments.code_sha256 is not None):
+    if arguments.command in {"start", "refresh"} and (arguments.code_run is not None or arguments.code_sha256 is not None):
         if not CODE_RUN_ID.fullmatch(arguments.code_run or "") or not CODE_SHA256.fullmatch(arguments.code_sha256 or ""):
             sys.stderr.write("usage: give --code-run <run ID> and --code-sha256 <64 lowercase hex characters> together\n")
             return 2
@@ -692,6 +785,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if arguments.command == "start":
             session.start(arguments.keep_on, code=code)
+        elif arguments.command == "refresh":
+            session.refresh(code=code)
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "stop":

@@ -83,9 +83,10 @@ class StandInHost:
     pages), ``repeat_token`` makes every page answer the same ``nextToken``, ``ghost_task`` makes list-tasks name one task that describe-tasks reports
     ``MISSING``, ``vanish_after_stop`` makes a stopped task unknown to describe-tasks, ``never_stop_task`` makes stop-task accept the call but leave the
     task running, ``stop_task_error`` makes stop-task fail without effect, ``stop_task_lost_reply`` makes stop-task take effect and then fail and
-    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn``. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status``
-    value (RUNNING when absent), and a stopped task has desired status STOPPED. ``add_task`` adds a running task of any family and group, so a case
-    can hold job tasks, service tasks and writer tasks together.
+    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn``. A service name that the host does not know is answered as ECS answers a missing
+    service: a ``MISSING`` failure entry and no service. ``describe_services_error`` adds a failure entry of another reason to every describe-services
+    answer. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status`` value (RUNNING when absent), and a stopped task has desired
+    status STOPPED. ``add_task`` adds a running task of any family and group, so a case can hold job tasks, service tasks and writer tasks together.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
@@ -371,8 +372,12 @@ class StandInHost:
     def ecs_describe_services(self, options: dict[str, list[str]]) -> dict[str, Any]:
         found = []
         reason = "ECS deployment circuit breaker: tasks failed to start" + (f" {LEAK}" if "leaky_reasons" in self.faults else "")
+        failures: list[dict[str, str]] = []
         for name in options["--services"]:
-            service = self.services[name]
+            service = self.services.get(name)
+            if service is None:
+                failures.append({"arn": f"{ACCOUNT_MARK}service/{CLUSTER}/{name}", "reason": "MISSING"})
+                continue
             found.append(
                 {
                     "serviceName": name,
@@ -382,4 +387,6 @@ class StandInHost:
                     "deployments": [{"rolloutState": service["state"], "rolloutStateReason": reason}],
                 }
             )
-        return {"services": found, "failures": []}
+        if "describe_services_error" in self.faults:
+            failures.append({"arn": f"{ACCOUNT_MARK}service/{CLUSTER}/any", "reason": "OTHER"})
+        return {"services": found, "failures": failures}

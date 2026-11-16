@@ -110,6 +110,38 @@ PLANTS: dict[str, tuple[str, str]] = {
     "does not verify the termination": ('not group.get("Instances")', "True"),
     "ignores pending tasks": (' and not service.get("pendingCount")', ""),
     "does not force the deployment": ('"--force-new-deployment"]', '"--no-force-new-deployment"]'),
+    "refresh ignores a running job task": ("        if tasks:\n            shown", "        if False:\n            shown"),
+    "refresh stops the host after a failure": (
+        "            raise\n\n    def bootstrap(self, again",
+        "            self.host_off()\n            raise\n\n    def bootstrap(self, again",
+    ),
+    "refresh accepts an instance outside the capacity provider": (
+        '        if active[0].get("capacityProviderName") != self.names.provider:\n            raise HostSessionError("refresh refused',
+        '        if False:\n            raise HostSessionError("refresh refused',
+    ),
+    "refresh turns the host on": (
+        '        self.step("services_state", self.state_report())\n        self.check_refreshable(code)',
+        '        self.host_on()\n        self.step("services_state", self.state_report())\n        self.check_refreshable(code)',
+    ),
+    "refresh does not print the state serial": (
+        '        self.step("services_state", self.state_report())\n        self.check_refreshable(code)',
+        "        self.check_refreshable(code)",
+    ),
+    "refresh redeploys a service that ECS does not have": (
+        '        if absent:\n            raise HostSessionError(\n                f"refresh refused',
+        '        if False:\n            raise HostSessionError(\n                f"refresh refused',
+    ),
+    "refresh accepts code the stack cannot place": (
+        "import TaskCleanup\n\n        if code is not None and CODE_FETCH not in self.names.one_shot:\n            raise",
+        "import TaskCleanup\n\n        if False:\n            raise",
+    ),
+    "refresh drops its code option": ('arguments.command in {"start", "refresh"} and', 'arguments.command == "start" and'),
+    "names carry no state serial": ("state_serial=services_state_serial(SERVICES_DIRECTORY),", "state_serial=None,"),
+    "status raises on an absent service": (
+        "        found, absent = self.lookup_services()\n        services = {",
+        "        found, absent = self.service_states(), []\n        services = {",
+    ),
+    "any describe-services failure counts as an absent service": ('any(item.get("reason") != MISSING for item in described.get("failures", []))', "False"),
     "prints the task ARN": ('self.step(key, f"exit codes {exits}")', 'self.step(key, f"exit codes {exits} {task}")'),
 }
 
@@ -125,6 +157,7 @@ def caught(source: str) -> bool:
         planted = importlib.util.module_from_spec(spec)
         sys.modules[MODULE] = planted
         spec.loader.exec_module(planted)
+    importlib.reload(importlib.import_module("scripts.infrastructure.host_session_refresh_cases"))
     cases = importlib.import_module("scripts.infrastructure.host_session_cases")
     importlib.reload(cases)
     for function in cases.CASES.values():

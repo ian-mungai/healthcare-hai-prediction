@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
-from scripts.infrastructure import host_session_code_cases, host_session_group_signal
+from scripts.infrastructure import host_session_code_cases, host_session_group_signal, host_session_refresh_cases
 from scripts.infrastructure.deployed_revisions_cases import CASES as DEPLOYED_REVISION_CASES
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
 from scripts.infrastructure.host_session_stand_in import (
@@ -932,4 +932,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
 
 
 CASES.update(host_session_code_cases.CASES)
+CASES.update(host_session_refresh_cases.CASES)
 CASES.update(DEPLOYED_REVISION_CASES)

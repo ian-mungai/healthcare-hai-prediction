@@ -1395,14 +1395,15 @@
     },
     {
       "path": "scripts/infrastructure/host_session.py",
-      "line": 657,
+      "line": 746,
       "code_sha256": "ee20a27238cf5e8b14a791933c550d1cdcae10ff3635aef6ab74e5f57407c008",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
+      "file_sha256": "a41f4e84b67bb3970e6b49fc7b3f6c6c59eb9d22712a188e1b2ecf1dc2e61f52",
       "dependencies": {
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
+        "scripts/infrastructure/aws_tasks.py": "sha256:82903e1447cec22a98bddad3017a06775f4bac05741e65af046a32c3ed588072",
         "scripts/infrastructure/render_platform_config.py": "sha256:7cb59a54d3d8fa2694d7fecc3671f98a03fd7ec132f309371c58d6dbb719a90c",
         "scripts/infrastructure/render_project_config.py": "sha256:07163d494396f00ca10a96d4dc15c09c8f5191f765d9af31bc3c1ff11f3b0a39",
         "scripts/process.py": "sha256:58c6ba8f9dc5544f41d7a6dcb065c8814d8c0c0082cbba5fc995462aed8ac6f5"
@@ -1628,7 +1629,7 @@
         "orchestration/ecs_preflight.py": "sha256:3b872f549df1fdb0d26cb8dac70c3a706c1376d3352b9663d3da296602f6cb80",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:77bc32d1e9caf0adf4d3aeb5f0af84ca80a626908aa5b41dd1cdee9e76142f3e",
+        "scripts/infrastructure/host_session.py": "sha256:a41f4e84b67bb3970e6b49fc7b3f6c6c59eb9d22712a188e1b2ecf1dc2e61f52",
         "scripts/infrastructure/render_jobs_config.py": "sha256:1befe23a4834c15827f51d7c8a4f13a88b90ef5c8c1c8f85da77be92bc7b3069",
         "scripts/infrastructure/render_project_config.py": "sha256:07163d494396f00ca10a96d4dc15c09c8f5191f765d9af31bc3c1ff11f3b0a39"
       },
