@@ -534,6 +534,55 @@ def base_run_cases() -> dict[str, bool]:
     }
 
 
+FEATURES_RUN = "20261109T010106Z-0a0a0a06"
+
+
+def drift_attempt_cases() -> dict[str, bool]:
+    """The drift check of a model run cannot launch again once its launch ended, so ``--drift-attempt N`` (2 to 99) starts it as a run of its own: the run
+    ID derives from the model's features run and the attempt, and every refusal comes before the secret is read and before any Airflow call."""
+    from orchestration import training_contract as contract
+
+    class Ends(StandIn):
+        def run(self, dag_id: str, dag_run_id: str) -> dict[str, Any]:
+            record = super().run(dag_id, dag_run_id)
+            self.runs[dag_run_id] = "success"
+            return record
+
+    start = ["--dag", DRIFT, "--mode", "real", "--model", "m6", "--features-run", FEATURES_RUN, "--wait-seconds", "5"]
+    second = contract.model_drift_run_id(FEATURES_RUN, 2)
+    api = Ends()
+    code, printed, _, _ = invoke(api, [*start, "--drift-attempt", "2"])
+    named = Ends()
+    named_code = invoke(named, [*start, "--drift-attempt", "2", "--run-id", second])[0]
+    return {
+        "drift attempt 2 triggers the drift run of that attempt with the conf the features DAG builds and names the attempt": code == 0
+        and printed is not None
+        and printed["run_id"] == second != contract.model_drift_run_id(FEATURES_RUN)
+        and api.confs == [{"run_id": second, "mode": "real", "mlflow": "aws", "model": "m6", "features_run": FEATURES_RUN, "drift_attempt": 2}],
+        "the derived run of attempt 2 may be named": named_code == 0 and named.confs == api.confs,
+        "the drift DAG without an attempt is still refused before any call": refused_quietly(start, "features DAG"),
+        "attempt 1 is the features DAG's run and is refused before any call": refused_quietly([*start, "--drift-attempt", "1"], "features DAG"),
+        "a drift attempt outside 2 to 99 is refused before any call": refused_quietly([*start, "--drift-attempt", "0"], "drift attempt")
+        and refused_quietly([*start, "--drift-attempt", "100"], "drift attempt"),
+        "a drift run ID that is not the attempt's derived run is refused before any call": refused_quietly(
+            [*start, "--drift-attempt", "2", "--run-id", RUN], "derived"
+        )
+        and refused_quietly([*start, "--drift-attempt", "2", "--run-id", contract.model_drift_run_id(FEATURES_RUN)], "derived"),
+        "a drift attempt needs a model of the contract and a features run ID": refused_quietly(
+            ["--dag", DRIFT, "--mode", "real", "--features-run", FEATURES_RUN, "--drift-attempt", "2", "--wait-seconds", "5"], "model"
+        )
+        and refused_quietly(["--dag", DRIFT, "--mode", "real", "--model", "m6", "--drift-attempt", "2", "--wait-seconds", "5"], "features run")
+        and refused_quietly([*start[:7], "latest", *start[8:], "--drift-attempt", "2"], "features run"),
+        "a workflow that is not the drift check refuses a drift attempt before any call": refused_quietly(
+            ["--dag", "training_dag", "--mode", "real", "--model", "m1", "--base-run", BASE, "--drift-attempt", "2", "--wait-seconds", "5"], "drift attempt"
+        ),
+        "a drift attempt is refused with a status, settle or clear action": all(
+            invoke(Ends(), ["--dag", DRIFT, flag, "--run-id", second, "--drift-attempt", "2", "--wait-seconds", "5"])[0] == 2
+            for flag in ("--status", "--settle", "--clear-failed")
+        ),
+    }
+
+
 GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
@@ -543,6 +592,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "trigger": trigger_cases,
     "publisher request": publisher_cases,
     "base run": base_run_cases,
+    "drift attempt": drift_attempt_cases,
 }
 
 

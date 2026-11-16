@@ -17,6 +17,8 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_monitoring_dag --run-id <Airflow run ID> --clear-failed --wait-seconds 600
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_monitoring_dag --mode real --model m6 \\
+        --features-run <run> --drift-attempt 2 --wait-seconds 600
 
 A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features base the
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
@@ -45,7 +47,11 @@ not staged yet) writes no claim, so the run and job launch when the cause is gon
 (``--research-attempt`` for research). The command unpauses the DAG, clears the tasks that failed and the tasks that never ran because of them, and prints the
 run's state and the cleared task IDs. It refuses a run that is absent, queued, running or successful and a failed run with no failed task, and clears nothing
 then. It takes ``--dag drift_monitoring_dag``, which only a features DAG starts, and the Airflow run ID of a run that a DAG started
-(``features_m1_dag__drift__<run ID>``). The trigger refuses to start the drift DAG by hand.
+(``features_m1_dag__drift__<run ID>``). The trigger starts the drift DAG by hand only with ``--drift-attempt N`` (2 to 99): the launch of a drift run is
+terminal once it ended, so the drift check of a model run that failed starts again as a run of its own, with ``--model`` and the model run's ``--features-run``.
+The run ID derives from the features run and the attempt (``model_drift_run_id``), the conf carries the attempt, the run runs the code staged for its own run
+(``lakehouse/run_stage/<run ID>/inputs/code.tar.gz`` and ``code.sha256``) and the training run it may start runs the same code. Attempt 1, the default, is the
+run the features DAG starts and is never started by hand.
 
 The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
@@ -71,6 +77,8 @@ from orchestration.training_contract import (
     HAI_TYPES,
     LAUNCH_LANES,
     MODELS,
+    drift_attempt_of,
+    model_drift_run_id,
     model_features_run_id,
     parameters_for,
     research_attempt_of,
@@ -275,6 +283,30 @@ def wait_for_end(api: AirflowApi, dag: str, run_id: str, deadline: float, wait_s
         time.sleep(max(min(POLL_SECONDS, deadline - time.monotonic()), 0.0))
 
 
+def drift_attempt_conf(args: argparse.Namespace) -> dict[str, Any]:
+    """The conf of a later attempt's drift run: the features DAG's conf for attempt 1 plus the attempt. Every refusal comes before the secret is read."""
+    try:
+        attempt = drift_attempt_of(args.drift_attempt)
+    except ValueError as error:
+        raise TriggerError(f"refused: --drift-attempt: {error}") from None
+    if args.model not in MODELS:
+        raise TriggerError(f"refused: a drift attempt needs --model, one of {', '.join(MODELS)}")
+    if args.features_run is None or not RUN_ID.fullmatch(args.features_run):
+        raise TriggerError("refused: a drift attempt needs --features-run, the features run ID of the model's set (not latest)")
+    if args.mlflow != "aws":
+        raise TriggerError("refused: the drift check runs on AWS, so --mlflow aws is the only lane")
+    given = {"--base-run": args.base_run, "--research-attempt": args.research_attempt, "--silver-snapshot-run": args.silver_snapshot_run}
+    given |= {"--gold-snapshot-run": args.gold_snapshot_run, "--run-kind": args.run_kind, "--capture-root": args.capture_root}
+    given |= {"--hai-type": args.hai_type, "--model-version": args.model_version, "--deploy-mode": args.deploy_mode, "--research-run": args.research_run}
+    extra = sorted(name for name, value in given.items() if value is not None)
+    if extra:
+        raise TriggerError(f"refused: {DRIFT_DAG} takes only --model, --features-run, --drift-attempt and --run-id, not {', '.join(extra)}")
+    derived = model_drift_run_id(args.features_run, attempt)
+    if args.run_id is not None and args.run_id != derived:
+        raise TriggerError(f"refused: the run of drift attempt {attempt} on {args.features_run} is {derived}, the derived run; --run-id may name only that run")
+    return {"run_id": derived, "mode": args.mode, "mlflow": "aws", "model": args.model, "features_run": args.features_run, "drift_attempt": attempt}
+
+
 def trigger(dag: str, conf: dict[str, Any], deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
     """Unpause the workflow, start the run, wait until it ends or the deadline passes, and return its end state and task states."""
     started = time.monotonic()
@@ -364,18 +396,24 @@ def main(argv: list[str] | None = None) -> int:
         "--base-run", help="training_dag and research_dag: the features_base_dag run whose model set is trained or researched; derives the run IDs"
     )
     cli.add_argument(
-        "--features-run", help="training_dag only: the features run to fit on (latest, the default, or a run ID; with --base-run only the model set's run)"
+        "--features-run",
+        help="training_dag: the features run to fit on (latest, the default, or a run ID; with --base-run only the model set's run); a drift attempt: the run",
     )
     cli.add_argument(
         "--research-attempt",
         type=int,
         help="research_dag only, with --base-run: the attempt (2 to 99) of the research of the base, after research that failed; 1, the default, is the first",
     )
+    cli.add_argument(
+        "--drift-attempt",
+        type=int,
+        help="drift_monitoring_dag only, with --model and --features-run: the attempt (2 to 99) of the drift check of a model run, after a check that failed",
+    )
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
     cli.add_argument("--mlflow", choices=("local", "aws"), default="aws")
-    cli.add_argument("--model", choices=MODELS, help="the model a training run fits (required for training_dag)")
+    cli.add_argument("--model", choices=MODELS, help="the model a training run fits (required for training_dag) or a drift attempt checks")
     cli.add_argument("--hai-type", choices=HAI_TYPES)
     cli.add_argument("--model-version")
     cli.add_argument("--promotion-mode", choices=("promote", "rollback"), default="promote")
@@ -388,15 +426,24 @@ def main(argv: list[str] | None = None) -> int:
     action.add_argument("--clear-failed", action="store_true", help="run the failed tasks of the failed run --run-id again in the same run")
     args = cli.parse_args(argv)
     inspecting = "status" if args.status else "settle" if args.settle else "clear" if args.clear_failed else None
-    if inspecting and (args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None):
-        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind and no --capture-root")
+    if inspecting and (
+        args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None or args.drift_attempt is not None
+    ):
+        cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind, no --capture-root and no --drift-attempt")
     if not inspecting and args.mode is None:
         cli.error("a trigger needs --mode")
     try:
         if not 0 < args.wait_seconds <= MAX_WAIT_SECONDS:
             raise TriggerError(f"refused: --wait-seconds must be above 0 and at most {MAX_WAIT_SECONDS}")
         deadline = time.monotonic() + args.wait_seconds
-        if not inspecting and args.dag not in DAGS:
+        if args.drift_attempt is not None and args.dag != DRIFT_DAG:
+            raise TriggerError(f"refused: {args.dag} takes no drift attempt, only {DRIFT_DAG} does")
+        if not inspecting and args.dag == DRIFT_DAG and args.drift_attempt in (None, 1):
+            raise TriggerError(
+                f"refused: {args.dag} is started by the features DAG of its model (attempt 1), not by hand; --drift-attempt 2 to 99 starts a later attempt, "
+                "and --status, --settle and --clear-failed take any run"
+            )
+        if not inspecting and args.dag not in (*DAGS, DRIFT_DAG):
             raise TriggerError(f"refused: {args.dag} is started by the features DAG of its model, not by hand; --status, --settle and --clear-failed take it")
         if inspecting:
             if not AIRFLOW_RUN_ID.fullmatch(args.run_id):
@@ -408,6 +455,11 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.dag != SERVING_DAG and (args.deploy_mode is not None or args.research_run is not None):
             raise TriggerError(f"refused: {args.dag} takes no deploy mode and no research run, only {SERVING_DAG} does")
+        if args.dag == DRIFT_DAG:
+            conf = drift_attempt_conf(args)
+            result = trigger(args.dag, conf, deadline, args.wait_seconds, AirflowApi(api_port(), read_token_secret(deadline), deadline=deadline))
+            sys.stdout.write(json.dumps(result) + "\n")
+            return 0 if result["state"] == "success" else 1
         if args.dag != "training_dag" and args.features_run is not None:
             raise TriggerError(f"refused: {args.dag} takes no features run, only training_dag does")
         run_id, features_run, extra = base_run_plan(args.dag, args.base_run, args.model, args.run_id, args.features_run, args.research_attempt)

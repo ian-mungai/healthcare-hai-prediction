@@ -25,7 +25,7 @@ from airflow.sdk import Asset, TriggerRule, get_current_context, task
 
 from orchestration.ingestion_schedule import RETRY_KIND, resolve_kind, resolve_retry, resolve_run_id, retry_run_id
 from orchestration.interface import SubmissionRequest
-from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, parameters_for, serving_parameters_for
+from orchestration.training_contract import DAGS, FEATURE_DAGS, LAUNCH_LANES, drift_attempt_of, parameters_for, serving_parameters_for
 
 LOG = logging.getLogger(__name__)
 RESEARCH_DAG = "research_dag"
@@ -140,6 +140,8 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
         training = parameters_for(instance.dag_id, raw, LAUNCH_LANES)  # every step runs on AWS: mlflow=local is refused by name
     elif instance.dag_id == DRIFT_DAG:
         training = {"model": params["model"]}  # the model whose set the drift job checks; the preflight refuses a model outside the contract
+        if params.get("drift_attempt", 1) != 1:  # attempt 1 is the default and is never sent, so the first drift run keeps its parameters
+            training["drift_attempt"] = drift_attempt_of(params["drift_attempt"])
     publisher = None
     if template == PUBLISHER_TEMPLATE and instance.dag_id == RETRY_DAG:
         original, day = resolve_retry(str(params["original_run"]), int(params["day"]), context)

@@ -21,9 +21,25 @@ def model_training_run_id(drift_run: str, model: str) -> str:
     return f"{drift_run[:16]}-{hashlib.sha256(f'training:{model}:{drift_run}'.encode()).hexdigest()[:8]}"
 
 
-def model_drift_run_id(features_run: str) -> str:
-    """The run ID of the drift check of one model set's run: the same for a retry of that run. The chain gate binds it to the bronze run's staged code."""
-    return f"{features_run[:16]}-{hashlib.sha256(f'drift:{features_run}'.encode()).hexdigest()[:8]}"
+MAX_DRIFT_ATTEMPT = 99
+
+
+def drift_attempt_of(attempt: Any) -> int:
+    """The drift attempt, a whole number from 1 to ``MAX_DRIFT_ATTEMPT``; anything else raises ``ValueError`` that names the drift attempt."""
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 1 <= attempt <= MAX_DRIFT_ATTEMPT:
+        raise ValueError(f"the drift attempt must be a whole number from 1 to {MAX_DRIFT_ATTEMPT}")
+    return attempt
+
+
+def model_drift_run_id(features_run: str, attempt: int = 1) -> str:
+    """The run ID of the drift check of one model set's run: the same for a retry of that run. The chain gate binds it to the bronze run's staged code.
+
+    The launch of a run is terminal once it ended, so a drift check that failed needs a run of its own. Attempt 1 is the run every model run has; the attempt
+    number of another run is the owner's explicit choice (``trigger_dag --drift-attempt``), and each attempt derives its own ID and so its own training run.
+    """
+    attempt = drift_attempt_of(attempt)
+    seed = f"drift:{features_run}" if attempt == 1 else f"drift:{attempt}:{features_run}"
+    return f"{features_run[:16]}-{hashlib.sha256(seed.encode()).hexdigest()[:8]}"
 
 
 def model_features_run_id(base_run: str, model: str) -> str:

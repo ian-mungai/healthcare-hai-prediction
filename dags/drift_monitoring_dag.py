@@ -9,7 +9,8 @@ records. It builds at most one request for ``training_dag``: the model's own tra
 changed or it has no Production model for the type), the primary population, the model's run as ``features_run`` and
 ``trigger=drift:<this run>``. A type the gate skips is logged with its reason. The trigger is mapped over that list, so a model that does not train starts
 nothing. The training run id and the trigger run id come from the drift run id and the model, so a retry never starts a second training run. Promotion of
-a retrained model is automatic through the promotion rule and the canary."""
+a retrained model is automatic through the promotion rule and the canary. A run whose check failed does not start again: its launch is terminal, so
+``trigger_dag --drift-attempt`` starts the same model run's check as a run of its own that runs the code staged for it."""
 
 from __future__ import annotations
 
@@ -135,6 +136,9 @@ with DAG(
         "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
         # The run of the model's published set: the drift job reads that set (its features job must have passed) and the training run it starts fits on it.
         "features_run": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
+        # The attempt of this model run's drift check: 1 is the run every model run has. The launch of a run is terminal once it ended, so a check that
+        # failed starts again as attempt 2 or later, with the run ID that the attempt derives (training_contract.model_drift_run_id) and its own training run.
+        "drift_attempt": Param(1, type="integer", minimum=1, maximum=99),
     },
     default_args={"retries": 0},
 ) as dag:

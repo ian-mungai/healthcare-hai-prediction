@@ -37,6 +37,7 @@ from orchestration.training_contract import (
     MODELS,
     PROMOTION_MODELS,
     chain_parameters_for,
+    drift_attempt_of,
     model_drift_run_id,
     model_features_run_id,
     model_training_run_id,
@@ -122,14 +123,30 @@ def feature_set_of(dag_id: str) -> str:
         raise LaunchRefused(f"the DAG {dag_id} names no feature set for the features job") from None
 
 
+def drift_attempt(request: SubmissionRequest) -> int:
+    """The attempt of a drift check: 1 when the request names none. Attempt 1 is never spelled out, so a run has one spelling."""
+    training = request.training or {}
+    try:
+        attempt = drift_attempt_of(training.get("drift_attempt", 1))
+    except ValueError as error:
+        raise LaunchRefused(str(error)) from None
+    if "drift_attempt" in training and attempt == 1:
+        raise LaunchRefused("drift_attempt is left out for attempt 1 or names a later attempt")
+    return attempt
+
+
 def drift_model(request: SubmissionRequest) -> str:
     """The model whose set a drift check reads, after the gates that bind the check: a model of the contract, and a drift run that derives from the model run
-    it checks (the run the chain gate bound to the bronze code), so that no other run is checked under that name."""
+    it checks and the attempt it names (the first attempt's run is the one the chain gate bound to the bronze code), so that no other run is checked under that
+    name."""
     model = (request.training or {}).get("model")
     if model not in MODELS:
         raise LaunchRefused(f"the drift check names {model!r}, which is not one of {', '.join(MODELS)}")
-    if request.input_run_id is None or request.run_id != model_drift_run_id(request.input_run_id):
-        raise LaunchRefused(f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks")
+    attempt = drift_attempt(request)
+    if request.input_run_id is None or request.run_id != model_drift_run_id(request.input_run_id, attempt):
+        raise LaunchRefused(
+            f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks and the drift attempt {attempt}"
+        )
     return str(model)
 
 
@@ -635,19 +652,23 @@ class Preflight:
                     parameters_for(request.dag_id, request.training or {}, LAUNCH_LANES)
             except ValueError as error:
                 raise LaunchRefused(str(error)) from None
-        if request.dag_id == DRIFT_DAG:
-            drift_model(request)
+        model = drift_model(request) if request.dag_id == DRIFT_DAG else None
         research_code = None
         if request.template == "research" and request.dag_id == "research_dag":
             research_code, bind = self.research_code_run(request)
         else:
             bind = False
+        later_drift = request.dag_id == DRIFT_DAG and drift_attempt(request) > 1
+        if later_drift:
+            research_code = self.drift_code_run(request)
         if research_code is None and row.get("needs_publisher_run_request"):
             research_code, bind = self.publisher_code_run(request)
         spec = self.spec(request, job, research_code)
         revision, job_memory = self.checked_revision(job, cap)
         if research_code is not None and bind:  # the only write of a job step, after every refusal
             self.code_runs.bind(request.run_id, research_code)
+        if later_drift and research_code is not None:  # the training run this attempt may start runs the code this attempt runs
+            self.code_runs.bind(model_training_run_id(request.run_id, str(model)), research_code)
         # ECS places the task by the revision's task memory, so the launcher's fit check asks for exactly that: the host job cap for a family without
         # reserve, its own memory for a family that reserves its own size. The fit probe gives no more than the host job cap.
         need = replace(spec.need, memory_mib=job_memory)
@@ -681,6 +702,24 @@ class Preflight:
         except TaskRefused as error:
             raise LaunchRefused(str(error)) from None
         return code_run, False
+
+    def drift_code_run(self, request: SubmissionRequest) -> str:
+        """The code run of a later drift attempt. The first attempt's run is bound to the bronze run's code by the chain gate. A later attempt exists to run
+        fixed code, so it runs the code staged for its own run (or the run its owner bound it to), never the bronze run's: the run's own ``code.sha256``
+        must be staged, or the launch is refused by name. The attempt is not bound: it resolves to its own staged code, which is written once."""
+        code_run = self.code_runs.resolve(request.run_id)
+        try:
+            self.code_digest(code_run)
+        except TaskUnavailable as error:
+            if str(error) != "code_digest_not_staged":
+                raise InputNotReady(str(error)) from None
+            raise LaunchRefused(
+                f"drift attempt {drift_attempt(request)} of run {request.run_id} runs fixed code, so it needs its own staged code: "
+                f"lakehouse/run_stage/{code_run}/inputs/code.sha256 is not staged. It does not use the code of the bronze run"
+            ) from None
+        except TaskRefused as error:
+            raise LaunchRefused(str(error)) from None
+        return code_run
 
     def publisher_code_run(self, request: SubmissionRequest) -> tuple[str | None, bool]:
         """The code run of a publisher run and whether the run still needs binding to it.

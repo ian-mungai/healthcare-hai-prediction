@@ -2223,6 +2223,108 @@ def drift_job_needs_its_model_run_to_pass() -> None:
     require(rig.tasks_started() == started, "a refused drift run started a task")
 
 
+def drift_attempt_ids_and_form() -> None:
+    """The drift run ID of attempt 1 is the ID every model run has, the ID of a later attempt derives from the attempt too, and an attempt the contract refuses
+    raises by name. The form takes the attempt as an integer from 1 to 99 that defaults to 1."""
+    contract = importlib.import_module("orchestration.training_contract")
+    features = model_run(base_run_passed(Rig())[1], "m2")
+    unchanged = f"{features[:16]}-{hashlib.sha256(f'drift:{features}'.encode()).hexdigest()[:8]}"
+    require(contract.model_drift_run_id(features) == unchanged == contract.model_drift_run_id(features, 1), "attempt 1 changed the drift run ID")
+    later = {attempt: contract.model_drift_run_id(features, attempt) for attempt in (2, 3, 99)}
+    require(len({unchanged, *later.values()}) == 4 and all(run.startswith(features[:16]) for run in later.values()), f"the attempts share a run: {later}")
+    require(contract.model_drift_run_id(features, 2) == later[2], "an attempt derives another run for every call")
+    for bad in (0, 100, -1, True, "2", None, 2.0):
+        try:
+            contract.model_drift_run_id(features, bad)
+        except ValueError as error:
+            require("drift attempt" in str(error), f"{bad!r} was refused for another cause: {error}")
+        else:
+            raise AssertionError(f"the drift attempt {bad!r} was accepted")
+    declared = form_parameter("drift_monitoring_dag.py", "drift_attempt")
+    arguments, settings = declared or ([], {})
+    require(
+        declared is not None and arguments == [1] and settings == {"type": "integer", "minimum": 1, "maximum": 99},
+        f"the form does not take the attempt as 1 to 99, default 1: {declared}",
+    )
+
+
+def drift_attempt_runs_the_code_staged_for_its_own_run() -> None:
+    """The first drift run is bound to the bronze code by the chain gate. A later attempt exists to run fixed code, so it runs the code staged for its own
+    run and binds the training run it may start to the same code. Attempt 1 and its training run stay as they were."""
+    contract = importlib.import_module("orchestration.training_contract")
+    rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
+    second = contract.model_drift_run_id(run, 2)
+    rig.stage_runs(second)
+    params = {"run_id": second, "mode": "real", "mlflow": "aws", "model": "m2", "features_run": run, "drift_attempt": 2}
+    first_training = RUN_KEY.format(run=training_run_of(drift_run_of(run), "m2"), name="code_run.json")
+    started = rig.tasks_started()
+    with world(rig, "drift_monitoring_dag", params) as current:
+        require(current.step("drift_run") == "succeeded", "the drift job of attempt 2 did not pass")
+    values = rig.environment(started)
+    require(values["fetch"]["CODE_RUN_ID"] == second, f"attempt 2 ran the code of {values['fetch']['CODE_RUN_ID']}, not its own staged code")
+    require(values["baseline"]["FEATURE_SET"] == "m2" and values["current"]["INPUT_RUN_ID"] == run, f"attempt 2 checks another set: {values}")
+    bound = json.loads(rig.stage.objects[RUN_KEY.format(run=training_run_of(second, "m2"), name="code_run.json")])
+    require(bound == {"code_run": second}, f"the training run of attempt 2 is bound to {bound}, not to the code of its drift run")
+    require(RUN_KEY.format(run=second, name="code_run.json") not in rig.stage.objects, "attempt 2 was bound to another run's code")
+    require(json.loads(rig.stage.objects[first_training]) == {"code_run": BRONZE_RUN}, "the training run of attempt 1 was rebound")
+    training = {**TRAIN_PARAMS, "run_id": training_run_of(second, "m2"), "features_run": run, "trigger": f"drift:{second}", "model": "m2"}
+    started = rig.tasks_started()
+    with world(rig, "training_dag", training) as current:
+        require(current.step("guard") == "succeeded", "the training run of attempt 2 did not launch")
+    require(rig.environment(started)["fetch"]["CODE_RUN_ID"] == second, "the training run of attempt 2 did not run the code staged for its drift run")
+    first = Rig()
+    _, run = model_chain_passed(first, "m2")
+    started = first.tasks_started()
+    with world(first, "drift_monitoring_dag", {**params, "run_id": drift_run_of(run), "features_run": run, "drift_attempt": 1}) as current:
+        require(current.step("drift_run") == "succeeded", "the drift job of attempt 1 did not pass")
+    require(first.environment(started)["fetch"]["CODE_RUN_ID"] == BRONZE_RUN, "attempt 1 did not run the bronze run's code")
+
+
+def drift_attempt_without_staged_code_is_refused_by_name() -> None:
+    """A later attempt with nothing staged for its own run is refused naming the run and the missing object, even with the bronze code staged: it never falls
+    back to that code. The refusal comes before any binding, launch record or task."""
+    contract = importlib.import_module("orchestration.training_contract")
+    rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
+    second = contract.model_drift_run_id(run, 2)
+    params = {"run_id": second, "mode": "real", "mlflow": "aws", "model": "m2", "features_run": run, "drift_attempt": 2}
+    puts, started, records = len(rig.stage.puts), rig.tasks_started(), len(rig.records.calls)
+    with world(rig, "drift_monitoring_dag", params) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require(second in str(error) and "code.sha256" in str(error) and "attempt 2" in str(error), f"the refusal does not name the run and the object: {error}")
+    written = [call for call in rig.records.calls[records:] if call[0] != "get_object"]
+    after = (len(rig.stage.puts), rig.tasks_started())
+    require(after == (puts, started) and not written, f"a refused attempt wrote or launched: puts and tasks {after}, record writes {written}")
+
+
+def drift_attempt_and_run_must_agree() -> None:
+    """The drift run derives from the features run and the attempt the request names: the first attempt's ID with attempt 2 and a later attempt's ID with no
+    attempt are both refused, attempt 1 is never spelled out, and an attempt outside 1 to 99 is refused before any launch."""
+    contract = importlib.import_module("orchestration.training_contract")
+    rig = Rig()
+    _, run = model_chain_passed(rig, "m2")
+    second = contract.model_drift_run_id(run, 2)
+    rig.stage_runs(second)
+    base = {"mode": "real", "mlflow": "aws", "model": "m2", "features_run": run}
+    started = rig.tasks_started()
+    for given, attempt in ((drift_run_of(run), 2), (second, None)):
+        extra = {} if attempt is None else {"drift_attempt": attempt}
+        with world(rig, "drift_monitoring_dag", {**base, "run_id": given, **extra}) as current:
+            error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+        require("derive" in str(error), f"run {given} with attempt {attempt} was not refused as not derived: {error}")
+    request = SubmissionRequest(
+        "drift_run", drift_run_of(run), "real", 1, "drift_monitoring_dag", "drift_run", "manual__test", run, training={"model": "m2", "drift_attempt": 1}
+    )
+    error = refuses(LaunchRefused, partial(rig.preflight.prepare, request))
+    require("drift_attempt" in str(error), f"the preflight took the attempt 1 spelled out: {error}")
+    for attempt in (0, 100):
+        with world(rig, "drift_monitoring_dag", {**base, "run_id": second, "drift_attempt": attempt}) as current:
+            error = refuses(ValueError, lambda: current.step("drift_run"))
+        require("drift attempt" in str(error), f"attempt {attempt} was refused for another cause: {error}")
+    require(rig.tasks_started() == started, "a refused drift run started a task")
+
+
 def training_run_fits_its_model_only() -> None:
     """A drift-started training run names one model and that model's own run: m5 trains with m5's set and m6 with m6's, each bound to the bronze code,
     so the run fits only that model and its own tests (the research tests of m5 and m6)."""
@@ -3066,6 +3168,10 @@ CASES: dict[str, Callable[[], None]] = {
     "drift_dag_takes_its_model_and_features_run": drift_dag_takes_its_model_and_features_run,
     "drift_job_takes_its_model_and_features_run": drift_job_takes_its_model_and_features_run,
     "drift_job_needs_its_model_run_to_pass": drift_job_needs_its_model_run_to_pass,
+    "drift_attempt_ids_and_form": drift_attempt_ids_and_form,
+    "drift_attempt_runs_the_code_staged_for_its_own_run": drift_attempt_runs_the_code_staged_for_its_own_run,
+    "drift_attempt_without_staged_code_is_refused_by_name": drift_attempt_without_staged_code_is_refused_by_name,
+    "drift_attempt_and_run_must_agree": drift_attempt_and_run_must_agree,
     "training_run_fits_its_model_only": training_run_fits_its_model_only,
     "bronze_chain_has_no_model_less_drift_layer": bronze_chain_has_no_model_less_drift_layer,
     "graph_rules_cover_the_model_drift_trigger": graph_rules_cover_the_model_drift_trigger,
