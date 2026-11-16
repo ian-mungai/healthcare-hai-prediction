@@ -5,6 +5,18 @@ variable "openmetadata_persistent_prepared" {
   nullable    = false
 }
 
+variable "airflow_lineage_prepared" {
+  description = "Prepare the lineage bot token grant for the Airflow scheduler: the shared task execution role may inject exactly the lineage bot token parameter (openmetadata_bot_token_names[\"lineage\"]) as OPENLINEAGE__TRANSPORT__AUTH__API_KEY. Off by default. Needs openmetadata_persistent_prepared. The services input airflow_lineage_http_enabled needs this grant first."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.airflow_lineage_prepared || var.openmetadata_persistent_prepared
+    error_message = "airflow_lineage_prepared needs openmetadata_persistent_prepared, because the lineage bot token parameter belongs to the persistent catalog."
+  }
+}
+
 variable "openmetadata_db_password_name" {
   description = "Parameter Store SecureString name of the password of the OpenMetadata database role. The host execution role may inject exactly this parameter. The owner sets the value outside Terraform."
   type        = string
@@ -86,6 +98,24 @@ resource "aws_iam_role_policy" "task_execution_openmetadata" {
         "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_admin_password_name}",
         "arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.openmetadata_db_password_name}",
       ]
+    }]
+  })
+}
+
+# The Airflow scheduler gets the lineage bot token through the shared task execution role. The password grant above stays byte equal. The parameter is a
+# SecureString under the AWS-managed key aws/ssm, so the role holds no KMS permission (roles.tf).
+resource "aws_iam_role_policy" "task_execution_airflow_lineage" {
+  count = var.airflow_lineage_prepared ? 1 : 0
+
+  name = "task_execution_airflow_lineage"
+  role = aws_iam_role.task_execution.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InjectLineageBotToken"
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = [local.openmetadata_parameter_arn["lineage"]]
     }]
   })
 }

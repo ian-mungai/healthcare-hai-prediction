@@ -43,6 +43,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "openmetadata_prepared",
     "openmetadata_marquez_reachable",
     "openmetadata_persistent_prepared",
+    "airflow_lineage_prepared",
     "serve_prepared",
     "host_code_fetch_prepared",
 )

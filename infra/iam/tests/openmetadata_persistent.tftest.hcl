@@ -205,3 +205,89 @@ run "job_execution_grant_is_absent_by_default" {
     error_message = "With the flag off the job execution role gains no catalog token grant."
   }
 }
+
+# The Airflow scheduler injects the lineage bot token for the HTTP lineage transport through the shared task execution role.
+run "airflow_lineage_flag_off_adds_no_grant_and_keeps_the_password_grant" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+  }
+
+  assert {
+    condition     = !var.airflow_lineage_prepared && length(aws_iam_role_policy.task_execution_airflow_lineage) == 0
+    error_message = "With airflow_lineage_prepared false the execution role gains no lineage token grant."
+  }
+
+  assert {
+    condition = (
+      length(jsondecode(aws_iam_role_policy.task_execution_openmetadata[0].policy).Statement) == 1
+      && !strcontains(aws_iam_role_policy.task_execution_openmetadata[0].policy, "openmetadata_bot")
+    )
+    error_message = "The password grant of the execution role stays as it was and holds no bot token."
+  }
+}
+
+run "airflow_lineage_flag_on_injects_exactly_the_lineage_token" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+    airflow_lineage_prepared         = true
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.task_execution_airflow_lineage[0].name == "task_execution_airflow_lineage"
+      && jsondecode(aws_iam_role_policy.task_execution_airflow_lineage[0].policy) == {
+        Version = "2012-10-17"
+        Statement = [{
+          Sid      = "InjectLineageBotToken"
+          Effect   = "Allow"
+          Action   = "ssm:GetParameters"
+          Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_lineage"]
+        }]
+      }
+    )
+    error_message = "The execution role may inject exactly the lineage bot token: one allow statement, ssm:GetParameters, one parameter ARN and no KMS or wildcard."
+  }
+
+  assert {
+    condition = (
+      toset(flatten([for statement in jsondecode(aws_iam_role_policy.task_execution_openmetadata[0].policy).Statement : flatten([statement.Resource])])) == toset([
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_admin_password",
+        "arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_db_password",
+      ])
+    )
+    error_message = "The existing password grant stays byte equal when the lineage flag is on."
+  }
+}
+
+run "airflow_lineage_flag_follows_a_renamed_token_parameter" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+    airflow_lineage_prepared         = true
+    openmetadata_bot_token_names = {
+      lineage    = "/example_project/renamed_lineage"
+      ingestion  = "/example_project/openmetadata_bot_ingestion"
+      comparison = "/example_project/openmetadata_bot_comparison"
+    }
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.task_execution_airflow_lineage[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/renamed_lineage"]
+    error_message = "The grant names the configured lineage parameter."
+  }
+}
+
+run "airflow_lineage_flag_without_the_persistent_catalog_is_refused" {
+  command = plan
+
+  variables {
+    airflow_lineage_prepared = true
+  }
+
+  expect_failures = [var.airflow_lineage_prepared]
+}
