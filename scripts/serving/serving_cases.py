@@ -181,6 +181,7 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
                 deployment_id=RUN_1,
             )
         read_features = options.pop("wrap", lambda inner: inner)(online_cases.reader(server))
+        read_marker = options.pop("wrap_marker", lambda inner: inner)(online_cases.markers(server))
         counted: list[str] = []
 
         def reading(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
@@ -190,7 +191,7 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
         api = service.ModelService(
             keys=keys.KeyRing.from_hashes({"ops": keys.hash_key(KEY_A), "other": keys.hash_key(KEY_B)}),
             limiter=options.pop("limiter", None) or limiter.RateLimiter(rate_per_minute=rate, burst=burst, clock=clock),
-            read_marker=online_cases.markers(server),
+            read_marker=read_marker,
             read_features=reading,
             manifests=store,
             loader=loader,
@@ -1791,6 +1792,77 @@ def with_view(reference: str, value: Any, stamp: Any) -> Callable[[Callable[...,
     return wrap
 
 
+def case_feature_refusals_are_logged(c: Checker) -> None:
+    """A 503 features_unavailable logs one fixed reason code, so the cause is visible. The log never holds a hospital, a key, a value or an error message."""
+    dropped = online_cases.REFERENCES[1].replace(":", "__", 1)
+
+    def stale(inner: Any) -> Any:
+        def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+            answer = dict(inner(references, key))
+            answer.pop(dropped, None)
+            return answer
+
+        return read
+
+    def failing(inner: Any) -> Any:
+        def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+            raise RuntimeError("synthetic feature store failure with secret-detail")
+
+        return read
+
+    def moving(inner: Any) -> Any:
+        reads = []
+
+        def read() -> Mapping[str, str]:
+            reads.append(1)
+            marker = dict(inner())
+            return marker if len(reads) == 1 else marker | {"load_id": "another-load"}
+
+        return read
+
+    def unreachable(inner: Any) -> Any:
+        def read() -> Mapping[str, str]:
+            raise online.OnlineError("Redis failed at marker read (ConnectionError)")
+
+        return read
+
+    def refusal(label: str, expected: str, prepare: Callable[[World], None] | None = None, **options: Any) -> str:
+        with world(**options) as w:
+            if prepare is not None:
+                prepare(w)
+            with captured_logs() as stream:
+                reply = ask(w)
+            logged = stream.getvalue()
+            c.check(f"{label} answers 503 features_unavailable", reply.status == 503 and reply.body.get("error") == "features_unavailable")
+            c.check(f"{label} logs reason={expected} once", logged.count(f"reason={expected}") == 1)
+            c.check(f"{label} logs the request id", reply.body.get("request_id", "-") in logged)
+            c.check(f"{label} logs no hospital, key or value", "AAA001" not in logged and KEY_A not in logged and "secret-detail" not in logged)
+            return logged
+
+    refusal("a restarted store with no marker", "marker_absent", lambda w: w.server.restart())
+    refusal("a store that is loading", "marker_loading", lambda w: w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"state": "loading"}))
+    refusal(
+        "a store with another feature schema",
+        "schema_hash_mismatch",
+        lambda w: w.server.write_hash(online.CONTROL_DB, online.MARKER_KEY, {"feature_schema_sha256": online_cases.OTHER_HASH}),
+    )
+    refusal("an answer without a requested feature", "features_missing", wrap=stale)
+    refusal("an absent view row", "view_row_absent", wrap=with_view(online_cases.REFERENCES[1], None, 0))
+    logged = refusal("a feature read that raises", "feature_read_failed", wrap=failing)
+    c.check("a failed feature read logs the error type", "cause=RuntimeError" in logged)
+    with world() as w:
+        with captured_logs() as stream:
+            reply = ask(w, "ZZZ999:2022")
+        c.check("a hospital-window the store does not hold answers 404", reply.status == 404)
+        c.check("and logs no features refusal", "reason=" not in stream.getvalue())
+        with captured_logs() as stream:
+            ok = ask(w)
+        c.check("an answered request logs no features refusal", ok.status == 200 and "reason=" not in stream.getvalue())
+    logged = refusal("an unreachable marker store", "marker_read_failed", wrap_marker=unreachable)
+    c.check("a failed marker read logs the step and its error type", "ConnectionError" in logged)
+    refusal("a marker that changed during the read", "marker_changed", wrap_marker=moving)
+
+
 def case_absent_row(c: Checker) -> None:
     """A view row that is absent gives 503 and no prediction. A value published as null still reaches the model."""
     view_reference = online_cases.REFERENCES[1]
@@ -2729,6 +2801,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "validation_and_unknown_hospital": (case_validation_and_unknown_hospital, "api"),
     "missing_feature_503": (case_missing_feature, "feast"),
     "absent_row": (case_absent_row, "feast"),
+    "feature_refusals_are_logged": (case_feature_refusals_are_logged, "feast monitoring"),
     "admit_before_body": (case_admit_before_body, "api"),
     "key_tool": (case_key_tool, "api key"),
     "split_deterministic": (case_split, "canary"),

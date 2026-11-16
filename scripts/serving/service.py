@@ -77,6 +77,11 @@ class Active:
     candidate: Slot | None
 
 
+def describe(error: contract.ServingError) -> str:
+    """The cause of a refusal for a log line: ``" cause=<error type or Redis step>"`` when a store call failed, otherwise nothing."""
+    return "" if error.cause is None else f" cause={error.cause}"
+
+
 def refusal(status: int, error: str, **extra: Any) -> Reply:
     return Reply(status, {"error": error, **extra})
 
@@ -275,7 +280,8 @@ class ModelService:
                 answered = self._answer(slot, ccn, window_year)
         except contract.NotFound:
             return refusal(404, "hospital_window_not_found", request_id=rid), None
-        except contract.ServingError:
+        except contract.ServingError as error:
+            LOG.warning("request %s: features unavailable for %s (reason=%s%s)", rid, hai_type, error.reason, describe(error))
             return refusal(503, "features_unavailable", request_id=rid), None
         if answered is None:
             return refusal(503, "model_unavailable", request_id=rid), None
@@ -344,7 +350,8 @@ class ModelService:
     def _failed(self, slot: Slot, error: Exception) -> None:
         with self._lock:
             slot.failures += 1
-            LOG.warning("model version %s failed a prediction (%s), %d in a row", slot.version, type(error).__name__, slot.failures)
+            kind = f"{type(error).__name__}, {error.reason}" if isinstance(error, contract.ServingError) else type(error).__name__
+            LOG.warning("model version %s failed a prediction (%s), %d in a row", slot.version, kind, slot.failures)
             if slot.failures >= self._failure_limit and not self._is_stable(slot):
                 slot.state = "ejected"
 

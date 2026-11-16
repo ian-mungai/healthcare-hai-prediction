@@ -34,9 +34,20 @@ TIMESTAMP_POSTFIX = "__ts"  # Feast's OnlineResponse.to_dict(include_event_times
 
 
 class ServingError(Exception):
-    """A request the contract refuses; ``status`` is the HTTP status the API answers with."""
+    """A request the contract refuses; ``status`` is the HTTP status the API answers with.
+
+    ``reason`` is a fixed code from this module (one per refusal site) that the API logs, so a 503 names its cause. ``cause`` is set only when a store call
+    failed: the error type, or for a Redis step the step and error type of its own message, which never holds the password or a value.
+    """
 
     status = 0
+    reason = "serving_error"
+
+    def __init__(self, message: str = "", *, reason: str | None = None, cause: str | None = None) -> None:
+        super().__init__(message)
+        if reason is not None:
+            self.reason = reason
+        self.cause = cause
 
 
 class Unavailable(ServingError):
@@ -95,38 +106,49 @@ def feast_name(reference: str) -> str:
 
 def checked_marker(raw: Mapping[str, str], schema_hash: str | None = None) -> Mapping[str, str]:
     """The marker, or Unavailable when it is not ``ready`` (or the schema hash differs)."""
-    if raw.get("state") != "ready":
-        raise Unavailable("the online store is not ready")
+    state = raw.get("state")
+    if state != "ready":
+        reason = {None: "marker_absent", "loading": "marker_loading"}.get(state, "marker_not_ready")
+        raise Unavailable("the online store is not ready", reason=reason)
     if schema_hash is not None and raw.get("feature_schema_sha256") != schema_hash:
-        raise ModelMismatch("the online store holds another feature schema than the model")
+        raise ModelMismatch("the online store holds another feature schema than the model", reason="schema_hash_mismatch")
     return raw
+
+
+def store_failure(step: str, error: Exception) -> Unavailable:
+    """The refusal for a failed store call: ``<step>_failed`` and the error type (a Redis step already names its own step and type)."""
+    cause = str(error) if isinstance(error, online.OnlineError) else type(error).__name__
+    return Unavailable("the online store did not answer", reason=f"{step}_failed", cause=cause)
 
 
 def serve(read_marker: MarkerReader, read_features: FeatureReader, *, references: Sequence[str], schema_hash: str, ccn: str, window_year: int) -> Served:
     """One request under the contract; raises ``Unavailable`` (503) or ``NotFound`` (404), never a partial answer."""
     key = spine_key(ccn, window_year)
+    step = "marker_read"
     try:
         first = checked_marker(read_marker(), schema_hash)
         wanted = requested(references)
+        step = "feature_read"
         answer = read_features(wanted, key)
+        step = "marker_recheck"
         second = read_marker()
     except ServingError:
         raise
-    except Exception:
-        raise Unavailable("the online store did not answer") from None
+    except Exception as error:
+        raise store_failure(step, error) from None
     if second.get("state") != "ready" or second.get("load_id") != first.get("load_id") or not first.get("load_id"):
-        raise Unavailable("the online store changed during the read")
+        raise Unavailable("the online store changed during the read", reason="marker_changed")
     try:
         probe = feast_name(PROBE)
         seconds = int(answer[probe + TIMESTAMP_POSTFIX][0])
         values = {reference: answer[feast_name(reference)][0] for reference in references}
     except (KeyError, IndexError, TypeError, ValueError):
-        raise ModelMismatch("the online store answered without the requested features") from None
+        raise ModelMismatch("the online store answered without the requested features", reason="features_missing") from None
     if seconds == 0:
         raise NotFound("the hospital-window is not in the online store")
     absent = sorted(reference for reference in references if not event_time(answer, feast_name(reference)))
     if absent:
-        raise ModelMismatch(f"the online store holds no row of {len(absent)} requested views for this hospital-window")
+        raise ModelMismatch(f"the online store holds no row of {len(absent)} requested views for this hospital-window", reason="view_row_absent")
     return Served(values, datetime.fromtimestamp(seconds, UTC).date().isoformat(), schema_hash)
 
 
