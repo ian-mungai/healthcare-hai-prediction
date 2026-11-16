@@ -1740,6 +1740,7 @@
     "scripts/features/publication_reads.py",
     "scripts/features/retired_publications.py",
     "scripts/features/training_extract.py",
+    "scripts/infrastructure/aws_tasks.py",
     "scripts/infrastructure/capture_reader.py",
     "scripts/infrastructure/host_session.py",
     "scripts/infrastructure/render_jobs_config.py",
