@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import importlib
 import importlib.metadata
 import json
@@ -458,8 +459,8 @@ def set_request(
     )
 
 
-def refusal_of(call: Callable[[], serving.Served]) -> tuple[int, str]:
-    """The status and the reason code of a refused request; ``(200, "")`` when it was answered."""
+def refusal_of(call: Callable[[], object]) -> tuple[int, str]:
+    """The status and the reason code of a refused call; ``(200, "")`` when it was answered (any result)."""
     try:
         call()
     except serving.ServingError as error:
@@ -1602,7 +1603,7 @@ def case_e37(c: Checker, make: Callable[[], Any]) -> None:
 
     readers = serving.SetReaders(build)
     c.check("a set's readers are built once", readers("m2") == readers("m2") and built == [online.Layout(4, SET_MARKER)])
-    refusals = {name: refusal_of(lambda name=name: readers(name)) for name in ("m3", "m5", "m6", "base", "x")}
+    refusals = {name: refusal_of(functools.partial(readers, name)) for name in ("m3", "m5", "m6", "base", "x")}
     c.check("a set with no online database is refused by name", set(refusals.values()) == {(503, "set_not_online")} and len(refusals) == 5)
     c.check("a refused set builds nothing", built == [online.Layout(4, SET_MARKER)])
     if server.kind == "fake":
