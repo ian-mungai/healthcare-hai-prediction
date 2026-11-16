@@ -181,6 +181,11 @@ locals {
   job_layer_run_prepared_roles = var.job_layer_runs_prepared ? aws_iam_role.job_write_layer_task : {}
 }
 
+# The records of a features run that its release phase reads (scripts/features/online_release.py).
+locals {
+  job_layer_run_release_records = ["online_hold.json", "online_release.json", "feast_materialize.json"]
+}
+
 resource "aws_iam_role_policy" "job_writer_layer_input" {
   for_each = local.job_layer_run_prepared_roles
 
@@ -247,6 +252,11 @@ resource "aws_iam_role_policy" "job_writer_features_feast" {
     # Before it loads or releases an online set, the phase lists the promotion lease generations of each model and refuses an unresolved promotion
     # (scripts/features/feast_sets.py unresolved_promotion). It lists promote/models/<model>/ and reads no lease record.
     LEASE_LIST_PREFIXES = jsonencode(["promote/models/*/"])
+    # The release phase of the features task (scripts/features/online_release.py) reads the hold, release and load records of a features run. It lists each exact
+    # key first, because a read of a missing key is AccessDenied for a role that may not list the bucket (scripts/features/feast_sets.py S3HoldStore). The role
+    # already puts under lakehouse/layer_runs/features/; this adds the read and the list of those three names and no other record of a run.
+    RUN_RECORD_OBJECT_ARNS   = jsonencode([for name in local.job_layer_run_release_records : "${local.bronze_bucket_arn}/lakehouse/layer_runs/features/*/${name}"])
+    RUN_RECORD_LIST_PREFIXES = jsonencode([for name in local.job_layer_run_release_records : "lakehouse/layer_runs/features/*/${name}"])
   })
 }
 

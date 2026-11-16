@@ -33,6 +33,11 @@ OFFLINE_VALUES = {
     "DATA_BUCKET_NAME": "example-hai-data-bucket",
     "AWS_PROFILE": "offline_preflight",
 }
+RELEASE_RECORDS = (
+    "online_hold.json",
+    "online_release.json",
+    "feast_materialize.json",
+)  # the records of a features run that its release phase reads (job_writer.tf)
 PLACEHOLDER = re.compile(r"\$\{([A-Z][A-Z0-9_]*)\}")
 ROW_KEYS = {"role", "action", "resource", "context", "scope", "granted_by"}
 ROLE_KEYS = {"name", "terraform", "policies", "layer", "attachments", "kind"}
@@ -229,6 +234,8 @@ def policy_inputs(policy: str, role: Mapping[str, Any], infra: Path, values: Map
             "PRODUCTION_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/promote/production/*"]),
             "PRODUCTION_LIST_PREFIXES": json.dumps(["promote/production/*"]),
             "LEASE_LIST_PREFIXES": json.dumps(["promote/models/*/"]),
+            "RUN_RECORD_OBJECT_ARNS": json.dumps([f"arn:aws:s3:::{bucket}/lakehouse/layer_runs/features/*/{name}" for name in RELEASE_RECORDS]),
+            "RUN_RECORD_LIST_PREFIXES": json.dumps([f"lakehouse/layer_runs/features/*/{name}" for name in RELEASE_RECORDS]),
         }
     if policy.endswith("job_writer_execution.json"):
         pairs = [names[f"AWS_POLARIS_{layer}_CLIENT_{part}_NAME"] for layer in ("SILVER", "GOLD", "FEATURES") for part in ("ID", "SECRET")]

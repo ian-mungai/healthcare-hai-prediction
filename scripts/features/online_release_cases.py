@@ -315,3 +315,61 @@ def case_e33_cached_release(c: Checker) -> None:
         c.refused("a release record with a load ID that is not text is refused", lambda: attempt({**genuine, "load_id": 7}), "load_id")
         c.refused("a hold of another run is refused", lambda: attempt(genuine, {**held, "run_id": other_run}), "hold")
         c.check("no refusal loaded anything online", online.loads == [])
+
+
+class ListedBucket:
+    """The data bucket as the features task role sees it (infra/iam job_writer_features_feast.json): it lists a prefix under ``lakehouse/layer_runs/features/``
+    and reads the keys it finds, and it may not list the rest of the bucket. So a read of a key that is not there is AccessDenied, as in S3 for a caller without
+    the bucket-wide list permission, and only a listing says that a key is absent. A write with ``IfNoneMatch`` is refused when the key exists."""
+
+    class ClientError(Exception):
+        def __init__(self, code: str) -> None:
+            super().__init__(code)
+            self.response = {"Error": {"Code": code}}
+
+    class NoSuchKey(ClientError):
+        pass
+
+    def __init__(self) -> None:
+        self.objects: dict[str, bytes] = {}
+        self.calls: list[str] = []
+        self.exceptions = type("Errors", (), {"NoSuchKey": self.NoSuchKey, "ClientError": self.ClientError})
+
+    def list_objects_v2(self, *, Bucket: str, Prefix: str, MaxKeys: int = 1000) -> dict[str, Any]:
+        self.calls.append(f"list {Prefix}")
+        if not Prefix.startswith(feast_sets.RUN_PREFIX + "/"):
+            raise self.ClientError("AccessDenied")
+        return {"Contents": [{"Key": key} for key in sorted(self.objects) if key.startswith(Prefix)][:MaxKeys]}
+
+    def get_object(self, *, Bucket: str, Key: str) -> dict[str, Any]:
+        self.calls.append(f"get {Key}")
+        if Key not in self.objects:
+            raise self.ClientError("AccessDenied")
+        return {"Body": io.BytesIO(self.objects[Key])}
+
+    def put_object(self, *, Bucket: str, Key: str, Body: str, IfNoneMatch: str) -> None:
+        self.calls.append(f"put {Key}")
+        if Key in self.objects:
+            raise self.ClientError("PreconditionFailed")
+        self.objects[Key] = Body.encode()
+
+
+def case_e33_s3_store_lists_before_it_reads(c: Checker) -> None:
+    """The release phase runs as the features task role, which may list only the run records of the features layer, so the store of the run's records asks
+    the listing whether a key is there and reads only a key that is: the absence of a hold or of a release (the first release has none) is an answer, not a
+    denial."""
+    client = ListedBucket()
+    store = feast_sets.S3HoldStore(client, "data-bucket")
+    run = HELD_RUN
+    c.check("a record that is not there reads as absent, not as a denied read", store.read(feast_sets.HOLD_NAME, run) is None)
+    c.check("the absence was settled by a listing of that key and no read", client.calls == [f"list {feast_sets.RUN_PREFIX}/{run}/{feast_sets.HOLD_NAME}"])
+    c.check(
+        "a record is written once",
+        store.write_new(feast_sets.HOLD_NAME, run, {"held": True}) and not store.write_new(feast_sets.HOLD_NAME, run, {"held": False}),
+    )
+    c.check("a record that is there is read back as it was first written", store.read(feast_sets.HOLD_NAME, run) == {"held": True})
+    client.objects[f"{feast_sets.RUN_PREFIX}/{run}/{feast_sets.RELEASE_NAME}.old"] = b"{}"
+    c.check("a key that only starts with the name is not the record", store.read(feast_sets.RELEASE_NAME, run) is None)
+    c.check(
+        "every call stayed under the run records of the features layer", all(call.split(" ", 1)[1].startswith(feast_sets.RUN_PREFIX) for call in client.calls)
+    )

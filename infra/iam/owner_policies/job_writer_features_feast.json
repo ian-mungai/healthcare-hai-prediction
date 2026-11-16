@@ -32,6 +32,19 @@
       "Action": ["s3:ListBucket"],
       "Resource": "${BUCKET_ARN}",
       "Condition": { "StringLike": { "s3:prefix": ${LEASE_LIST_PREFIXES} } }
+    },
+    {
+      "Sid": "ReadFeaturesRunRecords",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${RUN_RECORD_OBJECT_ARNS}
+    },
+    {
+      "Sid": "ListFeaturesRunRecords",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "${BUCKET_ARN}",
+      "Condition": { "StringLike": { "s3:prefix": ${RUN_RECORD_LIST_PREFIXES} } }
     }
   ]
 }

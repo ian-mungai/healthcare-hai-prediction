@@ -30,6 +30,8 @@ MANAGED_PREFIX = "storage_bronze_"
 EXTRAS = ("layer_input", "layer_upload", "layer_state", "layer_feast", "layer_activation")
 PRODUCTION_PREFIX = "promote/production/"
 LEASE_PREFIX = "promote/models/"
+RUN_RECORDS = ("online_hold.json", "online_release.json", "feast_materialize.json")  # what the release phase reads of a features run (feast_sets)
+RUN_RECORD_PREFIX = "lakehouse/layer_runs/features/"
 POLICIES = (
     "job_writer_layer_storage",
     "job_writer_execution",
@@ -200,6 +202,24 @@ def cases(collections: tuple[str, ...], raw: bool) -> list[Case]:
             for suffix in ("lease-0000000001.json", "lease-0000000001.done.json"):
                 for action in ("s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:GetObjectVersion"):
                     add(f"{layer} lease record {model} {suffix} {action}", layer, action, f"{BUCKET}/{lease}{suffix}", False)
+        # The release phase of the features task reads the hold, release and load records of a features run, and lists each exact key first, because a read of
+        # a missing key is AccessDenied for a role that may not list the bucket. It reads and lists nothing else of the run folders.
+        for name in RUN_RECORDS:
+            record, key = f"{BUCKET}/{RUN_RECORD_PREFIX}run/{name}", f"{RUN_RECORD_PREFIX}run/{name}"
+            add(f"{layer} features run record get {name}", layer, "s3:GetObject", record, layer == "features")
+            add(f"{layer} features run record list {name}", layer, "s3:ListBucket", BUCKET, layer == "features", {"s3:prefix": (key,)})
+            add(f"{layer} features run record list other bucket {name}", layer, "s3:ListBucket", OTHER_BUCKET, False, {"s3:prefix": (key,)})
+            add(f"{layer} features run record other bucket {name}", layer, "s3:GetObject", f"{OTHER_BUCKET}/{RUN_RECORD_PREFIX}run/{name}", False)
+            add(f"{layer} features run record versions {name}", layer, "s3:GetObjectVersion", record, False)
+            add(f"{layer} features run record versions list {name}", layer, "s3:ListBucketVersions", BUCKET, False, {"s3:prefix": (key,)})
+            add(f"{layer} gold run record {name}", layer, "s3:GetObject", f"{BUCKET}/lakehouse/layer_runs/gold/run/{name}", False)
+            add(f"{layer} gold run record list {name}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"lakehouse/layer_runs/gold/run/{name}",)})
+            add(f"{layer} features run record lookalike {name}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/sub/{name}.old", False)
+        for other in ("commit.json", "features_snapshot.json", "gold_pins.json", "layer_run.json", "feast_apply.json"):
+            add(f"{layer} features run record excludes {other}", layer, "s3:GetObject", f"{BUCKET}/{RUN_RECORD_PREFIX}run/{other}", False)
+            add(f"{layer} features run list excludes {other}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (f"{RUN_RECORD_PREFIX}run/{other}",)})
+        for prefix in (RUN_RECORD_PREFIX, f"{RUN_RECORD_PREFIX}run/", "lakehouse/layer_runs/", "lakehouse/layer_runs/features"):
+            add(f"{layer} features run folders are not listed {prefix}", layer, "s3:ListBucket", BUCKET, False, {"s3:prefix": (prefix,)})
         add(f"{layer} redis password read", layer, "ssm:GetParameter", REDIS_PARAMETER, layer == "features")
         for action in ("ssm:GetParameters", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter"):
             add(f"{layer} redis password excludes {action}", layer, action, REDIS_PARAMETER, False)
@@ -376,6 +396,8 @@ def render_documents(root: Path, base: dict[str, dict[str, Any]], bucket: str, c
         "PRODUCTION_OBJECT_ARNS": json.dumps([f"{bucket}/{PRODUCTION_PREFIX}*"]),
         "PRODUCTION_LIST_PREFIXES": json.dumps([f"{PRODUCTION_PREFIX}*"]),
         "LEASE_LIST_PREFIXES": json.dumps([f"{LEASE_PREFIX}*/"]),
+        "RUN_RECORD_OBJECT_ARNS": json.dumps([f"{bucket}/{RUN_RECORD_PREFIX}*/{name}" for name in RUN_RECORDS]),
+        "RUN_RECORD_LIST_PREFIXES": json.dumps([f"{RUN_RECORD_PREFIX}*/{name}" for name in RUN_RECORDS]),
     }
     documents["layer_feast_features"] = load(directory / "job_writer_features_feast.json", feast)
     activation = {"BUCKET_ARN": bucket, "RUN_OBJECT_ARNS": json.dumps([f"{bucket}/lakehouse/layer_runs/features/*"])}

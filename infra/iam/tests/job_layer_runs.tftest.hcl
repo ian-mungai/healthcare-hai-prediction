@@ -156,7 +156,7 @@ run "only_features_may_apply_feast" {
     condition = (
       toset(keys(aws_iam_role_policy.job_writer_features_feast)) == toset(["features"]) &&
       aws_iam_role_policy.job_writer_features_feast["features"].role == aws_iam_role.job_write_layer_task["features"].name &&
-      length(jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement) == 5 &&
+      length(jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement) == 7 &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[0].Action == ["s3:GetObject", "s3:PutObject"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/lakehouse/feast/registry.pb"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[1].Action == ["ssm:GetParameter"] &&
@@ -168,9 +168,14 @@ run "only_features_may_apply_feast" {
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[3].Condition.StringLike["s3:prefix"] == ["promote/production/*"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Action == ["s3:ListBucket"] &&
       jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
-      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Condition.StringLike["s3:prefix"] == ["promote/models/*/"]
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[4].Condition.StringLike["s3:prefix"] == ["promote/models/*/"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[5].Action == ["s3:GetObject"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[5].Resource == [for name in ["online_hold.json", "online_release.json", "feast_materialize.json"] : "arn:aws:s3:::example-project-ci-bucket/lakehouse/layer_runs/features/*/${name}"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Action == ["s3:ListBucket"] &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(aws_iam_role_policy.job_writer_features_feast["features"].policy).Statement[6].Condition.StringLike["s3:prefix"] == [for name in ["online_hold.json", "online_release.json", "feast_materialize.json"] : "lakehouse/layer_runs/features/*/${name}"]
     )
-    error_message = "The features role reads and writes the one Feast registry object, reads the one Redis password parameter, reads and lists the Production records under promote/production/ and lists the promotion lease records of each model under promote/models/<model>/ only. No other layer receives any of them."
+    error_message = "The features role reads and writes the one Feast registry object, reads the one Redis password parameter, reads and lists the Production records under promote/production/ lists the promotion lease records of each model under promote/models/<model>/ and, for the release phase, reads and lists the hold, release and load records of a features run (online_hold.json, online_release.json and feast_materialize.json under lakehouse/layer_runs/features/) only. No other layer receives any of them."
   }
 }
 

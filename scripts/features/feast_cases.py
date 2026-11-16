@@ -2280,6 +2280,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E33_command": (online_release_cases.case_e33_command, "FS6"),
     "E33_not_held_checked": (online_release_cases.case_e33_not_held_checked, "FS6"),
     "E33_cached_release": (online_release_cases.case_e33_cached_release, "FS6"),
+    "E33_s3_store": (online_release_cases.case_e33_s3_store_lists_before_it_reads, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_own_publication": (case_e13_own_publication, "LC13"),

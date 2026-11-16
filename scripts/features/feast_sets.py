@@ -138,11 +138,12 @@ class S3HoldStore:
         return f"{RUN_PREFIX}/{run}/{name}"
 
     def read(self, name: str, run: str) -> dict[str, Any] | None:
-        try:
-            body = self.client.get_object(Bucket=self.bucket, Key=self.key(name, run))["Body"].read()
-        except self.client.exceptions.NoSuchKey:
+        """The record, or None when the run has none. The features task role may list only the run records of the features layer, not the whole bucket,
+        so S3 answers a read of a missing key with AccessDenied: a listing of the exact key says whether the record is there, and only that is read."""
+        key = self.key(name, run)
+        if key not in {item["Key"] for item in self.client.list_objects_v2(Bucket=self.bucket, Prefix=key, MaxKeys=1).get("Contents", [])}:
             return None
-        document: dict[str, Any] = json.loads(body)
+        document: dict[str, Any] = json.loads(self.client.get_object(Bucket=self.bucket, Key=key)["Body"].read())
         return document
 
     def write_new(self, name: str, run: str, document: Mapping[str, Any]) -> bool:
