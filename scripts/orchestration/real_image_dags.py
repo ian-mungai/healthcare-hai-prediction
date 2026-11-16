@@ -787,17 +787,18 @@ def research_objects(
     training = importlib.import_module("orchestration.training_contract")
     found: dict[str, bytes] = {}
     for hai_type, challenger in challengers.items():
+        features_runs: dict[str, str] = {model: training.model_features_run_id(base_run, model) for model in training.PROMOTION_MODELS}
         research = {
             "schema": 1,
             "hai_type": hai_type,
             "base_run": base_run,
             "runs": {},
-            "features_runs": {model: training.model_features_run_id(base_run, model) for model in training.PROMOTION_MODELS},
+            "features_runs": features_runs,
             "promotion": {"registered_model": f"hai_model_{hai_type}", "candidates": [], "challenger": challenger, "production_version": production},
         }
         found[training.record_key("research", research_run, hai_type)] = json.dumps(research).encode()
         if challenger is not None and hold:
-            found[f"lakehouse/layer_runs/features/{research['features_runs'][challenger['model']]}/online_hold.json"] = b'{"held": true}\n'
+            found[f"lakehouse/layer_runs/features/{features_runs[challenger['model']]}/online_hold.json"] = b'{"held": true}\n'
         if challenger is not None and canary is not None and production is not None:
             result = {
                 "schema": 1,
