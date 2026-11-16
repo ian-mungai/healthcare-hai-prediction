@@ -1,4 +1,4 @@
-"""Cases of ``scripts.orchestration.trigger_dag``: the trigger, and the bounded ``--status`` and ``--settle`` of one run, against an Airflow stand-in.
+"""Cases of ``scripts.orchestration.trigger_dag``: the trigger and the bounded ``--status``, ``--settle`` and ``--clear-failed`` of one run, on a stand-in.
 
     .venv/bin/python -B -m scripts.orchestration.trigger_dag_cases --output <report.json>
 
@@ -172,6 +172,88 @@ def settle_cases() -> dict[str, bool]:
     code, printed, error, seconds = invoke(api, settle("1"))
     checks[f"settle of a run that stays queued after the mark ends at its deadline with exit 1 ({seconds:.1f} s)"] = (
         code == 1 and printed is None and RUN in error and seconds < 3
+    )
+    return checks
+
+
+DRIFT = "drift_monitoring_dag"
+DRIFT_RUN = "features_m1_dag__drift__20261115T220949Z-abcdef12"
+DRIFT_TASKS = {"drift_run": "failed", "decide": "upstream_failed", "trigger_training": "upstream_failed"}
+
+
+class Clearable(StandIn):
+    """A stand-in that keeps task states and clears them: a cleared run is queued again, as the scheduler sees it after the clear call."""
+
+    def __init__(self, runs: dict[str, str] | None = None, tasks: dict[str, str | None] | None = None, **options: Any) -> None:
+        super().__init__(runs, **options)
+        self.tasks = dict(DRIFT_TASKS if tasks is None else tasks)
+        self.cleared: list[tuple[str, str, list[str]]] = []
+
+    def task_states(self, dag_id: str, dag_run_id: str) -> dict[str, str | None]:
+        self.call("task_states")
+        return dict(self.tasks)
+
+    def clear(self, dag_id: str, dag_run_id: str, task_ids: list[str]) -> None:
+        self.call("clear")
+        self.cleared.append((dag_id, dag_run_id, list(task_ids)))
+        self.runs[dag_run_id] = "queued"
+
+
+def clear(run: str = DRIFT_RUN, dag: str = DRIFT, *extra: str) -> list[str]:
+    return ["--dag", dag, "--run-id", run, "--clear-failed", "--wait-seconds", "5", *extra]
+
+
+def clear_cases() -> dict[str, bool]:
+    """``--clear-failed`` runs the failed tasks of one failed run again in the same run: a launch the preflight refused wrote no claim, so the same run and
+    job launch when the cause is gone. Only a failed run with a failed task is cleared, and only its failed tasks."""
+    checks: dict[str, bool] = {}
+    api = Clearable({DRIFT_RUN: "failed"})
+    code, printed, _, _ = invoke(api, clear())
+    checks["clear of a failed run unpauses the DAG and clears its failed and upstream failed tasks in the same run"] = (
+        code == 0
+        and printed is not None
+        and api.cleared == [(DRIFT, DRIFT_RUN, ["decide", "drift_run", "trigger_training"])]
+        and api.paused.get(DRIFT) is False
+        and printed["cleared"] == ["decide", "drift_run", "trigger_training"]
+        and printed["state"] == "queued"
+        and printed["run_id"] == DRIFT_RUN
+    )
+    partial_api = Clearable({DRIFT_RUN: "failed"}, {"drift_run": "success", "decide": "failed", "trigger_training": "upstream_failed"})
+    invoke(partial_api, clear())
+    checks["clear leaves a task that succeeded as it is"] = partial_api.cleared == [(DRIFT, DRIFT_RUN, ["decide", "trigger_training"])]
+    for state in ("queued", "running", "success"):
+        refusing = Clearable({DRIFT_RUN: state})
+        code, printed, error, _ = invoke(refusing, clear())
+        checks[f"clear of a {state} run is refused and clears nothing"] = (
+            code == 1 and printed is None and state in error and not refusing.cleared and "unpause" not in refusing.calls
+        )
+    missing = Clearable()
+    code, printed, error, _ = invoke(missing, clear())
+    checks["clear of a run Airflow does not hold is refused and clears nothing"] = code == 1 and printed is None and "absent" in error and not missing.cleared
+    none_failed = Clearable({DRIFT_RUN: "failed"}, {"drift_run": "success", "decide": "success"})
+    code, printed, error, _ = invoke(none_failed, clear())
+    checks["clear of a failed run with no failed task is refused and clears nothing"] = (
+        code == 1 and printed is None and "no failed task" in error and not none_failed.cleared
+    )
+    down = Clearable({DRIFT_RUN: "failed"}, down=True)
+    code, printed, error, _ = invoke(down, clear())
+    checks["clear without a connection exits 1 and names the run and the cause"] = code == 1 and printed is None and DRIFT_RUN in error and not down.cleared
+    checks["clear needs a run ID and takes no mode and not status"] = all(
+        invoke(Clearable({DRIFT_RUN: "failed"}), arguments)[0] == 2
+        for arguments in (
+            ["--dag", DRIFT, "--clear-failed", "--wait-seconds", "5"],
+            [*clear(), "--mode", "real"],
+            [*clear(), "--status"],
+            [*clear(), "--settle"],
+        )
+    )
+    other = Clearable({RUN: "failed"})
+    code, printed, _, _ = invoke(other, clear(RUN, DAG))
+    checks["clear works for the other workflows too"] = code == 0 and other.cleared == [(DAG, RUN, ["decide", "drift_run", "trigger_training"])]
+    started = Clearable({DRIFT_RUN: "failed"})
+    code, _, error, _ = invoke(started, ["--dag", DRIFT, "--mode", "real", "--wait-seconds", "5"])
+    checks["the drift DAG cannot be triggered by hand, only read and cleared"] = (
+        code == 1 and "drift_monitoring_dag" in error and not started.calls and started.token_reads == 0
     )
     return checks
 
@@ -456,6 +538,7 @@ GROUPS: dict[str, Callable[[], dict[str, bool]]] = {
     "lost connection": lost_after_create,
     "status": status_cases,
     "settle": settle_cases,
+    "clear": clear_cases,
     "parse": parse_cases,
     "trigger": trigger_cases,
     "publisher request": publisher_cases,

@@ -16,6 +16,7 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag serving_deploy_dag --mode real --hai-type HAI_1 --deploy-mode stable --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --settle --wait-seconds 600
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag drift_monitoring_dag --run-id <Airflow run ID> --clear-failed --wait-seconds 600
 
 A workflow whose job publishes from a producer run requires that run as a run ID, as its form does: gold the silver run, features base the
 gold run. A missing or ``latest`` producer run is refused before the secret is read and before any request, and so is a mode the workflow's form
@@ -38,6 +39,13 @@ secret is read and before any request, and no other workflow takes them. An opti
 A trigger creates the run before it polls, so a trigger that fails after the create can leave a queued or running run behind. ``--status`` reads the state of
 one run (``absent`` when Airflow holds none) and its task states, and changes nothing. ``--settle`` pauses the DAG, so the scheduler starts nothing more of
 it, marks a run that has not ended failed and reads it again until it is terminal; an absent or ended run is left as it is. Both end at ``--wait-seconds``.
+
+``--clear-failed`` runs the failed tasks of one failed run again, in the same run. A launch that the preflight refuses (a launch hold, a code archive that is
+not staged yet) writes no claim, so the run and job launch when the cause is gone; a launch that was claimed and ended is terminal and needs a new run
+(``--research-attempt`` for research). The command unpauses the DAG, clears the tasks that failed and the tasks that never ran because of them, and prints the
+run's state and the cleared task IDs. It refuses a run that is absent, queued, running or successful and a failed run with no failed task, and clears nothing
+then. It takes ``--dag drift_monitoring_dag``, which only a features DAG starts, and the Airflow run ID of a run that a DAG started
+(``features_m1_dag__drift__<run ID>``). The trigger refuses to start the drift DAG by hand.
 
 The session's Airflow token secret is read from Parameter Store into memory (the supervisor stores it at ``up``); a short token is signed from it
 and sent only to the loopback API port. Nothing is written but one line of JSON on standard output: the run ID, the end state and the task states.
@@ -79,6 +87,8 @@ PLATFORM_FILE = REPO_ROOT / "config/orchestration/platform.json"
 PRODUCER_RUNS = {"gold_transform_dag": "silver_snapshot_run", "features_base_dag": "gold_snapshot_run"}
 RESEARCH_DAG = "research_dag"
 SERVING_DAG = "serving_deploy_dag"
+DRIFT_DAG = "drift_monitoring_dag"
+FAILED_TASK_STATES = ("failed", "upstream_failed")
 # The workflows whose form takes the closed training parameters of the contract (``parameters_for``).
 PARAMETER_DAGS = (*TRAINING_DAGS, RESEARCH_DAG)
 DAGS = ("ingestion_dag", "silver_transform_dag", "gold_transform_dag", "features_base_dag", *PARAMETER_DAGS, SERVING_DAG)
@@ -88,6 +98,8 @@ MODES = ("real",)
 # The form defaults of ingestion_dag, which stand for an option that is left out when the pair is checked.
 PUBLISHER_DEFAULTS = {"run_kind": "bootstrap", "capture_root": "raw/"}
 RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+# The Airflow run ID of a run that another DAG starts is the run ID behind the triggering DAG's name, as in features_m1_dag__drift__<run ID>.
+AIRFLOW_RUN_ID = re.compile(rf"(?:[a-z0-9_]+__)*{RUN_ID.pattern}")
 MAX_WAIT_SECONDS = 4 * 3600
 POLL_SECONDS = 2.0
 STATUS_CAUSE = re.compile(r"[A-Z]+ /\S*: (status [0-9]{3})(?:: .*)?", re.DOTALL)
@@ -302,13 +314,30 @@ def settle(api: AirflowApi, dag: str, run_id: str, deadline: float, wait_seconds
 
 
 def inspect(action: str, dag: str, run_id: str, deadline: float, wait_seconds: float, api: AirflowApi) -> dict[str, object]:
-    """``status`` or ``settle`` of one run, with the API's answers turned into a TriggerError that names the run and a safe cause."""
+    """``status``, ``settle`` or ``clear`` of one run, with the API's answers turned into a TriggerError that names the run and a safe cause."""
     try:
-        return run_state(api, dag, run_id) if action == "status" else settle(api, dag, run_id, deadline, wait_seconds)
+        if action == "status":
+            return run_state(api, dag, run_id)
+        return clear_failed(api, dag, run_id) if action == "clear" else settle(api, dag, run_id, deadline, wait_seconds)
     except AirflowApiError as error:
         raise TriggerError(f"{dag} run {run_id}: {action}: {safe_cause(error)}") from None
     except (ValueError, KeyError, TypeError):
         raise TriggerError(f"{dag} run {run_id}: {action}: the API answered in an unexpected way") from None
+
+
+def clear_failed(api: AirflowApi, dag: str, run_id: str) -> dict[str, object]:
+    """Run the failed tasks of one failed run again: refuse any other run, then unpause the DAG and clear the failed tasks and those that never ran because
+    of them. A task that succeeded is left as it is."""
+    found = run_state(api, dag, run_id)
+    if found["state"] != "failed":
+        raise TriggerError(f"refused: {dag} run {run_id} is {found['state']}, and only a failed run is cleared")
+    states = found["tasks"]
+    tasks = sorted(task for task, state in states.items() if state in FAILED_TASK_STATES) if isinstance(states, dict) else []
+    if not tasks:
+        raise TriggerError(f"refused: {dag} run {run_id} has no failed task to clear")
+    api.unpause(dag)
+    api.clear(dag, run_id, tasks)
+    return run_state(api, dag, run_id) | {"cleared": tasks}
 
 
 def read_token_secret(deadline: float) -> str:
@@ -324,7 +353,7 @@ def read_token_secret(deadline: float) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     cli = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    cli.add_argument("--dag", choices=DAGS, required=True)
+    cli.add_argument("--dag", choices=(*DAGS, DRIFT_DAG), required=True)
     cli.add_argument("--mode", help="the mode of a new run: real for every workflow here; required for a trigger, refused with --status or --settle")
     cli.add_argument("--run-id", help="a run ID to use; a new one is made when absent")
     cli.add_argument("--silver-snapshot-run", help="gold only, required: the committed silver run (a run ID) it publishes from")
@@ -356,8 +385,9 @@ def main(argv: list[str] | None = None) -> int:
     action = cli.add_mutually_exclusive_group()
     action.add_argument("--status", action="store_true", help="read the state of the run --run-id and change nothing")
     action.add_argument("--settle", action="store_true", help="pause the DAG and mark the run --run-id failed unless it is absent or has ended")
+    action.add_argument("--clear-failed", action="store_true", help="run the failed tasks of the failed run --run-id again in the same run")
     args = cli.parse_args(argv)
-    inspecting = "status" if args.status else "settle" if args.settle else None
+    inspecting = "status" if args.status else "settle" if args.settle else "clear" if args.clear_failed else None
     if inspecting and (args.run_id is None or args.mode is not None or args.run_kind is not None or args.capture_root is not None):
         cli.error(f"--{inspecting} needs --run-id and takes no --mode, no --run-kind and no --capture-root")
     if not inspecting and args.mode is None:
@@ -366,8 +396,10 @@ def main(argv: list[str] | None = None) -> int:
         if not 0 < args.wait_seconds <= MAX_WAIT_SECONDS:
             raise TriggerError(f"refused: --wait-seconds must be above 0 and at most {MAX_WAIT_SECONDS}")
         deadline = time.monotonic() + args.wait_seconds
+        if not inspecting and args.dag not in DAGS:
+            raise TriggerError(f"refused: {args.dag} is started by the features DAG of its model, not by hand; --status, --settle and --clear-failed take it")
         if inspecting:
-            if not RUN_ID.fullmatch(args.run_id):
+            if not AIRFLOW_RUN_ID.fullmatch(args.run_id):
                 raise TriggerError(f"refused: {args.run_id!r} is not a run ID")
             found = inspect(
                 inspecting, args.dag, args.run_id, deadline, args.wait_seconds, AirflowApi(api_port(), read_token_secret(deadline), deadline=deadline)
