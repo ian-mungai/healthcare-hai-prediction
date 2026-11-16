@@ -5,7 +5,8 @@ pinned DVC in a throwaway Git checkout in a temporary folder (the tracked ``.dvc
 ``data/`` and the matrix under ``data/``, as in the repository), a local folder as the DVC remote and a local stand-in for the MLflow run store that keeps the
 MLflow file store layout (``<run>/artifacts/<path>`` and ``<run>/tags/<key>``) and the call shapes the helper uses. The matrix is a real Parquet file written
 by DuckDB. Planted defects must fail visibly: a missing matrix, empty snapshot IDs, a wrong hash tag, a missing metafile, a missing baseline, an unwritable
-remote, a deadline, a replaced remote object, a site cache folder that cannot be written and a rerun that must change nothing.
+remote, a deadline, a replaced remote object, a site cache folder that cannot be written, a project with no remote (the loader takes it from DVC_REMOTE_URL or
+refuses by name) and a rerun that must change nothing.
 Results go to ``data/e2e/dvc_baseline/<UTC>/report.json``.
 """
 
@@ -244,6 +245,37 @@ def unwritable_site_cache(top: Path) -> Problems:
     return problems
 
 
+def remote_from_environment(top: Path) -> Problems:
+    """The drift container holds the tracked ``.dvc/config`` without a remote, so the loader must take it from DVC_REMOTE_URL as the training task does."""
+    work = Workspace(top)
+    work.record()
+    work.wipe_local_copies()
+    (work.project / ".dvc/config.local").unlink()
+    with mock.patch.dict(os.environ, {"DVC_REMOTE_URL": str(work.remote)}):
+        loaded = work.load()
+        repeated = work.load()
+    problems: Problems = []
+    if hashlib.sha256(loaded.read_bytes()).hexdigest() != work.original:
+        problems.append("the loaded matrix differs from the recorded one")
+    if repeated != loaded:
+        problems.append("a second load did not return the same path")
+    return problems
+
+
+def missing_remote(top: Path) -> Problems:
+    """A project with no remote and no DVC_REMOTE_URL is refused by name before DVC runs, not with DVC's 'Checkout failed' that hides the cause."""
+    work = Workspace(top)
+    work.record()
+    work.wipe_local_copies()
+    (work.project / ".dvc/config.local").unlink()
+    with mock.patch.dict(os.environ):
+        os.environ.pop("DVC_REMOTE_URL", None)
+        problems = expect_error(work.load, "no DVC remote")
+    if work.matrix.exists():
+        problems.append("a file was left at the matrix path although no remote was set")
+    return problems
+
+
 def main() -> int:
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     out = ROOT / "data" / "e2e" / "dvc_baseline" / stamp
@@ -262,6 +294,8 @@ def main() -> int:
         deadline,
         replaced_remote_object,
         unwritable_site_cache,
+        remote_from_environment,
+        missing_remote,
     )
     try:
         for check in cases:

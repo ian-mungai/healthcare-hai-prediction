@@ -2,8 +2,9 @@
 
 ``record`` runs ``dvc add`` and ``dvc push`` for the matrix file, logs the ``.dvc`` metafile as an MLflow artifact of the run and sets the metafile's
 SHA-256 as a run tag beside the Iceberg snapshot IDs of the source feature tables. The tags are set last, so a run that carries the hash tag always
-carries the metafile. ``load`` reads the metafile from the run, checks its hash against the tag, fetches the file with ``dvc pull`` and refuses a file whose
-MD5 differs from the one in the metafile. The drift loop loads its baseline this way from the Production run.
+carries the metafile. ``load`` reads the metafile from the run, checks its hash against the tag, points the project at the remote in ``DVC_REMOTE_URL`` (and
+refuses a project with none), fetches the file with ``dvc pull`` and refuses a file whose MD5 differs from the one in the metafile. The drift loop loads its
+baseline this way from the Production run.
 
 DVC runs in explicit no-SCM mode (``core.no_scm`` in the tracked ``.dvc/config``): the matrix and its metafile live under the git-ignored ``data/`` and the
 metafile is kept in the MLflow run, not in Git, so DVC must not ask Git about either file. The run store is any object with the MLflow client calls used here
@@ -154,6 +155,22 @@ def log_baseline(metafile: Path, relative: Path, run: Run, snapshots: Mapping[st
     return digest
 
 
+def ensure_remote(project: Path) -> None:
+    """Make the project's default remote the one in DVC_REMOTE_URL, or confirm that it already has one.
+
+    DVC does not read DVC_REMOTE_URL itself, and the tracked ``.dvc/config`` holds no remote, so a task that starts from the code archive has none. Without one
+    ``dvc pull`` prints "Everything is up to date" and then fails its checkout, which hides the cause; this refuses by name before any fetch. A rerun writes the
+    same local setting.
+    """
+    remote = os.environ.get("DVC_REMOTE_URL", "")
+    if remote:
+        run_dvc(["remote", "add", "--local", "--force", "--default", "store", remote], project, 120)
+    try:
+        run_dvc(["remote", "default"], project, 120)
+    except BaselineError:
+        raise BaselineError("no DVC remote is configured for the project; set DVC_REMOTE_URL to the remote's URL") from None
+
+
 def load(run: Run, *, project: Path = ROOT, deadlines: Deadlines | None = None) -> Path:
     """Fetch the exact matrix a run recorded and return its path; any mismatch raises and leaves no unverified file at the matrix path."""
     limits = deadlines or Deadlines()
@@ -178,6 +195,7 @@ def load(run: Run, *, project: Path = ROOT, deadlines: Deadlines | None = None) 
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
     matrix = project / relative
+    ensure_remote(project)
     try:
         run_dvc(["pull", "--force", f"{relative}.dvc"], project, limits.pull)
     except BaselineError as error:
