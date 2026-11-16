@@ -23,19 +23,7 @@ from unittest import mock
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure.host_session import Clock, HostSessionError, Names, Session
-from scripts.infrastructure.host_session_stand_in import (
-    CLUSTER,
-    CODE_FETCH_FAMILY,
-    FAMILIES,
-    GROUP,
-    OVERRIDES_LIMIT,
-    PROFILE,
-    PROJECT,
-    PROVIDER,
-    REGION,
-    SERVICES,
-    StandInHost,
-)
+from scripts.infrastructure.host_session_stand_in import OVERRIDES_LIMIT, PROFILE, REGION, SERVICES, StandInHost
 from scripts.infrastructure.run_code_fetch_e2e import BUCKET, RUN_A, RUN_B, StandInS3, archive, archive_files
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -93,7 +81,10 @@ class ScriptedHost(StandInHost):
         if self.modes[-1] in self.never_starts:
             self.next_unstarted = True
             return 1
+        before = len(self.output.getvalue())
         exit_code = self.execute(text, {"DATA_BUCKET_NAME": BUCKET, **variables})
+        if self.modes[-1] == "identify":
+            self.pending_output = self.output.getvalue()[before:].strip()
         if exit_code == 0 and "CODE_MODE" not in variables and self.after_install is not None:
             self.after_install(self.root)
         return exit_code
@@ -111,6 +102,8 @@ class ScriptedHost(StandInHost):
         saved = list(sys.path)
         try:
             with mock.patch.dict(os.environ, variables, clear=True), contextlib.redirect_stdout(self.output), contextlib.redirect_stderr(self.output):
+                if variables.get("CODE_MODE") == "identify":
+                    return int(module.run(self.root))
                 return int(module.run(self.root, self.fetch_dir, self.client))
         except KeyboardInterrupt:
             return 130
@@ -120,9 +113,8 @@ class ScriptedHost(StandInHost):
 
 
 def names() -> Names:
-    return Names(
-        CLUSTER, GROUP, PROVIDER, PROJECT, dict(sorted(SERVICES.items(), key=lambda item: item[0] != "postgres")), {**FAMILIES, "code_fetch": CODE_FETCH_FAMILY}
-    )
+    """The names of the scripted host: the code one-shot and the features task of the stand-in."""
+    return importlib.import_module("scripts.infrastructure.host_session_cases").names(code_fetch=True)
 
 
 def old_image(work: Path) -> Path:
@@ -139,11 +131,14 @@ def session_on(host: ScriptedHost) -> tuple[Session, list[str]]:
     return Session(cli, names(), Clock(lambda: host.now, host.advance), Path(tempfile.mkdtemp(prefix="host_session_code_")) / "launched", lines.append), lines
 
 
-def release(root: Path, sha: str, path: Path, members: int | None = None, select: bool = True) -> None:
-    """Put the archive ``path`` under repo_releases/<sha>, unpack ``members`` of its members (all when None) into code and show it as repo when ``select``."""
+def release(root: Path, sha: str, path: Path, members: int | None = None, select: bool = True, run: str | None = None) -> None:
+    """Put the archive ``path`` under repo_releases/<sha>, unpack ``members`` of its members (all when None) into code and show it as repo when ``select``.
+    ``run`` is the run ID that an install recorded beside it; a release that an older installer made has none."""
     folder = root / "repo_releases" / sha
     (folder / "code").mkdir(parents=True)
     shutil.copy(path, folder / "code.tar.gz")
+    if run is not None:
+        (folder / "run_id").write_text(f"{run}\n", encoding="utf-8")
     with tarfile.open(path) as tar:
         for index, member in enumerate(tar):
             if members is None or index < members:
@@ -324,7 +319,85 @@ def a_verification_task_that_never_starts_is_reported_as_unknown_state() -> dict
     }
 
 
+def reloads(host: StandInHost) -> list[dict[str, Any]]:
+    """The reload launches that the host saw, by container."""
+    return list(getattr(host, "reloads", []))
+
+
+def a_start_without_code_reloads_the_run_that_an_earlier_start_recorded() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    _, sha_b = archives[RUN_B]
+    first = start_for(session, RUN_B, sha_b)
+    after_first = len(reloads(host))
+    session.stop()
+    second = start_for_nothing(session)
+    later = reloads(host)[after_first:]
+    return {
+        "the start with the code succeeds": first is None and after_first > 0,
+        "the later start without code succeeds on the host's data folder": second is None,
+        "the install wrote the run ID beside the digest": (host.root / "repo_releases" / sha_b / "run_id").read_text(encoding="utf-8") == f"{RUN_B}\n",
+        "the identity task read it": "identify" in host.modes,
+        "every reload launch of the later start carries that run and digest": len(later) == after_first
+        and all(item["launch"]["fetch"]["CODE_RUN_ID"] == RUN_B and item["launch"]["fetch"]["CODE_SHA256"] == sha_b for item in later),
+        "the checkout was kept": shown(host.root) == archive_files(archives[RUN_B][0]),
+    }
+
+
+def start_for_nothing(session: Session) -> str | None:
+    """The message of the error that ``start`` without code raised, or None."""
+    try:
+        session.start()
+    except HostSessionError as error:
+        return str(error)
+    return None
+
+
+def a_start_without_code_on_a_release_with_no_record_is_refused() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    path_a, sha_a = archives[RUN_A]
+    release(host.root, sha_a, path_a)
+    message = start_for_nothing(session)
+    return {
+        "start fails and names the missing record": message is not None and "code run record" in message,
+        "it says how to write it": message is not None and "--code-run" in message and "--code-sha256" in message,
+        "no service is deployed and nothing is reloaded": deployments(host) == 0 and reloads(host) == [],
+        "the host is turned off again": host.desired == 0,
+        "the checkout is untouched": shown(host.root) == archive_files(path_a),
+    }
+
+
+def a_record_of_another_release_is_not_used() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    (path_a, sha_a), (path_b, sha_b) = archives[RUN_A], archives[RUN_B]
+    release(host.root, sha_a, path_a, select=False, run=RUN_A)
+    release(host.root, sha_b, path_b)
+    message = start_for_nothing(session)
+    return {
+        "repo shows a release with no record, so start fails although another release has one": message is not None and "code run record" in message,
+        "nothing is reloaded with the other release's run": reloads(host) == [] and deployments(host) == 0,
+    }
+
+
+def the_run_given_wins_over_the_record() -> dict[str, bool]:
+    host, session, _, archives, _ = scene(REVIEWED_SCRIPT.read_text(encoding="utf-8"), IMAGE_FETCHER.parent)
+    (path_a, sha_a), (_, sha_b) = archives[RUN_A], archives[RUN_B]
+    release(host.root, sha_a, path_a, run=RUN_A)
+    message = start_for(session, RUN_B, sha_b)
+    return {
+        "start with another code succeeds": message is None,
+        "no identity task runs, because the flags name the code": "identify" not in host.modes,
+        "every reload launch carries the run and digest given": len(reloads(host)) > 0
+        and all(item["launch"]["fetch"]["CODE_RUN_ID"] == RUN_B and item["launch"]["fetch"]["CODE_SHA256"] == sha_b for item in reloads(host)),
+        "the install recorded the run given for its digest": (host.root / "repo_releases" / sha_b / "run_id").read_text(encoding="utf-8") == f"{RUN_B}\n",
+        "the earlier record is untouched": (host.root / "repo_releases" / sha_a / "run_id").read_text(encoding="utf-8") == f"{RUN_A}\n",
+    }
+
+
 CASES: dict[str, Callable[[], dict[str, bool]]] = {
+    "a_start_without_code_reloads_the_run_that_an_earlier_start_recorded": a_start_without_code_reloads_the_run_that_an_earlier_start_recorded,
+    "a_start_without_code_on_a_release_with_no_record_is_refused": a_start_without_code_on_a_release_with_no_record_is_refused,
+    "a_record_of_another_release_is_not_used": a_record_of_another_release_is_not_used,
+    "the_run_given_wins_over_the_record": the_run_given_wins_over_the_record,
     "old_installer_with_an_interrupted_cache_selects_no_partial_checkout": old_installer_with_an_interrupted_cache_selects_no_partial_checkout,
     "verification_failure_restores_the_previous_checkout": verification_failure_restores_the_previous_checkout,
     "failed_install_states_the_actual_state": failed_install_states_the_actual_state,

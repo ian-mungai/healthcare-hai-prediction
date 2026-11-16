@@ -28,6 +28,9 @@ SERVICES = {"airflow_scheduler": "stand-in-airflow-scheduler", "polaris": "stand
 OPENMETADATA_SERVICE = "stand-in-openmetadata"
 OPENMETADATA_FAMILY = "stand-in-openmetadata-bootstrap"
 CODE_FETCH_FAMILY = "stand-in-code-fetch"
+RELOAD_FAMILY = "stand-in-features"
+LOG_GROUP = "stand-in-airflow-log-group"
+HOST_ADDRESS = "stand-in-host"
 ACCOUNT_MARK = "arn:aws:ecs:stand-in:111111111111:"
 BOOT_SECONDS = 120
 TERMINATE_SECONDS = 90
@@ -87,17 +90,29 @@ class StandInHost:
     service: a ``MISSING`` failure entry and no service. ``describe_services_error`` adds a failure entry of another reason to every describe-services
     answer. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status`` value (RUNNING when absent), and a stopped task has desired
     status STOPPED. ``add_task`` adds a running task of any family and group, so a case can hold job tasks, service tasks and writer tasks together.
+    The features task (``online_reload``) and the code identity are always there: ``reload_fails:<set>`` makes the reload launch of that set exit 1,
+    ``never_starts:<key>`` makes a task of the key stop without an exit code (``TaskFailedToStart``), ``task_seconds:<key>=<n>`` makes it run n virtual
+    seconds, ``no_code_record`` makes the identity task refuse as a host with no run ID record does, ``no_identity_log`` and ``bad_identity_line`` make its
+    log empty or malformed. A log request (``get-log-events``) answers the output of a stopped task and fails with ``ResourceNotFoundException`` for a
+    stream or a group that has no such task.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
     """
 
-    def __init__(self, faults: set[str] | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None) -> None:
+    def __init__(
+        self, faults: set[str] | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None, code_run: str | None = None
+    ) -> None:
         self.faults = set(faults or ())
         self.families = dict(
-            FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}), **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {})
+            FAMILIES,
+            online_reload=RELOAD_FAMILY,
+            **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}),
+            **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {}),
         )
-        # The code digest that /data/repo shows. The code one-shot changes it only when it exits 0 with a digest in its overrides, and exits 1 without
-        # overrides on a host that has none, as infra/services/scripts/code_fetch.py does.
-        self.checkout = checkout
+        # The code digest that /data/repo shows and the run ID recorded beside it. The code one-shot changes them only when it exits 0 with a digest in its
+        # overrides, and exits 1 without overrides on a host that has none, as infra/services/scripts/code_fetch.py does. The identity task prints them.
+        self.checkout, self.code_run, self.pending_output = checkout, code_run, ""
+        self.reloads: list[dict[str, Any]] = []
+        self.online: dict[str, tuple[str, str]] = {}
         self.now = 0.0
         self.desired = 0
         self.instance_up_at: float | None = None
@@ -128,6 +143,7 @@ class StandInHost:
         self.provider_delay = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("late_provider:")), 0)
         self.page_size = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("page_size:")), 0)
         self.handlers[("ecs", "stop-task")] = self.ecs_stop_task
+        self.handlers[("logs", "get-log-events")] = self.logs_get_log_events
         self.added = 0
 
     def add_task(self, family: str, group: str | None = None) -> str:
@@ -310,8 +326,21 @@ class StandInHost:
         )
         if key == "code_fetch":
             code = self.code_fetch_exit(options, code)
+        if key == "online_reload":
+            code = self.reload_exit(options, code)
         arn = f"{ACCOUNT_MARK}task/{key}-{len(self.tasks)}"
-        self.tasks[arn] = {"key": key, "family": family, "status": "RUNNING", "stops_at": self.now + TASK_SECONDS, "exit": code, "options": options}
+        seconds = next((int(fault.split("=")[1]) for fault in self.faults if fault.startswith(f"task_seconds:{key}=")), TASK_SECONDS)
+        self.tasks[arn] = {
+            "key": key,
+            "family": family,
+            "status": "RUNNING",
+            "stops_at": self.now + seconds,
+            "exit": code,
+            "options": options,
+            "output": self.pending_output,
+            "unstarted": f"never_starts:{key}" in self.faults,
+        }
+        self.pending_output = ""
         if token:
             self.tokens[token] = arn
         return {"tasks": [{"taskArn": arn}], "failures": []}
@@ -321,6 +350,14 @@ class StandInHost:
         shows that digest (fault ``verify_fails`` makes it fail) and the restore mode always succeeds, as a host with a verified checkout does."""
         containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
         environment = {item["name"]: item["value"] for container in containers for item in container.get("environment", [])}
+        if environment.get("CODE_MODE") == "identify":
+            if self.checkout is None or self.code_run is None or "no_code_record" in self.faults:
+                return 1
+            if "bad_identity_line" in self.faults:
+                self.pending_output = f"code_identify: identity run latest code {self.checkout}"
+            elif "no_identity_log" not in self.faults:
+                self.pending_output = f"code_identify: identity run {self.code_run} code {self.checkout}"
+            return 0
         if environment.get("CODE_MODE") == "verify":
             return 0 if environment.get("CODE_SHA256") == self.checkout and "verify_fails" not in self.faults else 1
         if environment.get("CODE_MODE") == "restore":
@@ -328,9 +365,35 @@ class StandInHost:
         if code != 0:
             return code
         if "CODE_SHA256" in environment:
-            self.checkout = environment["CODE_SHA256"]
+            self.checkout, self.code_run = environment["CODE_SHA256"], environment["CODE_RUN_ID"]
             return 0
         return 0 if self.checkout is not None else 1
+
+    def reload_exit(self, options: dict[str, list[str]], code: int) -> int:
+        """The exit code of a reload launch (a features task with LAYER_PHASE reload): the launch is recorded by container, and a success marks the set
+        online with the code of the launch. Fault ``reload_fails:<set>`` makes the launch of that set exit 1."""
+        containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
+        launch = {container["name"]: {item["name"]: item["value"] for item in container["environment"]} for container in containers}
+        model = launch.get("release", {}).get("RELEASE_MODEL", "")
+        self.reloads.append(
+            {"model": model, "launch": launch, "at": self.now, "services_stable": all(item["state"] == "COMPLETED" for item in self.services.values())}
+        )
+        if code == 0 and f"reload_fails:{model}" in self.faults:
+            return 1
+        if code == 0:
+            fetch = launch.get("fetch", {})
+            self.online[model] = (fetch.get("CODE_RUN_ID", ""), fetch.get("CODE_SHA256", ""))
+        return code
+
+    def logs_get_log_events(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        """The log of one task: its output once it stopped. A group other than the stand-in's, or a stream with no such task, is not found."""
+        stream = options["--log-stream-name"][0].split("/")
+        found = [task for arn, task in self.tasks.items() if arn.rsplit("/", 1)[-1] == stream[-1] and task["key"] == stream[0] == stream[1]]
+        if options["--log-group-name"] != [LOG_GROUP] or len(stream) != 3 or not found:
+            raise StandInError("ResourceNotFoundException")
+        task = found[0]
+        events = [{"message": line} for line in task.get("output", "").splitlines()] if task["status"] == "STOPPED" else []
+        return {"events": events, "nextForwardToken": "f/0"}
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
         found: list[dict[str, Any]] = []
@@ -342,6 +405,8 @@ class StandInHost:
                 failures.append({"arn": arn, "reason": "MISSING"})
                 continue
             container = {"name": task["key"], "exitCode": task["exit"]} if task["status"] == "STOPPED" else {"name": task["key"]}
+            if task["status"] == "STOPPED" and task.get("unstarted"):
+                container = {"name": task["key"], "reason": "CannotPullContainerError"}
             definition = {} if "no_definition" in self.faults else {"taskDefinitionArn": f"{ACCOUNT_MARK}task-definition/{task['family']}:7"}
             overrides = json.loads(task["options"]["--overrides"][0]) if "--overrides" in task["options"] else {"containerOverrides": [{"name": task["key"]}]}
             found.append(
@@ -351,7 +416,8 @@ class StandInHost:
                     "group": task.get("group", f"family:{task['family']}"),
                     "lastStatus": task["status"],
                     "desiredStatus": task.get("desired", "RUNNING"),
-                    "stoppedReason": reason,
+                    "stoppedReason": "Task failed to start" if task.get("unstarted") and task["status"] == "STOPPED" else reason,
+                    **({"stopCode": "TaskFailedToStart"} if task.get("unstarted") and task["status"] == "STOPPED" else {}),
                     "containers": [container],
                     "overrides": overrides,
                 }

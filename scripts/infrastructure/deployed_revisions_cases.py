@@ -136,9 +136,9 @@ def build(faults: set[str] | None = None, omit: tuple[str, ...] = ()) -> tuple[W
     return world, session, lines
 
 
-def served(session: Session) -> Callable[[], Session]:
-    """A stand-in for open_session that hands back ``session``."""
-    return lambda: session
+def served(session: Session) -> Callable[..., Session]:
+    """A stand-in for open_session that hands back ``session``, whether or not the caller asks for the jobs outputs."""
+    return lambda reload=False: session
 
 
 def check(session: Session) -> list[str]:

@@ -131,6 +131,58 @@ def a_release_names_its_model_and_run() -> None:
     )
 
 
+def a_reload_names_its_model_and_no_features_run() -> None:
+    """A reload launch (LAYER_PHASE reload, what ``host_session start`` sends) needs the model set and no features run: the reload picks its own run."""
+    reload_values = {name: value for name, value in VALUES.items() if name != "FEATURES_RUN"} | {"LAYER_PHASE": "reload"}
+    document = job_overrides.build("features", reload_values)
+    held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
+    require(
+        held["release"]
+        == {**{name: reload_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "RELEASE_MODEL")}, "FEATURES_RUN": "", "LAYER_PHASE": "reload"},
+        f"{held['release']}",
+    )
+    require(
+        all(container.get("LAYER_PHASE") == "reload" for container in held.values() if "LAYER_PHASE" in container),
+        f"a build container was told another phase: {held}",
+    )
+    try:
+        job_overrides.build("features", {name: value for name, value in reload_values.items() if name != "RELEASE_MODEL"})
+    except job_overrides.OverrideError as error:
+        require("RELEASE_MODEL" in str(error), f"the refusal does not name the variable: {error}")
+    else:
+        require(False, "a reload without its model set was built")
+
+
+def the_session_reload_launch_equals_the_generator_output() -> None:
+    """``host_session start`` builds the overrides of a reload launch from the variable names of the jobs stack. For the containers of the job catalog it fills
+    the same variables with the same values as the hand-started generator does, so a reload launch is the launch that a runbook would build."""
+    from scripts.infrastructure import host_session_cases
+
+    host, session, _ = host_session_cases.build()
+    code = (RUN, "ab" * 32)
+    ours = session.reload_overrides("m2", code)["containerOverrides"]
+    run = ours[0]["environment"][0]["value"]
+    given = {
+        **VALUES,
+        "RUN_ID": run,
+        "CODE_RUN_ID": code[0],
+        "CODE_SHA256": code[1],
+        "POLARIS_URI": f"http://{host_session_cases.HOST_ADDRESS}:8181/api/catalog",
+    }
+    theirs = job_overrides.build("features", {name: value for name, value in given.items() if name != "FEATURES_RUN"} | {"LAYER_PHASE": "reload"})[
+        "containerOverrides"
+    ]
+
+    def values(overrides: list[dict]) -> dict[str, dict[str, str]]:
+        """The variables of each container, without the two that only the build phases read (the reload ends them at once)."""
+        return {
+            item["name"]: {pair["name"]: pair["value"] for pair in item["environment"] if pair["name"] not in ("FEATURE_SET", "INPUT_RUN_ID")}
+            for item in overrides
+        }
+
+    require(values(ours) == values(theirs), f"the session fills {values(ours)}, the generator {values(theirs)}")
+
+
 def the_generator_builds_no_serving_request() -> None:
     """The serve job's request is derived by the launch from a closed request, so no owner command builds it."""
     serving = [job for job, row in job_table().items() if row.get("needs_serving_parameters")]
@@ -173,4 +225,6 @@ CASES: dict[str, Callable[[], None]] = {
     "a_job_variable_without_a_sample_fails_the_check": a_job_variable_without_a_sample_fails_the_check,
     "a_features_build_leaves_the_release_variables_empty": a_features_build_leaves_the_release_variables_empty,
     "a_release_names_its_model_and_run": a_release_names_its_model_and_run,
+    "a_reload_names_its_model_and_no_features_run": a_reload_names_its_model_and_no_features_run,
+    "the_session_reload_launch_equals_the_generator_output": the_session_reload_launch_equals_the_generator_output,
 }

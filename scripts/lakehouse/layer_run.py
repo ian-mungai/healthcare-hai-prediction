@@ -15,6 +15,10 @@ launch names the phase in ``LAYER_PHASE``. A features build leaves it empty: eve
 ``RELEASE_MODEL`` and the features run in ``FEATURES_RUN``. The release has no pin and no run folder of its own: the run of the launch only names its launch
 record.
 
+The same container runs the reload of the online store when the launch names ``reload`` in ``LAYER_PHASE`` (owner decision A, Nov 16 2026): ``host_session
+start`` launches it once per online model set after the services are stable. It needs only ``RELEASE_MODEL`` (the set) and runs
+``scripts.features.online_reload``, which picks the run of the set itself, so ``FEATURES_RUN`` stays empty. Every build phase ends at once in a reload launch.
+
 A features job takes ``FEATURE_SET`` (``--feature-set``): empty is the single path that builds every table, ``base`` the same tables as the base of the model
 sets, ``m1`` to ``m6`` one model table each. A model set pins the newest committed base run (``INPUT_RUN_ID`` names it; an older base run is refused) and
 builds ``feature_matrix_<set>`` from the domain matrices of that run. Every phase after the pin checks that it names the set the pin recorded.
@@ -87,6 +91,7 @@ PHASES = {
     "features": ("pin", "build", "validate", "export", "publish", "upload", "feast"),
 }
 RELEASE_PHASE = "release"  # the last container of the features task: it runs only in a launch that names it in LAYER_PHASE
+RELOAD_PHASE = "reload"  # the launch name that makes the release container reload the online store of a model set instead of releasing a held load
 PHASE_VARIABLE, MODEL_VARIABLE, FEATURES_RUN_VARIABLE = "LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN"
 STEP_SECONDS = 4 * 3600
 STEP_GRACE_SECONDS = 60  # the process runner stops a module this long after the timer of run_module should have
@@ -930,6 +935,15 @@ def feast(job: Job, bucket: str, client: Any) -> None:
             client.upload_file(str(job.folder / name), bucket, key)
 
 
+def reload(job: Job) -> None:
+    """Reload the online store of the model set that the launch names (``scripts.features.online_reload``): the newest run of the set with load evidence is
+    loaded again, or the set is skipped when it has none. The module ends loaded, already loaded or skipped (exit 0), or refuses by name (exit 1)."""
+    model = os.environ.get(MODEL_VARIABLE, "")
+    if not model:
+        raise StepError(f"{MODEL_VARIABLE} is not set: a reload names the model set whose online store it loads")
+    run_module(job, "scripts.features.online_reload", ["--model", model, "--run", job.run, "--mode", job.mode])
+
+
 def release(job: Job) -> None:
     """Release the held online load of the model set that the launch names, for the features run it names (``scripts.features.online_release``). The module
     reads the hold itself and ends released, already released or not held (exit 0), or refuses by name (exit 1)."""
@@ -1141,7 +1155,10 @@ def dispatch(job: Job, phase: str, args: argparse.Namespace) -> None:
     elif phase == "feast":
         feast(job, args.bucket, s3_client())
     elif phase == RELEASE_PHASE:
-        release(job)
+        if os.environ.get(PHASE_VARIABLE) == RELOAD_PHASE:
+            reload(job)
+        else:
+            release(job)
     elif phase == "publish":
         publish(job, args.bucket, s3_client() if job.mode == "real" and job.local is None else None)
     else:
@@ -1189,10 +1206,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not RUN_ID.fullmatch(args.run):
         parser.error("the run ID must look like 20261030T010203Z-0a1b2c3d")
     selected = os.environ.get(PHASE_VARIABLE, "")
-    if selected and (args.layer != "features" or selected not in (*PHASES["features"], RELEASE_PHASE)):
+    if selected and (args.layer != "features" or selected not in (*PHASES["features"], RELEASE_PHASE, RELOAD_PHASE)):
         parser.error(f"{PHASE_VARIABLE} {selected!r} is not a phase of the features task: it applies to the features layer only")
-    if selected != args.phase and (selected or args.phase == RELEASE_PHASE):
-        # A launch that names one phase leaves every other idle; a build, which names none, runs every phase but the release.
+    runs = args.phase == (RELEASE_PHASE if selected == RELOAD_PHASE else selected)
+    if (selected or args.phase == RELEASE_PHASE) and not runs:
+        # A launch that names one phase leaves every other idle (a reload launch runs the release container); a build runs every phase but the release.
         sys.stdout.write(json.dumps({"phase": args.phase, "skipped": True, "launch_phase": selected or "build"}) + "\n")
         return 0
     try:

@@ -61,8 +61,8 @@ PLANTS: dict[str, tuple[str, str]] = {
         "pass",
     ),
     "runs the one-shot's calls without its deadline": (
-        "        self.deadline = end if outer is None else min(end, outer)\n        try:\n            self.run_one_shot(",
-        "        try:\n            self.run_one_shot(",
+        "        self.deadline = end if outer is None else min(end, outer)\n        try:\n            return self.run_one_shot(",
+        "        try:\n            return self.run_one_shot(",
     ),
     "compares only the run ID": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_MODE")'),
     "compares only the digest": ('CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")', 'CODE_ENVIRONMENT = ("CODE_SHA256", "CODE_MODE")'),
@@ -143,6 +143,23 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "any describe-services failure counts as an absent service": ('any(item.get("reason") != MISSING for item in described.get("failures", []))', "False"),
     "prints the task ARN": ('self.step(key, f"exit codes {exits}")', 'self.step(key, f"exit codes {exits} {task}")'),
+    "reloads the online store before the services are stable": (
+        "            self.deploy_services()\n            self.reload_online_store(identity)",
+        "            self.reload_online_store(identity)\n            self.deploy_services()",
+    ),
+    "never reloads the online store": ("            self.reload_online_store(identity)\n", ""),
+    "reloads only the first online set": ("for model in online_sets():", "for model in online_sets()[:1]:"),
+    "ignores a failed reload": ('raise HostSessionError(f"online store reload of set {model} failed: {error}") from None', "pass"),
+    "launches the reload without its phase": ('"LAYER_PHASE": RELOAD_PHASE,', '"LAYER_PHASE": "",'),
+    "takes a running features task for the reload": (
+        "if key.startswith(ONLINE_RELOAD):\n            return False",
+        "if key.startswith(ONLINE_RELOAD):\n            return True",
+    ),
+    "reads the identity without the log": (
+        'found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)',
+        'found = ("20260101T000000Z-00000000", "0" * 64)',
+    ),
+    "invents the identity of a host with no record": ("raise HostSessionError(missing) from None", 'return "20260101T000000Z-00000000", "0" * 64'),
 }
 
 

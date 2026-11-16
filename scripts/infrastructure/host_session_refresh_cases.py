@@ -37,6 +37,7 @@ CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError
 JOB_PREFIX = "stand_in_dev_job_"
 SERIAL = 241
 CODE_RUN = "20261115T120000Z-abcdef01"
+OLD_RUN = "20261114T120000Z-abcdef00"
 CODE_SHA = "a" * 64
 OLD_SHA = "b" * 64
 NEW_SERVICE = "stand-in-streamlit"
@@ -49,12 +50,11 @@ def module() -> Any:
 
 
 def build(faults: set[str] | None = None, code_fetch: bool = True, checkout: str | None = None) -> tuple[StandInHost, Session, list[str]]:
-    """A stand-in host with the catalog service and the code one-shot, and a session whose names carry the state serial and whose job prefix is set."""
-    host, lines = StandInHost(faults, openmetadata=True, code_fetch=code_fetch, checkout=checkout), list[str]()
+    """A stand-in host with the catalog service and the code one-shot, and a session whose names carry the state serial, the features task of the online
+    store reload and the job prefix. A host that shows a checkout has the run ID ``OLD_RUN`` recorded beside it, as an install leaves it."""
+    host, lines = StandInHost(faults, openmetadata=True, code_fetch=code_fetch, checkout=checkout, code_run=OLD_RUN if checkout else None), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
-    services = dict(sorted(dict(SERVICES, openmetadata=OPENMETADATA_SERVICE).items(), key=lambda item: item[0] != "postgres"))
-    families = dict(FAMILIES, openmetadata_bootstrap=OPENMETADATA_FAMILY, **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {}))
-    names = Names(CLUSTER, GROUP, PROVIDER, PROJECT, services, families, SERIAL)
+    names = replace(importlib.import_module("scripts.infrastructure.host_session_cases").names(True, code_fetch, True), state_serial=SERIAL)
     marker = Path(tempfile.mkdtemp(prefix="host_session_refresh_case_")) / "polaris_bootstrap.launched"
     session = Session(cli, names, Clock(lambda: host.now, host.advance), marker, lines.append, job_prefix=JOB_PREFIX)
     return host, session, lines
@@ -62,8 +62,10 @@ def build(faults: set[str] | None = None, code_fetch: bool = True, checkout: str
 
 def running(faults: set[str] | None = None, code_fetch: bool = True, checkout: str | None = OLD_SHA) -> tuple[StandInHost, Session, list[str]]:
     """The same, after a successful ``start`` on a host that shows the older code ``OLD_SHA``; the report lines start empty again."""
-    host, session, lines = build(faults, code_fetch, checkout)
+    host, session, lines = build(faults, True, checkout)
     session.start()
+    if not code_fetch:
+        session.names = replace(session.names, one_shot={key: value for key, value in session.names.one_shot.items() if key != "code_fetch"})
     lines.clear()
     return host, session, lines
 
@@ -130,7 +132,8 @@ def refresh_without_code_checks_the_existing_checkout() -> dict[str, bool]:
     session.refresh()
     calls = after(host, count)
     return {
-        "the code one-shot runs once as a check": families_run(calls).count(CODE_FETCH_FAMILY) == 1,
+        "the code one-shot runs twice, to read the run record and as a check": families_run(calls).count(CODE_FETCH_FAMILY) == 2,
+        "the report names the recorded run": any(line == f"code_identity: {OLD_RUN}" for line in lines),
         "the checkout is unchanged": host.checkout == CODE_SHA,
         "every service is stable": all(service["state"] == "COMPLETED" for service in host.services.values()),
     }
@@ -298,6 +301,9 @@ def refresh_command_line() -> dict[str, bool]:
     outcome: dict[str, Any] = {"raise": None}
 
     class Recorder:
+        def __init__(self, *_: object) -> None:
+            pass
+
         def refresh(self, code: tuple[str, str] | None = None) -> None:
             called.append({"code": code})
             if outcome["raise"] is not None:

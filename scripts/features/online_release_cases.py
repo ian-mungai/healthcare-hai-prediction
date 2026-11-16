@@ -373,3 +373,282 @@ def case_e33_s3_store_lists_before_it_reads(c: Checker) -> None:
     c.check(
         "every call stayed under the run records of the features layer", all(call.split(" ", 1)[1].startswith(feast_sets.RUN_PREFIX) for call in client.calls)
     )
+
+
+RELOAD_RUNS = [f"20261111T0{hour}0000Z-0000a00{hour}" for hour in range(1, 7)]  # oldest first; the cases name them from the newest down
+LAUNCH_RUN = "20261112T010000Z-0000c001"
+
+
+class Reloadable:
+    """The online store of one set that restarts empty: a loader that marks what it loaded and recovers a finished load, as ``online_loader`` does."""
+
+    def __init__(self) -> None:
+        self.loads: list[str] = []
+        self.marker: tuple[str, str] | None = None
+        self.refusal: str | None = None
+
+    def load(self, request: Any) -> str:
+        if self.refusal is not None:
+            raise ReadError(self.refusal)
+        self.loads.append(f"{request.feature_set}:{request.run}:{request.base_run}")
+        self.marker = (request.run, f"load-{len(self.loads)}")
+        return self.marker[1]
+
+    def recover(self, request: Any) -> str | None:
+        return self.marker[1] if self.marker is not None and self.marker[0] == request.run else None
+
+    def restart(self) -> None:
+        self.marker = None
+
+    def loader(self) -> feast_sets.SetLoader:
+        return feast_sets.SetLoader(self.load, self.recover)
+
+
+class CountingStore(feast_sets.FolderHoldStore):
+    """A folder store that remembers which runs it was asked about."""
+
+    def __init__(self, root: Path) -> None:
+        super().__init__(root)
+        self.asked: list[str] = []
+
+    def read(self, name: str, run: str) -> dict[str, Any] | None:
+        self.asked.append(run)
+        return super().read(name, run)
+
+
+def hold_of(model: str, run: str, set_hash: str, **changes: Any) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "feature_set": model,
+        "run_id": run,
+        "base_run": BASE_RUN,
+        "set_schema_sha256": set_hash,
+        "production_set_schema_sha256": [OLD_HASH],
+        **changes,
+    }
+
+
+def release_of(model: str, run: str, set_hash: str, sha: str, **changes: Any) -> dict[str, Any]:
+    return {
+        "schema": 1,
+        "feature_set": model,
+        "run_id": run,
+        "base_run": BASE_RUN,
+        "set_schema_sha256": set_hash,
+        "feature_schema_sha256": sha,
+        "load_id": "load-first",
+        **changes,
+    }
+
+
+def reload_run(model: str, holds: feast_sets.HoldStore, *, runs: list[str], store: Reloadable, production: Any, **injected: Any) -> dict[str, Any]:
+    """One reload of ``model`` with the records in ``holds`` and the committed ``runs`` (newest first), over the stand-in store."""
+    online_reload: Any = importlib.import_module("scripts.features.online_reload")
+    schema, sha = reads.read_schema()
+    wiring: dict[str, Any] = {
+        "schema": (schema, sha),
+        "holds": holds,
+        "loader": store.loader(),
+        "runs": lambda name: list(runs),
+        "production": production,
+        **injected,
+    }
+    return online_reload.reload_set(model, mode="publish_fixture", **wiring)
+
+
+def case_e34_reload_picks_the_newest_run_with_load_evidence(c: Checker) -> None:
+    """After a restart the store is empty: the reload loads the newest committed run that has load evidence (its own load record, or a release bound to its
+    hold) and skips a newer run that is held and not released, because its load was never online."""
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m2", schema=schema)
+    held_new, blank, released, direct = RELOAD_RUNS[5], RELOAD_RUNS[4], RELOAD_RUNS[3], RELOAD_RUNS[2]
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        holds = CountingStore(Path(raw))
+        holds.write_new(feast_sets.HOLD_NAME, held_new, hold_of("m2", held_new, mine))
+        holds.write_new(feast_sets.MATERIALIZE_NAME, held_new, {"feature_set": "m2", "run_id": held_new, "online": "hold"})
+        holds.write_new(feast_sets.MATERIALIZE_NAME, blank, {"feature_set": "m2", "run_id": blank, "online": "offline"})
+        holds.write_new(feast_sets.HOLD_NAME, released, hold_of("m2", released, mine))
+        holds.write_new(feast_sets.RELEASE_NAME, released, release_of("m2", released, mine, sha))
+        loaded_receipt(holds, schema, sha, "m2", direct)
+        store, same = Reloadable(), lambda: {"HAI_2": mine, "HAI_3": mine}
+        result = reload_run("m2", holds, runs=RELOAD_RUNS[::-1], store=store, production=same)
+        c.check("the newest run with evidence is loaded once, with the base run its hold names", store.loads == [f"m2:{released}:{BASE_RUN}"])
+        c.check(
+            "the result says loaded and names the set, the run, the base run and the load",
+            (result["outcome"], result["feature_set"], result["run_id"], result["base_run"]) == ("loaded", "m2", released, BASE_RUN)
+            and result["load_id"] == "load-1",
+        )
+        c.check("the held newer run is named as skipped", result["skipped_held"] == [held_new])
+        c.check("the runs older than the loaded one were not read", direct not in holds.asked and RELOAD_RUNS[1] not in holds.asked)
+        newest = RELOAD_RUNS[5]
+        holds2 = feast_sets.FolderHoldStore(Path(raw) / "second")
+        loaded_receipt(holds2, schema, sha, "m2", newest)
+        holds2.write_new(feast_sets.HOLD_NAME, released, hold_of("m2", released, mine))
+        holds2.write_new(feast_sets.RELEASE_NAME, released, release_of("m2", released, mine, sha))
+        other = Reloadable()
+        result = reload_run("m2", holds2, runs=RELOAD_RUNS[::-1], store=other, production=same)
+        c.check(
+            "a newest run that loaded itself is the run to load",
+            other.loads == [f"m2:{newest}:{BASE_RUN}"] and result["run_id"] == newest and result["skipped_held"] == [],
+        )
+
+
+def case_e34_reload_skips_a_set_without_load_evidence(c: Checker) -> None:
+    """A set whose runs are all held, offline, blank or absent has nothing that was ever online: it is skipped and reported, and loads nothing."""
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m4", schema=schema)
+    held, offline = RELOAD_RUNS[5], RELOAD_RUNS[4]
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        holds = feast_sets.FolderHoldStore(Path(raw))
+        holds.write_new(feast_sets.HOLD_NAME, held, hold_of("m4", held, mine))
+        holds.write_new(feast_sets.MATERIALIZE_NAME, offline, {"feature_set": "m4", "run_id": offline, "online": "offline"})
+        store = Reloadable()
+        result = reload_run("m4", holds, runs=[held, offline, RELOAD_RUNS[3]], store=store, production=lambda: {"HAI_1": mine})
+        c.check("the set is skipped and loads nothing", result["outcome"] == "skipped" and store.loads == [] and store.marker is None)
+        c.check("the report names the reason and the held run", "no load evidence" in result["reason"] and result["skipped_held"] == [held])
+        none = reload_run("m4", holds, runs=[], store=store, production=lambda: {"HAI_1": mine})
+        c.check("a set with no committed run is skipped too", none["outcome"] == "skipped" and store.loads == [])
+
+
+def case_e34_reload_refuses_what_does_not_fit(c: Checker) -> None:
+    """A foreign hold, a record without a load, a changed schema, a Production model on another schema, an open promotion lease and a moved head each stop
+    the reload by name, and nothing is loaded."""
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m2", schema=schema)
+    run = RELOAD_RUNS[5]
+    good = {"HAI_2": mine, "HAI_3": mine}
+
+    def unresolved() -> dict[str, str | None]:
+        raise ReadError("the promotion of model-b (HAI_2) is unresolved: lease generation 3 is open")
+
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        counter = [0]
+        store = Reloadable()
+
+        def attempt(
+            hold: dict[str, Any] | None = None, release: dict[str, Any] | None = None, receipt: dict[str, Any] | None = None, production: Any = None
+        ) -> dict[str, Any]:
+            counter[0] += 1
+            holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+            if hold is not None:
+                holds.write_new(feast_sets.HOLD_NAME, run, hold)
+            if release is not None:
+                holds.write_new(feast_sets.RELEASE_NAME, run, release)
+            if receipt is not None:
+                loaded_receipt(holds, schema, sha, "m2", run, **receipt)
+            return reload_run("m2", holds, runs=[run], store=store, production=production or (lambda: dict(good)))
+
+        c.check("a genuine released run loads", attempt(hold_of("m2", run, mine), release_of("m2", run, mine, sha))["outcome"] == "loaded")
+        store.restart()
+        c.check("the genuine reload asked the store once", len(store.loads) == 1)
+        released = release_of("m2", run, mine, sha)
+        c.refused("a hold of another set is refused", lambda: attempt(hold_of("m1", run, mine), released), "belongs to set m1")
+        c.refused("a hold that names another run is refused", lambda: attempt(hold_of("m2", RELOAD_RUNS[0], mine), released), "names run")
+        c.refused(
+            "a release record without a load ID is refused",
+            lambda: attempt(hold_of("m2", run, mine), {key: value for key, value in released.items() if key != "load_id"}),
+            "load_id",
+        )
+        c.refused(
+            "a release record of another base run is refused",
+            lambda: attempt(hold_of("m2", run, mine), {**released, "base_run": RELOAD_RUNS[0]}),
+            "release record",
+        )
+        c.refused("a direct load record without a load ID is refused", lambda: attempt(receipt={"load_id": None}), "load_id")
+        c.refused("a direct load record of another schema is refused", lambda: attempt(receipt={"set_schema_sha256": OLD_HASH}), "set_schema_sha256")
+        c.refused(
+            "a hold of another schema than the set now has is refused",
+            lambda: attempt(hold_of("m2", run, OLD_HASH), release_of("m2", run, OLD_HASH, sha)),
+            "schema of set m2 changed",
+        )
+        c.refused(
+            "a Production model on another schema is refused by infection type",
+            lambda: attempt(hold_of("m2", run, mine), released, production=lambda: {"HAI_2": mine, "HAI_3": OLD_HASH}),
+            "HAI_3",
+        )
+        c.refused("an unresolved promotion is refused", lambda: attempt(hold_of("m2", run, mine), released, production=unresolved), "unresolved")
+        store.refusal = "before the read: 1 of 8 tables are not at the publication (feature_matrix: main is 9, publication names 8)"
+        c.refused(
+            "a moved head that the load finds is refused and loads nothing", lambda: attempt(hold_of("m2", run, mine), released), "not at the publication"
+        )
+        c.check("no refusal loaded anything online", len(store.loads) == 1)
+        online_reload: Any = importlib.import_module("scripts.features.online_reload")
+        for model in ("m3", "m5", "m6"):
+            c.refused(
+                f"{model} is offline only and is refused",
+                lambda model=model: online_reload.reload_set(model, mode="publish_fixture"),
+                "not an online model set",
+            )
+        c.refused("a name that is not a model set is refused", lambda: online_reload.reload_set("base", mode="publish_fixture"), "not a model set")
+
+
+def case_e34_reload_is_idempotent(c: Checker) -> None:
+    """A store that still holds the ready load is left alone; one that restarted empty is loaded again."""
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    run = RELOAD_RUNS[5]
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        holds = feast_sets.FolderHoldStore(Path(raw))
+        holds.write_new(feast_sets.HOLD_NAME, run, hold_of("m1", run, mine))
+        holds.write_new(feast_sets.RELEASE_NAME, run, release_of("m1", run, mine, sha))
+        store, records = Reloadable(), sorted(path.name for path in Path(raw).rglob("*"))
+        first = reload_run("m1", holds, runs=[run], store=store, production=lambda: {"HAI_1": mine})
+        again = reload_run("m1", holds, runs=[run], store=store, production=lambda: {"HAI_1": mine})
+        c.check(
+            "the first reload loads and the repeat finds the ready load",
+            (first["outcome"], again["outcome"]) == ("loaded", "already_loaded") and len(store.loads) == 1,
+        )
+        c.check("the repeat names the load the store holds", again["load_id"] == first["load_id"] == "load-1")
+        store.restart()
+        third = reload_run("m1", holds, runs=[run], store=store, production=lambda: {"HAI_1": mine})
+        c.check("a store that restarted empty is loaded again", third["outcome"] == "loaded" and len(store.loads) == 2)
+        plain = Reloadable()
+        loaded = reload_run("m1", holds, runs=[run], store=plain, production=lambda: {"HAI_1": mine}, loader=plain.load)
+        c.check("a loader that cannot recover loads", loaded["outcome"] == "loaded" and len(plain.loads) == 1)
+        c.check("the reload wrote no hold, release or load record", sorted(path.name for path in Path(raw).rglob("*")) == records)
+
+
+def case_e34_reload_command(c: Checker) -> None:
+    """``python -m scripts.features.online_reload --model <SET> --run <LAUNCH_RUN>``: its result line and exit codes."""
+    online_reload: Any = importlib.import_module("scripts.features.online_reload")
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m1", schema=schema)
+    run = RELOAD_RUNS[5]
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        holds = feast_sets.FolderHoldStore(Path(raw))
+        holds.write_new(feast_sets.HOLD_NAME, run, hold_of("m1", run, mine))
+        holds.write_new(feast_sets.RELEASE_NAME, run, release_of("m1", run, mine, sha))
+        store, production = Reloadable(), {"HAI_1": mine}
+        wiring: dict[str, Any] = {
+            "schema": (schema, sha),
+            "holds": holds,
+            "loader": store.loader(),
+            "runs": lambda name: [run],
+            "production": lambda: dict(production),
+        }
+
+        def invoke(argv: list[str]) -> tuple[int, str, str]:
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                code = online_reload.main(argv, {}, **wiring)
+            return code, out.getvalue(), err.getvalue()
+
+        arguments = ["--model", "m1", "--run", LAUNCH_RUN, "--mode", "publish_fixture"]
+        code, out, err = invoke(arguments)
+        line = json.loads(out) if out.strip() else {}
+        c.check("a reload exits 0 and prints one result line", code == 0 and err == "" and out.count("\n") == 1)
+        c.check(
+            "the line names the outcome, the set, the run and the load",
+            (line.get("outcome"), line.get("feature_set"), line.get("run_id")) == ("loaded", "m1", run) and "load_id" in line,
+        )
+        code, out, _ = invoke(arguments)
+        c.check("a repeat exits 0 and says already loaded", code == 0 and json.loads(out)["outcome"] == "already_loaded" and len(store.loads) == 1)
+        production["HAI_1"] = OLD_HASH
+        code, out, err = invoke(arguments)
+        c.check("a refusal exits 1 with the cause on stderr and no result line", code == 1 and out == "" and "online_reload failed" in err and "HAI_1" in err)
+        wiring["runs"] = lambda name: []
+        production["HAI_1"] = mine
+        code, out, _ = invoke(arguments)
+        c.check("a set without evidence exits 0 and says skipped", code == 0 and json.loads(out)["outcome"] == "skipped")
+        c.check("a name that is not a model set exits 1", invoke(["--model", "m9", "--run", LAUNCH_RUN])[0] == 1)
+        c.check("a launch run that is not a run ID exits 1", invoke(["--model", "m1", "--run", "latest"])[0] == 1)

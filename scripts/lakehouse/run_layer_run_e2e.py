@@ -233,6 +233,10 @@ def standin(job: Job, module: str, arguments: Sequence[str | Path], environment:
         shared_write(
             "release", model=option(arguments, "--model"), features_run=option(arguments, "--features-run"), mode=option(arguments, "--mode"), run=job.run
         )
+    elif name == "online_reload":
+        if "reload_fails" in DEFECTS:
+            fail(module)
+        shared_write("reload", model=option(arguments, "--model"), launch_run=option(arguments, "--run"), mode=option(arguments, "--mode"), run=job.run)
     elif name == "gold_maintenance":
         maintain_step(job, arguments)
     else:
@@ -1446,6 +1450,56 @@ def case_layer_phase_names_one_phase_of_a_features_task(case: Case) -> None:
     require(kinds() == [], f"{kinds()}")
 
 
+RELOAD_ENVIRONMENT = {"LAYER_PHASE": "reload", "RELEASE_MODEL": "m2", "FEATURES_RUN": ""}
+
+
+def reload_phase(case: Case, phase: str = "release", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
+    """One phase of a reload launch (``host_session start``): the release container of the features task runs the reload of the model set. The launch
+    names no features run, because the reload picks the run of each set itself."""
+    with mock.patch.dict(os.environ, {**RELOAD_ENVIRONMENT, **changes}):
+        return case.phase(layer, phase, label="reload", run=RELEASE_RUN, extra=extra)
+
+
+def case_reload_phase_reloads_the_set_the_launch_names(case: Case) -> None:
+    require(reload_phase(case) == 0, case.err)
+    reloaded = [item for item in writes() if item["kind"] == "reload"]
+    require(
+        reloaded == [{"kind": "reload", "model": "m2", "launch_run": RELEASE_RUN, "mode": "real", "run": RELEASE_RUN}],
+        f"the reload module was not run once for the model set and the run of the launch: {reloaded}",
+    )
+    require(kinds() == ["reload"], f"the reload wrote something else: {kinds()}")
+
+
+def case_a_reload_launch_skips_every_build_phase(case: Case) -> None:
+    for phase in layer_run.PHASES["features"]:
+        require(reload_phase(case, phase) == 0, f"{phase}: {case.err}")
+    require(kinds() == [], f"a build phase worked in a reload launch: {kinds()}")
+    require(case.out.count("skipped") == len(layer_run.PHASES["features"]), case.out)
+
+
+def case_a_reload_without_its_model_fails_by_name(case: Case) -> None:
+    require(reload_phase(case, RELEASE_MODEL="") != 0 and "RELEASE_MODEL" in case.err, case.err)
+    require(kinds() == [], f"a reload that names no model set loaded something: {kinds()}")
+
+
+def case_a_refused_reload_fails_the_phase(case: Case) -> None:
+    DEFECTS.add("reload_fails")
+    require(reload_phase(case) != 0 and "online_reload" in case.err, case.err)
+    require(kinds() == [], f"a refused reload wrote something: {kinds()}")
+
+
+def case_a_dry_reload_loads_nothing(case: Case) -> None:
+    require(reload_phase(case, extra=["--dry-run"]) == 0, case.err)
+    require(kinds() == [] and "dry_run" in case.out, f"{kinds()} {case.out}")
+
+
+def case_a_reload_launch_names_the_features_task_only(case: Case) -> None:
+    for layer, phase in (("silver", "release"), ("gold", "release")):
+        case.err = ""
+        require(reload_phase(case, phase, layer) != 0, f"{layer} {phase} took a reload launch's phase")
+    require(kinds() == [], f"{kinds()}")
+
+
 def case_phase_not_in_layer(case: Case) -> None:
     require(case.phase("gold", "verify") != 0 and "not a phase of gold" in case.err, case.err)
     require(case.phase("features", "verify") != 0, case.err)
@@ -1550,6 +1604,12 @@ CASES: dict[str, Callable[[Case], None]] = {
     "release: a refused release fails the phase": case_a_refused_release_fails_the_phase,
     "release: a dry run loads nothing": case_a_dry_release_loads_nothing,
     "release: LAYER_PHASE names one phase of a features task only": case_layer_phase_names_one_phase_of_a_features_task,
+    "reload: the release container reloads the set the launch names and nothing else": case_reload_phase_reloads_the_set_the_launch_names,
+    "reload: a reload launch skips every build phase": case_a_reload_launch_skips_every_build_phase,
+    "reload: a missing model set fails by name": case_a_reload_without_its_model_fails_by_name,
+    "reload: a refused reload fails the phase": case_a_refused_reload_fails_the_phase,
+    "reload: a dry run loads nothing": case_a_dry_reload_loads_nothing,
+    "reload: only the features task takes a reload launch": case_a_reload_launch_names_the_features_task_only,
 }
 
 

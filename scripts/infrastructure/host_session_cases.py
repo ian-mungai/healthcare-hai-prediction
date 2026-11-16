@@ -11,24 +11,28 @@ import json
 import re
 import tempfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import host_session_code_cases, host_session_group_signal, host_session_refresh_cases
 from scripts.infrastructure.deployed_revisions_cases import CASES as DEPLOYED_REVISION_CASES
-from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, Session
+from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, ReloadTask, Session
 from scripts.infrastructure.host_session_stand_in import (
     CLUSTER,
     CODE_FETCH_FAMILY,
     FAMILIES,
     GROUP,
+    HOST_ADDRESS,
+    LOG_GROUP,
     OPENMETADATA_FAMILY,
     OPENMETADATA_SERVICE,
     PROFILE,
     PROJECT,
     PROVIDER,
     REGION,
+    RELOAD_FAMILY,
     SERVICES,
     StandInHost,
 )
@@ -36,6 +40,7 @@ from scripts.process import TimeoutExpired
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REVIEWED_SCRIPT = host_session_code_cases.REVIEWED_SCRIPT
+IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
 CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
 
@@ -45,23 +50,54 @@ def session_module() -> Any:
     return importlib.import_module("scripts.infrastructure.host_session")
 
 
-def names(openmetadata: bool = False, code_fetch: bool = False) -> Names:
-    """The names the stand-in knows; ``openmetadata`` adds the persistent catalog service and its bootstrap task, ``code_fetch`` the code one-shot."""
+def reload_task() -> ReloadTask:
+    """The features task of the jobs stack as the stand-in knows it: the containers and the empty variables of each, from the job catalog the stack's tests
+    compare with the registered task definition."""
+    containers = json.loads((REPO_ROOT / "config" / "orchestration" / "ecs_broker_jobs.json").read_text(encoding="utf-8"))["jobs"]["features"]["containers"]
+    return ReloadTask(RELOAD_FAMILY, {container: list(variables) for container, variables in containers.items()})
+
+
+def names(openmetadata: bool = False, code_fetch: bool = True, reload: bool = True) -> Names:
+    """The names the stand-in knows; ``openmetadata`` adds the persistent catalog service and its bootstrap task, ``code_fetch`` the code one-shot and
+    ``reload`` the features task, the host address and the log group that the online store reload needs."""
     services = dict(SERVICES, **({"openmetadata": OPENMETADATA_SERVICE} if openmetadata else {}))
     families = dict(
         FAMILIES, **({"openmetadata_bootstrap": OPENMETADATA_FAMILY} if openmetadata else {}), **({"code_fetch": CODE_FETCH_FAMILY} if code_fetch else {})
     )
-    return Names(CLUSTER, GROUP, PROVIDER, PROJECT, dict(sorted(services.items(), key=lambda item: item[0] != "postgres")), families)
+    ordered = dict(sorted(services.items(), key=lambda item: item[0] != "postgres"))
+    return Names(
+        CLUSTER,
+        GROUP,
+        PROVIDER,
+        PROJECT,
+        ordered,
+        families,
+        reload=reload_task() if reload else None,
+        host_address=HOST_ADDRESS if reload else "",
+        log_group=LOG_GROUP if reload else "",
+    )
+
+
+# The code that a host shows after an earlier start with --code-run: the digest of its release and the run ID recorded beside it.
+RECORDED_RUN = "20261108T110000Z-dddddddd"
+RECORDED_SHA = "d" * 64
 
 
 def build(
-    faults: set[str] | None = None, marker: Path | None = None, openmetadata: bool = False, code_fetch: bool = False, checkout: str | None = None
+    faults: set[str] | None = None,
+    marker: Path | None = None,
+    openmetadata: bool = False,
+    code_fetch: bool = True,
+    checkout: str | None = RECORDED_SHA,
+    code_run: str | None = RECORDED_RUN,
+    reload: bool = True,
 ) -> tuple[StandInHost, Session, list[str]]:
-    """A stand-in host and a session wired to it; the third value collects the report lines; ``checkout`` is the code digest the host shows."""
-    host, lines = StandInHost(faults, openmetadata=openmetadata, code_fetch=code_fetch, checkout=checkout), list[str]()
+    """A stand-in host and a session wired to it; the third value collects the report lines. ``checkout`` is the code digest the host shows and ``code_run``
+    the run ID recorded beside it (a host that never ran an install has neither)."""
+    host, lines = StandInHost(faults, openmetadata=openmetadata, code_fetch=code_fetch, checkout=checkout, code_run=code_run), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
     marker = marker or Path(tempfile.mkdtemp(prefix="host_session_case_")) / "polaris_bootstrap.launched"
-    return host, Session(cli, names(openmetadata, code_fetch), Clock(lambda: host.now, host.advance), marker, lines.append), lines
+    return host, Session(cli, names(openmetadata, code_fetch, reload), Clock(lambda: host.now, host.advance), marker, lines.append), lines
 
 
 # The code one-shot's own limit (host_session.CODE_FETCH_SECONDS).
@@ -94,9 +130,10 @@ def happy_start() -> dict[str, bool]:
         "host_prepare uses the Project tag, propagation and managed tags": run.get("--tags") == [f"key=Project,value={PROJECT}"]
         and run.get("--propagate-tags") == ["TASK_DEFINITION"]
         and "--enable-ecs-managed-tags" in run,
-        "order is capacity, host_prepare, then deployments": order[0] == "set-desired-capacity"
-        and order[1] == "run-task"
-        and set(order[2:]) == {"update-service"},
+        "order is capacity, host_prepare, the code tasks, the deployments, then the online store reload": order[0] == "set-desired-capacity"
+        and order[1:4] == ["run-task"] * 3
+        and order[4:7] == ["update-service"] * 3
+        and order[7:] == ["run-task"] * len(session_module().online_sets()),
         "every update forces a new deployment": all(
             "--force-new-deployment" in entry["options"] for entry in host.log if entry["operation"] == "update-service"
         ),
@@ -118,7 +155,7 @@ def registration_timeout() -> dict[str, bool]:
 def provider_membership_lag() -> dict[str, bool]:
     host, session, lines = build({"late_provider:200"})
     session.start()
-    runs = [entry for entry in host.log if entry["operation"] == "run-task"]
+    runs = [entry for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [FAMILIES["host_prepare"]]]
     joined_at = (host.instance_up_at or 0) + host.provider_delay
     waited = [entry for entry in host.log if entry["operation"] == "describe-container-instances" and entry["at"] < joined_at]
     return {
@@ -278,9 +315,16 @@ def bootstrap_guards() -> dict[str, bool]:
 def lost_run_task_reply() -> dict[str, bool]:
     host, session, _ = build({"lose_run_task_reply", "stale_list_tasks"})
     message = failure(session.start)
-    first = [entry["options"].get("--client-token") for entry in host.log if entry["operation"] == "run-task"]
+    prepare = [FAMILIES["host_prepare"]]
+    first = [
+        entry["options"].get("--client-token") for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == prepare
+    ]
     session.start()
-    tokens = [entry["options"].get("--client-token", [None])[0] for entry in host.log if entry["operation"] == "run-task"]
+    tokens = [
+        entry["options"].get("--client-token", [None])[0]
+        for entry in host.log
+        if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == prepare
+    ]
     lost_host, lost_session, _ = build({"lose_run_task_reply:99", "stale_list_tasks"})
     unconfirmed = failure(lost_session.start)
     return {
@@ -468,7 +512,8 @@ def openmetadata_start() -> dict[str, bool]:
     session.start()
     log = [entry for entry in host.log if entry["operation"] in {"set-desired-capacity", "run-task", "update-service"}]
     updates = {entry["options"]["--service"][0]: entry["options"] for entry in log if entry["operation"] == "update-service"}
-    runs = [entry for entry in log if entry["operation"] == "run-task"]
+    runs = [entry for entry in log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] not in ([CODE_FETCH_FAMILY], [RELOAD_FAMILY])]
+    last_reload = max(index for index, entry in enumerate(log) if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [RELOAD_FAMILY])
     last_update = max(index for index, entry in enumerate(log) if entry["operation"] == "update-service")
     bootstrap_run = next(
         index for index, entry in enumerate(log) if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [OPENMETADATA_FAMILY]
@@ -478,7 +523,9 @@ def openmetadata_start() -> dict[str, bool]:
         and host.services[OPENMETADATA_SERVICE]["state"] == "COMPLETED",
         "its deployment also sets the desired count to one": updates[OPENMETADATA_SERVICE].get("--desired-count") == ["1"],
         "no other service gets a desired count": all("--desired-count" not in options for name, options in updates.items() if name != OPENMETADATA_SERVICE),
-        "the bootstrap runs once, after every deployment": len(runs) == 2 and bootstrap_run > last_update,
+        "the bootstrap runs once, after every deployment and the online store reload": len(runs) == 2
+        and bootstrap_run > last_update
+        and bootstrap_run > last_reload,
         "the bootstrap used the Project tag and propagation": log[bootstrap_run]["options"].get("--tags") == [f"key=Project,value={PROJECT}"],
         "the bootstrap finished with exit code zero": any(line.startswith("openmetadata_bootstrap: exit codes") for line in lines),
         "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
@@ -500,8 +547,8 @@ def openmetadata_bootstrap_absent_without_the_flag() -> dict[str, bool]:
     host, session, lines = build()
     session.start()
     return {
-        "only host_prepare runs": [entry["options"]["--task-definition"][0] for entry in host.log if entry["operation"] == "run-task"]
-        == [FAMILIES["host_prepare"]],
+        "no catalog bootstrap runs": [entry["options"]["--task-definition"][0] for entry in host.log if entry["operation"] == "run-task"]
+        == [FAMILIES["host_prepare"], CODE_FETCH_FAMILY, CODE_FETCH_FAMILY, *[RELOAD_FAMILY] * len(session_module().online_sets())],
         "no desired count is sent": all("--desired-count" not in entry["options"] for entry in host.log if entry["operation"] == "update-service"),
         "no catalog line is reported": not any("openmetadata" in line for line in lines),
     }
@@ -640,7 +687,8 @@ def code_start_passes_the_run_and_digest() -> dict[str, bool]:
         == {"CODE_RUN_ID": CODE_RUN, "CODE_SHA256": CODE_SHA, "CODE_MODE": "verify"},
         "both carry the reviewed installer as their command": all(code_command(item) == REVIEWED_SCRIPT.read_text(encoding="utf-8") for item in runs),
         "they run after host_prepare and before every deployment": order[:3] == [FAMILIES["host_prepare"], CODE_FETCH_FAMILY, CODE_FETCH_FAMILY]
-        and set(order[3:]) == {"update-service"},
+        and order[3:6] == ["update-service"] * 3,
+        "the reload launches follow the deployments": order[6:] == [RELOAD_FAMILY] * len(session_module().online_sets()),
         "it uses the Project tag and propagation": runs[0].get("--tags") == [f"key=Project,value={PROJECT}"]
         and runs[0].get("--propagate-tags") == ["TASK_DEFINITION"],
         "the host shows the new code": host.checkout == CODE_SHA,
@@ -650,20 +698,22 @@ def code_start_passes_the_run_and_digest() -> dict[str, bool]:
 
 
 def code_start_without_code_keeps_the_checkout() -> dict[str, bool]:
-    host, session, _ = build(code_fetch=True, checkout=OLD_SHA)
+    host, session, _ = build(code_fetch=True, checkout=OLD_SHA, code_run=OTHER_RUN)
     session.start()
     runs = runs_of(host, CODE_FETCH_FAMILY)
     return {
-        "the code one-shot still runs, to check the checkout": len(runs) == 1,
-        "it carries no run ID and no digest": code_environment(runs[0]) == {},
-        "it carries the reviewed installer as its command": code_command(runs[0]) == REVIEWED_SCRIPT.read_text(encoding="utf-8"),
+        "the code one-shot still runs, to check the checkout, and then names its run": len(runs) == 2,
+        "the check carries no run ID and no digest": code_environment(runs[0]) == {},
+        "the check carries the reviewed installer as its command": code_command(runs[0]) == REVIEWED_SCRIPT.read_text(encoding="utf-8"),
+        "the identity task carries its own script and its mode": code_command(runs[1]) == IDENTIFY_SCRIPT.read_text(encoding="utf-8")
+        and code_environment(runs[1]) == {"CODE_MODE": "identify"},
         "the host keeps its checkout": host.checkout == OLD_SHA,
         "every service runs": all(service["running"] == 1 for service in host.services.values()),
     }
 
 
 def code_start_without_code_on_an_empty_host_is_refused() -> dict[str, bool]:
-    host, session, _ = build(code_fetch=True)
+    host, session, _ = build(code_fetch=True, checkout=None, code_run=None)
     message = failure(session.start)
     return {
         "start fails": message is not None and "code_fetch" in message,
@@ -838,7 +888,7 @@ def code_fetch_launch_retries_stay_inside_the_limit() -> dict[str, bool]:
 
 
 def code_given_without_the_one_shot_is_refused() -> dict[str, bool]:
-    host, session, _ = build()
+    host, session, _ = build(code_fetch=False)
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
     return {
         "start refuses code it cannot place": message is not None and "code_fetch" in message,
@@ -857,6 +907,9 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
     started: list[dict[str, Any]] = []
 
     class Recorder:
+        def __init__(self, reload: bool = False) -> None:
+            self.reload = reload
+
         def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
             started.append({"keep_on": keep_on, "code": code})
 
@@ -878,6 +931,332 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
         **{f"{name} is a usage error": code == 2 for name, code in codes.items()},
         "a refused option opens no session": len(started) <= 1,
         "a well-formed pair reaches start as the code to place": accepted == 0 and started == [{"keep_on": False, "code": (CODE_RUN, CODE_SHA)}],
+    }
+
+
+RUN_ID_FORM = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
+
+
+def reload_runs(host: StandInHost) -> list[dict[str, Any]]:
+    """The reload launches that the stand-in saw, in order."""
+    return list(host.reloads)
+
+
+def sets_online() -> list[str]:
+    return session_module().online_sets()
+
+
+def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, bool]:
+    host, session, lines = build(openmetadata=True)
+    session.start(code=(CODE_RUN, CODE_SHA))
+    launches = reload_runs(host)
+    log = [entry for entry in host.log if entry["operation"] in {"run-task", "update-service"}]
+    last_update = max(index for index, entry in enumerate(log) if entry["operation"] == "update-service")
+    reload_at = [index for index, entry in enumerate(log) if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [RELOAD_FAMILY]]
+    bootstrap_at = next(index for index, entry in enumerate(log) if entry["options"].get("--task-definition") == [OPENMETADATA_FAMILY])
+    release = [item["launch"]["release"] for item in launches]
+    variables = reload_task().variables
+    return {
+        "the online sets come from the feature schema": sets_online() == ["m1", "m2", "m4"],
+        "one launch per online set, in order": [item["model"] for item in launches] == sets_online(),
+        "every launch is after the last deployment and every service was stable": len(reload_at) == len(sets_online())
+        and min(reload_at) > last_update
+        and all(item["services_stable"] for item in launches),
+        "the catalog bootstrap runs after the last reload": bootstrap_at > max(reload_at),
+        "the launches run one at a time": all(launches[index]["at"] < launches[index + 1]["at"] for index in range(len(launches) - 1)),
+        "each launch is a reload of its set with the code run, and the fetch container has the digest": all(
+            item["launch"]["release"]["LAYER_PHASE"] == "reload"
+            and item["launch"]["release"]["RELEASE_MODEL"] == item["model"]
+            and item["launch"]["release"]["CODE_RUN_ID"] == CODE_RUN
+            and item["launch"]["release"]["FEATURES_RUN"] == ""
+            and item["launch"]["fetch"]["CODE_RUN_ID"] == CODE_RUN
+            and item["launch"]["fetch"]["CODE_SHA256"] == CODE_SHA
+            for item in launches
+        ),
+        "each launch names the host's Polaris address": all(item["POLARIS_URI"] == f"http://{HOST_ADDRESS}:8181/api/catalog" for item in release),
+        "each launch has a run ID of its own": all(RUN_ID_FORM.fullmatch(item["RUN_ID"]) for item in release)
+        and len({item["RUN_ID"] for item in release}) == len(release),
+        "every container of the features task gets exactly its variables": all(
+            {container: list(item["launch"][container]) for container in variables} == variables for item in launches
+        ),
+        "every build container is told the reload phase and the release container is the one that reloads": all(
+            item["launch"][container].get("LAYER_PHASE", "reload") == "reload" for item in launches for container in item["launch"]
+        ),
+        "every set is online with the code of the start": host.online == {model: (CODE_RUN, CODE_SHA) for model in sets_online()},
+        "the launches use the Project tag, propagation and a client token": all(
+            entry["options"].get("--tags") == [f"key=Project,value={PROJECT}"] and entry["options"].get("--client-token")
+            for entry in host.log
+            if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [RELOAD_FAMILY]
+        ),
+        "output names no ARN or account ID": not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def start_without_code_reloads_the_recorded_run() -> dict[str, bool]:
+    host, session, lines = build(checkout=OLD_SHA, code_run=OTHER_RUN)
+    session.start()
+    release = [item["launch"]["fetch"] for item in reload_runs(host)]
+    reads = [entry for entry in host.log if entry["service"] == "logs"]
+    return {
+        "every reload carries the run and digest recorded for the checkout": len(release) == len(sets_online())
+        and all(item["CODE_RUN_ID"] == OTHER_RUN and item["CODE_SHA256"] == OLD_SHA for item in release),
+        "the identity came from the log of the identity task in the code log group": len(reads) == 1
+        and reads[0]["options"]["--log-group-name"] == [LOG_GROUP]
+        and reads[0]["options"]["--log-stream-name"][0].startswith("code_fetch/code_fetch/"),
+        "the identity is reported by run only": any(line == f"code_identity: {OTHER_RUN}" for line in lines),
+        "the host keeps its checkout": host.checkout == OLD_SHA,
+    }
+
+
+def start_with_code_does_not_read_the_record() -> dict[str, bool]:
+    host, session, _ = build(checkout=OLD_SHA, code_run=OTHER_RUN)
+    session.start(code=(CODE_RUN, CODE_SHA))
+    modes = [(code_environment(item) or {}).get("CODE_MODE", "install") for item in runs_of(host, CODE_FETCH_FAMILY)]
+    return {
+        "the flags win: the code tasks are the install and the verification, with no identity task": modes == ["install", "verify"],
+        "no log is read": not any(entry["service"] == "logs" for entry in host.log),
+        "every reload carries the run and digest given": all(
+            item["launch"]["fetch"]["CODE_RUN_ID"] == CODE_RUN and item["launch"]["fetch"]["CODE_SHA256"] == CODE_SHA for item in reload_runs(host)
+        ),
+        "the install replaces the record of the digest": host.code_run == CODE_RUN and host.checkout == CODE_SHA,
+    }
+
+
+def start_without_a_code_record_is_refused() -> dict[str, bool]:
+    host, session, _ = build({"no_code_record"})
+    message = failure(session.start)
+    return {
+        "start fails and names the missing record": message is not None and "code run record" in message and "repo_releases/<digest>/run_id" in message,
+        "it names the way out": message is not None and "--code-run" in message and "--code-sha256" in message,
+        "no service is deployed and no reload is launched": not any(entry["operation"] == "update-service" for entry in host.log) and reload_runs(host) == [],
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def start_without_a_code_record_keeps_the_host_with_keep_on() -> dict[str, bool]:
+    host, session, lines = build({"no_code_record"})
+    message = failure(lambda: session.start(keep_on=True))
+    return {
+        "start fails the same way": message is not None and "code run record" in message,
+        "the host is left on for diagnosis": host.desired == 1 and any(line.startswith("host_kept_on") for line in lines),
+    }
+
+
+def an_identity_log_that_never_shows_the_line_fails_visibly() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    for fault in ("no_identity_log", "bad_identity_line"):
+        host, session, _ = build({fault})
+        begun = host.now
+        message = failure(session.start)
+        checks[f"{fault}: start fails inside the identity wait and names it"] = message is not None and "code identity log" in message
+        checks[f"{fault}: no service is deployed, nothing is reloaded and the host is off"] = (
+            not any(entry["operation"] == "update-service" for entry in host.log) and reload_runs(host) == [] and host.desired == 0
+        )
+        checks[f"{fault}: the wait is bounded"] = host.now - begun < 3000
+    return checks
+
+
+def an_unreadable_log_fails_start_by_name() -> dict[str, bool]:
+    host, session, _ = build()
+    session.names = replace(session.names, log_group="another-log-group")
+    message = failure(session.start)
+    return {
+        "a log group that has no such stream fails start inside the identity wait": message is not None and "code identity log" in message,
+        "no service is deployed and the host is off": not any(entry["operation"] == "update-service" for entry in host.log) and host.desired == 0,
+    }
+
+
+def a_failed_reload_stops_the_host_and_names_the_set() -> dict[str, bool]:
+    host, session, lines = build({"reload_fails:m2"}, openmetadata=True)
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start fails and names the set": message is not None and "online store reload of set m2 failed" in message and "exit codes" in message,
+        "the sets before it were reloaded and the set after it was not launched": list(host.online) == ["m1"]
+        and [item["model"] for item in reload_runs(host)] == ["m1", "m2"],
+        "the catalog bootstrap does not run": not any(
+            entry["options"].get("--task-definition") == [OPENMETADATA_FAMILY] for entry in host.log if entry["operation"] == "run-task"
+        ),
+        "the host is turned off again": host.desired == 0,
+        "the message names no ARN or account ID": not ARN_OR_ACCOUNT.search(message or "") and not any(ARN_OR_ACCOUNT.search(line) for line in lines),
+    }
+
+
+def a_failed_reload_keeps_the_host_with_keep_on() -> dict[str, bool]:
+    host, session, lines = build({"exit_code:online_reload=1"})
+    message = failure(lambda: session.start(keep_on=True, code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start fails on the first set": message is not None and "set m1" in message and len(reload_runs(host)) == 1,
+        "the host stays on and says so": host.desired == 1 and any(line.startswith("host_kept_on") for line in lines),
+    }
+
+
+def a_reload_task_that_never_starts_is_a_failed_start() -> dict[str, bool]:
+    host, session, _ = build({"never_starts:online_reload"})
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start fails and names the set and the stop reason": message is not None and "set m1" in message and "task failed to start" in message,
+        "the failure is not taken for a script that ran": message is not None and "Traceback" not in message,
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def a_reload_that_passes_its_deadline_is_a_failed_start() -> dict[str, bool]:
+    host, session, _ = build({"task_seconds:online_reload=99999"})
+    begun = host.now
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start fails inside the reload's bounded wait": message is not None and "set m1" in message and "2400 s" in message,
+        "the wait ended at its limit, not later": host.now - begun < 2400 + 1500,
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def a_lost_reload_reply_launches_the_reload_once() -> dict[str, bool]:
+    host, session, _ = build({"stale_list_tasks"})
+    session.start(code=(CODE_RUN, CODE_SHA))
+    before = len(runs_of(host, RELOAD_FAMILY))
+    host.lost_replies = 1
+    session.reload_online_store((CODE_RUN, CODE_SHA))
+    second = runs_of(host, RELOAD_FAMILY)[before:]
+    tokens = [item["--client-token"][0] for item in second]
+    return {
+        "the lost reply is retried: one launch more than sets": len(second) == len(sets_online()) + 1,
+        "the retry of the lost launch carries the same client token": tokens[0] == tokens[1],
+        "every set gets its own token": len(set(tokens)) == len(sets_online()),
+        "the accepted launch is not doubled": len([task for task in host.tasks.values() if task["key"] == "online_reload"]) == 2 * len(sets_online()),
+    }
+
+
+def a_running_features_task_is_awaited_and_never_taken_for_the_reload() -> dict[str, bool]:
+    host, session, lines = build()
+    session.host_on()
+    running = host.add_task(RELOAD_FAMILY)
+    host.tasks[running]["stops_at"] = host.now + 300
+    stops_at = host.tasks[running]["stops_at"]
+    session.reload_online_store((CODE_RUN, CODE_SHA))
+    launches = [entry["at"] for entry in host.log if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [RELOAD_FAMILY]]
+    return {
+        "the reload launches only after the other features task stopped": len(launches) == len(sets_online()) and launches[0] >= stops_at,
+        "the other task was not counted as a reload": len(reload_runs(host)) == len(sets_online()),
+        "the wait is reported": any("another run or digest" in line for line in lines),
+    }
+
+
+def start_refuses_a_stack_that_cannot_reload() -> dict[str, bool]:
+    checks: dict[str, bool] = {}
+    stacks: tuple[tuple[str, dict[str, Any], str], ...] = (
+        ("a jobs stack with no features task", {"reload": False}, "host_run_tasks.features.task_definition"),
+        ("a stack with no code one-shot and no code given", {"code_fetch": False}, "code_fetch"),
+    )
+    for name, kwargs, needle in stacks:
+        host, session, _ = build(**kwargs)
+        message = failure(session.start)
+        checks[f"{name} is refused by name"] = message is not None and needle in message
+        checks[f"{name}: the host is never turned on"] = not any(entry["operation"] == "set-desired-capacity" for entry in host.log)
+    host, session, _ = build()
+    session.names = replace(session.names, host_address="")
+    message = failure(session.start)
+    checks["a platform without the host address is refused by name"] = message is not None and "host_private_ip" in message and host.log == []
+    host, session, _ = build()
+    session.names = replace(session.names, log_group="")
+    message = failure(session.start)
+    checks["a start that needs the log and has no log group is refused by name"] = message is not None and "log_group_names" in message and host.log == []
+    host, session, _ = build()
+    session.names = replace(session.names, log_group="")
+    session.start(code=(CODE_RUN, CODE_SHA))
+    checks["a start with the code given needs no log group"] = len(reload_runs(host)) == len(sets_online())
+    return checks
+
+
+def a_features_variable_that_the_reload_cannot_fill_is_refused() -> dict[str, bool]:
+    host, session, _ = build()
+    task = reload_task()
+    session.names = replace(session.names, reload=ReloadTask(task.family, {**task.variables, "release": [*task.variables["release"], "SURPRISE"]}))
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "the new variable is refused by name after the services, before any launch": message is not None and "SURPRISE" in message and reload_runs(host) == [],
+        "the host is turned off again": host.desired == 0,
+    }
+
+
+def the_online_sets_follow_the_feature_schema() -> dict[str, bool]:
+    module = session_module()
+    document = json.loads(module.FEATURE_SCHEMA.read_text(encoding="utf-8"))
+    changed = {**document, "model_sets": {name: {**entry, "online": name == "m3"} for name, entry in document["model_sets"].items()}}
+    with tempfile.TemporaryDirectory(prefix="host_session_schema_") as raw:
+        schema = Path(raw) / "feature_schema.json"
+        schema.write_text(json.dumps(changed), encoding="utf-8")
+        original = module.FEATURE_SCHEMA
+        module.FEATURE_SCHEMA = schema
+        try:
+            host, session, _ = build()
+            session.start(code=(CODE_RUN, CODE_SHA))
+        finally:
+            module.FEATURE_SCHEMA = original
+    return {
+        "the sets that are online in the schema are the sets reloaded": [item["model"] for item in reload_runs(host)] == ["m3"],
+        "the real schema lists the sets with an online load": sorted(name for name, entry in document["model_sets"].items() if entry["online"])
+        == sets_online(),
+    }
+
+
+def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
+    module: Any = importlib.import_module("scripts.infrastructure.host_session")
+    platform = {
+        "cluster_name": {"value": CLUSTER},
+        "host_autoscaling_group_name": {"value": GROUP},
+        "ec2_capacity_provider_name": {"value": PROVIDER},
+        "project_tag": {"value": PROJECT},
+        "host_private_ip": {"value": HOST_ADDRESS},
+        "log_group_names": {"value": {"airflow": LOG_GROUP, "polaris": "other"}},
+    }
+    services = {
+        "service_names": {"value": {"airflow_scheduler": "a", "polaris": "p", "postgres": "q"}},
+        "one_shot_run_task": {"value": {key: {"task_definition": family} for key, family in FAMILIES.items()}},
+    }
+    variables = {"fetch": ["RUN_ID"], "release": ["RUN_ID", "LAYER_PHASE"]}
+    jobs: dict[str, Any] = {"host_run_tasks": {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": variables}}}}
+    reads: list[Any] = []
+
+    def terraform(document: dict[str, Any]) -> Callable[..., dict[str, Any]]:
+        def read(directory: Path, *_: Any, **__: Any) -> dict[str, Any]:
+            reads.append(directory)
+            return platform if directory == module.PLATFORM_DIRECTORY else jobs if directory == module.JOBS_DIRECTORY else document
+
+        return read
+
+    original = module.terraform_document
+    try:
+        module.terraform_document = terraform(services)
+        plain = module.load_names({})
+        plain_reads = list(reads)
+        reads.clear()
+        full = module.load_names({}, reload=True)
+        jobs["host_run_tasks"] = {"value": None}
+        off = module.load_names({}, reload=True)
+        jobs["host_run_tasks"] = {"value": {"batch": {"task_definition": "x"}}}
+        missing = module.load_names({}, reload=True)
+        jobs["host_run_tasks"] = {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": {"fetch": ["RUN_ID"]}}}}
+        no_release = module.load_names({}, reload=True)
+        platform.pop("host_private_ip")
+        platform.pop("log_group_names")
+        bare = module.load_names({})
+    finally:
+        module.terraform_document = original
+    return {
+        "a command that does not start reads no jobs output": module.JOBS_DIRECTORY not in plain_reads and plain.reload is None,
+        "start reads the platform, the services and the jobs outputs": set(reads)
+        == {module.PLATFORM_DIRECTORY, module.SERVICES_DIRECTORY, module.JOBS_DIRECTORY},
+        "the features task, the address and the log group come from the outputs": full.reload == ReloadTask(RELOAD_FAMILY, variables)
+        and full.host_address == HOST_ADDRESS
+        and full.log_group == LOG_GROUP,
+        "a null host_run_tasks, a missing features task and a task with no release container are no reload task": (
+            off.reload,
+            missing.reload,
+            no_release.reload,
+        )
+        == (None, None, None),
+        "a platform without the two outputs loads, so stop and status never wait on them": bare.host_address == "" and bare.log_group == "",
     }
 
 
@@ -928,6 +1307,23 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "code_fetch_launch_retries_stay_inside_the_limit": code_fetch_launch_retries_stay_inside_the_limit,
     "code_given_without_the_one_shot_is_refused": code_given_without_the_one_shot_is_refused,
     "code_options_are_checked_before_any_call": code_options_are_checked_before_any_call,
+    "start_reloads_every_online_set_after_the_services_are_stable": start_reloads_every_online_set_after_the_services_are_stable,
+    "start_without_code_reloads_the_recorded_run": start_without_code_reloads_the_recorded_run,
+    "start_with_code_does_not_read_the_record": start_with_code_does_not_read_the_record,
+    "start_without_a_code_record_is_refused": start_without_a_code_record_is_refused,
+    "start_without_a_code_record_keeps_the_host_with_keep_on": start_without_a_code_record_keeps_the_host_with_keep_on,
+    "an_identity_log_that_never_shows_the_line_fails_visibly": an_identity_log_that_never_shows_the_line_fails_visibly,
+    "an_unreadable_log_fails_start_by_name": an_unreadable_log_fails_start_by_name,
+    "a_failed_reload_stops_the_host_and_names_the_set": a_failed_reload_stops_the_host_and_names_the_set,
+    "a_failed_reload_keeps_the_host_with_keep_on": a_failed_reload_keeps_the_host_with_keep_on,
+    "a_reload_task_that_never_starts_is_a_failed_start": a_reload_task_that_never_starts_is_a_failed_start,
+    "a_reload_that_passes_its_deadline_is_a_failed_start": a_reload_that_passes_its_deadline_is_a_failed_start,
+    "a_lost_reload_reply_launches_the_reload_once": a_lost_reload_reply_launches_the_reload_once,
+    "a_running_features_task_is_awaited_and_never_taken_for_the_reload": a_running_features_task_is_awaited_and_never_taken_for_the_reload,
+    "start_refuses_a_stack_that_cannot_reload": start_refuses_a_stack_that_cannot_reload,
+    "a_features_variable_that_the_reload_cannot_fill_is_refused": a_features_variable_that_the_reload_cannot_fill_is_refused,
+    "the_online_sets_follow_the_feature_schema": the_online_sets_follow_the_feature_schema,
+    "load_names_reads_the_jobs_outputs_for_start_only": load_names_reads_the_jobs_outputs_for_start_only,
 }
 
 

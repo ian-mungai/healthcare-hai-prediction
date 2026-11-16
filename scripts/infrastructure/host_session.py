@@ -24,6 +24,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -34,6 +35,8 @@ from scripts.infrastructure.render_project_config import REPO_ROOT, Configuratio
 from scripts.process import CompletedProcess
 
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
+JOBS_DIRECTORY = REPO_ROOT / "infra" / "jobs"
+FEATURE_SCHEMA = REPO_ROOT / "data_contracts" / "features" / "feature_schema.json"
 BOOTSTRAP_MARKER = REPO_ROOT / "data" / "host_session" / "polaris_bootstrap.launched"
 STATE_FILE = "terraform.tfstate"
 MISSING = "MISSING"
@@ -61,6 +64,16 @@ CODE_FETCH_SECONDS = 1200
 CODE_RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
+CODE_IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
+CODE_IDENTITY = re.compile(r"code_identify: identity run ([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}) code ([a-f0-9]{64})")
+CODE_IDENTITY_SECONDS = 180
+CODE_LOG_CONTAINER = "code_fetch"  # the container name is also the awslogs stream prefix of the code task
+LOG_COMPONENT = "airflow"  # the log group component of the code one-shot (infra/services/main.tf container_component)
+ONLINE_RELOAD = "online_reload"
+ONLINE_RELOAD_SECONDS = 2400  # the features task: code fetch, then the load of one set (feast_job.JOB_SECONDS is 1800)
+RELOAD_PHASE = "reload"
+RELOAD_CONTAINER = "release"
+POLARIS_PORT = 8181
 # The reviewed installer. Every code task carries its text as the container command, so the registered task definition, which may still hold an older
 # installer, never decides how the code is installed, verified or restored.
 CODE_FETCH_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
@@ -162,8 +175,20 @@ class Clock:
 
 
 @dataclass(frozen=True)
+class ReloadTask:
+    """The features host task of the jobs stack (output ``host_run_tasks.features``): its family and, per container, the variables a launch must fill."""
+
+    family: str
+    variables: dict[str, list[str]]
+
+
+@dataclass(frozen=True)
 class Names:
-    """The names a session needs, read from Terraform outputs; ``services`` has the first service first."""
+    """The names a session needs, read from Terraform outputs; ``services`` has the first service first.
+
+    ``reload``, ``host_address`` and ``log_group`` are what ``start`` needs for the online store reload: the features task of the jobs stack, the host's private
+    address (the Polaris endpoint the task is given) and the log group of the code one-shot (where its identity line is read). They are empty when the outputs
+    are missing or the command does not read them (only ``start`` does), and ``start`` refuses by name when one is empty."""
 
     cluster: str
     group: str
@@ -172,6 +197,9 @@ class Names:
     services: dict[str, str]
     one_shot: dict[str, str]
     state_serial: int | None = None
+    reload: ReloadTask | None = None
+    host_address: str = ""
+    log_group: str = ""
 
 
 def tolerant_runner(*args: Any, **kwargs: Any) -> CompletedProcess[str]:
@@ -209,8 +237,20 @@ def limit(remaining: Callable[[], float] | None) -> dict[str, float]:
     return {} if remaining is None else {"timeout": remaining()}
 
 
-def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None) -> Names:
-    """Read the platform and services outputs with the project profile.
+def reload_task(jobs: dict[str, Any]) -> ReloadTask | None:
+    """The features host task of the jobs outputs, or None when ``host_run_tasks`` is null (host jobs are off) or has no features task with a family and its
+    container variables."""
+    tasks = (jobs.get("host_run_tasks") or {}).get("value")
+    features = tasks.get("features") if isinstance(tasks, dict) else None
+    family = features.get("task_definition") if isinstance(features, dict) else None
+    variables = features.get("container_environment") if isinstance(features, dict) else None
+    if not isinstance(family, str) or not family or not isinstance(variables, dict) or RELOAD_CONTAINER not in variables:
+        return None
+    return ReloadTask(family, {str(container): [str(name) for name in names] for container, names in variables.items()})
+
+
+def load_names(settings: dict[str, str], remaining: Callable[[], float] | None = None, reload: bool = False) -> Names:
+    """Read the platform and services outputs with the project profile; with ``reload`` also the jobs outputs (``start`` only: a stop never waits for them).
 
     ``remaining`` gives the seconds left under the caller's deadline. It is read before each lookup, which gets only that much time.
     """
@@ -224,6 +264,8 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
     for key in (HOST_PREPARE, POLARIS_BOOTSTRAP):
         if key not in one_shot:
             raise ConfigurationError(f"The one_shot_run_task output has no {key} task.")
+    jobs = terraform_document(JOBS_DIRECTORY, ["output", "-json"], settings, "The jobs outputs could not be read.", **limit(remaining)) if reload else {}
+    address, groups = (platform.get(name, {}).get("value") for name in ("host_private_ip", "log_group_names"))
     return Names(
         cluster=output_value(platform, "cluster_name", str),
         group=output_value(platform, "host_autoscaling_group_name", str),
@@ -235,6 +277,9 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
             for key in (HOST_PREPARE, POLARIS_BOOTSTRAP, *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH) if optional in one_shot))
         },
         state_serial=services_state_serial(SERVICES_DIRECTORY),
+        reload=reload_task(jobs),
+        host_address=address if isinstance(address, str) else "",
+        log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
     )
 
 
@@ -418,14 +463,14 @@ class Session:
             return launched
         raise HostSessionError(f"{key} RunTask unconfirmed after {RUN_TASK_ATTEMPTS} attempts; the task may be running")
 
-    def one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None = None) -> None:
+    def one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None = None) -> str:
         """Run ``run_one_shot`` under one session deadline, so every AWS call of the one-shot, a RunTask retry included, gets only the time left of
-        ``seconds`` and is refused once it has passed."""
+        ``seconds`` and is refused once it has passed. The answer is the ARN of the task that ran."""
         outer = self.deadline
         end = self.clock.now() + seconds
         self.deadline = end if outer is None else min(end, outer)
         try:
-            self.run_one_shot(key, seconds, overrides)
+            return self.run_one_shot(key, seconds, overrides)
         except HostSessionError as error:
             # A call refused by the deadline names only the AWS operation; the owner reads which one-shot it was.
             if not str(error).startswith(key):
@@ -434,14 +479,22 @@ class Session:
         finally:
             self.deadline = outer
 
-    def run_one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None) -> None:
+    def family_of(self, key: str) -> str:
+        """The task family of a one-shot key: the features task for an online store reload, otherwise the services stack's one-shot."""
+        if key.startswith(ONLINE_RELOAD):
+            if self.names.reload is None:
+                raise HostSessionError(f"{key}: the jobs stack has no features host task")
+            return self.names.reload.family
+        return self.names.one_shot[key]
+
+    def run_one_shot(self, key: str, seconds: int, overrides: dict[str, Any] | None) -> str:
         """Run a one-shot task once and require exit code 0. The caller's session deadline bounds everything: each wait is capped by it and each AWS call
         is refused once it has passed, so the wait for an earlier task, the launch with its retries and the wait for the stop share one limit.
 
         A running task of the family with the same code overrides is awaited, never doubled. A running task with other code overrides is awaited until it
         stops, then the requested task launches, so two tasks of the family never run at once and the requested code is the code that is installed.
         """
-        family = self.names.one_shot[key]
+        family = self.family_of(key)
 
         running = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--family", family, "--desired-status", "RUNNING"]).get("taskArns", [])
         if running and not self.same_code(key, running, overrides):
@@ -474,6 +527,7 @@ class Session:
             ran = bool(exits) and all(isinstance(code, int) for code in exits.values()) and stopped_task.get("stopCode") != "TaskFailedToStart"
             raise TaskExitError(message) if ran else HostSessionError(message)
         self.step(key, f"exit codes {exits}")
+        return str(task)
 
     def described(self, key: str, arns: list[str]) -> list[dict[str, Any]]:
         """The described tasks of ``arns``; a failure entry or a missing task raises, as the wait of ``one_shot`` does."""
@@ -488,6 +542,8 @@ class Session:
 
     def same_code(self, key: str, arns: list[str], overrides: dict[str, Any] | None) -> bool:
         """True when every task in ``arns`` runs with the code environment (CODE_RUN_ID, CODE_SHA256, CODE_MODE) and the command that ``overrides`` ask for."""
+        if key.startswith(ONLINE_RELOAD):
+            return False  # a features task of any other launch is never this reload: wait for it to stop, then launch
         wanted = (code_environment(overrides, key), code_command(overrides, key))
         return all((code_environment(task.get("overrides"), key), code_command(task.get("overrides"), key)) == wanted for task in self.described(key, arns))
 
@@ -602,16 +658,17 @@ class Session:
         the reviewed installer as the command."""
         environment = [] if code is None else [{"name": "CODE_RUN_ID", "value": code[0]}, {"name": "CODE_SHA256", "value": code[1]}]
         environment += [] if mode == "install" else [{"name": "CODE_MODE", "value": mode}]
-        script = CODE_FETCH_SCRIPT.read_text(encoding="utf-8")
+        script = (CODE_IDENTIFY_SCRIPT if mode == "identify" else CODE_FETCH_SCRIPT).read_text(encoding="utf-8")
         return {"containerOverrides": [{"name": CODE_FETCH, "environment": environment, "command": [script]}]}
 
-    def place_code(self, code: tuple[str, str] | None) -> None:
-        """Run the code tasks after host_prepare: with ``code`` (run ID, code digest) the install of that archive as /data/repo and then a separate
-        verification that repo shows the release and the release holds every file of its archive; without it a check that the existing checkout is a
-        complete release, which fails on a host that has none. Each task runs the reviewed installer as its command. When a task ran and failed, a restore
-        task makes repo show a verified checkout again, and the error says what repo shows. start stops the host before any service."""
+    def place_code(self, code: tuple[str, str] | None) -> tuple[str, str]:
+        """Run the code tasks after host_prepare and answer the code run ID and digest of the checkout: with ``code`` (run ID, code digest) the install of that
+        archive as /data/repo and then a separate verification that repo shows the release and the release holds every file of its archive; without it a check
+        that the existing checkout is a complete release, which fails on a host that has none, and then the identity task, which reads the run ID that the
+        install recorded beside the digest of the release repo shows (``read_identity``). Each task runs a reviewed script as its command. When a task ran and
+        failed, a restore task makes repo show a verified checkout again, and the error says what repo shows. start stops the host before any service."""
         if CODE_FETCH not in self.names.one_shot:
-            return
+            raise HostSessionError("the code_fetch one-shot is missing: apply the services stack with code_fetch_task_role_arn first")
         try:
             self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(code))
             if code is not None:
@@ -621,6 +678,38 @@ class Session:
             raise HostSessionError(f"{error}; {self.restore_code(code)}") from None
         except HostSessionError as error:
             raise HostSessionError(f"{error}; the code task did not run to its end, so what repo shows is not known; no service was deployed") from None
+        return code if code is not None else self.read_identity()
+
+    def read_identity(self) -> tuple[str, str]:
+        """The code run ID and digest of the release that repo shows, from the identity task (``infra/services/scripts/code_identify.py``): it prints one
+        line from the record that the install wrote beside the digest, and this reads that line from the task's log. A host with no record is refused by
+        name: give --code-run and --code-sha256 once, which writes it."""
+        missing = (
+            "start without --code-run needs the code run record of the release that repo shows (repo_releases/<digest>/run_id, written by an install with "
+            "--code-run and --code-sha256); none was found. Give --code-run and --code-sha256 once; no service was deployed"
+        )
+        try:
+            task = self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(None, "identify"))
+        except TaskExitError:
+            raise HostSessionError(missing) from None
+        except HostSessionError as error:
+            raise HostSessionError(f"{error}; the identity task did not run to its end, so the code run is not known; no service was deployed") from None
+        found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)
+        self.step("code_identity", found[0])
+        return found
+
+    def identity_line(self, task: str) -> tuple[str, str] | None:
+        """The identity of the identity task's log: (run ID, digest), or None while the log has no such line yet."""
+        stream = f"{CODE_LOG_CONTAINER}/{CODE_LOG_CONTAINER}/{task.rsplit('/', 1)[-1]}"
+        try:
+            events = self.call("logs", "get-log-events", ["--log-group-name", self.names.log_group, "--log-stream-name", stream, "--start-from-head"])
+        except HostSessionError as error:
+            if "ResourceNotFound" in str(error):
+                return None
+            raise
+        found = [CODE_IDENTITY.fullmatch(str(event.get("message", "")).strip()) for event in events.get("events", [])]
+        lines = [(item.group(1), item.group(2)) for item in found if item is not None]
+        return lines[-1] if lines else None
 
     def restore_code(self, code: tuple[str, str] | None) -> str:
         """Run the restore task after a failed code task and answer what repo shows, from the task's own exit code."""
@@ -633,17 +722,73 @@ class Session:
         self.step("code_restored", "repo shows a verified checkout")
         return "repo shows a verified checkout, not the requested code; no service was deployed"
 
+    def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
+        """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch
+        is a release container that reloads ``model`` (LAYER_PHASE reload); every build container ends at once. A variable this tool cannot fill is refused."""
+        if self.names.reload is None:
+            raise HostSessionError("the jobs stack has no features host task")
+        values = {
+            "RUN_ID": f"{datetime.now(UTC).strftime('%Y%m%dT%H%M%SZ')}-{uuid.uuid4().hex[:8]}",
+            "CODE_RUN_ID": code[0],
+            "CODE_SHA256": code[1],
+            "POLARIS_URI": f"http://{self.names.host_address}:{POLARIS_PORT}/api/catalog",
+            "LAYER_PHASE": RELOAD_PHASE,
+            "RELEASE_MODEL": model,
+            "FEATURES_RUN": "",
+            "INPUT_RUN_ID": "",
+            "FEATURE_SET": "",
+        }
+        unknown = sorted({name for names in self.names.reload.variables.values() for name in names if name not in values})
+        if unknown:
+            raise HostSessionError(f"the features task has variables that the reload cannot fill: {', '.join(unknown)}")
+        return {
+            "containerOverrides": [
+                {"name": container, "environment": [{"name": name, "value": values[name]} for name in names]}
+                for container, names in self.names.reload.variables.items()
+            ]
+        }
+
+    def reload_online_store(self, code: tuple[str, str]) -> None:
+        """Reload the online store of every online model set: one launch of the features task per set (``online_sets``), one after the other, each a
+        release container that loads the newest run of the set with load evidence again (``scripts.features.online_reload``). The store keeps no snapshot, so
+        it is empty after every start. A launch that is refused, fails or passes its deadline raises, and ``start`` then stops the host unless ``keep_on``."""
+        for model in online_sets():
+            try:
+                self.one_shot(f"{ONLINE_RELOAD}_{model}", ONLINE_RELOAD_SECONDS, self.reload_overrides(model, code))
+            except HostSessionError as error:
+                raise HostSessionError(f"online store reload of set {model} failed: {error}") from None
+            self.step("online_store_reloaded", model)
+
+    def refuse_missing_inputs(self, code: tuple[str, str] | None) -> None:
+        """Refuse, before the host turns on, a start that cannot place its code or reload the online store."""
+        if CODE_FETCH not in self.names.one_shot:
+            raise HostSessionError(
+                "--code-run needs the code_fetch one-shot; apply the services stack with code_fetch_task_role_arn first"
+                if code is not None
+                else "start needs the code_fetch one-shot to read the code run record; apply the services stack with code_fetch_task_role_arn first"
+            )
+        if self.names.reload is None:
+            raise HostSessionError(
+                "the jobs stack has no features host task (output host_run_tasks.features.task_definition is null or missing), so the online store cannot "
+                "be reloaded; apply the jobs stack with host jobs enabled first"
+            )
+        if not self.names.host_address:
+            raise HostSessionError("the platform output host_private_ip is missing, so the reload task has no Polaris address")
+        if code is None and not self.names.log_group:
+            raise HostSessionError("the platform output log_group_names has no airflow group, so the code identity cannot be read")
+
     def start(self, keep_on: bool = False, code: tuple[str, str] | None = None) -> None:
-        """Host on, host_prepare, the code checkout, every service redeployed and stable. Any failure, interruption or SIGTERM stops the host unless
-        ``keep_on``. ``code`` (run ID, code digest) needs the code one-shot, so start refuses it before the host turns on when the stack has none."""
-        if code is not None and CODE_FETCH not in self.names.one_shot:
-            raise HostSessionError("--code-run needs the code_fetch one-shot; apply the services stack with code_fetch_task_role_arn first")
+        """Host on, host_prepare, the code checkout, every service redeployed and stable, then the online store reloaded. Any failure, interruption or SIGTERM
+        stops the host unless ``keep_on``. ``code`` (run ID, code digest) is the code of the reload launch too; without it the identity task reads it from
+        the record of the release repo shows. start refuses before the host turns on when the stack has no code one-shot or no features task."""
+        self.refuse_missing_inputs(code)
         succeeded = False
         try:
             self.host_on()
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
-            self.place_code(code)
+            identity = self.place_code(code)
             self.deploy_services()
+            self.reload_online_store(identity)
             self.openmetadata_bootstrap()
             succeeded = True
         finally:
@@ -740,10 +885,17 @@ class Session:
         }
 
 
-def open_session() -> Session:
-    """The session of the project profile, with the names read from the Terraform outputs. Raises ConfigurationError."""
+def online_sets() -> list[str]:
+    """The model sets that have an online load (m1, m2 and m4 today), from the feature schema, so the list never lives in a second place."""
+    document = json.loads(FEATURE_SCHEMA.read_text(encoding="utf-8"))
+    return sorted(name for name, entry in document["model_sets"].items() if entry["online"])
+
+
+def open_session(reload: bool = False) -> Session:
+    """The session of the project profile, with the names read from the Terraform outputs; ``reload`` also reads the jobs outputs (the ``start`` command).
+    Raises ConfigurationError."""
     settings, _ = load_configuration(REPO_ROOT / ".env")
-    session = Session(AwsCli(settings, tolerant_runner), load_names(settings))
+    session = Session(AwsCli(settings, tolerant_runner), load_names(settings, reload=reload))
     session.job_prefix = f"{settings['project_name']}_{settings['environment']}_job_"
     return session
 
@@ -752,9 +904,12 @@ def build_parser() -> argparse.ArgumentParser:
     """The command line."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    start = commands.add_parser("start", help="host on, host_prepare, the code checkout, redeploy every service, wait until stable")
+    start = commands.add_parser("start", help="host on, host_prepare, the code checkout, redeploy every service, wait until stable, reload the online store")
     start.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
-    start.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
+    start.add_argument(
+        "--code-run",
+        help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256 (without it start uses the run recorded for /data/repo)",
+    )
     start.add_argument("--code-sha256", help="SHA-256 of that code.tar.gz (the content of its code.sha256)")
     refresh = commands.add_parser("refresh", help="new code on a running host: host_prepare, the code checkout, redeploy every service, never stops the host")
     refresh.add_argument("--code-run", help="run ID whose staged code archive becomes /data/repo; give it with --code-sha256")
@@ -777,7 +932,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         code = (arguments.code_run, arguments.code_sha256)
     try:
-        session = open_session()
+        session = open_session(arguments.command == "start")
     except ConfigurationError as error:
         sys.stderr.write(f"configuration: {error}\n")
         return 2

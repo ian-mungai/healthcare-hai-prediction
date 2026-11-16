@@ -23,9 +23,11 @@ TABLE = ROOT / "config/orchestration/ecs_broker_jobs.json"
 DRY_RUN_VARIABLE = "LAYER_DRY_RUN"
 LAYERS = ("silver", "gold", "features")
 # A features task holds its release variables empty unless the launch is a release (scripts/lakehouse/layer_run.py): a build names no phase, no model set and
-# no run to release. A release names all three. The metadata job reads FEATURES_RUN too and always needs it.
+# no run to release. A release names all three. A reload (host_session start) names the phase and the model set, never a run: the reload picks its own run.
+# The metadata job reads FEATURES_RUN too and always needs it.
 RELEASE_VARIABLES = ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")
 RELEASE_PHASE = "release"
+RELOAD_PHASE = "reload"
 
 
 class OverrideError(ValueError):
@@ -47,14 +49,15 @@ def build(job: str, values: dict[str, str], dry_run: bool = False, table: Path =
     chosen = values[feature_sets.VARIABLE]
     if chosen != feature_sets.SINGLE_PATH and chosen not in feature_sets.SETS:
         raise OverrideError(f"{feature_sets.VARIABLE} {chosen!r} is not one of {feature_sets.SINGLE_PATH}, {', '.join(feature_sets.SETS)}")
-    releasing = job == "features" and values.get("LAYER_PHASE") == RELEASE_PHASE
-    if job == "features" and values.get("LAYER_PHASE") not in (None, "", RELEASE_PHASE, *jobs[job]["containers"]):
+    phase = values.get("LAYER_PHASE") if job == "features" else None
+    needed = {RELEASE_PHASE: RELEASE_VARIABLES, RELOAD_PHASE: ("LAYER_PHASE", "RELEASE_MODEL")}.get(phase or "", ())
+    if job == "features" and values.get("LAYER_PHASE") not in (None, "", RELEASE_PHASE, RELOAD_PHASE, *jobs[job]["containers"]):
         raise OverrideError(f"LAYER_PHASE {values['LAYER_PHASE']!r} is not a phase of the features job")
     overrides = []
     for container, names in jobs[job]["containers"].items():
         environment = []
         for name in names:
-            if not values.get(name) and not (job == "features" and name in RELEASE_VARIABLES and not releasing):
+            if not values.get(name) and not (job == "features" and name in RELEASE_VARIABLES and name not in needed):
                 raise OverrideError(f"{name} has no value: the {container} container of the {job} job needs it")
             environment.append({"name": name, "value": values.get(name, "")})
         if dry_run:
@@ -72,7 +75,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--polaris-uri", default="", help="POLARIS_URI: http://<host private address>:8181/api/catalog")
     parser.add_argument("--input-run", default="", help="INPUT_RUN_ID: the committed silver run for gold, the committed gold run for features")
     parser.add_argument("--features-run", default="", help="FEATURES_RUN: the features run whose chain the metadata job ingests (a run ID, never latest)")
-    parser.add_argument("--layer-phase", default="", help="LAYER_PHASE: release runs only the release phase of the features job; empty runs the build phases")
+    parser.add_argument(
+        "--layer-phase", default="", help="LAYER_PHASE: release or reload runs only the release container of the features job; empty runs the build phases"
+    )
     parser.add_argument("--release-model", default="", help="RELEASE_MODEL: the model set whose held online load the release releases (m1, m2 or m4)")
     parser.add_argument("--feature-set", default="", help="FEATURE_SET: all (the single path, the default), base or m1 to m6 for the features job")
     parser.add_argument("--mlflow-uri", default="", help="MLFLOW_TRACKING_URI: http://<host private address>:5100")
