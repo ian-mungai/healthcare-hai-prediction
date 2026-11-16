@@ -785,6 +785,19 @@ def features_cases() -> list[Case]:
             (NAMES["task"],),
         ),
         (
+            "a release launch's task given as the build's task",
+            lambda e, o: edit(
+                e.root / "describe.json",
+                lambda d: [
+                    i.update(value={"LAYER_PHASE": "release", "RELEASE_MODEL": "m1", "FEATURES_RUN": e.spec.run}[i["name"]])
+                    for c in d["tasks"][0]["overrides"]["containerOverrides"]
+                    for i in c.get("environment", [])
+                    if i["name"] in ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")
+                ],
+            ),
+            (NAMES["task"],),
+        ),
+        (
             "a gold producer report that failed",
             lambda e, o: edit(e.source.root / "qualification.json", lambda d: d.update(passed=False)),
             (NAMES["features_passed"],),
