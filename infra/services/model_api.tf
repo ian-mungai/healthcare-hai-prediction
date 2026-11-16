@@ -220,7 +220,7 @@ locals {
         tmpfs              = [{ containerPath = "/tmp", size = 256, mountOptions = ["noexec", "nosuid"] }]
       }
       healthCheck = {
-        command     = ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:${local.model_api_port}/v1/health', timeout=3)"]
+        command     = ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:${local.model_api_port}/v1/live', timeout=3)"]
         interval    = 30
         timeout     = 5
         retries     = 5

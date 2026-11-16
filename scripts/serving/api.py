@@ -113,6 +113,10 @@ def create_app(service: ModelService) -> FastAPI:
     def health() -> JSONResponse:
         return send(service.health())
 
+    @app.get("/v1/live", response_model=None, summary="Report that the process serves, whether or not a model is loaded")
+    def live() -> JSONResponse:
+        return send(service.live())
+
     @app.get("/metrics", include_in_schema=False)
     def scrape() -> PlainTextResponse:
         return PlainTextResponse(service.metrics.render(), media_type="text/plain; version=0.0.4; charset=utf-8")

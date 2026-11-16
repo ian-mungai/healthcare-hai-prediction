@@ -108,6 +108,7 @@ def case_http(c: Checker) -> None:
             c.check("a body without a declared length is cut off at the limit with 413", chunked[0] == 413)
             c.check("a body that stalls answers 408 within its deadline", stalled_status(port) == 408)
             c.check("health answers 200", call(port, "GET", "/v1/health")[0] == 200)
+            c.check("live answers 200 with its status and without a key", call(port, "GET", "/v1/live")[::2] == (200, {"status": "alive"}))
             limited = [post(port, good)[0] for _ in range(15)]
             c.check("the burst ends in 429", 429 in limited)
             document = call(port, "GET", "/v1/openapi.json")[2]

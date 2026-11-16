@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 
-ROUTES = ("/v1/predict", "/v1/health", "/metrics")
+ROUTES = ("/v1/predict", "/v1/health", "/v1/live", "/metrics")
 METHODS = ("GET", "POST", "HEAD", "OPTIONS")
 STATUSES = (200, 400, 401, 404, 405, 408, 413, 422, 429, 500, 503)
 BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0)

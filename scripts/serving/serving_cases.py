@@ -2534,6 +2534,28 @@ def series(samples: list[tuple[str, dict[str, str], float]], name: str, **labels
     return [value for sample, found, value in samples if sample == name and all(found.get(key) == wanted for key, wanted in labels.items())]
 
 
+def case_liveness_without_a_deployment(c: Checker) -> None:
+    """A service with no deployment is alive and not ready: /v1/live answers 200 for the container health check, /v1/health stays 503 and both are counted."""
+    with world(deployment=False) as w:
+        w.api.refresh()
+        live = w.api.live()
+        c.check("a service with no deployment answers live with 200", live.status == 200 and live.body == {"status": "alive"})
+        ready = w.api.health()
+        c.check("the same service answers health with 503 and no deployment", ready.status == 503 and ready.body[HAI]["deployment_id"] is None)
+        c.check("a prediction is refused until a deployment exists", ask(w).status == 503)
+        c.check("live stays 200 after the refused prediction", w.api.live().status == 200)
+        _, samples = scrape(w.api.metrics.render())
+        c.check(
+            "the live answers are counted under their own route", series(samples, "hai_api_requests_total", route="/v1/live", method="GET", status="200") == [2]
+        )
+        c.check(
+            "the health answer keeps its own route and status", series(samples, "hai_api_requests_total", route="/v1/health", method="GET", status="503") == [1]
+        )
+    with world() as w:
+        w.api.refresh()
+        c.check("a service with a stable model answers both 200", w.api.live().status == 200 and w.api.health().status == 200)
+
+
 def case_metrics(c: Checker) -> None:
     """The /metrics text has the names, types and labels of the monitoring contract, counts every answer, bounds its series and holds no key or hospital."""
     contract = json.loads((ROOT / "data_contracts/serving/metrics.json").read_text())["metrics"]
@@ -2622,7 +2644,8 @@ def case_metrics(c: Checker) -> None:
     )
     c.check(
         "the known routes keep their names",
-        [metrics.route_label(path) for path in ("/v1/predict", "/v1/health", "/metrics", "/v1/predict/")] == ["/v1/predict", "/v1/health", "/metrics", "other"],
+        [metrics.route_label(path) for path in ("/v1/predict", "/v1/health", "/v1/live", "/metrics", "/v1/predict/")]
+        == ["/v1/predict", "/v1/health", "/v1/live", "/metrics", "other"],
     )
 
 
@@ -2677,6 +2700,7 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "replay_budget": (case_replay_budget, "canary compare"),
     "replay_http_drip": (case_replay_http_drip, "timeout network"),
     "previous_record_format": (case_previous_record_format, "deploy compatibility"),
+    "liveness_without_a_deployment": (case_liveness_without_a_deployment, "api monitoring"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }

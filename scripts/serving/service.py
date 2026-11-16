@@ -168,6 +168,13 @@ class ModelService:
             slot.state = "loaded"
             LOG.info("model version %s of %s loaded on retry", slot.version, hai_type)
 
+    def live(self) -> Reply:
+        """Answer 200 while the process serves, whatever the models. The container health check asks this route; /v1/health stays the readiness signal."""
+        started = self._clock()
+        reply = Reply(200, {"status": "alive"})
+        self.metrics.observe("/v1/live", "GET", str(reply.status), self._clock() - started)
+        return reply
+
     def health(self) -> Reply:
         started = self._clock()
         reply = self._health()

@@ -1872,6 +1872,22 @@ run "model_api_is_private_and_pinned" {
     condition     = contains(output.parameter_names_used, "/healthcare_hai_prediction/model_api_key_hashes")
     error_message = "The execution role must be told to read the key hash parameter."
   }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      strcontains(join(" ", container.healthCheck.command), "http://127.0.0.1:8000/v1/live") && !strcontains(join(" ", container.healthCheck.command), "/v1/health")
+    ])
+    error_message = "The container health check asks the liveness route, which answers 200 while the process serves. The readiness route /v1/health answers 503 until a stable model is loaded and would stop the task before the first deployment."
+  }
+
+  assert {
+    condition = alltrue([
+      for container in jsondecode(aws_ecs_task_definition.service["model_api"].container_definitions) :
+      container.healthCheck.startPeriod >= 60 && container.healthCheck.retries >= 3 && container.healthCheck.interval * container.healthCheck.retries >= 60
+    ])
+    error_message = "The model API health check gives the process time to start and tolerates a few slow answers."
+  }
 }
 
 run "model_api_without_a_role_is_refused" {
@@ -2493,7 +2509,7 @@ run "serving_container_definitions_match_the_approved_versions" {
   assert {
     condition = alltrue([
       for pin in [
-        { id = "model_api/model_api", digest = "f87f0f24695ce2d0d9e7a0f9306ccbf81fdc5e6ff2dfd680764e07516c884704" },
+        { id = "model_api/model_api", digest = "832769e0a9d427730035f759becc4f57ffeff7ccfb3d67dc3df08fe6715f1477" },
         { id = "redis/redis", digest = "ff7acaae269a76eb99036e341d3e586f0da7db52a4adb517cd674cb56a489e08" },
         { id = "streamlit/streamlit", digest = "f8e2c6e9514fc5a6205c06cbfed1d52950ddcce9fe60e33034de38c25a0438af" },
       ] : output.execution_digests[pin.id] == pin.digest
