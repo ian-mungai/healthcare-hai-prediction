@@ -711,7 +711,7 @@ run "lineage_http_on_sends_only_to_openmetadata_from_the_scheduler" {
       AIRFLOW__OPENLINEAGE__INCLUDE_FULL_TASK_INFO = "false"
       AIRFLOW__OPENLINEAGE__NAMESPACE              = "hai-prediction-aws"
       AIRFLOW__OPENLINEAGE__TRANSPORT              = ""
-      OPENLINEAGE__TRANSPORT__TYPE                 = "http"
+      OPENLINEAGE__TRANSPORT__TYPE                 = "hai_lineage.http_transport.UtcHttpTransport"
       OPENLINEAGE__TRANSPORT__URL                  = "http://127.0.0.1:8585"
       OPENLINEAGE__TRANSPORT__ENDPOINT             = "api/v1/openlineage/lineage"
       OPENLINEAGE__TRANSPORT__TIMEOUT              = "5"

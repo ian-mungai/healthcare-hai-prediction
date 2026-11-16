@@ -263,6 +263,22 @@ def real_dags() -> dict[str, Any]:
     return report
 
 
+def lineage_http_transport() -> dict[str, Any]:
+    """Run the scheduler's HTTP lineage transport against a loopback stand-in (``lineage_http_cases.py``). A crash is the section's error."""
+    try:
+        path = REPO / "scripts/orchestration/lineage_http_cases.py"
+        spec = importlib.util.spec_from_file_location("lineage_http_cases", path)  # loaded by path, as real_dags is
+        if spec is None or spec.loader is None:
+            raise ImportError(f"{path} cannot be loaded")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        report: dict[str, Any] = module.run()
+    except Exception as error:
+        return {"ok": False, "error": f"{type(error).__name__}: {error}"[:1000]}
+    return report
+
+
 def main() -> int:
     """Print every result as JSON."""
     argparse.ArgumentParser(description=__doc__.splitlines()[0]).parse_args()
@@ -278,6 +294,7 @@ def main() -> int:
         report["lineage_transport"] = lineage_transport()
     except (OSError, ValueError, TypeError, AttributeError, ImportError) as error:
         report["lineage_transport"] = {"ok": False, "error": type(error).__name__}
+    report["lineage_http_transport"] = lineage_http_transport()
     report["real_dags"] = real_dags()
     sys.stdout.write("IN_IMAGE " + json.dumps(report, default=str) + "\n")
     return 0

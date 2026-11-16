@@ -115,6 +115,8 @@ def main() -> int:
                 result["in_image_checks"] = checked
                 if checked.get("lineage_transport", {}).get("ok") is not True:
                     raise RuntimeError("pinned-image local transport and safe projection check failed")
+                if checked.get("lineage_http_transport", {}).get("ok") is not True:
+                    raise RuntimeError(f"pinned-image scheduler HTTP transport check failed: {checked.get('lineage_http_transport')}")
             finally:
                 if client.release_allocation(allocation) != launcher.ReleaseOutcome.RELEASED:
                     raise RuntimeError("provider allocation was retained")

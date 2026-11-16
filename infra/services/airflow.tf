@@ -124,11 +124,12 @@ locals {
   # With airflow_lineage_http_enabled the scheduler, which runs every task (LocalExecutor), sends the OpenLineage events over HTTP only to OpenMetadata's
   # lineage route with the lineage bot credential, injected as an ECS secret so no file holds it, and the 5 second limit of the provider and the client.
   # The provider then has no config file and no transport setting, so the OpenLineage client reads its OPENLINEAGE__TRANSPORT__ variables, and the spool
-  # transport is not used. With the flag false these maps are empty and the task definitions are as before.
+  # transport is not used. The type is the project transport of the mounted services/lineage/http_transport.py (PYTHONPATH /opt/hai), the client's HTTP transport
+  # with eventTime sent in the UTC Z form, which OpenMetadata accepts and its +00:00 form it refuses. With the flag false these maps are empty and the task definitions are as before.
   airflow_lineage_http_environment = var.airflow_lineage_http_enabled ? {
     AIRFLOW__OPENLINEAGE__CONFIG_PATH  = ""
     AIRFLOW__OPENLINEAGE__TRANSPORT    = ""
-    OPENLINEAGE__TRANSPORT__TYPE       = "http"
+    OPENLINEAGE__TRANSPORT__TYPE       = "hai_lineage.http_transport.UtcHttpTransport"
     OPENLINEAGE__TRANSPORT__URL        = var.airflow_lineage_url
     OPENLINEAGE__TRANSPORT__ENDPOINT   = "api/v1/openlineage/lineage"
     OPENLINEAGE__TRANSPORT__TIMEOUT    = "5"

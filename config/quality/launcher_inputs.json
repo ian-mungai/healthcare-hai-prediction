@@ -416,7 +416,7 @@
   "dynamic_sites": {
     "orchestration/dag_runtime.py": 1,
     "scripts/orchestration/db_dump_cases.py": 1,
-    "scripts/orchestration/in_image_checks.py": 1
+    "scripts/orchestration/in_image_checks.py": 2
   },
   "inventory_sites": {
     "infra/services/scripts/code_fetch.py": 2,
@@ -1923,6 +1923,7 @@
     "scripts/orchestration/job_overrides.py",
     "scripts/orchestration/layer_walk_cases.py",
     "scripts/orchestration/ledger.py",
+    "scripts/orchestration/lineage_http_cases.py",
     "scripts/orchestration/net_checks.py",
     "scripts/orchestration/offline_checks.py",
     "scripts/orchestration/override_docs_cases.py",

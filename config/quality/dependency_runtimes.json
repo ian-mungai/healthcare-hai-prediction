@@ -103,7 +103,9 @@
         "scripts/orchestration/in_image_checks.py",
         "scripts/orchestration/real_image_dags.py",
         "scripts/orchestration/db_dump.py",
+        "services/lineage/http_transport.py",
         "services/lineage/provider_transport.py",
+        "scripts/orchestration/lineage_http_cases.py",
         "services/lineage/db_dump.py",
         "tests/orchestration/fixtures/combined_dag.py"
       ],
