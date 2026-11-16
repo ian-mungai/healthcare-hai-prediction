@@ -1399,6 +1399,7 @@
     "infra/services/postgres.tf",
     "infra/services/redis.tf",
     "infra/services/scripts/code_fetch.py",
+    "infra/services/scripts/code_identify.py",
     "infra/services/streamlit.tf",
     "infra/services/tests/flow/main.tf",
     "infra/services/tests/flow/outputs.tf",
