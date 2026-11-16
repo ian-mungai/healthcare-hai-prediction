@@ -33,6 +33,9 @@ from orchestration.training_contract import (
     GateRefused,
     base_run_of,
     decide_drift_gate,
+    model_choices,
+    model_label,
+    model_param_schema,
     model_training_run_id,
     parameters_for,
     run_id_pattern,
@@ -142,6 +145,11 @@ def gate_types(marker: dict[str, Any], model: str, records: list[dict[str, Any]]
     return expected["train_types"], {hai_type: str(item["reason"]) for hai_type, item in sorted(decisions.items()) if not item["train"]}
 
 
+def skip_line(model: str, hai_type: str, reason: str) -> str:
+    """The log line of a type that the gate does not train, with the model's name beside its key."""
+    return f"no training of {model_label(model)} for {hai_type}: {reason}"
+
+
 def training_requests(drift_run: str, mlflow: str, model: str, features_run: str, types: list[str]) -> list[dict[str, Any]]:
     """Return one request for ``training_dag`` that trains ``model`` on its own set for the given types, or none when the gate trains no type."""
     if not types:
@@ -162,6 +170,7 @@ def training_requests(drift_run: str, mlflow: str, model: str, features_run: str
 
 with DAG(
     dag_id="drift_monitoring_dag",
+    doc_md=f"{__doc__}\n\nModels: {model_choices()}.",
     schedule=None,
     catchup=False,
     max_active_runs=1,
@@ -171,7 +180,7 @@ with DAG(
         "mode": Param("real", type="string", enum=["real"]),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The model whose drift this run checks and whose training it starts (orchestration.training_contract.MODELS).
-        "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
+        "model": Param(type="string", **model_param_schema()),
         # The run of the model's published set: the drift job reads that set (its features job must have passed) and the training run it starts fits on it.
         "features_run": Param(type="string", pattern=f"^{SET_RUN}$"),
         # The attempt of this model run's drift check: 1 is the run every model run has. The launch of a run is terminal once it ended, so a check that
@@ -203,7 +212,7 @@ with DAG(
                     ", ".join(names),
                 )
         for hai_type, reason in skipped.items():
-            LOG.info("no training of %s for %s: %s", params["model"], hai_type, reason)
+            LOG.info("%s", skip_line(params["model"], hai_type, reason))
         return training_requests(params["run_id"], params["mlflow"], params["model"], params["features_run"], types)
 
     ran = drift_run()

@@ -11,17 +11,20 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_job_chain
-from orchestration.training_contract import BASE_RUN, model_drift_run_id, model_run_pattern
+from orchestration.training_contract import BASE_RUN, features_dag_display_name, model_drift_run_id, model_label, model_run_pattern, model_title
 
 MODEL = "m4"
 TRIGGER_TIMEOUT = timedelta(minutes=5)
 
 with DAG(
     dag_id="features_m4_dag",
+    dag_display_name=features_dag_display_name(MODEL),
+    description=f"Build the feature table of the {model_label(MODEL)} model set and start its drift check.",
+    doc_md=f"{__doc__}\n\nModel: {model_label(MODEL)}.",
     schedule=None,
     catchup=False,
     max_active_runs=1,  # two runs of one set would share its family: the host pool no longer keeps them apart
-    tags=["orchestration", "features"],
+    tags=["orchestration", "features", model_title(MODEL)],
     params={
         "run_id": Param(type="string", pattern=f"^{model_run_pattern('features', MODEL)}$"),
         "mode": Param("real", type="string", enum=["real"]),

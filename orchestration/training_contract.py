@@ -331,10 +331,54 @@ MODEL_LISTS = {
 }
 MODELS = tuple(MODEL_LISTS)
 # The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
+# The internal keys m1 to m6 stay the identifiers of DAGs, runs, sets, keys, paths, tags and resources; MODEL_NAMES above holds the slug that run IDs carry.
 MODEL_LABELS = {"m1": "OLS baseline", "m2": "Elastic Net", "m3": "Mixed effects", "m4": "Gradient boosting", "m5": "Spatial", "m6": "Fixed effects"}
 HAI_LABELS = {"HAI_1": "CLABSI", "HAI_2": "CAUTI", "HAI_3": "SSI colon", "HAI_4": "SSI hysterectomy", "HAI_5": "MRSA", "HAI_6": "C. difficile"}
 if tuple(MODEL_LABELS) != MODELS or tuple(HAI_LABELS) != HAI_TYPES:
     raise ValueError("MODEL_LABELS and HAI_LABELS must name exactly the models and HAI types of the contract")
+
+
+def check_model_names(names: Mapping[str, str], models: tuple[str, ...]) -> None:
+    """Refuse display names that do not cover exactly ``models``, or that are blank, padded or shared by two models."""
+    values = list(names.values())
+    if tuple(names) != models:
+        raise ValueError(f"the model display names are for {', '.join(names)}, not for {', '.join(models)}")
+    if any(not value or value != " ".join(value.split()) for value in values) or len(set(values)) != len(values):
+        raise ValueError("the model display names must be non-blank, single-spaced and different from each other")
+
+
+check_model_names(MODEL_LABELS, MODELS)
+
+
+def model_title(model: str) -> str:
+    """The key and name of ``model`` for a title or a tag: ``m2 Elastic Net``."""
+    if model not in MODEL_LABELS:
+        raise ValueError(f"{model} is not one of {', '.join(MODELS)}")
+    return f"{model} {MODEL_LABELS[model]}"
+
+
+def model_label(model: str) -> str:
+    """The key and name of ``model`` for a sentence or a log line: ``m2 (Elastic Net)``."""
+    if model not in MODEL_LABELS:
+        raise ValueError(f"{model} is not one of {', '.join(MODELS)}")
+    return f"{model} ({MODEL_LABELS[model]})"
+
+
+def model_choices(models: tuple[str, ...] = MODELS) -> str:
+    """The labels of ``models`` in a list for a sentence: ``m1 (OLS baseline), m2 (Elastic Net)``."""
+    return ", ".join(model_label(model) for model in models)
+
+
+def features_dag_display_name(model: str) -> str:
+    """The name the Airflow screens show for the features DAG of ``model``: ``Features: m2 Elastic Net``."""
+    return f"Features: {model_title(model)}"
+
+
+def model_param_schema() -> dict[str, Any]:
+    """The schema keys of the ``model`` parameter of a DAG: the models, the name that the trigger form shows beside each and a help text."""
+    return {"enum": list(MODELS), "values_display": {model: model_title(model) for model in MODELS}, "description": f"The model: {model_choices()}."}
+
+
 FEATURE_DAGS = {f"features_{model}_dag": model for model in MODELS}
 # The DAGs the first DAG waits for after the features base (each model's set, its drift check, its training run and, for a promotion model, the research), and
 # the catalog DAG, which it never waits for. Every DAG of the pipeline must be active (not paused) for a run to go through: this is the inventory that the

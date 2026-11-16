@@ -13,10 +13,22 @@ from airflow.providers.standard.operators.trigger_dagrun import TriggerDagRunOpe
 from airflow.sdk import DAG, Param, get_current_context, task
 
 from orchestration.dag_runtime import build_metadata_start, build_tasks
-from orchestration.training_contract import BASE_RUN, DRIFT_RUN, HAI_TYPES, SET_RUN, TRAINING_STEPS, research_requests, run_id_pattern
+from orchestration.training_contract import (
+    BASE_RUN,
+    DRIFT_RUN,
+    HAI_TYPES,
+    PROMOTION_MODELS,
+    SET_RUN,
+    TRAINING_STEPS,
+    model_choices,
+    model_param_schema,
+    research_requests,
+    run_id_pattern,
+)
 
 with DAG(
     dag_id="training_dag",
+    doc_md=f"{__doc__}\n\nModels: {model_choices()}. Research starts for {model_choices(PROMOTION_MODELS)}.",
     schedule=None,
     catchup=False,
     max_active_runs=1,
@@ -30,7 +42,7 @@ with DAG(
         "trigger": Param("manual", type="string", pattern=f"^(manual|drift:{DRIFT_RUN})$"),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
         # The one model this run fits; no default, so a form trigger must choose it (orchestration.training_contract.MODELS).
-        "model": Param(type="string", enum=["m1", "m2", "m3", "m4", "m5", "m6"]),
+        "model": Param(type="string", **model_param_schema()),
         # The base run of the model set this run trains on: research compares the models of one base run. Empty for a hand start, which starts no research.
         "base_run": Param("", type="string", pattern=f"^(|{BASE_RUN})$"),
     },

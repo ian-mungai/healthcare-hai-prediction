@@ -13,10 +13,11 @@ from __future__ import annotations
 from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_research_tasks
-from orchestration.training_contract import BASE_RUN, HAI_TYPES, RESEARCH_RUN
+from orchestration.training_contract import BASE_RUN, HAI_TYPES, PROMOTION_MODELS, RESEARCH_RUN, model_choices
 
 with DAG(
     dag_id="research_dag",
+    doc_md=f"{__doc__}\n\nModels compared: {model_choices(PROMOTION_MODELS)}.",
     schedule=None,
     catchup=False,
     max_active_runs=1,

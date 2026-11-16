@@ -19,7 +19,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from orchestration.training_contract import FEATURE_DAGS, MODELS, TRAINING_STEPS
+from orchestration.training_contract import (
+    FEATURE_DAGS,
+    MODELS,
+    PROMOTION_MODELS,
+    TRAINING_STEPS,
+    features_dag_display_name,
+    model_label,
+    model_param_schema,
+    model_title,
+)
 
 WORK_CHAIN = (
     "acquire_run",
@@ -213,3 +222,36 @@ def validate_transform_graph(graph: dict[str, TaskNode], dag_id: str = "transfor
         if node.trigger_rule != rule:
             violations.append(Violation("trigger_rule", task, f"{node.trigger_rule}, expected {rule}"))
     return violations
+
+
+# The DAGs with a ``model`` parameter, which show the name of each model beside its key in the trigger form.
+MODEL_PARAM_DAGS = ("training_dag", "drift_monitoring_dag")
+# The DAGs whose text names models: the models that the text of each must show with their names.
+DOC_MODELS = {**{dag_id: (model,) for dag_id, model in FEATURE_DAGS.items()}, **dict.fromkeys(MODEL_PARAM_DAGS, MODELS), "research_dag": PROMOTION_MODELS}
+
+
+def display_name_violations(dag: Any) -> list[Violation]:
+    """Every place where an Airflow DAG shows a model without its display name; reads the DAG's ``dag_id``, names, docs, tags and ``params`` only.
+
+    A model DAG shows ``Features: m2 Elastic Net`` with the label in its description and doc and the title as a tag. A DAG with a ``model`` parameter shows
+    each name in the form. Every DAG that names models in its doc shows their labels."""
+    dag_id = str(dag.dag_id)
+    problems: list[str] = []
+    doc = str(getattr(dag, "doc_md", None) or "")
+    if dag_id in FEATURE_DAGS:
+        model = FEATURE_DAGS[dag_id]
+        if str(dag.dag_display_name) != features_dag_display_name(model):
+            problems.append(f"the DAG shows {dag.dag_display_name!r}, not {features_dag_display_name(model)!r}")
+        if model_label(model) not in str(getattr(dag, "description", None) or ""):
+            problems.append(f"the description lacks {model_label(model)}")
+        if model_title(model) not in set(getattr(dag, "tags", None) or ()):
+            problems.append(f"the tags lack {model_title(model)}")
+    if dag_id in MODEL_PARAM_DAGS:
+        schema = dict(getattr(dag.params.get_param("model"), "schema", None) or {})
+        expected = model_param_schema()
+        if schema.get("enum") != expected["enum"] or schema.get("values_display") != expected["values_display"]:
+            problems.append("the model parameter does not show the display name of each model")
+        if any(model_label(model) not in str(schema.get("description") or "") for model in MODELS):
+            problems.append("the model parameter help lacks a model label")
+    problems += [f"the doc lacks {model_label(model)}" for model in DOC_MODELS.get(dag_id, ()) if model_label(model) not in doc]
+    return [Violation("display_name", dag_id, problem) for problem in problems]

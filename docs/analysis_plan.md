@@ -47,12 +47,14 @@ Every training run follows this plan. The plan changes during development, so ea
 
 ## The six models
 
-1. **OLS:** the original capstone specification on the CMS-only predictors, as the baseline.
-2. **Elastic Net:** all predictor families with CMI forced in. The grouped cross-validation tunes alpha and the L1 ratio.
-3. **Mixed effects (RQ2):** a random intercept per ownership group, taken from the ownership history as of the window start. The model reports the intraclass correlation (ICC) and a likelihood-ratio test against the fixed-only model (H2).
-4. **Tree model with SHapley Additive exPlanations (SHAP):** gradient boosting (XGBoost) is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
-5. **Spatial (RQ5):** Moran's I on the holdout-year residuals of the best non-spatial model. If it is significant at 0.05 (H5), a spatial lag or spatial error model follows, chosen by Lagrange multiplier tests.
-6. **Fixed-effects panel (RQ6):** hospital fixed effects across window years with time-varying predictors. A holdout hospital without an estimated effect gets the mean effect. The run counts these hospitals.
+Each model has an internal key (m1 to m6) that names its DAGs, runs, feature sets and paths. People read a display name beside the key. The names live in `MODEL_LABELS` in `orchestration/training_contract.py`.
+
+1. **m1 OLS baseline:** the original capstone specification on the CMS-only predictors, as the baseline.
+2. **m2 Elastic Net:** all predictor families with CMI forced in. The grouped cross-validation tunes alpha and the L1 ratio.
+3. **m3 Mixed effects (RQ2):** a random intercept per ownership group, taken from the ownership history as of the window start. The model reports the intraclass correlation (ICC) and a likelihood-ratio test against the fixed-only model (H2).
+4. **m4 Gradient boosting, a tree model with SHapley Additive exPlanations (SHAP):** XGBoost is the primary tree model, with SHAP values on the holdout. Random Forest runs as a check and is never promoted.
+5. **m5 Spatial (RQ5):** Moran's I on the holdout-year residuals of the best non-spatial model. If it is significant at 0.05 (H5), a spatial lag or spatial error model follows, chosen by Lagrange multiplier tests.
+6. **m6 Fixed effects (RQ6):** the panel model with hospital fixed effects across window years with time-varying predictors. A holdout hospital without an estimated effect gets the mean effect. The run counts these hospitals.
    - The model chooses its predictors before it drops rows. It first drops the predictors missing in more than half of the fitting rows, by the same rule as the other models. It then fits complete cases on the predictors it kept and adds no missing-value flags. This is its exception to the missing-value rule above.
    - Each time-ordered fold learns that selection on its own fitting rows and the final fit learns it on all training rows. Validation and holdout rows never enter it. The result records every kept and every dropped predictor with its missing share among the fitting rows before any row is dropped. The missing shares among the complete rows that the model fits on are recorded separately. The run counts the rows left out. A holdout row with a missing predictor is still scored, with the fitting median.
    - Every fit needs at least three fitting years. The time-ordered folds therefore validate the fourth training year onward.
@@ -62,8 +64,8 @@ For Moran's I, two hospitals are neighbours when their counties are the same or 
 ## Model runs
 
 - A training run fits one model, m1 to m6 in the order of the list above. It reads the Feast feature service `model_<id>` of its feature set and runs only the tests that model owns. A run logs the tags `model` and `base_run`, the identity of the base publication that its feature set was built from.
-- m1 runs the joint F test of RQ1 and fits the reduced model of RQ4 (the CMS-only list). m2 runs the Elastic Net comparison with the intercept and CMI model (RQ1), fits the full model of RQ4 on its own list and runs the mediation (RQ3). m3 reports the ownership test (RQ2), m4 the SHAP values, m5 the RQ5 test and m6 the RQ6 test. HAC validation refits each model's own specification.
-- m5 has no other model's residuals, so its Moran's I test uses the residuals of an OLS fit on the m5 list.
+- m1 (OLS baseline) runs the joint F test of RQ1 and fits the reduced model of RQ4 (the CMS-only list). m2 (Elastic Net) runs the Elastic Net comparison with the intercept and CMI model (RQ1), fits the full model of RQ4 on its own list and runs the mediation (RQ3). m3 (Mixed effects) reports the ownership test (RQ2), m4 (Gradient boosting) the SHAP values, m5 (Spatial) the RQ5 test and m6 (Fixed effects) the RQ6 test. HAC validation refits each model's own specification.
+- m5 (Spatial) has no other model's residuals, so its Moran's I test uses the residuals of an OLS fit on the m5 list.
 - The research job runs the tests that need two models, once the models have finished runs with the same `base_run`: RQ4 compares the reduced and the full fit on the same rows and holdout windows.
 
 ## Research question tests
