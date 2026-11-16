@@ -603,9 +603,22 @@ run "the_metadata_job_is_one_ingestion_client_of_the_persistent_catalog" {
       toset([for mount in jsondecode(output.host_container_definitions["metadata"])[1].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
       toset(["workspace:/workspace:false", "tmp:/tmp:false", "repo:/opt/hai/repo:true"]) &&
       !contains(keys(jsondecode(output.host_container_definitions["metadata"])[1]), "memory") && jsondecode(output.host_container_definitions["metadata"])[1].readonlyRootFilesystem &&
-      jsondecode(output.host_container_definitions["metadata"])[1].user == "10001:10001"
+      jsondecode(output.host_container_definitions["metadata"])[1].user == "10001:0"
     )
-    error_message = "The checkout is mounted read-only, the root filesystem stays read-only and the job user is not root."
+    error_message = "The checkout is mounted read-only, the root filesystem stays read-only and the ingest container runs as user 10001 in group 0, the group that reads the ingestion image's Python environment (boto3 and the metadata command live there)."
+  }
+
+  # The ingestion image keeps Python, boto3 and the metadata command in a virtual environment under the airflow user's home folder, which is mode 770 owned by
+  # airflow:root. A user outside group 0 cannot enter it and python resolves to the bare system install with no boto3. Group 0 reads the environment and holds
+  # no root power: the user is not root, every capability stays dropped and the root filesystem stays read-only.
+  assert {
+    condition = (
+      !jsondecode(output.host_container_definitions["metadata"])[1].privileged &&
+      !startswith(jsondecode(output.host_container_definitions["metadata"])[1].user, "0:") &&
+      jsondecode(output.host_container_definitions["metadata"])[1].linuxParameters.capabilities.drop == ["ALL"] &&
+      jsondecode(output.host_container_definitions["metadata"])[1].readonlyRootFilesystem
+    )
+    error_message = "Group 0 gives no capability: the ingest container is not privileged or root, drops all capabilities and keeps a read-only root filesystem."
   }
 
   assert {

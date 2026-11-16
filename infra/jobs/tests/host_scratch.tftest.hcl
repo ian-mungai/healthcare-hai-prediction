@@ -169,10 +169,11 @@ run "host_init_keeps_the_capabilities_that_let_root_delete_the_job_users_files" 
     condition = alltrue(flatten([
       for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : [
         for container in slice(jsondecode(output.host_container_definitions[family]), 1, length(jsondecode(output.host_container_definitions[family]))) :
-        container.linuxParameters.capabilities.drop == ["ALL"] && container.user == "10001:10001"
+        # The metadata ingest container runs in group 0 so it can read the ingestion image's Python environment (mode 770 airflow:root); it is still not root.
+        container.linuxParameters.capabilities.drop == ["ALL"] && container.user == (family == "metadata" && container.name == "ingest" ? "10001:0" : "10001:10001")
       ]
     ]))
-    error_message = "Every step after init still drops all capabilities and runs as the job user."
+    error_message = "Every step after init still drops all capabilities and runs as the job user, except the metadata ingest step, which runs in group 0 to read the ingestion image's Python environment."
   }
 }
 

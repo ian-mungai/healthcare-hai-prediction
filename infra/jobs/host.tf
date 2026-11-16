@@ -193,7 +193,7 @@ locals {
       essential              = true
       privileged             = false
       readonlyRootFilesystem = true
-      user                   = "10001:10001"
+      user                   = "10001:0" # group 0 reads the image's Python environment, which the airflow user's home folder keeps at mode 770 airflow:root; boto3 and the metadata command are there
       workingDirectory       = local.host_repo_mount
       entryPoint             = ["sh", "-c"]
       command                = ["python -m scripts.infrastructure.openmetadata_host_ingest --config-dir ${local.host_repo_mount}/config/metadata/ingestion --work-dir /workspace glue dbt raw_files"]
