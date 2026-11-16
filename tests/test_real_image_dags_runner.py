@@ -308,6 +308,14 @@ def test_the_drift_launch_is_checked_for_its_exact_model_and_run_inputs() -> Non
         right({key: value for key, value in environment.items() if key != "current"})
 
 
+def test_a_first_champion_has_its_own_real_image_scenario() -> None:
+    first = real_image_dags.cases_catalog()["research_dag_promotes_a_first_champion_without_a_canary"]
+    research = [step for step in first.steps if step.dag_id == "research_dag"]
+    check(len(research) == 1 and research[0].starts == 4 and research[0].run_state == "success", f"the first-champion research step: {research}")
+    check(research[0].release_recorded and research[0].check is not None, "the first-champion step records its release and checks the chain")
+    check(not [step for step in first.steps if step.dag_id == "serving_deploy_dag"], "the first-champion scenario deploys a canary or a stable serve by form")
+
+
 def test_the_missing_release_step_has_an_unpatched_scenario() -> None:
     catalog = real_image_dags.cases_catalog()
     recorded = catalog["research_dag_promotes_a_challenger_with_a_recorded_release"]
@@ -315,7 +323,10 @@ def test_the_missing_release_step_has_an_unpatched_scenario() -> None:
     check([step.release_recorded for step in recorded.steps if step.dag_id == "research_dag"] == [True, True], "the recorder case does not name its recorder")
     research = [step for step in missing.steps if step.dag_id == "research_dag"]
     check(len(research) == 1 and not research[0].release_recorded, "the missing-release scenario replaces the release")
-    check(research[0].starts == 5 and research[0].run_state == "failed" and research[0].reason == "release_online", f"the missing-release step: {research[0]}")
+    check(
+        research[0].starts == 5 and research[0].run_state == "failed" and research[0].reason == "online_hold.json cannot be read: AccessDenied",
+        f"the missing-release step: {research[0]}",
+    )
     check(research[0].states == {"ready": "success", "research": "success", "chain": "failed", "gate": "failed"}, f"its states: {research[0].states}")
     check(not any(step.release_recorded for step in missing.steps), "a step of the missing-release scenario replaces the release")
     check(

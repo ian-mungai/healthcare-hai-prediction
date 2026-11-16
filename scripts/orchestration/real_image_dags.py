@@ -945,49 +945,54 @@ def cases_catalog() -> dict[str, Scenario]:
         params = {**c.TRAIN_PARAMS, "run_id": training.trained_run_id(base, model), "model": model}
         return Step("training_dag", params, 1, family("train"), skipped=("trigger_research",))
 
-    def promotion_chain_ran(rig: Any, facts: dict[str, Any]) -> None:
-        """Research, the canary deploy of the challenger, its check, the promotion, the stable-only rollout and the owner notice: six tasks, each under its own
-        run, with the closed requests the preflight derived, and every run bound to the code the models trained with."""
+    def stage_first_champion(rig: Any) -> None:
+        """A research record that names no Production version, no canary result and no held online load, and a hold read the launch role would be denied."""
+        rig.stage.objects.update(research_objects(base, research, {"HAI_1": challenger, "HAI_2": None}, None, production=None, hold=False))
+        rig.stage.denied |= {
+            f"lakehouse/layer_runs/features/{training.model_features_run_id(base, model)}/online_hold.json" for model in training.PROMOTION_MODELS
+        }
+
+    def first_champion_ran(rig: Any, facts: dict[str, Any]) -> None:
+        """Research, the promotion, the stable-only rollout and the owner notice: four tasks, no canary deploy or check, no release and no read of a hold key,
+        and the research record the chain read names no Production version, which makes the notice say the one-time exception (the text is checked in
+        ``scripts.training.auto_promotion_cases``, because the training code is not in the Airflow image)."""
         first = rig.tasks_started() - facts["run_task_calls"]
-        environments = [rig.environment(first + index) for index in range(6)]
+        environments = [rig.environment(first + index) for index in range(4)]
         found = [item["serve"] if "serve" in item else item["promote"] for item in environments]
-        steps = ("canary_deploy", "canary", "promote", "stable_deploy", "notice")
-        runs = [research, *(training.chain_run_id(research, "HAI_1", step) for step in steps)]
+        runs = [research, *(training.chain_run_id(research, "HAI_1", step) for step in ("promote", "stable_deploy", "notice"))]
         require([item["RUN_ID"] for item in found] == runs, f"the chain ran under {[item['RUN_ID'] for item in found]}, not {runs}")
         phases = [item.get("PHASE") for item in found]
-        require(phases == ["research", None, "canary", "promote", None, "notify"], f"the chain ran the phases {phases}")
+        require(phases == ["research", "promote", None, "notify"], f"the chain ran the phases {phases}")
         parameters = [json.loads(item["TRAINING_PARAMETERS"]) if "TRAINING_PARAMETERS" in item else None for item in found]
         expected = [
             {"base_run": base, "population": "primary", "hai_types": types, "mlflow": "aws"},
-            None,
-            {"research_run": research, "hai_type": "HAI_1", "mlflow": "aws"},
             {"hai_type": "HAI_1", "model_version": challenger["version"], "promotion_mode": "promote", "mlflow": "aws"},
             None,
             {"research_run": research, "hai_type": "HAI_1", "outcome": "promoted", "mlflow": "aws"},
         ]
         require(parameters == expected, f"the chain sent the parameters {parameters}")
-        serving_request_is(canary_request | {"research_run": research})(environments[1])
-        serving_request_is(stable_request)(environments[4])
-        for run, environment in ((runs[1], environments[1]), (runs[4], environments[4])):
-            serving_request_is_bound(rig, run, environment)
-        for run, job in zip(runs, ("promote", "serve", "promote", "promote", "serve", "promote"), strict=True):
+        serving_request_is(stable_request)(environments[2])
+        serving_request_is_bound(rig, runs[2], environments[2])
+        for run, job in zip(runs, ("promote", "promote", "serve", "promote"), strict=True):
             end = rig.end(run, job)
             require(end is not None and end["outcome"] == "succeeded", f"{job} of {run} has no success record: {end}")
-            bound = json.loads(rig.stage.objects[c.RUN_KEY.format(run=run, name="code_run.json")])
-            require(bound == {"code_run": c.BRONZE_RUN}, f"{run} is bound to {bound}, not to the code the models trained with")
-        released = [item for item in rig.reports if item.startswith("release ")]
-        wanted = f"release m2 {training.model_features_run_id(base, 'm2')} {training.chain_run_id(research, 'HAI_1', 'release')}"
-        require(released == [wanted], f"the release of the held online load was {released}, not {[wanted]}")
+        started = [entry for entry in rig.stage.log if "online_hold" in entry]
+        require(not started, f"the first champion read a hold key: {started}")
+        require(not [item for item in rig.reports if item.startswith("release ")], "the first champion released a held online load")
+        record = json.loads(rig.stage.objects[training.record_key("research", research, "HAI_1")])
+        promotion = record["promotion"]
+        require("production_version" in promotion and promotion["production_version"] is None, f"the research record names a Production version: {promotion}")
 
-    def release_step_missing(rig: Any, facts: dict[str, Any]) -> None:
-        """The shipped release refuses by name: the chain launches research, the canary deploy and check, the promotion and the notice, no rollout."""
+    def closed_after_the_notice(rig: Any, facts: dict[str, Any]) -> None:
+        """With a Production model the chain reads the hold key and the launch role is denied it (``STAGE_PREFIXES`` hold no layer run), so the chain fails
+        closed by name after the promotion: it launches research, the canary deploy and check, the promotion and the notice, no rollout and no release."""
         first = rig.tasks_started() - facts["run_task_calls"]
         found = [item["serve"] if "serve" in item else item["promote"] for item in (rig.environment(first + index) for index in range(5))]
         phases = [item.get("PHASE") for item in found]
         require(phases == ["research", None, "canary", "promote", "notify"], f"the chain ran the phases {phases}, not the five before the release")
         notice = json.loads(found[4]["TRAINING_PARAMETERS"])
         require(notice["outcome"] == "promoted_not_rolled_out", f"the owner was told {notice['outcome']}")
-        require(not [item for item in rig.reports if item.startswith("release ")], "a release ran although the step is not built")
+        require(not [item for item in rig.reports if item.startswith("release ")], "a release ran although the hold read was denied")
 
     def research_started(rig: Any) -> None:
         found = triggered_confs("research_dag", research_trigger_run(trigger_run))
@@ -999,15 +1004,31 @@ def cases_catalog() -> dict[str, Scenario]:
     trigger_base, trigger_types = c.SERVE_BASE, list(c.TRAIN_PARAMS["hai_types"])
     trigger_run = training.trained_run_id(trigger_base, "m4")
     waiting = {"ready": "skipped", "research": "skipped", "chain": "skipped", "gate": DONE_STATE}
+
+    def hold_denied(starts: int, **changes: Any) -> Step:
+        """A research run with a Production model: its hold read is denied, so the chain fails closed by name (the run fails at the chain and the gate)."""
+        states = {"ready": DONE_STATE, "research": DONE_STATE, "chain": "failed", "gate": "failed"}
+        reason = "online_hold.json cannot be read: AccessDenied"
+        return Step("research_dag", research_params, starts, states=states, run_state="failed", reason=reason, **changes)
+
     research_cases = (
         Scenario(
             "research_dag_promotes_a_challenger_with_a_recorded_release",
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                Step("research_dag", research_params, 6, check=promotion_chain_ran, release_recorded=True, prepare=stage_research),
+                hold_denied(5, check=closed_after_the_notice, release_recorded=True, prepare=stage_research),
                 # A second run for the base joins the launches of the first and starts nothing again.
-                Step("research_dag", research_params, 0, check=joined, release_recorded=True),
+                hold_denied(0, check=joined, release_recorded=True),
+            ),
+            make_rig,
+        ),
+        Scenario(
+            "research_dag_promotes_a_first_champion_without_a_canary",
+            (
+                bronze,
+                *(trained(model) for model in training.PROMOTION_MODELS),
+                Step("research_dag", research_params, 4, check=first_champion_ran, release_recorded=True, prepare=stage_first_champion),
             ),
             make_rig,
         ),
@@ -1016,16 +1037,7 @@ def cases_catalog() -> dict[str, Scenario]:
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                Step(
-                    "research_dag",
-                    research_params,
-                    5,
-                    states={"ready": DONE_STATE, "research": DONE_STATE, "chain": "failed", "gate": "failed"},
-                    run_state="failed",
-                    reason="release_online",
-                    check=release_step_missing,
-                    prepare=stage_research,
-                ),
+                hold_denied(5, check=closed_after_the_notice, prepare=stage_research),
             ),
             make_rig,
         ),
