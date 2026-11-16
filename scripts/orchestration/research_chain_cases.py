@@ -721,6 +721,8 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
         release["release"]["RELEASE_MODEL"] == "m2" and release["release"]["FEATURES_RUN"] == FEATURES_RUNS["m2"], f"the release names: {release['release']}"
     )
     require(release["release"]["RUN_ID"] == runs[3], f"the release ran another run: {release['release']}")
+    end = rig.end(runs[3], "features")
+    require(end is not None and end["outcome"] == "succeeded", f"the release left {end}")
     stable_request = json.loads(environments[5]["serve"]["SERVING_REQUEST"])
     require(
         stable_request
@@ -770,6 +772,8 @@ def research_dag_fails_closed_when_the_release_task_is_refused() -> None:
     require(states["chain"] == "failed" and states["gate"] == "failed", f"states: {states}")
     require("HAI_1 release" in str(current.results["chain"]), f"the failure does not name the release step: {current.results['chain']}")
     require(not [entry for entry in rig.stage.log if "online_hold" in entry], f"the DAG read a hold key: {rig.stage.log}")
+    end = rig.end(training_contract.chain_run_id(RESEARCH, "HAI_1", "release"), "features")
+    require(end is not None and end["outcome"] == "failed", f"the refused release left {end}")
     expected = [("", "research"), ("HAI_1", "serve_canary"), ("HAI_1", "canary"), ("HAI_1", "promote"), ("m2", "release"), ("HAI_1", "notify")]
     require(launched_tasks(rig, before) == expected, f"tasks: {launched_tasks(rig, before)}")
     notice = json.loads(rig.environment(rig.tasks_started() - 1)["promote"]["TRAINING_PARAMETERS"])
