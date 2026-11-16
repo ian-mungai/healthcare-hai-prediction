@@ -2286,6 +2286,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E34_reload_refusals": (online_release_cases.case_e34_reload_refuses_what_does_not_fit, "FS6"),
     "E34_reload_idempotent": (online_release_cases.case_e34_reload_is_idempotent, "FS6"),
     "E34_reload_command": (online_release_cases.case_e34_reload_command, "FS6"),
+    "E35_launch_without_deployment_file": (online_release_cases.case_e35_launch_without_the_deployment_file, "FS6"),
     "E11_register": (case_e11_register, "LC29 LC30"),
     "E13_order": (case_e13_order, "LC13"),
     "E13_own_publication": (case_e13_own_publication, "LC13"),

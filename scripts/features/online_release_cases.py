@@ -13,9 +13,12 @@ import contextlib
 import importlib
 import io
 import json
+import sys
 import tempfile
+import types
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 from scripts.features import feast_job, feast_sets
 from scripts.features import publication_reads as reads
@@ -652,3 +655,73 @@ def case_e34_reload_command(c: Checker) -> None:
         c.check("a set without evidence exits 0 and says skipped", code == 0 and json.loads(out)["outcome"] == "skipped")
         c.check("a name that is not a model set exits 1", invoke(["--model", "m9", "--run", LAUNCH_RUN])[0] == 1)
         c.check("a launch run that is not a run ID exits 1", invoke(["--model", "m1", "--run", "latest"])[0] == 1)
+
+
+DATA_BUCKET = "example-data-bucket"
+S3_CLIENT = "s3-client-stand-in"
+
+
+def launch_environment(**changes: str | None) -> dict[str, str]:
+    """The environment of the feast container in a release or a reload launch of the features task (synthetic values): the AWS profile and the data bucket."""
+    environ: dict[str, str] = {
+        "FEAST_PROFILE": "aws",
+        "AWS_REGION": "us-east-2",
+        "FEAST_REGISTRY_BUCKET": DATA_BUCKET,
+        "DATA_BUCKET_NAME": DATA_BUCKET,
+        "RELEASE_MODEL": "m1",
+    }
+    for name, value in changes.items():
+        if value is None:
+            environ.pop(name, None)
+        else:
+            environ[name] = value
+    return environ
+
+
+def case_e35_launch_without_the_deployment_file(c: Checker) -> None:
+    """Failure modes of the run's record store in a release or a reload launch (first live reload, Nov 16: ``the deployment file is missing or not valid
+    JSON``). Only a build launch's steps write ``/workspace/infra/deployment.auto.tfvars.json``; a release or reload launch skips them, so the AWS profile takes
+    the data bucket of the record store from ``DATA_BUCKET_NAME``, which every features container has, and never reads that file.
+
+    1. The file is absent and ``DATA_BUCKET_NAME`` is set: the release store and the reload store open on that bucket (the file is never read).
+    2. ``DATA_BUCKET_NAME`` is unset or empty: both refuse by that name (not by the file).
+    3. ``DATA_BUCKET_NAME`` is not a bucket name (capitals, a space, ``..``, too short): both refuse by that name.
+    4. A file that is there does not override the variable (one source), and the local profile keeps reading its file."""
+    online_release: Any = importlib.import_module("scripts.features.online_release")
+    feast_aws: Any = importlib.import_module("scripts.features.feast_aws")
+    boto3 = types.SimpleNamespace(client=lambda service, region_name=None: f"{S3_CLIENT}:{service}:{region_name}")
+    absent = mock.patch.object(reads, "deployment_bucket", side_effect=ReadError("the deployment file is missing or not valid JSON"))
+    run = HELD_RUN
+
+    def release_store(environ: dict[str, str]) -> feast_sets.HoldStore:
+        return online_release.default_holds(run, "real", environ)
+
+    def reload_store(environ: dict[str, str]) -> feast_sets.HoldStore:
+        return feast_sets.hold_store(feast_aws.job_settings(environ, "materialize", LAUNCH_RUN, "real"), environ)
+
+    with mock.patch.dict(sys.modules, {"boto3": boto3}), absent as deployment_read:
+        for name, make in (("release", release_store), ("reload", reload_store)):
+            store = make(launch_environment())
+            c.check(
+                f"{name}: the store opens on the data bucket with no deployment file", isinstance(store, feast_sets.S3HoldStore) and store.bucket == DATA_BUCKET
+            )
+            c.check(f"{name}: the S3 client is the one of the task region", getattr(store, "client", "") == f"{S3_CLIENT}:s3:us-east-2")
+            c.refused(
+                f"{name}: an unset DATA_BUCKET_NAME is refused by name", lambda make=make: make(launch_environment(DATA_BUCKET_NAME=None)), "DATA_BUCKET_NAME"
+            )
+            c.refused(
+                f"{name}: an empty DATA_BUCKET_NAME is refused by name", lambda make=make: make(launch_environment(DATA_BUCKET_NAME="")), "DATA_BUCKET_NAME"
+            )
+            for bad in ("Bad_Bucket", "a..b", "x", "has space", "-leading"):
+                c.refused(
+                    f"{name}: DATA_BUCKET_NAME {bad!r} is refused by name",
+                    lambda make=make, bad=bad: make(launch_environment(DATA_BUCKET_NAME=bad)),
+                    "DATA_BUCKET_NAME",
+                )
+            other = make(launch_environment(DATA_BUCKET_NAME="another-data-bucket"))
+            c.check(f"{name}: the store takes the variable, not the registry bucket", getattr(other, "bucket", "") == "another-data-bucket")
+        c.check("no deployment file was read by any of them", deployment_read.call_count == 0)
+    with mock.patch.dict(sys.modules, {"boto3": boto3}), mock.patch.object(reads, "deployment_bucket", return_value="file-bucket-name") as deployment_read:
+        local = feast_job.JobSettings("materialize", run, "real", Path("/workspace/out"), "s3://file-bucket-name/lakehouse/feast/registry.pb", "us-east-2")
+        store = feast_sets.hold_store(local, {"AWS_REGION": "us-east-2", "DATA_BUCKET_NAME": DATA_BUCKET})
+        c.check("the local profile still reads its deployment file", getattr(store, "bucket", "") == "file-bucket-name" and deployment_read.call_count == 1)

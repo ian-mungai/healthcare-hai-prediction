@@ -646,11 +646,16 @@ def production_reader(settings: feast_job.JobSettings, feature_set: str) -> Call
 
 
 def hold_store(settings: feast_job.JobSettings, environ: Mapping[str, str]) -> HoldStore:
-    """The store a release reads and writes: the data bucket's run prefix for a real run, the run folder for a fixture run."""
+    """The store a release reads and writes: the data bucket's run prefix for a real run, the run folder for a fixture run.
+
+    The AWS profile takes the bucket from ``DATA_BUCKET_NAME`` (a release or reload launch writes no deployment file); the local profile reads the file."""
     if settings.mode == "publish_fixture":
         return RunFolderStore(settings.folder, settings.run)
+    from scripts.features import feast_aws
+
     region = settings.region or environ.get("AWS_REGION")
-    return S3HoldStore(importlib.import_module("boto3").client("s3", region_name=region), reads.deployment_bucket())
+    bucket = reads.environment_bucket(environ) if feast_aws.selected_profile(environ) == "aws" else reads.deployment_bucket()
+    return S3HoldStore(importlib.import_module("boto3").client("s3", region_name=region), bucket)
 
 
 def run_set_apply(

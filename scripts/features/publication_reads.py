@@ -57,6 +57,7 @@ RUN_ID = re.compile(r"[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,127}")
 REGION = re.compile(r"[a-z]{2}(-[a-z]+)+-[0-9]")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
+DATA_BUCKET_VARIABLE = "DATA_BUCKET_NAME"
 VARIABLE = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}|\$([A-Za-z_][A-Za-z0-9_]*)")
 # The S3 registry objects a Feast job may write (design 6.5 and section 7 item 4): one for the real registry, one for the probe.
 REGISTRY_KEYS = {"apply": "lakehouse/feast/registry.pb", "materialize": "lakehouse/feast/registry.pb", "probe": "lakehouse/feast_e2e/registry.pb"}
@@ -328,6 +329,18 @@ def deployment_bucket(path: Path = DEPLOYMENT_PATH) -> str:
     bucket = document.get("data_bucket_name") if isinstance(document, dict) else None
     if not isinstance(bucket, str) or not BUCKET.fullmatch(bucket):
         raise ReadError("the deployment file has no valid data_bucket_name")
+    return bucket
+
+
+def environment_bucket(environ: Mapping[str, str]) -> str:
+    """The data bucket name of an AWS launch, from ``DATA_BUCKET_NAME`` (every features container has it), with the checks of the deployment file's bucket.
+
+    A release or reload launch has no deployment file: only the steps of a build launch write it."""
+    bucket = environ.get(DATA_BUCKET_VARIABLE, "")
+    if not bucket:
+        raise ReadError(f"{DATA_BUCKET_VARIABLE} is not set")
+    if not BUCKET.fullmatch(bucket) or ".." in bucket:
+        raise ReadError(f"{DATA_BUCKET_VARIABLE} is not a bucket name")
     return bucket
 
 
