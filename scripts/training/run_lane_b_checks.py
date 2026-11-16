@@ -122,6 +122,38 @@ def run_checks(output: Path) -> int:
         case("research_run_id_has_the_run_form", re.fullmatch(training_contract.RUN_ID, research) is not None and research != base)
         case("research_run_id_is_stable_for_a_retry", research == training_contract.research_run_id(base))
         case("research_run_id_differs_per_base", research != training_contract.research_run_id("20261109T000000Z-b45e0002"))
+        attempts = {number: training_contract.research_run_id(base, number) for number in (1, 2, 3, 99)}
+        case("research_attempt_one_is_the_default_run", attempts[1] == research)
+        case("research_attempts_differ", len(set(attempts.values())) == len(attempts))
+        case("research_attempt_ids_have_the_run_form", all(re.fullmatch(training_contract.RUN_ID, value) for value in attempts.values()))
+        case("research_attempt_id_is_stable_for_a_retry", attempts[2] == training_contract.research_run_id(base, 2))
+        case("research_attempt_id_differs_per_base", attempts[2] != training_contract.research_run_id("20261109T000000Z-b45e0002", 2))
+        refused_attempts: list[tuple[str, Any]] = [("zero", 0), ("above_the_limit", 100), ("a_flag", True), ("text", "2"), ("a_fraction", 2.0)]
+        for name, bad in refused_attempts:
+            try:
+                training_contract.research_run_id(base, bad)
+            except ValueError as error:
+                case(f"research_attempt_refuses_{name}", "attempt" in str(error))
+            else:
+                case(f"research_attempt_refuses_{name}", False)
+        research_form = {"base_run": base, "population": "primary", "hai_types": ["HAI_1"], "mlflow": "aws"}
+        launch = training_contract.LAUNCH_LANES
+        case("research_form_without_an_attempt_is_accepted", training_contract.parameters_for("research_dag", research_form, launch) == research_form)
+        case(
+            "research_form_with_an_attempt_is_accepted",
+            training_contract.parameters_for("research_dag", {**research_form, "research_attempt": 2}, launch)["research_attempt"] == 2,
+        )
+        refused_forms: list[tuple[str, Any]] = [("one", 1), ("zero", 0), ("above_the_limit", 100), ("a_flag", True), ("text", "2"), ("none", None)]
+        for name, bad in refused_forms:
+            try:
+                training_contract.parameters_for("research_dag", {**research_form, "research_attempt": bad}, launch)
+            except ValueError as error:
+                case(f"research_form_refuses_the_attempt_{name}", "research_attempt" in str(error))
+            else:
+                case(f"research_form_refuses_the_attempt_{name}", False)
+        second_chain = {step: training_contract.chain_run_id(attempts[2], "HAI_1", step) for step in training_contract.CHAIN_STEPS}
+        first_chain = {step: training_contract.chain_run_id(research, "HAI_1", step) for step in training_contract.CHAIN_STEPS}
+        case("chain_run_ids_differ_per_research_attempt", not set(second_chain.values()) & set(first_chain.values()))
         chain = {
             (hai_type, step): training_contract.chain_run_id(research, hai_type, step)
             for hai_type in training_contract.HAI_TYPES

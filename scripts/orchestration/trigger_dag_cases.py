@@ -363,6 +363,10 @@ def base_run_cases() -> dict[str, bool]:
     types_api = Ends()
     invoke(types_api, [*research, "--hai-types", HAI_TYPE, "--population", "sensitivity"])
     chained = contract.research_requests("m1", trained, BASE, "primary", list(contract.HAI_TYPES), "aws")[0]["conf"]
+    second_run = contract.research_run_id(BASE, 2)
+    attempt_api, first_attempt_api = Ends(), Ends()
+    attempt_code, attempt_printed, _, _ = invoke(attempt_api, [*research, "--research-attempt", "2"])
+    invoke(first_attempt_api, [*research, "--research-attempt", "1"])
     serve = ["--dag", "serving_deploy_dag", "--mode", "real", "--hai-type", HAI_TYPE, "--wait-seconds", "5"]
     canary_api, stable_api, unnamed_api = Ends(), Ends(), Ends()
     canary_code = invoke(canary_api, [*serve, "--deploy-mode", "canary", "--research-run", RESEARCH_RUN])[0]
@@ -407,6 +411,22 @@ def base_run_cases() -> dict[str, bool]:
         ),
         "research with another run ID is refused before any call": refused_quietly([*research, "--run-id", RUN], "derived"),
         "research on the local MLflow lane is refused before any call": refused_quietly([*research, "--mlflow", "local"], "mlflow=local"),
+        "research attempt 2 triggers the research run of that attempt and records the attempt in the conf": attempt_code == 0
+        and attempt_printed is not None
+        and attempt_printed["run_id"] == second_run != contract.research_run_id(BASE)
+        and attempt_api.confs == [{**chained, "run_id": second_run, "research_attempt": 2}],
+        "research attempt 1 is the default run with no attempt in the conf": first_attempt_api.confs == [chained],
+        "a research attempt outside 1 to 99 is refused before any call": refused_quietly([*research, "--research-attempt", "0"], "research attempt")
+        and refused_quietly([*research, "--research-attempt", "100"], "research attempt"),
+        "a research run ID that is not the attempt's derived run is refused before any call": refused_quietly(
+            [*research, "--research-attempt", "2", "--run-id", contract.research_run_id(BASE)], "derived"
+        )
+        and refused_quietly([*research, "--research-attempt", "2", "--run-id", RUN], "derived"),
+        "the derived run of attempt 2 may be named": invoke(Ends(), [*research, "--research-attempt", "2", "--run-id", second_run])[0] == 0,
+        "a workflow that is not research refuses a research attempt before any call": refused_quietly([*train, "--research-attempt", "2"], "research attempt"),
+        "a research attempt without a base run is refused before any call": refused_quietly(
+            ["--dag", "research_dag", "--mode", "real", "--research-attempt", "2", "--wait-seconds", "5"], "base run"
+        ),
         "a canary deploy names the research run and the type and the mode and nothing else": canary_code == 0
         and canary_api.confs
         == [{"run_id": first(canary_api).get("run_id"), "mode": "real", "hai_type": HAI_TYPE, "deploy_mode": "canary", "research_run": RESEARCH_RUN}],

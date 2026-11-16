@@ -4,7 +4,8 @@
 until all three models have passed training runs on that base. Then one research task launches in the promote family and the chain task runs, for each
 infection type with a challenger, the canary check, the promotion, the release of the model set's held online load and the owner notice
 (``orchestration/promotion_chain.py``). No step needs the owner's approval. A second run for the same base joins the launches of the first and starts
-nothing again.
+nothing again. A run whose research failed does not start again: its launch is terminal, so the form's ``research_attempt`` starts the same base's research as
+a run of its own.
 """
 
 from __future__ import annotations
@@ -21,7 +22,7 @@ with DAG(
     max_active_runs=1,
     tags=["training", "promotion"],
     params={
-        # The research run ID, derived from the base run (orchestration.training_contract.research_run_id); a hand start names its own.
+        # The research run ID, derived from the base run and the attempt (orchestration.training_contract.research_run_id); a hand start names its own.
         "run_id": Param(type="string", pattern=r"^[0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}$"),
         "mode": Param("real", type="string", enum=["real"]),
         # The base run whose models research compares: no default, so a form trigger must name it.
@@ -29,6 +30,9 @@ with DAG(
         "population": Param("primary", type="string", enum=["primary", "sensitivity"]),
         "hai_types": Param(list(HAI_TYPES), type="array", minItems=1, maxItems=6, uniqueItems=True, items={"enum": list(HAI_TYPES)}),
         "mlflow": Param("aws", type="string", enum=["local", "aws"]),
+        # The attempt of the base's research: 1 is the run every base has. The launch of a run is terminal once it ended, so research that failed starts
+        # again as attempt 2 or later, with the run ID that the attempt derives (orchestration.training_contract.research_run_id) and its own chain.
+        "research_attempt": Param(1, type="integer", minimum=1, maximum=99),
     },
     default_args={"retries": 0},
 ) as dag:

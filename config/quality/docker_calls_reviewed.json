@@ -433,7 +433,7 @@
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
-        "orchestration/training_contract.py": "sha256:dd590b0b8acc2b18938117db0d7e00ffc0ce97c478e9bb9b9481242a19ad1d9f",
+        "orchestration/training_contract.py": "sha256:9e6c34f3933673c0563f6693848579d306f94845e39a2b0756e10467903d76d0",
         "scripts/infrastructure/secret_store.py": "sha256:5211ddea22e1ad83a3a3211aa36ed7e002db005bf36a28a65b663c733612ce24",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:df5fe9499fb37c716ec09ec24e84ca20a62588b0aae8c68fad52db1d171c3246",
         "scripts/infrastructure/sts_stand_in.py": "sha256:2892a7d92971696bcf4d2c05580d8dfb38de1f92eac66c94d2606561cfb08914",
@@ -1602,15 +1602,15 @@
     },
     {
       "path": "orchestration/dag_runtime.py",
-      "line": 168,
+      "line": 170,
       "code_sha256": "283cc928de87db0c7733588fe72c4e11f5ad65711699a324e0ed37f050d7f648",
       "problem": "imported by a computed name",
       "occurrences": 1,
-      "file_sha256": "52644cc21ac3167f30e1723e608e249b1716b5cae14130db74fdc7bf93db78c1",
+      "file_sha256": "aba845ed71fa48b703b79c8b9953886d3e0ef6e20d56875f47130b465824c3a9",
       "dependencies": {
         "orchestration/ingestion_schedule.py": "sha256:5389d6543b521445459a1f135859b6af5ac728c5f3ad33e4918928cb8c69d8c0",
         "orchestration/interface.py": "sha256:5c5c67a829b1a8504da4821b1b50ee302b40f9d2537e21d5b23bd0307704d8c5",
-        "orchestration/training_contract.py": "sha256:dd590b0b8acc2b18938117db0d7e00ffc0ce97c478e9bb9b9481242a19ad1d9f"
+        "orchestration/training_contract.py": "sha256:9e6c34f3933673c0563f6693848579d306f94845e39a2b0756e10467903d76d0"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",
       "lines": [

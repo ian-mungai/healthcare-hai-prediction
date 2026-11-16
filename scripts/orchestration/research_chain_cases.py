@@ -130,6 +130,31 @@ def research_dag_step_launches_with_its_form() -> None:
     require("mlflow=aws" in str(error), f"the refusal of the local lane does not name its fix: {error}")
 
 
+def research_dag_runs_a_later_attempt_as_a_run_of_its_own() -> None:
+    """A research run that failed cannot launch again, so the form's research attempt starts another run of the same base: the job gets the attempt in its
+    parameters and the base's code, and the first attempt, the default, sends none. An attempt the contract refuses never launches."""
+    second = training_contract.research_run_id(BASE, 2)
+    require(second != RESEARCH, "the second attempt derives the first attempt's run")
+    for attempt, run, expected in ((2, second, {**RESEARCH_PARAMS, "research_attempt": 2}), (1, RESEARCH, RESEARCH_PARAMS)):
+        rig = Rig()
+        rig.stage_runs(training_contract.trained_run_id(BASE, "m1"))
+        with world(rig, "research_dag", dag_params(run_id=run, research_attempt=attempt)) as current:
+            require(current.step("research") == "succeeded", f"the research step of attempt {attempt} did not pass")
+        promote = rig.environment()["promote"]
+        require(promote["RUN_ID"] == run, f"attempt {attempt} ran {promote['RUN_ID']}, not {run}")
+        require(json.loads(promote["TRAINING_PARAMETERS"]) == expected, f"attempt {attempt} sent {promote['TRAINING_PARAMETERS']}")
+    rig = Rig()
+    rig.stage_runs(training_contract.trained_run_id(BASE, "m1"))
+    for attempt in (0, 100):
+        with world(rig, "research_dag", dag_params(run_id=second, research_attempt=attempt)) as current:
+            error = refuses(ValueError, lambda: current.step("research"))
+        require("research attempt" in str(error), f"attempt {attempt} was refused for another cause: {error}")
+    require(rig.tasks_started() == 0, "a refused attempt launched a task")
+    rig.stage_runs(second)
+    error = refuses(LaunchRefused, partial(rig.preflight.prepare, request_for("research", second, {**RESEARCH_PARAMS, "research_attempt": 1})))
+    require("research_attempt" in str(error), f"the preflight took the attempt 1 spelled out: {error}")
+
+
 def hold_key(features_run: str) -> str:
     return f"{feast_sets.RUN_PREFIX}/{features_run}/{feast_sets.HOLD_NAME}"
 
@@ -817,4 +842,5 @@ CASES: dict[str, Callable[[], None]] = {
     "no_other_job_is_told_a_phase": no_other_job_is_told_a_phase,
     "steps_refuse_the_parameters_of_another_step": steps_refuse_the_parameters_of_another_step,
     "research_dag_step_launches_with_its_form": research_dag_step_launches_with_its_form,
+    "research_dag_runs_a_later_attempt_as_a_run_of_its_own": research_dag_runs_a_later_attempt_as_a_run_of_its_own,
 }

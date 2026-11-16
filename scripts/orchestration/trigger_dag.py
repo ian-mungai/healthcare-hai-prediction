@@ -11,6 +11,7 @@ Usage::
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag features_base_dag --mode real --gold-snapshot-run <gold run id> --wait-seconds 7200
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag training_dag --mode real --model m1 --base-run <base run id> --wait-seconds 14400
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag research_dag --mode real --base-run <base run id> --wait-seconds 14400
+    .venv/bin/python -m scripts.orchestration.trigger_dag --dag research_dag --mode real --base-run <base run id> --research-attempt 2 --wait-seconds 14400
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag model_promotion_dag --mode real --hai-type HAI_1 --model-version <version> --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag serving_deploy_dag --mode real --hai-type HAI_1 --deploy-mode stable --wait-seconds 3600
     .venv/bin/python -m scripts.orchestration.trigger_dag --dag gold_transform_dag --run-id <run id> --status --wait-seconds 60
@@ -24,7 +25,10 @@ does not accept: after the direct ECS launch every workflow here accepts only ``
 ``--base-run`` names the run of ``features_base_dag`` whose model set a training or research run uses. The runs of the chain derive from it
 (``orchestration/training_contract.py``), so the trigger derives them and refuses any other value: ``training_dag`` takes the training run of its ``--model``
 on the features run of that model's set (``--run-id`` and ``--features-run`` may name only those) and sends the base run, so a run of m1, m2 or m4 starts
-``research_dag`` itself for the base. ``research_dag`` takes the research run of the base (``--run-id`` may name only that run). The run ID that is printed is
+``research_dag`` itself for the base. ``research_dag`` takes the research run of the base (``--run-id`` may name only that run). The launch of a run is
+terminal once it ended, so a research run that failed cannot start again: ``--research-attempt N`` (2 to 99) starts the research of the same base as a run
+of its own, with its own research record and its own promotion chain, and sends the attempt in the conf. Attempt 1, the default, is the run every base has and
+sends no attempt. The run ID that is printed is
 the research run that ``serving_deploy_dag`` takes as ``--research-run``: a canary needs it, a stable deploy takes none. No other workflow takes ``--base-run``.
 
 ``ingestion_dag`` also takes ``--run-kind`` (``bootstrap``, the form's default, or ``monthly``) and ``--capture-root`` (``raw/``, the form's default, or one
@@ -61,6 +65,7 @@ from orchestration.training_contract import (
     MODELS,
     model_features_run_id,
     parameters_for,
+    research_attempt_of,
     research_run_id,
     serving_parameters_for,
     trained_run_id,
@@ -176,13 +181,18 @@ def serving_conf(given: dict[str, Any]) -> dict[str, str]:
 
 
 def base_run_plan(
-    dag: str, base_run: str | None, model: str | None, run_id: str | None, features_run: str | None
+    dag: str, base_run: str | None, model: str | None, run_id: str | None, features_run: str | None, research_attempt: int | None = None
 ) -> tuple[str | None, str | None, dict[str, str]]:
     """The run ID, the features run and the extra conf that a base run fixes for a training or research run.
 
     The training run of a model on a base run, the features run of its set and the research run are the runs the features, drift and training DAGs derive
     from the base run, so a run that names any other ID would belong to no chain. A value left out is derived; a value that is named must be the derived one.
+    The research run is also derived from the research attempt, which only ``research_dag`` takes and which needs the base run it derives from.
     """
+    if research_attempt is not None and dag != RESEARCH_DAG:
+        raise TriggerError(f"refused: {dag} takes no research attempt, only {RESEARCH_DAG} does")
+    if research_attempt is not None and base_run is None:
+        raise TriggerError("refused: a research attempt needs --base-run, the base run whose research run it derives")
     if base_run is None:
         return run_id, features_run, {}
     if dag not in (*TRAINING_DAGS[:1], RESEARCH_DAG):
@@ -190,7 +200,10 @@ def base_run_plan(
     if not RUN_ID.fullmatch(base_run):
         raise TriggerError(f"refused: --base-run must be a base publication run ID, not {base_run!r}")
     if dag == RESEARCH_DAG:
-        derived, features, extra = research_run_id(base_run), features_run, {}
+        try:
+            derived, features, extra = research_run_id(base_run, 1 if research_attempt is None else research_attempt), features_run, {}
+        except ValueError as error:
+            raise TriggerError(f"refused: --research-attempt: {error}") from None
     else:
         if model not in MODELS:
             raise TriggerError(f"refused: --base-run needs --model, one of {', '.join(MODELS)}, to derive the training run")
@@ -324,6 +337,11 @@ def main(argv: list[str] | None = None) -> int:
     cli.add_argument(
         "--features-run", help="training_dag only: the features run to fit on (latest, the default, or a run ID; with --base-run only the model set's run)"
     )
+    cli.add_argument(
+        "--research-attempt",
+        type=int,
+        help="research_dag only, with --base-run: the attempt (2 to 99) of the research of the base, after research that failed; 1, the default, is the first",
+    )
     cli.add_argument("--population", choices=("primary", "sensitivity"), default="primary")
     cli.add_argument("--hai-types", choices=HAI_TYPES, nargs="+", default=list(HAI_TYPES))
     cli.add_argument("--trigger", default="manual")
@@ -360,13 +378,15 @@ def main(argv: list[str] | None = None) -> int:
             raise TriggerError(f"refused: {args.dag} takes no deploy mode and no research run, only {SERVING_DAG} does")
         if args.dag != "training_dag" and args.features_run is not None:
             raise TriggerError(f"refused: {args.dag} takes no features run, only training_dag does")
-        run_id, features_run, extra = base_run_plan(args.dag, args.base_run, args.model, args.run_id, args.features_run)
+        run_id, features_run, extra = base_run_plan(args.dag, args.base_run, args.model, args.run_id, args.features_run, args.research_attempt)
         training = None
         if args.dag == "training_dag":
             args.features_run = "latest" if features_run is None else features_run
             training = {name: getattr(args, name) for name in ("features_run", "population", "hai_types", "trigger", "mlflow", "model")}
         elif args.dag == RESEARCH_DAG:
             training = {name: getattr(args, name) for name in ("base_run", "population", "hai_types", "mlflow")}
+            if args.research_attempt is not None and research_attempt_of(args.research_attempt) > 1:
+                training["research_attempt"] = args.research_attempt
         elif args.dag == "model_promotion_dag":
             training = {name: getattr(args, name) for name in ("hai_type", "model_version", "promotion_mode", "mlflow")}
         elif args.dag == SERVING_DAG:

@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
+from orchestration import training_contract
 from scripts.training import aws_run_cases, job, promote_receipt, run_tracking
 from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
 from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
@@ -41,15 +42,15 @@ def finished_models(
     return tracking, fixtures
 
 
-def research(folder: Path, anchor: Fixture, opening: Callable[[str], Any] | None = None, **changes: Any) -> tuple[int, str, str, Path]:
+def research(folder: Path, anchor: Fixture, opening: Callable[[str], Any] | None = None, run: str = RESEARCH_RUN, **changes: Any) -> tuple[int, str, str, Path]:
     """Run the research action on the shared store through the job entry point and return its result and output folder.
 
     ``opening`` replaces the store stand-in's ``open_store`` inside the run, so a case can drive the real ``run_tracking.open_store``.
     """
-    work = prepare(folder, run_id=RESEARCH_RUN)
+    work = prepare(folder, run_id=run)
     (work / "training_parameters.json").write_text(json.dumps(PARAMETERS | changes) + "\n")
     arguments = arguments_for("research", work)
-    arguments[arguments.index("--run") + 1] = RESEARCH_RUN
+    arguments[arguments.index("--run") + 1] = run
     with standins(anchor), contextlib.ExitStack() as stack:
         if opening is not None:
             stack.enter_context(mock.patch.object(run_tracking, "open_store", opening))
@@ -247,6 +248,22 @@ def research_cases(cases: Any, folder: Path) -> None:
         require(code == 0 and client.direct_reads == 0, f"research read an artifact over the presigned path ({client.direct_reads} reads): {code} {error}")
         require((output / f"research_{HAI_TYPE}.json").is_file(), "the research wrote no record")
 
+    def records_the_research_attempt() -> None:
+        tracking, fixtures = finished_models(folder / "attempt")
+        first = research(folder / "attempt_first", fixtures["m2"])
+        require(first[0] == 0, f"research failed: {first[2]}")
+        require("research_attempt" not in json.loads((first[3] / f"research_{HAI_TYPE}.json").read_text()), "the first attempt names an attempt in its record")
+        later = training_contract.research_run_id(BASE_RUN, 2)
+        second = research(folder / "attempt_second", fixtures["m2"], run=later, research_attempt=2)
+        require(second[0] == 0, f"the second attempt failed: {second[2]}")
+        records = [item for item in tracking.active().values() if item["tags"].get("step_key") == "research"]
+        require({item["tags"]["run_id"] for item in records} == {RESEARCH_RUN, later}, f"the research runs: {[item['tags']['run_id'] for item in records]}")
+        require(
+            json.loads((second[3] / f"research_{HAI_TYPE}.json").read_text()).get("research_attempt") == 2, "the record of attempt 2 does not name its attempt"
+        )
+        refused = research(folder / "attempt_spelled_out", fixtures["m2"], research_attempt=1)
+        require(refused[0] == job.EXIT_FAILED and failure_of(refused[2]) == "parameters", f"attempt 1 spelled out was accepted: {refused[0]} {refused[2]}")
+
     def phase_publishes_each_record_once() -> None:
         tracking, fixtures = finished_models(folder / "phase")
         bucket = aws_run_cases.ListingBucket(aws_run_cases.BUCKET, "research/")
@@ -278,6 +295,7 @@ def research_cases(cases: Any, folder: Path) -> None:
 
     cases.check("research_compares_two_models_and_chooses_one_challenger_per_type", compares_and_chooses)
     cases.check("research_reads_run_artifacts_through_the_tracking_server", reads_run_artifacts_through_the_tracking_server)
+    cases.check("research_records_a_later_attempt_and_refuses_attempt_one_spelled_out", records_the_research_attempt)
     cases.check("research_phase_stores_each_record_once_and_refuses_another_record", phase_publishes_each_record_once)
     cases.check("research_never_moves_the_production_alias_and_records_its_version", never_moves_production)
     cases.check("research_records_the_features_runs_and_no_production", records_the_features_runs_the_models_trained_on_and_no_production)

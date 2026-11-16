@@ -12,6 +12,8 @@ The record also names what the promotion chain cannot read from MLflow: ``featur
 run's ``features_run_id`` tag, which is not derived from the base run) and ``promotion.production_version`` (the version the ``production`` alias names,
 or None when the registered model has no Production version, which makes the challenger the first champion).
 
+A research run that is a later attempt of the base (``research_attempt``, 2 or more, which the first attempt leaves out) names its attempt in the record.
+
 Each run's holdout table (``holdout_predictions.parquet``) must hold the same hospital-windows with the same observed outcomes, or the action refuses with
 ``research_holdouts_differ``. The record is logged before the ``challenger`` alias moves, and a research run that has a complete record keeps the runs that
 record names. It never moves the ``production`` alias.
@@ -195,6 +197,8 @@ def research_type(store: Any, parameters: Mapping[str, Any], hai_type: str, run:
             "challenger_predictions": None if winner is None else holdouts[winner["model"]][1],
         },
     }
+    if "research_attempt" in parameters:
+        document["research_attempt"] = parameters["research_attempt"]
     body = job_actions.text(document)
     digest = hashlib.sha256(body).hexdigest()
     numbers = (

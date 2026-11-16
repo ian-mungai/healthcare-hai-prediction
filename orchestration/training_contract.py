@@ -36,9 +36,25 @@ def trained_run_id(base_run: str, model: str) -> str:
     return model_training_run_id(model_drift_run_id(model_features_run_id(base_run, model)), model)
 
 
-def research_run_id(base_run: str) -> str:
-    """The run ID of the research run of a base run: the same for a retry, so a base is researched once."""
-    return f"{base_run[:16]}-{hashlib.sha256(f'research:{base_run}'.encode()).hexdigest()[:8]}"
+MAX_RESEARCH_ATTEMPT = 99
+
+
+def research_attempt_of(attempt: Any) -> int:
+    """The research attempt, a whole number from 1 to ``MAX_RESEARCH_ATTEMPT``; anything else raises ``ValueError`` that names the attempt."""
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or not 1 <= attempt <= MAX_RESEARCH_ATTEMPT:
+        raise ValueError(f"the research attempt must be a whole number from 1 to {MAX_RESEARCH_ATTEMPT}")
+    return attempt
+
+
+def research_run_id(base_run: str, attempt: int = 1) -> str:
+    """The run ID of the research run of a base run: the same for a retry, so a base is researched once.
+
+    The launch of a run is terminal once it ended, so research that failed needs a run of its own. Attempt 1 is the run every base has; the attempt number
+    of another run is the owner's explicit choice (``--research-attempt``), and each attempt derives its own ID and so its own promotion chain.
+    """
+    attempt = research_attempt_of(attempt)
+    seed = f"research:{base_run}" if attempt == 1 else f"research:{attempt}:{base_run}"
+    return f"{base_run[:16]}-{hashlib.sha256(seed.encode()).hexdigest()[:8]}"
 
 
 CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
@@ -211,10 +227,17 @@ def parameters_for(dag_id: str, raw: Mapping[str, Any], lanes: tuple[str, ...] =
         if not isinstance(raw["trigger"], str) or not re.fullmatch(f"manual|drift:{RUN_ID}", raw["trigger"]):
             raise ValueError("trigger must be manual or name a drift run")
     elif dag_id == "research_dag":
-        if set(raw) != {"base_run", "population", "hai_types", "mlflow"}:
-            raise ValueError("research parameters must name the base run, population, HAI types and MLflow lane")
+        if set(raw) - {"research_attempt"} != {"base_run", "population", "hai_types", "mlflow"}:
+            raise ValueError("research parameters must name the base run, population, HAI types and MLflow lane, and may name a research attempt")
         if not isinstance(raw["base_run"], str) or not re.fullmatch(RUN_ID, raw["base_run"]):
             raise ValueError("base_run must be a base publication run ID")
+        if "research_attempt" in raw:
+            # Attempt 1 is the default and is left out, so a base has one spelling of its first research run.
+            try:
+                if research_attempt_of(raw["research_attempt"]) == 1:
+                    raise ValueError("attempt 1 is the default")
+            except ValueError as error:
+                raise ValueError(f"research_attempt is left out for attempt 1 or names a later attempt ({error})") from None
         _population_and_types(raw)
     elif dag_id == "model_promotion_dag":
         if set(raw) != {"hai_type", "model_version", "promotion_mode", "mlflow"}:

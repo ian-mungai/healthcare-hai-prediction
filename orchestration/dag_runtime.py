@@ -122,6 +122,8 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
     mode = str(params["mode"])
     if instance.dag_id == RESEARCH_DAG:
         raw = {name: params[name] for name in ("base_run", "population", "hai_types", "mlflow")}
+        if params.get("research_attempt", 1) != 1:  # attempt 1 is the default and is never sent, so the first research run keeps its parameters
+            raw["research_attempt"] = params["research_attempt"]
         training = parameters_for(RESEARCH_DAG, raw, LAUNCH_LANES)  # the research step runs on AWS: mlflow=local is refused by name
     elif instance.dag_id == SERVING_DAG:
         training = serving_parameters_for({name: params[name] for name in ("hai_type", "deploy_mode")})  # a closed request: no version and no share
