@@ -12,6 +12,12 @@ The prediction API must follow this contract; the online cases drive this client
 5. Return the values, ``features_as_of`` (the window start) and the schema hash. Nothing else from the marker is returned.
 6. Every Redis call has a 1 s timeout and none is retried; a timeout or any Redis or Feast error is 503.
 
+A model trained on a model set (version tag ``feature_set``) is served from that set's online layout (``online_protocol.set_layout``): the marker
+``hai:fs:marker:<set>`` in database 2 and the entity hashes in the set's own feature database. The marker holds the set's schema hash, which the model
+carries as ``feature_set_schema_sha256``. The model lists the domain views of its columns; the set's view ``model_<set>`` serves the same columns, so the
+read asks ``model_<set>:<column>`` and the values return under the references the model lists. The set has no hospital-window probe: the event time of
+its own view row is the probe, and an epoch event time is 404 (a key never written). A model with no set uses the single-path layout above.
+
 At start-up ``check_startup`` refuses a model whose references are not all in the schema file's servable list (Feast rejects unregistered references, fact F13).
 Feast and redis-py are imported by the adapters only, when they are built.
 """
@@ -19,7 +25,8 @@ Feast and redis-py are imported by the adapters only, when they are built.
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, MutableMapping, Sequence
+import threading
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -94,9 +101,19 @@ def spine_key(ccn: str, window_year: int) -> str:
     return f"{ccn}:{window_year}"
 
 
-def requested(references: Sequence[str]) -> list[str]:
+def requested(references: Sequence[str], probe: str = PROBE) -> list[str]:
     """The model's references plus the probe, without duplicates, in first-seen order."""
-    return list(dict.fromkeys([*references, PROBE]))
+    return list(dict.fromkeys([*references, probe]))
+
+
+def served_reference(feature_set: str, reference: str) -> str:
+    """The reference that the online store serves for a model's reference: itself on the single path, else the column in the set's view ``model_<set>``."""
+    if not feature_set:
+        return reference
+    column = reference.partition(":")[2]
+    if not column:
+        raise ModelMismatch("a reference of the model names no view column", reason="reference_invalid")
+    return f"model_{feature_set}:{column}"
 
 
 def feast_name(reference: str) -> str:
@@ -121,13 +138,30 @@ def store_failure(step: str, error: Exception) -> Unavailable:
     return Unavailable("the online store did not answer", reason=f"{step}_failed", cause=cause)
 
 
-def serve(read_marker: MarkerReader, read_features: FeatureReader, *, references: Sequence[str], schema_hash: str, ccn: str, window_year: int) -> Served:
-    """One request under the contract; raises ``Unavailable`` (503) or ``NotFound`` (404), never a partial answer."""
+def serve(
+    read_marker: MarkerReader,
+    read_features: FeatureReader,
+    *,
+    references: Sequence[str],
+    schema_hash: str,
+    ccn: str,
+    window_year: int,
+    feature_set: str = "",
+) -> Served:
+    """One request under the contract; raises ``Unavailable`` (503) or ``NotFound`` (404), never a partial answer.
+
+    ``feature_set`` names the model set the model was trained on; the readers are those of that set's layout (``SetReaders``). With no set the readers are
+    the single path's and the probe is ``PROBE``.
+    """
     key = spine_key(ccn, window_year)
+    if feature_set and not references:
+        raise ModelMismatch("a model of a feature set lists no references", reason="no_references")
+    names = {reference: served_reference(feature_set, reference) for reference in references}
+    probe_reference = next(iter(names.values())) if feature_set else PROBE
     step = "marker_read"
     try:
         first = checked_marker(read_marker(), schema_hash)
-        wanted = requested(references)
+        wanted = requested(list(names.values()), probe_reference)
         step = "feature_read"
         answer = read_features(wanted, key)
         step = "marker_recheck"
@@ -139,14 +173,14 @@ def serve(read_marker: MarkerReader, read_features: FeatureReader, *, references
     if second.get("state") != "ready" or second.get("load_id") != first.get("load_id") or not first.get("load_id"):
         raise Unavailable("the online store changed during the read", reason="marker_changed")
     try:
-        probe = feast_name(PROBE)
+        probe = feast_name(probe_reference)
         seconds = int(answer[probe + TIMESTAMP_POSTFIX][0])
-        values = {reference: answer[feast_name(reference)][0] for reference in references}
+        values = {reference: answer[feast_name(names[reference])][0] for reference in references}
     except (KeyError, IndexError, TypeError, ValueError):
         raise ModelMismatch("the online store answered without the requested features", reason="features_missing") from None
     if seconds == 0:
         raise NotFound("the hospital-window is not in the online store")
-    absent = sorted(reference for reference in references if not event_time(answer, feast_name(reference)))
+    absent = sorted(reference for reference in references if not event_time(answer, feast_name(names[reference])))
     if absent:
         raise ModelMismatch(f"the online store holds no row of {len(absent)} requested views for this hospital-window", reason="view_row_absent")
     return Served(values, datetime.fromtimestamp(seconds, UTC).date().isoformat(), schema_hash)
@@ -161,33 +195,33 @@ def event_time(answer: Mapping[str, Sequence[Any]], name: str) -> int:
         return 0
 
 
-def marker_reader(environ: MutableMapping[str, str], *, client: online.RedisClient | None = None) -> MarkerReader:
-    """A marker reader over database 2 with the serving timeout (1 s)."""
+def marker_reader(environ: Mapping[str, str], *, client: online.RedisClient | None = None, layout: online.Layout = online.DEFAULT_LAYOUT) -> MarkerReader:
+    """A reader of the layout's marker (single path by default) over database 2 with the serving timeout (1 s)."""
     control = client if client is not None else online.connect(environ, online.CONTROL_DB, timeout=online.SERVING_TIMEOUT)
-    return lambda: online.read_marker(control)
+    return lambda: online.read_marker(control, layout.marker_key)
 
 
-def serving_client(store: Any, environ: Mapping[str, str]) -> Any:
+def serving_client(store: Any, environ: Mapping[str, str], database: int = online.FEATURE_DB) -> Any:
     """Give a Feast store's online store one client with the serving settings (1 s timeouts, no retries) and return it, replacing whatever client it had.
 
     ``feature_store.yaml`` sets 5 s timeouts for the jobs and redis-py would retry three times by default. Feast keeps one client per online store in
     ``_client`` (Feast 0.66.0, ``RedisOnlineStore._get_client``), so the client is set before the first read and the store is asked for it again to prove it.
     """
     online_store = store._get_provider().online_store
-    client = online.connect(environ, online.FEATURE_DB, timeout=online.SERVING_TIMEOUT, decode=False)
+    client = online.connect(environ, database, timeout=online.SERVING_TIMEOUT, decode=False)
     online_store._client = client
     if online_store._get_client(store.config.online_store) is not client:
         raise online.OnlineError("the Feast online store does not use the serving client")
     return client
 
 
-def feast_reader(store: Any, environ: Mapping[str, str]) -> FeatureReader:
-    """A feature reader over a Feast store (online store on database 1): full feature names and event times, one entity row.
+def feast_reader(store: Any, environ: Mapping[str, str], *, layout: online.Layout = online.DEFAULT_LAYOUT) -> FeatureReader:
+    """A feature reader over a Feast store (online store on the layout's feature database, 1 by default): full feature names and event times, one entity row.
 
     Building the reader configures the store's client (``serving_client``), so no reader can run on the job settings; every read checks that the store still
     uses that client and answers 503 (through ``serve``) when it does not.
     """
-    client = serving_client(store, environ)
+    client = serving_client(store, environ, layout.feature_db)
     online_store = store._get_provider().online_store
 
     def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
@@ -199,3 +233,36 @@ def feast_reader(store: Any, environ: Mapping[str, str]) -> FeatureReader:
         return answer
 
     return read
+
+
+class SetReaders:
+    """The marker reader and feature reader of each online model set, built on first use and kept.
+
+    ``build`` makes the pair for one layout. A set with no online database is refused by name (``set_not_online``); a build that fails is 503 and is tried
+    again by the next request.
+    """
+
+    def __init__(self, build: Callable[[online.Layout], tuple[MarkerReader, FeatureReader]]) -> None:
+        self._build, self._lock = build, threading.Lock()
+        self._built: dict[str, tuple[MarkerReader, FeatureReader]] = {}
+
+    def __call__(self, feature_set: str) -> tuple[MarkerReader, FeatureReader]:
+        try:
+            layout = online.set_layout(feature_set)
+        except online.OnlineError:
+            raise ModelMismatch("the model's feature set has no online database", reason="set_not_online") from None
+        with self._lock:
+            if feature_set not in self._built:
+                try:
+                    self._built[feature_set] = self._build(layout)
+                except Exception as error:
+                    raise store_failure("readers_build", error) from None
+            return self._built[feature_set]
+
+
+def store_readers(store_factory: Callable[[], Any], environ: Mapping[str, str]) -> SetReaders:
+    """The readers of every online set over Feast: a marker client on database 2 and, from a Feast store of its own, a client on the set's database.
+
+    A Feast store keeps one online client, so each set gets its own store; ``store_factory`` makes it.
+    """
+    return SetReaders(lambda layout: (marker_reader(environ, layout=layout), feast_reader(store_factory(), environ, layout=layout)))

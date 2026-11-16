@@ -21,6 +21,7 @@ import argparse
 import contextlib
 import importlib
 import importlib.metadata
+import json
 import os
 import sys
 import tempfile
@@ -50,6 +51,14 @@ KEYS = [f"AAA00{number}:2022" for number in range(1, 5)]
 WINDOW_SECONDS = 1640995200  # 2022-01-01 00:00 UTC
 REFERENCES = ["feature_matrix_hospital_window:bed_count", "feature_matrix_care_compare:c119__value__number"]
 NO_WINDOW_MODEL = ["feature_matrix_care_compare:c119__value__number"]
+SET_ID = "m2"
+SET_HASH = "c" * 64
+SET_MODEL = [
+    "feature_matrix_care_compare:c119__value__number",
+    "feature_matrix_hospital:bed_count",
+]  # a model trained on m2 lists the domain views of its columns
+SET_SERVED = ["model_m2:c119__value__number", "model_m2:bed_count"]  # the set's view serves the same columns
+SET_MARKER = "hai:fs:marker:m2"
 T0 = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
 
 # The three Lua sources the fake translates, copied here on purpose: a change to online_protocol's scripts makes the fake refuse to run until the translation
@@ -373,6 +382,89 @@ def reader(server: Any) -> serving.FeatureReader:
 def markers(server: Any) -> serving.MarkerReader:
     control = server.client(online.CONTROL_DB, timeout=online.SERVING_TIMEOUT)
     return lambda: online.read_marker(control)
+
+
+def set_field_values(version: str, key: str) -> dict[str, str]:
+    """The Feast-shaped hash of one entity in a load of the m2 set: a value and an event time per column of the set's view."""
+    fields: dict[str, str] = {}
+    for domain, served in zip(SET_MODEL, SET_SERVED, strict=True):
+        name = serving.feast_name(served)
+        fields[name] = f"{version}|{key}|{domain}"
+        fields[name + serving.TIMESTAMP_POSTFIX] = str(WINDOW_SECONDS)
+    return fields
+
+
+class ModelSetHooks(Hooks):
+    """The stand-ins of a set load: ``materialize`` writes the set's view into the set's own feature database."""
+
+    def __init__(self, server: Any, version: str, feature_set: str = SET_ID, keys: Sequence[str] = KEYS, **actions: Callable[..., None]) -> None:
+        super().__init__(server, version, keys, **actions)
+        self.layout = online.set_layout(feature_set)
+
+    def materialize(self, start: datetime, end: datetime) -> None:
+        self.events.append("materialize")
+        for index, key in enumerate(self.keys):
+            self.server.write_hash(self.layout.feature_db, key.encode(), set_field_values(self.version, key))
+            if "written" in self.actions:
+                self.actions["written"](index)
+
+
+def model_set_load(server: Any, hooks: ModelSetHooks, set_hash: str = SET_HASH, feature_set: str = SET_ID) -> online.LoadResult:
+    """One load of a model set the way ``feast_sets.online_loader`` runs it: the writer protocol with the set's layout."""
+    layout = online.set_layout(feature_set)
+    return online.run_load(
+        server.client(online.CONTROL_DB), server.client(layout.feature_db), plan_for(schema=set_hash), hooks, deadline=never, lease_ms=60_000, layout=layout
+    )
+
+
+def set_reader(server: Any, layout: online.Layout) -> serving.FeatureReader:
+    """The Feast reader of the cases for a set: the key's hash in the set's database, one event time per requested feature (zero when the row is absent)."""
+
+    def read(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+        stored = server.read_hash(layout.feature_db, key.encode())
+        answer: dict[str, Sequence[Any]] = {}
+        for reference in references:
+            name = serving.feast_name(reference)
+            answer[name] = [stored.get(name)]
+            answer[name + serving.TIMESTAMP_POSTFIX] = [int(stored.get(name + serving.TIMESTAMP_POSTFIX, "0"))]
+        return answer
+
+    return read
+
+
+def set_readers(server: Any) -> serving.SetReaders:
+    """The marker and feature readers of every online set over the server, built on first use."""
+
+    def build(layout: online.Layout) -> tuple[serving.MarkerReader, serving.FeatureReader]:
+        client = server.client(online.CONTROL_DB, timeout=online.SERVING_TIMEOUT)
+        return serving.marker_reader({}, client=client, layout=layout), set_reader(server, layout)
+
+    return serving.SetReaders(build)
+
+
+def set_request(
+    server: Any, key: str = KEYS[0], references: Sequence[str] = SET_MODEL, schema_hash: str = SET_HASH, feature_set: str = SET_ID, **options: Any
+) -> serving.Served:
+    ccn, _, year = key.partition(":")
+    read_marker, read_features = set_readers(server)(feature_set)
+    return serving.serve(
+        options.get("read_marker", read_marker),
+        options.get("read_features", read_features),
+        references=references,
+        schema_hash=schema_hash,
+        ccn=ccn,
+        window_year=int(year),
+        feature_set=feature_set,
+    )
+
+
+def refusal_of(call: Callable[[], serving.Served]) -> tuple[int, str]:
+    """The status and the reason code of a refused request; ``(200, "")`` when it was answered."""
+    try:
+        call()
+    except serving.ServingError as error:
+        return error.status, error.reason
+    return 200, ""
 
 
 def request(server: Any, key: str = KEYS[0], references: Sequence[str] = REFERENCES, schema_hash: str = SCHEMA_HASH, **options: Any) -> serving.Served:
@@ -1449,6 +1541,111 @@ def case_e36(c: Checker, make: Callable[[], Any]) -> None:
     reset(server)
 
 
+def case_e37(c: Checker, make: Callable[[], Any]) -> None:
+    """FS6: a model trained on a model set is served from that set's own marker, database and view; a set that is not ready or has another schema is 503."""
+    server = make()
+    c.check(
+        "the set's layout is the marker key hai:fs:marker:m2 in database 2 and feature database 4", online.set_layout(SET_ID) == online.Layout(4, SET_MARKER)
+    )
+    model_set_load(server, ModelSetHooks(server, "s1"))
+    c.check(
+        "the load wrote the set's marker and database and nothing of the single path",
+        server.read_hash(online.CONTROL_DB, SET_MARKER).get("state") == "ready"
+        and len(server.database_keys(4)) == len(KEYS)
+        and server.database_keys(online.FEATURE_DB) == []
+        and server.marker() == {},
+    )
+    seen: list[list[str]] = []
+
+    def spy(references: list[str], key: str) -> Mapping[str, Sequence[Any]]:
+        seen.append(list(references))
+        return set_reader(server, online.set_layout(SET_ID))(references, key)
+
+    served = set_request(server, read_features=spy)
+    c.check("a set model gets its values under the references it lists", served.values == {ref: f"s1|{KEYS[0]}|{ref}" for ref in SET_MODEL})
+    c.check("the read asks the set's view only, with no single-path probe", seen == [SET_SERVED])
+    c.check("the answer carries the window start and the set's schema hash", (served.features_as_of, served.feature_schema_hash) == ("2022-01-01", SET_HASH))
+    c.check("a hospital-window the set does not hold is 404", refusal_of(lambda: set_request(server, key="ZZZ999:2022")) == (404, "serving_error"))
+    c.check("a request without a set finds no single-path marker and is 503", refusal_of(lambda: request(server)) == (503, "marker_absent"))
+    c.check(
+        "a model trained on another set hash is 503 schema_hash_mismatch",
+        refusal_of(lambda: set_request(server, schema_hash=SCHEMA_HASH)) == (503, "schema_hash_mismatch"),
+    )
+    c.check(
+        "a model trained on a changed set is 503 schema_hash_mismatch",
+        refusal_of(lambda: set_request(server, schema_hash=OTHER_HASH)) == (503, "schema_hash_mismatch"),
+    )
+    c.check("a set model with no references is refused by name", refusal_of(lambda: set_request(server, references=[])) == (503, "no_references"))
+    c.check(
+        "a set model with a reference of no view is refused by name",
+        refusal_of(lambda: set_request(server, references=["bed_count"])) == (503, "reference_invalid"),
+    )
+    load_m1 = ModelSetHooks(server, "m1-load", "m1")
+    model_set_load(server, load_m1, OTHER_HASH, "m1")
+    c.check("a load of another set changes nothing that m2 serves", set_request(server).values == served.values)
+    c.check("and flushes nothing of m2's database", len(server.database_keys(4)) == len(KEYS) and len(server.database_keys(3)) == len(KEYS))
+    during: list[tuple[int, str]] = []
+    model_set_load(server, ModelSetHooks(server, "s2", written=lambda index: during.append(refusal_of(lambda: set_request(server)))))
+    c.check("while the set reloads every answer is 503 marker_loading", during == [(503, "marker_loading")] * len(KEYS))
+    c.check("after the reload the set serves the new values", set_request(server).values == {ref: f"s2|{KEYS[0]}|{ref}" for ref in SET_MODEL})
+    server.write_hash(online.CONTROL_DB, SET_MARKER, {"state": "loading"})
+    c.check("a set marker that is loading is 503 marker_loading", refusal_of(lambda: set_request(server)) == (503, "marker_loading"))
+    server.write_hash(online.CONTROL_DB, SET_MARKER, {"state": "failed"})
+    c.check("a set marker in another state is 503 marker_not_ready", refusal_of(lambda: set_request(server)) == (503, "marker_not_ready"))
+    server.restart()
+    c.check("a restarted store with no set marker is 503 marker_absent", refusal_of(lambda: set_request(server)) == (503, "marker_absent"))
+    built: list[online.Layout] = []
+
+    def build(layout: online.Layout) -> tuple[serving.MarkerReader, serving.FeatureReader]:
+        built.append(layout)
+        return (lambda: {}), (lambda references, key: {})
+
+    readers = serving.SetReaders(build)
+    c.check("a set's readers are built once", readers("m2") == readers("m2") and built == [online.Layout(4, SET_MARKER)])
+    refusals = {name: refusal_of(lambda name=name: readers(name)) for name in ("m3", "m5", "m6", "base", "x")}
+    c.check("a set with no online database is refused by name", set(refusals.values()) == {(503, "set_not_online")} and len(refusals) == 5)
+    c.check("a refused set builds nothing", built == [online.Layout(4, SET_MARKER)])
+    if server.kind == "fake":
+        serving_set_adapter_checks(c)
+        schema, _ = reads.read_schema()
+        feature_schema: Any = importlib.import_module("scripts.features.feature_schema")
+        for model, slots in (("m1", ("m1_ols",)), ("m2", ("m2_elastic_net", "rq4_reduced")), ("m4", ("m4_boosting",))):
+            for slot in slots:
+                lists = json.loads((Path(__file__).resolve().parents[2] / f"config/training/feature_lists/{slot}.json").read_text())["references"]
+                mapped = [serving.served_reference(model, reference) for reference in lists]
+                c.check(
+                    f"the view the serving client reads for the {slot} list is the one Feast serves for {model}",
+                    mapped == feature_schema.service_references(schema, model, lists),
+                )
+    reset(server)
+
+
+def serving_set_adapter_checks(c: Checker) -> None:
+    """FS6: the serving readers of a set log in as the model API user, with 1 s timeouts, on database 2 for the marker and on the set's database for Feast."""
+    calls: list[dict[str, Any]] = []
+    environ = {"FEAST_REDIS_HOST": "redis", "REDIS_PASSWORD": PHRASE, "REDIS_USERNAME": "model_api"}
+    stores: list[AdapterStore] = []
+
+    def store() -> AdapterStore:
+        stores.append(AdapterStore())
+        return stores[-1]
+
+    with fake_redis_modules(calls):
+        readers = serving.store_readers(store, environ)
+        c.check("building the readers of sets connects to nothing", calls == [] and stores == [])
+        readers("m2")
+        c.check(
+            "the m2 readers are a marker client on database 2 and a Feast client on database 4, as the model API user with 1 s timeouts",
+            [(call["db"], call.get("username"), call["socket_timeout"], call["socket_connect_timeout"]) for call in calls]
+            == [(2, "model_api", 1.0, 1.0), (4, "model_api", 1.0, 1.0)],
+        )
+        readers("m2")
+        readers("m1")
+        c.check("each set has its own Feast store and a repeat builds nothing", len(stores) == 2 and [call["db"] for call in calls[2:]] == [2, 3])
+        c.check("the Feast client of m2 is not the one of m1", stores[0].online_store._client is not stores[1].online_store._client)
+        c.check("the Feast clients have zero retries", all(store_.online_store._client.retry.retries == 0 for store_ in stores))
+
+
 FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] = {
     "E20": (case_e20, "LO1 D1 RS5 B9"),
     "E21": (case_e21, "LO8 LO17 D1 D9 CR5"),
@@ -1461,6 +1658,7 @@ FAKE_CASES: dict[str, tuple[Callable[[Checker, Callable[[], Any]], None], str]] 
     "E34": (case_e34, "FS6"),
     "E35": (case_e35, "FS6"),
     "E36": (case_e36, "FS6"),
+    "E37": (case_e37, "FS6"),
     "E24_serving": (case_serving_read, "LO13 LO16"),
     "E24_materialize": (case_materialize, "LO11 D7"),
 }

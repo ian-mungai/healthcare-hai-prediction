@@ -38,6 +38,7 @@ class LoadedModel:
     references: tuple[str, ...]
     schema_hash: str
     predict: Model
+    feature_set: str = ""
 
 
 class ModelLoader(Protocol):
@@ -104,10 +105,11 @@ class ModelService:
         failure_limit: int,
         metrics: Metrics | None = None,
         wall: Callable[[], float] = time.time,
+        set_readers: contract.SetReaders | None = None,
     ) -> None:
         self.keys, self.limiter, self.buffer = keys, limiter, buffer
         self.metrics = metrics if metrics is not None else Metrics()
-        self._read_marker, self._read_features = read_marker, read_features
+        self._read_marker, self._read_features, self._set_readers = read_marker, read_features, set_readers
         self._manifests, self._loader, self._clock, self._new_id = manifests, loader, clock, new_id
         self._wall = wall  # the epoch clock a canary's expiry is read against; ``clock`` is monotonic and has no date
         self._hai_types, self._refresh_seconds, self._failure_limit = tuple(hai_types), refresh_seconds, failure_limit
@@ -327,9 +329,17 @@ class ModelService:
         """
         if slot.model is None or slot.state != "loaded":
             return None
+        feature_set = slot.model.feature_set
         try:
+            read_marker, read_features = self._readers(feature_set)
             served = contract.serve(
-                self._read_marker, self._read_features, references=slot.model.references, schema_hash=slot.model.schema_hash, ccn=ccn, window_year=window_year
+                read_marker,
+                read_features,
+                references=slot.model.references,
+                schema_hash=slot.model.schema_hash,
+                ccn=ccn,
+                window_year=window_year,
+                feature_set=feature_set,
             )
         except contract.ModelMismatch as error:
             self._failed(slot, error)
@@ -346,6 +356,14 @@ class ModelService:
         with self._lock:
             slot.failures = 0
         return value, served
+
+    def _readers(self, feature_set: str) -> tuple[contract.MarkerReader, contract.FeatureReader]:
+        """The readers of the model's layout: the single path's with no feature set, else the set's."""
+        if not feature_set:
+            return self._read_marker, self._read_features
+        if self._set_readers is None:
+            raise contract.Unavailable("the service has no readers for model sets", reason="set_readers_missing")
+        return self._set_readers(feature_set)
 
     def _failed(self, slot: Slot, error: Exception) -> None:
         with self._lock:

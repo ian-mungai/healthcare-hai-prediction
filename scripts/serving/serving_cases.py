@@ -92,6 +92,7 @@ class Loader:
         self.nonfinite: dict[str, float] = {}
         self.schema_hashes: dict[str, str] = {}
         self.extra_references: dict[str, tuple[str, ...]] = {}
+        self.set_models: dict[str, str] = {}
         self.calls = 0
         self.rows: list[Mapping[str, Any]] = []
         self.clock: Clock | None = None
@@ -117,8 +118,11 @@ class Loader:
                 return self.nonfinite[version]
             return float(version) + sum(len(str(value)) for value in row.values()) / 10000
 
-        references = (*online_cases.REFERENCES, *self.extra_references.get(version, ()))
-        return service.LoadedModel(version, references, self.schema_hashes.get(version, online_cases.SCHEMA_HASH), predict)
+        feature_set = self.set_models.get(version, "")
+        base = online_cases.SET_MODEL if feature_set else online_cases.REFERENCES
+        default_hash = online_cases.SET_HASH if feature_set else online_cases.SCHEMA_HASH
+        references = (*base, *self.extra_references.get(version, ()))
+        return service.LoadedModel(version, references, self.schema_hashes.get(version, default_hash), predict, feature_set)
 
     def release(self, model: service.LoadedModel) -> None:
         self.released.append(model.version)
@@ -160,7 +164,10 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
     """A clean serving world: Redis stand-in loaded by the real writer protocol, a deployment written by the real deploy action, a service built over both."""
     server = online_cases.FakeServer()
     names = hospital_keys(count) if count != 4 else list(online_cases.KEYS)
-    online_cases.load(server, online_cases.Hooks(server, "v1", names), online_cases.plan_for(count=len(names)))
+    if options.pop("single", True):
+        online_cases.load(server, online_cases.Hooks(server, "v1", names), online_cases.plan_for(count=len(names)))
+    for feature_set in options.pop("sets", ()):
+        online_cases.model_set_load(server, online_cases.ModelSetHooks(server, "s1", feature_set, names), online_cases.SET_HASH, feature_set)
     with tempfile.TemporaryDirectory(prefix="serving_") as folder:
         store = manifests.FileManifestStore(Path(folder))
         registry, loader, sink, clock, wall = Registry(), Loader(), Sink(), Clock(), Clock()
@@ -193,6 +200,7 @@ def world(count: int = 4, rate: int = 600, burst: int = 1000, deployment: bool =
             limiter=options.pop("limiter", None) or limiter.RateLimiter(rate_per_minute=rate, burst=burst, clock=clock),
             read_marker=read_marker,
             read_features=reading,
+            set_readers=online_cases.set_readers(server),
             manifests=store,
             loader=loader,
             buffer=predictions.PredictionBuffer(
@@ -1863,6 +1871,66 @@ def case_feature_refusals_are_logged(c: Checker) -> None:
     refusal("a marker that changed during the read", "marker_changed", wrap_marker=moving)
 
 
+def on_set(feature_set: str) -> Callable[[Loader], None]:
+    """Configure every loaded version as a model trained on the set."""
+
+    def configure(loader: Loader) -> None:
+        loader.set_models.update({PRODUCTION: feature_set, CANDIDATE: feature_set, "5": feature_set})
+
+    return configure
+
+
+def case_set_model_served(c: Checker) -> None:
+    """A model trained on a model set is served from that set's marker, database and view, and a refused set names its reason in the log."""
+    with world(single=False, sets=("m2",), configure=on_set("m2")) as w:
+        c.check(
+            "the store holds the m2 set and no single-path load", w.server.read_hash(online.CONTROL_DB, online.MARKER_KEY) == {} and w.server.marker() == {}
+        )
+        reply = ask(w)
+        c.check("a model of the m2 set is served with 200", reply.status == 200 and reply.body["model_version"] == PRODUCTION)
+        c.check("the response names the set's schema hash", reply.body["feature_schema_sha256"] == online_cases.SET_HASH)
+        c.check("the model received the values under the references it lists", w.loader.calls == 1 and set(w.loader.rows[0]) == set(online_cases.SET_MODEL))
+        c.check("the values are the set's own load", all(str(value).startswith("s1|") for value in w.loader.rows[0].values()))
+        c.check("the row of the prediction holds the set's hash", [row["feature_schema_sha256"] for row in rows_of(w)] == [online_cases.SET_HASH])
+        c.check("a hospital-window the set does not hold answers 404", ask(w, "ZZZ999:2022").status == 404)
+
+    def refusal(label: str, expected: str, prepare: Callable[[World], None], **options: Any) -> None:
+        with world(**{"single": False, "sets": ("m2",), "configure": on_set("m2"), **options}) as w:
+            prepare(w)
+            with captured_logs() as stream:
+                reply = ask(w)
+            c.check(f"{label} answers 503 features_unavailable", reply.status == 503 and reply.body.get("error") == "features_unavailable")
+            c.check(f"{label} logs reason={expected} once", stream.getvalue().count(f"reason={expected}") == 1)
+            c.check(f"{label} runs no prediction", w.loader.calls == 0)
+
+    marker = online_cases.SET_MARKER
+    refusal("a set that is loading", "marker_loading", lambda w: w.server.write_hash(online.CONTROL_DB, marker, {"state": "loading"}))
+    refusal("a set with another state", "marker_not_ready", lambda w: w.server.write_hash(online.CONTROL_DB, marker, {"state": "failed"}))
+    refusal(
+        "a set with another schema",
+        "schema_hash_mismatch",
+        lambda w: w.server.write_hash(online.CONTROL_DB, marker, {"feature_schema_sha256": online_cases.OTHER_HASH}),
+    )
+    refusal("a restarted store with no set marker", "marker_absent", lambda w: w.server.restart())
+    refusal("a set that was never loaded", "marker_absent", lambda w: None, sets=())
+    with world(single=False, sets=("m2",), configure=lambda loader: loader.set_models.update({PRODUCTION: "m3", CANDIDATE: "m3", "5": "m3"})) as w:
+        with captured_logs() as stream:
+            reply = ask(w)
+        c.check(
+            "a model of a set with no online database answers 503 and logs set_not_online",
+            reply.status == 503 and stream.getvalue().count("reason=set_not_online") == 1,
+        )
+    with world(configure=on_set("m2")) as w:
+        with captured_logs() as stream:
+            reply = ask(w)
+        c.check("a set model is not served from the single path alone", reply.status == 503 and stream.getvalue().count("reason=marker_absent") == 1)
+    with world(sets=("m2",)) as w:
+        c.check(
+            "a model with no set is still served from the single path next to a loaded set",
+            ask(w).status == 200 and w.loader.rows[0].keys() == set(online_cases.REFERENCES),
+        )
+
+
 def case_absent_row(c: Checker) -> None:
     """A view row that is absent gives 503 and no prediction. A value published as null still reaches the model."""
     view_reference = online_cases.REFERENCES[1]
@@ -2646,9 +2714,8 @@ class ProbingMlflow:
         self.direct_reads = 0
         self.artifacts = SimpleNamespace(download_artifacts=self.download_artifacts)
         self.sklearn = SimpleNamespace(load_model=self.load_model)
-        self.MlflowClient = lambda: SimpleNamespace(
-            get_model_version=lambda name, version: SimpleNamespace(run_id="run1", tags={"feature_schema_sha256": "hash1"})
-        )
+        self.tags = {"feature_schema_sha256": "hash1"}
+        self.MlflowClient = lambda: SimpleNamespace(get_model_version=lambda name, version: SimpleNamespace(run_id="run1", tags=dict(self.tags)))
 
     def proxied(self, what: str) -> bool:
         if os.environ.get(PROXY_SWITCH, "").lower() == "false":
@@ -2686,6 +2753,40 @@ def case_loader_reads_artifacts_through_the_tracking_server(c: Checker) -> None:
             )
             c.check("the loaded model predicts", model is not None and model.predict({"a:1": 1.0}) == 0.25)
             c.check("the setting is false for every later download in the process", os.environ.get(PROXY_SWITCH) == "false")
+
+
+def case_loader_reads_the_feature_set(c: Checker) -> None:
+    """The loader reads the model's feature set and the set's schema hash from the version tags; a set model with no set hash does not load."""
+    with tempfile.TemporaryDirectory() as folder:
+        listing = Path(folder) / "feature_list.json"
+        listing.write_text(json.dumps({"references": ["a:1"], "columns": ["a"]}))
+        library = ProbingMlflow(listing)
+        frames = SimpleNamespace(DataFrame=lambda rows: rows)
+
+        def loaded(tags: dict[str, str]) -> service.LoadedModel | None:
+            library.tags = tags
+            with mock.patch.dict(sys.modules, {"mlflow": library, "pandas": frames}):
+                try:
+                    return mlflow_loader.MlflowLoader().load(HAI, PRODUCTION)
+                except ValueError:
+                    return None
+
+        both = {"feature_schema_sha256": "whole", "feature_set": "m2", "feature_set_schema_sha256": "setdigest"}
+        model = loaded(both)
+        c.check("a version tagged with a set loads for that set", model is not None and model.feature_set == "m2")
+        c.check("its schema hash is the set's, which the set's marker holds", model is not None and model.schema_hash == "setdigest")
+        c.check("its references stay the ones of its feature list", model is not None and model.references == ("a:1",))
+        old = loaded({"feature_schema_sha256": "whole"})
+        c.check(
+            "a version with no set tag loads for the single path with the whole schema hash",
+            old is not None and (old.feature_set, old.schema_hash) == ("", "whole"),
+        )
+        c.check("a version tagged with a set but no set hash does not load", loaded({"feature_schema_sha256": "whole", "feature_set": "m2"}) is None)
+        c.check(
+            "a version tagged with an empty set loads for the single path",
+            (lambda m: m is not None and m.feature_set == "")(loaded({**both, "feature_set": ""})),
+        )
+        c.check("a version with a set tag that is not text of a set name does not load", loaded({**both, "feature_set": "M 2/x"}) is None)
 
 
 def case_metrics(c: Checker) -> None:
@@ -2835,6 +2936,8 @@ CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "previous_record_format": (case_previous_record_format, "deploy compatibility"),
     "liveness_without_a_deployment": (case_liveness_without_a_deployment, "api monitoring"),
     "loader_reads_artifacts_through_the_tracking_server": (case_loader_reads_artifacts_through_the_tracking_server, "api mlflow"),
+    "loader_reads_the_feature_set": (case_loader_reads_the_feature_set, "api mlflow feast"),
+    "set_model_served": (case_set_model_served, "feast api"),
     "metrics": (case_metrics, "monitoring"),
     "dag_contract": (case_dag, "dag"),
 }

@@ -114,6 +114,7 @@ def build(environ: Mapping[str, str], settings: Settings) -> tuple[service.Model
         limiter=limiter.RateLimiter(rate_per_minute=settings.rate_per_minute, burst=settings.burst, clock=time.monotonic),
         read_marker=contract.marker_reader(mutable),
         read_features=contract.feast_reader(store, mutable),
+        set_readers=contract.store_readers(feature_store, mutable),
         manifests=manifest_store(settings.manifest_uri),
         loader=MlflowLoader(),
         buffer=buffer,
