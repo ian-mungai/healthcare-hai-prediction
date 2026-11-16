@@ -29,6 +29,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
 FETCH_DIR = REPO_ROOT / "services" / "training"
 OUTPUT = REPO_ROOT / "data" / "e2e" / "code_fetch"
+IDENTIFY = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
 BUCKET = "example-project-data-dev"
 RUN_A = "20261108T120000Z-aaaaaaaa"
 RUN_B = "20261108T130000Z-bbbbbbbb"
@@ -491,6 +492,100 @@ def verify_accepts_only_a_complete_selected_release() -> dict[str, bool]:
     }
 
 
+RUN_C = "20261108T140000Z-cccccccc"
+
+
+def identify(script: Any, host: Path) -> tuple[int, str]:
+    """Run the identity one-shot (the command of a code task): it names the run that staged the release repo shows, and changes nothing."""
+    spec = importlib.util.spec_from_file_location("code_identify_one_shot", IDENTIFY)
+    if spec is None or spec.loader is None:
+        raise FileNotFoundError(IDENTIFY)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    out = io.StringIO()
+    with redirect_stdout(out), redirect_stderr(out):
+        code = module.run(host)
+    return code, out.getvalue()
+
+
+def record_of(host: Path, sha: str) -> str | None:
+    """The run ID record beside the staged digest, or None."""
+    path = host / "repo_releases" / sha / "run_id"
+    return path.read_text() if path.is_file() else None
+
+
+def the_install_records_its_run_beside_the_staged_digest() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    path, sha = archives[RUN_A]
+    call(script, host, environment(RUN_A, sha), StandInS3({RUN_A: path}))
+    code, text = identify(script, host)
+    return {
+        "the run ID is recorded beside the archive of the release": record_of(host, sha) == f"{RUN_A}\n",
+        "the record does not disturb the verification of the release": verify_mode(script, host, sha, "verify")[0] == 0,
+        "identify exits 0 and names the run and the digest": code == 0 and f"code_identify: identity run {RUN_A} code {sha}" in text,
+        "no temporary record is left": not (host / "repo_releases" / sha / "run_id.partial").exists(),
+    }
+
+
+def a_later_install_for_the_same_digest_rewrites_the_record() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    path, sha = archives[RUN_A]
+    client = StandInS3({RUN_A: path, RUN_C: path})
+    call(script, host, environment(RUN_A, sha), client)
+    again, _ = call(script, host, environment(RUN_C, sha), client)
+    code, text = identify(script, host)
+    (host / "repo_releases" / sha / "run_id").unlink()
+    call(script, host, environment(RUN_C, sha), client)
+    return {
+        "the second install for the same digest succeeds and keeps one release": again == 0
+        and [item.name for item in (host / "repo_releases").iterdir()] == [sha],
+        "the run that was given wins": code == 0 and f"run {RUN_C} " in text and f"run {RUN_A} " not in text,
+        "a repeat for the same code writes a missing record again": record_of(host, sha) == f"{RUN_C}\n",
+    }
+
+
+def identify_refuses_what_has_no_record_for_the_shown_release() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    (path_a, sha_a), (path_b, sha_b) = archives[RUN_A], archives[RUN_B]
+    call(script, host, environment(RUN_A, sha_a), StandInS3({RUN_A: path_a}))
+    call(script, host, environment(RUN_B, sha_b), StandInS3({RUN_B: path_b}))
+    (host / "repo_releases" / sha_b / "run_id").unlink()
+    code, text = identify(script, host)
+    before = (os.readlink(host / "repo"), record_of(host, sha_a))
+    return {
+        "repo shows a release with no record, although another release has one": code != 0 and "no code run record" in text,
+        "the refusal names the shown digest and no run": sha_b[:12] in text and RUN_A not in text and "identity" not in text,
+        "nothing changed": before == (f"repo_releases/{sha_b}/code", f"{RUN_A}\n") and record_of(host, sha_b) is None,
+    }
+
+
+def identify_refuses_a_record_that_is_not_a_run_id() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    path, sha = archives[RUN_A]
+    call(script, host, environment(RUN_A, sha), StandInS3({RUN_A: path}))
+    outcomes = {}
+    for label, content in (("empty", ""), ("text", "latest\n"), ("two lines", f"{RUN_A}\n{RUN_B}\n"), ("padded", f" {RUN_A}\n")):
+        (host / "repo_releases" / sha / "run_id").write_text(content)
+        code, text = identify(script, host)
+        outcomes[f"a record that is {label} is refused and no run is named"] = code != 0 and "run record" in text and "identity" not in text
+    return outcomes
+
+
+def identify_refuses_a_host_with_no_complete_release_shown() -> dict[str, bool]:
+    script, host, archives, _ = fixture()
+    path, sha = archives[RUN_A]
+    empty, empty_text = identify(script, host)
+    call(script, host, environment(RUN_A, sha), StandInS3({RUN_A: path}))
+    (host / "repo").unlink()
+    (host / "repo").mkdir()
+    (host / "repo" / "dags").mkdir()
+    folder, folder_text = identify(script, host)
+    return {
+        "an empty repo folder is refused": empty != 0 and "no code run record" in empty_text and "identity" not in empty_text,
+        "a checkout folder that is no release has no record": folder != 0 and "no code run record" in folder_text and "identity" not in folder_text,
+    }
+
+
 def restore_returns_to_the_previous_checkout() -> dict[str, bool]:
     script, host, archives, _ = fixture()
     (path_a, sha_a), (path_b, sha_b) = archives[RUN_A], archives[RUN_B]
@@ -704,6 +799,11 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "release_with_a_changed_file_is_installed_again": release_with_a_changed_file_is_installed_again,
     "no_code_refuses_a_selected_release_that_is_not_complete": no_code_refuses_a_selected_release_that_is_not_complete,
     "verify_accepts_only_a_complete_selected_release": verify_accepts_only_a_complete_selected_release,
+    "the_install_records_its_run_beside_the_staged_digest": the_install_records_its_run_beside_the_staged_digest,
+    "a_later_install_for_the_same_digest_rewrites_the_record": a_later_install_for_the_same_digest_rewrites_the_record,
+    "identify_refuses_what_has_no_record_for_the_shown_release": identify_refuses_what_has_no_record_for_the_shown_release,
+    "identify_refuses_a_record_that_is_not_a_run_id": identify_refuses_a_record_that_is_not_a_run_id,
+    "identify_refuses_a_host_with_no_complete_release_shown": identify_refuses_a_host_with_no_complete_release_shown,
     "restore_returns_to_the_previous_checkout": restore_returns_to_the_previous_checkout,
     "restore_with_no_verified_checkout_leaves_none_selected": restore_with_no_verified_checkout_leaves_none_selected,
     "restore_after_a_failed_install_keeps_the_selected_checkout": restore_after_a_failed_install_keeps_the_selected_checkout,

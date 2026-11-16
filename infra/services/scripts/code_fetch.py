@@ -92,6 +92,8 @@ def install(host: Path, fetch_dir: Path, client: Any, run_id: str, digest: str) 
             os.replace(partial, good)
         finally:
             shutil.rmtree(partial, ignore_errors=True)
+    (staged := good / "run_id.partial").write_text(f"{run_id}\n", encoding="utf-8")
+    os.replace(staged, good / "run_id")
     if current == good.name:
         sys.stdout.write(f"code_fetch: repo already shows {digest[:12]}\n")
         return 0

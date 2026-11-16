@@ -44,6 +44,9 @@ locals {
   # checks that repo shows the release of CODE_SHA256 and that the release holds every file of its archive. CODE_MODE restore shows repo.previous again
   # when repo shows that release or any release that is not complete, and leaves an empty repo folder when no verified release exists. One lock file in
   # /host serializes every mode of every code task on the host; a task that cannot take it within 600 seconds fails and changes nothing.
+  # An install also writes its CODE_RUN_ID to repo_releases/<release>/run_id. host_session start without --code-run runs scripts/code_identify.py as the command
+  # of a code task: it prints the run ID and the digest of the release that repo shows, or refuses when that release has no record, and start reads the line
+  # from the task's log. The installer plus its three variables must stay under the 8192 characters that RunTask accepts for all container overrides.
   code_fetch_task = {
     network_mode  = "host"
     task_role_arn = var.code_fetch_task_role_arn
