@@ -195,7 +195,7 @@ repos:
         pass_filenames: false
         always_run: true
       - id: hadolint
-        name: Every tracked Dockerfile passes Hadolint
+        name: Every tracked Dockerfile passes Hadolint and the image folder mode rule
         entry: .venv/bin/python -m scripts.quality.lint_sources hadolint
         language: system
         pass_filenames: false

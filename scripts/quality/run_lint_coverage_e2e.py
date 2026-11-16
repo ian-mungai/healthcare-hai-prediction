@@ -44,6 +44,8 @@ SQLFLUFF_SIZE_LIMIT = (ROOT / ".sqlfluff").read_text().replace("large_file_skip_
 if "large_file_skip_byte_limit = 20000" not in SQLFLUFF_SIZE_LIMIT:
     raise SystemExit(".sqlfluff no longer sets large_file_skip_byte_limit = 0; adapt the size-skip samples")
 NO_IMAGES = ("infra/services/images.json", '{"images": {}}\n')
+HEAD = "FROM debian:12\nWORKDIR /app\n"
+COVER = "RUN find /app -type d -exec chmod 0555 {} +\n"
 AIRFLOW_HEADER = "# docker build --tag hai-airflow:3.4.0-python3.12 --build-context hai=services/hai services/orchestration\n"
 
 
@@ -150,6 +152,79 @@ SAMPLES = (
         "FROM ubuntu:24.04\nRUN echo ok | cat\n",
         'FROM ubuntu:24.04\nSHELL ["/bin/bash", "-o", "pipefail", "-c"]\nRUN echo ok | cat\n',
         "DL4006",
+    ),
+    *(
+        Sample(name, "hadolint", "Dockerfile", HEAD + bad, HEAD + good, "cannot enter")
+        for name, bad, good in (
+            # The model API layout of Nov 15 2026: Docker 29 gave every folder that COPY --chmod=0444 created the mode 0444.
+            (
+                "copy_mode_created_folder",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+            ),
+            (
+                "copy_mode_nested_folders_after_a_missing_cover",
+                "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\nUSER 10010\n",
+                "COPY --chmod=0444 a/__init__.py /app/a/\nCOPY --chmod=0444 b/c/main.py /app/b/c/main.py\n" + COVER + "USER 10010\n",
+            ),
+            ("copy_mode_enterable_mode", "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n", "COPY --chmod=0555 pkg/main.py /app/pkg/\nUSER 10010\n"),
+            (
+                "copy_mode_chmod_after_user",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\n" + COVER,
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+            ),
+            (
+                "copy_mode_chmod_of_another_folder",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /srv\nUSER 10010\n",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_chmod_without_search_bit",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0600 {} +\nUSER 10010\n",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN find /app -type d -exec chmod 0755 {} +\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_folder_made_first",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+                "RUN install -d -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_folder_made_with_a_closed_mode",
+                "RUN mkdir -m 0700 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+                "RUN mkdir -m 0755 /app/pkg\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_folder_made_by_an_earlier_copy",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+                "COPY pkg/__init__.py /app/pkg/\nCOPY --chmod=0444 pkg/main.py /app/pkg/main.py\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_relative_destination",
+                "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nUSER 10010\n",
+                "WORKDIR /app\nCOPY --chmod=0444 pkg/main.py pkg/main.py\nRUN chmod -R 0755 /app/pkg\nUSER 10010\n",
+            ),
+            (
+                "copy_mode_cover_in_a_later_stage",
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\nUSER 10010\nFROM debian:12\n" + COVER,
+                "COPY --chmod=0444 pkg/main.py /app/pkg/\n" + COVER + "USER 10010\n",
+            ),
+        )
+    ),
+    Sample(
+        "copy_mode_from_stage",
+        "hadolint",
+        "Dockerfile",
+        "FROM debian:12 AS base\nFROM debian:12\nWORKDIR /app\nCOPY --from=base --chmod=0444 /etc/hostname /app/pkg/hostname\nUSER 10010\n",
+        "FROM debian:12 AS base\nFROM debian:12\nWORKDIR /app\nCOPY --from=base --chmod=0555 /etc/hostname /app/pkg/hostname\nUSER 10010\n",
+        "cannot enter",
+    ),
+    Sample(
+        "copy_mode_variable_destination",
+        "hadolint",
+        "Dockerfile",
+        HEAD + "COPY --chmod=0444 pkg/main.py $APP/pkg/\nUSER 10010\n",
+        HEAD + "COPY --chmod=0444 pkg/main.py /app/pkg/\nRUN chmod -R 0755 /app\nUSER 10010\n",
+        "cannot resolve",
     ),
     Sample(
         "build_stage_reference",

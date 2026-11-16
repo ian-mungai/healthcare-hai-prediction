@@ -10,11 +10,12 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import re
 import shlex
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from scripts.process import TimeoutExpired, find_program, run_command
 from scripts.quality.repo_checks import load_yaml
@@ -394,7 +395,8 @@ def header_contexts(name: str) -> set[str]:
     return contexts
 
 
-def docker_instructions(name: str) -> list[tuple[int, str, list[str]]]:
+def docker_bodies(name: str) -> list[tuple[int, str, str]]:
+    """Every instruction of one Dockerfile as its first line number, upper-case operation and joined body."""
     selected = []
     pending, start = "", 0
     for number, line in enumerate(safe_source(name).read_text().splitlines(), 1):
@@ -411,13 +413,15 @@ def docker_instructions(name: str) -> list[tuple[int, str, list[str]]]:
         if "<<" in instruction:
             raise ValueError(f"{name}:{start}: build-context checking does not support Dockerfile heredocs")
         operation, *remainder = instruction.split(maxsplit=1)
-        body = remainder[0] if remainder else ""
-        if operation.upper() in {"FROM", "COPY"}:
-            selected.append((start, operation.upper(), shlex.split(body)))
+        selected.append((start, operation.upper(), remainder[0] if remainder else ""))
         pending, start = "", 0
     if pending:
         raise ValueError(f"{name}:{start}: unterminated Dockerfile continuation")
     return selected
+
+
+def docker_instructions(name: str) -> list[tuple[int, str, list[str]]]:
+    return [(number, operation, shlex.split(body)) for number, operation, body in docker_bodies(name) if operation in {"FROM", "COPY"}]
 
 
 def build_contexts() -> int:
@@ -457,6 +461,172 @@ def build_contexts() -> int:
     return int(failed)
 
 
+OCTAL_MODE = re.compile(r"[0-7]{3,4}")
+CONTROL_OPERATORS = {"&&", "||", ";", "|", "&"}
+ENTERABLE = 0o005  # read and search permission for other users: COPY writes root-owned files and the image runs as another user
+
+
+def instruction_words(body: str) -> list[str]:
+    """The words of an instruction in exec form (a JSON array) or shell form."""
+    if body.lstrip().startswith("["):
+        try:
+            words = json.loads(body)
+        except ValueError:
+            words = None
+        if isinstance(words, list):
+            return [str(word) for word in words]
+    return shlex.split(body)
+
+
+def shell_commands(body: str) -> list[list[str]]:
+    """The simple commands of one RUN body, split at the shell's control operators, without the RUN flags."""
+    if body.lstrip().startswith("["):
+        return [instruction_words(body)]
+    lexer = shlex.shlex(body, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    commands: list[list[str]] = [[]]
+    for token in lexer:
+        if token in CONTROL_OPERATORS:
+            commands.append([])
+        else:
+            commands[-1].append(token)
+    while commands[0] and commands[0][0].startswith("--"):
+        commands[0].pop(0)
+    return [command for command in commands if command]
+
+
+def image_folder(path: str, workdir: str, where: str) -> str:
+    """The absolute form of a path of the image; a path that holds a variable cannot be followed."""
+    joined = posixpath.normpath(posixpath.join(workdir, path))
+    if "$" in joined or "`" in joined:
+        raise ValueError(f"{where}: copy-mode checking cannot resolve {path}; write the folder in full")
+    return joined
+
+
+def folder_chain(folder: str) -> list[str]:
+    """The folder and each parent below the first level, which every image has: the folders that a COPY may create."""
+    parts = PurePosixPath(folder).parts
+    return ["/" + "/".join(parts[1:index]) for index in range(len(parts), 2, -1)]
+
+
+def opens(mode: str) -> bool:
+    """Whether an octal mode gives other users read and search permission on a folder."""
+    return bool(OCTAL_MODE.fullmatch(mode)) and int(mode, 8) & ENTERABLE == ENTERABLE
+
+
+def command_mode(words: list[str]) -> int | None:
+    """The octal mode that a mkdir, install or chmod command names, or None when it names none."""
+    for index, word in enumerate(words):
+        value = word.split("=", 1)[1] if word.startswith("--mode=") else words[index + 1] if word in {"-m", "--mode"} and index + 1 < len(words) else ""
+        if value:
+            return int(value, 8) if OCTAL_MODE.fullmatch(value) else 0
+    return None
+
+
+class StageModes:
+    """The folders of one build stage: those known to be enterable, and those that a COPY --chmod created without search permission."""
+
+    def __init__(self, name: str) -> None:
+        self.name, self.workdir = name, "/"
+        self.known: set[str] = set()
+        self.pending: dict[str, tuple[int, str]] = {}
+
+    def folder(self, path: str, number: int) -> str:
+        return image_folder(path, self.workdir, f"{self.name}:{number}")
+
+    def copy(self, number: int, words: list[str]) -> None:
+        flags = [word for word in words if word.startswith("--")]
+        paths = [word for word in words if not word.startswith("--")]
+        if len(paths) < 2:
+            return
+        mode = next((flag.split("=", 1)[1] for flag in flags if flag.startswith("--chmod=")), "")
+        if mode and not OCTAL_MODE.fullmatch(mode):
+            raise ValueError(f"{self.name}:{number}: copy-mode checking cannot read the mode {mode}; write it as an octal number")
+        destination = self.folder(paths[-1], number)
+        # The destination is a folder when it ends with a slash or when several sources go to it; otherwise it names the file.
+        folder = destination if paths[-1].endswith("/") or len(paths) > 2 else posixpath.dirname(destination)
+        chain = folder_chain(folder)
+        if mode and not opens(mode):
+            self.pending.update({created: (number, mode) for created in chain if created not in self.known})
+        self.known.update(chain)
+
+    def operands(self, number: int, arguments: list[str]) -> list[str]:
+        return [self.folder(word, number) for word in arguments if not word.startswith("-") and not OCTAL_MODE.fullmatch(word) and "$" not in word]
+
+    def run(self, number: int, body: str) -> None:
+        for command in shell_commands(body):
+            program, arguments = posixpath.basename(command[0]), command[1:]
+            if program == "mkdir" or (program == "install" and {"-d", "--directory"} & set(arguments)):
+                mode = command_mode(arguments)
+                paths = self.operands(number, arguments)
+                made = [folder for path in paths for folder in folder_chain(path)]
+                self.known.update(made if mode is None or mode & ENTERABLE == ENTERABLE else [folder for folder in made if folder not in paths])
+            elif program == "chmod":
+                if any(opens(word) for word in arguments[:3]):
+                    self.cover(self.operands(number, arguments), any(word in {"-R", "--recursive"} for word in arguments))
+            elif program == "find":
+                self.find(number, arguments)
+
+    def find(self, number: int, arguments: list[str]) -> None:
+        """A ``find ROOT -type d -exec chmod MODE {} +`` command covers every folder below each ROOT."""
+        if "-type" not in arguments or "-exec" not in arguments:
+            return
+        kind, start = arguments.index("-type"), arguments.index("-exec")
+        chmod = arguments[start + 1 : start + 3]
+        if arguments[kind + 1 : kind + 2] != ["d"] or len(chmod) != 2 or chmod[0] != "chmod" or not opens(chmod[1]):
+            return
+        roots: list[str] = []
+        for word in arguments:
+            if word.startswith("-") or word in {"(", "!"}:
+                break
+            roots.append(self.folder(word, number))
+        self.cover(roots, True)
+
+    def cover(self, roots: list[str], recursive: bool) -> None:
+        for folder in list(self.pending):
+            if any(folder == root or (recursive and folder.startswith(root.rstrip("/") + "/")) for root in roots):
+                del self.pending[folder]
+
+    def report(self) -> bool:
+        for folder, (number, mode) in sorted(self.pending.items(), key=lambda item: item[1][0]):
+            sys.stderr.write(
+                f"{self.name}:{number}: COPY --chmod={mode} gives the folder {folder} that it creates the same mode, so the image user cannot enter it. "
+                f"Make the folder first with RUN install -d -m 0755 {folder}, or give every folder a mode with search permission before USER, "
+                "for example RUN find /app -type d -exec chmod 0555 {} +.\n"
+            )
+        failed = bool(self.pending)
+        self.pending = {}
+        return failed
+
+
+def copy_modes(selected: list[str]) -> int:
+    """Flag a COPY --chmod whose mode leaves a folder it creates closed to the image user, unless a folder step before USER opens it.
+
+    Docker 29 gives each folder that COPY --chmod creates the mode of the file, so ``--chmod=0444`` made /app/scripts closed and the
+    non-root model API and page tasks exited 1 (Nov 15 2026). A destination without a trailing slash and with one source names a file;
+    the folders that it needs below the first level count as created unless an earlier instruction made or copied into them. Files are root-owned.
+    """
+    sys.stdout.write(f"Image folder modes: {len(selected)} tracked Dockerfiles\n")
+    failed = False
+    for name in selected:
+        stage = StageModes(name)
+        for number, operation, body in docker_bodies(name):
+            if operation == "FROM":
+                failed |= stage.report()
+                stage = StageModes(name)
+            elif operation == "WORKDIR":
+                stage.workdir = stage.folder(body, number)
+                stage.known.update(folder_chain(stage.workdir))
+            elif operation == "COPY":
+                stage.copy(number, instruction_words(body))
+            elif operation == "RUN":
+                stage.run(number, body)
+            elif operation == "USER" and body.split(":")[0].strip() not in {"root", "0"}:
+                failed |= stage.report()
+        failed |= stage.report()
+    return int(failed)
+
+
 def lint(check: str) -> int:
     if check == "ruff":
         return ruff()
@@ -468,6 +638,8 @@ def lint(check: str) -> int:
         return go(check)
     if check == "build-contexts":
         return build_contexts()
+    if check == "image-modes":
+        return copy_modes(dockerfiles())
     if check == "shellcheck":
         selected = list(shell_sources(tracked=True))
     elif check == "actionlint":
@@ -503,11 +675,12 @@ def main() -> int:
     args = parser.parse_args()
     failed = False
     for check in CHECKS[:-1] if args.check == "fast" else (args.check,):
-        try:
-            failed |= bool(lint(check))
-        except (OSError, ValueError, TimeoutExpired) as error:
-            sys.stderr.write(f"{check}: {error}\n")
-            failed = True
+        for part in ("image-modes", check) if check == "hadolint" else (check,):
+            try:
+                failed |= bool(lint(part))
+            except (OSError, ValueError, TimeoutExpired) as error:
+                sys.stderr.write(f"{part}: {error}\n")
+                failed = True
     return int(failed)
 
 
