@@ -471,9 +471,9 @@ run "host_definitions_pass_the_secret_flow_check" {
   assert {
     condition = toset(output.host_secret_flow.containers_checked) == toset(concat([
       "host_silver/pin", "host_silver/build", "host_silver/verify", "host_silver/publish", "host_gold/pin", "host_gold/publish", "host_gold/maintain", "host_features/pin",
-      "host_features/publish", "host_features/feast", "host_features/release", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
+      "host_features/publish", "host_features/feast", "host_bronze/load", "host_train/extract", "host_train/train", "host_drift/baseline", "host_drift/current",
       "host_promote/promote", "host_serve/serve", "host_metadata/ingest"
-    ], flatten([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : ["host_features_${set}/pin", "host_features_${set}/publish", "host_features_${set}/feast", "host_features_${set}/release"]])))
+    ], flatten([for set in ["m1", "m2", "m3", "m4", "m5", "m6"] : ["host_features_${set}/pin", "host_features_${set}/publish", "host_features_${set}/feast"]])))
     error_message = "The containers that receive a secret are the ones that receive a secret, and the flow check follows each of them."
   }
 }

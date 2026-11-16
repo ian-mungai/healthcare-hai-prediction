@@ -186,12 +186,6 @@
           "CODE_RUN_ID",
           "POLARIS_URI",
           "FEATURE_SET",
-          "LAYER_PHASE"
-        ],
-        "release": [
-          "RUN_ID",
-          "CODE_RUN_ID",
-          "POLARIS_URI",
           "FEATURES_RUN",
           "RELEASE_MODEL",
           "LAYER_PHASE"

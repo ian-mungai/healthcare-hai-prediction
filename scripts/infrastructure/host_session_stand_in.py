@@ -374,7 +374,7 @@ class StandInHost:
         online with the code of the launch. Fault ``reload_fails:<set>`` makes the launch of that set exit 1."""
         containers = json.loads(options["--overrides"][0])["containerOverrides"] if "--overrides" in options else []
         launch = {container["name"]: {item["name"]: item["value"] for item in container["environment"]} for container in containers}
-        model = launch.get("release", {}).get("RELEASE_MODEL", "")
+        model = launch.get("feast", {}).get("RELEASE_MODEL", "")
         self.reloads.append(
             {"model": model, "launch": launch, "at": self.now, "services_stable": all(item["state"] == "COMPLETED" for item in self.services.values())}
         )

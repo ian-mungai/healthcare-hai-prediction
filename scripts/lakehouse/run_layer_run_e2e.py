@@ -1392,9 +1392,9 @@ RELEASE_RUN = "20261030T050607Z-5f607182"  # the run of a release launch: its ow
 RELEASE_ENVIRONMENT = {"LAYER_PHASE": "release", "RELEASE_MODEL": "m2", "FEATURES_RUN": FEATURES_RUN}
 
 
-def release_phase(case: Case, phase: str = "release", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
-    """One phase of a release launch: the variables the launch gives the containers of the features task, changed by ``changes``. No run before it: the
-    release has no pin and no run folder of its own to rely on."""
+def release_phase(case: Case, phase: str = "feast", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
+    """One phase of a release launch: the variables the launch gives the containers of the features task, changed by ``changes``. The feast container runs the
+    release (``feast`` is the default phase). No run before it: the release has no pin and no run folder of its own to rely on."""
     with mock.patch.dict(os.environ, {**RELEASE_ENVIRONMENT, **changes}):
         return case.phase(layer, phase, label="release", run=RELEASE_RUN, extra=extra)
 
@@ -1410,18 +1410,22 @@ def case_release_phase_releases_the_run_the_launch_names(case: Case) -> None:
 
 
 def case_release_phase_runs_only_when_the_launch_asks(case: Case) -> None:
-    for environment in ({"LAYER_PHASE": ""}, {"LAYER_PHASE": "", "RELEASE_MODEL": "", "FEATURES_RUN": ""}):
-        require(release_phase(case, **environment) == 0, case.err)
-    require(kinds() == [], f"a features build released a model set's online load: {kinds()}")
-    require("release" in case.out and "skipped" in case.out, case.out)
+    """A features build applies Feast in its feast container and never releases or reloads, even when the release variables hold values."""
+    require(case.chain("silver") == [0] * 7 and case.chain("gold") == [0] * 7, case.err)
+    with mock.patch.dict(os.environ, {"LAYER_PHASE": "", "RELEASE_MODEL": "m2", "FEATURES_RUN": FEATURES_RUN}):
+        require(case.chain("features") == [0] * 7, case.err)
+    require(kinds().count("feast") == 2, f"the feast container of a build did not apply Feast: {kinds()}")
+    require(not {"release", "reload"} & set(kinds()), f"a features build released or reloaded a model set's online load: {kinds()}")
 
 
 def case_a_release_launch_skips_every_build_phase(case: Case) -> None:
-    for phase in layer_run.PHASES["features"]:
+    builds = [phase for phase in layer_run.PHASES["features"] if phase != layer_run.RELEASE_RUNNER]
+    require(layer_run.PHASES["features"][-1] == layer_run.RELEASE_RUNNER and len(builds) == 6, layer_run.PHASES["features"])
+    for phase in builds:
         require(release_phase(case, phase) == 0, f"{phase}: {case.err}")
     require(kinds() == [], f"a build phase worked in a release launch: {kinds()}")
     require(not list((case.root / "release_features").rglob("*.json")), "a build phase left a record in a release launch")
-    require(case.out.count("skipped") == len(layer_run.PHASES["features"]), case.out)
+    require(case.out.count("skipped") == len(builds), case.out)
 
 
 def case_a_release_without_its_model_or_run_fails_by_name(case: Case) -> None:
@@ -1444,17 +1448,19 @@ def case_a_dry_release_loads_nothing(case: Case) -> None:
 
 def case_layer_phase_names_one_phase_of_a_features_task(case: Case) -> None:
     require(release_phase(case, LAYER_PHASE="bogus") != 0 and "LAYER_PHASE" in case.err, case.err)
-    for layer, phase in (("silver", "release"), ("gold", "release"), ("silver", "build"), ("gold", "build")):
+    for layer, phase in (("silver", "pin"), ("gold", "pin"), ("silver", "build"), ("gold", "build")):
         case.err = ""
-        require(release_phase(case, phase, layer) != 0, f"{layer} {phase} took a release launch's phase")
+        require(release_phase(case, phase, layer) != 0 and "LAYER_PHASE" in case.err, f"{layer} {phase} took a release launch's phase: {case.err}")
+    case.err = ""
+    require(release_phase(case, "release") != 0 and "invalid choice" in case.err, f"release is a launch name, no phase of its own: {case.err}")
     require(kinds() == [], f"{kinds()}")
 
 
 RELOAD_ENVIRONMENT = {"LAYER_PHASE": "reload", "RELEASE_MODEL": "m2", "FEATURES_RUN": ""}
 
 
-def reload_phase(case: Case, phase: str = "release", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
-    """One phase of a reload launch (``host_session start``): the release container of the features task runs the reload of the model set. The launch
+def reload_phase(case: Case, phase: str = "feast", layer: str = "features", extra: Sequence[str] = (), **changes: str) -> int:
+    """One phase of a reload launch (``host_session start``): the feast container of the features task runs the reload of the model set. The launch
     names no features run, because the reload picks the run of each set itself."""
     with mock.patch.dict(os.environ, {**RELOAD_ENVIRONMENT, **changes}):
         return case.phase(layer, phase, label="reload", run=RELEASE_RUN, extra=extra)
@@ -1471,10 +1477,11 @@ def case_reload_phase_reloads_the_set_the_launch_names(case: Case) -> None:
 
 
 def case_a_reload_launch_skips_every_build_phase(case: Case) -> None:
-    for phase in layer_run.PHASES["features"]:
+    builds = [phase for phase in layer_run.PHASES["features"] if phase != layer_run.RELEASE_RUNNER]
+    for phase in builds:
         require(reload_phase(case, phase) == 0, f"{phase}: {case.err}")
     require(kinds() == [], f"a build phase worked in a reload launch: {kinds()}")
-    require(case.out.count("skipped") == len(layer_run.PHASES["features"]), case.out)
+    require(case.out.count("skipped") == len(builds), case.out)
 
 
 def case_a_reload_without_its_model_fails_by_name(case: Case) -> None:
@@ -1494,9 +1501,9 @@ def case_a_dry_reload_loads_nothing(case: Case) -> None:
 
 
 def case_a_reload_launch_names_the_features_task_only(case: Case) -> None:
-    for layer, phase in (("silver", "release"), ("gold", "release")):
+    for layer, phase in (("silver", "pin"), ("gold", "pin")):
         case.err = ""
-        require(reload_phase(case, phase, layer) != 0, f"{layer} {phase} took a reload launch's phase")
+        require(reload_phase(case, phase, layer) != 0 and "LAYER_PHASE" in case.err, f"{layer} {phase} took a reload launch's phase: {case.err}")
     require(kinds() == [], f"{kinds()}")
 
 
@@ -1598,13 +1605,13 @@ CASES: dict[str, Callable[[Case], None]] = {
     "LAYER_DRY_RUN=1 starts a dry run": case_dry_run_from_the_environment,
     "a phase outside the layer exits non-zero": case_phase_not_in_layer,
     "release: the phase releases the run the launch names and nothing else": case_release_phase_releases_the_run_the_launch_names,
-    "release: a features build leaves the release phase idle": case_release_phase_runs_only_when_the_launch_asks,
+    "release: a features build applies Feast and never releases": case_release_phase_runs_only_when_the_launch_asks,
     "release: a release launch skips every build phase": case_a_release_launch_skips_every_build_phase,
     "release: a missing model or run fails by name": case_a_release_without_its_model_or_run_fails_by_name,
     "release: a refused release fails the phase": case_a_refused_release_fails_the_phase,
     "release: a dry run loads nothing": case_a_dry_release_loads_nothing,
     "release: LAYER_PHASE names one phase of a features task only": case_layer_phase_names_one_phase_of_a_features_task,
-    "reload: the release container reloads the set the launch names and nothing else": case_reload_phase_reloads_the_set_the_launch_names,
+    "reload: the feast container reloads the set the launch names and nothing else": case_reload_phase_reloads_the_set_the_launch_names,
     "reload: a reload launch skips every build phase": case_a_reload_launch_skips_every_build_phase,
     "reload: a missing model set fails by name": case_a_reload_without_its_model_fails_by_name,
     "reload: a refused reload fails the phase": case_a_refused_reload_fails_the_phase,

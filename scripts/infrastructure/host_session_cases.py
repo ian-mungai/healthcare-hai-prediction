@@ -954,7 +954,7 @@ def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, 
     last_update = max(index for index, entry in enumerate(log) if entry["operation"] == "update-service")
     reload_at = [index for index, entry in enumerate(log) if entry["operation"] == "run-task" and entry["options"]["--task-definition"] == [RELOAD_FAMILY]]
     bootstrap_at = next(index for index, entry in enumerate(log) if entry["options"].get("--task-definition") == [OPENMETADATA_FAMILY])
-    release = [item["launch"]["release"] for item in launches]
+    release = [item["launch"]["feast"] for item in launches]
     variables = reload_task().variables
     return {
         "the online sets come from the feature schema": sets_online() == ["m1", "m2", "m4"],
@@ -965,10 +965,10 @@ def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, 
         "the catalog bootstrap runs after the last reload": bootstrap_at > max(reload_at),
         "the launches run one at a time": all(launches[index]["at"] < launches[index + 1]["at"] for index in range(len(launches) - 1)),
         "each launch is a reload of its set with the code run, and the fetch container has the digest": all(
-            item["launch"]["release"]["LAYER_PHASE"] == "reload"
-            and item["launch"]["release"]["RELEASE_MODEL"] == item["model"]
-            and item["launch"]["release"]["CODE_RUN_ID"] == CODE_RUN
-            and item["launch"]["release"]["FEATURES_RUN"] == ""
+            item["launch"]["feast"]["LAYER_PHASE"] == "reload"
+            and item["launch"]["feast"]["RELEASE_MODEL"] == item["model"]
+            and item["launch"]["feast"]["CODE_RUN_ID"] == CODE_RUN
+            and item["launch"]["feast"]["FEATURES_RUN"] == ""
             and item["launch"]["fetch"]["CODE_RUN_ID"] == CODE_RUN
             and item["launch"]["fetch"]["CODE_SHA256"] == CODE_SHA
             for item in launches
@@ -979,7 +979,7 @@ def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, 
         "every container of the features task gets exactly its variables": all(
             {container: list(item["launch"][container]) for container in variables} == variables for item in launches
         ),
-        "every build container is told the reload phase and the release container is the one that reloads": all(
+        "every build container is told the reload phase and the feast container is the one that reloads": all(
             item["launch"][container].get("LAYER_PHASE", "reload") == "reload" for item in launches for container in item["launch"]
         ),
         "every set is online with the code of the start": host.online == {model: (CODE_RUN, CODE_SHA) for model in sets_online()},
@@ -1171,7 +1171,7 @@ def start_refuses_a_stack_that_cannot_reload() -> dict[str, bool]:
 def a_features_variable_that_the_reload_cannot_fill_is_refused() -> dict[str, bool]:
     host, session, _ = build()
     task = reload_task()
-    session.names = replace(session.names, reload=ReloadTask(task.family, {**task.variables, "release": [*task.variables["release"], "SURPRISE"]}))
+    session.names = replace(session.names, reload=ReloadTask(task.family, {**task.variables, "feast": [*task.variables["feast"], "SURPRISE"]}))
     message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
     return {
         "the new variable is refused by name after the services, before any launch": message is not None and "SURPRISE" in message and reload_runs(host) == [],
@@ -1214,7 +1214,7 @@ def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
         "service_names": {"value": {"airflow_scheduler": "a", "polaris": "p", "postgres": "q"}},
         "one_shot_run_task": {"value": {key: {"task_definition": family} for key, family in FAMILIES.items()}},
     }
-    variables = {"fetch": ["RUN_ID"], "release": ["RUN_ID", "LAYER_PHASE"]}
+    variables = {"fetch": ["RUN_ID"], "feast": ["RUN_ID", "RELEASE_MODEL", "LAYER_PHASE"]}
     jobs: dict[str, Any] = {"host_run_tasks": {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": variables}}}}
     reads: list[Any] = []
 
@@ -1237,7 +1237,9 @@ def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
         jobs["host_run_tasks"] = {"value": {"batch": {"task_definition": "x"}}}
         missing = module.load_names({}, reload=True)
         jobs["host_run_tasks"] = {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": {"fetch": ["RUN_ID"]}}}}
-        no_release = module.load_names({}, reload=True)
+        no_feast = module.load_names({}, reload=True)
+        jobs["host_run_tasks"] = {"value": {"features": {"task_definition": RELOAD_FAMILY, "container_environment": {"feast": ["RUN_ID", "LAYER_PHASE"]}}}}
+        older = module.load_names({}, reload=True)
         platform.pop("host_private_ip")
         platform.pop("log_group_names")
         bare = module.load_names({})
@@ -1250,12 +1252,13 @@ def load_names_reads_the_jobs_outputs_for_start_only() -> dict[str, bool]:
         "the features task, the address and the log group come from the outputs": full.reload == ReloadTask(RELOAD_FAMILY, variables)
         and full.host_address == HOST_ADDRESS
         and full.log_group == LOG_GROUP,
-        "a null host_run_tasks, a missing features task and a task with no release container are no reload task": (
+        "a null host_run_tasks, a missing features task, no feast container and an older feast container without RELEASE_MODEL are no reload task": (
             off.reload,
             missing.reload,
-            no_release.reload,
+            no_feast.reload,
+            older.reload,
         )
-        == (None, None, None),
+        == (None, None, None, None),
         "a platform without the two outputs loads, so stop and status never wait on them": bare.host_address == "" and bare.log_group == "",
     }
 

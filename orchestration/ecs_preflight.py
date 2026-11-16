@@ -97,9 +97,10 @@ BINDING_FORM = re.compile(
 PHASES = {"promote": "promote", "research": "research", "canary_check": "canary", "owner_notice": "notify"}
 # The steps that the research DAG launches with their own closed parameters, besides its research step.
 CHAIN_TEMPLATES = ("canary_check", "owner_notice", "promote")
-# The release of a model set's held online load runs as a phase of the features family (owner decision A, Nov 15 2026): the features task holds the release
-# container beside its build phases, and LAYER_PHASE tells every phase container which one phase this launch runs. A features build leaves it empty and runs
-# every phase but the release; the release step names ``release``, so the build phases end at once and only the release phase works.
+# The release of a model set's held online load runs as a phase of the features family (owner decision A, Nov 15 2026): the last container of the features
+# task, feast, runs it (ECS allows 10 containers in a task definition), and LAYER_PHASE tells every phase container which one phase this launch runs. A
+# features build leaves it empty and runs every phase, feast as the Feast apply; the release step names ``release``, so the build phases end at once and the
+# feast container releases.
 RELEASE_TEMPLATE = "release_online"
 LAYER_PHASES = {RELEASE_TEMPLATE: "release"}
 
@@ -930,8 +931,8 @@ class Preflight:
         releasing = request.template == RELEASE_TEMPLATE
         names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id == DRIFT_DAG or releasing
         containers, log_container = self.containers(job)
-        # A features task holds the release container: a features build leaves its three variables empty, and only the release step fills them.
-        holds_release = "release" in containers
+        # A features task holds the release variables in its feast container: a features build leaves them empty, and only the release step fills them.
+        holds_release = any("RELEASE_MODEL" in names for names in containers.values())
         values: dict[str, Callable[[], str]] = {
             "RUN_ID": lambda: request.run_id,
             "CODE_RUN_ID": lambda: code_run,

@@ -325,7 +325,7 @@ def test_the_release_phase_runs_for_real_and_a_refusal_fails_closed() -> None:
     check(chain[0].check is not None, "the release scenario does not check the seven tasks of the chain")
     research = [step for step in refused.steps if step.dag_id == "research_dag"]
     check(len(research) == 1 and research[0].starts == 6 and research[0].run_state == "failed", f"the refused-release step: {research}")
-    check(research[0].plan == {"release": 1} and research[0].reason == "HAI_1 release:", f"the release is not refused by name: {research[0]}")
+    check(research[0].plan == {"feast": 1} and research[0].reason == "HAI_1 release:", f"the release is not refused by name: {research[0]}")
     check(research[0].states == {"ready": "success", "research": "success", "chain": "failed", "gate": "failed"}, f"its states: {research[0].states}")
     check(not [item for item in real_image_dags.SUBSTITUTIONS if "release" in item and "recorder" in item], "a substitution still replaces the release")
     check(not hasattr(real_image_dags.Step, "release_recorded"), "a step can still replace the release with a recorder")

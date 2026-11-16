@@ -1707,12 +1707,12 @@ def features_job_names_its_feature_set() -> None:
     )
     phases = {container: values["LAYER_PHASE"] for container, values in sent.items() if "LAYER_PHASE" in values}
     require(
-        set(phases) == {"pin", "build", "validate", "export", "publish", "upload", "feast", "release"} and set(phases.values()) == {""},
+        set(phases) == {"pin", "build", "validate", "export", "publish", "upload", "feast"} and set(phases.values()) == {""},
         f"a features build was told to run one phase only: {phases}",
     )
     require(
-        sent["release"]["RELEASE_MODEL"] == "" and sent["release"]["FEATURES_RUN"] == "",
-        f"a features build was told to release a model set's online load: {sent['release']}",
+        "release" not in sent and sent["feast"]["RELEASE_MODEL"] == "" and sent["feast"]["FEATURES_RUN"] == "",
+        f"a features build was told to release a model set's online load: {sent}",
     )
     rig.stage_runs(OTHER_RUN)
     started = rig.tasks_started()

@@ -74,19 +74,20 @@ def check_overrides(table: dict) -> None:
 
 
 def a_features_build_leaves_the_release_variables_empty() -> None:
-    """A features task that is not a release gets the three release variables empty, so a hand-started build needs no value for them: the release phase
-    ends at once and every build phase runs. The metadata job, which reads FEATURES_RUN too, still refuses it when it is missing."""
+    """A features task that is not a release gets the three release variables empty, so a hand-started build needs no value for them: its feast container
+    applies Feast and every build phase runs. The metadata job, which reads FEATURES_RUN too, still refuses it when it is missing."""
     build_values = {name: value for name, value in VALUES.items() if name not in ("LAYER_PHASE", "RELEASE_MODEL", "FEATURES_RUN")}
     document = job_overrides.build("features", build_values)
     held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
     require(
-        held["release"]
+        held["feast"]
         == {
-            **{name: build_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI")},
+            **{name: build_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "FEATURE_SET")},
             **dict.fromkeys(("FEATURES_RUN", "RELEASE_MODEL", "LAYER_PHASE"), ""),
         },
-        f"{held['release']}",
+        f"{held['feast']}",
     )
+    require("release" not in held, f"the features task has a release container: {sorted(held)}")
     require(all(container.get("LAYER_PHASE", "") == "" for container in held.values()), f"a build was told a phase: {held}")
     try:
         job_overrides.build("metadata", {name: value for name, value in VALUES.items() if name != "FEATURES_RUN"})
@@ -97,7 +98,7 @@ def a_features_build_leaves_the_release_variables_empty() -> None:
 
 
 def a_release_names_its_model_and_run() -> None:
-    """A hand-started release (LAYER_PHASE release) needs the model set and the features run it releases, by name, and fills the release container."""
+    """A hand-started release (LAYER_PHASE release) needs the model set and the features run it releases, by name, and fills its feast container."""
     for missing in ("RELEASE_MODEL", "FEATURES_RUN"):
         try:
             job_overrides.build("features", {name: value for name, value in VALUES.items() if name != missing})
@@ -124,10 +125,11 @@ def a_release_names_its_model_and_run() -> None:
         timeout=60,
     )
     require(done.returncode == 0, f"{done.returncode}: {done.stderr.strip()[-200:]}")
-    release = next(item for item in json.loads(done.stdout)["containerOverrides"] if item["name"] == "release")
+    feast = next(item for item in json.loads(done.stdout)["containerOverrides"] if item["name"] == "feast")
+    held = {pair["name"]: pair["value"] for pair in feast["environment"]}
     require(
-        {pair["name"]: pair["value"] for pair in release["environment"]}["RELEASE_MODEL"] == "m2" and len(release["environment"]) == 6,
-        f"the release container: {release}",
+        (held["LAYER_PHASE"], held["RELEASE_MODEL"], held["FEATURES_RUN"]) == ("release", "m2", VALUES["FEATURES_RUN"]) and len(feast["environment"]) == 7,
+        f"the feast container: {feast}",
     )
 
 
@@ -137,9 +139,13 @@ def a_reload_names_its_model_and_no_features_run() -> None:
     document = job_overrides.build("features", reload_values)
     held = {item["name"]: {pair["name"]: pair["value"] for pair in item["environment"]} for item in document["containerOverrides"]}
     require(
-        held["release"]
-        == {**{name: reload_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "RELEASE_MODEL")}, "FEATURES_RUN": "", "LAYER_PHASE": "reload"},
-        f"{held['release']}",
+        held["feast"]
+        == {
+            **{name: reload_values[name] for name in ("RUN_ID", "CODE_RUN_ID", "POLARIS_URI", "RELEASE_MODEL", "FEATURE_SET")},
+            "FEATURES_RUN": "",
+            "LAYER_PHASE": "reload",
+        },
+        f"{held['feast']}",
     )
     require(
         all(container.get("LAYER_PHASE") == "reload" for container in held.values() if "LAYER_PHASE" in container),

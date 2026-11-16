@@ -1961,7 +1961,6 @@ FEATURES_CONTAINER_SETS = {
     "publish": ["all"],
     "upload": ["all"],
     "feast": ["all"],
-    "release": [],
 }
 
 
@@ -1983,11 +1982,11 @@ def single_path_value_cases(report: Report, layer_run: Any) -> None:
             code = job_overrides.main(text.split())
         containers = json.loads(printed.getvalue())["containerOverrides"] if code == 0 else []
         emitted = {entry["name"]: [item["value"] for item in entry["environment"] if item["name"] == "FEATURE_SET"] for entry in containers}
-        outcomes.append(code == 0 and emitted == FEATURES_CONTAINER_SETS and len(containers) == 9 and "<" not in text)
+        outcomes.append(code == 0 and emitted == FEATURES_CONTAINER_SETS and len(containers) == 8 and "<" not in text)
     report.case(
         "F14",
         "FS2",
-        "the features override commands (no set argument, dry run, real) give the seven build containers FEATURE_SET=all, the fetch and release none",
+        "the features override commands (no set argument, dry run, real) give the seven build containers FEATURE_SET=all and the fetch none",
         len(outcomes) == 2 and all(outcomes),
         commands=len(outcomes),
         passed=sum(outcomes),

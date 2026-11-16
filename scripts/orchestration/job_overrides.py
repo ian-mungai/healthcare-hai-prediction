@@ -76,7 +76,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input-run", default="", help="INPUT_RUN_ID: the committed silver run for gold, the committed gold run for features")
     parser.add_argument("--features-run", default="", help="FEATURES_RUN: the features run whose chain the metadata job ingests (a run ID, never latest)")
     parser.add_argument(
-        "--layer-phase", default="", help="LAYER_PHASE: release or reload runs only the release container of the features job; empty runs the build phases"
+        "--layer-phase",
+        default="",
+        help="LAYER_PHASE: release or reload runs only the feast container of the features job, as a release or reload; empty runs the build phases",
     )
     parser.add_argument("--release-model", default="", help="RELEASE_MODEL: the model set whose held online load the release releases (m1, m2 or m4)")
     parser.add_argument("--feature-set", default="", help="FEATURE_SET: all (the single path, the default), base or m1 to m6 for the features job")

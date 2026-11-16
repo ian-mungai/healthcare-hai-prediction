@@ -953,7 +953,7 @@ def cases_catalog() -> dict[str, Scenario]:
             require(end is not None and end["outcome"] == "succeeded", f"{job} of {run} has no success record: {end}")
         started = [entry for entry in rig.stage.log if "online_hold" in entry]
         require(not started, f"the first champion read a hold key: {started}")
-        require(not [item for item in environments if "release" in item], "the first champion launched the release phase")
+        require(not [item for item in environments if "feast" in item], "the first champion launched the release phase")
         record = json.loads(rig.stage.objects[training.record_key("research", research, "HAI_1")])
         promotion = record["promotion"]
         require("production_version" in promotion and promotion["production_version"] is None, f"the research record names a Production version: {promotion}")
@@ -962,14 +962,16 @@ def cases_catalog() -> dict[str, Scenario]:
     release_features = training.model_features_run_id(base, challenger["model"])
 
     def release_task(environment: dict[str, dict[str, str]]) -> None:
-        """The release task of the features family: it runs only the release phase, for the challenger's model and the features run its training run read."""
-        task = environment["release"]
+        """The release task of the features family: its feast container runs only the release phase, for the challenger's model and the features run its
+        training run read."""
+        task = environment["feast"]
         require(task["RUN_ID"] == release_run, f"the release ran {task['RUN_ID']}, not {release_run}")
         require(
             (task["LAYER_PHASE"], task["RELEASE_MODEL"], task["FEATURES_RUN"]) == ("release", challenger["model"], release_features),
-            f"the release container was told {task}",
+            f"the feast container was told {task}",
         )
-        other = {name: container["LAYER_PHASE"] for name, container in environment.items() if name != "release" and "LAYER_PHASE" in container}
+        require("release" not in environment, f"the features task has a release container: {sorted(environment)}")
+        other = {name: container["LAYER_PHASE"] for name, container in environment.items() if name != "feast" and "LAYER_PHASE" in container}
         require(set(other.values()) == {"release"} and "pin" in other, f"a build phase was not told the release phase: {other}")
 
     def chain_with_release_ran(rig: Any, facts: dict[str, Any]) -> None:
@@ -977,7 +979,7 @@ def cases_catalog() -> dict[str, Scenario]:
         and the owner notice: seven tasks in that order, each under the chain run of its own, and no read of a hold key (the release phase reads its own)."""
         first = rig.tasks_started() - facts["run_task_calls"]
         environments = [rig.environment(first + index) for index in range(7)]
-        found = [item["serve"] if "serve" in item else item["release"] if "release" in item else item["promote"] for item in environments]
+        found = [item["serve"] if "serve" in item else item["feast"] if "feast" in item else item["promote"] for item in environments]
         runs = [
             research,
             *(training.chain_run_id(research, "HAI_1", step) for step in ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")),
@@ -997,7 +999,7 @@ def cases_catalog() -> dict[str, Scenario]:
         research, the canary deploy and check, the promotion, the release and the notice, and no rollout."""
         first = rig.tasks_started() - facts["run_task_calls"]
         environments = [rig.environment(first + index) for index in range(6)]
-        found = [item["serve"] if "serve" in item else item["release"] if "release" in item else item["promote"] for item in environments]
+        found = [item["serve"] if "serve" in item else item["feast"] if "feast" in item else item["promote"] for item in environments]
         require([item.get("PHASE") for item in found] == ["research", None, "canary", "promote", None, "notify"], f"the chain ran {found}")
         release_task(environments[4])
         end = rig.end(release_run, "features")
@@ -1047,7 +1049,7 @@ def cases_catalog() -> dict[str, Scenario]:
             (
                 bronze,
                 *(trained(model) for model in training.PROMOTION_MODELS),
-                release_refused(6, check=closed_after_the_notice, plan={"release": 1}, prepare=stage_research),
+                release_refused(6, check=closed_after_the_notice, plan={"feast": 1}, prepare=stage_research),
             ),
             make_rig,
         ),

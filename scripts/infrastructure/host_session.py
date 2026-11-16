@@ -72,7 +72,10 @@ LOG_COMPONENT = "airflow"  # the log group component of the code one-shot (infra
 ONLINE_RELOAD = "online_reload"
 ONLINE_RELOAD_SECONDS = 2400  # the features task: code fetch, then the load of one set (feast_job.JOB_SECONDS is 1800)
 RELOAD_PHASE = "reload"
-RELOAD_CONTAINER = "release"
+RELOAD_CONTAINER = (
+    "feast"  # the last container of the features task runs the reload (LAYER_PHASE reload); a task of an older revision lacks RELEASE_MODEL there
+)
+RELOAD_VARIABLE = "RELEASE_MODEL"
 POLARIS_PORT = 8181
 # The reviewed installer. Every code task carries its text as the container command, so the registered task definition, which may still hold an older
 # installer, never decides how the code is installed, verified or restored.
@@ -244,7 +247,7 @@ def reload_task(jobs: dict[str, Any]) -> ReloadTask | None:
     features = tasks.get("features") if isinstance(tasks, dict) else None
     family = features.get("task_definition") if isinstance(features, dict) else None
     variables = features.get("container_environment") if isinstance(features, dict) else None
-    if not isinstance(family, str) or not family or not isinstance(variables, dict) or RELOAD_CONTAINER not in variables:
+    if not isinstance(family, str) or not family or not isinstance(variables, dict) or RELOAD_VARIABLE not in (variables.get(RELOAD_CONTAINER) or []):
         return None
     return ReloadTask(family, {str(container): [str(name) for name in names] for container, names in variables.items()})
 
@@ -724,7 +727,7 @@ class Session:
 
     def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
         """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch
-        is a release container that reloads ``model`` (LAYER_PHASE reload); every build container ends at once. A variable this tool cannot fill is refused."""
+        is the feast container reloading ``model`` (LAYER_PHASE reload); every build container ends at once. A variable this tool cannot fill is refused."""
         if self.names.reload is None:
             raise HostSessionError("the jobs stack has no features host task")
         values = {
@@ -750,7 +753,7 @@ class Session:
 
     def reload_online_store(self, code: tuple[str, str]) -> None:
         """Reload the online store of every online model set: one launch of the features task per set (``online_sets``), one after the other, each a
-        release container that loads the newest run of the set with load evidence again (``scripts.features.online_reload``). The store keeps no snapshot, so
+        feast container that loads the newest run of the set with load evidence again (``scripts.features.online_reload``). The store keeps no snapshot, so
         it is empty after every start. A launch that is refused, fails or passes its deadline raises, and ``start`` then stops the host unless ``keep_on``."""
         for model in online_sets():
             try:

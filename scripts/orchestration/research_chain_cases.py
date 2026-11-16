@@ -431,15 +431,15 @@ def a_failed_release_or_rollout_is_announced_as_not_rolled_out() -> None:
 
 def launched_tasks(rig: Rig, start: int = 0) -> list[tuple[str, str]]:
     """The tasks the rig started, in order, as (type, what it did): a serve deploy by its mode, a promote-family task by its phase and a features-family task
-    that runs the release phase as (its model, ``release``): the release names a model and a run, not a type."""
+    that runs the release phase in its feast container as (its model, ``release``): the release names a model and a run, not a type."""
     found = []
     for index in range(start, rig.tasks_started()):
         environment = rig.environment(index)
         if "serve" in environment:
             request = json.loads(environment["serve"]["SERVING_REQUEST"])
             found.append((request["hai_type"], f"serve_{request['deploy_mode']}"))
-        elif "release" in environment:
-            found.append((environment["release"]["RELEASE_MODEL"], environment["release"]["LAYER_PHASE"]))
+        elif "feast" in environment:
+            found.append((environment["feast"]["RELEASE_MODEL"], environment["feast"]["LAYER_PHASE"]))
         else:
             found.append((json.loads(environment["promote"]["TRAINING_PARAMETERS"]).get("hai_type", ""), environment["promote"]["PHASE"]))
     return found
@@ -705,7 +705,7 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
     runs = [training_contract.chain_run_id(RESEARCH, "HAI_1", step) for step in steps]
     environments = [rig.environment(before + index) for index in range(7)]
     require(
-        [item["serve" if "serve" in item else "release" if "release" in item else "promote"]["RUN_ID"] for item in environments] == [RESEARCH, *runs],
+        [item["serve" if "serve" in item else "feast" if "feast" in item else "promote"]["RUN_ID"] for item in environments] == [RESEARCH, *runs],
         f"runs: {environments}",
     )
     canary_request = json.loads(environments[1]["serve"]["SERVING_REQUEST"])
@@ -715,12 +715,11 @@ def research_dag_runs_the_chain_for_the_challenger() -> None:
         f"the derived canary request: {canary_request}",
     )
     release = environments[4]
-    for phase in ("pin", "build", "validate", "export", "publish", "upload", "feast", "release"):
+    for phase in ("pin", "build", "validate", "export", "publish", "upload", "feast"):
         require(release[phase]["LAYER_PHASE"] == "release", f"the {phase} container was not told the release phase: {release[phase]}")
-    require(
-        release["release"]["RELEASE_MODEL"] == "m2" and release["release"]["FEATURES_RUN"] == FEATURES_RUNS["m2"], f"the release names: {release['release']}"
-    )
-    require(release["release"]["RUN_ID"] == runs[3], f"the release ran another run: {release['release']}")
+    require("release" not in release, f"the features task has a release container: {sorted(release)}")
+    require(release["feast"]["RELEASE_MODEL"] == "m2" and release["feast"]["FEATURES_RUN"] == FEATURES_RUNS["m2"], f"the release names: {release['feast']}")
+    require(release["feast"]["RUN_ID"] == runs[3], f"the release ran another run: {release['feast']}")
     end = rig.end(runs[3], "features")
     require(end is not None and end["outcome"] == "succeeded", f"the release left {end}")
     stable_request = json.loads(environments[5]["serve"]["SERVING_REQUEST"])
@@ -759,13 +758,13 @@ def research_dag_promotes_a_first_champion_without_a_canary() -> None:
 
 
 def research_dag_fails_closed_when_the_release_task_is_refused() -> None:
-    """A Production model launches the release phase after the promotion. When the phase refuses (the release container exits 1, as online_release does for a
+    """A Production model launches the release phase after the promotion. When the phase refuses (the feast container exits 1, as online_release does for a
     refused release), the promotion stands, no rollout runs, the notice says the promotion did not roll out and the DAG run fails naming the release."""
     rig = Rig()
     for model in training_contract.PROMOTION_MODELS:
         trained(rig, model)
     staged_for_the_dag(rig)
-    rig.ecs.plan = {"release": 1}
+    rig.ecs.plan = {"feast": 1}
     before = rig.tasks_started()
     with world(rig, "research_dag", dag_params()) as current:
         states = current.run_dag("research_dag.py")
@@ -807,10 +806,11 @@ def the_release_step_takes_only_its_closed_parameters() -> None:
     require(not rig.ecs.calls and not rig.records.calls, "a release with other parameters reached the cloud or the launch records")
     spec = rig.preflight.prepare(request_for("release_online", run, good, input_run=good["features_run"]))
     require(spec is not None and spec.job == "features", f"the release did not name the features job: {spec}")
-    release = spec.environment["release"]
+    require("release" not in spec.environment, f"the features task has a release container: {sorted(spec.environment)}")
+    release = spec.environment["feast"]
     require(
         release["LAYER_PHASE"] == "release" and release["RELEASE_MODEL"] == "m2" and release["FEATURES_RUN"] == good["features_run"],
-        f"the release container: {release}",
+        f"the feast container: {release}",
     )
     for name, variables in spec.environment.items():
         require(

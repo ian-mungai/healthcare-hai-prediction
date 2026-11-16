@@ -89,3 +89,21 @@ run "host_definitions_equal_the_fixture_the_airflow_mode_rig_reads" {
     error_message = "The containers of the nine host definitions differ from tests/host_definitions.json, which the Airflow mode rig reads. If the change is intended, regenerate it with: .venv/bin/python -m scripts.orchestration.host_definitions_fixture"
   }
 }
+
+# ECS refuses RegisterTaskDefinition with "Too many containers" above 10 containers per task definition. The features host definitions went to 11 with a release
+# container, and the apply failed after a plan that passed, because a plan does not check the limit.
+run "no_host_definition_has_more_containers_than_ecs_allows" {
+  command = plan
+
+  variables {
+    host_jobs_enabled = true
+  }
+
+  assert {
+    condition = (
+      length(aws_ecs_task_definition.host) == 15 &&
+      alltrue([for family, task in aws_ecs_task_definition.host : length(jsondecode(task.container_definitions)) <= 10])
+    )
+    error_message = "A host task definition holds more than 10 containers, which ECS refuses at registration (ClientException: Too many containers): ${jsonencode({ for family, task in aws_ecs_task_definition.host : family => length(jsondecode(task.container_definitions)) })}"
+  }
+}
