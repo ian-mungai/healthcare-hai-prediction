@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib
 import math
+import os
 import re
 import uuid
 from collections.abc import Mapping, Sequence
@@ -30,6 +31,7 @@ ALL_RUNS = 3
 COMPLETE_TAG = "bundle_sha256"
 UNSAFE = re.compile(r"[^A-Za-z0-9_\-. /]")
 NAME_LIMIT = 250
+PROXY_DOWNLOADS = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
 
 
 class TrackingError(Exception):
@@ -101,7 +103,13 @@ class TypePlan:
 
 
 def open_store(uri: str) -> TrackingStore:
-    """Open the MLflow client for the tracking URI the job is given; the training image carries the library."""
+    """Open the MLflow client for the tracking URI the job is given; the training image carries the library.
+
+    A job reaches the tracking server only. The 3.17.2 client, with no setting, asks the server's ``/server-info``; the server advertises presigned downloads
+    for an S3 artifact destination, and the client then reads each file straight from S3 and hides a failure of that read behind "Failed to download
+    artifacts from path". Setting ``false`` before the client exists keeps every download on the tracking server.
+    """
+    os.environ[PROXY_DOWNLOADS] = "false"
     client: TrackingStore = importlib.import_module("mlflow.tracking").MlflowClient(tracking_uri=uri)
     return client
 

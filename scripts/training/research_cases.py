@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
+from collections.abc import Callable
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from unittest import mock
 
-from scripts.training import aws_run_cases, job, promote_receipt
+from scripts.training import aws_run_cases, job, promote_receipt, run_tracking
 from scripts.training.job_action_cases import BASE_RUN, HAI_TYPE, LABEL, FileTracking, Fixture, Predictor, promoted, require, run_promotion, standins
 from scripts.training.job_cases import arguments_for, call, failure_of, listing, prepare
 
@@ -37,13 +41,18 @@ def finished_models(
     return tracking, fixtures
 
 
-def research(folder: Path, anchor: Fixture, **changes: Any) -> tuple[int, str, str, Path]:
-    """Run the research action on the shared store through the job entry point and return its result and output folder."""
+def research(folder: Path, anchor: Fixture, opening: Callable[[str], Any] | None = None, **changes: Any) -> tuple[int, str, str, Path]:
+    """Run the research action on the shared store through the job entry point and return its result and output folder.
+
+    ``opening`` replaces the store stand-in's ``open_store`` inside the run, so a case can drive the real ``run_tracking.open_store``.
+    """
     work = prepare(folder, run_id=RESEARCH_RUN)
     (work / "training_parameters.json").write_text(json.dumps(PARAMETERS | changes) + "\n")
     arguments = arguments_for("research", work)
     arguments[arguments.index("--run") + 1] = RESEARCH_RUN
-    with standins(anchor):
+    with standins(anchor), contextlib.ExitStack() as stack:
+        if opening is not None:
+            stack.enter_context(mock.patch.object(run_tracking, "open_store", opening))
         code, out, error = call(arguments)
     return code, out, error, work / "out"
 
@@ -51,6 +60,32 @@ def research(folder: Path, anchor: Fixture, **changes: Any) -> tuple[int, str, s
 def parent_of(tracking: FileTracking, model: str) -> dict[str, Any]:
     """Return the parent run a model logged."""
     return next(run for run in tracking.parents().values() if run["tags"]["model"] == model)
+
+
+PROXY_SWITCH = "MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD"
+
+
+class ProbingClient:
+    """The MLflow 3.17.2 client over an artifact server that stores artifacts in S3.
+
+    A client with no ``MLFLOW_ENABLE_PROXY_MULTIPART_DOWNLOAD`` setting asks ``/server-info``, which advertises presigned downloads for an S3 destination, and
+    fetches each file straight from S3 with the presigned URL. The ECS task reaches the tracking server only. When that second request fails, MLflow hides the
+    cause and ``RunsArtifactRepository.download_artifacts`` raises the one generic message. A client with the setting ``false`` streams the file through the
+    tracking server, as the owner's port-forwarded request does.
+    """
+
+    def __init__(self, tracking: Any) -> None:
+        self.tracking = tracking
+        self.direct_reads = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.tracking, name)
+
+    def download_artifacts(self, run_id: str, path: str, dst_path: str | None = None) -> str:
+        if os.environ.get(PROXY_SWITCH, "").lower() != "false":
+            self.direct_reads += 1
+            raise Exception(f"Failed to download artifacts from path {path.rsplit('/', 1)[-1]!r}, please ensure that the path is correct.")
+        return self.tracking.download_artifacts(run_id, path, dst_path)
 
 
 def research_cases(cases: Any, folder: Path) -> None:
@@ -203,6 +238,15 @@ def research_cases(cases: Any, folder: Path) -> None:
         require(code == job.EXIT_FAILED and failure_of(error) == "mlflow_bundle_conflict", f"a changed record was accepted: {code} {error}")
         require(tracking.models[NAME]["aliases"] == before, f"the refused retry moved the alias: {before} to {tracking.models[NAME]['aliases']}")
 
+    def reads_run_artifacts_through_the_tracking_server() -> None:
+        tracking, fixtures = finished_models(folder / "proxied")
+        client = ProbingClient(tracking)
+        library = SimpleNamespace(import_module=lambda name: SimpleNamespace(MlflowClient=lambda tracking_uri: client))
+        with mock.patch.object(run_tracking, "importlib", library):
+            code, _, error, output = research(folder / "proxied_research", fixtures["m2"], opening=run_tracking.open_store)
+        require(code == 0 and client.direct_reads == 0, f"research read an artifact over the presigned path ({client.direct_reads} reads): {code} {error}")
+        require((output / f"research_{HAI_TYPE}.json").is_file(), "the research wrote no record")
+
     def phase_publishes_each_record_once() -> None:
         tracking, fixtures = finished_models(folder / "phase")
         bucket = aws_run_cases.ListingBucket(aws_run_cases.BUCKET, "research/")
@@ -233,6 +277,7 @@ def research_cases(cases: Any, folder: Path) -> None:
         require(len(tracking.parents()) == 3, "the phase changed the model runs")
 
     cases.check("research_compares_two_models_and_chooses_one_challenger_per_type", compares_and_chooses)
+    cases.check("research_reads_run_artifacts_through_the_tracking_server", reads_run_artifacts_through_the_tracking_server)
     cases.check("research_phase_stores_each_record_once_and_refuses_another_record", phase_publishes_each_record_once)
     cases.check("research_never_moves_the_production_alias_and_records_its_version", never_moves_production)
     cases.check("research_records_the_features_runs_and_no_production", records_the_features_runs_the_models_trained_on_and_no_production)
