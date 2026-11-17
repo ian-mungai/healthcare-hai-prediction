@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import threading
 import time
 from collections.abc import Callable
@@ -656,6 +657,89 @@ class TrickleOpenSearch:
         self.thread.join(timeout=10)
 
 
+def opensearch_resolves_no_name_and_connects_once_within_the_deadline(root: Path) -> dict[str, bool]:
+    resolved: list[str] = []
+    real = socket.getaddrinfo
+
+    def slow_resolver(host: Any, *arguments: Any, **options: Any) -> Any:
+        resolved.append(str(host))
+        time.sleep(0.2)
+        return real(host, *arguments, **options)
+
+    class StalledSocket:
+        """A socket whose connect never completes: it waits for the timeout that was set on it, as a real stalled connect does."""
+
+        connects: list[float] = []
+
+        def __init__(self, *arguments: Any, **options: Any) -> None:
+            self.timeout = 0.0
+
+        def settimeout(self, value: float) -> None:
+            self.timeout = value
+
+        def connect(self, address: Any) -> None:
+            StalledSocket.connects.append(self.timeout)
+            time.sleep(self.timeout)
+            raise TimeoutError("timed out")
+
+        def close(self) -> None:
+            return
+
+        def __enter__(self) -> StalledSocket:
+            return self
+
+        def __exit__(self, *exc: object) -> None:
+            return
+
+    with OpenMetadataStandIn(body={"status": "green"}) as peer, mock.patch.object(socket, "getaddrinfo", slow_resolver):
+        started = time.monotonic()
+        try:
+            found = values(exporter.opensearch_samples(peer.url, 0.1))
+        except exporter.SourceError:
+            found = {}
+        prompt = time.monotonic() - started
+    resolved_for_name: list[str] = []
+    with mock.patch.object(socket, "getaddrinfo", lambda host, *a, **k: resolved_for_name.append(str(host)) or []):
+        try:
+            exporter.deadline_get("http://localhost:9200/_cluster/health", 1.0)
+            name_refused = False
+        except exporter.SourceError:
+            name_refused = True
+    with mock.patch.object(socket, "socket", StalledSocket):
+        started = time.monotonic()
+        try:
+            exporter.deadline_get("http://127.0.0.1:9200/_cluster/health", 0.1)
+            stalled_failed = False
+        except exporter.SourceError:
+            stalled_failed = True
+        stalled = time.monotonic() - started
+    return {
+        "a numeric loopback address is never resolved, so a slow resolver costs nothing": resolved == []
+        and found.get(("hai_opensearch_cluster_status", ())) == 0.0,
+        "the read with a slow resolver ends well inside the budget": prompt < 0.18,
+        "a host name is refused and no name lookup runs": name_refused and resolved_for_name == [],
+        "a stalled connect makes exactly one attempt": len(StalledSocket.connects) == 1,
+        "the connect gets no more than the budget": all(value <= 0.1 for value in StalledSocket.connects),
+        "a stalled connect ends within the budget": stalled_failed and stalled < 0.2,
+        "the settings refuse a name host": refused(OPENSEARCH_HEALTH_URL="http://localhost:9200/_cluster/health"),
+    }
+
+
+def an_opensearch_answer_over_the_cap_is_an_error(root: Path) -> dict[str, bool]:
+    def read(pad: int) -> bool:
+        with OpenMetadataStandIn(body={"status": "green", "pad": "x" * pad}) as peer:
+            try:
+                exporter.opensearch_samples(peer.url, 5.0)
+                return False
+            except exporter.SourceError:
+                return True
+
+    return {
+        "an answer above 1 MiB is refused": read(2 * 1024 * 1024),
+        "an answer below the cap is read": not read(512 * 1024),
+    }
+
+
 def a_trickling_opensearch_answer_ends_at_one_absolute_deadline(root: Path) -> dict[str, bool]:
     def timed(**options: Any) -> tuple[bool, float]:
         with TrickleOpenSearch(0.02, **options) as peer:
@@ -803,6 +887,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "gaps_a_delete_that_fails_once_leaves_one_group_after_the_retry": a_delete_that_fails_once_leaves_one_group_after_the_retry,
     "gaps_a_delete_that_times_out_publishes_nothing": a_delete_that_times_out_publishes_nothing,
     "gaps_the_delete_and_the_publish_share_one_total_deadline": the_delete_and_the_publish_share_one_total_deadline,
+    "gaps_opensearch_resolves_no_name_and_connects_once_within_the_deadline": opensearch_resolves_no_name_and_connects_once_within_the_deadline,
+    "gaps_an_opensearch_answer_over_the_cap_is_an_error": an_opensearch_answer_over_the_cap_is_an_error,
     "gaps_a_trickling_opensearch_answer_ends_at_one_absolute_deadline": a_trickling_opensearch_answer_ends_at_one_absolute_deadline,
     "gaps_the_loaded_record_carries_the_rows_of_a_fresh_load": the_loaded_record_carries_the_rows_of_a_fresh_load,
     "gaps_every_gap_has_a_panel_and_an_alert_rule": every_gap_has_a_panel_and_an_alert_rule,

@@ -24,6 +24,7 @@ import argparse
 import base64
 import contextlib
 import http.client
+import ipaddress
 import json
 import math
 import os
@@ -351,8 +352,13 @@ OPENSEARCH_STATUS = {"green": 0.0, "yellow": 1.0, "red": 2.0}
 
 def deadline_get(url: str, timeout: float, limit: int = 1024 * 1024) -> tuple[int, bytes]:
     """One HTTP/1.0 GET with one absolute deadline over the connect, the send, the headers and every read of the body, so an answer that trickles in byte by
-    byte ends at the deadline like a silent one. The answer is read to its end and cut at ``limit`` bytes. Raises SourceError."""
+    byte ends at the deadline like a silent one. The host must be an IP address: a name is refused, so no name lookup runs outside the deadline. There is one
+    connect attempt, with the time that is left. The answer is read to its end and cut at ``limit`` bytes. Raises SourceError."""
     parsed = urlparse(url)
+    try:
+        address = ipaddress.ip_address(parsed.hostname or "")
+    except ValueError:
+        raise SourceError("the address host is not an IP address") from None
     deadline = time.monotonic() + timeout
 
     def left() -> float:
@@ -362,9 +368,11 @@ def deadline_get(url: str, timeout: float, limit: int = 1024 * 1024) -> tuple[in
         return remaining
 
     try:
-        with socket.create_connection((parsed.hostname or "", parsed.port or 80), timeout=left()) as connection:
+        with socket.socket(socket.AF_INET6 if address.version == 6 else socket.AF_INET, socket.SOCK_STREAM) as connection:
             connection.settimeout(left())
-            connection.sendall(f"GET {parsed.path or '/'} HTTP/1.0\r\nHost: {parsed.hostname}\r\nConnection: close\r\n\r\n".encode("ascii"))
+            connection.connect((str(address), parsed.port or 80))
+            connection.settimeout(left())
+            connection.sendall(f"GET {parsed.path or '/'} HTTP/1.0\r\nHost: {address}\r\nConnection: close\r\n\r\n".encode("ascii"))
             raw = b""
             while len(raw) <= limit:
                 connection.settimeout(left())
