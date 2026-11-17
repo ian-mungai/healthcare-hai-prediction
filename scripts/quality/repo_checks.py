@@ -85,11 +85,17 @@ CI_GROUP_FILES = "scripts/ci/groups"
 ENV_READ = re.compile(r"""(?:os\.environ(?:\.get)?\s*[\[(]\s*|os\.getenv\s*\(\s*)["']([A-Z][A-Z0-9_]*)["']""")
 ENV_EXAMPLE_NAME = re.compile(r"^\s*#?\s*(?:export\s+)?([A-Z][A-Z0-9_]*)\s*=", re.MULTILINE)
 ENV_LIST = "config/quality/env_names.json"
-ENV_CATEGORIES = ("test", "container", "tool")
-# Test code: a tests folder, test_*.py, *_cases.py, run_*e2e.py runners, and stand-in, fake, fixture, fault and plant modules. A module outside this rule
-# that only tests use goes under "test_modules" in ENV_LIST.
+ENV_CATEGORIES = ("test", "container", "shell", "tool")
+# Test code: a tests folder, test_*.py, *_cases.py, run_*e2e.py runners, and stand-in, fake, fixture, fault and plant modules. The word patterns match whole
+# parts of a file or folder name (split at / _ . -), so understanding.py is production code. A module outside this rule that only tests use goes under
+# "test_modules" in ENV_LIST.
 TEST_CODE = re.compile(
-    r"(?:^|/)(?:tests?/|test_[^/]*$|conftest\.py$)|_cases\.py$|(?:^|/)run_(?:[^/]*_)?e2e\.py$|stand_?ins?|fake|_faults\.py$|planted|plants?\.py$|fixtures?\.py$|_fixture"
+    r"(?:^|/)(?:tests?/|test_[^/]*$|conftest\.py$)"
+    r"|_cases\.py$"
+    r"|(?:^|/)run_(?:[^/]*_)?e2e\.py$"
+    r"|(?:^|[/_.-])(?:stand_?ins?|fakes?|planted)(?:$|[/_.-])"
+    r"|(?:^|[/_])fixtures?\.py$|_fixtures?(?:$|[/_.-])"
+    r"|(?:^|[/_])plants?\.py$|_faults\.py$"
 )
 # Where Terraform, the job templates and the launcher configs set the variables of a container.
 CONTAINER_SETTERS = re.compile(r"(?:infra/|config/orchestration/|data_contracts/orchestration/|services/|docker-compose[^/]*$)")
@@ -564,28 +570,145 @@ def mypy_commands() -> list[Finding]:
     return findings
 
 
-def env_list() -> dict[str, Any]:
-    """Return ``ENV_LIST``: ``env_file`` (the settings of .env, in order), ``test_modules`` (path to reason) and ``names`` (name to entry); empty if missing."""
+def env_list() -> tuple[dict[str, Any], list[str]]:
+    """Return ``ENV_LIST`` and the keys that one of its objects holds twice.
+
+    The list has ``env_file`` (the settings of .env, in order), ``test_modules`` (path to reason) and ``names`` (name to entry).
+    """
     path = Path(ENV_LIST)
-    return json.loads(path.read_text()) if path.exists() else {}
+    twice: list[str] = []
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        """Build one JSON object and note each key that it holds twice."""
+        keys = [key for key, _ in items]
+        twice.extend(sorted({key for key in keys if keys.count(key) > 1}))
+        return dict(items)
+
+    return (json.loads(path.read_text(), object_pairs_hook=pairs) if path.exists() else {}), twice
+
+
+def env_without_comments(text: str, kind: str) -> str:
+    """Return ``text`` of a ``kind`` file (hcl, yaml, shell, docker or python) with its comments cut out.
+
+    HCL loses ``#`` and ``//`` to the end of the line and ``/* */`` blocks. YAML, shell and Dockerfiles lose ``#`` at the start of a word. Python loses its
+    comment tokens, and a file that Python cannot tokenize is cut like a shell file. A quote opens a string that ends with the same quote or the line, so
+    ``"s3://bucket"`` keeps its slashes.
+    """
+    if kind == "python":
+        try:
+            return tokenize.untokenize(token for token in tokenize.generate_tokens(io.StringIO(text).readline) if token.type != tokenize.COMMENT)
+        except (tokenize.TokenError, SyntaxError, IndentationError):
+            kind = "shell"
+    hcl = kind == "hcl"
+    out: list[str] = []
+    quote, i = "", 0
+    while i < len(text):
+        char = text[i]
+        if quote:
+            out.append(char)
+            if char == "\\" and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 1
+            elif char in (quote, "\n"):
+                quote = ""
+        elif char in ('"' if hcl else "\"'"):
+            quote = char
+            out.append(char)
+        elif hcl and text.startswith("/*", i):
+            end = text.find("*/", i + 2)
+            out.append(" ")
+            i = len(text) if end < 0 else end + 1
+        elif (char == "#" or (hcl and text.startswith("//", i))) and (hcl or i == 0 or text[i - 1].isspace()):
+            while i + 1 < len(text) and text[i + 1] != "\n":
+                i += 1
+        else:
+            out.append(char)
+        i += 1
+    return "".join(out)
+
+
+def env_setter_kind(path: str) -> str | None:
+    """Return how a file sets environment variables (hcl, json, yaml, shell, docker or python); None if it sets none, as a JSON schema only describes them."""
+    name = Path(path).name
+    if name.endswith(".schema.json"):
+        return None
+    if name == "Dockerfile":
+        return "docker"
+    if name.endswith((".sh", ".sh.tftpl", ".bash")):
+        return "shell"
+    return {".tf": "hcl", ".hcl": "hcl", ".json": "json", ".yaml": "yaml", ".yml": "yaml", ".py": "python"}.get(Path(path).suffix)
+
+
+def json_container_variables(text: str) -> set[str]:
+    """Return the strings in the lists under a ``containers`` key of a JSON file: the variables that the launch contract declares for each container."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return set()
+    found: set[str] = set()
+
+    def walk(node: Any, declared: bool) -> None:
+        """Collect the strings of the lists below a ``containers`` key."""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                walk(value, declared or key == "containers")
+        elif isinstance(node, list):
+            for item in node:
+                if declared and isinstance(item, str):
+                    found.add(item)
+                else:
+                    walk(item, declared)
+
+    walk(data, False)
+    return found
+
+
+def env_setters(path: str, text: str, names: set[str]) -> set[str]:
+    """Return the ``names`` that the file ``path`` sets in an assignment form.
+
+    The forms are ``name = "X"`` or ``"name": "X"`` (an environment entry), ``"X=value"``, a mapping key (``X = ...`` in HCL, ``"X": ...`` in JSON, ``X: ...``
+    and ``- X=...`` in YAML), ``X=...`` or ``export X=...`` in shell, ``ENV X`` in a Dockerfile and ``env["X"] = ...`` or ``setdefault("X", ...)`` in Python.
+    A JSON file also sets the strings in the lists under its ``containers`` keys (see ``json_container_variables``). Comments and reads never count.
+    """
+    kind = env_setter_kind(path)
+    if kind is None or not names:
+        return set()
+    alt = "|".join(map(re.escape, sorted(names)))
+    forms = {
+        "name": rf"""["']?\bname["']?\s*[:=]\s*["']?({alt})["']?(?!\w)""",
+        "string": rf"""["']({alt})=""",
+        "json": rf"""["']({alt})["']\s*:""",
+        "hcl": rf"""["']({alt})["']\s*=(?!=)|^\s*({alt})\s*=(?!=)""",
+        "yaml": rf"""["']({alt})["']\s*:|^\s*-?\s*({alt})\s*:|^\s*-\s*({alt})=""",
+        "shell": rf"""^\s*(?:export\s+)?({alt})=""",
+        "docker": rf"""^\s*ENV\s+({alt})(?:=|\s)""",
+        "python": rf"""\[\s*["']({alt})["']\s*\]\s*=(?!=)|\bsetdefault\(\s*["']({alt})["']|["']({alt})["']\s*:""",
+    }
+    wanted = {"hcl": ("name", "string", "hcl"), "json": ("name", "string", "json"), "yaml": ("name", "string", "yaml"), "python": ("name", "string", "python")}
+    pattern = re.compile("|".join(forms[form] for form in wanted.get(kind, (kind,))), re.M)
+    found = {next(group for group in match.groups() if group) for match in pattern.finditer(env_without_comments(text, kind))}
+    return found | (names & json_container_variables(text) if kind == "json" else set())
 
 
 def env_example() -> list[Finding]:
     """Every environment variable that tracked Python code reads is in .env.example or in ``ENV_LIST``, never in both.
 
-    .env.example is a direct example of the real .env: the names of ``env_file`` and nothing else, one placeholder line each, with no commented-out
-    names. Every other name is in ``ENV_LIST`` with a category: ``test`` (only test code uses it, see ``TEST_CODE``), ``container`` (Terraform, ECS,
-    Airflow, a job template or the launcher sets it inside a container) or ``tool`` (the OS or a tool sets it, or a person exports it for one command).
-    A container name must be set in a ``CONTAINER_SETTERS`` file, in the file named by ``set_in`` or by the platform (``set_by`` is ``ecs``). A name
-    counts as set by its own spelling in an environment form (a quoted key, ``NAME=``, ``NAME:`` or ``name = "NAME"``), so the check shows where a
-    name is set, not that the value is right.
+    .env.example is a direct example of the real .env: one header comment line at most, then the names of ``env_file`` and nothing else, one placeholder line
+    each. Every other name is in ``ENV_LIST`` with a category: ``test`` (only test code uses it, see ``TEST_CODE``), ``container`` (Terraform, ECS, Airflow,
+    a job template or the launcher sets it inside a container), ``shell`` (an optional override that a person may export for one command) or ``tool``
+    (the OS or a tool sets it). A container name must be set in an assignment form (see ``env_setters``) in a ``CONTAINER_SETTERS`` file, in the file named by
+    ``set_in`` or by the platform (``set_by`` is ``ecs``). ``set_by`` ``alias`` with ``set_in`` is the one exception that is not verified: project code sets
+    the name through a constant that the check does not follow, and ``set_in`` only has to use the name. The check shows where a name is set, not that the
+    value is right. Aliases, indirect and dynamic reads, and reads in shell or template files only are not followed.
     """
-    data = env_list()
+    data, twice = env_list()
     env_file: list[str] = data.get("env_file", [])
     names: dict[str, Any] = data.get("names", {})
     extra_modules: dict[str, str] = data.get("test_modules", {})
     documented: list[tuple[int, str]] = []
     findings = []
+    for key in sorted({*twice, *(name for name in env_file if env_file.count(name) > 1)}):
+        findings.append(Finding(ENV_LIST, f"{key} is listed twice in {ENV_LIST}", f"{POLICY}: docs match the code", f"keep one entry of {key}"))
     example = Path(".env.example")
     for number, line in enumerate(example.read_text().splitlines() if example.exists() else [], 1):
         match = ENV_EXAMPLE_NAME.match(line)
@@ -594,6 +717,16 @@ def env_example() -> list[Finding]:
             findings.append(Finding(f".env.example:{number}", f"{match.group(1)} is commented out in .env.example", f"{POLICY}: docs match the code", fix))
         elif match:
             documented.append((number, match.group(1)))
+        elif number > 1 or not line.startswith("#"):
+            fix = "keep one header comment line and the settings of .env, one per line"
+            findings.append(
+                Finding(
+                    f".env.example:{number}",
+                    f".env.example line {number} is not a setting: only one header comment line is allowed",
+                    f"{POLICY}: docs match the code",
+                    fix,
+                )
+            )
     shown = {name for _, name in documented}
     tracked = set(git("ls-files").splitlines())
 
@@ -610,7 +743,7 @@ def env_example() -> list[Finding]:
         for number, line in enumerate(Path(path).read_text().splitlines(), 1):
             for name in ENV_READ.findall(line):
                 if name not in shown and name not in names:
-                    fix = f"add {name} to .env.example when a person sets it in .env, otherwise to {ENV_LIST} with the category test, container or tool"
+                    fix = f"add {name} to .env.example when a person sets it in .env, otherwise to {ENV_LIST} with the category test, container, shell or tool"
                     findings.append(
                         Finding(f"{path}:{number}", f"{name} is read but is in neither .env.example nor {ENV_LIST}", f"{POLICY}: docs match the code", fix)
                     )
@@ -619,24 +752,20 @@ def env_example() -> list[Finding]:
     interest = shown | set(names) | set(env_file)
     users: dict[str, tuple[set[str], set[str]]] = {name: (set(), set()) for name in interest}
     setters: dict[str, set[str]] = {name: set() for name in names if isinstance(names[name], dict) and names[name].get("category") == "container"}
-    alternatives = "|".join(map(re.escape, setters)) or "(?!)"
-    setter = re.compile(
-        rf"""["']({alternatives})["']\s*[:=,\]]|^\s*-?\s*({alternatives})\s*[:=]|["']({alternatives})=|name\s*=\s*["']({alternatives})["']""", re.M
-    )
     for path, lines in reference_files().items():
         if path in (".env.example", ENV_LIST) or path.endswith(".md"):
             continue
         for word in {word for line in lines for word in re.findall(r"\w+", line)} & interest:
             users[word][0 if is_test(path) else 1].add(path)
         if setters and CONTAINER_SETTERS.match(path) and not is_test(path):
-            for found in setter.finditer("\n".join(lines)):
-                setters[next(group for group in found.groups() if group)].add(path)
+            for name in env_setters(path, "\n".join(lines), set(setters)):
+                setters[name].add(path)
     for number, name in documented:
         if name in names:
             fix = f"keep {name} only in {ENV_LIST}, or only in .env.example when a person sets it in .env"
             findings.append(Finding(f".env.example:{number}", f"{name} is in both .env.example and {ENV_LIST}", f"{POLICY}: docs match the code", fix))
         elif name not in env_file:
-            fix = f"move {name} to {ENV_LIST} with the category test, container or tool"
+            fix = f"move {name} to {ENV_LIST} with the category test, container, shell or tool"
             findings.append(
                 Finding(f".env.example:{number}", f"{name} is in .env.example but not in env_file of {ENV_LIST}", f"{POLICY}: docs match the code", fix)
             )
@@ -660,11 +789,11 @@ def env_example() -> list[Finding]:
         entry, (tests, production) = names[name], users[name]
         category = entry.get("category") if isinstance(entry, dict) else None
         if category not in ENV_CATEGORIES:
-            fix = f"give {name} one of the categories test, container or tool in {ENV_LIST}"
-            findings.append(Finding(ENV_LIST, f"{name} has category {category}: use test, container or tool", f"{POLICY}: docs match the code", fix))
+            fix = f"give {name} one of the categories test, container, shell or tool in {ENV_LIST}"
+            findings.append(Finding(ENV_LIST, f"{name} has category {category}: use test, container, shell or tool", f"{POLICY}: docs match the code", fix))
         elif category == "test":
             if production:
-                fix = f"change the category of {name} to container or tool, or stop production code from using it"
+                fix = f"change the category of {name} to container, shell or tool, or stop production code from using it"
                 findings.append(Finding(ENV_LIST, f"{name} is listed as test but production code also uses it", f"{POLICY}: docs match the code", fix))
             elif not tests:
                 findings.append(Finding(ENV_LIST, f"{name} is listed as test but no test code uses it", CLEANUP_RULE, f"remove {name} from {ENV_LIST}"))
@@ -682,11 +811,15 @@ def env_example() -> list[Finding]:
                         fix,
                     )
                 )
-            elif not (home in tracked and not is_test(home) and re.search(rf"\b{re.escape(name)}\b", Path(home).read_text())):
+            elif entry.get("set_by") == "alias":
+                if not (home in tracked and not is_test(home) and re.search(rf"\b{re.escape(name)}\b", Path(home).read_text())):
+                    fix = f"name a tracked production file that uses {name} in set_in, or remove it"
+                    message = f"{name} is listed with set_by alias and set_in {home}, which is not a tracked production file that uses it"
+                    findings.append(Finding(ENV_LIST, message, f"{POLICY}: docs match the code", fix))
+            elif not (home in tracked and not is_test(home) and name in env_setters(home, Path(home).read_text(), {name})):
                 fix = f"name a tracked production file that sets {name} in set_in, or remove it"
-                findings.append(
-                    Finding(ENV_LIST, f"{name} is listed with set_in {home}, which is not a tracked file that uses it", f"{POLICY}: docs match the code", fix)
-                )
+                message = f"{name} is listed with set_in {home}, which is not a tracked production file that sets it"
+                findings.append(Finding(ENV_LIST, message, f"{POLICY}: docs match the code", fix))
     return findings
 
 

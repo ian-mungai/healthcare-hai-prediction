@@ -148,6 +148,8 @@ ENV_LIST = "config/quality/env_names.json"
 ENV_FILE_NAMES = ["AWS_REGION", "AWS_PROFILE", "AWS_ACCOUNT_ID", "PROJECT_NAME", "S3_BUCKET", "ENVIRONMENT", "ALERT_EMAIL"]
 CONTAINER_SETTER = "infra/jobs/sample.tf"
 CONTAINER_SETTER_TEXT = f'environment = [{{ name = "{CONTAINER_SETTING}", value = "x" }}]\n'
+SHELL_SETTING = "SAMPLE_SHELL" + "_SETTING"
+CONTAINER_SETTER_NAME = "SAMPLE_COMMENTED" + "_SETTING"
 UNUSED_TF_VARIABLE = "unused" + "_region"
 DASH_M_MODULE = "nightly" + "_report"
 USED_TF = f'variable "{UNUSED_TF_VARIABLE}" {{}}\n\nlocals {{\n  region = var.{UNUSED_TF_VARIABLE}\n}}\n\n' + 'output "region" {\n  value = local.region\n}\n'
@@ -2458,7 +2460,7 @@ CASES = [
             "app/launch.py": "X = 1\n",
             ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in="app/launch.py")}),
         },
-        reason=f"{CONTAINER_SETTING} is listed with set_in app/launch.py, which is not a tracked file that uses it",
+        reason=f"{CONTAINER_SETTING} is listed with set_in app/launch.py, which is not a tracked production file that sets it",
     ),
     Case(
         "container variable set by the platform",
@@ -2484,7 +2486,7 @@ CASES = [
         "env-example",
         False,
         {"app/tool.py": read_sample(TOOL_SETTING), ENV_LIST: env_names({TOOL_SETTING: env_entry("person")})},
-        reason=f"{TOOL_SETTING} has category person: use test, container or tool",
+        reason=f"{TOOL_SETTING} has category person: use test, container, shell or tool",
     ),
     Case(
         "setting of .env missing from .env.example",
@@ -2506,6 +2508,192 @@ CASES = [
         False,
         {".env.example": env_example_text(*ENV_FILE_NAMES) + f"# {TEST_SETTING}=\n"},
         reason=f"{TEST_SETTING} is commented out in .env.example",
+    ),
+    Case(
+        "container variable read in services",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "services/app/reader.py": read_sample(CONTAINER_SETTING),
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "container variable set only in a Terraform comment",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTER_NAME),
+            CONTAINER_SETTER: f'# environment = [{{ name = "{CONTAINER_SETTER_NAME}", value = "x" }}]\n'
+            f'// environment = [{{ name = "{CONTAINER_SETTER_NAME}", value = "x" }}]\n'
+            f'/* environment = [{{ name = "{CONTAINER_SETTER_NAME}", value = "x" }}] */\n',
+            ENV_LIST: env_names({CONTAINER_SETTER_NAME: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTER_NAME} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "container variable set only in a YAML comment",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTER_NAME),
+            "docker-compose.yaml": f"services:\n  app:\n    environment:\n      # - '{CONTAINER_SETTER_NAME}=x'\n      - OTHER=1  # {CONTAINER_SETTER_NAME}\n",
+            ENV_LIST: env_names({CONTAINER_SETTER_NAME: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTER_NAME} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "container variable set_in names the reader",
+        "env-example",
+        False,
+        {"app/tool.py": read_sample(CONTAINER_SETTING), ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_in="app/tool.py")})},
+        reason=f"{CONTAINER_SETTING} is listed with set_in app/tool.py, which is not a tracked production file that sets it",
+    ),
+    Case(
+        "container variable set by a shell export",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "infra/jobs/sample.sh": f"#!/bin/bash\nexport {CONTAINER_SETTING}=placeholder\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+    ),
+    Case(
+        "container variable set by a plain shell assignment",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "infra/jobs/sample.sh": f"#!/bin/bash\n{CONTAINER_SETTING}=placeholder\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+    ),
+    Case(
+        "container variable set only in a shell comment",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "infra/jobs/sample.sh": f'#!/bin/bash\n# export {CONTAINER_SETTING}=placeholder\necho "# {CONTAINER_SETTING}=x"\n',
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "production file whose name holds a test word",
+        "env-example",
+        False,
+        {
+            "app/understanding.py": read_sample(TEST_SETTING),
+            "app/fakery.py": read_sample(TEST_SETTING),
+            "app/defaultplants.py": read_sample(TEST_SETTING),
+            ENV_LIST: env_names({TEST_SETTING: env_entry("test")}),
+        },
+        reason=f"{TEST_SETTING} is listed as test but production code also uses it",
+    ),
+    Case(
+        "variable read by stand-in, fake and fixture modules",
+        "env-example",
+        True,
+        {
+            "app/stand_in_server.py": read_sample(TEST_SETTING),
+            "app/push_fake_cloud.py": read_sample(TEST_SETTING),
+            "app/package_fixture.py": read_sample(TEST_SETTING),
+            "app/session_plants.py": read_sample(TEST_SETTING),
+            ENV_LIST: env_names({TEST_SETTING: env_entry("test")}),
+        },
+    ),
+    Case(
+        "shell variable that production code reads",
+        "env-example",
+        True,
+        {"app/tool.py": read_sample(SHELL_SETTING), ENV_LIST: env_names({SHELL_SETTING: env_entry("shell")})},
+    ),
+    Case(
+        "listed shell variable no production code uses",
+        "env-example",
+        False,
+        {ENV_LIST: env_names({SHELL_SETTING: env_entry("shell")})},
+        reason=f"{SHELL_SETTING} is listed as shell but no production code uses it",
+    ),
+    Case(
+        "variable listed twice",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(SHELL_SETTING),
+            ENV_LIST: '{"env_file": '
+            + json.dumps(ENV_FILE_NAMES)
+            + ', "test_modules": {}, "names": {"'
+            + SHELL_SETTING
+            + '": {"category": "shell", "reason": "a"}, "'
+            + SHELL_SETTING
+            + '": {"category": "shell", "reason": "b"}}}\n',
+        },
+        reason=f"{SHELL_SETTING} is listed twice in {ENV_LIST}",
+    ),
+    Case(
+        "second header comment in .env.example",
+        "env-example",
+        False,
+        {".env.example": "# Settings of a person.\n# A second line.\n" + "".join(f"{name}=placeholder\n" for name in ENV_FILE_NAMES)},
+        reason=".env.example line 2 is not a setting: only one header comment line is allowed",
+    ),
+    Case(
+        "blank line in .env.example",
+        "env-example",
+        False,
+        {
+            ".env.example": "# Settings of a person.\n"
+            + "".join(f"{name}=placeholder\n\n" for name in ENV_FILE_NAMES[:1])
+            + "".join(f"{name}=placeholder\n" for name in ENV_FILE_NAMES[1:])
+        },
+        reason=".env.example line 3 is not a setting: only one header comment line is allowed",
+    ),
+    Case(
+        "container variable declared in a job config",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "config/orchestration/sample_jobs.json": json.dumps({"jobs": [{"containers": {"run": ["RUN_ID", CONTAINER_SETTING]}}]}) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+    ),
+    Case(
+        "container variable in a job config list that declares no container",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "config/orchestration/sample_jobs.json": json.dumps({"jobs": [{"allowed": ["RUN_ID", CONTAINER_SETTING]}]}) + "\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed as container but nothing in infra/ or the job and launcher configs sets it",
+    ),
+    Case(
+        "container variable set through an alias",
+        "env-example",
+        True,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "app/launch.py": f'NAME = "{CONTAINER_SETTING}"\nENVIRONMENT_OVERRIDE = {{NAME: "x"}}\n',
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_by="alias", set_in="app/launch.py")}),
+        },
+    ),
+    Case(
+        "container variable alias file does not use it",
+        "env-example",
+        False,
+        {
+            "app/tool.py": read_sample(CONTAINER_SETTING),
+            "app/launch.py": "X = 1\n",
+            ENV_LIST: env_names({CONTAINER_SETTING: env_entry("container", set_by="alias", set_in="app/launch.py")}),
+        },
+        reason=f"{CONTAINER_SETTING} is listed with set_by alias and set_in app/launch.py, which is not a tracked production file that uses it",
     ),
     Case(
         "variable read by a listed test module",
