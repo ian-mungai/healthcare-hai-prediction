@@ -27,6 +27,15 @@ variable "github_oidc_subject_prefix" {
     condition     = can(regex("^repo:[A-Za-z0-9_.-]+@[0-9]+/[A-Za-z0-9_.-]+@[0-9]+$", var.github_oidc_subject_prefix))
     error_message = "Use the ID form repo:<owner>@<owner id>/<name>@<repository id>, with digits for both ids and no pattern characters or trailing claim."
   }
+
+  validation {
+    condition = (
+      !can(regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$", var.github_repository)) ||
+      !can(regex("^repo:([A-Za-z0-9_.-]+)@[0-9]+/([A-Za-z0-9_.-]+)@[0-9]+$", var.github_oidc_subject_prefix)) ||
+      join("/", regex("^repo:([A-Za-z0-9_.-]+)@[0-9]+/([A-Za-z0-9_.-]+)@[0-9]+$", var.github_oidc_subject_prefix)) == var.github_repository
+    )
+    error_message = "The owner and repository names in github_oidc_subject_prefix must be exactly those of github_repository. Change both together."
+  }
 }
 
 variable "github_oidc_provider_arn" {

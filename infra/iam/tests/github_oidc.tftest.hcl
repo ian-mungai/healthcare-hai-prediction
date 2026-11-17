@@ -297,7 +297,14 @@ run "a_custom_subject_prefix_replaces_the_default_in_every_role" {
   command = plan
 
   variables {
-    github_oidc_subject_prefix = "repo:example-owner@111/example-repository@222"
+    github_oidc_plan_role_enabled = true
+    github_repository             = "example-owner/example-repository"
+    github_oidc_subject_prefix    = "repo:example-owner@111/example-repository@222"
+  }
+
+  assert {
+    condition     = join(",", sort(keys(aws_iam_role.github))) == "code_staging,deploy,image_push,terraform_plan"
+    error_message = "All four roles must exist, so that the prefix is checked on the plan role too."
   }
 
   assert {
@@ -340,6 +347,46 @@ run "the_subject_prefix_refuses_a_missing_repository_id" {
   }
 
   expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "the_subject_prefix_must_name_the_configured_owner" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:other-owner@29179213/healthcare-hai-prediction@1376048206"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "the_subject_prefix_must_name_the_configured_repository" {
+  command = plan
+
+  variables {
+    github_oidc_subject_prefix = "repo:ian-mungai@29179213/other-repository@1376048206"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "changing_the_repository_alone_fails_against_the_default_prefix" {
+  command = plan
+
+  variables {
+    github_repository = "ian-mungai/another-repository"
+  }
+
+  expect_failures = [var.github_oidc_subject_prefix]
+}
+
+run "an_invalid_repository_fails_only_its_own_check" {
+  command = plan
+
+  variables {
+    github_repository = "ian-mungai/*"
+  }
+
+  expect_failures = [var.github_repository]
 }
 
 run "the_subject_prefix_refuses_a_trailing_claim" {
