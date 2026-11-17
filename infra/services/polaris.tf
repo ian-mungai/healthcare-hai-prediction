@@ -9,6 +9,7 @@ locals {
       stopTimeout       = 60
       environment = [
         { name = "AWS_REGION", value = var.aws_region },
+        { name = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS", value = "10ms,50ms,100ms,500ms,1s,5s" },
         { name = "POLARIS_PERSISTENCE_RELATIONAL_JDBC_DATABASE_TYPE", value = "postgresql" },
         { name = "POLARIS_PERSISTENCE_TYPE", value = "relational-jdbc" },
         { name = "POLARIS_REALM_CONTEXT_REALMS", value = "POLARIS" },

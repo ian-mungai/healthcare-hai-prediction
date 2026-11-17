@@ -138,6 +138,23 @@ run "flag_on_adds_one_service_with_six_containers" {
   }
 }
 
+run "polaris_publishes_latency_buckets_for_the_percentile_panels" {
+  command = plan
+
+  assert {
+    condition = contains(
+      jsondecode(aws_ecs_task_definition.service["polaris"].container_definitions)[0].environment,
+      { name = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS", value = "10ms,50ms,100ms,500ms,1s,5s" }
+    )
+    error_message = "Polaris 1.8.0 publishes no http_server_requests_seconds_bucket series unless this setting is set, and the Polaris percentile panels read that series."
+  }
+
+  assert {
+    condition     = jsondecode(aws_ecs_task_definition.service["polaris"].container_definitions)[0].memory == local.memory_profile.polaris.limit && jsondecode(aws_ecs_task_definition.service["polaris"].container_definitions)[0].memoryReservation == local.memory_profile.polaris.reservation
+    error_message = "The histogram setting changes no memory limit or reservation of the Polaris container."
+  }
+}
+
 run "every_monitoring_listener_binds_loopback" {
   command = plan
 

@@ -8,6 +8,7 @@ Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.monit
 - ``monitoring/grafana/provisioning/alerting/``: the alert rules (``rules_*.yml``), the one Amazon SNS contact point and the notification policy.
 - ``monitoring/grafana/provisioning/**`` and ``monitoring/grafana/dashboards/*.json``: the data source and the dashboards.
 - ``infra/services/monitoring.tf``: the ports and the folders the task mounts.
+- ``infra/services/polaris.tf``: the setting that makes Polaris publish latency buckets.
 
 A metric is real when the mapping produces it, a known list names it or the API contract lists it. The check reads label matchers too, so a label typo fails.
 It does not run PromQL and it does not prove that Airflow sends an event the mapping lists: that needs a running scheduler.
@@ -70,6 +71,11 @@ EXPECTED_TARGETS = {
     "node_exporter": ["127.0.0.1:9100"],
 }
 EXPECTED_PATHS = {"polaris": "/q/metrics", "openmetadata": "/prometheus", "mlflow": "/mlflow_metrics"}
+POLARIS_TERRAFORM = "infra/services/polaris.tf"
+POLARIS_BUCKET = "http_server_requests_seconds_bucket"
+POLARIS_SETTING = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS"
+POLARIS_SETTING_VALUE = re.compile(rf'name\s*=\s*"{POLARIS_SETTING}",\s*value\s*=\s*"([^"]*)"')
+DURATION_LIST = re.compile(r"[0-9]+(?:ms|s)(?:,[0-9]+(?:ms|s))*")
 PORT_FILES = ("infra/services/monitoring.tf", "infra/services/polaris.tf", "infra/services/openmetadata.tf")
 TERRAFORM_JOBS = (
     "prometheus",
@@ -544,6 +550,23 @@ def terraform_problems(root: Path, scrape: Any, datasource: Any, provider: Any) 
     return problems
 
 
+def polaris_histogram_problems(root: Path, metrics: dict[str, set[str] | None]) -> list[str]:
+    """Problems where the Polaris task and the known list disagree about the latency bucket, which Polaris publishes only when the task sets the SLO list."""
+    problems: list[str] = []
+    text = read_text(root, POLARIS_TERRAFORM, problems)
+    if text is None:
+        return problems
+    found = POLARIS_SETTING_VALUE.search(text)
+    listed = POLARIS_BUCKET in metrics
+    if found is None and listed:
+        problems.append(f"{KNOWN}: lists {POLARIS_BUCKET}, but {POLARIS_TERRAFORM} does not set {POLARIS_SETTING}, so Polaris publishes no such series")
+    if found is not None and not listed:
+        problems.append(f"{KNOWN}: polaris lacks the bucket {POLARIS_BUCKET}, which the {POLARIS_SETTING} setting in {POLARIS_TERRAFORM} makes Polaris publish")
+    if found is not None and not DURATION_LIST.fullmatch(found.group(1)):
+        problems.append(f"{POLARIS_TERRAFORM}: {POLARIS_SETTING} is not a list of durations in ms or s that Quarkus reads, for example 10ms,50ms,1s")
+    return problems
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Every problem of the monitoring files under ``root``, as text lines; an empty list means they are valid."""
     problems: list[str] = []
@@ -554,6 +577,7 @@ def check(root: Path = ROOT) -> list[str]:
     provider = read_yaml(root, PROVIDER, problems)
     metrics = {**known_metrics(known, problems), **(mapping_metrics(mapping, problems) if mapping is not None else {})}
     problems.extend(catalog_problems(known))
+    problems.extend(polaris_histogram_problems(root, metrics))
     from scripts import metrics_push
 
     jobs = {str(job.get("job_name")) for job in (scrape or {}).get("scrape_configs", [])} | set(metrics_push.JOB_PHASES)

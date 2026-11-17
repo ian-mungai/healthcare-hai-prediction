@@ -23,6 +23,7 @@ GRAFANA = f"{DASHBOARDS}/hai_grafana.json"
 RULES = "monitoring/grafana/provisioning/alerting/rules_service_metrics.yml"
 POLARIS_TERRAFORM = "infra/services/polaris.tf"
 HISTOGRAM_SETTING = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS"
+BUCKET = "http_server_requests_seconds_bucket"
 PINNED = {"polaris": "1.8.0", "mlflow": "3.17.2", "grafana": "13.2.5"}
 WANTED_RULES = (
     "PolarisServerErrors",
@@ -64,6 +65,8 @@ def polaris_panels_cover_the_request(root: Path) -> dict[str, bool]:
         "mean latency from the sum and the count": mentions(found, "http_server_requests_seconds_sum", "http_server_requests_seconds_count"),
         "latency by operation is limited by topk": mentions(found, "topk(", "http_server_requests_seconds_sum", "method, uri"),
         "slowest recent request by operation": mentions(found, "http_server_requests_seconds_max", "topk("),
+        "95th percentile latency": mentions(found, "histogram_quantile(0.95", "sum by (le) (rate(http_server_requests_seconds_bucket{"),
+        "95th percentile latency by operation, limited by topk": mentions(found, "topk(10, histogram_quantile(0.95", "sum by (le, method, uri)"),
         "JVM heap used": mentions(found, 'jvm_memory_used_bytes{job="polaris",area="heap"}'),
         "JVM heap share of the maximum": mentions(found, "jvm_memory_used_bytes", "clamp_min(jvm_memory_max_bytes"),
     }
@@ -123,19 +126,43 @@ def known_list_names_the_pinned_versions(root: Path) -> dict[str, bool]:
 
 
 def polaris_latency_buckets_need_the_histogram_setting(root: Path) -> dict[str, bool]:
-    """Polaris 1.8.0 publishes no latency bucket unless the SLO setting is set, so the known list may name the bucket only when the task sets it."""
+    """Polaris 1.8.0 publishes a latency bucket only when the SLO setting is set: the setting, the known list and the panel must agree."""
     known = json.loads((root / KNOWN).read_text(encoding="utf-8"))
-    listed = "http_server_requests_seconds_bucket" in known.get("polaris", {}).get("metrics", {})
-    configured = HISTOGRAM_SETTING in (root / POLARIS_TERRAFORM).read_text(encoding="utf-8")
-    return {"the bucket is listed only when the Polaris task sets the histogram setting": configured or not listed}
+    listed = known.get("polaris", {}).get("metrics", {}).get(BUCKET)
+    terraform = (root / POLARIS_TERRAFORM).read_text(encoding="utf-8")
+    value = re.search(rf'name\s*=\s*"{HISTOGRAM_SETTING}",\s*value\s*=\s*"([^"]*)"', terraform)
+    found = expressions(root, POLARIS)
+    return {
+        "the Polaris task sets the histogram setting": value is not None,
+        "the setting is a list of durations that Quarkus reads": value is not None
+        and re.fullmatch(r"[0-9]+(ms|s)(,[0-9]+(ms|s))*", value.group(1)) is not None,
+        "the known list names the bucket with its le label": isinstance(listed, dict) and "le" in listed.get("labels", []),
+        "the 95th percentile panel reads the bucket": mentions(found, BUCKET),
+    }
 
 
 def polaris_panel_reads_a_bucket_nobody_publishes(root: Path) -> dict[str, bool]:
     return reported(
         root,
-        lambda tree: edit(tree, POLARIS, "http_server_requests_seconds_sum", "http_server_requests_seconds_bucket"),
-        "http_server_requests_seconds_bucket is not a metric",
+        lambda tree: edit(tree, POLARIS, "http_server_requests_seconds_bucket", "http_server_requests_seconds_buckets"),
+        "http_server_requests_seconds_buckets is not a metric",
     )
+
+
+def polaris_task_drops_the_histogram_setting(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, POLARIS_TERRAFORM, f'{{ name = "{HISTOGRAM_SETTING}", value = "10ms,50ms,100ms,500ms,1s,5s" }},\n', ""),
+        f"does not set {HISTOGRAM_SETTING}",
+    )
+
+
+def polaris_histogram_setting_is_not_a_duration_list(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, POLARIS_TERRAFORM, "10ms,50ms,100ms,500ms,1s,5s", "10ms,fast"), "is not a list of durations")
+
+
+def polaris_bucket_is_left_off_the_known_list(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, KNOWN, '"http_server_requests_seconds_bucket"', '"http_server_requests_seconds_buckets"'), "lacks the bucket")
 
 
 def polaris_panel_label_not_on_the_metric(root: Path) -> dict[str, bool]:
@@ -204,6 +231,9 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "service_known_list_names_the_pinned_versions": known_list_names_the_pinned_versions,
     "service_polaris_latency_buckets_need_the_histogram_setting": polaris_latency_buckets_need_the_histogram_setting,
     "service_polaris_panel_reads_a_bucket_nobody_publishes": polaris_panel_reads_a_bucket_nobody_publishes,
+    "service_polaris_task_drops_the_histogram_setting": polaris_task_drops_the_histogram_setting,
+    "service_polaris_histogram_setting_is_not_a_duration_list": polaris_histogram_setting_is_not_a_duration_list,
+    "service_polaris_bucket_is_left_off_the_known_list": polaris_bucket_is_left_off_the_known_list,
     "service_polaris_panel_label_not_on_the_metric": polaris_panel_label_not_on_the_metric,
     "service_polaris_panel_groups_by_uri_without_topk": polaris_panel_groups_by_uri_without_topk,
     "service_mlflow_panel_asks_for_a_route_label": mlflow_panel_asks_for_a_route_label,
