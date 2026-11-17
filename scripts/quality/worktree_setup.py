@@ -12,7 +12,9 @@ It makes or verifies, in this order, each item that Git ignores:
    ``infra/platform``, copied from the main checkout (no state file is ever copied).
 3. ``.env`` and ``infra/deployment.auto.tfvars.json``, copied only when absent, in mode 0600. They hold the account, bucket and profile names and no credential.
 4. The ``.terraform`` folder of ``infra/jobs``, made by ``terraform init -backend=false`` from the copied providers (the main checkout may hold none to copy).
-   An existing folder is accepted only when its modules and the providers of the lock file are all there; otherwise init runs again.
+   An existing folder is accepted only when its manifest lists every module that the configuration calls (read from the ``module`` blocks, local modules
+   included) and the providers of the lock file are all there; otherwise init runs again. Init writes by path, so it runs only when the lock file and
+   everything in an existing folder are plain files and folders with one name; the one link allowed is the one init makes to the copied providers.
 5. The generated requirement and pin files of ``lock_env images``, which include ``services/orchestration/constraints-3.12.txt``, the file that the
    ``airflow-check`` service bind-mounts.
 
@@ -40,8 +42,8 @@ under ``.worktrees/`` of its repository.
 Limits: the command is for one run at a time (a second run at the same moment is not supported). Between a check and its write another process of the same
 user can still change the index (a path that becomes tracked after the check), rename a folder that a handle already holds or change what the main
 checkout's source files hold. A folder swapped for a link after its handle was opened is not followed, and no destination is ever replaced. ``terraform init``
-resolves its own paths, so its folder is checked just before the call and not during it. A volume that is case-insensitive per folder is probed in the
-private folder only.
+resolves its own paths, so its folder and lock file are checked just before the call and not during it. A volume that is case-insensitive per folder is probed
+in the private folder only.
 """
 
 from __future__ import annotations
@@ -82,6 +84,10 @@ MAX_JUDGED = 1 << 20  # A copied small file larger than this is the owner's own,
 DIRECTORY = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
 NEW_FILE = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
 EXISTING_FILE = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC  # Non-blocking, so a pipe swapped in after the check cannot hold the run.
+MODULE_CALL = re.compile(r'module[ \t]+"([^"\n]+)"[ \t]*\{')
+SOURCE_ATTRIBUTE = re.compile(r"source[ \t]*=[ \t]*")
+HEREDOC = re.compile(r"<<-?([A-Za-z_][A-Za-z0-9_]*)[ \t]*\r?\n")
+MODULE_DEPTH = 8
 LOCK_PROVIDER = re.compile(r'provider\s+"([^"]+)"\s*\{\s*version\s*=\s*"([^"]+)"')
 
 
@@ -668,6 +674,125 @@ def judge_existing(setup: Setup, relative: str, parent: int, name: str, data: by
         setup.report.note(f"kept {relative} (it differs from the main checkout's file, which is not copied over it)")
 
 
+def skip_template(text: str, start: int) -> int:
+    """The index after the ``${ }`` or ``%{ }`` part of a string whose body starts at ``start``."""
+    depth, index = 1, start
+    while index < len(text) and depth:
+        if text[index] == '"':
+            index = skip_string(text, index)
+            continue
+        depth += (text[index] == "{") - (text[index] == "}")
+        index += 1
+    return index
+
+
+def skip_string(text: str, start: int) -> int:
+    """The index after the quoted string that starts at ``start``, with its templates and escapes."""
+    index = start + 1
+    while index < len(text):
+        if text[index] == "\\":
+            index += 2
+        elif text[index] == '"':
+            return index + 1
+        elif text.startswith(("$${", "%%{"), index):
+            index += 3
+        elif text.startswith(("${", "%{"), index):
+            index = skip_template(text, index + 2)
+        else:
+            index += 1
+    return len(text)
+
+
+def skip_lexical(text: str, index: int) -> int:
+    """The index after the comment, string or heredoc that starts at ``index``; ``index + 1`` for any other character."""
+    if text[index] == "#" or text.startswith("//", index):
+        end = text.find("\n", index)
+        return len(text) if end < 0 else end
+    if text.startswith("/*", index):
+        end = text.find("*/", index + 2)
+        return len(text) if end < 0 else end + 2
+    if text[index] == '"':
+        return skip_string(text, index)
+    heredoc = HEREDOC.match(text, index) if text.startswith("<<", index) else None
+    if heredoc:
+        closing = re.compile(rf"^[ \t]*{re.escape(heredoc.group(1))}[ \t]*\r?$", re.MULTILINE).search(text, heredoc.end())
+        return len(text) if closing is None else closing.end()
+    return index + 1
+
+
+def block_end(text: str, start: int) -> int:
+    """The index after the brace that closes the block whose body starts at ``start``."""
+    depth, index = 1, start
+    while index < len(text) and depth:
+        skipped = skip_lexical(text, index)
+        if skipped == index + 1:
+            depth += (text[index] == "{") - (text[index] == "}")
+        index = skipped
+    return index
+
+
+def word_starts(text: str, index: int, word: str) -> bool:
+    return text.startswith(word, index) and (index == 0 or not (text[index - 1].isalnum() or text[index - 1] in "_-"))
+
+
+def literal_source(body: str) -> str | None:
+    """The plain string of the top-level ``source`` attribute of a module block body, or None when it is not a plain string."""
+    depth, index = 0, 0
+    while index < len(body):
+        skipped = skip_lexical(body, index)
+        if skipped != index + 1:
+            index = skipped
+            continue
+        if body[index] in "{[(":
+            depth += 1
+        elif body[index] in "}])":
+            depth -= 1
+        elif depth == 0 and word_starts(body, index, "source"):
+            attribute = SOURCE_ATTRIBUTE.match(body, index)
+            if attribute and body.startswith('"', attribute.end()):
+                end = skip_string(body, attribute.end())
+                value = body[attribute.end() + 1 : end - 1]
+                return None if any(mark in value for mark in ("${", "%{", "\\")) else value
+            return None
+        index += 1
+    return None
+
+
+def module_calls(text: str) -> list[tuple[str, str | None]]:
+    """Name and plain source (None when it is not a plain string) of every top-level ``module`` block of the configuration text."""
+    calls: list[tuple[str, str | None]] = []
+    depth, index = 0, 0
+    while index < len(text):
+        skipped = skip_lexical(text, index)
+        if skipped != index + 1:
+            index = skipped
+            continue
+        if text[index] in "{[(":
+            depth += 1
+        elif text[index] in "}])":
+            depth -= 1
+        elif depth == 0 and word_starts(text, index, "module"):
+            found = MODULE_CALL.match(text, index)
+            if found:
+                end = block_end(text, found.end())
+                calls.append((found.group(1), literal_source(text[found.end() : end - 1])))
+                index = end
+                continue
+        index += 1
+    return calls
+
+
+def required_modules(folder: Path, prefix: str = "", depth: int = 0) -> dict[str, str | None]:
+    """Manifest key to plain source of every module the configuration in ``folder`` calls; a local module is read for its own calls (key ``a.b``)."""
+    found: dict[str, str | None] = {}
+    for path in sorted(folder.glob("*.tf")):
+        for name, source in module_calls(path.read_text(encoding="utf-8")):
+            found[f"{prefix}{name}"] = source
+            if source and source.startswith(("./", "../")) and depth < MODULE_DEPTH and (folder / source).is_dir():
+                found.update(required_modules(folder / source, f"{prefix}{name}.", depth + 1))
+    return found
+
+
 def jobs_cache_gap(setup: Setup) -> str | None:
     """Why the jobs stack's ``.terraform`` is not a complete cache: None when its modules and every provider of the lock file are there."""
     cache = setup.worktree / JOBS / ".terraform"
@@ -677,10 +802,21 @@ def jobs_cache_gap(setup: Setup) -> str | None:
             raise TypeError
     except (OSError, ValueError, KeyError, TypeError):
         return "modules/modules.json is missing or unreadable"
+    listed: dict[str, dict[str, object]] = {}
     for module in modules:
         folder = module.get("Dir") if isinstance(module, dict) else None
         if not isinstance(folder, str) or not os.path.isdir(os.path.join(setup.worktree, JOBS, folder)):
             return f"the module folder {folder} is missing"
+        listed[str(module.get("Key"))] = module
+    try:
+        required = required_modules(setup.worktree / JOBS)
+    except (OSError, ValueError) as error:
+        return f"the module calls of the configuration cannot be read ({type(error).__name__})"
+    for key, source in required.items():
+        if key not in listed:
+            return f"the module {key} of the configuration is not in modules.json"
+        if source is not None and listed[key].get("Source") != source:
+            return f"the module {key} is installed from another source than the configuration's {source}"
     try:
         lock = (setup.worktree / JOBS_LOCK).read_text(encoding="utf-8")
     except OSError:
@@ -701,14 +837,41 @@ def jobs_cache_gap(setup: Setup) -> str | None:
     return None
 
 
-def escaping_link(worktree: Path, cache: Path) -> str | None:
-    """The first link below ``cache`` that leads outside the worktree, or None; terraform init writes through such a link."""
-    top = os.path.realpath(worktree)
+def native_provider_link(setup: Setup, cache: Path, path: Path) -> bool:
+    """True for the link terraform init makes to a platform folder of the copied providers: ``providers/<host>/<namespace>/<name>/<version>/<platform>``."""
+    parts = path.relative_to(cache).parts
+    if len(parts) != 6 or parts[0] != "providers":
+        return False
+    wanted = setup.worktree / PROVIDERS / Path(*parts[1:])
+    return os.path.exists(wanted) and os.path.realpath(path) == os.path.realpath(wanted)
+
+
+def init_hazard(setup: Setup, cache: Path) -> str | None:
+    """Why terraform init must not run: it writes by path, so a link or a file with another name in its cache or lock file would take its writes elsewhere.
+
+    The lock file and everything below an existing cache must be plain folders and files with one name. The one link that is allowed is the one terraform
+    init itself makes from the cache to the copied providers of the worktree.
+    """
+    lock = setup.worktree / JOBS_LOCK
+    with contextlib.suppress(FileNotFoundError):
+        held = lock.lstat()
+        if stat.S_ISLNK(held.st_mode) or (stat.S_ISREG(held.st_mode) and held.st_nlink > 1):
+            return f"{JOBS_LOCK} is a link or has other names, and terraform init writes it"
+    if not cache.is_dir():
+        return None
     for current, folders, files in os.walk(cache, followlinks=False):
         for name in folders + files:
-            path = os.path.join(current, name)
-            if os.path.islink(path) and not os.path.realpath(path).startswith(top + os.sep):
-                return os.path.relpath(path, worktree)
+            path = Path(current) / name
+            held = path.lstat()
+            shown = path.relative_to(setup.worktree)
+            if stat.S_ISLNK(held.st_mode):
+                if not native_provider_link(setup, cache, path):
+                    return f"{shown} is a link, and terraform init would write through it"
+            elif stat.S_ISREG(held.st_mode):
+                if held.st_nlink > 1:
+                    return f"{shown} has {held.st_nlink} hard links, and terraform init would write through them"
+            elif not stat.S_ISDIR(held.st_mode):
+                return f"{shown} is not a plain file or folder"
     return None
 
 
@@ -738,9 +901,9 @@ def initialise_jobs(setup: Setup) -> None:
         return
     if setup.refuse(relative, folder=True):
         return
-    leaving = escaping_link(setup.worktree, setup.worktree / relative) if found is not None else None
-    if leaving:
-        report.problem(JOBS, f"cannot be initialised again: {leaving} is a link that leads outside the worktree, and terraform init would write through it")
+    hazard = init_hazard(setup, setup.worktree / relative)
+    if hazard:
+        report.problem(JOBS, f"terraform init was not run: {hazard}")
         return
     arguments = [f"-chdir={setup.worktree / JOBS}", "init", "-backend=false", "-input=false", f"-plugin-dir={setup.worktree / PROVIDERS}"]
     try:
