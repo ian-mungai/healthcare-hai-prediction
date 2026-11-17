@@ -22,12 +22,24 @@ variables {
   mlflow_enabled                  = true
   mlflow_task_role_arn            = "arn:aws:iam::111111111111:role/example-mlflow"
   host_private_ip                 = "10.0.1.20"
+  serving_execution_role_arn      = "arn:aws:iam::111111111111:role/example-serving-execution"
+  model_api_task_role_arn         = "arn:aws:iam::111111111111:role/example-model-api"
+  streamlit_task_role_arn         = "arn:aws:iam::111111111111:role/example-streamlit"
+  model_api_manifest_uri          = "s3://example-project-data-dev/serving/deployments"
+  model_api_registry_uri          = "s3://example-project-data-dev/lakehouse/feast/registry.pb"
   mlflow_artifact_bucket          = "example-project-data-dev"
   # TEST FIXTURE ONLY, not a measured value: an explicit override of the 32768 MiB default, as the owner sets it from the ECS registered memory of the host.
   host_usable_memory_mib = 30720
   # TEST FIXTURE ONLY, not a measured value: the cap the owner sets (host_job_cap_mib). Here it equals the job room of this fixture (30720 usable MiB less the
   # 2048 MiB system reserve and the 7632 MiB the four optional services and Airflow reserve).
   host_job_cap_mib = 21040
+
+  # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
+  # that does not set a switch tests it off, so the fixture sets each one explicitly.
+  model_api_enabled            = false
+  streamlit_enabled            = false
+  airflow_lineage_http_enabled = false
+  model_api_mlflow_uri         = ""
 
   log_group_names = {
     postgres   = "/example/postgres"
@@ -54,6 +66,8 @@ variables {
     prometheus             = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/prometheus"
     grafana                = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/grafana"
     statsd_exporter        = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/statsd_exporter"
+    model_api              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/model_api"
+    streamlit              = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/streamlit"
   }
 
   image_digests = {
@@ -71,6 +85,8 @@ variables {
     prometheus             = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
     grafana                = "sha256:3333333333333333333333333333333333333333333333333333333333333333"
     statsd_exporter        = "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    model_api              = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    streamlit              = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbc"
   }
 }
 
@@ -361,42 +377,56 @@ run "the_host_job_cap_is_rendered_into_every_airflow_container" {
   }
 }
 
-run "the_default_cap_is_the_current_job_room_of_the_live_stack" {
+run "the_default_cap_is_the_job_room_the_committed_default_services_leave" {
   command = plan
 
-  # The live stack runs MLflow and none of Marquez, OpenMetadata and monitoring on the 32768 MiB host: the services reserve 3904 MiB, so one job has
-  # 32768 - 2048 - 3904 = 26816 MiB. The default of host_job_cap_mib is that figure (one host job at a time, set from the Airflow pool of one slot).
+  # The committed defaults run MLflow, the model API, the page, monitoring and persistent OpenMetadata, and not Marquez, on the 32768 MiB host: the services
+  # reserve 7920 MiB, so one job has 32768 - 2048 - 7920 = 22800 MiB. The default of host_job_cap_mib is that figure (one host job at a time, set from the
+  # Airflow pool of one slot).
   variables {
     marquez_enabled                 = false
-    openmetadata_persistent_enabled = false
-    monitoring_enabled              = false
+    mlflow_enabled                  = true
+    model_api_enabled               = true
+    model_api_mlflow_uri            = "http://127.0.0.1:5100"
+    streamlit_enabled               = true
+    monitoring_enabled              = true
+    openmetadata_persistent_enabled = true
+    airflow_lineage_http_enabled    = true
     host_usable_memory_mib          = null
     host_job_cap_mib                = null
   }
 
   assert {
-    condition     = var.host_job_cap_mib == 26816 && output.reserved_memory_mib == 3904 && output.host_job_memory_mib == 26816 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
-    error_message = "The default cap is 26816 MiB, the job room the live services leave today."
+    condition     = var.host_job_cap_mib == 22800 && output.reserved_memory_mib == 7920 && output.host_job_memory_mib == 22800 && output.host_job_memory_mib == 32768 - 2048 - output.reserved_memory_mib
+    error_message = "The default cap is 22800 MiB, the job room the services leave with every committed default on."
   }
 
   assert {
     condition = alltrue([
       for key in ["airflow_apiserver", "airflow_scheduler", "airflow_dag_processor", "airflow_triggerer"] : alltrue([
         for container in jsondecode(aws_ecs_task_definition.service[key].container_definitions) :
-        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=26816") if startswith(container.name, "airflow")
+        contains([for item in container.environment : "${item.name}=${item.value}"], "HAI_LAUNCH_HOST_JOB_CAP_MIB=22800") if startswith(container.name, "airflow")
       ])
     ])
-    error_message = "Every Airflow container carries the default cap of 26816 MiB."
+    error_message = "Every Airflow container carries the default cap of 22800 MiB."
   }
 }
 
 run "a_cap_above_the_job_room_is_refused" {
   command = plan
 
-  # All four optional services on the 32768 MiB host leave 23088 MiB, below the default cap of 26816 MiB.
+  # Marquez on beside the committed default services leaves less than the default cap of 22800 MiB on the 32768 MiB host.
   variables {
-    host_usable_memory_mib = null
-    host_job_cap_mib       = null
+    marquez_enabled                 = true
+    mlflow_enabled                  = true
+    model_api_enabled               = true
+    model_api_mlflow_uri            = "http://127.0.0.1:5100"
+    streamlit_enabled               = true
+    monitoring_enabled              = true
+    openmetadata_persistent_enabled = true
+    airflow_lineage_http_enabled    = true
+    host_usable_memory_mib          = null
+    host_job_cap_mib                = null
   }
 
   expect_failures = [output.host_job_memory_mib]

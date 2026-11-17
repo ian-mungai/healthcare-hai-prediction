@@ -2,6 +2,16 @@ mock_provider "aws" {}
 
 # The catalog inputs of the metadata host job: the ingestion image and the two catalog roles. The job is a client of the persistent catalog.
 variables {
+  # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
+  # not set a switch tests it off, so the fixture sets each one explicitly.
+  drift_enabled                         = false
+  promote_enabled                       = false
+  layer_jobs_enabled                    = false
+  serve_enabled                         = false
+  train_enabled                         = false
+  publisher_job_enabled                 = false
+  publisher_keys_enabled                = false
+  serve_manifest_prefix                 = ""
   aws_profile                           = "example_project_dev"
   aws_region                            = "us-west-2"
   expected_account_id                   = "111111111111"

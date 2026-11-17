@@ -1,12 +1,22 @@
 mock_provider "aws" {}
 
 variables {
-  aws_profile         = "example_project_dev"
-  aws_region          = "us-west-2"
-  expected_account_id = "111111111111"
-  project_name        = "example_project"
-  environment         = "dev"
-  data_bucket_name    = "example-project-data-dev"
+  # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
+  # not set a switch tests it off, so the fixture sets each one explicitly.
+  drift_enabled          = false
+  promote_enabled        = false
+  layer_jobs_enabled     = false
+  serve_enabled          = false
+  train_enabled          = false
+  publisher_job_enabled  = false
+  publisher_keys_enabled = false
+  host_repo_path         = null
+  aws_profile            = "example_project_dev"
+  aws_region             = "us-west-2"
+  expected_account_id    = "111111111111"
+  project_name           = "example_project"
+  environment            = "dev"
+  data_bucket_name       = "example-project-data-dev"
   train_images = {
     training      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_training_dev@sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     feature_store = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project_feature_store_dev@sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"

@@ -1,7 +1,7 @@
 variable "streamlit_enabled" {
   description = "Run the Streamlit page on the host. It binds the host loopback only, so Session Manager port forwarding is the one way in, and it reaches the model API over the host loopback. Public access is a later, separate decision."
   type        = bool
-  default     = false
+  default     = true
 
   validation {
     condition     = !var.streamlit_enabled || var.model_api_enabled

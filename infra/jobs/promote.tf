@@ -1,7 +1,7 @@
 variable "promote_enabled" {
   description = "Supply the inputs of the promotion host definition that model_promotion_dag launches. It reuses the training image, the execution role, the training task role and the MLflow administrator password, and it needs the jobs log group."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {

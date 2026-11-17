@@ -27,6 +27,13 @@ variables {
   host_private_ip                 = "10.0.1.20"
   mlflow_artifact_bucket          = "example-project-data-dev"
 
+  # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
+  # that does not set a switch tests it off, so the fixture sets each one explicitly.
+  model_api_enabled            = false
+  streamlit_enabled            = false
+  airflow_lineage_http_enabled = false
+  model_api_mlflow_uri         = ""
+
   log_group_names = {
     postgres   = "/example/postgres"
     redis      = "/example/redis"

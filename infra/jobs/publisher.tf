@@ -1,7 +1,7 @@
 variable "publisher_job_enabled" {
   description = "Register the Run 3 publisher host task definition <project>_<environment>_job_publisher_host, which the direct ECS launch starts on the host (orchestration/publisher_launch.py). It needs the analytics image digest, the execution role, the publisher task role and the jobs log group."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {
@@ -18,7 +18,7 @@ variable "publisher_job_enabled" {
 variable "publisher_keys_enabled" {
   description = "Let the publisher job take the units that need an API key. The publisher task role must hold the key grant in infra/iam first."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 

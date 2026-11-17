@@ -1,7 +1,7 @@
 variable "openmetadata_persistent_enabled" {
-  description = "Run persistent OpenMetadata and its single-node OpenSearch as one host task, plus the one-shot bootstrap task that sets the administrator password and issues one bot token per caller. It replaces Marquez once the retirement comparison passes. Their images are pushed first (config/metadata/images.json) and their digests recorded; this stays false until then. False plans no OpenMetadata resource and leaves every existing limit as it was."
+  description = "Run persistent OpenMetadata and its single-node OpenSearch as one host task, plus the one-shot bootstrap task that sets the administrator password and issues one bot token per caller. It replaces Marquez once the retirement comparison passes. Their images are pushed first (config/metadata/images.json) and their digests recorded; the committed default is true. False plans no OpenMetadata resource and leaves every existing limit as it was."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 

@@ -1,7 +1,7 @@
 variable "serve_enabled" {
   description = "Supply the inputs of the serve host definition that serving_deploy_dag and the promotion chain of research_dag launch. It reuses the training image, the execution role and the MLflow administrator password. It has its own task role and needs the jobs log group."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {
@@ -28,7 +28,7 @@ variable "serve_roles" {
 variable "serve_manifest_prefix" {
   description = "Key prefix of the deployment records in the data bucket, without a trailing slash, for example serving/deployments. It is fixed in the task definition, so a caller cannot choose where records go."
   type        = string
-  default     = ""
+  default     = "serving/deployments"
   nullable    = false
 
   validation {

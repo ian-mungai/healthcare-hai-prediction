@@ -1,7 +1,7 @@
 variable "model_api_enabled" {
   description = "Run the private model API service on the host. It binds the host loopback only, so Session Manager port forwarding is the one way in. A public load balancer is a later, separate decision."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "model_api_task_role_arn" {
@@ -61,7 +61,7 @@ variable "model_api_registry_uri" {
 variable "model_api_mlflow_uri" {
   description = "Address of the MLflow tracking server on the host, for example http://127.0.0.1:5100."
   type        = string
-  default     = ""
+  default     = "http://127.0.0.1:5100"
 
   validation {
     condition     = !var.model_api_enabled || can(regex("^http://127\\.0\\.0\\.1:[0-9]{4,5}$", var.model_api_mlflow_uri))

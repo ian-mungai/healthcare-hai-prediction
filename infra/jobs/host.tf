@@ -1,14 +1,14 @@
 variable "host_jobs_enabled" {
-  description = "Register the host definition of each selected job family: an EC2 bridge task definition named <project>_<environment>_job_<family>_host for the host capacity provider. Every job runs on the host, so the stack registers no other kind of job definition. Off by default."
+  description = "Register the host definition of each selected job family: an EC2 bridge task definition named <project>_<environment>_job_<family>_host for the host capacity provider. Every job runs on the host, so the stack registers no other kind of job definition."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 
 variable "host_jobs" {
   description = "The job families whose host definition is registered while host_jobs_enabled is true. Each needs the inputs of its containers: the images, the roles, the parameter names and its own enable flag."
   type        = set(string)
-  default     = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  default     = ["drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
   nullable    = false
 
   validation {
@@ -92,7 +92,7 @@ variable "host_private_ip" {
 variable "host_repo_path" {
   description = "Absolute host path of the repository checkout that the metadata host task mounts read-only to run the ingestion script and read its configuration. Use the checkout that Airflow mounts. Required while the metadata host task is selected."
   type        = string
-  default     = null
+  default     = "/data/repo"
 
   validation {
     condition     = var.host_repo_path == null ? !(var.host_jobs_enabled && contains(var.host_jobs, "metadata")) : can(regex("^/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)*$", var.host_repo_path)) && !strcontains(var.host_repo_path, "..")

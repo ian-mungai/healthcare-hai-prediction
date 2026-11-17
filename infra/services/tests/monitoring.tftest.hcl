@@ -23,6 +23,15 @@ variables {
   marquez_enabled             = true
   monitoring_enabled          = true
 
+  # The committed defaults of the services stack are the live ones (MLflow, model API, page, monitoring, OpenMetadata and HTTP lineage on). Every case here
+  # that does not set a switch tests it off, so the fixture sets each one explicitly.
+  mlflow_enabled                  = false
+  model_api_enabled               = false
+  streamlit_enabled               = false
+  openmetadata_persistent_enabled = false
+  airflow_lineage_http_enabled    = false
+  model_api_mlflow_uri            = ""
+
   log_group_names = {
     postgres   = "/example/postgres"
     redis      = "/example/redis"

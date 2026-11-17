@@ -1,13 +1,18 @@
 mock_provider "aws" {}
 
 variables {
-  aws_profile         = "example_project_dev"
-  aws_region          = "us-west-2"
-  expected_account_id = "111111111111"
-  project_name        = "example_project"
-  environment         = "dev"
-  data_bucket_name    = "example-project-data-dev"
-  host_job_memory_mib = 23552
+  # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
+  # not set a switch tests it off, so the fixture sets each one explicitly.
+  host_jobs_enabled      = false
+  publisher_keys_enabled = false
+  host_jobs              = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  aws_profile            = "example_project_dev"
+  aws_region             = "us-west-2"
+  expected_account_id    = "111111111111"
+  project_name           = "example_project"
+  environment            = "dev"
+  data_bucket_name       = "example-project-data-dev"
+  host_job_memory_mib    = 23552
   # TEST FIXTURE ONLY, not measured values: the services output host_capacity_binding for a 30720 MiB usable host.
   host_capacity_binding = "job_memory_mib=23552 usable_memory_mib=30720 system_reserve_mib=2048 service_reservations_mib=5120"
   log_group_name        = "example_project_jobs_dev"

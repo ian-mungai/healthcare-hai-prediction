@@ -5,12 +5,25 @@ mock_provider "aws" {}
 # where it connects.
 
 variables {
-  aws_profile         = "example_project_dev"
-  aws_region          = "us-west-2"
-  expected_account_id = "111111111111"
-  project_name        = "example_project"
-  environment         = "dev"
-  data_bucket_name    = "example-project-data-dev"
+  # The committed defaults of the jobs stack are the live ones (every job family on, host_repo_path and serve_manifest_prefix set). Every case here that does
+  # not set a switch tests it off, so the fixture sets each one explicitly.
+  drift_enabled          = false
+  host_jobs_enabled      = false
+  promote_enabled        = false
+  layer_jobs_enabled     = false
+  serve_enabled          = false
+  train_enabled          = false
+  publisher_job_enabled  = false
+  publisher_keys_enabled = false
+  host_jobs              = ["bronze", "drift", "features", "features_m1", "features_m2", "features_m3", "features_m4", "features_m5", "features_m6", "gold", "metadata", "promote", "serve", "silver", "train"]
+  host_repo_path         = null
+  serve_manifest_prefix  = ""
+  aws_profile            = "example_project_dev"
+  aws_region             = "us-west-2"
+  expected_account_id    = "111111111111"
+  project_name           = "example_project"
+  environment            = "dev"
+  data_bucket_name       = "example-project-data-dev"
   job_role_arns = {
     execution      = "arn:aws:iam::111111111111:role/example_project_job_execution_dev"
     publisher_task = "arn:aws:iam::111111111111:role/example_project_job_publisher_task_dev"

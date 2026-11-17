@@ -1,7 +1,7 @@
 variable "train_enabled" {
   description = "Supply the inputs of the training host definition. It needs the training and feature store image digests, the execution and training roles and the jobs log group."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {

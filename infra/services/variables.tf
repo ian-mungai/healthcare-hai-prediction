@@ -223,7 +223,7 @@ variable "marquez_enabled" {
 variable "mlflow_enabled" {
   description = "Run the MLflow tracking service on the host. Training jobs on AWS log runs to it. Its image is built from services/mlflow and pushed first. Set this to false to stop the service: the database and the artifacts stay."
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "mlflow_task_role_arn" {
@@ -331,9 +331,9 @@ variable "host_usable_memory_mib" {
 }
 
 variable "host_job_cap_mib" {
-  description = "The host job cap in MiB: the memory one host job gets (one host job runs at a time). The stack renders it into every Airflow container as HAI_LAUNCH_HOST_JOB_CAP_MIB, which the launch preflight reads at every host launch (a missing or invalid value refuses the launch), and hands it to the jobs stack as the job memory (output host_job_memory_mib) and in the capacity binding. It must fit the room the services leave: the usable memory less host_system_reserve_mib and the always-on service reservations (output host_job_memory_mib refuses a larger cap). The default is the room the live services leave today: MLflow on a 32768 MiB host reserves 3904 MiB, so 32768 - 2048 - 3904 = 26816 MiB. A change of the cap is a host job cap change: it starts with the reviewed jobs inputs and their SHA-256 (--jobs-inputs and --jobs-sha256 of terraform.sh --keep-launch-hold) and ends with services_apply finish after the jobs apply. The authoritative procedure is the docstring of scripts/infrastructure/services_apply.py."
+  description = "The host job cap in MiB: the memory one host job gets (one host job runs at a time). The stack renders it into every Airflow container as HAI_LAUNCH_HOST_JOB_CAP_MIB, which the launch preflight reads at every host launch (a missing or invalid value refuses the launch), and hands it to the jobs stack as the job memory (output host_job_memory_mib) and in the capacity binding. It must fit the room the services leave: the usable memory less host_system_reserve_mib and the always-on service reservations (output host_job_memory_mib refuses a larger cap). The default is the room the services leave with every committed default on: they reserve 7920 MiB on a 32768 MiB host, so 32768 - 2048 - 7920 = 22800 MiB. A change of the cap is a host job cap change: it starts with the reviewed jobs inputs and their SHA-256 (--jobs-inputs and --jobs-sha256 of terraform.sh --keep-launch-hold) and ends with services_apply finish after the jobs apply. The authoritative procedure is the docstring of scripts/infrastructure/services_apply.py."
   type        = number
-  default     = 26816
+  default     = 22800
   nullable    = false
 
   validation {
@@ -501,9 +501,9 @@ variable "polaris_root_secret_name" {
 }
 
 variable "monitoring_enabled" {
-  description = "Run Prometheus, Grafana and the StatsD exporter as one task on the host, all on loopback, and send the Airflow metrics to the exporter. Their images are mirrored first (push_images.py plan) and their digests recorded, and the Grafana password parameter exists; this stays false until then. False plans no monitoring resource and no Airflow change."
+  description = "Run Prometheus, Grafana and the StatsD exporter as one task on the host, all on loopback, and send the Airflow metrics to the exporter. Their images are mirrored first (push_images.py plan) and their digests recorded, and the Grafana password parameter exists; the committed default is true. False plans no monitoring resource and no Airflow change."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 }
 
@@ -615,9 +615,9 @@ variable "airflow_launch_scratch_path" {
 }
 
 variable "airflow_lineage_http_enabled" {
-  description = "Send the OpenLineage events of the Airflow tasks over HTTP only to OpenMetadata's lineage route (/api/v1/openlineage/lineage), with the lineage bot credential of openmetadata_bot_token_names as an ECS secret of the scheduler and a 5 second limit, instead of the spool transport. Turn it on only with persistent OpenMetadata running and the execution role granted the lineage bot parameter (the parameter_names_used output names it). False adds no OpenLineage transport setting and no lineage bot secret to the scheduler; the lineage code mounts of the Airflow containers are present either way."
+  description = "Send the OpenLineage events of the Airflow tasks over HTTP only to OpenMetadata's lineage route (/api/v1/openlineage/lineage), with the lineage bot credential of openmetadata_bot_token_names as an ECS secret of the scheduler and a 5 second limit, instead of the spool transport. It is on by default and needs persistent OpenMetadata running and the execution role granted the lineage bot parameter (the parameter_names_used output names it). False adds no OpenLineage transport setting and no lineage bot secret to the scheduler; the lineage code mounts of the Airflow containers are present either way."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {

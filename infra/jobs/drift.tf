@@ -1,7 +1,7 @@
 variable "drift_enabled" {
   description = "Supply the inputs of the drift host definition that drift_monitoring_dag launches. It needs the training, feature store and drift image digests, the execution and drift roles and the jobs log group."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {

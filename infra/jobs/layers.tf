@@ -1,7 +1,7 @@
 variable "layer_jobs_enabled" {
   description = "Supply the inputs of the silver, gold and features host definitions. They need the spark, analytics and quality image digests, the execution role, each enabled layer's writer role and pair, the jobs log group and, for features, the feature store image and the host Redis address."
   type        = bool
-  default     = false
+  default     = true
   nullable    = false
 
   validation {
