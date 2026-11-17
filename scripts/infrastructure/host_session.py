@@ -10,6 +10,11 @@ service and one-shot names come from the services state of the checkout it runs 
 checkout whose copy is older than the applied stack names fewer services than the stack has. Run ``refresh`` from the checkout that holds the newest
 services state; ``refresh`` and ``status`` print the serial of the state they read (``services_state: serial <n>``), and ``refresh`` refuses a name that
 ECS does not have.
+
+``stop`` lists the running job tasks of the project first, as ``aws_tasks list`` does, and changes nothing while any runs: it refuses, or with
+``--wait-seconds N`` polls every 15 seconds until none runs and refuses when the N seconds pass. ``--force-stop`` skips the check. A listing that fails
+or cannot be read refuses; it is never read as "no job task is running". Stopping the host ends every task on it; a job launched in the seconds between
+the check and the stop is resumed by its DAG retry.
 """
 
 from __future__ import annotations
@@ -26,13 +31,16 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
 from scripts.process import CompletedProcess
+
+if TYPE_CHECKING:
+    from scripts.infrastructure.aws_tasks import JobTask
 
 SERVICES_DIRECTORY = REPO_ROOT / "infra" / "services"
 JOBS_DIRECTORY = REPO_ROOT / "infra" / "jobs"
@@ -47,6 +55,7 @@ SERVICES_STABLE_SECONDS = 1200
 SERVICE_RESTART_SECONDS = 900
 TERMINATE_SECONDS = 900
 POLL_SECONDS = 15
+STOP_PROGRESS_SECONDS = 60
 CALL_SECONDS = 180
 RUN_TASK_ATTEMPTS = 3
 UNCONFIRMED = "request_unconfirmed"
@@ -139,6 +148,15 @@ def install_termination_handler() -> Callable[[], None]:
     return restore
 
 
+def age_text(seconds: float) -> str:
+    """A run time for the owner: ``45 s``, ``2 min 05 s`` or ``1 h 02 min``."""
+    hours, rest = divmod(max(int(seconds), 0), 3600)
+    minutes, remainder = divmod(rest, 60)
+    if hours:
+        return f"{hours} h {minutes:02d} min"
+    return f"{minutes} min {remainder:02d} s" if minutes else f"{remainder} s"
+
+
 def category(reason: object, categories: tuple[tuple[str, str], ...]) -> str:
     """The fixed category of a provider reason; the reason text itself can hold identifiers and never reaches the output."""
     text = str(reason).lower()
@@ -171,10 +189,12 @@ def run_task_code(reason: object) -> str:
 
 @dataclass(frozen=True)
 class Clock:
-    """The time source of every wait; a case replaces it to run time forward without sleeping."""
+    """The time source of every wait; a case replaces it to run time forward without sleeping. ``wall`` is the clock time in epoch seconds, which a task's
+    start time is measured against."""
 
     now: Callable[[], float] = time.monotonic
     sleep: Callable[[float], None] = time.sleep
+    wall: Callable[[], float] = time.time
 
 
 @dataclass(frozen=True)
@@ -633,11 +653,85 @@ class Session:
         except HostSessionError as error:
             self.step("openmetadata_stop_failed", f"{error}; stopping the host anyway; the index rebuilds from the database after a restore")
 
-    def stop(self) -> None:
-        """Stop the catalog service first, then turn the host off and verify it.
+    def running_job_tasks(self) -> list[JobTask]:
+        """The job tasks of the project's families that are not STOPPED (a task that is stopping counts), listed as ``aws_tasks list`` lists them under its
+        120-second cleanup limit. A listing that fails raises. ``TaskCleanup`` is imported here because ``aws_tasks`` imports this module."""
+        from scripts.infrastructure.aws_tasks import TaskCleanup
 
-        An interruption or SIGTERM during the catalog drain still reaches the host-off step, which then holds every shutdown signal until it is verified.
+        if self.job_prefix is None:
+            raise HostSessionError("the session has no job task family prefix")
+        cleanup = TaskCleanup(self, self.job_prefix)
+        with cleanup.bounded():
+            return cleanup.discover()
+
+    def job_task_line(self, task: JobTask) -> str:
+        """One running job task for the owner: its family, the last 8 characters of its ID and how long it has run, never an ARN."""
+        shown = f"{task.family} {task.suffix}" + (" (writer)" if task.writer else "")
+        return f"{shown}, run time unknown" if task.started_at is None else f"{shown} running {age_text(self.clock.wall() - task.started_at)}"
+
+    def check_no_job_tasks(self, wait_seconds: int) -> None:
+        """Return when no job task of the project runs; change nothing and raise ``HostSessionError`` otherwise.
+
+        With running tasks the check polls every ``POLL_SECONDS`` until none runs and refuses when ``wait_seconds`` have passed (0: it refuses at once). The
+        deadline bounds the polling; a listing in flight at the deadline may take up to its own 120-second limit more. A listing that fails is never read as
+        "none running": the check refuses at once when the deadline has passed and after ``FAILED_POLLS_ALLOWED`` failed listings in a row otherwise. An
+        interrupt or SIGTERM leaves the host on and says so.
         """
+        if self.job_prefix is None:
+            raise HostSessionError(
+                "stop refused: the session has no job task family prefix, so running job tasks cannot be checked; --force-stop skips the check"
+            )
+        end, failed = self.clock.now() + max(wait_seconds, 0), 0
+        shown: set[str] | None = None
+        reported = self.clock.now()
+        try:
+            while True:
+                tasks: list[JobTask] | None = None
+                try:
+                    tasks, failed = self.running_job_tasks(), 0
+                except HostSessionError as error:
+                    failed += 1
+                    if failed >= FAILED_POLLS_ALLOWED or self.clock.now() >= end:
+                        raise HostSessionError(
+                            f"stop refused: the running job tasks could not be listed ({error}); nothing was changed; --force-stop skips the check"
+                        ) from None
+                if tasks is not None:
+                    if not tasks:
+                        self.step("job_tasks", "no job task is running")
+                        return
+                    lines = [self.job_task_line(task) for task in tasks]
+                    now = self.clock.now()
+                    if now >= end:
+                        for line in lines:
+                            self.step("job_task", line)
+                        waited = f"; still running after a wait of {wait_seconds} s" if wait_seconds else ""
+                        raise HostSessionError(
+                            f"stop refused: {len(tasks)} job task(s) running ({'; '.join(lines)}){waited}; wait for them (stop --wait-seconds N) or end them "
+                            "(aws_tasks stop); stop --force-stop turns the host off anyway and ends them"
+                        )
+                    names = {task.arn for task in tasks}
+                    if names != shown or now - reported >= STOP_PROGRESS_SECONDS:
+                        if names != shown:
+                            for line in lines:
+                                self.step("job_task", line)
+                        self.step("stop_waiting", f"{len(tasks)} job task(s) running; {int(end - now)} s of the wait of {wait_seconds} s left")
+                        shown, reported = names, now
+                self.clock.sleep(min(POLL_SECONDS, end - self.clock.now()))
+        except (KeyboardInterrupt, TerminationRequested):
+            self.step("stop_interrupted", "interrupted while checking for job tasks; nothing was stopped and the host is still on; run stop again")
+            raise
+
+    def stop(self, wait_seconds: int = 0, force_stop: bool = False) -> None:
+        """Check that no job task runs, stop the catalog service, then turn the host off and verify it.
+
+        The check comes first and changes nothing: while a job task runs, ``stop`` refuses, or with ``wait_seconds`` waits up to that deadline for the tasks to
+        end and then refuses. ``force_stop`` skips the check and reports that it did. An interruption or SIGTERM during the check leaves the host on. After the
+        check, an interruption or SIGTERM during the catalog drain still reaches the host-off step, which then holds every shutdown signal until it is verified.
+        """
+        if force_stop:
+            self.step("stop_forced", "the running job task check is skipped by --force-stop; a job task that runs now ends with the host")
+        else:
+            self.check_no_job_tasks(wait_seconds)
         try:
             self.openmetadata_stop()
         finally:
@@ -645,7 +739,12 @@ class Session:
                 self.host_off()
 
     def stop_after_failure(self, command: str, keep_on: bool) -> None:
-        """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates."""
+        """Stop and verify the host after a failed command, or leave it on for diagnosis; a failed stop is reported and the first failure still propagates.
+
+        It never checks for running job tasks, unlike ``stop``: it is the cleanup of a command that already failed, and a refusal or a wait here would leave a
+        failed host running and billed with nobody present. ``--keep-on`` is the way to keep the host; a job that a half-started host loses is resumed by
+        its DAG retry, as for a job launched between the check of ``stop`` and its host-off call.
+        """
         self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")
         if keep_on:
             self.step("host_kept_on", "left on for diagnosis; run stop when done")
@@ -903,6 +1002,17 @@ def open_session(reload: bool = False) -> Session:
     return session
 
 
+def whole_seconds(text: str) -> int:
+    """A whole number of seconds that is 0 or more, or an argparse error."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"{text!r} is not a whole number of seconds") from None
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"{text!r} is below 0 seconds")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     """The command line."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -920,7 +1030,16 @@ def build_parser() -> argparse.ArgumentParser:
     bootstrap = commands.add_parser("bootstrap", help="run polaris_bootstrap once")
     bootstrap.add_argument("--again", action="store_true", help="run it again although it already ran")
     bootstrap.add_argument("--keep-on", action="store_true", help="on failure leave the host on for diagnosis")
-    commands.add_parser("stop", help="host off and verify the instance terminated")
+    stop = commands.add_parser("stop", help="refuse while a job task runs, then host off and verify the instance terminated")
+    drain = stop.add_mutually_exclusive_group()
+    drain.add_argument(
+        "--wait-seconds",
+        type=whole_seconds,
+        default=0,
+        metavar="N",
+        help="while a job task runs, poll every 15 seconds until none runs and refuse when N seconds have passed (default 0: refuse at once)",
+    )
+    drain.add_argument("--force-stop", action="store_true", help="skip the running job task check; the host goes off and every job task on it ends")
     commands.add_parser("status", help="host and service counts, read only")
     return parser
 
@@ -948,7 +1067,7 @@ def main(argv: list[str] | None = None) -> int:
         elif arguments.command == "bootstrap":
             session.bootstrap(arguments.again, arguments.keep_on)
         elif arguments.command == "stop":
-            session.stop()
+            session.stop(arguments.wait_seconds, arguments.force_stop)
         else:
             sys.stdout.write(json.dumps(session.status(), indent=2, sort_keys=True) + "\n")
     except (HostSessionError, TerminationRequested, KeyboardInterrupt) as error:

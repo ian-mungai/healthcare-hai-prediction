@@ -49,7 +49,7 @@ def drive_stop(module: ModuleType, root: Path, bin_directory: Path) -> int:
     names = module.Names("group-signal-cluster", GROUP, "group-signal-provider", "group-signal-project", {"postgres": "group-signal-postgres"}, {})
     cli = AwsCli({"aws_profile": "group-signal-profile", "aws_region": "group-signal-region"}, module.tolerant_runner)
     try:
-        module.Session(cli, names, module.Clock(), root / "marker", report).stop()
+        module.Session(cli, names, module.Clock(), root / "marker", report, job_prefix="group_signal_dev_job_").stop()
     except (module.HostSessionError, KeyboardInterrupt, module.TerminationRequested) as error:
         (root / "failure.txt").write_text(type(error).__name__, encoding="utf-8")
         return 1

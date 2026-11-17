@@ -1,8 +1,9 @@
 """A stand-in for the ``aws`` command, used by the group SIGINT case in ``host_session_group_signal``.
 
-It answers two autoscaling commands from a state file under the directory named by ``HOST_SESSION_FAKE_STATE``. A capacity change lands only after an
-in-flight window, so a command that is killed during the window changes nothing. The change also records the process and session identifiers of the
-command. It imports nothing from the repository, so it runs with ``python -I host_session_fake_aws.py <aws arguments>``.
+It answers two autoscaling commands from a state file under the directory named by ``HOST_SESSION_FAKE_STATE`` and, for the job task check of ``stop``, an
+empty ECS task listing. A capacity change lands only after an in-flight window, so a command that is killed during the window changes nothing. The change
+also records the process and session identifiers of the command. It imports nothing from the repository, so it runs with
+``python -I host_session_fake_aws.py <aws arguments>``.
 """
 
 from __future__ import annotations
@@ -32,6 +33,9 @@ def answer(arguments: list[str]) -> int:
         state = json.loads(state_file.read_text(encoding="utf-8"))
         group = {"AutoScalingGroupName": GROUP, "DesiredCapacity": state["desired"], "Instances": [{"InstanceId": item} for item in state["instances"]]}
         sys.stdout.write(json.dumps({"AutoScalingGroups": [group]}))
+        return 0
+    if (service, operation) == ("ecs", "list-tasks"):
+        sys.stdout.write(json.dumps({"taskArns": []}))
         return 0
     if (service, operation) == ("autoscaling", "set-desired-capacity"):
         (root / "requested").write_text(operation, encoding="utf-8")

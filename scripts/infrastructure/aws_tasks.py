@@ -16,6 +16,7 @@ import re
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
@@ -48,10 +49,26 @@ class JobTask:
     family: str
     writer: bool
     mismatch: bool = False
+    started_at: float | None = None
 
     @property
     def suffix(self) -> str:
         return self.arn.rsplit("/", 1)[-1][-SUFFIX_LENGTH:]
+
+
+def started_epoch(value: object) -> float | None:
+    """The start time of a described task as epoch seconds: the AWS CLI shows ``startedAt`` as an ISO string with an offset or as a number. A task that has
+    not started (no value) and a value that is neither answer None."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value).timestamp()
+        except ValueError:
+            return None
+    return None
 
 
 class TaskCleanup:
@@ -128,7 +145,8 @@ class TaskCleanup:
                 continue
             family = ours[-1]
             shown = family if FAMILY_FORM.fullmatch(family) else UNNAMED
-            tasks.append(JobTask(str(item["taskArn"]), shown, family.removeprefix(self.prefix).startswith(WRITER_MARK), grouped != defined))
+            writer = family.removeprefix(self.prefix).startswith(WRITER_MARK)
+            tasks.append(JobTask(str(item["taskArn"]), shown, writer, started_at=started_epoch(item.get("startedAt")), mismatch=grouped != defined))
         return tasks
 
     def not_stopped(self, tasks: list[JobTask]) -> list[JobTask]:

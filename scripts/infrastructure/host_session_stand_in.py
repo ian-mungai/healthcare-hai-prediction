@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import signal
+from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 from scripts.process import CompletedProcess, TimeoutExpired
@@ -42,6 +43,9 @@ SERVICE_START_SECONDS = 45
 LEAK = f"{ACCOUNT_MARK}task/leak i-0123456789abcdef0 111111111111"
 CLIENT_TOKEN_LIMIT = 64
 STOP_TASK_SECONDS = 15
+# The wall time of virtual second 0 and the zone in which describe-tasks shows ``startedAt``, as the AWS CLI shows it (an ISO string with an offset).
+EPOCH = datetime(2026, 11, 17, 20, 0, 0, tzinfo=UTC)
+SHOWN_ZONE = timezone(timedelta(hours=-8))
 # What RunTask accepts for all container overrides of one call, formatting characters included.
 OVERRIDES_LIMIT = 8192
 FLAGS = {"--force-new-deployment", "--enable-ecs-managed-tags", "--no-honor-cooldown", "--no-paginate"}
@@ -86,7 +90,8 @@ class StandInHost:
     pages), ``repeat_token`` makes every page answer the same ``nextToken``, ``ghost_task`` makes list-tasks name one task that describe-tasks reports
     ``MISSING``, ``vanish_after_stop`` makes a stopped task unknown to describe-tasks, ``never_stop_task`` makes stop-task accept the call but leave the
     task running, ``stop_task_error`` makes stop-task fail without effect, ``stop_task_lost_reply`` makes stop-task take effect and then fail and
-    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn``. A service name that the host does not know is answered as ECS answers a missing
+    ``no_definition`` makes describe-tasks omit ``taskDefinitionArn`` and ``no_started_at`` makes it omit ``startedAt`` (``EPOCH`` plus the virtual start time,
+    shown with an offset as the AWS CLI shows it). A service name that the host does not know is answered as ECS answers a missing
     service: a ``MISSING`` failure entry and no service. ``describe_services_error`` adds a failure entry of another reason to every describe-services
     answer. List-tasks answers the tasks whose ``desiredStatus`` is the ``--desired-status`` value (RUNNING when absent), and a stopped task has desired
     status STOPPED. ``add_task`` adds a running task of any family and group, so a case can hold job tasks, service tasks and writer tasks together.
@@ -159,6 +164,7 @@ class StandInHost:
             "stops_at": 10**9,
             "exit": 0,
             "options": {},
+            "started": self.now,
         }
         return arn
 
@@ -337,6 +343,7 @@ class StandInHost:
             "stops_at": self.now + seconds,
             "exit": code,
             "options": options,
+            "started": self.now,
             "output": self.pending_output,
             "unstarted": f"never_starts:{key}" in self.faults,
         }
@@ -416,6 +423,9 @@ class StandInHost:
                     "group": task.get("group", f"family:{task['family']}"),
                     "lastStatus": task["status"],
                     "desiredStatus": task.get("desired", "RUNNING"),
+                    **(
+                        {} if "no_started_at" in self.faults else {"startedAt": (EPOCH + timedelta(seconds=task["started"])).astimezone(SHOWN_ZONE).isoformat()}
+                    ),
                     "stoppedReason": "Task failed to start" if task.get("unstarted") and task["status"] == "STOPPED" else reason,
                     **({"stopCode": "TaskFailedToStart"} if task.get("unstarted") and task["status"] == "STOPPED" else {}),
                     "containers": [container],

@@ -26,6 +26,8 @@ from scripts.infrastructure.host_session import Clock, HostSessionError, Names, 
 from scripts.infrastructure.host_session_stand_in import OVERRIDES_LIMIT, PROFILE, REGION, SERVICES, StandInHost
 from scripts.infrastructure.run_code_fetch_e2e import BUCKET, RUN_A, RUN_B, StandInS3, archive, archive_files
 
+JOB_PREFIX = "stand_in_dev_job_"  # the job family prefix of the session; stop checks it for running job tasks
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 BEFORE = REPO_ROOT / "scripts" / "infrastructure" / "code_installer_before"
 REVIEWED_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
@@ -128,7 +130,14 @@ def old_image(work: Path) -> Path:
 def session_on(host: ScriptedHost) -> tuple[Session, list[str]]:
     lines: list[str] = []
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
-    return Session(cli, names(), Clock(lambda: host.now, host.advance), Path(tempfile.mkdtemp(prefix="host_session_code_")) / "launched", lines.append), lines
+    return Session(
+        cli,
+        names(),
+        Clock(lambda: host.now, host.advance),
+        Path(tempfile.mkdtemp(prefix="host_session_code_")) / "launched",
+        lines.append,
+        job_prefix=JOB_PREFIX,
+    ), lines
 
 
 def release(root: Path, sha: str, path: Path, members: int | None = None, select: bool = True, run: str | None = None) -> None:

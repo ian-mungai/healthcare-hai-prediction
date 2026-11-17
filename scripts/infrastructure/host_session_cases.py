@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts.acquisition.s3_store import AwsCli
-from scripts.infrastructure import host_session_code_cases, host_session_group_signal, host_session_refresh_cases
+from scripts.infrastructure import host_session_code_cases, host_session_group_signal, host_session_refresh_cases, host_session_stop_cases
 from scripts.infrastructure.deployed_revisions_cases import CASES as DEPLOYED_REVISION_CASES
 from scripts.infrastructure.host_session import REGISTRATION_SECONDS, TERMINATE_SECONDS, Clock, HostSessionError, Names, ReloadTask, Session
 from scripts.infrastructure.host_session_stand_in import (
@@ -40,6 +40,7 @@ from scripts.process import TimeoutExpired
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 REVIEWED_SCRIPT = host_session_code_cases.REVIEWED_SCRIPT
+JOB_PREFIX = host_session_refresh_cases.JOB_PREFIX
 IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_identify.py"
 ARN_OR_ACCOUNT = re.compile(r"arn:aws|\b\d{12}\b|\bi-[0-9a-f]{8,}\b")
 CASE_ERRORS = (AssertionError, LookupError, StopIteration, TypeError, ValueError, AttributeError, NameError, HostSessionError)
@@ -97,7 +98,8 @@ def build(
     host, lines = StandInHost(faults, openmetadata=openmetadata, code_fetch=code_fetch, checkout=checkout, code_run=code_run), list[str]()
     cli = AwsCli({"aws_profile": PROFILE, "aws_region": REGION}, host.runner)
     marker = marker or Path(tempfile.mkdtemp(prefix="host_session_case_")) / "polaris_bootstrap.launched"
-    return host, Session(cli, names(openmetadata, code_fetch, reload), Clock(lambda: host.now, host.advance), marker, lines.append), lines
+    session = Session(cli, names(openmetadata, code_fetch, reload), Clock(lambda: host.now, host.advance), marker, lines.append, job_prefix=JOB_PREFIX)
+    return host, session, lines
 
 
 # The code one-shot's own limit (host_session.CODE_FETCH_SECONDS).
@@ -1332,4 +1334,5 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
 
 CASES.update(host_session_code_cases.CASES)
 CASES.update(host_session_refresh_cases.CASES)
+CASES.update(host_session_stop_cases.CASES)
 CASES.update(DEPLOYED_REVISION_CASES)

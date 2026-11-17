@@ -136,6 +136,35 @@ PLANTS: dict[str, tuple[str, str]] = {
         "import TaskCleanup\n\n        if False:\n            raise",
     ),
     "refresh drops its code option": ('arguments.command in {"start", "refresh"} and', 'arguments.command == "start" and'),
+    "stop skips the job task check": ("        else:\n            self.check_no_job_tasks(wait_seconds)\n", "        else:\n            pass\n"),
+    "stop still checks after --force-stop": (
+        '        if force_stop:\n            self.step("stop_forced"',
+        '        if False:\n            self.step("stop_forced"',
+    ),
+    "stop reads a failed listing as no job task running": (
+        "                except HostSessionError as error:\n                    failed += 1\n"
+        "                    if failed >= FAILED_POLLS_ALLOWED or self.clock.now() >= end:",
+        "                except HostSessionError as error:\n                    return\n                    failed += 1\n"
+        "                    if failed >= FAILED_POLLS_ALLOWED or self.clock.now() >= end:",
+    ),
+    "stop never waits for a job task": ("end, failed = self.clock.now() + max(wait_seconds, 0), 0", "end, failed = self.clock.now(), 0"),
+    "stop refuses at the first listing although it may wait": (
+        "                    now = self.clock.now()\n                    if now >= end:",
+        "                    now = self.clock.now()\n                    if True:",
+    ),
+    "stop gives up the wait without a refusal": (
+        "                self.clock.sleep(min(POLL_SECONDS, end - self.clock.now()))\n        except (KeyboardInterrupt",
+        "                return\n        except (KeyboardInterrupt",
+    ),
+    "stop turns the host off after an interrupted wait": (
+        'run stop again")\n            raise',
+        'run stop again")\n            self.host_off()\n            raise',
+    ),
+    "stop prints the task ARN": ('shown = f"{task.family} {task.suffix}"', 'shown = f"{task.family} {task.arn}"'),
+    "stop after a failure waits for job tasks": (
+        '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")',
+        '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")\n        self.check_no_job_tasks(0)',
+    ),
     "names carry no state serial": ("state_serial=services_state_serial(SERVICES_DIRECTORY),", "state_serial=None,"),
     "status raises on an absent service": (
         "        found, absent = self.lookup_services()\n        services = {",
@@ -175,6 +204,7 @@ def caught(source: str) -> bool:
         sys.modules[MODULE] = planted
         spec.loader.exec_module(planted)
     importlib.reload(importlib.import_module("scripts.infrastructure.host_session_refresh_cases"))
+    importlib.reload(importlib.import_module("scripts.infrastructure.host_session_stop_cases"))
     cases = importlib.import_module("scripts.infrastructure.host_session_cases")
     importlib.reload(cases)
     for function in cases.CASES.values():
