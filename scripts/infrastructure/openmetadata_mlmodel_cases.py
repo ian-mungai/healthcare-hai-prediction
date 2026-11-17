@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import tempfile
 import urllib.parse
 from collections.abc import Callable, Mapping
@@ -681,9 +682,15 @@ class Registry:
         administrator: bool = False,
         default_permission: str = "NO_PERMISSIONS",
         workspaces: bool = True,
+        reader_id: int = 2,
+        other_users: Mapping[int, str] | None = None,
+        shared_with: Mapping[str, tuple[int, ...]] | None = None,
     ) -> None:
         self.reader_login = reader_login
-        self.rows: dict[tuple[str, str], tuple[str, str]] = {(kind, "*"): ("READ", "__user_2__") for kind in grants}
+        self.reader_id = reader_id
+        self.other_users = dict(other_users or {})  # user ID to name of the other users of the registry
+        self.shared_with = dict(shared_with or {})  # role name to the IDs of the other users that hold it
+        self.rows: dict[tuple[str, str], tuple[str, str]] = {(kind, "*"): ("READ", f"__user_{reader_id}__") for kind in grants}
         self.rows.update(extra or {})
         self.row_ids: dict[tuple[str, str], int] = {}
         self.administrator = administrator
@@ -693,6 +700,8 @@ class Registry:
         self.fail_grant = False
         self.fail_remove = False
         self.ignore_remove = False  # answers 200 and keeps the grant
+        self.fail_holders = False  # the list of the holders of a role answers 500
+        self.hide_user_id = False  # the user read answers without an ID
 
     @property
     def granted(self) -> set[str]:
@@ -702,7 +711,14 @@ class Registry:
         return self.row_ids.setdefault(key, 3 + len(self.row_ids))
 
     def role_id(self, role: str) -> int:
-        return 2 if role == "__user_2__" else 10 + sorted({name for _, name in self.rows.values()} - {"__user_2__"}).index(role)
+        """A user's own role has the ID of the user, as in the live server (role 3 is ``__user_3__``); another role has an ID from 10 up."""
+        found = re.fullmatch(r"__user_([0-9]+)__", role)
+        return int(found.group(1)) if found else 10 + sorted({name for _, name in self.rows.values() if not name.startswith("__user_")}).index(role)
+
+    def holders(self, role: str) -> list[int]:
+        """The IDs of the users that hold a role: the owner of a synthetic role, the reader (it holds each role of its rows) and the users it is shared with."""
+        found = re.fullmatch(r"__user_([0-9]+)__", role)
+        return sorted({self.reader_id, *([int(found.group(1))] if found else []), *self.shared_with.get(role, ())})
 
     def effective(self, kind: str) -> str:
         granted = [level for (row_kind, pattern), (level, _) in self.rows.items() if row_kind == kind and pattern == "*"]
@@ -742,10 +758,20 @@ class Registry:
         if method == "GET" and path == "/api/2.0/mlflow/users/get":
             found = parse_user(parts.query) == READER[0] and self.reader_login is not None
             return (
-                (200, {"user": {"username": READER[0], "is_admin": self.administrator}})
+                (200, {"user": {**({} if self.hide_user_id else {"id": self.reader_id}), "username": READER[0], "is_admin": self.administrator}})
                 if found
                 else (404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no user"})
             )
+        if method == "GET" and path == "/api/3.0/mlflow/roles/users/list":
+            if self.fail_holders:
+                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
+            role_id = int(urllib.parse.parse_qs(parts.query)["role_id"][0])
+            role = next((name for _, name in self.rows.values() if self.role_id(name) == role_id), None)
+            holders = self.holders(role) if role else []
+            return 200, {"assignments": [{"id": 100 + user, "role_id": role_id, "user_id": user} for user in holders]}
+        if method == "GET" and path == "/api/2.0/mlflow/users/list":
+            users = {self.reader_id: READER[0], **self.other_users}
+            return 200, {"users": [{"id": user, "username": name, "is_admin": False} for user, name in sorted(users.items())]}
         if method == "GET" and path == "/api/3.0/mlflow/users/roles/list":
             roles: dict[str, list[dict[str, Any]]] = {}
             for (kind, pattern), (level, role) in sorted(self.rows.items()):
@@ -943,8 +969,11 @@ def the_setup_downgrades_an_elevated_reader_or_fails_naming_why() -> None:
         values_absent(ssm, out, err)
     shared = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("workspace", "*"): ("USE", "team_editors")})
     code, out, err = run_setup(shared, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
-    require(code == 1 and "team_editors" in err and "USE on workspace *" in err, f"a grant from a shared role cannot be removed here: {(code, err)}")
-    require("roles/unassign" in err and "roles/permissions/remove" in err, f"the owner is told the exact administrator step: {err}")
+    require(code == 1 and "team_editors" in err and "roles/unassign" in err, f"a shared role is refused with the unassign call: {(code, err)}")
+    require(
+        not any(call[0] in ("DELETE", "PATCH") for call in shared.calls[-6:]) and shared.rows[("workspace", "*")] == ("USE", "team_editors"),
+        "nothing was removed",
+    )
     silent = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("experiment", "1"): ("MANAGE", "__user_2__")})
     silent.ignore_remove = True
     code, out, err = run_setup(silent, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
@@ -953,6 +982,78 @@ def the_setup_downgrades_an_elevated_reader_or_fails_naming_why() -> None:
     refused.fail_remove = True
     code, out, err = run_setup(refused, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
     require(code == 1 and "500" in err and refused.rows[("registered_model", "*")][0] == "MANAGE", (code, err))
+
+
+def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_role_first() -> None:
+    """MLflow 3.17.2 lets an administrator assign another user's synthetic role, or a shared role, to the reader. A row of such a role belongs to its other
+    holders too, so the setup refuses before it changes anything, names the role and gives the unassign call. The reader's own role is ``__user_<its ID>__``."""
+    require = base().require
+    every = ("registered_model", "experiment", "logged_model")
+    login = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
+
+    def refused(label: str, registry: Registry, *said: str, announced: bool = True) -> None:
+        before = dict(registry.rows)
+        code, out, err = run_setup(registry, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+        require(code == 1 and all(text in err for text in said), (label, code, err))
+        require(registry.rows == before, f"{label}: the grant of the other holder is intact")
+        require(
+            not any(call[0] in ("DELETE", "PATCH") or call[1].endswith("/permissions/grant") for call in registry.calls),
+            f"{label}: nothing is changed: {registry.calls}",
+        )
+        require(not announced or "Nothing was changed" in err, f"{label}: the owner is told nothing was changed: {err}")
+        values_absent(login, out, err)
+
+    # Another user's synthetic role, borrowed by an assignment, with an EDIT grant of that user, while the reader is also an administrator.
+    borrowed = Registry(
+        reader_login="Synthetic-Stored-1!",
+        grants=every,
+        extra={("experiment", "7"): ("EDIT", "__user_3__")},
+        administrator=True,
+        other_users={3: "other_user"},
+    )
+    refused("borrowed synthetic role", borrowed, "__user_3__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "metadata_reader", "role_id": 3}')
+    require(borrowed.administrator, "the administrator flag is untouched while the setup refuses")
+    # A shared role, with a read-only grant: any other role of the reader is refused, whatever it grants.
+    refused(
+        "shared role with READ only",
+        Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("run", "*"): ("READ", "team_readers")}),
+        "team_readers",
+        "roles/unassign",
+    )
+    refused(
+        "shared role with EDIT",
+        Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("run", "*"): ("EDIT", "team_editors")}),
+        "team_editors",
+        "roles/unassign",
+    )
+    # The reader's own role, also held by another user: its rows are not the reader's alone.
+    shared_own = Registry(
+        reader_login="Synthetic-Stored-1!",
+        grants=every,
+        extra={("experiment", "7"): ("MANAGE", "__user_2__")},
+        other_users={5: "other_user"},
+        shared_with={"__user_2__": (5,)},
+    )
+    refused(
+        "the readers own role held by another user", shared_own, "__user_2__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "other_user", "role_id": 2}'
+    )
+    # The binding is to the reader's user ID, not to the name pattern: with ID 7 the role ``__user_2__`` is another user's.
+    foreign_pattern = Registry(
+        reader_login="Synthetic-Stored-1!", reader_id=7, grants=(), extra={("experiment", "7"): ("EDIT", "__user_2__")}, other_users={2: "other_user"}
+    )
+    refused("a synthetic role of another ID", foreign_pattern, "__user_2__", '"role_id": 2')
+    # A holders list or a user read that fails stops the setup with nothing changed, and a role with other holders cannot slip through.
+    for label, flag in (("holders list", "fail_holders"), ("user without an ID", "hide_user_id")):
+        broken = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("experiment", "7"): ("EDIT", "__user_2__")})
+        setattr(broken, flag, True)
+        refused(label, broken, "HTTP", announced=label == "holders list")
+    # The reader's own role, with ID 7, is still cleaned and the rerun changes nothing.
+    own = Registry(reader_login="Synthetic-Stored-1!", reader_id=7, grants=every, extra={("experiment", "7"): ("EDIT", "__user_7__")})
+    code, out, err = run_setup(own, login)
+    require(code == 0 and "EDIT on experiment 7 removed" in out and {level for level, _ in own.rows.values()} == {"READ"}, (code, out, err))
+    again = len(writes(own))
+    code, out, err = run_setup(own, login)
+    require(code == 0 and "unchanged" in out and len(writes(own)) == again, (code, out, err))
 
 
 def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
@@ -995,5 +1096,6 @@ CASES = [
     an_unreadable_admin_login_or_a_refused_grant_stops_with_a_cause,
     the_setup_talks_only_to_a_loopback_registry,
     the_setup_downgrades_an_elevated_reader_or_fails_naming_why,
+    the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_role_first,
     the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]

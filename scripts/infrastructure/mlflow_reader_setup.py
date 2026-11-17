@@ -47,7 +47,6 @@ READER_PARAMETER = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
 ADMIN_PARAMETER = "/healthcare_hai_prediction/mlflow_admin_password"
 LOOPBACK_REGISTRY = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}")
 ADMIN_USER = "admin"
-SYNTHETIC_ROLE = re.compile(r"__user_[0-9]+__")  # the role MLflow makes for one user's own grants, a reserved name: the only role this step may change
 
 
 def basic(user: str, secret: str) -> dict[str, str]:
@@ -93,32 +92,76 @@ def reader_permissions(client: Client, registry: str, reader: Mapping[str, str])
     return permissions
 
 
-def downgrade(client: Client, registry: str, admin: Mapping[str, str], permissions: Mapping[str, Any]) -> list[str]:
+def unassign(username: str, role_id: Any) -> str:
+    """The administrator call that takes a role away from a user."""
+    return f'DELETE /api/3.0/mlflow/roles/unassign {{"username": "{username}", "role_id": {role_id}}}'
+
+
+def reader_identity(client: Client, registry: str, admin: Mapping[str, str]) -> int:
+    """The user ID of the reader, from the registry. MLflow names the reader's own role ``__user_<this ID>__``."""
+    status, answer = client.call("GET", f"{registry}/api/2.0/mlflow/users/get?{urllib.parse.urlencode({'username': READER})}", admin)
+    user = answer.get("user") if isinstance(answer, dict) else None
+    if status != 200 or not isinstance(user, dict) or not isinstance(user.get("id"), int):
+        raise StepFailed(f"the registry answered HTTP {status} without a user ID when {READER} was read")
+    return int(user["id"])
+
+
+def user_names(client: Client, registry: str, admin: Mapping[str, str]) -> dict[int, str]:
+    """The names of the users by ID, for a message. An answer that cannot be read leaves the IDs to stand for the names."""
+    status, answer = client.call("GET", f"{registry}/api/2.0/mlflow/users/list", admin)
+    users = answer.get("users") if status == 200 and isinstance(answer, dict) else None
+    return {int(user["id"]): str(user["username"]) for user in users or [] if isinstance(user, dict) and "id" in user and "username" in user}
+
+
+def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mapping[str, str], roles: list[dict[str, Any]], user_id: int) -> None:
+    """Stop, with nothing changed, unless every role of the reader is its own synthetic role and no other user holds that role.
+
+    A role row is removed by its ID for every holder of the role. MLflow 3.17.2 lets an administrator assign another user's synthetic role
+    (``__user_<their ID>__``) or a shared role to the reader, and a name that fits the synthetic pattern does not show whose role it is. Only the role named for
+    the reader's own ID counts as its own, and only while the reader alone holds it. Any other role is refused with the administrator call that unassigns it."""
+    own = f"__user_{user_id}__"
+    for role in roles:
+        if role.get("name") != own:
+            raise StepFailed(
+                f"the role {role.get('name')} (id {role.get('id')}) is assigned to {READER} but is not its own role {own}, so its grants may be other users'. "
+                f"As the administrator unassign it: {unassign(READER, role.get('id'))} then rerun. Nothing was changed"
+            )
+        query = urllib.parse.urlencode({"role_id": role["id"]})
+        status, holders = client.call("GET", f"{registry}/api/3.0/mlflow/roles/users/list?{query}", admin)
+        assigned = {item.get("user_id") for item in holders.get("assignments") or []} if status == 200 and isinstance(holders, dict) else None
+        if assigned is None:
+            raise StepFailed(f"the registry answered HTTP {status} when the holders of the role {own} were listed. Nothing was changed")
+        others = sorted(user for user in assigned if user != user_id)
+        if others:
+            names = user_names(client, registry, admin)
+            calls = "; ".join(unassign(names.get(user, str(user)), role["id"]) for user in others)
+            raise StepFailed(
+                f"the role {own} of {READER} is also held by other users, so its grants are not the reader's alone. As the administrator: {calls}, then rerun. "
+                "Nothing was changed"
+            )
+
+
+def downgrade(client: Client, registry: str, admin: Mapping[str, str], permissions: Mapping[str, Any], user_id: int) -> list[str]:
     """Take administrator rights and every grant above READ away from the reader, on every kind of resource and on the workspace.
 
-    The grants are read from the roles of the user, with their IDs, and removed by ID through the role API, which is the one path that accepts the
-    ``workspace`` type (the per-user revoke call refuses it with 400). Only the user's own role is changed. A grant above READ in a shared role stops the step
-    with the role named and the exact administrator calls."""
+    The roles of the reader are checked first (``refuse_roles_other_than_its_own``), before any change. The grants are read from them with their IDs and
+    removed by ID through the role API, which is the one path that accepts the ``workspace`` type (the per-user revoke call refuses it with 400)."""
     changed: list[str] = []
+    status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
+    if status != 200 or not isinstance(listing, dict):
+        raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
+    roles = [role for role in listing.get("roles") or [] if isinstance(role, dict)]
+    refuse_roles_other_than_its_own(client, registry, admin, roles, user_id)
     if permissions.get("is_admin") is True:
         status, _ = client.call("PATCH", f"{registry}/api/2.0/mlflow/users/update-admin", admin, {"username": READER, "is_admin": False})
         if status != 200:
             raise StepFailed(f"the registry answered HTTP {status} when the administrator rights of {READER} were removed")
         changed.append("administrator rights removed")
-    status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
-    if status != 200 or not isinstance(listing, dict):
-        raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
-    for role in listing.get("roles") or []:
+    for role in roles:
         for item in role.get("permissions") or []:
             if item.get("permission") not in ELEVATED_LEVELS:
                 continue
             label = f"{item['permission']} on {item['resource_type']} {item['resource_pattern']}"
-            if not SYNTHETIC_ROLE.fullmatch(str(role.get("name", ""))):
-                raise StepFailed(
-                    f"the grant {label} of {READER} comes from the role {role.get('name')}, which this step does not change. As the administrator, remove it: "
-                    f'DELETE /api/3.0/mlflow/roles/permissions/remove {{"role_permission_id": {item["id"]}}} '
-                    f'or take the role away with DELETE /api/3.0/mlflow/roles/unassign {{"username": "{READER}", "role_id": {role["id"]}}}, then rerun'
-                )
             status, _ = client.call("DELETE", f"{registry}/api/3.0/mlflow/roles/permissions/remove", admin, {"role_permission_id": item["id"]})
             if status != 200:
                 raise StepFailed(f"the registry answered HTTP {status} when the grant {label} of {READER} was removed")
@@ -145,7 +188,7 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
     if status != 200:
         raise StepFailed(f"the registry answered HTTP {status} while the user {READER} was read, created or updated (an administrator login is needed)")
     permissions = reader_permissions(client, registry, reader)
-    lowered = downgrade(client, registry, admin, permissions)
+    lowered = downgrade(client, registry, admin, permissions, reader_identity(client, registry, admin))
     if lowered:
         changed.extend(lowered)
         permissions = reader_permissions(client, registry, reader)
