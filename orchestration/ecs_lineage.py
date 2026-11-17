@@ -18,7 +18,8 @@ Where the parts come from:
   ``config/metadata/ingestion/glue.json`` and ``config/lakehouse/athena_mirror.json``. The names come from those files, never from the live mirror, so
   they are the same while the mirror's ``enabled`` is false; OpenMetadata resolves them once the mirror is on and ingested (it creates no unresolved
   entity). Bronze is a mirror layer like the others (``bronze``), so a bronze table is named the same way and resolves once the mirror holds it.
-- The launch identity, the times, the outcome and the input run bound at launch come from the launch records (``orchestration/ecs_launch.py``).
+- The launch identity, the times, the outcome and the input run bound at launch come from the launch records (``orchestration/ecs_launch.py``). The records
+  write times as ``+00:00``, which OpenMetadata 2.0.7 refuses with a 400, so every event carries its eventTime in the UTC Z form (``utc_time``).
 - The versions come from the job's evidence under ``lakehouse/layer_runs/<layer>/<run>/``: the pin file (the input snapshots) and the output record.
   The input snapshot record is checked by ``snapshots.validate_input_record``: it names exactly the declared inputs, and its pins equal the frozen pins.
   For gold and features the frozen pins are the snapshot set that the input run bound at launch published; the pin must also name that run. Silver pins
@@ -67,7 +68,7 @@ import urllib.parse
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from functools import cache
 from pathlib import Path
 from typing import Any
@@ -84,6 +85,8 @@ ROUTE = "/api/v1/openlineage/lineage"
 DELIVERY_SECONDS = 5.0
 TABLE_EVENTS_SECONDS = 300.0  # one deadline for all the per-table events of a bronze run: the 664 declared tables are 1,328 events, which fit at 0.22 s each
 TRANSPORT_TYPE, TRANSPORT_URL, TRANSPORT_KEY = "OPENLINEAGE__TRANSPORT__TYPE", "OPENLINEAGE__TRANSPORT__URL", "OPENLINEAGE__TRANSPORT__AUTH__API_KEY"
+# the client's HTTP type and the project's (infra/services/airflow.tf sets the second)
+HTTP_TRANSPORT_TYPES = ("http", "hai_lineage.http_transport.UtcHttpTransport")
 JOB_NAMESPACE = "hai-prediction-aws"  # the provider's namespace (AIRFLOW__OPENLINEAGE__NAMESPACE in infra/services/airflow.tf)
 PRODUCER = "https://github.com/ian-mungai/healthcare-hai-prediction"
 EVENT_SCHEMA = "https://openlineage.io/spec/2-0-2/OpenLineage.json#/$defs/RunEvent"
@@ -301,6 +304,29 @@ def timestamp_text(value: Any, where: str) -> str:
     if offset is None or offset.total_seconds() != 0:
         raise LineageRefused(f"{where}: {value!r} is not a UTC time")
     return str(value)
+
+
+FRACTION = re.compile(r":\d{2}[.,](\d+)")
+
+
+def utc_time(value: str) -> str:
+    """An ISO 8601 time in UTC with a trailing Z, keeping the fractional digits (at most six), as OpenMetadata 2.0.7 accepts it and refuses a numeric offset
+    such as ``+00:00`` (the launch records write that form). Anything that is not an ISO 8601 date-time is returned as given. A case compares this with
+    ``services/lineage/http_transport.py`` ``utc_time``, which does the same for the scheduler's events and cannot be imported here (it needs the client)."""
+    if "t" not in value.lower() or value.endswith("Z"):
+        return value
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return value
+    match = FRACTION.search(value)
+    digits = min(len(match.group(1)), 6) if match else 0
+    try:
+        moment = (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(UTC)
+    except OverflowError:
+        return value
+    fraction = f".{moment.microsecond:06d}"[: digits + 1] if digits else ""
+    return moment.isoformat(timespec="seconds").removesuffix("+00:00") + fraction + "Z"
 
 
 def unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -659,7 +685,7 @@ def events(lineage: JobLineage, invocation: Mapping[str, Any], facts: LaunchFact
         found.append(
             {
                 "eventType": event_type,
-                "eventTime": instant,
+                "eventTime": utc_time(instant),
                 "run": {"runId": run_uuid(invocation), "facets": {"haiLaunch": lineage.launch}},
                 "job": {"namespace": JOB_NAMESPACE, "name": f"{invocation['dag_id']}.{invocation['task_id']}"},
                 "inputs": lineage.inputs if event_type == "COMPLETE" else plain_inputs,
@@ -800,9 +826,10 @@ def post_event(url: str, payload: bytes, credential: str, timeout: float = DELIV
 
 
 def http_lineage(environ: Mapping[str, str]) -> tuple[str, str] | None:
-    """The receiver address and credential of the HTTP lineage settings (``infra/services/airflow.tf``), or None when HTTP lineage is not on."""
+    """The receiver address and credential of the HTTP lineage settings (``infra/services/airflow.tf``), or None when HTTP lineage is not on: the type is the
+    client's ``http`` or the project's ``hai_lineage.http_transport.UtcHttpTransport``, which the services stack sets."""
     url, key = environ.get(TRANSPORT_URL, ""), environ.get(TRANSPORT_KEY, "")
-    return (url, key) if environ.get(TRANSPORT_TYPE) == "http" and url and key else None
+    return (url, key) if environ.get(TRANSPORT_TYPE) in HTTP_TRANSPORT_TYPES and url and key else None
 
 
 def send_within(lines: Sequence[str], url: str, credential: str, seconds: float) -> None:

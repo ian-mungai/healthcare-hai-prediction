@@ -2979,7 +2979,7 @@ def publisher_host_definition_passes_the_launch_preflight() -> None:
 
 
 HTTP_LINEAGE = {
-    "OPENLINEAGE__TRANSPORT__TYPE": "http",
+    "OPENLINEAGE__TRANSPORT__TYPE": "hai_lineage.http_transport.UtcHttpTransport",  # as infra/services/airflow.tf sets it
     "OPENLINEAGE__TRANSPORT__URL": "http://10.0.0.5:8585",
     "OPENLINEAGE__TRANSPORT__ENDPOINT": "api/v1/openlineage/lineage",
     "OPENLINEAGE__TRANSPORT__TIMEOUT": "5",

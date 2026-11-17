@@ -12,7 +12,10 @@ from __future__ import annotations
 import ast
 import copy
 import hashlib
+import importlib
 import json
+import re
+import sys
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -20,8 +23,9 @@ from contextlib import contextmanager
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from typing import Any
+from unittest import mock
 
 from jsonschema import Draft202012Validator
 from referencing import Registry, Resource
@@ -690,11 +694,29 @@ def unreadable_output_record() -> None:
     require(found["inputs"] == [] and found["outputs"] == [], f"the live facets name no dataset: {found}")
 
 
-class Receiver:
-    """A local HTTP stand-in of OpenMetadata's lineage route. ``delay`` holds every reply that long, as a slow or hung receiver does."""
+OFFSET_TIME = re.compile(r"[+-]\d{2}:?\d{2}$")
+OPENMETADATA_REFUSAL = json.dumps({"code": 400, "message": "Invalid request format"}).encode()
 
-    def __init__(self, delay: float = 0.0) -> None:
+
+def resolve(event: dict[str, Any], catalogue: set[tuple[str, str]]) -> tuple[int, dict[str, Any]]:
+    """What OpenMetadata 2.0.7 does with an event (observed Nov 16 2026): an eventTime with a numeric offset is refused with 400, a dataset is found by its
+    last two name parts (``<schema>.<table>``, whatever its namespace and database part) among the catalogued tables, and a COMPLETE event draws an edge from
+    every resolved input to every resolved output."""
+    if OFFSET_TIME.search(str(event.get("eventTime", ""))):
+        return 400, json.loads(OPENMETADATA_REFUSAL)
+    found = {side: [item for item in event.get(side, []) if tuple(item["name"].split(".")[-2:]) in catalogue] for side in ("inputs", "outputs")}
+    unresolved = [item["name"] for side in ("inputs", "outputs") for item in event.get(side, []) if tuple(item["name"].split(".")[-2:]) not in catalogue]
+    edges = len(found["inputs"]) * len(found["outputs"]) if event.get("eventType") == "COMPLETE" else 0
+    return 200, {"status": "success", "lineageEdgesCreated": edges, "unresolvedDatasets": unresolved}
+
+
+class Receiver:
+    """A local HTTP stand-in of OpenMetadata's lineage route. ``delay`` holds every reply that long, as a slow or hung receiver does. With a ``catalogue`` of
+    ``(schema, table)`` pairs it answers as ``resolve`` says, and ``replies`` keeps the answer to each event."""
+
+    def __init__(self, delay: float = 0.0, catalogue: set[tuple[str, str]] | None = None) -> None:
         self.requests: list[dict[str, Any]] = []
+        self.replies: list[tuple[int, dict[str, Any]]] = []
         self.delay = delay
         self.release = threading.Event()
         owner = self
@@ -705,8 +727,14 @@ class Receiver:
                 owner.requests.append({"path": self.path, "authorization": self.headers.get("Authorization"), "body": body})
                 if owner.delay:
                     owner.release.wait(owner.delay)
-                reply = json.dumps({"status": "success", "lineageEdgesCreated": 1, "unresolvedDatasets": []}).encode()
-                self.send_response(200)
+                status, found = (
+                    (200, {"status": "success", "lineageEdgesCreated": 1, "unresolvedDatasets": []})
+                    if catalogue is None
+                    else resolve(json.loads(body), catalogue)
+                )
+                owner.replies.append((status, found))
+                reply = json.dumps(found).encode()
+                self.send_response(status)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(reply)))
                 self.end_headers()
@@ -722,8 +750,8 @@ class Receiver:
 
 
 @contextmanager
-def receiving(delay: float = 0.0) -> Iterator[Receiver]:
-    receiver = Receiver(delay)
+def receiving(delay: float = 0.0, catalogue: set[tuple[str, str]] | None = None) -> Iterator[Receiver]:
+    receiver = Receiver(delay, catalogue)
     receiver.thread.start()
     try:
         yield receiver
@@ -897,13 +925,14 @@ def base_row_digest_of(run: str, committed_at: str, snapshot_set: dict[str, int]
 
 
 def model_set_evidence(**change: Any) -> tuple[Any, dict[str, Any], ecs_lineage.LaunchFacts]:
-    """Evidence of the model set m1's run over a base features run: the base run's record and its own Feast apply record (the publication it committed, with
-    its commit time), the model run's pin with the digest of the base row, its one scoped table and its facts. ``change`` replaces one part of the evidence:
-    ``pin_digest``, ``pin_time`` (the commit time the pin's digest was made from), ``apply_time``, ``apply_run``, ``drift`` (a snapshot of the base record that
-    changes after the pin) or ``apply=False`` (no apply record)."""
+    """Evidence of a model set's run over a base features run: the base run's record and its own Feast apply record (the publication it committed, with its
+    commit time), the model run's pin with the digest of the base row, its one scoped table and its facts. ``change`` replaces one part of the evidence:
+    ``model`` (the set, m1 by default), ``pin_digest``, ``pin_time`` (the commit time the pin's digest was made from), ``apply_time``, ``apply_run``, ``drift``
+    (a snapshot of the base record that changes after the pin) or ``apply=False`` (no apply record)."""
+    model = str(change.get("model", "m1"))
     bucket = template_bucket()
     base, layer = RUN_OF["features"], "lakehouse/layer_runs/features"
-    declared = ecs_lineage.declared_lineage("features_m1")
+    declared = ecs_lineage.declared_lineage(f"features_{model}")
     domain = tables_of(declared["inputs"])
     base_set = {**tables_of(ecs_lineage.declared_lineage("features")["outputs"]), **domain}
     drifted = {**base_set, "feature_bridge_geography_measures": 999} if change.get("drift") else base_set
@@ -920,9 +949,9 @@ def model_set_evidence(**change: Any) -> tuple[Any, dict[str, Any], ecs_lineage.
     pin = {"schema": 1, "run_id": MODEL_RUN, "mode": "real", "namespace": "features", "source_run_id": base, "snapshot_set": domain, "base_row_sha256": digest}
     put(bucket, f"{layer}/{MODEL_RUN}/base_pins.json", pin)
     scoped = tables_of(declared["outputs"])
-    record = {"schema": 1, "run_id": MODEL_RUN, "mode": "real", "namespace": "features", "snapshot_set": scoped, "feature_set": "m1", "base_run": base}
+    record = {"schema": 1, "run_id": MODEL_RUN, "mode": "real", "namespace": "features", "snapshot_set": scoped, "feature_set": model, "base_run": base}
     put(bucket, f"{layer}/{MODEL_RUN}/features_snapshot.json", record)
-    facts_of = ecs_lineage.LaunchFacts(MODEL_RUN, "features", 1, START, END, "succeeded", base, "m1")
+    facts_of = ecs_lineage.LaunchFacts(MODEL_RUN, "features", 1, START, END, "succeeded", base, model)
     return bucket, declared, facts_of
 
 
@@ -948,6 +977,159 @@ def model_set_digest_is_bound_to_its_base_row() -> None:
         require(word in str(error), f"{name} is refused with {error}")
 
 
+Z_TIME = re.compile(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z")
+PROJECT_TRANSPORT = "hai_lineage.http_transport.UtcHttpTransport"  # OPENLINEAGE__TRANSPORT__TYPE in infra/services/airflow.tf
+
+
+def event_times_leave_in_the_z_form() -> None:
+    """The launch records stamp their times with ``orchestration.ecs_launch.iso`` (``+00:00``), which OpenMetadata 2.0.7 refuses with 400. Every event that
+    leaves ``ecs_lineage`` (the events, the per-table events, the replay and its send) carries eventTime in the UTC Z form, for the same instant."""
+    rig = Rig()
+    evidence_bucket(rig)
+    operator(rig, None).execute(context())
+    found = source(rig, spec(), DECLARED["gold"])
+    record = ecs_lineage.launch_facts(found.store, RUN, "gold", 1)
+    require(
+        record.started_at.endswith("+00:00") and record.ended_at.endswith("+00:00"),
+        f"the launch records give {record.started_at}: the case needs the iso() form",
+    )
+    for label, events in (("the events", found.events()), ("the constant times of the cases", built("gold"))):
+        times = [event["eventTime"] for event in events]
+        require(all(Z_TIME.fullmatch(time_) for time_ in times), f"{label} carry eventTime {times}")
+    require([event["eventTime"] for event in built("gold")] == ["2026-11-04T10:00:00Z", "2026-11-04T10:30:00Z"], "the instant is the launch's, in UTC")
+    arguments = ["--bucket", BUCKET, "--job", "gold", "--run-id", RUN, "--attempt", "1", "--template", "gold_build"]
+    arguments += ["--dag-id", "gold_transform_dag", "--task-id", "gold_build", "--dag-run-id", f"manual__{RUN}"]
+    with receiving(catalogue=set()) as receiver:
+        lines = ecs_lineage.replay(rig.bucket, arguments, declared=DECLARED["gold"], send=(receiver.url, CREDENTIAL))
+        sent = found.send_table_events(
+            {"OPENLINEAGE__TRANSPORT__TYPE": "http", "OPENLINEAGE__TRANSPORT__URL": receiver.url, ecs_lineage.TRANSPORT_KEY: CREDENTIAL}
+        )
+    require(len(lines) == 4 and sent == 2, f"{len(lines)} replayed events and {sent} per-table events were sent")
+    require(all(Z_TIME.fullmatch(json.loads(line)["eventTime"]) for line in lines), "the replayed lines carry the Z form")
+    require(all(status == 200 for status, _ in receiver.replies) and len(receiver.replies) == 6, f"the receiver answered {receiver.replies}")
+
+
+def utc_time_is_the_transports_helper() -> None:
+    """``ecs_lineage.utc_time`` (standard library only: the module runs where the OpenLineage client may be missing) gives what the project transport's own
+    ``utc_time`` (services/lineage/http_transport.py, imported here over a stand-in of the client it imports) gives for every string form."""
+    stubs: dict[str, Any] = {name: ModuleType(name) for name in ("openlineage", "openlineage.client", "openlineage.client.transport")}
+    stubs["openlineage.client.transport.http"] = SimpleNamespace(HttpTransport=type("HttpTransport", (), {}))
+    with mock.patch.dict(sys.modules, stubs):
+        module = importlib.import_module("services.lineage.http_transport")  # a literal name: the launcher input scan follows it
+    forms = [
+        "2026-11-04T10:00:00+00:00",
+        "2026-11-04T10:00:00.123456+00:00",
+        "2026-11-04T10:00:00.1+00:00",
+        "2026-11-04T10:00:00,5+00:00",
+        "2026-11-04T10:00:00.1234567+00:00",
+        "2026-11-04T12:00:00+02:00",
+        "2026-11-04T10:00:00",
+        "2026-11-04T10:00:00Z",
+        "2026-11-04T10:00:00.5Z",
+        "2026-11-04",
+        "not a time",
+        "",
+    ]
+    for form in forms:
+        require(ecs_lineage.utc_time(form) == module.utc_time(form), f"{form!r}: {ecs_lineage.utc_time(form)!r} is not {module.utc_time(form)!r}")
+    require(ecs_lineage.utc_time("2026-11-04T12:00:00+02:00") == "2026-11-04T10:00:00Z", "another offset is converted to UTC")
+
+
+def table_events_are_sent_for_the_project_transport_type() -> None:
+    """``infra/services/airflow.tf`` sets OPENLINEAGE__TRANSPORT__TYPE to the project transport (``hai_lineage.http_transport.UtcHttpTransport``), not to
+    ``http``, so the per-table events leave for the receiver of the project's HTTP settings under that type too; any other type, a missing address or a
+    missing key sends nothing."""
+    require(f'= "{PROJECT_TRANSPORT}"' in (ROOT / "infra/services/airflow.tf").read_text(), "the services stack no longer names the project transport")
+    rig = Rig()
+    evidence_bucket(rig)
+    operator(rig, None).execute(context())
+    found = source(rig, spec(), DECLARED["gold"])
+    with receiving() as receiver:
+        base = {"OPENLINEAGE__TRANSPORT__URL": receiver.url, ecs_lineage.TRANSPORT_KEY: CREDENTIAL}
+        for kind, wanted in ((PROJECT_TRANSPORT, 2), ("http", 2), ("hai_lineage.provider_transport.SafeTransport", 0), ("console", 0), ("", 0)):
+            sent = found.send_table_events({**base, "OPENLINEAGE__TRANSPORT__TYPE": kind})
+            require(sent == wanted, f"type {kind!r} sent {sent} events, not {wanted}")
+        require(
+            found.send_table_events({"OPENLINEAGE__TRANSPORT__TYPE": PROJECT_TRANSPORT, ecs_lineage.TRANSPORT_KEY: CREDENTIAL}) == 0, "no address, nothing sent"
+        )
+        require(
+            found.send_table_events({"OPENLINEAGE__TRANSPORT__TYPE": PROJECT_TRANSPORT, "OPENLINEAGE__TRANSPORT__URL": receiver.url}) == 0,
+            "no key, nothing sent",
+        )
+    require(len(receiver.requests) == 4, f"{len(receiver.requests)} requests reached the receiver")
+
+
+def catalogue_of_the_mirror() -> set[tuple[str, str]]:
+    """The ``(schema, table)`` of every table the Glue mirror catalogues, from the code that writes them (the bronze table map, the pin, the silver, gold and
+    features publish plans and each model set's plan), not from the files ``declared_lineage`` reads."""
+    from scripts.features import features_publish
+
+    schema = json.loads((ROOT / ecs_lineage.FEATURE_SCHEMA_FILE).read_text())
+    found = {tuple(item["name"].split(".")[-2:]) for lineage in code_derived_lineage().values() for side in lineage.values() for item in side}
+    for model in schema["model_sets"]:
+        found |= {(MIRROR_SCHEMA["features"], table) for table in features_publish.publish_plan("real", feature_set=model).tables}
+    return {(str(schema_name), str(table)) for schema_name, table in found}
+
+
+LAYER_DAGS = ["features_base_dag", *(f"features_m{number}_dag" for number in range(1, 7)), "gold_transform_dag", "silver_transform_dag"]
+
+
+def layer_dag_names_resolve_in_the_catalogue() -> None:
+    """Each DAG whose job sends per-table events (the silver, gold and features DAGs and the six model set DAGs) emits datasets that a stand-in of the
+    OpenMetadata lineage route resolves to catalogued tables: every name is in the Glue database of its layer (inputs one layer below or in the layer itself, a
+    model set's inputs and output in features), none is unresolved, every COMPLETE event draws an edge
+    and the edges the stand-in counts are the table pairs of the events."""
+    dags = json.loads((ROOT / ecs_lineage.HOST_FILE).read_text())["dags"]
+    mapped = sorted(dag for dag, family in dags.items() if ecs_lineage.lineage_layer(family) in ecs_lineage.TABLE_EVENT_JOBS)
+    require(mapped == sorted(LAYER_DAGS), f"the DAGs whose jobs send table events are {mapped}, not {sorted(LAYER_DAGS)}")
+    wanted = catalogue_of_the_mirror()
+    below = {"silver": "bronze", "gold": "silver", "features": "gold"}
+    for dag in sorted(LAYER_DAGS):
+        family = dags[dag]
+        layer, model = ecs_lineage.lineage_layer(family), ecs_lineage.model_set_of(family)
+        if model:
+            bucket, declared, found = model_set_evidence(model=model)
+            domain = [item["name"].split(".")[-1] for item in declared["inputs"]]
+            reads = {item["name"].split(".")[-1]: [{"layer": "features", "table": table} for table in domain] for item in declared["outputs"]}
+            put(bucket, f"metadata/dbt/features/{MODEL_RUN}/table_inputs.json", {"schema": 1, "layer": "features", "run_id": MODEL_RUN, "tables": reads})
+        else:
+            bucket, declared, found = template_bucket(), ecs_lineage.declared_lineage(family), facts(family)
+        events = ecs_lineage.layer_table_events(ecs_lineage.S3Evidence(bucket, BUCKET), declared, {**invocation(layer), "dag_id": dag}, found)
+        completes = [event for event in events if event["eventType"] == "COMPLETE"]
+        require(len(completes) == len(declared["outputs"]), f"{dag}: {len(completes)} table events for {len(declared['outputs'])} published tables")
+        names = {item["name"] for event in events for side in ("inputs", "outputs") for item in event[side]}
+        inputs_in = tuple(
+            f"hai_lakehouse.hai_mirror_{schema}." for schema in {"features" if model else below[layer], layer}
+        )  # a gold or features table may read its own layer
+        require(
+            all(item["name"].startswith(f"hai_lakehouse.hai_mirror_{layer}.") for event in completes for item in event["outputs"]),
+            f"{dag}: an output is not in {layer}",
+        )
+        require(all(item["name"].startswith(inputs_in) for event in completes for item in event["inputs"]), f"{dag}: an input is not in {inputs_in}")
+        require(names <= {item["name"] for side in declared.values() for item in side}, f"{dag}: emitted a table it did not declare")
+        if model:
+            require({item["name"] for event in completes for item in event["outputs"]} == {declared["outputs"][0]["name"]}, f"{dag}: not the one set table")
+        with receiving(catalogue=wanted) as receiver:
+            for event in events:
+                require(ecs_lineage.post_event(receiver.url, ecs_lineage.canonical(event).encode(), CREDENTIAL) == 200, f"{dag}: an event was refused")
+        replies = [found for _, found in receiver.replies]
+        require(
+            all(reply["unresolvedDatasets"] == [] for reply in replies),
+            f"{dag}: unresolved {[r['unresolvedDatasets'] for r in replies if r['unresolvedDatasets']][:2]}",
+        )
+        require(
+            all(reply["lineageEdgesCreated"] > 0 for event, reply in zip(events, replies, strict=True) if event["eventType"] == "COMPLETE"),
+            f"{dag}: a COMPLETE draws no edge",
+        )
+        require(sum(reply["lineageEdgesCreated"] for reply in replies) == len(table_pairs(events)), f"{dag}: edges differ from the table pairs")
+    outside = ecs_lineage.dataset("gold", "fact_hai_measure")
+    require(
+        resolve({"eventType": "COMPLETE", "eventTime": "2026-11-04T10:00:00Z", "inputs": [], "outputs": [outside]}, set())[1]["unresolvedDatasets"]
+        == [outside["name"]],
+        "the stand-in resolves nothing outside its catalogue",
+    )
+
+
 CASES: dict[str, Callable[[], None]] = {
     "model_set_digest_is_bound_to_its_base_row": model_set_digest_is_bound_to_its_base_row,
     "model_set_families_carry_the_features_layer": model_set_families_carry_the_features_layer,
@@ -967,6 +1149,10 @@ CASES: dict[str, Callable[[], None]] = {
     "receiver_gets_the_bearer_and_the_timeout": receiver_gets_the_bearer_and_the_timeout,
     "replay_rebuilds_the_same_events": replay_rebuilds_the_same_events,
     "adopted_retry_keeps_its_lineage": adopted_retry_keeps_its_lineage,
+    "event_times_leave_in_the_z_form": event_times_leave_in_the_z_form,
+    "utc_time_is_the_transports_helper": utc_time_is_the_transports_helper,
+    "table_events_are_sent_for_the_project_transport_type": table_events_are_sent_for_the_project_transport_type,
+    "layer_dag_names_resolve_in_the_catalogue": layer_dag_names_resolve_in_the_catalogue,
     "spec_copies_are_pinned": spec_copies_are_pinned,
     "module_check_agrees": module_check_agrees,
     "imports_stay_in_the_image": imports_stay_in_the_image,
