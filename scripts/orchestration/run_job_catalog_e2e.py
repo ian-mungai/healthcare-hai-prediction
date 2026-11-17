@@ -15,7 +15,7 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
-from scripts.orchestration import airflow_mount_cases, ecs_adapter_cases, ecs_chain_cases, layer_walk_cases, override_docs_cases
+from scripts.orchestration import airflow_mount_cases, ecs_adapter_cases, ecs_chain_cases, ecs_send_boundary_cases, layer_walk_cases, override_docs_cases
 from scripts.process import run_command
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -28,6 +28,8 @@ SOURCES = (
     "config/orchestration/ecs_broker_jobs.schema.json",
     "scripts/orchestration/ecs_fake.py",
     "scripts/orchestration/ecs_adapter_cases.py",
+    "scripts/orchestration/ecs_send_boundary_cases.py",
+    "scripts/loopback_trickle.py",
     "scripts/orchestration/airflow_mount_cases.py",
     "scripts/orchestration/override_docs_cases.py",
     "scripts/orchestration/layer_walk_cases.py",
@@ -41,7 +43,7 @@ SOURCES = (
 def suites() -> dict[str, dict[str, Callable[[], None]]]:
     """Every suite, imported without a guard: a suite that cannot be imported stops the run with its error."""
     return {
-        "adapter": ecs_adapter_cases.CASES,
+        "adapter": {**ecs_adapter_cases.CASES, **ecs_send_boundary_cases.CASES},
         "chain": ecs_chain_cases.CASES,
         "airflow": airflow_mount_cases.CASES,
         "overrides": override_docs_cases.CASES,
