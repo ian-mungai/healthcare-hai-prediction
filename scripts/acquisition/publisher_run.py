@@ -222,15 +222,17 @@ def require_bound_queue(queue: Path, environment: Mapping[str, str]) -> None:
 
 
 RUN_ID_FORM = re.compile(r"ingestion_([a-f0-9]{8})(?:_([2-9]|[1-9][0-9]))?")
-RETRY_DAYS = 2
+RETRY_FIRST_DAY, RETRY_LAST_DAY = 2, 3  # the retry period: days 2 and 3 of the month, the day a retry run ID ends in
 
 
 def retry_run_id(original_run: str, day: int) -> str:
     """The run ID of the retry of ``original_run`` on ``day``: ``ingestion_retry_<hex>_<day>`` with the original's hex, and its attempt suffix before the day.
     The launch derives it by the same rule, and a test keeps both equal."""
     found = RUN_ID_FORM.fullmatch(original_run)
-    if found is None or isinstance(day, bool) or not 1 <= day <= RETRY_DAYS:
-        raise PublisherError(f"The retry names an original run that is not an ingestion run ID or a retry day outside one to {RETRY_DAYS}.")
+    if found is None or isinstance(day, bool) or not RETRY_FIRST_DAY <= day <= RETRY_LAST_DAY:
+        raise PublisherError(
+            f"The retry names an original run that is not an ingestion run ID or a retry day that is not day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY}."
+        )
     attempt = "" if found[2] is None else f"_{found[2]}"
     return f"ingestion_retry_{found[1]}{attempt}_{day}"
 
@@ -252,8 +254,8 @@ def check_retry(env: Mapping[str, str]) -> tuple[str, int] | None:
     original, day_text = named["PUBLISHER_ORIGINAL_RUN"], named["PUBLISHER_RETRY_DAY"]
     if not RUN_ID_FORM.fullmatch(original):
         raise PublisherError("The retry names an original run that is not a run ID.")
-    if not re.fullmatch(f"[1-{RETRY_DAYS}]", day_text):
-        raise PublisherError(f"The retry day is outside one to {RETRY_DAYS}.")
+    if not re.fullmatch(f"[{RETRY_FIRST_DAY}-{RETRY_LAST_DAY}]", day_text):
+        raise PublisherError(f"The retry day is not day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY}.")
     if env["RUN_ID"] != retry_run_id(original, int(day_text)):
         raise PublisherError("The retry does not run under the run ID of that day.")
     return original, int(day_text)
@@ -271,7 +273,7 @@ def outstanding_units(storage: Any, root: str, original: str, day: int) -> froze
     if first is None:
         raise PublisherError("The original run of the retry has no run record on this capture root.")
     outstanding = {item["snapshot_id"] for item in first["units"]["failed"]} | set(first["units"]["paused_not_attempted"])
-    for earlier in range(1, day):
+    for earlier in range(RETRY_FIRST_DAY, day):
         found = read_run_record(storage, root, retry_run_id(original, earlier))
         if found is not None:
             outstanding -= {item["snapshot_id"] for name in ("completed", "changed", "unchanged") for item in found["units"][name]}

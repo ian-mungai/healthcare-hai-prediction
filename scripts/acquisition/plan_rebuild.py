@@ -22,7 +22,7 @@ from scripts.acquisition.transport import CaptureError
 REPORT_FOLDER = "plan_rebuild"
 REPORT_JSON = "report.json"
 REPORT_TEXT = "report.txt"
-RUN_ID = re.compile(r"ingestion_(retry_)?[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?(?(1)_[1-2])")
+RUN_ID = re.compile(r"ingestion_(retry_)?[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?(?(1)_[2-3])")
 # The file roles a listing source may name: the collected roles and the reference roles.
 ROLES = frozenset({"data", "api_page", "dictionary", "methodology", "layout"})
 ENTRY_KEYS = frozenset({"source_id", "url", "role", "mode"})

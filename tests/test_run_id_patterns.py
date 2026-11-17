@@ -93,9 +93,9 @@ def test_the_acquisition_copies_refuse_everything_but_an_ingestion_run(run: str)
 
 
 def test_the_retry_run_ids_of_the_job_and_the_plan_report_agree() -> None:
-    for run in (f"ingestion_retry_{HEX}_1", f"ingestion_retry_{HEX}_2_2"):
+    for run in (f"ingestion_retry_{HEX}_2", f"ingestion_retry_{HEX}_2_3"):
         check(plan_rebuild.RUN_ID.fullmatch(run) is not None, f"the plan report refuses {run}")
-    for run in (f"ingestion_retry_{HEX}_3", f"ingestion_retry_{HEX}"):
+    for run in (f"ingestion_retry_{HEX}_4", f"ingestion_retry_{HEX}_1", f"ingestion_retry_{HEX}"):
         check(plan_rebuild.RUN_ID.fullmatch(run) is None, f"the plan report accepts {run}")
 
 

@@ -18,11 +18,13 @@ DAGS = ("training_dag", "model_promotion_dag")
 MODEL_NAMES = {"m1": "ols", "m2": "elastic_net", "m3": "mixed_effects", "m4": "gradient_boosting", "m5": "spatial", "m6": "fixed_effects"}
 INFECTION_NAMES = {"HAI_1": "clabsi", "HAI_2": "cauti", "HAI_3": "ssi_colon", "HAI_4": "ssi_hysterectomy", "HAI_5": "mrsa", "HAI_6": "cdiff"}
 MAX_ATTEMPT = 99
-RETRY_DAYS = 2
+# The retry period is days 2 and 3 of the month (owner, Nov 16 2026, 9:06 AM PST); a retry run ID ends in its day of the month.
+RETRY_FIRST_DAY = 2
+RETRY_LAST_DAY = 3
 CHAIN_STEPS = ("canary_deploy", "canary", "promote", "release", "stable_deploy", "notice")
 # The names of a run ID without a qualifier, with a model name, with an infection name.
 PLAIN_NAMES = ("ingestion", "bronze", "silver", "gold", "features", "metadata", "research", "serving", "promotion")
-MODEL_QUALIFIED = ("features", "drift", "training", "research")
+MODEL_QUALIFIED = ("features", "drift", "training", "research", "reload")
 HEX_DIGITS = "[a-f0-9]{8}"
 ATTEMPT_TAIL = "(?:_(?:[2-9]|[1-9][0-9]))?"
 
@@ -33,7 +35,7 @@ def _alternatives(names: Any) -> str:
 
 _MODELS = _alternatives(MODEL_NAMES.values())
 _INFECTIONS = _alternatives(INFECTION_NAMES.values())
-RETRY_RUN_ID = f"ingestion_retry_{HEX_DIGITS}{ATTEMPT_TAIL}_[1-{RETRY_DAYS}]"
+RETRY_RUN_ID = f"ingestion_retry_{HEX_DIGITS}{ATTEMPT_TAIL}_[{RETRY_FIRST_DAY}-{RETRY_LAST_DAY}]"
 # Every run ID of the form, one alternative for each name in the names table of the design.
 RUN_ID = (
     f"(?:(?:{_alternatives(PLAIN_NAMES)})_{HEX_DIGITS}{ATTEMPT_TAIL}"

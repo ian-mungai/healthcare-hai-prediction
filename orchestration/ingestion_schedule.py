@@ -17,7 +17,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from orchestration.training_contract import RETRY_DAYS, compose_run_id, new_run_hex, run_id_parts, run_id_pattern, scheduled_run_hex
+from orchestration.training_contract import RETRY_FIRST_DAY, RETRY_LAST_DAY, compose_run_id, new_run_hex, run_id_parts, run_id_pattern, scheduled_run_hex
 
 ENVIRONMENT_SETTING = "HAI_ENVIRONMENT"
 PRODUCTION = "prod"
@@ -31,9 +31,9 @@ SCHEDULED_RUN = "scheduled"
 SCHEDULED_RUN_TYPE = "scheduled"
 MONTHLY_KIND = "monthly"
 RETRY_KIND = "retry"
-# The retry period is days 2 and 3 of the month at midnight UTC, the original being the monthly run of day 1: retry day 1 is day 2 of the month and retry day 2
-# is day 3 (owner, Nov 16 2026, 9:06 AM PST). ``RETRY_DAYS`` is the number of retry days.
-RETRY_SCHEDULE = f"0 0 2-{RETRY_DAYS + 1} * *"
+# The retry period is days 2 and 3 of the month at midnight UTC, the original being the monthly run of day 1 (owner, Nov 16 2026, 9:06 AM PST). A retry day
+# is its day of the month, and a retry run ID ends in it (``ingestion_retry_<hex>_2``).
+RETRY_SCHEDULE = f"0 0 {RETRY_FIRST_DAY}-{RETRY_LAST_DAY} * *"
 # The retry day a scheduled retry's form carries by default. Only a scheduled run replaces it; a hand trigger must name its original run and its day.
 SCHEDULED_RETRY_DAY = 0
 
@@ -88,7 +88,7 @@ def resolve_kind(requested: str, context: Mapping[str, Any]) -> str:
 
 def resolve_retry(original: str, day: int, context: Mapping[str, Any]) -> tuple[str, int]:
     """The original run and the day of the current retry. A hand trigger names both. A scheduled run names neither: its logical date, which must be midnight
-    UTC on day 2 or 3 of a month, gives the day (the day of the month less one) and the monthly run of day 1 as the original. Half a name is refused."""
+    UTC on day 2 or 3 of a month, gives the day (the day of the month) and the monthly run of day 1 as the original. Half a name is refused."""
     if original != SCHEDULED_RUN and day != SCHEDULED_RETRY_DAY:
         return original, day
     if original != SCHEDULED_RUN or day != SCHEDULED_RETRY_DAY:
@@ -96,21 +96,21 @@ def resolve_retry(original: str, day: int, context: Mapping[str, Any]) -> tuple[
     if not is_scheduled(context):
         raise ValueError("this retry is not scheduled and names no original run and day")
     utc = context["dag_run"].logical_date.astimezone(UTC)
-    if (utc.hour, utc.minute, utc.second, utc.microsecond) != (0, 0, 0, 0) or not 2 <= utc.day <= RETRY_DAYS + 1:
+    if (utc.hour, utc.minute, utc.second, utc.microsecond) != (0, 0, 0, 0) or not RETRY_FIRST_DAY <= utc.day <= RETRY_LAST_DAY:
         raise ValueError("a scheduled retry runs at midnight UTC on day 2 or 3 of the month")
-    return scheduled_run_id(utc.replace(day=1)), utc.day - 1
+    return scheduled_run_id(utc.replace(day=1)), utc.day
 
 
 def retry_run_id(original_run: str, day: int) -> str:
-    """The run ID of the retry of ``original_run`` on retry day ``day`` (1 to ``RETRY_DAYS``): ``ingestion_retry_<hex>_<day>`` with the original run's hex.
+    """The run ID of the retry of ``original_run`` on day ``day`` of the month (2 or 3): ``ingestion_retry_<hex>_<day>`` with the original run's hex.
 
-    A later attempt of the original run puts its suffix before the day (``ingestion_retry_<hex>_2_1``). The same run and day always give the same ID, so a
-    repeat of a retry day joins its recorded launch and starts nothing new.
+    A later attempt of the original run puts its suffix before the day (``ingestion_retry_<hex>_2_3`` is attempt 2 on day 3). The same run and day always
+    give the same ID, so a repeat of a retry day joins its recorded launch and starts nothing new.
     """
     if not isinstance(original_run, str) or not re.fullmatch(RUN_ID_PATTERN, original_run):
         raise ValueError("the original run ID is not a run ID of an ingestion run")
-    if isinstance(day, bool) or not isinstance(day, int) or not 1 <= day <= RETRY_DAYS:
-        raise ValueError(f"the retry day is outside one to {RETRY_DAYS}")
+    if isinstance(day, bool) or not isinstance(day, int) or not RETRY_FIRST_DAY <= day <= RETRY_LAST_DAY:
+        raise ValueError(f"the retry day is not day {RETRY_FIRST_DAY} or {RETRY_LAST_DAY} of the month")
     parts = run_id_parts(original_run)
     attempt = "" if parts.attempt == 1 else f"_{parts.attempt}"
     return f"ingestion_retry_{parts.hex}{attempt}_{day}"
@@ -125,12 +125,12 @@ def bronze_run_for(ingestion_run: str) -> str:
 
 
 def ingestion_runs_of(bronze_run: str) -> tuple[str, tuple[str, ...]]:
-    """The ingestion run that a bronze run follows and the run of each retry day (1 to ``RETRY_DAYS``), all with the bronze run's hex and attempt."""
+    """The ingestion run that a bronze run follows and the run of each retry day (day 2 and 3), all with the bronze run's hex and attempt."""
     if not isinstance(bronze_run, str) or not re.fullmatch(run_id_pattern("bronze"), bronze_run):
         raise ValueError("only a bronze run follows ingestion runs")
     parts = run_id_parts(bronze_run)
     original = compose_run_id("ingestion", parts.hex, parts.attempt)
-    return original, tuple(retry_run_id(original, day) for day in range(1, RETRY_DAYS + 1))
+    return original, tuple(retry_run_id(original, day) for day in range(RETRY_FIRST_DAY, RETRY_LAST_DAY + 1))
 
 
 def bronze_after_ingestion(ingestion_run: str, context: Mapping[str, Any]) -> str | None:
@@ -142,7 +142,7 @@ def bronze_after_ingestion(ingestion_run: str, context: Mapping[str, Any]) -> st
 def bronze_after_retry(original_run: str, day: int, context: Mapping[str, Any]) -> str | None:
     """The bronze run that a retry day starts, or None: the last day of a scheduled retry period ends the period. A hand retry starts no bronze run; the owner
     starts a bronze run with an attempt suffix when one is wanted."""
-    return bronze_run_for(original_run) if is_scheduled(context) and day == RETRY_DAYS else None
+    return bronze_run_for(original_run) if is_scheduled(context) and day == RETRY_LAST_DAY else None
 
 
 def captured_ids(record: Mapping[str, Any]) -> set[str]:

@@ -242,11 +242,11 @@ def retry_rig() -> Rig:
 
 def retry_schedule_is_production_only() -> None:
     for name, cron in {"prod": "0 0 2-3 * *", "dev": None}.items():
-        params = SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": 1}
+        params = SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY}
         with scheduled(retry_rig(), {schedule.ENVIRONMENT_SETTING: name}, params, "manual", RETRY_DAG) as (current, seen):
             current.run_dag("ingestion_retry_dag.py")
         require(bool(seen) and seen[0]["schedule"] == cron, f"{name} got the retry schedule {seen[0]['schedule'] if seen else None}, not {cron}")
-    with scheduled(retry_rig(), {}, SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": 1}, "manual", RETRY_DAG) as (current, seen):
+    with scheduled(retry_rig(), {}, SCHEDULED_RETRY | {"original_run": ORIGINAL, "day": schedule.RETRY_FIRST_DAY}, "manual", RETRY_DAG) as (current, seen):
         current.run_dag("ingestion_retry_dag.py")
     require(seen[0]["schedule"] is None, "a deployment that names no environment got a retry schedule")
 
@@ -254,19 +254,19 @@ def retry_schedule_is_production_only() -> None:
 def a_scheduled_retry_runs_each_of_the_two_days_once() -> None:
     rig = retry_rig()
     runs = []
-    for day in range(1, 3):
-        date = datetime(2026, 12, 1 + day, tzinfo=UTC)
+    for day in range(schedule.RETRY_FIRST_DAY, schedule.RETRY_LAST_DAY + 1):
+        date = datetime(2026, 12, day, tzinfo=UTC)
         with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, date) as (current, _):
             states = current.run_dag("ingestion_retry_dag.py")
-        require(states == (STARTS if day == schedule.RETRY_DAYS else WAITS), f"retry day {day} did not pass: {states}")
-        environment = rig.environment(day - 1)["run"]
+        require(states == (STARTS if day == schedule.RETRY_LAST_DAY else WAITS), f"retry day {day} did not pass: {states}")
+        environment = rig.environment(day - schedule.RETRY_FIRST_DAY)["run"]
         require(environment["PUBLISHER_RUN_KIND"] == "retry" and environment["HAI_CAPTURE_ROOT"] == "raw/", f"day {day} carried {environment}")
         require(environment["RUN_ID"] == schedule.retry_run_id(ORIGINAL, day), f"day {day} ran under {environment['RUN_ID']}")
         require(
             (environment["PUBLISHER_ORIGINAL_RUN"], environment["PUBLISHER_RETRY_DAY"]) == (ORIGINAL, str(day)),
             f"day {day} did not carry its original run and its day to the container: {environment}",
         )
-        require(rig.environment(day - 1)["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"day {day} did not run the code of its original run")
+        require(rig.environment(day - schedule.RETRY_FIRST_DAY)["fetch"]["CODE_RUN_ID"] == CURRENT_CODE, f"day {day} did not run the code of its original run")
         require(rig.preflight.code_runs.stored(environment["RUN_ID"]) == CURRENT_CODE, f"day {day} was not bound to the code of its original run")
         runs.append(environment["RUN_ID"])
     require(len(set(runs)) == 2 and rig.tasks_started() == 2, f"two distinct retry runs were expected: {runs}")
@@ -310,7 +310,7 @@ def a_retry_of_a_run_with_its_own_code_uses_that_code() -> None:
         states = current.run_dag("ingestion_retry_dag.py")
     require(states == STARTS, f"a retry of a run that ran its own code did not pass: {states}")
     require(rig.environment()["fetch"]["CODE_RUN_ID"] == ORIGINAL, f"the retry did not fetch the code of its original run: {rig.environment()['fetch']}")
-    require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 2)) == ORIGINAL, "the retry was not bound to the run whose code it used")
+    require(rig.preflight.code_runs.stored(schedule.retry_run_id(ORIGINAL, 3)) == ORIGINAL, "the retry was not bound to the run whose code it used")
 
 
 BRONZE_START = [("bronze_chain_dag", "bronze_ab12cd34", {"run_id": "bronze_ab12cd34", "mode": "real"})]
@@ -357,11 +357,11 @@ def an_existing_bronze_run_counts_and_an_api_refusal_fails() -> None:
 
 def the_last_retry_day_starts_bronze_whatever_its_result() -> None:
     bronze = schedule.bronze_run_for(ORIGINAL)
-    for day in range(1, schedule.RETRY_DAYS + 1):
+    for day in range(schedule.RETRY_FIRST_DAY, schedule.RETRY_LAST_DAY + 1):
         rig = retry_rig()
-        with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, 1 + day, tzinfo=UTC)) as (current, _):
+        with scheduled(rig, PRODUCTION, dict(SCHEDULED_RETRY), "scheduled", RETRY_DAG, datetime(2026, 12, day, tzinfo=UTC)) as (current, _):
             current.run_dag("ingestion_retry_dag.py")
-        expected = [("bronze_chain_dag", bronze, {"run_id": bronze, "mode": "real"})] if day == schedule.RETRY_DAYS else []
+        expected = [("bronze_chain_dag", bronze, {"run_id": bronze, "mode": "real"})] if day == schedule.RETRY_LAST_DAY else []
         require(current.dag_runs == expected, f"retry day {day}: the bronze start was {current.dag_runs}")
     steps = importlib.import_module("orchestration.airflow_steps")
     refused = mock.patch.object(steps, "preflight_step", side_effect=TaskRefused("a refusal of the retry day"))
@@ -373,7 +373,7 @@ def the_last_retry_day_starts_bronze_whatever_its_result() -> None:
 
 def a_hand_started_retry_starts_no_bronze_run() -> None:
     rig = retry_rig()
-    with scheduled(rig, PRODUCTION, {"original_run": ORIGINAL, "day": schedule.RETRY_DAYS, "mode": "real"}, "manual", RETRY_DAG) as (current, _):
+    with scheduled(rig, PRODUCTION, {"original_run": ORIGINAL, "day": schedule.RETRY_LAST_DAY, "mode": "real"}, "manual", RETRY_DAG) as (current, _):
         states = current.run_dag("ingestion_retry_dag.py")
     require(states == WAITS and not current.dag_runs, f"a hand retry started bronze: {states} {current.dag_runs}")
 

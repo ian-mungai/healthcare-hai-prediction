@@ -32,8 +32,9 @@ def test_the_names_tables_hold_the_approved_short_names() -> None:
     [
         f"ingestion_{HEX}",
         f"ingestion_{HEX}_2",
-        f"ingestion_retry_{HEX}_1",
         f"ingestion_retry_{HEX}_2",
+        f"ingestion_retry_{HEX}_3",
+        f"ingestion_retry_{HEX}_2_3",
         f"ingestion_retry_{HEX}_3_2",
         f"bronze_{HEX}",
         f"silver_{HEX}_2",
@@ -46,6 +47,8 @@ def test_the_names_tables_hold_the_approved_short_names() -> None:
         f"research_{HEX}",
         f"research_{HEX}_2",
         f"research_spatial_{HEX}",
+        f"reload_elastic_net_{HEX}",
+        f"reload_gradient_boosting_{HEX}_2",
         f"promote_clabsi_{HEX}",
         f"canary_deploy_ssi_colon_{HEX}",
         f"stable_deploy_cdiff_{HEX}_2",
@@ -73,10 +76,14 @@ def test_every_run_id_of_the_new_form_is_valid(run: str) -> None:
         f"unknown_{HEX}",
         f"features_m2_{HEX}",
         f"promote_HAI_1_{HEX}",
+        f"reload_{HEX}",
+        f"reload_m2_{HEX}",
         f"drift_{HEX}",
         f"ingestion_retry_{HEX}",
         f"ingestion_retry_{HEX}_4",
+        f"ingestion_retry_{HEX}_1",
         f"ingestion_retry_{HEX}_0",
+        f"ingestion_retry_{HEX}_2_1",
         f"promote_{HEX}",
         f" silver_{HEX}",
         f"silver_{HEX}\n",
@@ -93,6 +100,8 @@ def test_the_parts_of_a_run_id_are_read_back() -> None:
     check((parts.name, parts.hex, parts.attempt, parts.day) == ("ingestion_retry", HEX, 1, 2), f"{parts}")
     parts = contract.run_id_parts(f"ingestion_retry_{HEX}_3_2")
     check((parts.hex, parts.attempt, parts.day) == (HEX, 3, 2), f"{parts}")
+    parts = contract.run_id_parts(f"ingestion_retry_{HEX}_2_3")
+    check((parts.attempt, parts.day) == (2, 3), f"attempt 2 on day 3: {parts}")
     parts = contract.run_id_parts(f"promote_ssi_hysterectomy_{HEX}")
     check((parts.name, parts.qualifier, parts.attempt) == ("promote", "ssi_hysterectomy", 1), f"{parts}")
     with pytest.raises(ValueError, match="not a run ID"):
@@ -202,7 +211,7 @@ def test_the_record_key_of_a_research_run_takes_only_the_new_form() -> None:
 
 
 def test_the_whole_chain_of_a_pipeline_run_is_valid_at_every_step() -> None:
-    ids = [f"ingestion_{HEX}", f"ingestion_retry_{HEX}_1", f"bronze_{HEX}"]
+    ids = [f"ingestion_{HEX}", f"ingestion_retry_{HEX}_2", f"bronze_{HEX}"]
     for layer in ("silver", "gold", "features", "metadata"):
         ids.append(contract.chain_layer_run(layer, f"bronze_{HEX}"))
     base = f"features_{HEX}"

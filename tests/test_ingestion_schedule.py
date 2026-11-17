@@ -88,25 +88,25 @@ def test_the_retry_schedule_is_days_two_and_three_in_production_only() -> None:
         schedule.retry_schedule_for({"HAI_ENVIRONMENT": "production"})
 
 
-def test_a_retry_run_id_depends_on_the_original_run_and_the_day_alone() -> None:
-    ids = [schedule.retry_run_id(ORIGINAL, day) for day in range(1, 3)]
+def test_a_retry_run_id_depends_on_the_original_run_and_the_day_of_the_month_alone() -> None:
+    ids = [schedule.retry_run_id(ORIGINAL, day) for day in (2, 3)]
     digits = ORIGINAL.removeprefix("ingestion_")
-    check(ids == [f"ingestion_retry_{digits}_1", f"ingestion_retry_{digits}_2"], f"a retry run id is not the original's hex and its day: {ids}")
-    check(ORIGINAL not in ids and schedule.retry_run_id(ORIGINAL, 2) == ids[1], "the retry days do not have run ids of their own or a repeat differs")
+    check(ids == [f"ingestion_retry_{digits}_2", f"ingestion_retry_{digits}_3"], f"a retry run id is not the original's hex and its day of the month: {ids}")
+    check(ORIGINAL not in ids and schedule.retry_run_id(ORIGINAL, 3) == ids[1], "the retry days do not have run ids of their own or a repeat differs")
     second_attempt = f"{ORIGINAL}_2"
-    check(schedule.retry_run_id(second_attempt, 1) == f"ingestion_retry_{digits}_2_1", "the attempt of the original run is not kept before the day")
+    check(schedule.retry_run_id(second_attempt, 3) == f"ingestion_retry_{digits}_2_3", "the attempt of the original run is not kept before the day")
 
 
-@pytest.mark.parametrize("day", [0, 3, 8, -1, True, 1.0, "1"])
-def test_a_retry_day_outside_one_to_two_is_refused(day: Any) -> None:
-    with pytest.raises(ValueError, match="one to 2"):
+@pytest.mark.parametrize("day", [0, 1, 4, 8, -1, True, 2.0, "2"])
+def test_a_retry_day_outside_days_two_and_three_is_refused(day: Any) -> None:
+    with pytest.raises(ValueError, match="day 2 or 3"):
         schedule.retry_run_id(ORIGINAL, day)
 
 
 @pytest.mark.parametrize("original", ["latest", "20261201T000000Z-0a1b2c3d", "silver_0a1b2c3d", "bronze_0a1b2c3d"])
 def test_an_original_run_that_is_not_an_ingestion_run_id_is_refused(original: str) -> None:
     with pytest.raises(ValueError, match="not a run ID"):
-        schedule.retry_run_id(original, 1)
+        schedule.retry_run_id(original, 2)
 
 
 def test_a_hand_started_ingestion_run_has_a_fresh_random_hex() -> None:
@@ -117,7 +117,7 @@ def test_a_hand_started_ingestion_run_has_a_fresh_random_hex() -> None:
 def test_a_scheduled_retry_takes_its_day_and_its_original_run_from_its_logical_date() -> None:
     for day in range(2, 4):
         found = schedule.resolve_retry(schedule.SCHEDULED_RUN, schedule.SCHEDULED_RETRY_DAY, retry_context(day))
-        check(found == (ORIGINAL, day - 1), f"day {day} of the month resolved to {found}")
+        check(found == (ORIGINAL, day), f"day {day} of the month resolved to {found}")
 
 
 @pytest.mark.parametrize("context_of", [retry_context(1), retry_context(4), retry_context(4, 6), {}, context("manual")])
@@ -127,7 +127,7 @@ def test_a_scheduled_retry_outside_its_window_or_not_scheduled_is_refused(contex
 
 
 def test_a_hand_triggered_retry_names_both_its_run_and_its_day_or_is_refused() -> None:
-    check(schedule.resolve_retry(ORIGINAL, 2, context("manual")) == (ORIGINAL, 2), "a retry that names both was changed")
+    check(schedule.resolve_retry(ORIGINAL, 3, context("manual")) == (ORIGINAL, 3), "a retry that names both was changed")
     with pytest.raises(ValueError, match="both"):
         schedule.resolve_retry(ORIGINAL, schedule.SCHEDULED_RETRY_DAY, context("manual"))
     with pytest.raises(ValueError, match="both"):
@@ -135,7 +135,7 @@ def test_a_hand_triggered_retry_names_both_its_run_and_its_day_or_is_refused() -
 
 
 def test_the_job_and_the_launch_derive_the_same_retry_run_id() -> None:
-    for day in range(1, 3):
+    for day in (2, 3):
         check(
             publisher_run.retry_run_id(ORIGINAL, day) == schedule.retry_run_id(ORIGINAL, day),
             f"the retry run id of day {day} differs between the job and the launch",

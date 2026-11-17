@@ -444,7 +444,7 @@ def trigger_forms() -> dict[str, dict[str, Any]]:
     models = ("m1", "m2", "m3", "m4", "m5", "m6")
     return {
         "ingestion_dag": {"run_id": c.PUBLISHER_RUN},
-        "ingestion_retry_dag": {"original_run": c.PUBLISHER_RUN, "day": 1},
+        "ingestion_retry_dag": {"original_run": c.PUBLISHER_RUN, "day": 2},
         "silver_transform_dag": {"run_id": silver},
         "gold_transform_dag": {"run_id": gold, "silver_snapshot_run": silver},
         "features_base_dag": {"run_id": base, "gold_snapshot_run": gold},
@@ -834,7 +834,7 @@ def cases_catalog() -> dict[str, Scenario]:
     def stage_retry(rig: Any) -> None:
         import importlib
 
-        rig.stage_runs(importlib.import_module("orchestration.ingestion_schedule").retry_run_id(c.PUBLISHER_RUN, 1))
+        rig.stage_runs(importlib.import_module("orchestration.ingestion_schedule").retry_run_id(c.PUBLISHER_RUN, 2))
 
     def family(job: str) -> str:
         return f"example_dev_job_{job}_host"
@@ -893,7 +893,7 @@ def cases_catalog() -> dict[str, Scenario]:
             Step("ingestion_dag", {"run_id": c.PUBLISHER_RUN, "mode": "real"}, 1, family("publisher"), job_states()),
             Step(
                 "ingestion_retry_dag",
-                {"original_run": c.PUBLISHER_RUN, "day": 1, "mode": "real"},
+                {"original_run": c.PUBLISHER_RUN, "day": 2, "mode": "real"},
                 1,
                 family("publisher"),
                 job_states(),

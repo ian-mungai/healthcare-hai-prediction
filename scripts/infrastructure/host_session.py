@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from orchestration.training_contract import CODE_RUN, compose_run_id, new_run_hex
+from orchestration.training_contract import CODE_RUN, MODEL_NAMES, compose_run_id, new_run_hex
 from scripts.acquisition.cli_tools import run_argv
 from scripts.acquisition.s3_store import AwsCli, StorageError
 from scripts.infrastructure.render_platform_config import PLATFORM_DIRECTORY, terraform_document
@@ -887,7 +887,7 @@ class Session:
         if self.names.reload is None:
             raise HostSessionError("the jobs stack has no features host task")
         values = {
-            "RUN_ID": compose_run_id("features", new_run_hex()),
+            "RUN_ID": compose_run_id("reload", new_run_hex(), 1, MODEL_NAMES[model]),
             "CODE_RUN_ID": code[0],
             "CODE_SHA256": code[1],
             "POLARIS_URI": f"http://{self.names.host_address}:{POLARIS_PORT}/api/catalog",

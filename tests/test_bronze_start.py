@@ -26,7 +26,7 @@ def context(run_type: str) -> dict[str, Any]:
         (ORIGINAL, f"bronze_{HEX}"),
         (f"{ORIGINAL}_2", f"bronze_{HEX}_2"),
         (f"ingestion_retry_{HEX}_2", f"bronze_{HEX}"),
-        (f"ingestion_retry_{HEX}_3_1", f"bronze_{HEX}_3"),
+        (f"ingestion_retry_{HEX}_3_2", f"bronze_{HEX}_3"),
     ],
 )
 def test_the_bronze_run_takes_the_hex_and_the_attempt_of_its_ingestion_run(ingestion: str, bronze: str) -> None:
@@ -46,9 +46,9 @@ def test_a_hand_started_ingestion_run_starts_bronze_at_once_and_a_scheduled_one_
 
 
 def test_only_the_last_scheduled_retry_day_starts_bronze() -> None:
-    last = schedule.RETRY_DAYS
+    last = schedule.RETRY_LAST_DAY
     check(schedule.bronze_after_retry(ORIGINAL, last, context("scheduled")) == f"bronze_{HEX}", "the last retry day did not start bronze")
-    for day in range(1, last):
+    for day in range(schedule.RETRY_FIRST_DAY, last):
         check(schedule.bronze_after_retry(ORIGINAL, day, context("scheduled")) is None, f"retry day {day} started bronze inside the period")
     check(schedule.bronze_after_retry(ORIGINAL, last, context("manual")) is None, "a hand retry started bronze: only the owner starts a suffixed bronze run")
     check(schedule.bronze_after_retry(f"{ORIGINAL}_2", last, context("scheduled")) == f"bronze_{HEX}_2", "the attempt did not carry")
@@ -56,10 +56,11 @@ def test_only_the_last_scheduled_retry_day_starts_bronze() -> None:
 
 def test_the_ingestion_runs_of_a_bronze_run_are_its_original_and_each_retry_day() -> None:
     check(
-        schedule.ingestion_runs_of(f"bronze_{HEX}") == (ORIGINAL, tuple(f"ingestion_retry_{HEX}_{day}" for day in range(1, schedule.RETRY_DAYS + 1))),
+        schedule.ingestion_runs_of(f"bronze_{HEX}")
+        == (ORIGINAL, tuple(f"ingestion_retry_{HEX}_{day}" for day in range(schedule.RETRY_FIRST_DAY, schedule.RETRY_LAST_DAY + 1))),
         f"{schedule.ingestion_runs_of(f'bronze_{HEX}')}",
     )
-    check(schedule.ingestion_runs_of(f"bronze_{HEX}_2")[1][0] == f"ingestion_retry_{HEX}_2_1", "the attempt is not before the day")
+    check(schedule.ingestion_runs_of(f"bronze_{HEX}_2")[1][0] == f"ingestion_retry_{HEX}_2_2", "the attempt is not before the day")
     with pytest.raises(ValueError, match="bronze"):
         schedule.ingestion_runs_of(ORIGINAL)
 
@@ -128,7 +129,7 @@ def test_the_bronze_run_record_names_the_carried_over_files_and_the_notice(monke
 
     objects = {
         f"raw/ingestion_runs/{ORIGINAL}/run.json": json.dumps(record(["a__1__x", "b__1__x"], [])).encode(),
-        f"raw/ingestion_runs/ingestion_retry_{HEX}_1/run.json": json.dumps(record([], [], ["b__1__x"])).encode(),
+        f"raw/ingestion_runs/ingestion_retry_{HEX}_2/run.json": json.dumps(record([], [], ["b__1__x"])).encode(),
     }
     client = Client(objects)
     result = bronze_run.record_carried_over(client, "bucket", f"bronze_{HEX}", "raw/", topic=f"arn:aws:sns:us-west-2:{'1' * 12}:alerts", notify=client)

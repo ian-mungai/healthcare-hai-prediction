@@ -121,7 +121,9 @@ def static_value(node: ast.expr) -> Any:
     if isinstance(node, ast.JoinedStr):
         return "".join(str(static_value(part.value)) if isinstance(part, ast.FormattedValue) else str(part.value) for part in node.values)
     if isinstance(node, ast.Name):
-        return {**CONTRACT_NAMES, "MODEL": "m1", "RETRY_DAYS": training_contract.RETRY_DAYS}[node.id]
+        return {**CONTRACT_NAMES, "MODEL": "m1", "RETRY_FIRST_DAY": training_contract.RETRY_FIRST_DAY, "RETRY_LAST_DAY": training_contract.RETRY_LAST_DAY}[
+            node.id
+        ]
     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in CONTRACT_NAMES:
         return CONTRACT_NAMES[node.func.id](
             *(static_value(item) for item in node.args), **{item.arg: static_value(item.value) for item in node.keywords if item.arg}

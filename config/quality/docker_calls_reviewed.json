@@ -435,7 +435,7 @@
         "orchestration/network_policy.py": "sha256:9c0812ce8df6116d1a8b1162ede82a8fb86dea495a346b19fab973a3dd24794a",
         "orchestration/online_store.py": "sha256:e846532a2d31d56d455d210679e9b49943246b09969e09adcc719c30e6f0bf45",
         "orchestration/pipeline_session.py": "sha256:2d3f02af924d814ab3a3987c8bb2be185f9feefd7e4ab5a7aadb8b5df6a11376",
-        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc",
+        "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233",
         "scripts/infrastructure/secret_store.py": "sha256:d2cc2111e2483d4105f5e30ad23c5d486cc05f19aaddd9ece319261e1147bd37",
         "scripts/infrastructure/secret_store_stand_in.py": "sha256:346993406097e06051381a300bf3fa73ba9654f0f1f0802a67028dd3e8b59029",
         "scripts/infrastructure/sts_stand_in.py": "sha256:2892a7d92971696bcf4d2c05580d8dfb38de1f92eac66c94d2606561cfb08914",
@@ -1401,9 +1401,9 @@
       "code_sha256": "6eabf6922d0dcfc0c6ab8a78c4a8b071ea00cebd9a4df97104af549b56640e4f",
       "problem": "is used as a value",
       "occurrences": 1,
-      "file_sha256": "639fd1493b11343abdafa7fc1807652d439477548f1d62adf66d30a2c3492e8d",
+      "file_sha256": "5de38f59e6afce8da1a1ea3fa31dd599de1b0e662542c9c68b69cd3e822f8f60",
       "dependencies": {
-        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc",
+        "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233",
         "scripts/acquisition/cli_tools.py": "sha256:d518f204b446de6cda15d9c19267788c22ddac0c2ce39fd9447ebabcd59e65be",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/aws_tasks.py": "sha256:dca6fa6f95196303006a408722814d0f2437db4a7b79789ac92b03ad61d7d824",
@@ -1612,9 +1612,9 @@
       "occurrences": 1,
       "file_sha256": "1b0e386397a6b69fd8071ec0b95621b45696f95caf749288ba3e2a7a3733c1f1",
       "dependencies": {
-        "orchestration/ingestion_schedule.py": "sha256:5430069a7043fbd98f767d183fc30c55b14ecb090a6ea9b934828a10a4f28cbe",
+        "orchestration/ingestion_schedule.py": "sha256:368f2c7d10cf68795c191e70aff0e8e5f452da4b29078c6f932a92a50f35d1d2",
         "orchestration/interface.py": "sha256:1b42a78e7c86b6357f59ba7ec6ef83e733a0e3c4c2c91e92dbf217fc1f966892",
-        "orchestration/training_contract.py": "sha256:221504c5d6b970cfab6bb402920ea32ef35f9ef2e1673cfdf818bbd2b112cbdc"
+        "orchestration/training_contract.py": "sha256:deaaa50169191f45bef094ccd8ecfc28708c635a6f25b37d6752fa15394bd233"
       },
       "reason": "loads the step launcher (orchestration/airflow_steps.py) by the fixed name LAUNCH_MODULE when a step runs, so a container without it still parses the DAGs; that module and the ones it imports call S3, ECS, Logs and Parameter Store clients and start no process",
       "lines": [
@@ -1629,10 +1629,10 @@
       "occurrences": 1,
       "file_sha256": "2dbcc5a784fb7583f8bc168570c97c22d2f7b7b7a967e0d7c055b5eacfbff0c9",
       "dependencies": {
-        "orchestration/ecs_preflight.py": "sha256:a312e5c1d705b88a0ad66cac67b181fabf2dada342c48371ddbe14c4e87b5498",
+        "orchestration/ecs_preflight.py": "sha256:bdb03a763d14e27f1b4d0d11adebf05fc8eefccea233d428ae69fc44a52bb935",
         "scripts/acquisition/s3_store.py": "sha256:94c1943f14f8e63abe523937e530aeccf781c4a98b08fb5dc6a2a12dcdd040f2",
         "scripts/infrastructure/capture_reader.py": "sha256:9f3f4c8da176a956a319ff5f7b41490f6f6cf0ad5a4f75dc358a16803c34221e",
-        "scripts/infrastructure/host_session.py": "sha256:639fd1493b11343abdafa7fc1807652d439477548f1d62adf66d30a2c3492e8d",
+        "scripts/infrastructure/host_session.py": "sha256:5de38f59e6afce8da1a1ea3fa31dd599de1b0e662542c9c68b69cd3e822f8f60",
         "scripts/infrastructure/render_jobs_config.py": "sha256:e13b51367f82ebab9ff4e6601b0a3088a48195ef84cad6d21ea9101da75e81cb",
         "scripts/infrastructure/render_project_config.py": "sha256:41d2fbf0d0b984dc12e0307d628a22afa1f3e61498b1164b1af3b43a82e2a593",
         "scripts/infrastructure/stack_settings.py": "sha256:3eb6f397aae23f12856d2f628df15d06b2f17e6c0f92ea891a7794942367c47b"

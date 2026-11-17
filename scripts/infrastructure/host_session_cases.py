@@ -15,6 +15,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from orchestration.training_contract import MODEL_NAMES
 from scripts.acquisition.s3_store import AwsCli
 from scripts.infrastructure import (
     host_session_code_cases,
@@ -945,7 +946,7 @@ def code_options_are_checked_before_any_call() -> dict[str, bool]:
     }
 
 
-RUN_ID_FORM = re.compile(r"features_[a-f0-9]{8}")
+RELOAD_RUN_ID = re.compile(r"reload_([a-z_]+)_[a-f0-9]{8}")
 
 
 def reload_runs(host: StandInHost) -> list[dict[str, Any]]:
@@ -985,7 +986,9 @@ def start_reloads_every_online_set_after_the_services_are_stable() -> dict[str, 
             for item in launches
         ),
         "each launch names the host's Polaris address": all(item["POLARIS_URI"] == f"http://{HOST_ADDRESS}:8181/api/catalog" for item in release),
-        "each launch has a run ID of its own": all(RUN_ID_FORM.fullmatch(item["RUN_ID"]) for item in release)
+        "each launch has a run ID of its own, reload_<model short name>_<hex>": all(
+            (found := RELOAD_RUN_ID.fullmatch(item["RUN_ID"])) is not None and found[1] == MODEL_NAMES[item["RELEASE_MODEL"]] for item in release
+        )
         and len({item["RUN_ID"] for item in release}) == len(release),
         "every container of the features task gets exactly its variables": all(
             {container: list(item["launch"][container]) for container in variables} == variables for item in launches

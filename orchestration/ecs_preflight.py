@@ -28,7 +28,7 @@ from jsonschema import Draft202012Validator
 
 from orchestration.ecs_adapter import SendWithheld, TaskRefused, TaskUnavailable
 from orchestration.ecs_launch import RETRYABLE_CODES, JobSpec, LaunchRefused, LaunchStore, LaunchUnavailable, Resources
-from orchestration.ingestion_schedule import RETRY_DAYS, RETRY_KIND, retry_run_id
+from orchestration.ingestion_schedule import RETRY_FIRST_DAY, RETRY_KIND, RETRY_LAST_DAY, retry_run_id
 from orchestration.ingestion_schedule import RUN_ID_PATTERN as INGESTION_RUN_PATTERN
 from orchestration.interface import SubmissionRequest
 from orchestration.promotion_chain import RecordRefused, challenger_named, stored_decision
@@ -292,7 +292,13 @@ def publisher_values(request: object, run_id: str) -> dict[str, str]:
         raise LaunchRefused("publisher_request_has_wrong_capture_root")
     if retry:
         original, day = request["original_run"], request["day"]
-        if not isinstance(original, str) or not RUN_ID.fullmatch(original) or isinstance(day, bool) or not isinstance(day, int) or not 1 <= day <= RETRY_DAYS:
+        if (
+            not isinstance(original, str)
+            or not RUN_ID.fullmatch(original)
+            or isinstance(day, bool)
+            or not isinstance(day, int)
+            or not RETRY_FIRST_DAY <= day <= RETRY_LAST_DAY
+        ):
             raise LaunchRefused("publisher_retry_request_has_wrong_original_run_or_day")
         if run_id != retry_run_id(original, day):
             raise LaunchRefused("publisher_retry_run_is_not_the_run_of_that_day")

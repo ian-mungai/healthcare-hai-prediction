@@ -1,6 +1,6 @@
 """Retry the files the monthly publisher run could not fetch, once a day on days 2 and 3 of the month, through the same publisher job on the host.
 
-The DAG carries its run kind as launch parameters: the original run, the retry day (1 or 2) and the capture root. The retry run's own ID is
+The DAG carries its run kind as launch parameters: the original run, the retry day (day 2 or 3 of the month) and the capture root. The retry run's own ID is
 ``ingestion_retry_<hex>_<day>`` with the original run's hex, so the same day always has the same ID, and a repeat of it joins the recorded launch and starts
 nothing new. The retry is a new run of the publisher: capture mode skips every unit that has a completion record, so a retry tries exactly the units that have
 none, and nothing is restored or pruned. Nothing is staged for the run but its code, and no step waits for the owner.
@@ -19,7 +19,7 @@ from airflow.sdk import DAG, Param
 
 from orchestration.dag_runtime import build_bronze_start, build_job_chain
 from orchestration.ingestion_schedule import RUN_ID_PATTERN, SCHEDULED_RETRY_DAY, SCHEDULED_RUN, retry_schedule_for
-from orchestration.training_contract import RETRY_DAYS
+from orchestration.training_contract import RETRY_FIRST_DAY, RETRY_LAST_DAY
 
 SCHEDULE = retry_schedule_for(os.environ)
 # A scheduled DAG needs a default for every parameter, so the scheduled form carries ``scheduled`` and day 0, which only a scheduled run resolves from its
@@ -27,7 +27,11 @@ SCHEDULE = retry_schedule_for(os.environ)
 ORIGINAL_RUN = (
     Param(SCHEDULED_RUN, type="string", pattern=rf"^({SCHEDULED_RUN}|{RUN_ID_PATTERN})$") if SCHEDULE else Param(type="string", pattern=rf"^{RUN_ID_PATTERN}$")
 )
-DAY = Param(SCHEDULED_RETRY_DAY, type="integer", minimum=0, maximum=RETRY_DAYS) if SCHEDULE else Param(type="integer", minimum=1, maximum=RETRY_DAYS)
+DAY = (
+    Param(SCHEDULED_RETRY_DAY, type="integer", minimum=0, maximum=RETRY_LAST_DAY)
+    if SCHEDULE
+    else Param(type="integer", minimum=RETRY_FIRST_DAY, maximum=RETRY_LAST_DAY)
+)
 
 with DAG(
     dag_id="ingestion_retry_dag",

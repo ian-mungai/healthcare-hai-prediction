@@ -211,9 +211,9 @@ def test_a_retry_recaptures_a_unit_whose_monthly_refresh_failed_over_an_older_ca
     check(len(failed) == 1 and failed[0]["reason"] == "html_instead_of_data", f"the monthly refresh of the second unit failed: {failed}")
     asked = len(host.world.site.asked)
     host.world.bodies[url] = csv_body(999)
-    host.run(monkeypatch, **retry_changes(1))
+    host.run(monkeypatch, **retry_changes(2))
     check(len(host.world.site.asked) == asked + 1, "the retry asked for the failed unit only")
-    units = run_record_of(host, retry_changes(1)["RUN_ID"])["units"]
+    units = run_record_of(host, retry_changes(2)["RUN_ID"])["units"]
     check([item["snapshot_id"] for item in units["changed"]] == [failed[0]["snapshot_id"]], f"the retry recaptured the failed unit: {units}")
     check(len(units["skipped_complete"]) == 1 and not units["failed"], f"the retry skipped the unit the monthly run completed: {units}")
 
@@ -224,29 +224,29 @@ def test_a_retry_also_takes_the_units_a_failure_paused_in_the_monthly_run(host: 
     check(len(paused) == 1, f"the failure of the first unit paused the second: {paused}")
     asked = len(host.world.site.asked)
     host.world.bodies[url] = csv_body(999)
-    host.run(monkeypatch, **retry_changes(1))
+    host.run(monkeypatch, **retry_changes(2))
     check(len(host.world.site.asked) == asked + 2, "the retry did not ask for both the failed unit and the paused one")
-    units = run_record_of(host, retry_changes(1)["RUN_ID"])["units"]
+    units = run_record_of(host, retry_changes(2)["RUN_ID"])["units"]
     check(len(units["changed"]) + len(units["unchanged"]) == 2 and not units["skipped_complete"], f"the retry took both units: {units}")
 
 
 def test_the_next_retry_day_skips_the_unit_the_earlier_day_recovered(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     url = failed_month(host, monkeypatch)
     host.world.bodies[url] = csv_body(999)
-    host.run(monkeypatch, **retry_changes(1))
-    asked = len(host.world.site.asked)
     host.run(monkeypatch, **retry_changes(2))
+    asked = len(host.world.site.asked)
+    host.run(monkeypatch, **retry_changes(3))
     check(len(host.world.site.asked) == asked, "day 2 asked for a unit that day 1 recovered")
-    check(len(run_record_of(host, retry_changes(2)["RUN_ID"])["units"]["skipped_complete"]) == 2, "day 2 skipped both units")
+    check(len(run_record_of(host, retry_changes(3)["RUN_ID"])["units"]["skipped_complete"]) == 2, "day 2 skipped both units")
 
 
 def test_a_retry_that_fails_again_leaves_the_unit_for_the_next_day(host: Host, monkeypatch: pytest.MonkeyPatch) -> None:
     url = failed_month(host, monkeypatch)
     with pytest.raises(publisher_run.PublisherError):
-        host.run(monkeypatch, **retry_changes(1))
+        host.run(monkeypatch, **retry_changes(2))
     asked = len(host.world.site.asked)
     host.world.bodies[url] = csv_body(999)
-    host.run(monkeypatch, **retry_changes(2))
+    host.run(monkeypatch, **retry_changes(3))
     check(len(host.world.site.asked) == asked + 1, "day 2 did not ask again for the unit that failed on day 1")
 
 
@@ -254,9 +254,9 @@ def test_a_retry_after_a_clean_month_skips_every_unit_and_compares_nothing(host:
     host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
     host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
     asked = len(host.world.site.asked)
-    host.run(monkeypatch, **retry_changes(1))
+    host.run(monkeypatch, **retry_changes(2))
     check(len(host.world.site.asked) == asked, "a retry requested a unit that the monthly run refreshed")
-    second = run_record_of(host, retry_changes(1)["RUN_ID"])
+    second = run_record_of(host, retry_changes(2)["RUN_ID"])
     check(second["recheck"] is False and len(second["units"]["skipped_complete"]) == 2, f"it skips both units: {second['units']}")
 
 
@@ -264,7 +264,7 @@ def test_a_retry_whose_original_run_has_no_record_is_refused_before_any_request(
     host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
     asked = len(host.world.site.asked)
     with pytest.raises(publisher_run.PublisherError, match="original run"):
-        host.run(monkeypatch, **retry_changes(1))
+        host.run(monkeypatch, **retry_changes(2))
     check(len(host.world.site.asked) == asked, "a retry with no original run record asked for a unit")
 
 
@@ -274,9 +274,10 @@ def test_a_retry_whose_original_run_has_no_record_is_refused_before_any_request(
         ({"PUBLISHER_ORIGINAL_RUN": ""}, "PUBLISHER_ORIGINAL_RUN"),
         ({"PUBLISHER_RETRY_DAY": ""}, "PUBLISHER_RETRY_DAY"),
         ({"PUBLISHER_RETRY_DAY": "0"}, "retry day"),
-        ({"PUBLISHER_RETRY_DAY": "8"}, "retry day"),
-        ({"PUBLISHER_RETRY_DAY": "1.5"}, "retry day"),
-        ({"PUBLISHER_RETRY_DAY": "1\n"}, "retry day"),
+        ({"PUBLISHER_RETRY_DAY": "4"}, "retry day"),
+        ({"PUBLISHER_RETRY_DAY": "1"}, "retry day"),
+        ({"PUBLISHER_RETRY_DAY": "2.5"}, "retry day"),
+        ({"PUBLISHER_RETRY_DAY": "2\n"}, "retry day"),
         ({"PUBLISHER_ORIGINAL_RUN": "latest"}, "original run"),
         ({"RUN_ID": "ingestion_0a1b2c3e"}, "run ID of that day"),
     ],
@@ -284,7 +285,7 @@ def test_a_retry_whose_original_run_has_no_record_is_refused_before_any_request(
 def test_a_retry_that_does_not_name_a_valid_original_run_and_day_is_refused_before_any_call(
     host: Host, monkeypatch: pytest.MonkeyPatch, changes: dict[str, str], match: str
 ) -> None:
-    refused(monkeypatch, host, match, **(retry_changes(1) | changes))
+    refused(monkeypatch, host, match, **(retry_changes(2) | changes))
 
 
 @pytest.mark.parametrize("kind", ["bootstrap", "monthly"])
@@ -343,7 +344,7 @@ def test_only_a_monthly_run_writes_the_hold_report(host: Host, monkeypatch: pyte
     host.run(monkeypatch, RUN_ID=BOOTSTRAP_RUN)
     check(not [key for key in host.world.bucket.objects if "plan_rebuild" in key], "a bootstrap run wrote a hold report")
     host.run(monkeypatch, RUN_ID=MONTHLY_RUN, PUBLISHER_RUN_KIND="monthly")
-    host.run(monkeypatch, **retry_changes(1))
+    host.run(monkeypatch, **retry_changes(2))
     reports = sorted(key for key in host.world.bucket.objects if "plan_rebuild" in key)
     check(all(f"/{MONTHLY_RUN}/" in key for key in reports) and len(reports) == 2, f"only the monthly run wrote its report: {reports}")
 
@@ -379,7 +380,7 @@ def test_a_bootstrap_run_that_passes_leaves_its_bootstrap_record(host: Host, mon
 def test_a_monthly_or_retry_run_on_a_root_with_no_bootstrap_record_is_refused_before_any_request(
     host: Host, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
-    changes = retry_changes(1) if kind == "retry" else {"PUBLISHER_RUN_KIND": kind}
+    changes = retry_changes(2) if kind == "retry" else {"PUBLISHER_RUN_KIND": kind}
     with pytest.raises(publisher_run.PublisherError, match="no bootstrap run record"):
         host.run(monkeypatch, **changes)
     check(not host.world.site.asked and not host.world.bucket.versions, f"a {kind} run asked for a unit or wrote an object")
