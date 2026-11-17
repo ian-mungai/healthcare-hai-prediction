@@ -1,7 +1,7 @@
 """Repeatable synthetic ONC meaningful-use capture-to-S3 verification, without live downloads or credentials.
 
 All the data is public: a capture stores the file whole under raw/ as published and records that it names clinicians, whom bronze
-pseudonymizes at load. Captures stored under plan version 1 (hospital rows only, original on the Mac) keep verifying.
+pseudonymizes at load. Version 1 captures are retired and have no case here.
 """
 
 import argparse

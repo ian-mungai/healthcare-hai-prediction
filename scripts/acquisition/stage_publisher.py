@@ -1,7 +1,7 @@
 """Build what the publisher job takes as staged inputs: one deterministic archive and the request that binds it.
 
 Run it on the owner's Mac after ``stored_mirror`` and the approvals. It writes ``publisher_inputs.tar.gz`` and ``publisher_request.json``. The owner copies both
-beside the run's code archive. The archive holds the stored mirror, its index, the route files and a manifest that names the queue. It refuses an original, a
+beside the run's code archive. The archive holds the stored mirror, its index, the route files and a manifest that names the queue. It refuses a
 settings file, a config file or anything that is not a plain file, because everything in it reaches the task. The task reads its config from the code root.
 
     .venv/bin/python -m scripts.acquisition.stage_publisher --mirror-output <folder> --queue <path inside the mirror> --removal-plan <file> \\
@@ -82,7 +82,7 @@ def build(
             raise StageError("The mirror output holds a file that is not plain, so the stage is refused.")
         if path.is_file():
             if refused(name):
-                raise StageError("The mirror output holds an original or a settings file, so the stage is refused.")
+                raise StageError("The mirror output holds a settings file, so the stage is refused.")
             entries[name] = path.read_bytes()
     if MANIFEST_NAME in entries:
         raise StageError("The mirror output already holds a manifest, so the stage is refused.")

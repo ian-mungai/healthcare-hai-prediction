@@ -57,11 +57,6 @@ def stored_name(entry: dict) -> str:
     return f"hcai_util_{entry['year']}.xlsx"
 
 
-def slug(sheet: str) -> str:
-    """A storage-safe file name for a sheet."""
-    return re.sub(r"[^a-z0-9]+", "_", sheet.lower()).strip("_")
-
-
 def load_plan(path: Path | None = None) -> dict:
     """Verify the locked scope, per-year bindings, access release and base registry."""
     path = PLAN_PATH if path is None else path
@@ -238,7 +233,7 @@ def check_raw(raw: bytes, entry: dict) -> dict:
 
 
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
-    """Rebuild every sheet from the local original; check the artifact set, bindings, release and holds."""
+    """Check that the workbook is stored whole under raw/ as published, and check its artifact set, bindings, release and holds."""
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "HCAI utilization storage source differs")
