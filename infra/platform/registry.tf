@@ -16,6 +16,15 @@ resource "aws_ecr_repository" "image" {
   encryption_configuration {
     encryption_type = "AES256"
   }
+
+  # The group of every image is checked on every plan, so a typo in the group of an image that a switch would leave out cannot keep or drop its repository unseen.
+  # scripts/infrastructure/push_images.py checks the same list before an image is pushed.
+  lifecycle {
+    precondition {
+      condition     = alltrue([for name, group in local.image_groups : contains(local.repository_groups, group)])
+      error_message = "Every image of infra/services/images.json needs a repository_group of always, monitoring or serving. Fix: ${join(", ", [for name, group in local.image_groups : name if !contains(local.repository_groups, group)])}."
+    }
+  }
 }
 
 resource "aws_ecr_lifecycle_policy" "image" {

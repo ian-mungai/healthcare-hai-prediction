@@ -1,0 +1,6 @@
+{
+  "images": {
+    "postgres": { "repository_group": "always" },
+    "model_api": { "repository_group": "Serving" }
+  }
+}

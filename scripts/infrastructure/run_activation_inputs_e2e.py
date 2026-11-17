@@ -817,9 +817,9 @@ def platform_cases(workspace: Workspace) -> dict[str, bool]:
             and workspace.written(stack) is None
             and not workspace.called()
         )
-    defaults = {"monitoring_enabled": True, "serving_enabled": True, "scratch_volume_gb": 60}
+    defaults = {"monitoring_enabled": True, "serving_enabled": True, "scratch_volume_gb": 60, "image_manifest": ""}
     directory = f"-chdir={workspace.root / STACKS[stack]}"
-    for override, accepted in (({}, True), ({"serving_enabled": False}, False), ({"scratch_volume_gb": 120}, False)):
+    for override, accepted in (({}, True), ({"serving_enabled": False}, False), ({"scratch_volume_gb": 120}, False), ({"image_manifest": "other.json"}, False)):
         workspace.clear(stack)
         workspace.run(stack, None)
         workspace.plan.write_text(json.dumps(plan_document(rendered, defaults, override)))

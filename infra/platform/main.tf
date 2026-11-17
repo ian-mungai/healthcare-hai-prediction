@@ -10,10 +10,14 @@ provider "aws" {
 
 locals {
   # Every image of images.json gets a repository. The repository_group of an image says which switch keeps it: always, or only while the monitoring or the
-  # serving switch is true. A false switch leaves the stack as it was before those parts existed.
-  images            = jsondecode(file("${path.module}/../services/images.json")).images
-  monitoring_images = toset([for name, image in local.images : name if image.repository_group == "monitoring"])
-  serving_images    = toset([for name, image in local.images : name if image.repository_group == "serving"])
+  # serving switch is true. A false switch leaves the stack as it was before those parts existed. A missing or unknown group reads as "" here, which no
+  # switch filters out, and the precondition of the repository resource stops the plan on it.
+  repository_groups = ["always", "monitoring", "serving"]
+  image_manifest    = var.image_manifest == "" ? "${path.module}/../services/images.json" : var.image_manifest
+  images            = jsondecode(file(local.image_manifest)).images
+  image_groups      = { for name, image in local.images : name => try(tostring(image.repository_group), null) == null ? "" : tostring(image.repository_group) }
+  monitoring_images = toset([for name, group in local.image_groups : name if group == "monitoring"])
+  serving_images    = toset([for name, group in local.image_groups : name if group == "serving"])
   ecr_repositories = setsubtract(
     toset(keys(local.images)),
     setunion(var.monitoring_enabled ? toset([]) : local.monitoring_images, var.serving_enabled ? toset([]) : local.serving_images),
@@ -40,14 +44,6 @@ locals {
 
   data_mount_path     = "/data"
   data_classification = { DataClassification = "Public" }
-}
-
-# A repository group other than the three would be kept whatever the switches say, so the plan stops on it. scripts/infrastructure/push_images.py checks the same list.
-check "repository_groups" {
-  assert {
-    condition     = alltrue([for name, image in local.images : contains(["always", "monitoring", "serving"], image.repository_group)])
-    error_message = "Every image of infra/services/images.json needs a repository_group of always, monitoring or serving."
-  }
 }
 
 # The IAM stack, which an administrator applies first, owns the network, the host launch template, the host Auto Scaling

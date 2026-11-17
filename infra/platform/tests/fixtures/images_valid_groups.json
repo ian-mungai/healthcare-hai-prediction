@@ -1,0 +1,7 @@
+{
+  "images": {
+    "postgres": { "repository_group": "always" },
+    "prometheus": { "repository_group": "monitoring" },
+    "model_api": { "repository_group": "serving" }
+  }
+}

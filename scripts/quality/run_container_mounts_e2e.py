@@ -35,9 +35,11 @@ TRAINING = "orchestration/training_render.py"
 JOB = "scripts/training/job.py"
 EXTRACT = "scripts/features/training_extract.py"
 TERRAFORM_GROUP = "scripts/ci/groups/terraform_checks.sh"
-# Where the Terraform stacks read repository files from above their own folder: a path that climbs out of the stack folder, written with or without the
-# module prefix and at any depth, and the jobs root's repository path. Each one is resolved from the stack folder (the folder of the stack under test).
-STACK_FILE_READS = (r'(?:\$\{path\.module\}/|")((?:\.\./)+[A-Za-z0-9_./-]+)',)
+# Where the Terraform stacks read repository files from above their own folder. Each form starts somewhere else: ${path.module} at the folder of the file that
+# declares the read (a child module's own folder, or the stack folder for a test), ${path.root}, ${path.cwd} and a path with no prefix at the stack folder
+# where terraform runs. A read counts when its target is a file of the repository outside the stack folder. The jobs root's repository path is a prefix.
+MODULE_FILE_READS = (r"\$\{path\.module\}/([A-Za-z0-9_./-]+)",)
+STACK_FILE_READS = (r"\$\{path\.(?:root|cwd)\}/([A-Za-z0-9_./-]+)", r'"((?:\.\./)+[A-Za-z0-9_./-]*)')
 REPOSITORY_FILE_READS = (r"\$\{local\.om_repo\}/([A-Za-z0-9_./-]+)",)
 # The run deadline is a hang guard for the whole run, not part of what a case proves: every case has its own hook deadline. A fixed 720 s ran out before the
 # last of the 52 cases on hosted runners (11 to 16 s a case with every group running at once, 3.5 s on an idle machine), and the run then printed
@@ -534,21 +536,38 @@ def group_stack_files() -> list[str]:
     return found.group(1).split() if found else []
 
 
+def stack_folder(root: Path, path: Path) -> Path:
+    """The folder terraform runs in for a file below infra: its stack, or infra itself for the storage stack and its tests."""
+    first = path.relative_to(root / "infra").parts[0]
+    stack = root / "infra" / first
+    return stack if stack != path and stack.is_dir() and any(stack.glob("*.tf")) else root / "infra"
+
+
+def copied_with_stack(root: Path, stack: Path, target: Path) -> bool:
+    """Whether the CI tree of the stack holds the file anyway: it is below the stack folder, and for the storage stack not below a nested stack's folder."""
+    if not target.is_relative_to(stack):
+        return False
+    nested = target.relative_to(stack).parts[0] if stack == root / "infra" and target.parent != stack else None
+    return nested is None or not any((stack / nested).glob("*.tf"))
+
+
 def stack_read_files(root: Path = ROOT) -> set[str]:
-    """Every repository file below the repository root that a stack or a stack test reads above its folder."""
+    """Every repository file below the repository root that a stack, a child module or a stack test reads outside its stack folder."""
+    root = root.resolve()
     names: set[str] = set()
     for pattern in ("*.tf", "*.tftest.hcl"):
         for path in (root / "infra").rglob(pattern):
             if ".terraform" in path.parts:
                 continue
             text = path.read_text(encoding="utf-8")
-            relative = path.relative_to(root / "infra")
-            stack = root / "infra" / relative.parts[0] if len(relative.parts) > 1 else root / "infra"
-            for expression in STACK_FILE_READS:
+            stack = stack_folder(root, path)
+            module = stack if path.name.endswith(".tftest.hcl") else path.parent
+            starts = [(module, expression) for expression in MODULE_FILE_READS] + [(stack, expression) for expression in STACK_FILE_READS]
+            for start, expression in starts:
                 for reach in re.findall(expression, text):
-                    target = (stack / reach).resolve()
-                    if target.is_file() and target.is_relative_to(root.resolve()) and not target.is_relative_to(stack.resolve()):
-                        names.add(target.relative_to(root.resolve()).as_posix())
+                    target = Path(os.path.normpath(start / reach))
+                    if target.is_file() and target.is_relative_to(root) and not copied_with_stack(root, stack, target):
+                        names.add(target.relative_to(root).as_posix())
             for expression in REPOSITORY_FILE_READS:
                 names.update(name for name in re.findall(expression, text) if (root / name).is_file())
     return names
@@ -562,16 +581,49 @@ def stack_file_read_guard_case() -> dict[str, object]:
         ),
         "infra/platform/policies/own.json": "{}\n",
         "infra/services/images.json": "{}\n",
+        "infra/services/variables.tf": "\n",
         "infra/iam/tests/bare.tftest.hcl": 'locals {\n  a = jsondecode(file("../../config/bare.json"))\n}\n',
         "infra/iam/main.tf": (
             'locals {\n  b = jsondecode(file("${path.module}/../../config/two_levels.json"))\n  c = file("${path.module}/../../config/absent.json")\n}\n'
         ),
         "infra/jobs/host.tf": 'module "flow" {\n  source = "../services/tests/flow"\n}\n',
         "infra/services/tests/flow/main.tf": "\n",
+        # A child module resolves ${path.module} from its own folder: this read stays inside the platform stack, whatever the sibling stack holds.
+        "infra/platform/modules/reader/main.tf": 'locals {\n  inside = file("${path.module}/../services/variables.tf")\n}\n',
+        "infra/platform/modules/services/variables.tf": "\n",
+        # The same module reaching the repository root is a dependency the isolated CI tree needs.
+        "infra/platform/modules/reader/external.tf": 'locals {\n  outside = file("${path.module}/../../../../config/external.json")\n}\n',
+        # A path with no module prefix and a path.root path both start at the stack folder, even in a child module.
+        "infra/platform/modules/reader/bare.tf": (
+            'locals {\n  bare = file("../../config/child_bare.json")\n  rooted = file("${path.root}/../services/root_read.json")\n}\n'
+        ),
+        # The storage stack is the infra folder itself: its tests and files start there.
+        "infra/tests/storage.tftest.hcl": 'locals {\n  a = file("../config/storage.json")\n  b = file("${path.module}/../config/storage_module.json")\n}\n',
+        "infra/main.tf": 'locals {\n  c = file("${path.module}/../config/storage_main.json")\n}\n',
+        "infra/iam/policies/nested.json": "{}\n",
+        "infra/storage_note.tf": 'locals {\n  d = file("${path.module}/iam/policies/nested.json")\n  e = file("${path.module}/tests/inside.json")\n}\n',
+        "infra/tests/inside.json": "{}\n",
         "config/bare.json": "{}\n",
         "config/two_levels.json": "{}\n",
+        "config/external.json": "{}\n",
+        "config/child_bare.json": "{}\n",
+        "infra/services/root_read.json": "{}\n",
+        "config/storage.json": "{}\n",
+        "config/storage_module.json": "{}\n",
+        "config/storage_main.json": "{}\n",
     }
-    expected = {"infra/services/images.json", "config/bare.json", "config/two_levels.json"}
+    expected = {
+        "infra/services/images.json",
+        "config/bare.json",
+        "config/two_levels.json",
+        "config/external.json",
+        "config/child_bare.json",
+        "infra/services/root_read.json",
+        "infra/iam/policies/nested.json",
+        "config/storage.json",
+        "config/storage_module.json",
+        "config/storage_main.json",
+    }
     with tempfile.TemporaryDirectory(prefix="stack_reads.") as folder:
         for name, text in files.items():
             target = Path(folder) / name
@@ -582,7 +634,14 @@ def stack_file_read_guard_case() -> dict[str, object]:
         "a one-level relative read is listed": "infra/services/images.json" in found,
         "a read with no module prefix is listed": "config/bare.json" in found,
         "a two-level read is listed": "config/two_levels.json" in found,
-        "a read of a file inside the stack, of a missing file and of a folder is not listed": found <= expected,
+        "a read from a child module that stays inside its stack is not listed as the sibling stack's file": "infra/services/variables.tf" not in found,
+        "a read from a child module that leaves its stack is listed": "config/external.json" in found,
+        "a child module path without the module prefix starts at the stack folder": "config/child_bare.json" in found,
+        "a path.root path starts at the stack folder": "infra/services/root_read.json" in found,
+        "the storage stack reads start at the infra folder": {"config/storage.json", "config/storage_module.json", "config/storage_main.json"} <= found,
+        "the storage stack lists a file of a nested stack but not one of its own folders": "infra/iam/policies/nested.json" in found
+        and "infra/tests/inside.json" not in found,
+        "nothing but the files read outside a stack is listed": found == expected,
     }
     return {"name": "stack_file_read_guard", "passed": all(checks.values()), "guard_checks": checks, "found": sorted(found)}
 

@@ -1,0 +1,6 @@
+{
+  "images": {
+    "postgres": { "repository_group": "always" },
+    "redis": { "repository_group": "" }
+  }
+}
