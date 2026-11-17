@@ -638,7 +638,17 @@ def ingestion_refuses_artifacts_that_name_the_old_mirror_schemas() -> None:
         "compiled code": lambda node: node.update(compiled_code='select * from "hai_lakehouse"."hai_mirror_silver"."int_hospital_windows"'),
         "compiled sql": lambda node: node.update(compiled_sql="select * from hai_lakehouse.hai_mirror_gold.fact_hai_measure"),
         "unknown schema of the database": lambda node: node.update(compiled_code="select * from hai_lakehouse.old_silver.int_hospital_windows"),
+        "two-part quoted relation": lambda node: node.update(compiled_code='select * from "hai_mirror_silver"."int_hospital_windows"'),
+        "two-part unquoted relation": lambda node: node.update(compiled_sql="select * from hai_mirror_silver.int_hospital_windows"),
+        "two-part relation name": lambda node: node.update(relation_name='"hai_mirror_silver"."int_county_values"'),
+        "raw code": lambda node: node.update(raw_code='select * from "hai_lakehouse"."hai_mirror_silver"."int_hospital_windows"'),
+        "raw sql": lambda node: node.update(raw_sql='select * from "hai_lakehouse"."hai_mirror_silver"."int_hospital_windows"'),
+        "key name": lambda node: node.update(meta={"hai_mirror_silver": 1}),
+        "backticks and capitals": lambda node: node.update(compiled_code="select * from `HAI_Mirror_Gold`.fact_hai_measure"),
+        "description text": lambda node: node.update(description="reads hai_lakehouse.hai_mirror_features.feature_matrix_hospital"),
+        "three-part of another database": lambda node: node.update(compiled_code="select * from other_db.hai_mirror_bronze.cms_hai_hospital"),
     }
+    missed: list[str] = []
     for label, damage in stale.items():
         bucket = saved_runs(old_names=False)
         key = f"metadata/dbt/gold/{RUNS['gold']}/manifest.json"
@@ -646,10 +656,9 @@ def ingestion_refuses_artifacts_that_name_the_old_mirror_schemas() -> None:
         damage(document["nodes"]["model.hai.dim_hospital"])
         bucket.objects[key] = json.dumps(document).encode()
         code, err, seen = ingest_saved_runs(bucket)
-        require(
-            code == 1 and not seen and "model.hai.dim_hospital" in err and RUNS["gold"] in err,
-            f"{label}: refused and named: code {code}, {len(seen)} workflows, {err!r}",
-        )
+        if not (code == 1 and not seen and "model.hai.dim_hospital" in err and RUNS["gold"] in err):
+            missed.append(f"{label}: code {code}, {len(seen)} workflows, {err!r}")
+    require(not missed, f"each stale form is refused, named and before any workflow: {missed}")
     bucket = saved_runs(old_names=False)
     key = f"metadata/dbt/features/{RUNS['features']}/catalog.json"
     document = json.loads(bucket.objects[key])
@@ -657,6 +666,44 @@ def ingestion_refuses_artifacts_that_name_the_old_mirror_schemas() -> None:
     bucket.objects[key] = json.dumps(document).encode()
     code, err, seen = ingest_saved_runs(bucket)
     require(code == 1 and not seen and "model.hai.feature_matrix_hospital" in err, f"a stale catalog.json is refused too: code {code}, {err!r}")
+    deep = {
+        "catalog.json": ("catalog.json", lambda document: document["nodes"]["model.hai.feature_matrix_hospital"].update(comment="was hai_mirror_features.t")),
+        "catalog column key": (
+            "catalog.json",
+            lambda document: document["nodes"]["model.hai.feature_matrix_hospital"].update(columns={"x": {"hai_mirror_gold": 1}}),
+        ),
+        "manifest macro": (
+            "manifest.json",
+            lambda document: document.setdefault("macros", {}).update({"macro.hai.m": {"macro_sql": 'select "hai_mirror_gold"."t"'}}),
+        ),
+        "manifest key": ("manifest.json", lambda document: document.update(**{"hai_mirror_gold": {}})),
+        "run results message": (
+            "run_results.json",
+            lambda document: document.update(results=[{"unique_id": "model.hai.feature_matrix_hospital", "message": "SELECT 1 FROM hai_mirror_gold.t"}]),
+        ),
+    }
+    missed = []
+    for label, (name, damage) in deep.items():
+        bucket = saved_runs(old_names=False)
+        key = f"metadata/dbt/features/{RUNS['features']}/{name}"
+        document = json.loads(bucket.objects[key]) if key in bucket.objects else {"results": []}
+        damage(document)
+        bucket.objects[key] = json.dumps(document).encode()
+        code, err, seen = ingest_saved_runs(bucket)
+        if not (code == 1 and not seen and name in err and RUNS["features"] in err):
+            missed.append(f"{label}: code {code}, {len(seen)} workflows, {err!r}")
+        require(bucket.objects[key] == json.dumps(document).encode() and not bucket.puts, f"{label}: the stored objects are never changed")
+    require(not missed, f"each stale artifact text is refused, named and before any workflow: {missed}")
+    bucket = saved_runs(old_names=False)
+    key = f"metadata/dbt/gold/{RUNS['gold']}/manifest.json"
+    document = json.loads(bucket.objects[key])
+    document["nodes"]["model.hai.dim_hospital"].update(
+        description="the hai_mirror workgroup, not my_hai_mirror_silver or hai_mirror_silver_view or hai_mirror_other",
+        compiled_code="select * from x.hai_mirror",
+    )
+    bucket.objects[key] = json.dumps(document).encode()
+    code, err, seen = ingest_saved_runs(bucket)
+    require(code == 0 and len(seen) == 3, f"a text that holds no whole old schema name still ingests: code {code}, {err!r}")
 
 
 CASES: dict[str, Callable[[], None]] = {

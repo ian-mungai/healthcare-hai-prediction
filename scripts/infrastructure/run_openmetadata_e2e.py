@@ -959,26 +959,39 @@ def host_ingest_ingests_the_three_recorded_layers() -> None:
 
 
 def host_ingest_fails_when_a_chain_run_names_the_old_mirror_schemas() -> None:
-    """A chain run saved before the mirror rename fails the dbt step like a missing manifest does: exit 1, no dbt workflow, the earlier Glue step kept."""
-    stale = json.dumps(
-        {
-            "nodes": {
-                "model.hai.int_x": {
-                    "resource_type": "model",
-                    "schema": "hai_mirror_silver",
-                    "compiled_code": 'select * from "hai_lakehouse"."hai_mirror_silver"."t"',
-                }
-            }
+    """A chain run saved before the mirror rename fails the dbt step like a missing manifest does: exit 1, no dbt workflow and no raw files write. The steps
+    before the dbt downloads still run: the chain pin reads, the bronze run lookup and the Glue source (it reads nothing of the dbt copies). Each form of the
+    old name is refused: a node placement, three-part and two-part SQL, the raw SQL fields and a key."""
+    forms = {
+        "node placement": {
+            "schema": "hai_mirror_silver",
+            "compiled_code": 'select * from "hai_lakehouse"."hai_mirror_silver"."t"',
+        },
+        "two-part compiled code": {"compiled_code": 'select * from "hai_mirror_silver"."t"'},
+        "two-part compiled sql": {"compiled_sql": "select * from hai_mirror_silver.t"},
+        "raw code": {"raw_code": 'select * from "hai_lakehouse"."hai_mirror_silver"."t"'},
+        "raw sql": {"raw_sql": "select * from hai_lakehouse.hai_mirror_silver.t"},
+        "key": {"meta": {"hai_mirror_silver": 1}},
+    }
+    from scripts.infrastructure import openmetadata_host_ingest as host_ingest
+
+    for label, damage in forms.items():
+        stale = json.dumps({"nodes": {"model.hai.int_x": {"resource_type": "model", **damage}}}).encode()
+        keys = chain_keys(**{f"metadata/dbt/silver/{SILVER_RUN}/manifest.json": stale}) | {
+            SILVER_CLAIM_KEY: silver_claim(BRONZE_RUN),
+            BRONZE_KEY: json.dumps(bronze_record({"cms_hai_hospital": 2})).encode(),
         }
-    ).encode()
-    seen: list[dict[str, Any]] = []
-    s3 = FakeS3(chain_keys(**{f"metadata/dbt/silver/{SILVER_RUN}/manifest.json": stale}))
-    with tempfile.TemporaryDirectory() as folder:
-        args, env = host_ingest_environment(Path(folder))
-        code, _, err = run_host_ingest(args, env, seen.append, s3_client=s3)
-    types = [config["source"]["sourceConfig"]["config"]["type"] for config in seen]
-    require(code == 1 and types == ["DatabaseMetadata"], f"glue ran, dbt did not: code {code}, workflows {types}")
-    require(f"silver/{SILVER_RUN}" in err and "model.hai.int_x" in err and "hai_mirror_silver" in err, err)
+        seen: list[dict[str, Any]] = []
+        catalog = FakeCatalog({"cms_hai_hospital": ""})
+        with tempfile.TemporaryDirectory() as folder:
+            args, env = host_ingest_environment(Path(folder))
+            env["DATA_BUCKET_NAME"] = "example-project-data-dev"
+            with quiet() as (_, err):
+                code = host_ingest.main([*args, "raw_files"], env=env, workflow=seen.append, s3_client=FakeS3(keys), http=catalog)
+        types = [config["source"]["sourceConfig"]["config"]["type"] for config in seen]
+        require(code == 1 and types == ["DatabaseMetadata"], f"{label}: glue ran, dbt did not: code {code}, workflows {types}")
+        require(not catalog.calls, f"{label}: the raw files step ran after the refusal: {catalog.calls}")
+        require(f"silver/{SILVER_RUN}" in err.getvalue() and "model.hai.int_x" in err.getvalue() and "hai_mirror_silver" in err.getvalue(), err.getvalue())
 
 
 def host_ingest_never_falls_back_to_latest() -> None:

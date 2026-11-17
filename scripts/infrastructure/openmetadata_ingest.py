@@ -4,10 +4,10 @@ Runs inside the ingestion image as ``python openmetadata_ingest.py glue|dbt --co
 gives the token through ``--token-env NAME`` and its address through ``--server-url URL`` instead. OpenMetadata 2.0.7 has no Iceberg connector, so the
 ``glue`` source reads the tables of every layer, bronze included, from their read-only Glue mirror with the task role (owner decision of Nov 7 2026). The
 ``dbt`` source names, in its copy of the manifest, the Glue database of each model and of each bronze source, so that dbt attaches to those tables.
-A saved dbt copy that still names a ``hai_mirror_<layer>`` schema (a run from before the rename) is refused with exit 1 before any workflow starts, and is
-never translated. It refuses a configuration that profiles, samples or reads rows before it fills any placeholder, so a value from the environment can never
-switch one on. Some tables can hold personal fields outside the Public research-data scope, which is why this guard exists beside the read-only role and the
-server setting that disables ingestion pipelines.
+A saved dbt copy that still names a ``hai_mirror_<layer>`` schema anywhere (a run from before the rename: any text or key of its three files) is refused with
+exit 1 before any workflow starts, and is never translated. It refuses a configuration that profiles, samples or reads rows before it fills any
+placeholder, so a value from the environment can never switch one on. Some tables can hold personal fields outside the Public research-data scope, which is
+why this guard exists beside the read-only role and the server setting that disables ingestion pipelines.
 Exit codes: 0 done, 1 the run failed, 2 the configuration was refused. Output names variables and exception classes and never prints a value.
 """
 
@@ -19,7 +19,7 @@ import json
 import os
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -169,12 +169,45 @@ def stale_place(database: Any, schema: Any, mapping: Mapping[str, Any]) -> str:
     return ""
 
 
+def old_names_pattern(mapping: Mapping[str, Any]) -> re.Pattern[str]:
+    """The old mirror schema names (``hai_mirror_<layer>``, one per layer the mapping lists) as whole identifiers, in any case, quoted or not, any qualifier."""
+    names = sorted(f"{OLD_MIRROR_PREFIX}{layer}" for layer in mapping["schemas"])
+    return re.compile(r"(?<![A-Za-z0-9_])(?:" + "|".join(re.escape(name) for name in names) + r")(?![A-Za-z0-9_])", re.IGNORECASE)
+
+
+def old_name_places(document: Any, pattern: re.Pattern[str]) -> Iterator[tuple[str, str]]:
+    """Each ``(path, name)`` where a key or a string value anywhere in ``document`` holds an old mirror schema name, in key order.
+
+    The OpenMetadata dbt connector reads many fields (compiled and raw SQL, relation names, descriptions, column and test text) and may read more in a later
+    release, so no field list decides: every key and every string is searched."""
+    stack: list[tuple[str, Any]] = [("", document)]
+    while stack:
+        path, node = stack.pop()
+        if isinstance(node, dict):
+            children = []
+            for key in sorted(node, key=str):
+                here = f"{path}.{key}" if path else str(key)
+                found = pattern.search(str(key))
+                if found:
+                    yield here, found.group(0)
+                children.append((here, node[key]))
+            stack.extend(reversed(children))
+        elif isinstance(node, list):
+            stack.extend(reversed([(f"{path}[{index}]", item) for index, item in enumerate(node)]))
+        elif isinstance(node, str):
+            found = pattern.search(node)
+            if found:
+                yield path, found.group(0)
+
+
 def check_current_names(folder: Path, mapping: Mapping[str, Any]) -> None:
-    """Raise ``StaleArtifacts`` for the first node (in key order) of the downloaded copy that still names a Glue schema outside the mirror config.
+    """Raise ``StaleArtifacts`` for the first place (in key order) of the downloaded copy that still names a Glue schema outside the mirror config.
 
     A copy written before the mirror databases took the plain layer names carries ``hai_lakehouse.hai_mirror_<layer>.<table>`` in node placements, relation
     names and compiled SQL. The connector would parse that SQL for lineage and name deleted entities, so the copy is refused and never translated: only runs
-    built after the rename are valid (owner decision of Nov 17 2026). It reads the manifest, then ``catalog.json`` and ``run_results.json`` when present."""
+    built after the rename are valid (owner decision of Nov 17 2026). Two checks run over ``manifest.json``, then ``catalog.json`` and ``run_results.json``
+    when present. The placement check refuses a node placed in a schema of the mirror database that the mirror config does not list. The name check
+    refuses any key or string value of the three files that holds an old name ``hai_mirror_<layer>`` as a whole identifier, in any form or qualifier."""
     manifest = json.loads((folder / "manifest.json").read_text())
     for section in ("nodes", "sources"):
         for key in sorted(manifest.get(section) or {}):
@@ -184,6 +217,7 @@ def check_current_names(folder: Path, mapping: Mapping[str, Any]) -> None:
                 found = found or stale_relation(node.get(field), mapping)
             if found:
                 raise StaleArtifacts(f"manifest.json node {key} names {found}")
+    documents = {"manifest.json": manifest}
     if (folder / "catalog.json").is_file():
         catalog = json.loads((folder / "catalog.json").read_text())
         for section in ("nodes", "sources"):
@@ -192,11 +226,18 @@ def check_current_names(folder: Path, mapping: Mapping[str, Any]) -> None:
                 found = stale_place(metadata.get("database"), metadata.get("schema"), mapping)
                 if found:
                     raise StaleArtifacts(f"catalog.json node {key} names {found}")
+        documents["catalog.json"] = catalog
     if (folder / "run_results.json").is_file():
-        for item in json.loads((folder / "run_results.json").read_text()).get("results") or []:
+        results = json.loads((folder / "run_results.json").read_text())
+        for item in results.get("results") or []:
             found = stale_relation(item.get("relation_name"), mapping)
             if found:
                 raise StaleArtifacts(f"run_results.json node {item.get('unique_id')} names {found}")
+        documents["run_results.json"] = results
+    pattern = old_names_pattern(mapping)
+    for name, document in documents.items():
+        for path, found in old_name_places(document, pattern):
+            raise StaleArtifacts(f"{name} {path} names {found}")
 
 
 def place_models(folder: Path, mapping: Mapping[str, Any]) -> int:
