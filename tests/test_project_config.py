@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Any
@@ -13,8 +14,11 @@ from scripts.infrastructure.render_project_config import ConfigurationError, ale
 from scripts.process import CompletedProcess, TimeoutExpired, run_command
 from tests.support import check
 
-# The committed defaults in the shape the renderer reads; config/aws/iam_preparation.json is the owner's file.
+# The committed defaults in the shape the renderer reads; config/aws/iam_preparation.json is the reviewed file: flags and non-environment values only.
 DEFAULT_PREPARATION = Path(__file__).parent / "fixtures" / "iam_preparation_default.json"
+# The live IAM apply inputs (serial 420), keys and shapes only: the account, region, bucket and project are placeholders. Its publisher secret ARNs hold the
+# wildcard form of the owner IAM apply that follows this change; serial 420 still holds the three fixed ARNs.
+LIVE_INPUTS = Path(__file__).parent / "fixtures" / "iam_live_inputs_sanitized.json"
 
 TEST_PROJECT_NAME = "example_project"
 TEST_ENVIRONMENT = "dev"
@@ -481,3 +485,190 @@ def test_alerts_topic_must_be_one_topic_arn_and_is_not_echoed(tmp_path: Path, va
 def test_unknown_preparation_input_is_still_refused(tmp_path: Path) -> None:
     with pytest.raises(ConfigurationError):
         renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, example_extra_input=True))
+
+
+def render_committed_inputs(environment: dict[str, Any]) -> dict[str, object]:
+    """The IAM preparation inputs a fresh render writes from the committed file and the .env values, as the CLI writes them."""
+    _, iam = build_configuration(environment)
+    return renderer.derive_environment_inputs(renderer.load_preparation(environment["S3_BUCKET"]), iam)
+
+
+def sanitize(document: dict[str, object], environment: dict[str, Any]) -> dict[str, object]:
+    """Replace the .env values with the placeholders of the live fixture."""
+    text = json.dumps(document, sort_keys=True)
+    for placeholder, name in (("<bucket>", "S3_BUCKET"), ("<account>", "AWS_ACCOUNT_ID"), ("<region>", "AWS_REGION")):
+        text = text.replace(environment[name], placeholder)
+    text = text.replace(f"{environment['PROJECT_NAME']}_alerts_{environment['ENVIRONMENT']}", "<project>_alerts_<environment>")
+    text = text.replace(f'"{environment["PROJECT_NAME"]}_{environment["ENVIRONMENT"]}"', '"<project>_<environment>"')
+    return json.loads(text)
+
+
+def test_committed_iam_inputs_render_every_live_key(environment: dict[str, Any]) -> None:
+    live = json.loads(LIVE_INPUTS.read_text(encoding="utf-8"))
+    rendered = sanitize(render_committed_inputs(environment), environment)
+    check(sorted(rendered) == sorted(live), "a fresh render from the committed file writes exactly the live key set")
+    check(rendered == live, "a fresh render from the committed file writes the live values, with the .env values as placeholders")
+
+
+def test_live_inputs_fixture_holds_no_account_number_or_bucket() -> None:
+    text = LIVE_INPUTS.read_text(encoding="utf-8")
+    check(not re.search(r"[0-9]{12}", text) and "imungai" not in text, "the live fixture holds no account number and no bucket name")
+
+
+def derived_inputs(tmp_path: Path, environment: dict[str, Any], **extra: Any) -> dict[str, object]:
+    _, iam = build_configuration(environment)
+    return renderer.derive_environment_inputs(renderer.load_preparation(environment["S3_BUCKET"], preparation_file(tmp_path, **extra)), iam)
+
+
+def test_derived_inputs_are_built_from_env_and_their_flags_are_not_stack_inputs(tmp_path: Path, environment: dict[str, Any]) -> None:
+    inputs = derived_inputs(
+        tmp_path, environment, alerts_topic_enabled=True, athena_owner_is_project_user=True, publisher_secret_arns_enabled=True, training_prepared=True
+    )
+    account, region = environment["AWS_ACCOUNT_ID"], environment["AWS_REGION"]
+    check(
+        inputs["alerts_topic_arn"] == f"arn:aws:sns:{region}:{account}:{TEST_PROJECT_NAME}_alerts_{TEST_ENVIRONMENT}", "the topic is the platform alerts topic"
+    )
+    check(inputs["athena_owner_user"] == f"{TEST_PROJECT_NAME}_{TEST_ENVIRONMENT}", "the owner is the project policy user")
+    check(
+        inputs["publisher_secret_arns"]
+        == {name: f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-??????" for name in ("bls_api_key", "census_api_key", "hud_api_key")},
+        "each secret ARN holds the .env account and region and the six-character wildcard, never a suffix",
+    )
+    check(inputs["training_prepared"] is True, "an input that holds no .env value passes through")
+    check(not {"alerts_topic_enabled", "athena_owner_is_project_user", "publisher_secret_arns_enabled"} & inputs.keys(), "no derived flag reaches the stack")
+
+
+def test_derived_inputs_stay_out_when_their_flags_are_off(tmp_path: Path, environment: dict[str, Any]) -> None:
+    inputs = derived_inputs(tmp_path, environment, alerts_topic_enabled=False, athena_owner_is_project_user=False)
+    check(not {"alerts_topic_arn", "athena_owner_user", "publisher_secret_arns"} & inputs.keys(), "off flags build no input")
+
+
+@pytest.mark.parametrize("name", ["alerts_topic_enabled", "athena_owner_is_project_user", "publisher_secret_arns_enabled"])
+def test_derived_flag_must_be_a_boolean_and_is_not_echoed(tmp_path: Path, name: str) -> None:
+    with pytest.raises(ConfigurationError) as refusal:
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, **{name: "synthetic-value"}))
+    check(f"Set {name} to true or false" in str(refusal.value) and "synthetic-value" not in str(refusal.value), "the message names the input, not the value")
+
+
+PUBLISHER_NAMES = ("bls_api_key", "census_api_key", "hud_api_key")
+
+
+def secret_arns(suffix: str = "??????", account: str = "1" * 12, **replace: str) -> dict[str, str]:
+    arns = {name: f"arn:aws:secretsmanager:eu-west-1:{account}:secret:{name}-{suffix}" for name in PUBLISHER_NAMES}
+    return {**arns, **replace}
+
+
+def test_a_literal_publisher_secret_arn_may_only_be_the_six_character_wildcard_form(tmp_path: Path) -> None:
+    document = renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, publisher_secret_arns=secret_arns()))
+    check(document["publisher_secret_arns"] == secret_arns(), "the exact wildcard form of the three names is kept as written")
+
+
+@pytest.mark.parametrize(
+    "arns",
+    [
+        secret_arns("*"),
+        secret_arns("AbCdEf"),
+        secret_arns("?????"),
+        secret_arns("???????"),
+        secret_arns("*??????"),
+        secret_arns(account="1" * 11),
+        secret_arns(account="*"),
+        secret_arns(census_api_key="arn:aws:secretsmanager:eu-west-1:" + "1" * 12 + ":secret:*-??????"),
+        secret_arns(census_api_key="arn:aws:secretsmanager:eu-west-1:" + "1" * 12 + ":secret:other_secret-??????"),
+        {name: arn for name, arn in secret_arns().items() if name != "hud_api_key"},
+    ],
+)
+def test_a_literal_publisher_secret_arn_outside_the_wildcard_form_is_refused(tmp_path: Path, arns: dict[str, str]) -> None:
+    with pytest.raises(ConfigurationError) as refusal:
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, publisher_secret_arns=arns))
+    check("Set publisher_secret_arns to empty or" in str(refusal.value) and "1" * 11 not in str(refusal.value), "the message names the input, not a value")
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"alerts_topic_enabled": True, "alerts_topic_arn": ALERTS_TOPIC},
+        {"athena_owner_is_project_user": True, "athena_owner_user": "example_owner"},
+        {"publisher_secret_arns_enabled": True, "publisher_secret_arns": secret_arns()},
+    ],
+)
+def test_a_derived_input_and_its_literal_are_refused_together(tmp_path: Path, extra: dict[str, Any]) -> None:
+    with pytest.raises(ConfigurationError, match="not both"):
+        renderer.load_preparation("example-project-ci-bucket", preparation_file(tmp_path, **extra))
+
+
+def iam_pattern_matches(pattern: str, arn: str) -> bool:
+    """The IAM Resource match rule: a question mark is one character, an asterisk is any run and every other character is literal."""
+    return re.fullmatch("".join(".*" if char == "*" else "." if char == "?" else re.escape(char) for char in pattern), arn) is not None
+
+
+def test_a_recreated_secret_with_a_new_suffix_still_matches_and_another_name_does_not(tmp_path: Path, environment: dict[str, Any]) -> None:
+    value = derived_inputs(tmp_path, environment, publisher_secret_arns_enabled=True)["publisher_secret_arns"]
+    rendered: dict[str, str] = value if isinstance(value, dict) else {}
+    check(set(rendered) == set(PUBLISHER_NAMES), "the render names the three secrets")
+    account, region = environment["AWS_ACCOUNT_ID"], environment["AWS_REGION"]
+    for name, pattern in rendered.items():
+        for suffix in ("Xy9Q1z", "a1B2c3", "000000"):
+            check(
+                iam_pattern_matches(pattern, f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-{suffix}"),
+                f"{name} matches a recreated secret with suffix {suffix}",
+            )
+        others = [other for other in PUBLISHER_NAMES if other != name]
+        wrong = [
+            *(f"arn:aws:secretsmanager:{region}:{account}:secret:{other}-Xy9Q1z" for other in others),
+            f"arn:aws:secretsmanager:{region}:{account}:secret:{name}_extra-Xy9Q1z",
+            f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-Xy9Q1",
+            f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-Xy9Q1zz",
+            f"arn:aws:secretsmanager:{region}:{'2' * 12}:secret:{name}-Xy9Q1z",
+            f"arn:aws:secretsmanager:us-east-1:{account}:secret:{name}-Xy9Q1z",
+        ]
+        check(not any(iam_pattern_matches(pattern, arn) for arn in wrong), f"{name} matches no other name, length, account or region")
+
+
+def render_iam_cli(environment: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *extra: str) -> Path:
+    """Run the render command line for the IAM stack in a synthetic workspace and return the preparation file it writes."""
+    (tmp_path / ".env").write_text("\n".join(f"{key}={value}" for key, value in environment.items()), encoding="utf-8")
+    monkeypatch.setattr(renderer, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(sys, "argv", ["renderer", "--stack", "iam", "--admin-profile", "example_admin", *extra])
+    renderer.main()
+    return tmp_path / "infra" / "iam" / "preparation.auto.tfvars.json"
+
+
+def test_cli_writes_the_derived_iam_inputs_and_none_of_the_preparation_only_settings(
+    environment: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    written = json.loads(render_iam_cli(environment, tmp_path, monkeypatch).read_text(encoding="utf-8"))
+    account, region = environment["AWS_ACCOUNT_ID"], environment["AWS_REGION"]
+    check(
+        written.get("alerts_topic_arn") == f"arn:aws:sns:{region}:{account}:{TEST_PROJECT_NAME}_alerts_{TEST_ENVIRONMENT}",
+        "the written file holds the alerts topic",
+    )
+    check(written.get("athena_owner_user") == f"{TEST_PROJECT_NAME}_{TEST_ENVIRONMENT}", "the written file holds the project policy user")
+    check(
+        written.get("publisher_secret_arns") == {name: f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-??????" for name in PUBLISHER_NAMES},
+        "the written file holds the three wildcard secret ARNs",
+    )
+    settings = {"alerts_topic_enabled", "athena_owner_is_project_user", "publisher_secret_arns_enabled"}
+    check(not settings & written.keys(), "no preparation-only setting is forwarded to Terraform")
+    check(sanitize(written, environment) == json.loads(LIVE_INPUTS.read_text(encoding="utf-8")), "the written file equals the sanitized live inputs")
+
+
+@pytest.mark.parametrize("change", [None, "alerts_topic_arn"])
+def test_cli_saved_plan_check_uses_the_derived_iam_inputs(
+    environment: dict[str, Any], tmp_path: Path, monkeypatch: pytest.MonkeyPatch, change: str | None
+) -> None:
+    render_iam_cli(environment, tmp_path, monkeypatch)
+    _, iam = build_configuration(environment, "example_admin")
+    # The saved plan holds the inputs the reviewed render must write, built here without the command line.
+    reviewed = renderer.derive_environment_inputs(renderer.load_preparation(environment["S3_BUCKET"]), iam)
+    variables = {key: {"value": value} for key, value in {**iam, **reviewed}.items()}
+    if change:
+        variables[change] = {"value": "arn:aws:sns:eu-west-1:" + "2" * 12 + ":example_project_alerts_dev"}
+    plan = {"complete": True, "variables": variables}
+    monkeypatch.setattr(sys, "argv", ["renderer", "--stack", "iam", "--admin-profile", "example_admin", "--check-plan", str(tmp_path / "reviewed.tfplan")])
+    monkeypatch.setattr(renderer, "run_command", lambda program, args, **kwargs: CompletedProcess([program, *args], 0, json.dumps(plan), ""))
+    if change:
+        with pytest.raises(SystemExit):
+            renderer.main()
+    else:
+        renderer.main()

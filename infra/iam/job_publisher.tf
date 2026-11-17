@@ -6,14 +6,17 @@ variable "publisher_job_enabled" {
 }
 
 variable "publisher_keys_enabled" {
-  description = "Let the run 3 publisher task role read the three API keys by exact ARN. Off until the owner approves the keyed units on the task."
+  description = "Let the run 3 publisher task role read the three API keys by their ARN names (the six-character wildcard for the random suffix). Off until the owner approves the keyed units on the task."
   type        = bool
   default     = false
   nullable    = false
 }
 
+# Secrets Manager appends six random characters to a secret name as part of its ARN, so the ARN is named with the six-character wildcard "-??????" (AWS
+# documents it in the IAM policy examples, "Example: Wildcards"; never "-*"). The grant matches the secret of that name only. A secret that is deleted and
+# created again under the same name keeps the access, because the six characters change and the wildcard still matches.
 variable "publisher_secret_arns" {
-  description = "The exact ARNs of census_api_key, bls_api_key and hud_api_key, with their six-character suffix. Empty until publisher_keys_enabled is true."
+  description = "The ARNs of census_api_key, bls_api_key and hud_api_key by name, each ending in the six-character wildcard -?????? for the suffix Secrets Manager appends. Empty until publisher_keys_enabled is true."
   type        = map(string)
   default     = {}
   nullable    = false
@@ -21,9 +24,9 @@ variable "publisher_secret_arns" {
   validation {
     condition = !var.publisher_keys_enabled || (
       toset(keys(var.publisher_secret_arns)) == toset(["bls_api_key", "census_api_key", "hud_api_key"]) &&
-      alltrue([for name, arn in var.publisher_secret_arns : can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:${name}-[A-Za-z0-9]{6}$", arn))])
+      alltrue([for name, arn in var.publisher_secret_arns : can(regex("^arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{12}:secret:${name}-[?]{6}$", arn))])
     )
-    error_message = "Name exactly census_api_key, bls_api_key and hud_api_key, each with its exact ARN and no wildcard."
+    error_message = "Name exactly census_api_key, bls_api_key and hud_api_key, each as an ARN of its own name ending in -?????? (six question marks) and never -*."
   }
 }
 

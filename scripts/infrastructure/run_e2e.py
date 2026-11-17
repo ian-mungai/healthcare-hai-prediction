@@ -43,7 +43,7 @@ SOURCE_PATHS = (
     "data_contracts/infrastructure/platform_preparation.schema.json",
 )
 PREPARATION_PATH = "config/aws/iam_preparation.json"
-# The committed defaults in the shape the renderer reads (the owner edits the committed file itself).
+# The default inputs in the shape the renderer reads, for cases that need all-off flags; the committed config/aws/iam_preparation.json holds the live flags.
 DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 PREPARATION_OUTPUT = "infra/iam/preparation.auto.tfvars.json"
 BRONZE_TABLES_PATH = "config/lakehouse/bronze_tables.json"

@@ -342,16 +342,16 @@ run "publisher_keys_are_off_by_default" {
   }
 }
 
-run "publisher_keys_read_only_the_three_exact_secrets" {
+run "publisher_keys_read_only_the_three_secrets_by_name" {
   command = plan
 
   variables {
     publisher_job_enabled  = true
     publisher_keys_enabled = true
     publisher_secret_arns = {
-      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
-      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
-      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
     }
   }
 
@@ -360,18 +360,18 @@ run "publisher_keys_read_only_the_three_exact_secrets" {
       length(jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement) == 1 &&
       jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement[0].Action == ["secretsmanager:GetSecretValue"] &&
       toset(jsondecode(aws_iam_role_policy.job_publisher_keys[0].policy).Statement[0].Resource) == toset([
-        "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf",
-        "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl",
-        "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-??????",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????",
+        "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????",
       ]) &&
       !strcontains(aws_iam_role_policy.job_publisher_keys[0].policy, "*") &&
       join(",", output.publisher_job_contract.secrets) == "bls_api_key,census_api_key,hud_api_key"
     )
-    error_message = "The publisher task role may read exactly the three key secrets by exact ARN and nothing else."
+    error_message = "The publisher task role may read exactly the three key secrets by name, with the six-character wildcard for the suffix AWS appends, and nothing else."
   }
 }
 
-run "publisher_keys_refuse_a_wildcard_arn" {
+run "publisher_keys_refuse_a_star_suffix" {
   command = plan
 
   variables {
@@ -379,8 +379,120 @@ run "publisher_keys_refuse_a_wildcard_arn" {
     publisher_keys_enabled = true
     publisher_secret_arns = {
       census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-*"
-      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
-      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_fixed_suffix" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_short_wildcard" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-?????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_long_wildcard" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-???????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_star_in_the_name" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:*-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_another_accounts_shape" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:11111111111:secret:census_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_wildcard_account" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:*:secret:census_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_another_service" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:ssm:us-west-2:111111111111:secret:census_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
     }
   }
 
@@ -394,8 +506,24 @@ run "publisher_keys_refuse_a_fourth_or_a_missing_secret" {
     publisher_job_enabled  = true
     publisher_keys_enabled = true
     publisher_secret_arns = {
-      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
-      other_secret   = "arn:aws:secretsmanager:us-west-2:111111111111:secret:other_secret-GhIjKl"
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-??????"
+      other_secret   = "arn:aws:secretsmanager:us-west-2:111111111111:secret:other_secret-??????"
+    }
+  }
+
+  expect_failures = [var.publisher_secret_arns]
+}
+
+run "publisher_keys_refuse_a_secret_under_another_name" {
+  command = plan
+
+  variables {
+    publisher_job_enabled  = true
+    publisher_keys_enabled = true
+    publisher_secret_arns = {
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
     }
   }
 
@@ -408,9 +536,9 @@ run "publisher_keys_need_the_class" {
   variables {
     publisher_keys_enabled = true
     publisher_secret_arns = {
-      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-AbCdEf"
-      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-GhIjKl"
-      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-MnOpQr"
+      census_api_key = "arn:aws:secretsmanager:us-west-2:111111111111:secret:census_api_key-??????"
+      bls_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:bls_api_key-??????"
+      hud_api_key    = "arn:aws:secretsmanager:us-west-2:111111111111:secret:hud_api_key-??????"
     }
   }
 

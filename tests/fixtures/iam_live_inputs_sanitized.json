@@ -1,0 +1,47 @@
+{
+  "airflow_launch_families": [
+    "drift",
+    "features",
+    "gold",
+    "metadata",
+    "promote",
+    "publisher",
+    "serve",
+    "silver",
+    "train"
+  ],
+  "airflow_launch_prepared": true,
+  "airflow_lineage_prepared": true,
+  "alerts_topic_arn": "arn:aws:sns:<region>:<account>:<project>_alerts_<environment>",
+  "athena_mirror_prepared": true,
+  "athena_owner_user": "<project>_<environment>",
+  "bronze_live_locations": {
+    "bronze": "s3://<bucket>/lakehouse/bronze/",
+    "bronze_dictionary": "s3://<bucket>/lakehouse/bronze_dictionary/"
+  },
+  "bronze_qualification_collection": "california_cdph/infection_prevention",
+  "bronze_writer_prepared": true,
+  "drift_prepared": true,
+  "host_code_fetch_prepared": true,
+  "job_endpoints_enabled": false,
+  "job_features_image_prepared": true,
+  "job_layer_runs_prepared": true,
+  "job_writer_e2e_prepared": true,
+  "job_writer_layers_prepared": true,
+  "model_api_manifest_prefix": "serving/deployments",
+  "model_api_prepared": true,
+  "model_api_registry_key": "lakehouse/feast/registry.pb",
+  "monitoring_enabled": true,
+  "openmetadata_persistent_prepared": true,
+  "openmetadata_prepared": true,
+  "publisher_job_enabled": true,
+  "publisher_keys_enabled": true,
+  "publisher_secret_arns": {
+    "bls_api_key": "arn:aws:secretsmanager:<region>:<account>:secret:bls_api_key-??????",
+    "census_api_key": "arn:aws:secretsmanager:<region>:<account>:secret:census_api_key-??????",
+    "hud_api_key": "arn:aws:secretsmanager:<region>:<account>:secret:hud_api_key-??????"
+  },
+  "serve_prepared": true,
+  "source_raw_root_enabled": false,
+  "training_prepared": true
+}

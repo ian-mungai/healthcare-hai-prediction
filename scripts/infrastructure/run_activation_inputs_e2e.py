@@ -44,7 +44,7 @@ SOURCES = (
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
 )
-# The committed defaults in the shape the renderer reads (the owner edits the committed file itself).
+# The default inputs in the shape the renderer reads, for cases that need all-off flags; the committed config/aws/iam_preparation.json holds the live flags.
 DEFAULT_PREPARATION = "tests/fixtures/iam_preparation_default.json"
 ACCOUNT = "111111111111"
 ADMIN = "example_admin"
@@ -143,7 +143,7 @@ ROWS: list[Row] = [
     Row(
         "iam",
         "publisher_secret_arns",
-        {name: f"arn:aws:secretsmanager:us-west-2:{'1' * 12}:secret:{name}-AbCdEf" for name in ("census_api_key", "bls_api_key", "hud_api_key")},
+        {name: f"arn:aws:secretsmanager:us-west-2:{'1' * 12}:secret:{name}-??????" for name in ("census_api_key", "bls_api_key", "hud_api_key")},
         {"census_api_key": f"arn:aws:secretsmanager:us-west-2:{'1' * 12}:secret:census_api_key-*"},
     ),
     Row("iam", "athena_owner_user", "example_owner", 5),

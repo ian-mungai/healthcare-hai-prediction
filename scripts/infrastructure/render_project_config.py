@@ -46,15 +46,24 @@ OPTIONAL_PREPARATION_FLAGS = (
     "airflow_lineage_prepared",
     "serve_prepared",
     "host_code_fetch_prepared",
+    "alerts_topic_enabled",
+    "athena_owner_is_project_user",
+    "publisher_secret_arns_enabled",
 )
-# Text inputs that may be left out. The IAM user name the Athena reader role trusts stays in the owner's local file, so no tracked file holds a value.
+# Flags that are no stack inputs: each one builds an input that holds a .env value (the account, the region, the project name), so the committed file
+# holds the flag and never the value. derive_environment_inputs replaces them with the inputs they build.
+DERIVED_PREPARATION_FLAGS = ("alerts_topic_enabled", "athena_owner_is_project_user", "publisher_secret_arns_enabled")
+# Text inputs that may be left out. The IAM user name the Athena reader role trusts and the alerts topic ARN hold .env values, so the tracked file sets their
+# derived flags instead and no tracked file holds a value; the literals stay valid for a local file.
 OPTIONAL_PREPARATION_TEXT = ("athena_owner_user", "model_api_registry_key", "model_api_manifest_prefix", "airflow_launch_record_prefix", "alerts_topic_arn")
 # Lists that may be left out: the job families the Airflow launch role may start.
 OPTIONAL_PREPARATION_LISTS = ("airflow_launch_families",)
 HOST_JOB_FAMILIES = ("train", "bronze", "silver", "gold", "features", "drift", "promote", "serve", "metadata")
 # The families the Airflow launch role may start: the host job families and the Run 3 publisher (infra/iam/airflow_launch.tf).
 LAUNCH_FAMILIES = (*HOST_JOB_FAMILIES, "publisher")
-# The exact ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value.
+# The ARNs of the three API key secrets the publisher task role may read. An ARN names a secret, not its value. Secrets Manager appends six random characters
+# to a secret name as part of its ARN, so the ARN ends in the six-character wildcard "-??????" (AWS IAM policy examples, "Example: Wildcards"; never "-*").
+# A secret that is deleted and created again under the same name keeps the access, because the wildcard still matches. The same rule as job_publisher.tf.
 PUBLISHER_SECRET_NAMES = frozenset({"census_api_key", "bls_api_key", "hud_api_key"})
 OPTIONAL_PREPARATION_NAMES = frozenset({*OPTIONAL_PREPARATION_FLAGS, *OPTIONAL_PREPARATION_TEXT, *OPTIONAL_PREPARATION_LISTS, "publisher_secret_arns"})
 # The same rule as the alerts_topic_arn validation in infra/iam/training_variables.tf: one SNS topic ARN, with no wildcard.
@@ -209,14 +218,22 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
         and (
             set(secrets) != PUBLISHER_SECRET_NAMES
             or not all(
-                isinstance(arn, str) and re.fullmatch(rf"arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{{12}}:secret:{name}-[A-Za-z0-9]{{6}}", arn)
+                isinstance(arn, str) and re.fullmatch(rf"arn:aws:secretsmanager:[a-z0-9-]+:[0-9]{{12}}:secret:{name}-[?]{{6}}", arn)
                 for name, arn in secrets.items()
             )
         )
     ):
         raise ConfigurationError(
-            "Set publisher_secret_arns to empty or the exact ARNs of census_api_key, bls_api_key and hud_api_key in the IAM preparation file."
+            "Set publisher_secret_arns to empty or the ARNs of census_api_key, bls_api_key and hud_api_key, each ending in -?????? (six question marks), "
+            "in the IAM preparation file."
         )
+    for flag, literal in (
+        ("alerts_topic_enabled", "alerts_topic_arn"),
+        ("athena_owner_is_project_user", "athena_owner_user"),
+        ("publisher_secret_arns_enabled", "publisher_secret_arns"),
+    ):
+        if document.get(flag) and document.get(literal):
+            raise ConfigurationError(f"Set either {flag} or {literal} in the IAM preparation file, not both.")
     collection = document["bronze_qualification_collection"]
     if not isinstance(collection, str) or (collection and not COLLECTION_PATTERN.fullmatch(collection)):
         raise ConfigurationError("Set bronze_qualification_collection to empty or a publisher/collection name in the IAM preparation file.")
@@ -226,6 +243,31 @@ def load_preparation(bucket: str, path: Path = PREPARATION_PATH, tables: Path = 
         )
     locations = {"bronze": f"s3://{bucket}/lakehouse/bronze/", "bronze_dictionary": f"s3://{bucket}/lakehouse/bronze_dictionary/"}
     return {**document, "bronze_live_locations": locations if document["bronze_live_locations"] else {}}
+
+
+def derive_environment_inputs(preparation: Mapping[str, object], iam: Mapping[str, str]) -> dict[str, object]:
+    """Build the inputs that hold .env values from the committed flags, and return the stack inputs without those flags.
+
+    The topic, the Athena owner user and the secret ARNs follow the same naming rules as their stack validations: the topic is the platform alerts topic of the
+    project, environment, account and region, and the owner is the project policy user (the profile name). A built value that fails its rule is refused.
+    """
+    region, account, project, environment = (iam[name] for name in ("aws_region", "expected_account_id", "project_name", "environment"))
+    inputs = {name: value for name, value in preparation.items() if name not in DERIVED_PREPARATION_FLAGS}
+    if preparation.get("alerts_topic_enabled"):
+        topic = f"arn:aws:sns:{region}:{account}:{project}_alerts_{environment}"
+        if not ALERTS_TOPIC.fullmatch(topic):
+            raise ConfigurationError(
+                "The alerts topic built from .env is not a valid topic ARN; check AWS_REGION, AWS_ACCOUNT_ID, PROJECT_NAME and ENVIRONMENT."
+            )
+        inputs["alerts_topic_arn"] = topic
+    if preparation.get("athena_owner_is_project_user"):
+        owner = f"{project}_{environment}"
+        if not OWNER_USER.fullmatch(owner):
+            raise ConfigurationError("The project policy user built from .env is not a valid IAM user name; check PROJECT_NAME and ENVIRONMENT.")
+        inputs["athena_owner_user"] = owner
+    if preparation.get("publisher_secret_arns_enabled"):
+        inputs["publisher_secret_arns"] = {name: f"arn:aws:secretsmanager:{region}:{account}:secret:{name}-??????" for name in sorted(PUBLISHER_SECRET_NAMES)}
+    return inputs
 
 
 def verify_project_identity(storage: dict[str, str]) -> None:
@@ -385,6 +427,8 @@ def main() -> None:
                 raise ConfigurationError("--athena-retention belongs to the storage stack: select --stack storage.")
             storage_inputs["athena_retention_enabled"] = True
         preparation = load_preparation(storage["data_bucket_name"]) if arguments.stack in ("iam", "both") else None
+        if preparation is not None:
+            preparation = derive_environment_inputs(preparation, iam)
         selected = {"storage": (REPO_ROOT / "infra", storage_inputs), "iam": (REPO_ROOT / "infra" / "iam", iam)}
         if arguments.check_plan:
             if arguments.stack in ("both", "dvc"):
