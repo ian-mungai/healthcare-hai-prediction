@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import os
 import re
 import sys
 import tempfile
@@ -19,6 +20,7 @@ MODULE = "scripts.infrastructure.host_session"
 SOURCE = Path(__file__).with_name("host_session.py")
 SIGNAL_MODULE = "scripts.infrastructure.host_session_group_signal"
 SIGNAL_SOURCE = Path(__file__).with_name("host_session_group_signal.py")
+ENTRY_SOURCE = "HOST_SESSION_ENTRY_SOURCE"  # host_session_entry_stand_in.SOURCE: the child process loads this file as host_session
 KILL_AFTER_REAP = ("with contextlib.suppress(ProcessLookupError, PermissionError):", "    os.killpg(driver.pid, signal.SIGKILL)")
 
 
@@ -165,6 +167,7 @@ PLANTS: dict[str, tuple[str, str]] = {
         '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")',
         '        self.step(f"{command}_failed", "the host is left on" if keep_on else "stopping the host")\n        self.check_no_job_tasks(0)',
     ),
+    "the command line runs a second copy of the module": ("    raise SystemExit(packaged_main())", "    raise SystemExit(main())"),
     "names carry no state serial": ("state_serial=services_state_serial(SERVICES_DIRECTORY),", "state_serial=None,"),
     "status raises on an absent service": (
         "        found, absent = self.lookup_services()\n        services = {",
@@ -193,7 +196,8 @@ PLANTS: dict[str, tuple[str, str]] = {
 
 
 def caught(source: str) -> bool:
-    """True when the cases detect the planted source."""
+    """True when the cases detect the planted source. The cases that start the command line as a child process load the planted file too
+    (``HOST_SESSION_ENTRY_SOURCE``), and the file stays until the last case has run."""
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "host_session_planted.py"
         path.write_text(source, encoding="utf-8")
@@ -203,17 +207,22 @@ def caught(source: str) -> bool:
         planted = importlib.util.module_from_spec(spec)
         sys.modules[MODULE] = planted
         spec.loader.exec_module(planted)
-    importlib.reload(importlib.import_module("scripts.infrastructure.host_session_refresh_cases"))
-    importlib.reload(importlib.import_module("scripts.infrastructure.host_session_stop_cases"))
-    cases = importlib.import_module("scripts.infrastructure.host_session_cases")
-    importlib.reload(cases)
-    for function in cases.CASES.values():
+        os.environ[ENTRY_SOURCE] = str(path)
         try:
-            if not all(function().values()):
-                return True
-        except (*cases.CASE_ERRORS, KeyboardInterrupt, planted.TerminationRequested):
-            return True
-    return False
+            importlib.reload(importlib.import_module("scripts.infrastructure.aws_tasks"))  # it must raise the planted module's HostSessionError
+            importlib.reload(importlib.import_module("scripts.infrastructure.host_session_refresh_cases"))
+            importlib.reload(importlib.import_module("scripts.infrastructure.host_session_stop_cases"))
+            cases = importlib.import_module("scripts.infrastructure.host_session_cases")
+            importlib.reload(cases)
+            for function in cases.CASES.values():
+                try:
+                    if not all(function().values()):
+                        return True
+                except (*cases.CASE_ERRORS, KeyboardInterrupt, planted.TerminationRequested):
+                    return True
+            return False
+        finally:
+            os.environ.pop(ENTRY_SOURCE, None)
 
 
 def signal_plant_caught(source: str) -> bool:

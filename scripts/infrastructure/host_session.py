@@ -1079,4 +1079,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ``python -m`` loads this file as ``__main__``, and ``aws_tasks`` imports the module by its package name: a second copy with classes of its own, so its
+    # ``HostSessionError`` is not the one that ``main`` catches. Run the package copy, so that every module shares one set of classes.
+    from scripts.infrastructure.host_session import main as packaged_main
+
+    raise SystemExit(packaged_main())

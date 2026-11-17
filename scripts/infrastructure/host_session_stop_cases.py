@@ -207,6 +207,26 @@ def stop_refuses_when_the_listing_fails() -> dict[str, bool]:
     return checks
 
 
+def stop_retries_a_transient_describe_failure() -> dict[str, bool]:
+    host, session, lines, arns = scene(READER)
+    host.describe_task_failures = 1
+    host.tasks[arns[0]]["stops_at"] = host.now + 20
+    count = len(host.log)
+    session.stop(wait_seconds=60)
+    off = next(entry for entry in refresh.after(host, count) if entry["operation"] == "set-desired-capacity")
+    other, single, _, _ = scene(READER)
+    other.describe_task_failures = 1
+    message = refresh.failure(single.stop)
+    return {
+        "a describe failure that is not a missing task is retried and the stop then goes on": host.desired == 0 and host.instance_up_at is None,
+        "the host went off only after the task ended, not after the failed listing": off["at"] >= 20,
+        "without a wait the same failure refuses by name and the host stays on": message is not None
+        and message.startswith("stop refused")
+        and "could not be listed" in message
+        and host_is_on(other),
+    }
+
+
 def stop_interrupted_during_the_wait_leaves_the_host_on() -> dict[str, bool]:
     module = refresh.module()
     checks: dict[str, bool] = {}
@@ -322,6 +342,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "stop_waits_and_then_refuses_at_the_deadline": stop_waits_and_then_refuses_at_the_deadline,
     "stop_force_skips_the_check": stop_force_skips_the_check,
     "stop_refuses_when_the_listing_fails": stop_refuses_when_the_listing_fails,
+    "stop_retries_a_transient_describe_failure": stop_retries_a_transient_describe_failure,
     "stop_interrupted_during_the_wait_leaves_the_host_on": stop_interrupted_during_the_wait_leaves_the_host_on,
     "a_failed_command_still_stops_the_host_while_a_job_task_runs": a_failed_command_still_stops_the_host_while_a_job_task_runs,
     "a_task_start_time_is_read_in_every_form_the_cli_shows": a_task_start_time_is_read_in_every_form_the_cli_shows,

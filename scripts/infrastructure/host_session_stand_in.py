@@ -90,6 +90,7 @@ class StandInHost:
     pages), ``repeat_token`` makes every page answer the same ``nextToken``, ``ghost_task`` makes list-tasks name one task that describe-tasks reports
     ``MISSING``, ``vanish_after_stop`` makes a stopped task unknown to describe-tasks, ``never_stop_task`` makes stop-task accept the call but leave the
     task running, ``stop_task_error`` makes stop-task fail without effect, ``stop_task_lost_reply`` makes stop-task take effect and then fail and
+    ``describe_tasks_failure:<n>`` makes the next n describe-tasks calls answer a failure entry that is not ``MISSING`` (a transient service failure) and
     ``no_definition`` makes describe-tasks omit ``taskDefinitionArn`` and ``no_started_at`` makes it omit ``startedAt`` (``EPOCH`` plus the virtual start time,
     shown with an offset as the AWS CLI shows it). A service name that the host does not know is answered as ECS answers a missing
     service: a ``MISSING`` failure entry and no service. ``describe_services_error`` adds a failure entry of another reason to every describe-services
@@ -147,6 +148,7 @@ class StandInHost:
         self.throttled = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("throttle:")), 0)
         self.provider_delay = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("late_provider:")), 0)
         self.page_size = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("page_size:")), 0)
+        self.describe_task_failures = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("describe_tasks_failure:")), 0)
         self.handlers[("ecs", "stop-task")] = self.ecs_stop_task
         self.handlers[("logs", "get-log-events")] = self.logs_get_log_events
         self.added = 0
@@ -403,6 +405,9 @@ class StandInHost:
         return {"events": events, "nextForwardToken": "f/0"}
 
     def ecs_describe_tasks(self, options: dict[str, list[str]]) -> dict[str, Any]:
+        if self.describe_task_failures > 0:
+            self.describe_task_failures -= 1
+            return {"tasks": [], "failures": [{"arn": options["--tasks"][0], "reason": "INTERNAL"}]}
         found: list[dict[str, Any]] = []
         failures: list[dict[str, str]] = []
         reason = "Essential container in task exited" + (f" {LEAK}" if "leaky_reasons" in self.faults else "")
