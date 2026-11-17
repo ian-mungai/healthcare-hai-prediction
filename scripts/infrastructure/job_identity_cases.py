@@ -85,6 +85,12 @@ NEWEST = {
     "hai_quality_checks_failed": "hai_job_finish_timestamp_seconds",
     "hai_quality_checks_run": "hai_job_finish_timestamp_seconds",
     "hai_quality_checks_warned": "hai_job_finish_timestamp_seconds",
+    "hai_drift_triggered": "hai_job_finish_timestamp_seconds",
+    "hai_drift_share": "hai_job_finish_timestamp_seconds",
+    "hai_drift_features_drifted": "hai_job_finish_timestamp_seconds",
+    "hai_drift_current_rows": "hai_job_finish_timestamp_seconds",
+    "hai_drift_status": "hai_job_finish_timestamp_seconds",
+    "hai_drift_unmonitored": "hai_job_finish_timestamp_seconds",
 }
 
 

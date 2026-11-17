@@ -17,7 +17,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: 'hai_drift_triggered == bool 1'
+              expr: '(hai_drift_triggered == bool 1) and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds))'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
