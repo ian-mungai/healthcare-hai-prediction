@@ -235,7 +235,8 @@ def live_folder(work: Path, run: str) -> Path:
 
 
 def live_names(hai_type: str) -> list[str]:
-    return [f"drift_{hai_type}.json", f"report_{hai_type}.html"]
+    """The files of a live run: the record, Evidently's HTML report, and the snapshot and project files that rebuild the UI workspace from S3."""
+    return [f"drift_{hai_type}.json", f"report_{hai_type}.html", f"snapshot_{hai_type}.json", f"project_{hai_type}.json"]
 
 
 def check_live_phase(work: Path, run: str, hai_type: str, workspace: Path, *, config: Path = drift_config.CONFIG) -> dict[str, Any]:
@@ -296,7 +297,8 @@ def create_object(client: Any, bucket: str, key: str, body: bytes, content_type:
 
 
 def publish_live_phase(client: Any, bucket: str, work: Path, run: str, hai_type: str) -> dict[str, Any]:
-    """Upload the live check's record and HTML report to ``drift_demo/<run>/`` and then the marker that names them, each created only when its key is free.
+    """Upload the live check's record, HTML report, UI snapshot and project file to ``drift_demo/<run>/`` and then the marker that names them, each created only
+    when its key is free.
 
     A run whose marker exists is complete: the same record is a no-op (its stored HTML keeps matching the marker, whatever the local HTML is) and another
     record is refused as ``demo_run_conflict``. An earlier try that stopped before the marker left objects that the retry finds again: the same bytes complete

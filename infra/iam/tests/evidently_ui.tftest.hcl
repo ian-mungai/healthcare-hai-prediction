@@ -41,18 +41,18 @@ variables {
   owner_ip_cidrs      = []
 }
 
-# The Evidently UI shows the snapshots of the live drift check from a read-only folder on the host and calls no AWS service. Its task role exists only to give the
-# service a role of its own, apart from every other service, and it holds no policy at all. Every case reads the plan only.
+# The Evidently UI shows the snapshots of the live drift check from a read-only folder on the host. Its restore step rebuilds that folder from the completed runs under
+# drift_demo/ in S3, so its task role holds one policy: read and list on that prefix, and no write. The UI process itself calls no AWS service. Every case reads the plan only.
 run "default_prepares_no_evidently_ui_role" {
   command = plan
 
   assert {
-    condition     = !var.evidently_ui_prepared && length(aws_iam_role.evidently_ui_task) == 0 && output.evidently_ui_role == null
+    condition     = !var.evidently_ui_prepared && length(aws_iam_role.evidently_ui_task) == 0 && length(aws_iam_role_policy.evidently_ui_restore_read) == 0 && output.evidently_ui_role == null
     error_message = "The Evidently UI role exists only while evidently_ui_prepared is true."
   }
 }
 
-run "the_evidently_ui_role_is_assumed_by_ecs_tasks_and_holds_no_policy" {
+run "the_evidently_ui_role_is_assumed_by_ecs_tasks_and_may_only_read_the_demo_prefix" {
   command = plan
 
   variables {
@@ -81,5 +81,19 @@ run "the_evidently_ui_role_is_assumed_by_ecs_tasks_and_holds_no_policy" {
       role != aws_iam_role.evidently_ui_task[0].name
     ])
     error_message = "The UI role is named apart from every other service role."
+  }
+
+  assert {
+    condition = (
+      length(aws_iam_role_policy.evidently_ui_restore_read) == 1 &&
+      aws_iam_role_policy.evidently_ui_restore_read[0].role == aws_iam_role.evidently_ui_task[0].name &&
+      length(jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement) == 2 &&
+      jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement[0].Action == ["s3:GetObject"] &&
+      jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/drift_demo/*" &&
+      jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement[1].Action == ["s3:ListBucket"] &&
+      jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement[1].Resource == "arn:aws:s3:::example-project-ci-bucket" &&
+      jsondecode(aws_iam_role_policy.evidently_ui_restore_read[0].policy).Statement[1].Condition == { StringLike = { "s3:prefix" = ["drift_demo/*"] } }
+    )
+    error_message = "The restore step may read objects under drift_demo/ and list that prefix of the data bucket, and nothing else: no write, no delete and no other prefix."
   }
 }

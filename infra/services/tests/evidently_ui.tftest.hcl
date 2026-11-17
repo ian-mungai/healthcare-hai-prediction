@@ -3,8 +3,9 @@ mock_provider "aws" {
 }
 
 # The Evidently UI runs as one small service behind evidently_ui_enabled. It serves the snapshots of the on-demand live drift check (monitoring.live_check) from a
-# folder of the drift job family that the jobs stack writes and this service only reads. These cases pin the flag-off plan, the one container and its limits, the
-# read-only workspace, the loopback port and the memory rule that recomputes the host job cap. Every case reads the plan only: no image runs and nothing reaches AWS.
+# folder of the drift job family that the jobs stack writes and this service only reads. A restore step runs first in the same task: it rebuilds that folder from the
+# completed runs under drift_demo/ in S3. These cases pin the flag-off plan, the two containers and their limits, the read-only workspace of the UI, the restore step's
+# own mounts and rights, the loopback port and the memory rule that recomputes the host job cap. Every case reads the plan only: no image runs and nothing reaches AWS.
 variables {
   # TEST FIXTURE ONLY, not a measured value: the host job cap (host_job_cap_mib) these plans use.
   host_job_cap_mib            = 4096
@@ -36,6 +37,7 @@ variables {
     polaris_admin = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/polaris_admin"
     airflow       = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/airflow"
     drift         = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    training      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
   }
 
   image_digests = {
@@ -45,6 +47,7 @@ variables {
     polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
     airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     drift         = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    training      = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
   }
 }
 
@@ -62,12 +65,13 @@ run "flag_off_plans_no_evidently_ui" {
   }
 }
 
-run "flag_on_adds_one_loopback_service_on_the_pinned_drift_image" {
+run "flag_on_adds_one_loopback_service_with_a_restore_step" {
   command = plan
 
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
   }
 
   assert {
@@ -87,51 +91,99 @@ run "flag_on_adds_one_loopback_service_on_the_pinned_drift_image" {
 
   assert {
     condition = (
-      length(jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)) == 1 &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].name == "evidently_ui" &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].image == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift@sha256:9999999999999999999999999999999999999999999999999999999999999999"
+      [for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.name] == ["evidently_ui_restore", "evidently_ui"] &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.image if container.name == "evidently_ui"]) == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift@sha256:9999999999999999999999999999999999999999999999999999999999999999" &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.image if container.name == "evidently_ui_restore"]) == "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training@sha256:8888888888888888888888888888888888888888888888888888888888888888"
     )
-    error_message = "One container runs the existing drift image, pinned by its digest. No new image or repository exists."
+    error_message = "The UI runs the existing drift image and the restore step the existing training image (it holds boto3), each pinned by its digest. No new image or repository exists."
   }
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].command == [
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.command if container.name == "evidently_ui"]) == [
         "python", "-c", "from evidently.legacy.cli import app; app()", "ui", "--host", "127.0.0.1", "--port", "8600", "--workspace", "/workspace"
       ] &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].portMappings == [{ containerPort = 8600, hostPort = 8600, protocol = "tcp" }]
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.portMappings if container.name == "evidently_ui"]) == [{ containerPort = 8600, hostPort = 8600, protocol = "tcp" }]
     )
     error_message = "The legacy Evidently UI of release 0.7.23 (the API of the report that drift_check runs) binds the host loopback on port 8600, never 8000 (the model API)."
   }
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].memory == 512 &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].memoryReservation == 256
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.memory if container.name == "evidently_ui"]) == 512 &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.memoryReservation if container.name == "evidently_ui"]) == 256 &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.memory if container.name == "evidently_ui_restore"]) == 256 &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.memoryReservation if container.name == "evidently_ui_restore"]) == 16
     )
-    error_message = "The container reserves 256 MiB and may use 512 MiB: the measured idle size is 237 MiB with four snapshots."
+    error_message = "The UI reserves 256 MiB and may use 512 MiB (measured idle size 237 MiB with four snapshots). The restore step, which runs once before it, reserves 16 MiB and may use 256 MiB."
   }
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].user == "10001:10001" &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].readonlyRootFilesystem &&
-      length(lookup(jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0], "secrets", [])) == 0 &&
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].healthCheck.command == [
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.user if container.name == "evidently_ui"]) == "10001:10001" &&
+      alltrue([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.readonlyRootFilesystem && length(lookup(container, "secrets", [])) == 0]) &&
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.healthCheck.command if container.name == "evidently_ui"]) == [
         "CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8600/api/version', timeout=3)"
       ]
     )
-    error_message = "The UI runs as the numeric job user (which owns the workspace) on a read-only root with no secret, and is healthy when /api/version answers."
+    error_message = "The UI runs as the numeric job user on a read-only root, healthy when /api/version answers. No container holds a secret, and both roots are read-only."
   }
 
   assert {
     condition = (
-      jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions)[0].mountPoints == [
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.mountPoints if container.name == "evidently_ui"]) == [
         { sourceVolume = "evidently_workspace", containerPath = "/workspace", readOnly = true }
       ] &&
       [for volume in aws_ecs_task_definition.service["evidently_ui"].volume : volume.host_path if volume.name == "evidently_workspace"] == ["/data/job_scratch/drift/evidently_workspace"]
     )
     error_message = "The UI mounts the workspace folder of the drift job family read-only. The folder is the one infra/jobs mounts into the drift check, so a job writes and the UI only reads."
+  }
+}
+
+run "the_restore_step_runs_first_reads_s3_and_writes_only_the_workspace" {
+  command = plan
+
+  variables {
+    evidently_ui_enabled       = true
+    evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
+  }
+
+  assert {
+    condition = (
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.dependsOn if container.name == "evidently_ui"]) == [{ containerName = "evidently_ui_restore", condition = "SUCCESS" }] &&
+      !one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.essential if container.name == "evidently_ui_restore"])
+    )
+    error_message = "The UI starts only after the restore step ended with success, and the restore step is not essential, so it ends and stays ended."
+  }
+
+  assert {
+    condition = (
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.command if container.name == "evidently_ui_restore"]) == [
+        "cd /opt/hai/repo && python -m monitoring.live_restore --bucket \"$DATA_BUCKET_NAME\" --workspace /workspace && chown -R 10001:10001 /workspace"
+      ] &&
+      contains(one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.environment if container.name == "evidently_ui_restore"]), { name = "DATA_BUCKET_NAME", value = "example-project-data-dev" })
+    )
+    error_message = "The restore step runs monitoring.live_restore from the reviewed checkout for the data bucket, then hands the rebuilt folder to the job user, which the UI and the drift check run as."
+  }
+
+  assert {
+    condition = (
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.mountPoints if container.name == "evidently_ui_restore"]) == [
+        { sourceVolume = "evidently_workspace", containerPath = "/workspace", readOnly = false },
+        { sourceVolume = "code_repo", containerPath = "/opt/hai/repo", readOnly = true }
+      ] &&
+      [for volume in aws_ecs_task_definition.service["evidently_ui"].volume : volume.host_path if volume.name == "code_repo"] == ["/data/repo"] &&
+      !one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.privileged if container.name == "evidently_ui_restore"])
+    )
+    error_message = "The restore step writes only the workspace folder and reads the code checkout read-only."
+  }
+
+  assert {
+    condition = (
+      one([for container in jsondecode(aws_ecs_task_definition.service["evidently_ui"].container_definitions) : container.linuxParameters.capabilities if container.name == "evidently_ui_restore"]) == { drop = ["ALL"], add = ["CHOWN", "DAC_OVERRIDE", "FOWNER"] }
+    )
+    error_message = "The restore step runs as root with only the capabilities to change owners and to read and write the folder it hands over."
   }
 }
 
@@ -141,6 +193,7 @@ run "the_ui_port_is_free_on_the_host" {
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
   }
 
   assert {
@@ -161,10 +214,22 @@ run "the_ui_without_a_task_role_is_refused" {
   command = plan
 
   variables {
-    evidently_ui_enabled = true
+    evidently_ui_enabled     = true
+    evidently_ui_bucket_name = "example-project-data-dev"
   }
 
   expect_failures = [var.evidently_ui_task_role_arn]
+}
+
+run "the_ui_without_a_bucket_name_is_refused" {
+  command = plan
+
+  variables {
+    evidently_ui_enabled       = true
+    evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+  }
+
+  expect_failures = [var.evidently_ui_bucket_name]
 }
 
 run "the_ui_without_the_drift_image_is_refused" {
@@ -173,12 +238,34 @@ run "the_ui_without_the_drift_image_is_refused" {
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
     image_digests = {
       postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
       redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
       polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
       polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
       airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      training      = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
+    }
+  }
+
+  expect_failures = [var.image_digests]
+}
+
+run "the_ui_without_the_training_image_is_refused" {
+  command = plan
+
+  variables {
+    evidently_ui_enabled       = true
+    evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
+    image_digests = {
+      postgres      = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      redis         = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+      polaris       = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+      polaris_admin = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      airflow       = "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+      drift         = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
     }
   }
 
@@ -191,6 +278,7 @@ run "the_ui_shares_no_role_with_another_service" {
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-control"
+    evidently_ui_bucket_name   = "example-project-data-dev"
   }
 
   expect_failures = [var.evidently_ui_task_role_arn]

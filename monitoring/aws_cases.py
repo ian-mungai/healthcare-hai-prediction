@@ -71,6 +71,17 @@ class MemoryS3:
         self.conditions.append(arguments.get("IfNoneMatch"))
         return {}
 
+    def list_objects_v2(self, **arguments: Any) -> dict[str, Any]:
+        """The listing of a prefix with a delimiter: the keys that hold no delimiter after the prefix, and the first folder name of the others."""
+        prefix, delimiter = arguments.get("Prefix", ""), arguments.get("Delimiter")
+        keys = sorted(key for bucket, key in self.objects if bucket == arguments["Bucket"] and key.startswith(prefix))
+        folders = sorted({prefix + key[len(prefix) :].split(delimiter, 1)[0] + delimiter for key in keys if delimiter and delimiter in key[len(prefix) :]})
+        return {
+            "Contents": [{"Key": key} for key in keys if not delimiter or delimiter not in key[len(prefix) :]],
+            "CommonPrefixes": [{"Prefix": folder} for folder in folders],
+            "IsTruncated": False,
+        }
+
     def get_object(self, **arguments: Any) -> dict[str, Any]:
         key = (arguments["Bucket"], arguments["Key"])
         if key not in self.objects:

@@ -228,6 +228,7 @@ ROWS: list[Row] = [
         "evidently_ui_enabled",
     ),
     Row("services", "evidently_ui_task_role_arn", ROLE % "evidently_ui_task", "arn:aws:iam::1:role/x", refuse=(ROLE % "streamlit_task",)),
+    Row("services", "evidently_ui_bucket_name", "example-project-data-dev", "s3://example-project-data-dev"),
     Row("services", "openmetadata_task_role_arn", ROLE % "openmetadata_host_task", "arn:aws:iam::1:role/x"),
     Row("services", "code_fetch_task_role_arn", ROLE % "host_code_fetch_task", "arn:aws:iam::1:role/x", refuse=(ROLE % "openmetadata_host_task",)),
     Row("services", "code_bucket_name", "example-project-data-dev", 5, refuse=("Example_Bucket",)),

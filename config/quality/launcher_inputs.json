@@ -1255,6 +1255,7 @@
     "infra/iam/owner_policies/drift_records.json",
     "infra/iam/owner_policies/drift_records_read.json",
     "infra/iam/owner_policies/ecs_host.json",
+    "infra/iam/owner_policies/evidently_ui_restore_read.json",
     "infra/iam/owner_policies/grafana_alerts.json",
     "infra/iam/owner_policies/host_state_read.json",
     "infra/iam/owner_policies/job_drift_images.json",

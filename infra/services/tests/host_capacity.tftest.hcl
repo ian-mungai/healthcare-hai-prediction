@@ -71,6 +71,7 @@ variables {
     postgres_exporter      = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/postgres_exporter"
     node_exporter          = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/node_exporter"
     drift                  = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/drift"
+    training               = "111111111111.dkr.ecr.us-west-2.amazonaws.com/example_project/training"
   }
 
   image_digests = {
@@ -93,6 +94,7 @@ variables {
     postgres_exporter      = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     node_exporter          = "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
     drift                  = "sha256:9999999999999999999999999999999999999999999999999999999999999999"
+    training               = "sha256:8888888888888888888888888888888888888888888888888888888888888888"
   }
 }
 
@@ -476,7 +478,8 @@ run "a_cap_at_or_above_the_host_memory_is_refused" {
   expect_failures = [var.host_job_cap_mib]
 }
 
-# The Evidently UI (evidently_ui_enabled) reserves 256 MiB, which the job room gives up: the cap the owner sets for the live stack falls from 22640 to 22384 MiB.
+# The Evidently UI (evidently_ui_enabled) reserves 272 MiB (the UI 256 and its restore step 16), which the job room gives up: the cap the owner sets for the live
+# stack falls from 22640 to 22368 MiB.
 # The fixture below has the room of that stack (32320 usable MiB less the 2048 MiB reserve and the 7632 MiB the services reserve is 22640 MiB).
 run "the_job_room_before_the_evidently_ui" {
   command = plan
@@ -492,28 +495,29 @@ run "the_job_room_before_the_evidently_ui" {
   }
 }
 
-run "the_evidently_ui_takes_256_mib_from_the_job_room" {
+run "the_evidently_ui_takes_272_mib_from_the_job_room" {
   command = plan
 
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
     host_usable_memory_mib     = 32320
-    host_job_cap_mib           = 22384
+    host_job_cap_mib           = 22368
   }
 
   assert {
-    condition     = output.reserved_memory_mib == run.the_job_room_before_the_evidently_ui.reserved_memory_mib + 256 && output.reserved_memory_mib == 7888
-    error_message = "The UI container reserves 256 MiB, so the service reservations grow from 7632 to 7888 MiB."
+    condition     = output.reserved_memory_mib == run.the_job_room_before_the_evidently_ui.reserved_memory_mib + 272 && output.reserved_memory_mib == 7904
+    error_message = "The UI and its restore step reserve 272 MiB together, so the service reservations grow from 7632 to 7904 MiB."
   }
 
   assert {
-    condition     = output.host_job_memory_mib == 22384 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
-    error_message = "With the UI on, a cap of 22384 MiB (22640 less 256) is exactly the room that is left."
+    condition     = output.host_job_memory_mib == 22368 && output.host_job_memory_mib + output.reserved_memory_mib + var.host_system_reserve_mib == var.host_usable_memory_mib
+    error_message = "With the UI on, a cap of 22368 MiB (22640 less 272) is exactly the room that is left."
   }
 
   assert {
-    condition     = output.host_capacity_binding == "job_memory_mib=22384 usable_memory_mib=32320 system_reserve_mib=2048 service_reservations_mib=7888"
+    condition     = output.host_capacity_binding == "job_memory_mib=22368 usable_memory_mib=32320 system_reserve_mib=2048 service_reservations_mib=7904"
     error_message = "The capacity binding names the lowered cap and the larger service reservations."
   }
 }
@@ -524,6 +528,7 @@ run "the_old_cap_no_longer_fits_with_the_evidently_ui_on" {
   variables {
     evidently_ui_enabled       = true
     evidently_ui_task_role_arn = "arn:aws:iam::111111111111:role/example-evidently-ui"
+    evidently_ui_bucket_name   = "example-project-data-dev"
     host_usable_memory_mib     = 32320
     host_job_cap_mib           = 22640
   }

@@ -199,8 +199,8 @@ variable "image_digests" {
   }
 
   validation {
-    condition     = !var.evidently_ui_enabled || contains(keys(var.image_digests), "drift")
-    error_message = "Supply the image digest of the drift image when evidently_ui_enabled is true: the UI runs it."
+    condition     = !var.evidently_ui_enabled || alltrue([for image in ["drift", "training"] : contains(keys(var.image_digests), image)])
+    error_message = "Supply the image digests of the drift and training images when evidently_ui_enabled is true: the UI runs the first and its restore step the second."
   }
 
   validation {

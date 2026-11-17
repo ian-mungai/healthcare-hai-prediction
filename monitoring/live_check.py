@@ -6,7 +6,8 @@ matrix's ``window_year`` and must agree with the manifest's ``newest_window_year
 with their own maximum) and a current window (the newest year) and runs ``monitoring.drift_check`` on the split with the tracked drift configuration. The
 record ``drift_<HAI type>.json`` (its ``triggered`` flag is always false: nothing is triggered) and Evidently's own report ``report_<HAI type>.html`` go to
 ``--out``. The report is also added as a snapshot to the Evidently UI workspace ``--workspace``, in one project for the model and the HAI type
-(``m2 Elastic Net HAI_1 CLABSI``).
+(``m2 Elastic Net HAI_1 CLABSI``). The snapshot file and the project's metadata go to ``--out`` too (``snapshot_<HAI type>.json``,
+``project_<HAI type>.json``): the publish phase keeps them in S3, from where ``monitoring.live_restore`` rebuilds the workspace.
 
 A run ID is bound to its inputs (model, type, matrix, manifest, feature list, drift configuration and ``--production-version``) when it is first written. The
 workspace keeps the first record and report under ``.live_runs/<run ID>/``. A rerun with the same inputs, in any job, copies those bytes to ``--out`` and
@@ -39,6 +40,7 @@ import duckdb
 
 from monitoring import drift_check, drift_config
 from monitoring.drift_check import HAI_TYPES, YEAR, CheckError, deadline
+from monitoring.live_workspace import export_run_files, place_snapshot, set_aside_incomplete_snapshots, snapshot_identity, write_bytes
 from orchestration.training_contract import MODELS, RUN_ID
 
 # The names people read beside the internal keys, in one list each (the readable keys rule). Both lists must cover exactly the keys of their contract.
@@ -57,7 +59,6 @@ def project_name(model: str, hai_type: str) -> str:
 
 
 LIVE_RUNS = ".live_runs"
-INCOMPLETE = ".incomplete"
 
 
 @dataclass(frozen=True)
@@ -152,21 +153,6 @@ def build(arguments: Namespace, plan: Plan, on_report: Callable[[Any], None]) ->
     return record
 
 
-def write_bytes(target: Path, body: bytes, temp_folder: Path | None = None) -> None:
-    """Write ``body`` to ``target`` through a temporary file (in ``temp_folder``, by default the target's folder) and a rename, so no reader sees half of it."""
-    target.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(dir=temp_folder or target.parent, prefix=".live_", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "wb") as stream:
-            stream.write(body)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(name, target)
-    finally:
-        if os.path.exists(name):
-            os.unlink(name)
-
-
 def write_html(report: Any, target: Path) -> bytes:
     """Save Evidently's own report as one self-contained HTML file, atomically, and return its bytes."""
     handle, name = tempfile.mkstemp(dir=target.parent, prefix=".report_", suffix=".tmp")
@@ -197,36 +183,6 @@ def record_outputs(workspace: Path, run_id: str, identity: str, files: dict[str,
     for name, body in files.items():
         write_bytes(folder / name, body)
     write_bytes(folder / "identity.json", (json.dumps({"inputs_sha256": identity}, sort_keys=True) + "\n").encode())
-
-
-def snapshot_identity(workspace: Path, name: str, run_id: str) -> tuple[bool, str | None]:
-    """Whether the project ``name`` holds a snapshot of ``run_id`` and the inputs identity that snapshot carries, read from the files the UI reads."""
-    for metadata in sorted(workspace.glob("*/metadata.json")):
-        try:
-            if json.loads(metadata.read_bytes()).get("name") != name:
-                continue
-        except ValueError:
-            continue
-        for path in sorted((metadata.parent / "snapshots").glob("*.json")):
-            try:
-                found = json.loads(path.read_bytes()).get("metadata", {})
-            except ValueError:
-                continue
-            if found.get("run_id") == run_id:
-                return True, found.get("inputs_sha256") or None
-    return False, None
-
-
-def set_aside_incomplete_snapshots(workspace: Path) -> None:
-    """Move a snapshot file that is not complete JSON, as an interrupted write leaves it, out of the folder the loader reads (it parses every file there)."""
-    for path in sorted(workspace.glob("*/snapshots/*.json")):
-        try:
-            json.loads(path.read_bytes())
-        except ValueError:
-            target = path.parent.parent / INCOMPLETE
-            target.mkdir(exist_ok=True)
-            os.replace(path, target / path.name)
-            sys.stderr.write(f"live drift check: set aside the incomplete snapshot file {path.name} of {path.parent.parent.name} under {INCOMPLETE}\n")
 
 
 @contextlib.contextmanager
@@ -269,7 +225,7 @@ def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Pat
     identity = inputs_identity(arguments, plan)
     hai_type = plan.manifest["hai_type"]
     name = project_name(arguments.model, hai_type)
-    names = [f"drift_{hai_type}.json", f"report_{hai_type}.html"]
+    names = [f"drift_{hai_type}.json", f"report_{hai_type}.html", f"snapshot_{hai_type}.json", f"project_{hai_type}.json"]
     recorded = recorded_outputs(arguments.workspace, arguments.run_id, names)
     snapshot = snapshot_identity(arguments.workspace, name, arguments.run_id)
     for known in (recorded[0] if recorded else None, snapshot[1]):
@@ -280,7 +236,9 @@ def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Pat
                 "production version). A check of other inputs needs a new run ID",
             )
     target = arguments.out / names[0]
-    if recorded and snapshot[0]:
+    if recorded:
+        if not snapshot[0]:
+            place_snapshot(arguments.workspace, recorded[1][names[3]], recorded[1][names[2]])
         for file, body in recorded[1].items():
             write_bytes(arguments.out / file, body)
         return target
@@ -288,17 +246,15 @@ def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Pat
     record = build(arguments, plan, reports.append)
     if len(reports) != 1:
         raise RuntimeError(f"the check computed {len(reports)} Evidently reports, expected one")
-    if recorded:
-        for file, body in recorded[1].items():
-            write_bytes(arguments.out / file, body)
-    else:
-        drift_check.write_record(arguments.out, record)
-        write_html(reports[0], arguments.out / names[1])
+    drift_check.write_record(arguments.out, record)
+    write_html(reports[0], arguments.out / names[1])
     add_to_workspace(reports[0], arguments.workspace, name, arguments.run_id, identity)
-    if not recorded:
-        record_outputs(arguments.workspace, arguments.run_id, identity, {file: (arguments.out / file).read_bytes() for file in names})
-        for sink in record_sinks:
-            sink(record)
+    project_file, snapshot_file = export_run_files(arguments.workspace, name, arguments.run_id)
+    write_bytes(arguments.out / names[3], project_file)
+    write_bytes(arguments.out / names[2], snapshot_file)
+    record_outputs(arguments.workspace, arguments.run_id, identity, {file: (arguments.out / file).read_bytes() for file in names})
+    for sink in record_sinks:
+        sink(record)
     return target
 
 

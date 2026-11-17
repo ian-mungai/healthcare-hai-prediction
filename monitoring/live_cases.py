@@ -36,7 +36,7 @@ LIVE_DAG_FILE = ROOT / "dags/drift_live_check_dag.py"
 RUN = drift_cases.RUN_ID
 OTHER_RUN = "20261117T120000Z-0a1b2c3e"
 BUCKET = "bucket-for-tests"
-OUTPUTS = ["drift_HAI_1.json", "report_HAI_1.html"]
+OUTPUTS = ["drift_HAI_1.json", "project_HAI_1.json", "report_HAI_1.html", "snapshot_HAI_1.json"]
 Problems = list[str]
 
 
@@ -158,6 +158,12 @@ def writes_the_record_and_the_html_to_the_demo_folder_only(folder: Path) -> Prob
         problems.append(f"report_HAI_1.html is not a self-contained Evidently report ({len(html)} characters)")
     if projects_of(workspace) != {"m2 Elastic Net HAI_1 CLABSI": [RUN]}:
         problems.append(f"the workspace holds {projects_of(workspace)}, expected one project with this run")
+    project_folder = next(workspace.glob("*/metadata.json")).parent
+    snapshot_file = next((project_folder / "snapshots").glob("*.json"))
+    if (out / "snapshot_HAI_1.json").read_bytes() != snapshot_file.read_bytes() or (out / "project_HAI_1.json").read_bytes() != (
+        project_folder / "metadata.json"
+    ).read_bytes():
+        problems.append("the exported snapshot or project file differs from the workspace file the UI reads")
     stray = sorted(path.name for path in folder.iterdir() if path.name not in {"demo_out", "evidently_workspace", *(path.name for path in paths.values())})
     return problems + ([f"the command left {stray} beside its inputs"] if stray else [])
 
@@ -386,13 +392,193 @@ def a_damaged_snapshot_file_is_set_aside_not_fatal(folder: Path) -> Problems:
     problems = [] if code == 0 else [f"a damaged snapshot file blocked the workspace (exit {code}): {text[-300:]}"]
     if damaged.name not in text or "set aside" not in text or not list(workspace.glob("*/.incomplete/*.json")) or damaged.exists():
         problems.append("the damaged file was not set aside and named")
-    code, text, rerun_out, _ = run_live(folder, paths, evidently=evidently, out=folder / "rerun")
+    code, text, rerun_out, _ = run_live(folder, paths, out=folder / "rerun")
     if code != 0 or recorded(rerun_out) != recorded(first_out):
         problems.append(f"the rerun of the run that lost its snapshot did not give the recorded outputs (exit {code}): {text[-200:]}")
     found = projects_of(workspace)
     if found != {"m2 Elastic Net HAI_1 CLABSI": sorted([RUN, OTHER_RUN, third])}:
         problems.append(f"the workspace holds {found}")
     return problems
+
+
+def published(
+    folder: Path, s3: aws_cases.MemoryS3, workspace: Path, *, run: str = RUN, tag: str = "a", model: str = "m2", shifted: tuple[str, ...] = NUMERIC[:2]
+) -> Problems:
+    """Run the real live check into ``workspace`` for ``run`` and publish its outputs to ``s3`` as the publish phase does. Returns the problems it met."""
+    sub = folder / tag
+    sub.mkdir(exist_ok=True)
+    paths = write_baseline(sub, shifted=shifted)
+    code, text, out, _ = run_live(sub, paths, evidently=drift_cases.need_evidently(), run=run, model=model, out=sub / "out", workspace=workspace)
+    if code != 0:
+        return [f"the live check of {run} exited {code}: {text[:300]}"]
+    work = sub / "work"
+    (work / "drift" / run).mkdir(parents=True)
+    done = {"phase": "baseline", "run_id": run, "monitored": ["HAI_1"], "unmonitored": {}, "model": model}
+    (work / "drift" / run / "baseline.done.json").write_text(json.dumps(done) + "\n")
+    shutil.copytree(out, work / "drift_live" / run)
+    importlib.import_module("monitoring.aws_run").publish_live_phase(s3, BUCKET, work, run, "HAI_1")
+    return []
+
+
+def restore(s3: aws_cases.MemoryS3, workspace: Path) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = importlib.import_module("monitoring.live_restore").restore(s3, BUCKET, workspace)
+    return result
+
+
+def file_state(workspace: Path) -> dict[str, tuple[int, int]]:
+    return {str(path.relative_to(workspace)): (path.stat().st_size, path.stat().st_mtime_ns) for path in sorted(workspace.rglob("*")) if path.is_file()}
+
+
+def statuses(reports: list[dict[str, Any]]) -> dict[str, str]:
+    return {item["run"]: item["status"] for item in reports}
+
+
+def restore_rebuilds_an_empty_workspace(folder: Path) -> Problems:
+    """Two completed runs of one project, published from a workspace that is then lost, rebuild an empty workspace: the same project folder, the same
+    snapshot files and the same project metadata, byte for byte."""
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source) + published(folder, s3, source, run=OTHER_RUN, tag="b")
+    if problems:
+        return problems
+    reports = restore(s3, target)
+    if statuses(reports) != {RUN: "restored", OTHER_RUN: "restored"}:
+        problems.append(f"the restore reported {reports}")
+    if projects_of(target) != projects_of(source) or len(projects_of(target)) != 1:
+        problems.append(f"the restored workspace holds {projects_of(target)}, the source {projects_of(source)}")
+    for path in source.rglob("*.json"):
+        if path.is_file() and ".live_runs" not in path.parts and (target / path.relative_to(source)).read_bytes() != path.read_bytes():
+            problems.append(f"{path.relative_to(source)} differs after the restore")
+    return problems
+
+
+def restore_rerun_is_a_noop(folder: Path) -> Problems:
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source)
+    if problems:
+        return problems
+    restore(s3, target)
+    before = file_state(target)
+    second = restore(s3, target)
+    if statuses(second) != {RUN: "present"}:
+        problems.append(f"the second restore reported {second}")
+    return problems + ([] if file_state(target) == before else ["the second restore changed a file or added one"])
+
+
+def restore_skips_and_reports_an_incomplete_run(folder: Path) -> Problems:
+    """A run with no completion marker, and a run whose snapshot object is missing, are skipped and named; the complete run is still restored."""
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    third = "20261117T140000Z-0a1b2c40"
+    problems = published(folder, s3, source) + published(folder, s3, source, run=OTHER_RUN, tag="b") + published(folder, s3, source, run=third, tag="c")
+    if problems:
+        return problems
+    del s3.objects[(BUCKET, f"drift_demo/{OTHER_RUN}/_complete.json")]
+    del s3.objects[(BUCKET, f"drift_demo/{third}/snapshot_HAI_1.json")]
+    reports = restore(s3, target)
+    found = {item["run"]: item for item in reports}
+    if statuses(reports) != {RUN: "restored", OTHER_RUN: "skipped", third: "skipped"}:
+        problems.append(f"the restore reported {statuses(reports)}")
+    if not all(item.get("reason", "").startswith("incomplete") for item in (found.get(OTHER_RUN, {}), found.get(third, {}))):
+        problems.append(f"the skips do not name an incomplete run: {reports}")
+    return problems + ([] if list(projects_of(target).values()) == [[RUN]] else [f"the workspace holds {projects_of(target)}"])
+
+
+def restore_refuses_a_mismatched_hash(folder: Path) -> Problems:
+    """A snapshot whose bytes differ from the hash its marker recorded is never placed: the run is skipped as hash_mismatch, naming the file, and no file or
+    project folder of it exists."""
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source)
+    if problems:
+        return problems
+    key = (BUCKET, f"drift_demo/{RUN}/snapshot_HAI_1.json")
+    s3.objects[key] = s3.objects[key].replace(b"DataDriftPreset", b"OtherPreset")
+    reports = restore(s3, target)
+    problems = (
+        []
+        if statuses(reports) == {RUN: "skipped"} and "hash_mismatch" in reports[0].get("reason", "") and "snapshot_HAI_1.json" in reports[0]["reason"]
+        else [f"reported {reports}"]
+    )
+    return problems + ([f"the refused run left {sorted(file_state(target))}"] if target.exists() and file_state(target) else [])
+
+
+def restore_skips_a_marker_that_cannot_be_trusted(folder: Path) -> Problems:
+    """An unreadable marker, a marker of another run and a marker that names a file outside the run's folder are each skipped by name and place nothing."""
+    s3, source = aws_cases.MemoryS3(), folder / "source"
+    problems = published(folder, s3, source)
+    if problems:
+        return problems
+    marker_key = (BUCKET, f"drift_demo/{RUN}/_complete.json")
+    good = json.loads(s3.objects[marker_key])
+    variants = {
+        "marker_unreadable": b"{not json",
+        "marker_invalid": json.dumps(good | {"run_id": OTHER_RUN}).encode(),
+        "marker_invalid ": json.dumps(good | {"files": {**good["files"], "../escape.json": "0" * 64}}).encode(),
+    }
+    for expected, body in variants.items():
+        s3.objects[marker_key] = body
+        target = folder / f"restored_{expected.strip()}_{len(body)}"
+        reports = restore(s3, target)
+        if statuses(reports) != {RUN: "skipped"} or expected.strip() not in reports[0].get("reason", "") or (target.exists() and file_state(target)):
+            problems.append(f"{expected.strip()}: reported {reports}, left {sorted(file_state(target)) if target.exists() else []}")
+    return problems
+
+
+def restore_adds_to_an_existing_project_of_the_same_name(folder: Path) -> Problems:
+    """A workspace that already holds the project under its own id (made by a check after the loss) takes the restored snapshot into it."""
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source) + published(folder, aws_cases.MemoryS3(), target, run=OTHER_RUN, tag="b")
+    if problems:
+        return problems
+    existing = next(target.glob("*/metadata.json")).parent.name
+    reports = restore(s3, target)
+    found = projects_of(target)
+    problems = [] if statuses(reports) == {RUN: "restored"} else [f"reported {reports}"]
+    if list(found.values()) != [sorted([RUN, OTHER_RUN])] or [path.parent.name for path in target.glob("*/metadata.json")] != [existing]:
+        problems.append(f"the workspace holds {found} in {[path.parent.name for path in target.glob('*/metadata.json')]}")
+    return problems
+
+
+def restore_skips_a_snapshot_of_another_run(folder: Path) -> Problems:
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source, run=OTHER_RUN)
+    if problems:
+        return problems
+    for name in list(key for _, key in s3.objects if key.startswith(f"drift_demo/{OTHER_RUN}/")):
+        s3.objects[(BUCKET, name.replace(OTHER_RUN, RUN))] = s3.objects[(BUCKET, name)]
+    marker_key = (BUCKET, f"drift_demo/{RUN}/_complete.json")
+    s3.objects[marker_key] = json.dumps(json.loads(s3.objects[marker_key]) | {"run_id": RUN}).encode()
+    reports = restore(s3, target)
+    found = {item["run"]: item for item in reports}
+    expected = {RUN: "skipped", OTHER_RUN: "restored"}
+    return [] if statuses(reports) == expected and "snapshot_run_mismatch" in found[RUN].get("reason", "") else [f"reported {reports}"]
+
+
+def the_ui_loader_lists_the_restored_projects(folder: Path) -> Problems:
+    """Evidently's own workspace loader, which the UI service runs, lists the restored projects and their snapshots by run."""
+    s3, source, target = aws_cases.MemoryS3(), folder / "source", folder / "restored"
+    problems = published(folder, s3, source) + published(folder, s3, source, run=OTHER_RUN, tag="b")
+    if problems:
+        return problems
+    restore(s3, target)
+    script = (
+        "import json, sys\n"
+        "from evidently.legacy.ui.workspace import Workspace\n"
+        "ws = Workspace.create(sys.argv[1])\n"
+        "print(json.dumps({p.name: sorted(s.metadata.get('run_id', '') for s in p.list_snapshots(include_reports=True)) for p in ws.list_projects()}))\n"
+    )
+    done = run_command(EVIDENTLY_PROGRAM, ["-c", script, str(target)], cwd=ROOT, timeout=drift_cases.TIMEOUT)
+    if done.returncode != 0:
+        return [f"the UI loader failed on the restored workspace: {(done.stdout + done.stderr)[-300:]}"]
+    return [] if json.loads(done.stdout.strip().splitlines()[-1]) == projects_of(source) else [f"the loader lists {done.stdout.strip()}"]
+
+
+def restore_cli_refuses_a_bad_bucket_name(folder: Path) -> Problems:
+    done = run_command(PYTHON, ["-m", "monitoring.live_restore", "--bucket=A_bad_bucket", f"--workspace={folder / 'ws'}"], cwd=ROOT, timeout=120)
+    text = done.stdout + done.stderr
+    return (
+        []
+        if done.returncode == 2 and "bucket_invalid" in text and not (folder / "ws").exists()
+        else [f"expected exit 2 naming bucket_invalid, got {done.returncode}: {text[:300]}"]
+    )
 
 
 def passes_the_record_to_each_sink_once(folder: Path) -> Problems:
@@ -546,6 +732,8 @@ def live_publish(folder: Path, s3: aws_cases.MemoryS3, *, outputs: bool = True) 
     if outputs:
         (out / "drift_HAI_1.json").write_text(json.dumps({"run_id": RUN, "hai_type": "HAI_1"}) + "\n")
         (out / "report_HAI_1.html").write_text("<html>report</html>\n")
+        (out / "snapshot_HAI_1.json").write_text(json.dumps({"id": "01a1eacb-e868-74d7-b7f3-8795aab9b89f", "metadata": {"run_id": RUN}}) + "\n")
+        (out / "project_HAI_1.json").write_text(json.dumps({"id": "01a1eacb-e867-7d8d-94f8-d8cac187f378", "name": "m2 Elastic Net HAI_1 CLABSI"}) + "\n")
     return work, importlib.import_module("monitoring.aws_run").publish_live_phase(s3, BUCKET, work, RUN, "HAI_1")
 
 
@@ -553,7 +741,8 @@ def publish_writes_the_demo_prefix_then_the_marker(folder: Path) -> Problems:
     s3 = aws_cases.MemoryS3()
     work, done = live_publish(folder, s3)
     out = work / "drift_live" / RUN
-    expected = [f"drift_demo/{RUN}/drift_HAI_1.json", f"drift_demo/{RUN}/report_HAI_1.html", f"drift_demo/{RUN}/_complete.json"]
+    prefix = f"drift_demo/{RUN}/"
+    expected = [prefix + name for name in ("drift_HAI_1.json", "report_HAI_1.html", "snapshot_HAI_1.json", "project_HAI_1.json", "_complete.json")]
     problems = [] if s3.puts == expected else [f"the writes were {s3.puts}, expected {expected}"]
     if any(key.startswith(("drift/", f"drift/{RUN}")) for key in s3.puts):
         problems.append("a live check wrote into the drift/ prefix of the gate runs")
@@ -561,7 +750,7 @@ def publish_writes_the_demo_prefix_then_the_marker(folder: Path) -> Problems:
     files = {name: hashlib.sha256((out / name).read_bytes()).hexdigest() for name in OUTPUTS}
     if marker != {"kind": "drift_live", "run_id": RUN, "hai_type": "HAI_1", "model": "m2", "files": files}:
         problems.append(f"the marker is {marker}")
-    return problems or ([] if done["files"] == OUTPUTS else [f"the phase reports {done}"])
+    return problems or ([] if sorted(done["files"]) == OUTPUTS else [f"the phase reports {done}"])
 
 
 def publish_repeats_to_the_same_result(folder: Path) -> Problems:
@@ -569,7 +758,7 @@ def publish_repeats_to_the_same_result(folder: Path) -> Problems:
     work, _ = live_publish(folder, s3)
     first = dict(s3.objects)
     importlib.import_module("monitoring.aws_run").publish_live_phase(s3, BUCKET, work, RUN, "HAI_1")
-    return [] if s3.objects == first and len(first) == 3 else ["a second publish changed or added objects"]
+    return [] if s3.objects == first and len(first) == 5 else ["a second publish changed or added objects"]
 
 
 def publish_again(folder: Path, s3: aws_cases.MemoryS3, *, html: str | None = None, record: dict[str, Any] | None = None) -> Any:
@@ -587,9 +776,7 @@ def publish_creates_each_object_once_and_the_marker_last(folder: Path) -> Proble
     s3 = aws_cases.MemoryS3()
     live_publish(folder, s3)
     prefix = f"drift_demo/{RUN}/"
-    return (
-        [] if s3.conditions == ["*", "*", "*"] and s3.puts[-1] == prefix + "_complete.json" else [f"the writes were {s3.puts} with conditions {s3.conditions}"]
-    )
+    return [] if s3.conditions == ["*"] * 5 and s3.puts[-1] == prefix + "_complete.json" else [f"the writes were {s3.puts} with conditions {s3.conditions}"]
 
 
 def publish_of_a_completed_run_changes_nothing(folder: Path) -> Problems:
@@ -600,7 +787,7 @@ def publish_of_a_completed_run_changes_nothing(folder: Path) -> Problems:
     done = publish_again(folder, s3, html="<html>recomputed with other timestamps</html>\n")
     marker = json.loads(s3.objects[(BUCKET, f"drift_demo/{RUN}/_complete.json")])
     html = s3.objects[(BUCKET, f"drift_demo/{RUN}/report_HAI_1.html")]
-    problems = [] if s3.objects == stored and len(s3.puts) == 3 and done.get("reused") is True else ["a completed run was written again"]
+    problems = [] if s3.objects == stored and len(s3.puts) == 5 and done.get("reused") is True else ["a completed run was written again"]
     return problems + ([] if marker["files"]["report_HAI_1.html"] == hashlib.sha256(html).hexdigest() else ["the stored HTML does not match the marker"])
 
 
@@ -627,7 +814,7 @@ def publish_retry_after_an_interrupted_marker_completes_it(folder: Path) -> Prob
     else:
         return ["the interrupted marker put did not interrupt the publish"]
     marker_key = (BUCKET, f"drift_demo/{RUN}/_complete.json")
-    problems = [] if marker_key not in s3.objects and len(s3.objects) == 2 else [f"the interrupted publish left {sorted(key[1] for key in s3.objects)}"]
+    problems = [] if marker_key not in s3.objects and len(s3.objects) == 4 else [f"the interrupted publish left {sorted(key[1] for key in s3.objects)}"]
     stored = dict(s3.objects)
     try:
         publish_again(folder, s3, html="<html>other bytes</html>\n")
@@ -677,6 +864,7 @@ def loaded_live_dag() -> Any:
 
 
 IAM_FOLDER = ROOT / "infra/iam"
+ALLOWED_UI_GRANTS = ["evidently_ui.tf: evidently_ui_restore_read"]
 GRANT_BLOCK = re.compile(
     r'resource\s+"(aws_iam_role_policy|aws_iam_role_policy_attachment|aws_iam_policy_attachment|aws_iam_role_policies_exclusive)"\s+"[^"]+"\s*\{'
 )
@@ -706,14 +894,14 @@ def ui_role_exists_and_holds_no_grant(folder: Path) -> Problems:
         else ["infra/iam/evidently_ui.tf does not define the role"]
     )
     found = grants_to_the_ui_role(IAM_FOLDER)
-    return problems + ([f"a policy is attached to the UI role: {found}"] if found else [])
+    return problems + ([] if found == ALLOWED_UI_GRANTS else [f"the policies attached to the UI role are {found}, expected only {ALLOWED_UI_GRANTS}"])
 
 
 def ui_role_check_catches_a_planted_s3_grant(folder: Path) -> Problems:
     """The check above is effective: in a copy of the IAM stack, an inline S3 read policy and a managed attachment on the role are each found."""
     plant = folder / "iam_copy"
     shutil.copytree(IAM_FOLDER, plant, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfstate*"))
-    unplanted = grants_to_the_ui_role(plant)
+    unplanted = grants_to_the_ui_role(plant)  # the one policy the restore step reads with
     inline = [
         'resource "aws_iam_role_policy" "ui_reads_s3" {',
         "  role   = aws_iam_role.evidently_ui_task[0].name",
@@ -728,8 +916,9 @@ def ui_role_check_catches_a_planted_s3_grant(folder: Path) -> Problems:
     ]
     (plant / "planted.tf").write_text("\n".join([*inline, *managed]) + "\n")
     planted = grants_to_the_ui_role(plant)
-    problems = [f"the copy already held a grant: {unplanted}"] if unplanted else []
-    return problems + ([] if sorted(planted) == ["planted.tf: ui_managed", "planted.tf: ui_reads_s3"] else [f"the planted grants were found as {planted}"])
+    problems = [] if unplanted == ALLOWED_UI_GRANTS else [f"the copy held {unplanted}, expected only {ALLOWED_UI_GRANTS}"]
+    expected = sorted([*ALLOWED_UI_GRANTS, "planted.tf: ui_managed", "planted.tf: ui_reads_s3"])
+    return problems + ([] if sorted(planted) == expected else [f"the planted grants were found as {planted}"])
 
 
 def dag_declares_one_job_chain_and_triggers_nothing(folder: Path) -> Problems:
@@ -801,6 +990,15 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("live_another_run_adds_a_snapshot", another_run_adds_a_snapshot_to_the_same_project),
         ("live_another_model_gets_its_own_project", another_model_gets_its_own_project),
         ("live_passes_the_record_to_each_sink_once", passes_the_record_to_each_sink_once),
+        ("live_restore_rebuilds_an_empty_workspace", restore_rebuilds_an_empty_workspace),
+        ("live_restore_rerun_is_a_noop", restore_rerun_is_a_noop),
+        ("live_restore_skips_and_reports_an_incomplete_run", restore_skips_and_reports_an_incomplete_run),
+        ("live_restore_refuses_a_mismatched_hash", restore_refuses_a_mismatched_hash),
+        ("live_restore_skips_a_marker_that_cannot_be_trusted", restore_skips_a_marker_that_cannot_be_trusted),
+        ("live_restore_adds_to_an_existing_project_of_the_same_name", restore_adds_to_an_existing_project_of_the_same_name),
+        ("live_restore_skips_a_snapshot_of_another_run", restore_skips_a_snapshot_of_another_run),
+        ("live_restore_result_loads_in_the_ui_loader", the_ui_loader_lists_the_restored_projects),
+        ("live_restore_cli_refuses_a_bad_bucket_name", restore_cli_refuses_a_bad_bucket_name),
         ("live_changed_inputs_under_the_same_run_are_refused", changed_inputs_under_the_same_run_are_refused),
         ("live_rerun_reuses_the_recorded_outputs_byte_for_byte", a_rerun_reuses_the_recorded_outputs_byte_for_byte),
         ("live_reused_run_calls_no_sink", a_reused_run_calls_no_sink),
