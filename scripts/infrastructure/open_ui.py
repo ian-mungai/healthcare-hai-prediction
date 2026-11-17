@@ -5,20 +5,21 @@ Run from the repository root: ``bash scripts/open_ui.sh <name> [--local-port N]`
 same Terraform, and needs neither AWS nor ``.env``.
 
 The profile, the region, the project name and the environment come from ``.env`` through ``load_configuration``. The script finds the one running instance
-tagged ``Name`` ``<PROJECT_NAME>_host_<ENVIRONMENT>`` (it refuses zero or several), prints the browser address and runs ``aws ssm start-session`` through
-``scripts.process.run_command`` for the document ``<PROJECT_NAME>_<name>_forward_<ENVIRONMENT>``, which fixes the host port. The session stays open until you
-stop it with Ctrl+C or its eight-hour deadline passes. The names it accepts are the keys of the
-``web_ui_forwards`` map in ``infra/iam/web_ui_forwards.tf`` and the persistent OpenMetadata document in ``infra/iam/openmetadata_persistent.tf``: the same
-Terraform declares the documents, so a new web interface needs no change here. It refuses every other name before it calls AWS. No output names an account ID
-or an ARN.
+tagged ``Name`` ``<PROJECT_NAME>_host_<ENVIRONMENT>`` (it refuses zero or several), prints the browser address and runs ``aws ssm start-session`` as a child
+it owns (started through ``scripts.process.start``) for the document ``<PROJECT_NAME>_<name>_forward_<ENVIRONMENT>``, which fixes the host port. The session
+stays open until you stop it with Ctrl+C or its eight-hour deadline passes. The names it accepts are the keys of the ``web_ui_forwards`` map in
+``infra/iam/web_ui_forwards.tf`` and the persistent OpenMetadata document in ``infra/iam/openmetadata_persistent.tf``: the same Terraform declares the
+documents, so a new web interface needs no change here. It refuses every other name before it calls AWS. No output names an account ID or an ARN.
 
 Stopping a session: ``aws ssm start-session`` runs the Session Manager plugin as its child and ignores SIGINT itself while the plugin runs (a terminal Ctrl+C
 reaches the whole foreground process group and the plugin handles it). Ctrl+C here, or the deadline, therefore sends SIGINT to the process group of the
-``aws`` child only, which holds ``aws`` and the plugin and nothing else, and waits up to ``HAI_OPEN_UI_STOP_SECONDS`` (15) for the plugin to close the
-session. Only if the group is still alive after that wait does it send SIGTERM, wait again and send SIGKILL last. While the session runs, the SIGINT handler
-only records each press: a Ctrl+C while the child is searched for cannot raise an error, and a Ctrl+C during a wait skips the rest of that wait. The script
-can show only that the local processes ended and which signal each needed. It cannot prove offline that AWS ended the remote session: after a SIGKILL the
-session may stay open until its idle timeout, and the script says so. ``HAI_OPEN_UI_SESSION_SECONDS`` (28800) sets the deadline.
+``aws`` child, which holds ``aws`` and the plugin and nothing else, and waits up to ``HAI_OPEN_UI_STOP_SECONDS`` (15) for the plugin to close the session.
+Only if the group is still alive after that wait does it send SIGTERM, wait again and send SIGKILL last. This process started the child, so it holds its
+``Popen`` and its process group is the child's pid: the stop needs no process listing and completes before this process exits, whatever else fails; the report
+names the signals actually sent. While the session runs, the SIGINT handler only records each press, so a Ctrl+C never raises an error, and a Ctrl+C during a
+wait skips the rest of that wait. The script can show only that the local processes ended and which signal each needed. It cannot prove offline that AWS ended
+the remote session: after a SIGKILL the session may stay open until its idle timeout, and the script says so. ``HAI_OPEN_UI_SESSION_SECONDS`` (28800) sets the
+deadline.
 """
 
 from __future__ import annotations
@@ -32,8 +33,9 @@ import signal
 import sys
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import NoReturn
 
 from scripts.acquisition.s3_store import AwsCli, StorageError, aws_environment
 from scripts.infrastructure.render_project_config import REPO_ROOT, ConfigurationError, load_configuration
@@ -46,7 +48,7 @@ from scripts.infrastructure.web_ui_terraform import (
     terraform_listeners,
     terraform_text,
 )
-from scripts.process import CompletedProcess, list_processes, run_command
+from scripts.process import CompletedProcess, find_program, start
 
 LOCAL_PORT = re.compile(r"[0-9]{1,5}")
 HIGHEST_PORT = 65535
@@ -54,7 +56,6 @@ SESSION_SECONDS = 8 * 3600
 STOP_SECONDS = 15.0
 SESSION_SETTING = "HAI_OPEN_UI_SESSION_SECONDS"
 STOP_SETTING = "HAI_OPEN_UI_STOP_SECONDS"
-CHILD_SEARCH_SECONDS = 3.0
 ERROR_CODE = re.compile(r"An error occurred \(([A-Za-z0-9]+)\)")
 
 
@@ -163,35 +164,33 @@ def seconds_setting(name: str, default: float) -> float:
     return seconds
 
 
-def session_children() -> list[int]:
-    """The pids of this process's own children that lead a process group: the ``aws`` child. A listing also shows its own short-lived lister as a child, so
-    only a child that two listings both show counts."""
-
-    def leaders() -> set[int]:
-        return {row.pid for row in list_processes() if row.parent == os.getpid() and row.group == row.pid}
-
-    return sorted(leaders() & leaders())
-
-
 class AwsSession:
-    """``run_command("aws", ...)`` in a worker thread, with events instead of ``Thread.join`` for every wait: in Python 3.12 a Ctrl+C that interrupts
-    ``join`` marks a running thread as stopped, so ``is_alive`` would then be wrong. The thread is a daemon, so a stop that fails never keeps this process
-    alive until the worker's fallback deadline."""
+    """The ``aws`` child this process started and owns.
 
-    def __init__(self, arguments: list[str], deadline: float) -> None:
+    The child is started through ``scripts.process.start`` (the launcher's own start function), in its own session, so this process holds its ``Popen`` and its
+    process group is its pid: no process listing is needed to stop it, and no failing listing can strand it. A daemon thread only drains its output and sets
+    ``finished`` when it ends and its pipes close. Every wait uses that event, not ``Thread.join``: in Python 3.12 a Ctrl+C that interrupts ``join`` marks a
+    running thread as stopped.
+    """
+
+    def __init__(self, arguments: list[str]) -> None:
+        environment = aws_environment()
+        executable = find_program("aws", environment)
+        if executable is None:
+            raise FileNotFoundError("aws is not on PATH")
+        self.arguments = [executable, *arguments]
         self.finished = threading.Event()
         self.presses: list[float] = []
-        self.outcome: dict[str, Any] = {}
-        self.arguments = arguments
-        self.deadline = deadline
-        self.thread = threading.Thread(target=self.work, name="aws_session", daemon=True)
+        self.result: CompletedProcess[str] | None = None
+        self.process = start(self.arguments, None, environment, new_session=True, errors="replace")
+        threading.Thread(target=self.drain, name="aws_session", daemon=True).start()
 
-    def work(self) -> None:
+    def drain(self) -> None:
+        stdout, stderr = "", ""
         try:
-            self.outcome["result"] = run_command("aws", self.arguments, env=aws_environment(), timeout=self.deadline)
-        except BaseException as error:
-            self.outcome["error"] = error
+            stdout, stderr = self.process.communicate()
         finally:
+            self.result = CompletedProcess(self.arguments, self.process.returncode, stdout, stderr)
             self.finished.set()
 
     def press(self, _number: int, _frame: object) -> None:
@@ -200,6 +199,11 @@ class AwsSession:
 
     def running(self) -> bool:
         return not self.finished.is_set()
+
+    def signal_group(self, number: int) -> None:
+        """Send a signal to the child's process group (the child's pid), which holds ``aws`` and the plugin and nothing else."""
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(self.process.pid, number)
 
     def wait(self, seconds: float, skippable: bool = True) -> bool:
         """Wait up to ``seconds`` for the session to end. A Ctrl+C pressed during the wait ends it early when ``skippable``. True when the session has ended."""
@@ -213,56 +217,43 @@ class AwsSession:
         return self.finished.is_set()
 
 
-def find_child(session: AwsSession) -> list[int]:
-    """The ``aws`` child's pid, searched for up to ``CHILD_SEARCH_SECONDS``. A failed process listing is tried again until the search ends."""
-    end = time.monotonic() + CHILD_SEARCH_SECONDS
-    while session.running() and time.monotonic() < end:
-        try:
-            children = session_children()
-        except OSError:
-            children = []
-        if children:
-            return children
-        session.wait(0.1, skippable=False)
-    return []
-
-
-def stop_session(session: AwsSession, stop_seconds: float) -> str:
-    """Stop the ``aws`` child's process group with SIGINT, then SIGTERM, then SIGKILL, waiting ``stop_seconds`` after each. Returns the last signal sent
-    (``none`` when the child ended by itself first, ``survived`` when it is still alive after SIGKILL or was never found).
-
-    A Ctrl+C while the child is searched for is only recorded: it cannot skip the SIGINT step, which has not been sent yet. A Ctrl+C during a wait skips the
-    rest of that wait.
+def stop_session(session: AwsSession, stop_seconds: float) -> list[str]:
+    """Stop the child's process group with SIGINT, then SIGTERM, then SIGKILL, waiting ``stop_seconds`` after each, and return the names of the signals
+    actually sent (empty when the child had already ended). A Ctrl+C during a wait skips the rest of that wait.
     """
-    children = find_child(session)
-    sent = "none"
-    for name, number in (("interrupt", signal.SIGINT), ("term", signal.SIGTERM), ("kill", signal.SIGKILL)):
+    sent: list[str] = []
+    for number in (signal.SIGINT, signal.SIGTERM, signal.SIGKILL):
         if not session.running():
-            return sent
-        if not children:
-            return "survived"
-        for pid in children:
-            with contextlib.suppress(ProcessLookupError):
-                os.killpg(pid, number)
-        sent = name
+            break
+        session.signal_group(number)
+        sent.append(number.name)
         if session.wait(stop_seconds):
-            return sent
-    return "survived"
+            break
+    return sent
 
 
-def run_session(arguments: list[str], session_seconds: float, stop_seconds: float) -> tuple[str, str, CompletedProcess[str] | None]:
-    """Run ``aws`` with ``arguments`` until it ends, the user presses Ctrl+C or the deadline passes. Returns why it stopped (``ended``, ``interrupt`` or
-    ``deadline``), the last signal sent to stop it (``none`` when it ended by itself) and its result when it ended by itself or after a stop.
+@dataclass
+class SessionEnd:
+    """How a session ended: why (``ended``, ``interrupt`` or ``deadline``), the signals sent to stop it, whether the child is still alive and its result."""
 
-    ``run_command`` runs in a worker thread, so this thread, which alone receives Ctrl+C, can stop the child in steps. From the start until the end of the stop
-    the SIGINT handler only records each press, so no Ctrl+C raises an error and every step of the stop completes. The worker's own deadline is only a last
-    bound: it is longer than the session deadline plus the three waits, so ``run_command``'s abrupt session stop never comes first.
+    reason: str
+    sent: list[str] = field(default_factory=list)
+    alive: bool = False
+    result: CompletedProcess[str] | None = None
+
+
+def run_session(arguments: list[str], session_seconds: float, stop_seconds: float) -> SessionEnd:
+    """Run ``aws`` with ``arguments`` until it ends, the user presses Ctrl+C or the deadline passes, then stop it if it has not ended.
+
+    This process owns the child, so the stop needs no discovery and always runs to its end before this function returns: SIGINT, wait, SIGTERM, wait, SIGKILL,
+    wait, each to the child's process group. From the start until the end of the stop the SIGINT handler only records each press, so no Ctrl+C raises an error.
+    A last SIGKILL to the group runs on any way out while the child lives.
     """
-    session = AwsSession(arguments, session_seconds + 4 * stop_seconds + 60)
+    session = AwsSession(arguments)
     reason = "ended"
+    sent: list[str] = []
     previous = signal.signal(signal.SIGINT, session.press)
     try:
-        session.thread.start()
         end = time.monotonic() + session_seconds
         while not session.finished.wait(0.2):
             if session.presses:
@@ -271,14 +262,12 @@ def run_session(arguments: list[str], session_seconds: float, stop_seconds: floa
             if time.monotonic() >= end:
                 reason = "deadline"
                 break
-        stop = stop_session(session, stop_seconds) if session.running() else "none"
+        sent = stop_session(session, stop_seconds)
     finally:
         signal.signal(signal.SIGINT, previous)
-    if session.running():
-        return reason, stop, None
-    if "error" in session.outcome:
-        raise session.outcome["error"]
-    return reason, stop, session.outcome.get("result")
+        if session.running():
+            session.signal_group(signal.SIGKILL)
+    return SessionEnd(reason, sent, session.running(), session.result)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -306,23 +295,27 @@ def main(argv: list[str] | None = None) -> int:
         return error.code if isinstance(error, OpenUiError) else 1
     sys.stdout.write(f"open_ui: {arguments.name} opens at http://127.0.0.1:{local_port}\nKeep this window open and press Ctrl+C to close the session.\n")
     sys.stdout.flush()
-    reason, stop, result = run_session(session_arguments(settings, arguments.name, target, local_port), session_seconds, stop_seconds)
-    if stop == "survived" or result is None:
-        sys.stderr.write("open_ui: the aws process did not end after SIGKILL. Look for it with: ps -A | grep aws\n")
+    end = run_session(session_arguments(settings, arguments.name, target, local_port), session_seconds, stop_seconds)
+    sent = ", ".join(end.sent) or "none"
+    if end.alive or end.result is None:
+        sys.stderr.write(f"open_ui: the aws process did not end after SIGKILL (signals sent: {sent}). Look for it with: ps -A | grep aws\n")
         return 1
-    if stop == "kill":
+    if "SIGKILL" in end.sent:
         sys.stderr.write(
-            "open_ui: the Session Manager plugin did not close on SIGINT or SIGTERM and was killed. The AWS session may stay open until its idle timeout.\n"
+            "open_ui: the Session Manager plugin did not close on SIGINT or SIGTERM and was killed "
+            f"(signals sent: {sent}). The AWS session may stay open until its idle timeout.\n"
         )
         return 1
-    if reason == "deadline":
-        sys.stderr.write("open_ui: the session reached its deadline and the plugin was asked to close it. Run the command again to reopen it.\n")
+    if end.reason == "deadline":
+        sys.stderr.write(
+            f"open_ui: the session reached its deadline and the plugin was asked to close it (signals sent: {sent}). Run the command again to reopen it.\n"
+        )
         return 1
-    if reason == "ended" and result.returncode:
-        code = ERROR_CODE.search(result.stderr)
-        sys.stderr.write(f"open_ui: the session ended with exit code {result.returncode} ({code.group(1) if code else 'request_failed'}).\n")
+    if end.reason == "ended" and end.result.returncode:
+        code = ERROR_CODE.search(end.result.stderr)
+        sys.stderr.write(f"open_ui: the session ended with exit code {end.result.returncode} ({code.group(1) if code else 'request_failed'}).\n")
         return 1
-    note = " The script cannot confirm that AWS ended the remote session." if reason == "interrupt" else ""
+    note = " The script cannot confirm that AWS ended the remote session." if end.reason == "interrupt" else ""
     sys.stdout.write(f"open_ui: the session is closed.{note}\n")
     return 0
 

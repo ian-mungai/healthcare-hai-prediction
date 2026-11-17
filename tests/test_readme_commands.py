@@ -40,7 +40,7 @@ def fenced_blocks(readme: str) -> tuple[list[tuple[str, list[str]]], list[str]]:
     for token in MarkdownIt("commonmark").parse(readme):
         if token.type != "fence" or token.map is None:
             continue
-        blocks.append((token.info.strip().split(" ")[0].lower(), token.content.splitlines()))
+        blocks.append((next(iter(token.info.split()), "").lower(), token.content.splitlines()))
         last = lines[token.map[1] - 1].lstrip(" >\t") if token.map[1] - 1 > token.map[0] else ""
         if not re.fullmatch(re.escape(token.markup[0]) + "{" + str(len(token.markup)) + r",}\s*", last):
             unclosed.append(f"the code fence opened at line {token.map[0] + 1} is never closed")
@@ -131,3 +131,13 @@ def test_a_fence_inside_a_blockquote_or_a_list_is_checked() -> None:
     check(plain == [], f"a blockquoted plain text fence must not be checked: {plain}")
     unclosed = problems(readme + "\n> ```bash\n> bash scripts/install.sh\n")
     check(any("never closed" in message for message in unclosed), f"an unclosed blockquoted fence was not reported: {unclosed}")
+
+
+def test_a_plain_text_fence_whose_info_string_has_a_tab_or_extra_words_is_exempt() -> None:
+    readme = (ROOT / "README.md").read_text()
+    for info in ("text\tnote", "text  note", "text\t\tnote more", "TEXT\tnote", "txt\tnote"):
+        found = problems(readme + f"\n```{info}\necho only an example of output\n```\n")
+        check(found == [], f"a fence with the info string {info!r} is plain text and must not be checked: {found}")
+    for info in ("bash\tnote", "sh\tnote", "bash  note"):
+        found = problems(readme + f"\n```{info}\necho nonconforming\n```\n")
+        check(any("must be one" in message for message in found), f"a fence with the info string {info!r} is code and must be checked: {found}")

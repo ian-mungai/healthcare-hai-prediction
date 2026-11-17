@@ -15,6 +15,8 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from scripts.infrastructure import open_ui, web_ui_terraform
 from scripts.process import CompletedProcess, run_command
 from tests.support import check
@@ -45,6 +47,7 @@ if [ "$1 $2" = "ssm start-session" ]; then
   stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
   echo "$$" > "$STAND_IN_PIDFILE"
   echo "start $(stamp)" >> "$STAND_IN_MARK"
+  if [ -n "$STAND_IN_PS_BREAK" ]; then : > "$STAND_IN_PS_BREAK"; fi
   sleep "${STAND_IN_SLEEP:-60}" &
   sleeper=$!
   case "$STAND_IN_SESSION_MODE" in
@@ -70,6 +73,10 @@ exit 3
 
 PS_STAND_IN = """#!/bin/bash
 sleep "${STAND_IN_PS_DELAY:-0}"
+if [ -n "$STAND_IN_PS_BREAK" ] && [ -e "$STAND_IN_PS_BREAK" ]; then
+  echo "ps: the process table cannot be read" >&2
+  exit 1
+fi
 exec /bin/ps "$@"
 """
 
@@ -345,11 +352,11 @@ def seconds_between(workspace: Workspace, first: str, second: str) -> float:
 
 
 def stop_child(workspace: Workspace) -> None:
-    """Make sure no stand-in child is left running, whatever the case did."""
+    """Make sure no stand-in child and nothing in its process group (its sleeper) is left running, whatever the case did."""
     path = workspace.folder / "child.pid"
     if path.exists():
         with contextlib.suppress(ProcessLookupError):
-            os.kill(int(path.read_text()), signal.SIGKILL)
+            os.killpg(int(path.read_text()), signal.SIGKILL)
 
 
 def test_ctrl_c_sends_the_interrupt_to_the_aws_child_and_lets_it_close_the_session(tmp_path: Path) -> None:
@@ -403,7 +410,7 @@ def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> No
             check(workspace.calls() == [], f"{name}={value}: no AWS call may happen")
 
 
-def test_a_second_ctrl_c_during_child_discovery_still_stops_the_session_cleanly(tmp_path: Path) -> None:
+def test_a_second_ctrl_c_right_after_the_first_still_stops_the_session_cleanly(tmp_path: Path) -> None:
     workspace = Workspace(tmp_path, instances(INSTANCE))
     try:
         result = workspace.run(
@@ -481,5 +488,75 @@ def test_the_session_deadline_is_the_configured_time(tmp_path: Path) -> None:
         check(result.returncode == 1 and "deadline" in result.stderr, f"the deadline must end the session: {result.returncode} {result.stderr}")
         gap = seconds_between(workspace, "start", "int")
         check(2.0 <= gap <= 4.5, f"SIGINT must come at the configured 2 s deadline, not after {gap:.2f} s")
+    finally:
+        stop_child(workspace)
+
+
+def test_a_failing_process_listing_cannot_stop_the_bounded_stop_of_the_owned_child(tmp_path: Path) -> None:
+    for number, (mode, code, expected_marks, expected_sent) in enumerate(
+        (("interrupt", 0, ["int"], "SIGINT"), ("ignore_all", 1, ["int", "term"], "SIGINT, SIGTERM, SIGKILL"))
+    ):
+        folder = tmp_path / f"case{number}"
+        folder.mkdir()
+        workspace = Workspace(folder, instances(INSTANCE))
+        try:
+            began = time.monotonic()
+            result = workspace.run(
+                "airflow",
+                extra={
+                    "STAND_IN_SESSION_MODE": mode,
+                    "STAND_IN_SLEEP": "30",
+                    "STAND_IN_PS_BREAK": str(folder / "ps_broken"),
+                    "HAI_OPEN_UI_STOP_SECONDS": "1",
+                },
+            )
+            elapsed = time.monotonic() - began
+            output = result.stdout + result.stderr
+            check((folder / "ps_broken").exists(), "the case needs the process listing to fail once the session runs")
+            check(result.returncode == code, f"{mode}: exit {code} expected, got {result.returncode}: {output}")
+            check(elapsed < 12.0, f"{mode}: the parent must exit within the bounded stop, it took {elapsed:.1f} s")
+            check(marks(workspace) == expected_marks, f"{mode}: the child must get exactly {expected_marks}: {marks(workspace)}")
+            if code:
+                check(f"signals sent: {expected_sent}" in result.stderr, f"{mode}: the report must list the signals actually sent: {result.stderr}")
+            pid = int((folder / "child.pid").read_text())
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pass
+            else:
+                raise AssertionError(f"{mode}: the child {pid} must be gone when the parent exits")
+            check("did not end after SIGKILL" not in output, f"{mode}: the report must not claim a SIGKILL that was not needed: {output}")
+        finally:
+            stop_child(workspace)
+
+
+def test_a_failure_inside_the_stop_still_kills_the_owned_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    for name, value in {
+        "PATH": f"{workspace.bin}{os.pathsep}/usr/bin{os.pathsep}/bin",
+        "STAND_IN_LOG": str(workspace.log),
+        "STAND_IN_MARK": str(workspace.folder / "marks.log"),
+        "STAND_IN_PIDFILE": str(workspace.folder / "child.pid"),
+        "STAND_IN_SESSION_MODE": "hang",
+        "STAND_IN_SLEEP": "30",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    def broken(session: object, stop_seconds: float) -> list[str]:
+        raise RuntimeError("the stop failed")
+
+    monkeypatch.setattr(open_ui, "stop_session", broken)
+    try:
+        with pytest.raises(RuntimeError, match="the stop failed"):
+            open_ui.run_session(["ssm", "start-session"], 0.5, 1.0)
+        time.sleep(0.5)
+        pid = int((workspace.folder / "child.pid").read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError(f"the child {pid} must be killed when the stop fails")
+        check(signal.getsignal(signal.SIGINT) is signal.default_int_handler, "the SIGINT handler must be restored")
     finally:
         stop_child(workspace)
