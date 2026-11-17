@@ -45,11 +45,13 @@ locals {
   airflow_launch_volumes = merge({ for name, path in local.airflow_launch_files : name => "${local.code_path}/${path}" }, { job_scratch = var.airflow_launch_scratch_path })
 
   # The Airflow pool that limits the tasks launching a host job to what the host holds. It has one slot for each airflow_pool_slot_cpu_units of the CPU the
-  # services leave for jobs (job_cpu_units, 3072: 24 slots), and a job task takes the slots of its share of the host (orchestration/dag_runtime.py), so a
-  # job that reserves the whole job room runs alone and jobs that reserve less share the host while they fit (the six model sets run in two waves, as the owner decided Nov 13 2026). The migrate container creates the pool (airflow pools set is an upsert)
+  # services leave for jobs (job_cpu_units, 3072: 48 slots of 64 units, finer than 128 so that a large model set and two small ones fit the pool at every job
+  # cap the services can have), and a job task takes the slots of its share of the host (orchestration/dag_runtime.py), so a job that reserves the whole job
+  # room runs alone and jobs that reserve less share the host while they fit. The six model sets run in two waves (owner, Nov 13 and Nov 17 2026): a model
+  # set also takes its slots as its priority weight, so the scheduler starts the large sets first. The migrate container creates the pool (airflow pools set is an upsert)
   # and every Airflow container names it, its slots and the CPU of one slot (HAI_LAUNCH_POOL, HAI_LAUNCH_POOL_SLOTS, HAI_LAUNCH_POOL_SLOT_CPU_UNITS).
   airflow_launch_pool         = "host_jobs"
-  airflow_pool_slot_cpu_units = 128
+  airflow_pool_slot_cpu_units = 64
   airflow_pool_slots          = floor(var.job_cpu_units / local.airflow_pool_slot_cpu_units)
   airflow_launch_host         = var.host_private_ip
 

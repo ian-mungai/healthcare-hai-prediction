@@ -57,6 +57,7 @@ import ast
 import hashlib
 import importlib
 import inspect
+import itertools
 import json
 import os
 import re
@@ -535,7 +536,7 @@ def pool_only_when_configured() -> None:
             ):
                 runpy.run_path(str(ROOT / "dags" / dag_file))
             slots = {node.task_id: node.settings.get("pool_slots") for node in built}
-            want = {"drift_run": 16, "metadata_run": 8}[launch_task]  # drift 2,048 units, metadata 1,024 units: slots of 128
+            want = {"drift_run": 32, "metadata_run": 16}[launch_task]  # drift 2,048 units, metadata 1,024 units: slots of 64
             require(slots.get(launch_task) == want, f"{launch_task} of {dag_file} takes the slots {slots}, expected {want}")
     text = (ROOT / "infra/services/airflow.tf").read_text()
     require(
@@ -1973,16 +1974,23 @@ OWN_SIZES = {
 }
 SET_PEAKS_MIB = {"m1": 1348, "m2": 8976, "m3": 1844, "m4": 8969, "m5": 1613, "m6": 2215}
 # The capacity of the r7g.xlarge host as the services stack computes it: 4096 CPU units less the services' 1024 leave 3072 for jobs; 32768 MiB usable less
-# the 2048 system reserve and the 7920 service reservations (every default service on) leave the 22800 MiB job cap. A pool slot is 128 CPU units, so the
-# pool has 24 slots.
+# the 2048 system reserve and the 7920 service reservations (every default service on) leave the 22800 MiB job cap (22640 with monitoring, 22384 with the
+# Evidently UI too). A pool slot is 64 CPU units, so the pool has 48 slots.
+POOL_SLOTS = 48
 POOL_ENVIRONMENT = {
     "HAI_LAUNCH_POOL": "host_jobs",
-    "HAI_LAUNCH_POOL_SLOTS": "24",
-    "HAI_LAUNCH_POOL_SLOT_CPU_UNITS": "128",
+    "HAI_LAUNCH_POOL_SLOTS": str(POOL_SLOTS),
+    "HAI_LAUNCH_POOL_SLOT_CPU_UNITS": "64",
     "HAI_LAUNCH_HOST_JOB_CAP_MIB": "22800",
 }
+JOB_CAPS_MIB = (22800, 22640, 22384)
 JOB_ROOM_CPU = 3072
 JOB_ROOM_MIB = 22800
+# How long one set's job ran on the host, in minutes: the gaps between the task start times of the one-at-a-time run 20261113T192848Z-* (describe.json of
+# evidence_run_m<n>_20261113T195509Z), which include the launch. The run of m6 has no recorded start of a successor, so m6 takes the small-set value.
+SET_MINUTES = {"m1": 3.4, "m2": 4.9, "m3": 3.6, "m4": 4.9, "m5": 3.5, "m6": 3.5}
+# The six sets must finish within the two large runs end to end: the 9.8 minutes of m2 then m4 (owner, Nov 13 2026: "finished in about 10 minutes").
+TWO_WAVE_MINUTES = 9.8
 
 
 def model_sets_have_their_own_families() -> None:
@@ -2047,47 +2055,81 @@ def model_sets_launch_in_their_own_task_definitions() -> None:
     )
 
 
+def pool_makespan(order: tuple[str, ...], weights: dict[str, int], priorities: dict[str, int]) -> float:
+    """The minutes the six sets take in a pool of ``POOL_SLOTS`` slots when their job tasks arrive in ``order``: the scheduler walks the waiting tasks by
+    descending priority weight, then by arrival, and starts each one that fits; a task that does not fit is skipped and a smaller one behind it can start
+    (scheduler_job_runner.py of apache-airflow-core 3.4.0, ``_executable_task_instances_to_queued``)."""
+    waiting = sorted(order, key=lambda model: (-priorities[model], order.index(model)))
+    running: dict[str, float] = {}
+    now = 0.0
+    while waiting or running:
+        used = sum(weights[model] for model in running)
+        for model in list(waiting):
+            if used + weights[model] <= POOL_SLOTS:
+                running[model] = now + SET_MINUTES[model]
+                used += weights[model]
+                waiting.remove(model)
+        first = min(running, key=lambda model: running[model])
+        now = running.pop(first)
+    return now
+
+
 def six_model_sets_fit_the_host_in_two_waves() -> None:
-    """The set reservations in waves: all six together do not fit the job room (the large m2 and m4 hold 13312 MiB each), but the pool lets one large and
-    three small sets run together, so the six finish in two waves, and a full-size job takes every slot so it waits for the sets and they wait for it."""
+    """The set reservations in waves: all six together do not fit the job room (the large m2 and m4 hold 13312 MiB each), but at each job cap the pool lets one
+    large and two small sets run together and never two large ones, and the large sets have the higher priority weight, so the six finish in two waves
+    whatever order their tasks arrive in; a full-size job takes every slot so it waits for the sets and they wait for it."""
     with world(Rig(), "silver_transform_dag", SILVER) as current:
         runtime = current.runtime
     _, host = importlib.import_module("orchestration.ecs_preflight").load_tables(ROOT)
     sets = {model: host["jobs"][f"features_{model}"] for model in MODEL_DAGS.values()}
-    with mock.patch.dict("os.environ", POOL_ENVIRONMENT, clear=True):
-        weights = {model: runtime.pool_slots_of(f"features_{model}") for model in sets}
-        full = runtime.pool_slots_of(None)
-        require(weights == {"m1": 4, "m2": 12, "m3": 4, "m4": 12, "m5": 4, "m6": 4} and full == 24, f"the pool weights are {weights} and {full}")
-        require(sum(weights.values()) > 24 and full + min(weights.values()) > 24, "the pool lets a full-size job run beside a set, or all six sets at once")
+    for cap in JOB_CAPS_MIB:
+        with mock.patch.dict("os.environ", {**POOL_ENVIRONMENT, "HAI_LAUNCH_HOST_JOB_CAP_MIB": str(cap)}, clear=True):
+            weights = {model: runtime.pool_slots_of(f"features_{model}") for model in sets}
+            priorities = {model: runtime.pool_settings(f"features_{model}")["priority_weight"] for model in sets}
+            full = runtime.pool_slots_of(None)
+        require(
+            weights == {"m1": 9, "m2": 29, "m3": 9, "m4": 29, "m5": 9, "m6": 9} and full == POOL_SLOTS,
+            f"at {cap} MiB the pool weights are {weights} and {full}",
+        )
+        require(
+            sum(weights.values()) > POOL_SLOTS and full + min(weights.values()) > POOL_SLOTS,
+            f"at {cap} MiB the pool lets a full-size job run beside a set, or all six sets at once",
+        )
+        require(weights["m2"] + weights["m1"] + weights["m3"] <= POOL_SLOTS, f"at {cap} MiB one large and two small sets do not fit the pool: {weights}")
+        require(weights["m2"] + weights["m4"] > POOL_SLOTS, f"at {cap} MiB the two large sets fit the pool together: {weights}")
         for model, need in sets.items():
-            require(weights[model] * JOB_ROOM_MIB // 24 >= need["memory_mib"], f"the {model} weight covers less memory than the set reserves")
-            require(weights[model] * JOB_ROOM_CPU // 24 >= need["cpu_units"], f"the {model} weight covers less CPU than the set reserves")
-    waves: list[list[str]] = []
-    for model in sets:  # first fit in DAG order, as the pool admits tasks
-        for wave in waves:
-            if sum(weights[name] for name in wave) + weights[model] <= 24:
-                wave.append(model)
-                break
-        else:
-            waves.append([model])
-    require(len(waves) == 2, f"the six sets need {len(waves)} waves, not two: {waves}")
-    for wave in waves:
-        require(sum(sets[name]["memory_mib"] for name in wave) <= JOB_ROOM_MIB, f"the wave {wave} reserves more memory than the job room")
-        require(sum(sets[name]["cpu_units"] for name in wave) <= JOB_ROOM_CPU, f"the wave {wave} reserves more CPU than the job room")
+            require(weights[model] * cap // POOL_SLOTS >= need["memory_mib"], f"at {cap} MiB the {model} weight covers less memory than the set reserves")
+            require(weights[model] * JOB_ROOM_CPU // POOL_SLOTS >= need["cpu_units"], f"the {model} weight covers less CPU than the set reserves")
+        require(
+            max(priorities[model] for model in ("m1", "m3", "m5", "m6")) < min(priorities["m2"], priorities["m4"]),
+            f"the large sets do not outrank the small ones: {priorities}",
+        )
+        slowest = max(pool_makespan(order, weights, priorities) for order in itertools.permutations(sets))
+        require(
+            slowest <= TWO_WAVE_MINUTES + 0.05,
+            f"at {cap} MiB some arrival order takes {slowest:.1f} minutes, above the two waves of {TWO_WAVE_MINUTES} minutes",
+        )
+        no_priority = {model: 0 for model in sets}
+        require(
+            max(pool_makespan(order, weights, no_priority) for order in itertools.permutations(sets)) > TWO_WAVE_MINUTES + 0.05,
+            f"at {cap} MiB the arrival order alone already gives two waves, so the priority weight proves nothing",
+        )
     with mock.patch.dict("os.environ", {"HAI_LAUNCH_POOL": "host_jobs"}, clear=True):
         require(runtime.pool_slots_of("features_m1") == 1, "a deployment with no slot setting must keep the one-slot pool")
+        require("priority_weight" not in runtime.pool_settings("features_m1"), "a deployment with no slot setting gives no priority weight")
 
 
 WEIGHTS = {
-    **{f"features_{model}_dag.py": (12 if model in ("m2", "m4") else 4) for model in ("m1", "m2", "m3", "m4", "m5", "m6")},
-    "model_promotion_dag.py": 8,  # 1,024 units: 8 slots of 128
-    "serving_deploy_dag.py": 8,
+    **{f"features_{model}_dag.py": (29 if model in ("m2", "m4") else 9) for model in ("m1", "m2", "m3", "m4", "m5", "m6")},
+    "model_promotion_dag.py": 16,  # 1,024 units: 16 slots of 64
+    "serving_deploy_dag.py": 16,
 }
 
 
 def model_jobs_weigh_their_pool_slots() -> None:
-    """With the deployment's slot settings, the job task of a model DAG takes the slots of its set (four, or twelve for m2 and m4), the job task of every
-    other host DAG takes the whole pool, and no other task takes slots. Without the settings no task names slots."""
+    """With the deployment's slot settings, the job task of a model DAG takes the slots of its set (nine, or twenty-nine for m2 and m4) and the same number
+    as its priority weight, so the large sets come first. The job task of every other host DAG takes the slots of its share and no priority weight, and no
+    other task takes slots. Without the settings no task names slots."""
     rig = Rig()
     with world(rig, "silver_transform_dag", SILVER) as current:
         runtime = current.runtime
@@ -2114,10 +2156,16 @@ def model_jobs_weigh_their_pool_slots() -> None:
                 ):
                     runpy.run_path(str(ROOT / "dags" / dag_file))
                 slots = {node.task_id: node.settings.get("pool_slots") for node in built}
-                want = {"job": (WEIGHTS.get(dag_file, 24))} if expected else {}
+                want = {"job": (WEIGHTS.get(dag_file, POOL_SLOTS))} if expected else {}
                 require(
                     {name: value for name, value in slots.items() if value is not None} == want,
                     f"{dag_file} with {'' if expected else 'no '}slot settings has the pool slots {slots}, expected {want}",
+                )
+                priorities = {node.task_id: node.settings.get("priority_weight") for node in built if node.settings.get("priority_weight") is not None}
+                wanted = {"job": WEIGHTS[dag_file]} if expected and dag_file.startswith("features_m") else {}
+                require(
+                    priorities == wanted,
+                    f"{dag_file} has the priority weights {priorities}, expected {wanted}: only a model set takes its slots as its priority",
                 )
 
 

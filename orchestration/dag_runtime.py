@@ -59,6 +59,8 @@ DEFAULT_POOL = "default_pool"
 POOL_SLOTS_SETTING = "HAI_LAUNCH_POOL_SLOTS"
 POOL_SLOT_CPU_SETTING = "HAI_LAUNCH_POOL_SLOT_CPU_UNITS"
 JOB_CAP_SETTING = "HAI_LAUNCH_HOST_JOB_CAP_MIB"
+# The host family that every model set is like (its row in the host table says ``like``).
+MODEL_SET_PARENT = "features"
 HOST_TABLE = Path(__file__).resolve().parents[1] / "config/orchestration/host_jobs.json"
 
 
@@ -80,6 +82,11 @@ def whole_setting(name: str) -> int:
     return int(raw)
 
 
+def host_row(family: str | None) -> dict[str, Any]:
+    """The row of ``family`` in the host table (an empty row for ``None``, as the steps of the other DAGs name no family)."""
+    return json.loads(HOST_TABLE.read_text())["jobs"][family] if family is not None else {}
+
+
 def pool_slots_of(family: str | None) -> int:
     """The pool slots of a job in ``family``: all of them for a family that reserves the whole job room (``None`` too, as the steps of the other DAGs
     do), so such a job runs alone; the larger of its CPU slots and its memory slots for a family that reserves its own size, so several run together
@@ -87,7 +94,7 @@ def pool_slots_of(family: str | None) -> int:
     if POOL_SLOTS_SETTING not in os.environ:
         return 1
     slots = whole_setting(POOL_SLOTS_SETTING)
-    need = json.loads(HOST_TABLE.read_text())["jobs"][family] if family is not None else {}
+    need = host_row(family)
     if not need.get("reserve"):
         return slots
     by_cpu = math.ceil(int(need["cpu_units"]) / whole_setting(POOL_SLOT_CPU_SETTING))
@@ -96,10 +103,14 @@ def pool_slots_of(family: str | None) -> int:
 
 
 def pool_settings(family: str | None = None) -> dict[str, Any]:
-    """The task settings that put a launching task in the host pool: its name, and its slots where the deployment sets a slot count."""
+    """The task settings that put a launching task in the host pool: its name, and its slots where the deployment sets a slot count. A model set (a host
+    family that is like the features job) also takes its slots as its priority weight, so the scheduler starts the large sets first and the small ones fill
+    the room beside them."""
     settings: dict[str, Any] = {"pool": launch_pool()}
     if POOL_SLOTS_SETTING in os.environ:
         settings["pool_slots"] = pool_slots_of(family)
+        if host_row(family).get("like") == MODEL_SET_PARENT:
+            settings["priority_weight"] = settings["pool_slots"]
     return settings
 
 
