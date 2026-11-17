@@ -217,18 +217,22 @@
           "RUN_ID",
           "MLFLOW_TRACKING_URI",
           "POLARIS_URI",
-          "FEATURE_SET"
+          "FEATURE_SET",
+          "LIVE_HAI_TYPE"
         ],
         "current": [
           "RUN_ID",
           "POLARIS_URI",
-          "INPUT_RUN_ID"
+          "INPUT_RUN_ID",
+          "LIVE_HAI_TYPE"
         ],
         "check": [
-          "RUN_ID"
+          "RUN_ID",
+          "LIVE_HAI_TYPE"
         ],
         "publish": [
-          "RUN_ID"
+          "RUN_ID",
+          "LIVE_HAI_TYPE"
         ]
       },
       "chain": true
@@ -346,6 +350,7 @@
     "cross_layer_checks": "gold",
     "drift_final_gate_accepted": null,
     "drift_final_gate_rejected": null,
+    "drift_live_run": "drift",
     "drift_run": "drift",
     "extract": "train",
     "feast_apply": "features",

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any
 
 
@@ -26,8 +26,16 @@ def ensure() -> None:
         raise DependencyMissing(f"a package the report needs is not installed in this environment: {error}") from None
 
 
-def run(reference: Any, current: Any, numerical: Sequence[str], categorical: Sequence[str], config: Mapping[str, Any]) -> tuple[str, dict[str, dict[str, Any]]]:
-    """Return the Evidently version and, for each feature, its column type, test name, threshold, score and drift flag."""
+def run(
+    reference: Any,
+    current: Any,
+    numerical: Sequence[str],
+    categorical: Sequence[str],
+    config: Mapping[str, Any],
+    on_report: Callable[[Any], None] | None = None,
+) -> tuple[str, dict[str, dict[str, Any]]]:
+    """Return the Evidently version and, for each feature, its column type, test name, threshold, score and drift flag. ``on_report`` gets the finished
+    report, for a caller that saves its HTML or adds it to a workspace."""
     try:
         preset = importlib.import_module("evidently.legacy.metric_preset").DataDriftPreset
         mapping = importlib.import_module("evidently.legacy.pipeline.column_mapping").ColumnMapping
@@ -51,6 +59,8 @@ def run(reference: Any, current: Any, numerical: Sequence[str], categorical: Seq
     report.run(
         reference_data=reference, current_data=current, column_mapping=mapping(numerical_features=list(numerical), categorical_features=list(categorical))
     )
+    if on_report is not None:
+        on_report(report)
     tables = [item["result"]["drift_by_columns"] for item in report.as_dict()["metrics"] if "drift_by_columns" in item["result"]]
     if len(tables) != 1:
         raise RuntimeError(f"the report holds {len(tables)} drift tables, expected one")

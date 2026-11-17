@@ -21,7 +21,7 @@ import os
 import signal
 import sys
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -163,7 +163,8 @@ def write_record(out: Path, record: dict[str, Any]) -> Path:
     return target
 
 
-def run(arguments: argparse.Namespace) -> Path:
+def build_record(arguments: argparse.Namespace, on_report: Callable[[Any], None] | None = None) -> dict[str, Any]:
+    """Compare the two matrices and return the drift record. ``on_report`` gets Evidently's report when one is computed."""
     config, config_sha = drift_config.load(arguments.config)
     reference_manifest = read_manifest(arguments.reference_manifest, "reference_manifest")
     current_manifest = read_manifest(arguments.current_manifest, "current_manifest")
@@ -214,6 +215,7 @@ def run(arguments: argparse.Namespace) -> Path:
                 [name for name in features if kinds[name] == "numerical"],
                 [name for name in features if kinds[name] == "categorical"],
                 config,
+                on_report,
             )
         except evidently_report.DependencyMissing as error:
             raise CheckError("dependency_missing", f"the report needs Evidently and pandas: {error}", 3) from None
@@ -229,7 +231,11 @@ def run(arguments: argparse.Namespace) -> Path:
             "drift_share": share,
             "triggered": share >= config["drift_share"],
         }
-    return write_record(arguments.out, record)
+    return record
+
+
+def run(arguments: argparse.Namespace) -> Path:
+    return write_record(arguments.out, build_record(arguments))
 
 
 def main(argv: list[str] | None = None) -> int:

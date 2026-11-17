@@ -2532,6 +2532,62 @@ def drift_attempt_and_run_must_agree() -> None:
     require(rig.tasks_started() == started, "a refused drift run started a task")
 
 
+LIVE_RUN = "20261117T120000Z-1ee70001"
+LIVE_PARAMS = {"run_id": LIVE_RUN, "mode": "real", "model": "m2", "hai_type": "HAI_3"}
+
+
+def live_drift_job_takes_its_model_and_type() -> None:
+    """The on-demand live check launches the drift family's one task for a model and a type, with no model run: the baseline container is told the model and
+    the type, the check and publish containers the type, the current-window container the type and no model run. It runs the code staged for its own run,
+    binds no run and starts exactly one task, and the DAG has no task that starts another DAG."""
+    rig = Rig()
+    rig.stage_runs(LIVE_RUN)
+    puts, started = len(rig.stage.puts), rig.tasks_started()
+    with world(rig, "drift_live_check_dag", LIVE_PARAMS) as current:
+        states = current.run_dag("drift_live_check_dag.py")
+        failed = {name: state for name, state in states.items() if state != "success"}
+        require(bool(states) and not failed and current.results["gate"] == "accepted", f"the live check did not finish: {failed} {current.results}")
+    values = rig.environment(started)
+    require(values["baseline"]["FEATURE_SET"] == "m2", f"the baseline container was not told the model: {values['baseline']}")
+    require(
+        {name: values[name]["LIVE_HAI_TYPE"] for name in ("baseline", "current", "check", "publish")}
+        == dict.fromkeys(("baseline", "current", "check", "publish"), "HAI_3"),
+        f"a phase container was not told the type: {values}",
+    )
+    require(values["current"]["INPUT_RUN_ID"] == "latest", f"the live check named a model run: {values['current']}")
+    require(values["fetch"]["CODE_RUN_ID"] == LIVE_RUN, f"the live check ran the code of {values['fetch']['CODE_RUN_ID']}, not its own staged code")
+    require(len(rig.stage.puts) == puts, "the live check bound a run")
+    require(rig.tasks_started() == started + 1, "the live check did not start exactly one task")
+    gate = Rig()
+    gate.stage_runs(OTHER_RUN)
+    with world(gate, "drift_monitoring_dag", {"run_id": OTHER_RUN, "mode": "real", "mlflow": "aws", "model": "m2", "features_run": OTHER_RUN}) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_run"))
+    require("derive" in str(error) or "features" in str(error), f"the gate DAG no longer refuses a run that derives from nothing: {error}")
+
+
+def live_drift_job_is_refused_by_name_before_any_launch() -> None:
+    """A live check with nothing staged for its own run, a model or a type outside the contract, or a request with another key is refused by name before any
+    binding, launch record or task. The gate runs of the drift DAG keep the reason they had."""
+    rig = Rig()
+    started, records = rig.tasks_started(), len(rig.records.calls)
+    with world(rig, "drift_live_check_dag", LIVE_PARAMS) as current:
+        error = refuses(LaunchRefused, lambda: current.step("drift_live_run"))
+    require(
+        LIVE_RUN in str(error) and "code.sha256" in str(error) and "live drift check" in str(error),
+        f"the refusal does not name the run and the object: {error}",
+    )
+    rig.stage_runs(LIVE_RUN)
+    for name, value in (("model", "m7"), ("hai_type", "HAI_9")):
+        with world(rig, "drift_live_check_dag", {**LIVE_PARAMS, name: value}) as current:
+            error = refuses(LaunchRefused, lambda: current.step("drift_live_run"))
+        require(value in str(error), f"{name}={value} was not refused by name: {error}")
+    request = SubmissionRequest("drift_live_run", LIVE_RUN, "real", 1, "drift_live_check_dag", "job", "manual__test", None, training={"model": "m2"})
+    error = refuses(LaunchRefused, partial(rig.preflight.prepare, request))
+    require("exactly" in str(error), f"a request without the type was not refused as not closed: {error}")
+    written = [call for call in rig.records.calls[records:] if call[0] != "get_object"]
+    require(rig.tasks_started() == started and not written, f"a refused live check wrote or launched: tasks {rig.tasks_started()}, record writes {written}")
+
+
 def training_run_fits_its_model_only() -> None:
     """A drift-started training run names one model and that model's own run: m5 trains with m5's set and m6 with m6's, each bound to the bronze code,
     so the run fits only that model and its own tests (the research tests of m5 and m6)."""
@@ -3388,6 +3444,8 @@ CASES: dict[str, Callable[[], None]] = {
     "drift_attempt_runs_the_code_staged_for_its_own_run": drift_attempt_runs_the_code_staged_for_its_own_run,
     "drift_attempt_without_staged_code_is_refused_by_name": drift_attempt_without_staged_code_is_refused_by_name,
     "drift_attempt_and_run_must_agree": drift_attempt_and_run_must_agree,
+    "live_drift_job_takes_its_model_and_type": live_drift_job_takes_its_model_and_type,
+    "live_drift_job_is_refused_by_name_before_any_launch": live_drift_job_is_refused_by_name_before_any_launch,
     "training_run_fits_its_model_only": training_run_fits_its_model_only,
     "bronze_chain_has_no_model_less_drift_layer": bronze_chain_has_no_model_less_drift_layer,
     "graph_rules_cover_the_model_drift_trigger": graph_rules_cover_the_model_drift_trigger,

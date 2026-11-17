@@ -126,6 +126,7 @@
     "features_m5_dag": "features_m5",
     "features_m6_dag": "features_m6",
     "drift_monitoring_dag": "drift",
+    "drift_live_check_dag": "drift",
     "training_dag": "train",
     "model_promotion_dag": "promote",
     "research_dag": "promote",

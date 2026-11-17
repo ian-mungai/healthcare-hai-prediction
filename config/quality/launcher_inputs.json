@@ -611,6 +611,7 @@
     "config/training/redundant_features.json",
     "config/training/targets.json",
     "dags/bronze_chain_dag.py",
+    "dags/drift_live_check_dag.py",
     "dags/drift_monitoring_dag.py",
     "dags/features_base_dag.py",
     "dags/features_m1_dag.py",

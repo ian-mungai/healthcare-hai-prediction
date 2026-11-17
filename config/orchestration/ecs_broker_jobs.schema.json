@@ -84,7 +84,8 @@
                   "PHASE",
                   "LAYER_PHASE",
                   "RELEASE_MODEL",
-                  "LINEAGE_INVOCATION"
+                  "LINEAGE_INVOCATION",
+                  "LIVE_HAI_TYPE"
                 ]
               }
             }

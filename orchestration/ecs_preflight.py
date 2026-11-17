@@ -36,6 +36,7 @@ from orchestration.promotion_chain import RecordRefused, challenger_named, store
 from orchestration.training_contract import CODE_RUN as CODE_RUN_PATTERN
 from orchestration.training_contract import (
     FEATURE_DAGS,
+    HAI_TYPES,
     LAUNCH_LANES,
     MODELS,
     PROMOTION_MODELS,
@@ -90,6 +91,10 @@ CHAIN = "chain"
 CHAIN_LAYERS = ("silver", "gold", "features")
 # The drift check of a model set: it checks the set of one model run, and its job needs the features job of that run to have passed.
 DRIFT_DAG = "drift_monitoring_dag"
+# The on-demand live check of a model's Production baseline: it launches the drift family's task with LIVE_HAI_TYPE set, reads no features run, runs the code
+# staged for its own run and starts nothing after it.
+LIVE_DAG = "drift_live_check_dag"
+LIVE_KEYS = frozenset({"model", "hai_type"})
 JOB_MODE = "real"
 # The feature set a DAG's features job builds (the FEATURE_SET of its containers). A DAG that names none cannot launch the features job.
 FEATURE_SETS = {"features_base_dag": "base", **FEATURE_DAGS}
@@ -182,6 +187,19 @@ def drift_model(request: SubmissionRequest) -> str:
             f"the drift run {request.run_id} does not derive from the model run {request.input_run_id} it checks and the drift attempt {named or 'of that run'}"
         )
     return str(model)
+
+
+def live_parameters(request: SubmissionRequest) -> tuple[str, str]:
+    """The model and HAI type of a live check, after the closed form of the DAG: exactly these two keys, a model of the contract and a supported type."""
+    training = request.training or {}
+    if set(training) != LIVE_KEYS:
+        raise LaunchRefused(f"the live drift check takes exactly {', '.join(sorted(LIVE_KEYS))}, not {', '.join(sorted(training)) or 'nothing'}")
+    model, hai_type = training["model"], training["hai_type"]
+    if model not in MODELS:
+        raise LaunchRefused(f"the live drift check names {model!r}, which is not one of {', '.join(MODELS)}")
+    if hai_type not in HAI_TYPES:
+        raise LaunchRefused(f"the live drift check names {hai_type!r}, which is not one of {', '.join(HAI_TYPES)}")
+    return str(model), str(hai_type)
 
 
 class S3Reader(Protocol):
@@ -696,8 +714,11 @@ class Preflight:
             research_code, bind = self.research_code_run(request)
         else:
             bind = False
+        live = request.dag_id == LIVE_DAG
+        if live:
+            live_parameters(request)  # first of the live gates: a malformed form launches nothing
         later_drift = request.dag_id == DRIFT_DAG and "drift_attempt" in (request.training or {})
-        if later_drift:
+        if later_drift or live:
             research_code = self.drift_code_run(request)
         if research_code is None and row.get("needs_publisher_run_request"):
             research_code, bind = self.publisher_code_run(request)
@@ -748,13 +769,14 @@ class Preflight:
         fixed code, so it runs the code staged for its own run (or the run its owner bound it to), never the bronze run's: the run's own ``code.sha256``
         must be staged, or the launch is refused by name. The attempt is not bound: it resolves to its own staged code, which is written once."""
         code_run = self.code_runs.resolve(request.run_id)
+        label = "the live drift check" if request.dag_id == LIVE_DAG else f"drift attempt {drift_attempt(request)}"
         try:
             self.code_digest(code_run)
         except TaskUnavailable as error:
             if str(error) != "code_digest_not_staged":
                 raise InputNotReady(str(error)) from None
             raise LaunchRefused(
-                f"drift attempt {drift_attempt(request)} of run {request.run_id} runs fixed code, so it needs its own staged code: "
+                f"{label} of run {request.run_id} runs fixed code, so it needs its own staged code: "
                 f"lakehouse/run_stage/{code_run}/inputs/code.sha256 is not staged. It does not use the code of the bronze run"
             ) from None
         except TaskRefused as error:
@@ -968,7 +990,7 @@ class Preflight:
 
         training = json.dumps({**(request.training or {}), "mlflow": "aws"}, sort_keys=True, separators=(",", ":"))
         releasing = request.template == RELEASE_TEMPLATE
-        names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id == DRIFT_DAG or releasing
+        names_a_model = bool(row.get("needs_training_parameters")) or request.dag_id in (DRIFT_DAG, LIVE_DAG) or releasing
         containers, log_container = self.containers(job)
         # A features task holds the release variables in its feast container: a features build leaves them empty, and only the release step fills them.
         holds_release = any("RELEASE_MODEL" in names for names in containers.values())
@@ -981,7 +1003,16 @@ class Preflight:
             "MLFLOW_TRACKING_URI": lambda: self.settings.mlflow_uri,
             "INPUT_RUN_ID": lambda: request.input_run_id or "latest",
             "FEATURES_RUN": lambda: "" if holds_release and not releasing else features_run_of(request),
-            "FEATURE_SET": lambda: "" if releasing else drift_model(request) if request.dag_id == DRIFT_DAG else feature_set_of(request.dag_id),
+            "FEATURE_SET": lambda: (
+                ""
+                if releasing
+                else drift_model(request)
+                if request.dag_id == DRIFT_DAG
+                else live_parameters(request)[0]
+                if request.dag_id == LIVE_DAG
+                else feature_set_of(request.dag_id)
+            ),
+            "LIVE_HAI_TYPE": lambda: live_parameters(request)[1] if request.dag_id == LIVE_DAG else "",
             "LAYER_PHASE": lambda: LAYER_PHASES.get(request.template, ""),
             "RELEASE_MODEL": lambda: release_model_of(request) if releasing else "",
             "PHASE": lambda: phase_of(request.template),

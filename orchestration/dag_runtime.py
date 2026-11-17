@@ -45,6 +45,8 @@ SERVING_SELECTIONS = {"serve_deploy": "research_run"}
 # The drift check reads one model run's published set: its form names that run, and the check's job needs the features job of that run to have passed.
 DRIFT_DAG = "drift_monitoring_dag"
 DRIFT_SELECTIONS = {"drift_run": "features_run"}
+# The on-demand live check of a baseline: its form names the model and the HAI type, and it reads no producer run.
+LIVE_DRIFT_DAG = "drift_live_check_dag"
 ASSETS = {"features_commit": "features"}
 # The time limits of the one-job chain's tasks that start no job.
 PREFLIGHT_TIMEOUT = timedelta(minutes=30)
@@ -198,6 +200,8 @@ def step_request(template: str, context: dict[str, Any]) -> SubmissionRequest:
         training = {"model": params["model"]}  # the model whose set the drift job checks; the preflight refuses a model outside the contract
         if params.get("drift_attempt", 1) != 1:  # attempt 1 is the default and is never sent, so the first drift run keeps its parameters
             training["drift_attempt"] = drift_attempt_of(params["drift_attempt"])
+    elif instance.dag_id == LIVE_DRIFT_DAG:
+        training = {"model": params["model"], "hai_type": params["hai_type"]}  # the preflight refuses a model or type outside the contract
     publisher = None
     if template == PUBLISHER_TEMPLATE and instance.dag_id == RETRY_DAG:
         original, day = resolve_retry(str(params["original_run"]), int(params["day"]), context)

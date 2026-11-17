@@ -28,6 +28,10 @@
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
     },
+    "dags/drift_live_check_dag.py": {
+      "runtime": "orchestration_image",
+      "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""
+    },
     "dags/features_base_dag.py": {
       "runtime": "orchestration_image",
       "reason": "Cannot find implementation or library stub for module named \"airflow.sdk\""

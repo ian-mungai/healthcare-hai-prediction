@@ -14,7 +14,13 @@ phases, and ``records/drift_<type>.json`` after ``check``.
   and unmonitored types and the SHA-256 of every record. The DAG reads only runs that have the marker.
 
 A rerun in the same workspace resumes: ``baseline`` and ``current`` return their recorded result, and ``check`` and ``publish`` repeat safely and write the same
-bytes. Exit codes are those of ``monitoring.drift_check``: 2 a refused input (the message names the failure), 3 a package or environment is missing.
+bytes.
+
+``--live-type HAI_n`` turns the task into the on-demand live check of ``monitoring.live_check`` for that one type. ``baseline`` fetches only that type,
+``current`` reads nothing, ``check`` splits the baseline by window year and ``publish`` uploads the record and Evidently's HTML report to
+``s3://<bucket>/drift_demo/<run>/``, never to ``drift/<run>/``.
+
+Exit codes are those of ``monitoring.drift_check``: 2 a refused input (the message names the failure), 3 a package or environment is missing.
 """
 
 from __future__ import annotations
@@ -32,7 +38,7 @@ from argparse import Namespace
 from pathlib import Path
 from typing import Any
 
-from monitoring import baseline, current_window, drift_check, drift_config, drift_gate
+from monitoring import baseline, current_window, drift_check, drift_config, drift_gate, live_check
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
 from orchestration.training_contract import MODELS, RUN_ID
 from scripts import metrics_push, resource_peaks
@@ -45,6 +51,9 @@ PHASES = ("baseline", "current", "check", "publish")
 BUCKET = re.compile(r"[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]")
 PHASE_SECONDS = {"baseline": 3600, "current": 1800, "publish": 300}
 MARKER = "_complete.json"
+# The on-demand live check (``--live-type``) keeps its outputs under their own local folder and its own S3 prefix, never under drift/<run>/ of the gate runs.
+LIVE_FOLDER = "drift_live"
+LIVE_PREFIX = "drift_demo"
 ENVIRONMENT_DEFAULTS = {
     "MLFLOW_DISABLE_TELEMETRY": "true",
     "DO_NOT_TRACK": "true",
@@ -215,6 +224,70 @@ def publish_phase(client: Any, bucket: str, work: Path, run: str) -> dict[str, A
     return {"phase": "publish", "run_id": run, "files": sorted(bodies)}
 
 
+def live_folder(work: Path, run: str) -> Path:
+    return work / LIVE_FOLDER / run
+
+
+def live_names(hai_type: str) -> list[str]:
+    return [f"drift_{hai_type}.json", f"report_{hai_type}.html"]
+
+
+def check_live_phase(work: Path, run: str, hai_type: str, workspace: Path, *, config: Path = drift_config.CONFIG) -> dict[str, Any]:
+    """Run the live check on the baseline of ``hai_type``: the baseline matrix split by window year, its record and HTML report under ``drift_live/<run>/`` and
+    its snapshot in the Evidently UI workspace."""
+    folder = run_folder(work, run)
+    base = require_baseline(folder, run)
+    if hai_type not in base["monitored"]:
+        raise CheckError(
+            "live_type_not_monitored", f"{hai_type} has no baseline to check: {base['unmonitored'].get(hai_type, 'the baseline phase did not fetch it')}"
+        )
+    if "model" not in base:
+        raise CheckError("model_missing", f"the baseline phase of run {run} did not gate a model, so the live check cannot name its project")
+    live_check.run(
+        Namespace(
+            model=base["model"],
+            matrix=folder / hai_type / "reference.parquet",
+            manifest=folder / hai_type / "reference_manifest.json",
+            features=folder / hai_type / "features.json",
+            run_id=run,
+            out=live_folder(work, run),
+            workspace=workspace,
+            config=config,
+        ),
+        record_sinks=live_check.RECORD_SINKS,
+    )
+    return {"phase": "check", "run_id": run, "types": [hai_type]}
+
+
+def publish_live_phase(client: Any, bucket: str, work: Path, run: str, hai_type: str) -> dict[str, Any]:
+    """Upload the live check's record and HTML report to ``drift_demo/<run>/`` and then the marker that names them. Nothing is uploaded when one is missing or
+    belongs to another run. The prefix is never ``drift/<run>/``, which the drift DAG reads to start training."""
+    base = require_baseline(run_folder(work, run), run)
+    bodies: dict[str, bytes] = {}
+    for name in live_names(hai_type):
+        path = live_folder(work, run) / name
+        if not path.is_file():
+            raise CheckError("record_missing", f"the live check of {hai_type} has no {name} at {path}")
+        bodies[name] = path.read_bytes()
+    if json.loads(bodies[live_names(hai_type)[0]]).get("run_id") != run:
+        raise CheckError("record_stale", f"the live record of {hai_type} belongs to another run")
+    marker = {
+        "kind": "drift_live",
+        "run_id": run,
+        "hai_type": hai_type,
+        "model": base.get("model"),
+        "files": {name: hashlib.sha256(body).hexdigest() for name, body in bodies.items()},
+    }
+    for name, body in bodies.items():
+        client.put_object(
+            Bucket=bucket, Key=f"{LIVE_PREFIX}/{run}/{name}", Body=body, ContentType="text/html" if name.endswith(".html") else "application/json"
+        )
+    client.put_object(
+        Bucket=bucket, Key=f"{LIVE_PREFIX}/{run}/{MARKER}", Body=(json.dumps(marker, indent=2, sort_keys=True) + "\n").encode(), ContentType="application/json"
+    )
+    return {"phase": "publish", "run_id": run, "files": list(bodies)}
+
+
 def model_feature_list_sha(root: Path, model: str | None) -> str | None:
     """The hash of the model's predictor definitions as the training extract records it, or None for a run that gates no model."""
     if model is None:
@@ -263,6 +336,8 @@ def main(argv: list[str] | None = None) -> int:
         "--model", choices=MODELS, help="gate this model: its Production baseline and feature schema decide, and the marker carries the decision"
     )
     parser.add_argument("--config", type=Path, default=drift_config.CONFIG)
+    parser.add_argument("--live-type", choices=("", *HAI_TYPES), default="", help="run the on-demand live check of this one HAI type; empty runs the gate task")
+    parser.add_argument("--workspace", type=Path, default=Path("/evidently"), help="the Evidently UI workspace of the live check")
     arguments = parser.parse_args(argv)
     prepare_environment(arguments.bucket)
     try:
@@ -273,20 +348,35 @@ def main(argv: list[str] | None = None) -> int:
         startup_check.check_phase("drift", arguments.phase)
         task_capacity.apply()
         with deadline(seconds), contextlib.ExitStack() as stack:
+            live = arguments.live_type
+            if live and arguments.phase == "baseline" and not arguments.model:
+                raise CheckError("model_missing", "a live check needs --model: the model whose Production baseline it checks")
             if arguments.phase == "baseline":
                 result = baseline_phase(
-                    open_store(), arguments.work, arguments.run, model=arguments.model, feature_list_sha=model_feature_list_sha(arguments.root, arguments.model)
+                    open_store(),
+                    arguments.work,
+                    arguments.run,
+                    hai_types=(live,) if live else HAI_TYPES,
+                    model=arguments.model,
+                    feature_list_sha=model_feature_list_sha(arguments.root, arguments.model),
                 )
+            elif arguments.phase == "current" and live:
+                result = {"phase": "current", "run_id": arguments.run, "types": []}
             elif arguments.phase == "current":
                 prepare_feature_reader(arguments.bucket, arguments.work)
                 reader = current_window.open_reader(stack, arguments.root, arguments.features_run)
                 result = current_phase(arguments.root, reader, arguments.work, arguments.run, features_run=arguments.features_run)
+            elif arguments.phase == "check" and live:
+                result = check_live_phase(arguments.work, arguments.run, live, arguments.workspace, config=arguments.config)
             elif arguments.phase == "check":
                 result = check_phase(arguments.work, arguments.run, config=arguments.config)
             else:
                 if not BUCKET.fullmatch(arguments.bucket):
                     raise CheckError("bucket_invalid", "set --bucket or DATA_BUCKET_NAME to the data bucket name")
-                result = publish_phase(open_s3(), arguments.bucket, arguments.work, arguments.run)
+                if live:
+                    result = publish_live_phase(open_s3(), arguments.bucket, arguments.work, arguments.run, live)
+                else:
+                    result = publish_phase(open_s3(), arguments.bucket, arguments.work, arguments.run)
     except (CheckError, drift_config.ConfigError, task_capacity.CapacityError, startup_check.StartupCheckError) as error:
         sys.stderr.write(f"drift task {arguments.phase} failed: {error}\n")
         return error.code if isinstance(error, CheckError) else 2

@@ -26,6 +26,7 @@ from tests.support import check
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 KNOWN_DAGS = {
     "bronze_chain_dag",
+    "drift_live_check_dag",
     "drift_monitoring_dag",
     "features_base_dag",
     "features_m1_dag",

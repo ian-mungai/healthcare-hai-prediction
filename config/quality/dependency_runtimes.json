@@ -188,7 +188,8 @@
       "code": [
         "monitoring/drift_check.py",
         "monitoring/drift_config.py",
-        "monitoring/evidently_report.py"
+        "monitoring/evidently_report.py",
+        "monitoring/live_check.py"
       ]
     }
   }

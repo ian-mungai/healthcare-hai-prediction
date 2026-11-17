@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from monitoring import aws_cases, dag_cases, drift_cases, gate_cases, reader_cases
+from monitoring import aws_cases, dag_cases, drift_cases, gate_cases, live_cases, reader_cases
 from scripts.process import SubprocessError, run_command
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -104,7 +104,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("config_rejects_malformed_file", unreadable_configuration),
         ("config_rejects_missing_file", missing_configuration),
     ]
-    return config + drift_cases.cases() + reader_cases.cases() + aws_cases.cases() + gate_cases.cases() + dag_cases.cases()
+    return config + drift_cases.cases() + reader_cases.cases() + aws_cases.cases() + gate_cases.cases() + dag_cases.cases() + live_cases.cases()
 
 
 def main() -> int:
