@@ -74,6 +74,11 @@
       "hai_publisher_evidence_problems": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
       "hai_publisher_source_last_success_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "data_source"]},
       "hai_publisher_source_units_unfinished": {"type": "gauge", "labels": ["job", "phase", "outcome", "data_source"]},
+      "hai_publish_tables": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publish_rows": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publish_tables_changed": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publish_tables_empty": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publish_commit_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
       "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
     }
   },

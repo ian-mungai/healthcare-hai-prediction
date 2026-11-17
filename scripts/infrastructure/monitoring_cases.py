@@ -14,6 +14,7 @@ from pathlib import Path
 
 from scripts.infrastructure import monitoring_files
 from scripts.infrastructure.host_state_exporter_cases import CASES as EXPORTER_CASES
+from scripts.infrastructure.layer_publish_cases import CASES as PUBLISH_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 from scripts.infrastructure.publisher_metrics_cases import CASES as PUBLISHER_CASES
@@ -475,3 +476,4 @@ CASES |= PUSH_CASES
 CASES |= EXPORTER_CASES
 CASES |= SPARK_CASES
 CASES |= PUBLISHER_CASES
+CASES |= PUBLISH_CASES

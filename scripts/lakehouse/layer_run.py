@@ -797,6 +797,7 @@ def publish(job: Job, bucket: str, client: Any = None) -> None:
             check_stored_backup(job, bucket, client)
         if step == "commit":
             accept_commit(job)
+            layer_metrics.publish_folder(job.publish_folder)
     if job.layer in RECORD_FILE:
         run_publish(
             job, ["record", *common, "--publish-dir", job.publish_folder, "--record", job.folder / RECORD_FILE[job.layer], *pin_flags, *job.local_flags]

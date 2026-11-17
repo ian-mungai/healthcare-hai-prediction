@@ -69,6 +69,21 @@
       "dashboard": "hai_ingestion.json",
       "panel": "Age of the last success, by data source",
       "reason": "Empty until a publisher run fetches a unit."
+    },
+    {
+      "dashboard": "hai_data_quality.json",
+      "panel": "Tables and rows of the latest publish, by layer",
+      "reason": "Empty until a layer job publishes with the publish counts."
+    },
+    {
+      "dashboard": "hai_data_quality.json",
+      "panel": "Tables changed and tables empty, by layer",
+      "reason": "Empty until a layer job publishes with the publish counts."
+    },
+    {
+      "dashboard": "hai_data_quality.json",
+      "panel": "Age of the newest publish, by layer",
+      "reason": "Empty until a layer job publishes with the publish counts."
     }
   ]
 }

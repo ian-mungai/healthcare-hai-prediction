@@ -211,6 +211,136 @@
         },
         "overrides": []
       }
+    },
+    {
+      "type": "row",
+      "title": "Layer publish",
+      "id": 8,
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 18
+      },
+      "panels": []
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Tables and rows of the latest publish, by layer",
+      "description": "Tables committed and rows in them. The job names the layer.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (job) (hai_publish_tables)",
+          "legendFormat": "{{job}} tables"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (job) (hai_publish_rows)",
+          "legendFormat": "{{job}} rows"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Tables changed and tables empty, by layer",
+      "description": "Tables whose snapshot moved, and tables with no rows, in the latest publish.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (job) (hai_publish_tables_changed)",
+          "legendFormat": "{{job}} changed"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "max by (job) (hai_publish_tables_empty)",
+          "legendFormat": "{{job}} empty"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "Age of the newest publish, by layer",
+      "description": "Seconds since the latest committed publish of the layer.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "hai_prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 19
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "hai_prometheus"
+          },
+          "expr": "time() - max by (job) (hai_publish_commit_timestamp_seconds)",
+          "legendFormat": "{{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
     }
   ]
 }
