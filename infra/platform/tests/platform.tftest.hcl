@@ -109,21 +109,48 @@ run "lookups_from_the_iam_stack" {
   }
 }
 
+# The platform settings are the live ones with no preparation file: a plain plan of a clean checkout creates the repositories of every image in
+# infra/services/images.json, the monitoring and serving repositories included, and the log groups of the live stack.
+run "live_settings_are_the_defaults" {
+  command = plan
+
+  assert {
+    condition = (
+      var.monitoring_enabled && var.serving_enabled && var.scratch_volume_gb == 60 && var.data_volume_gb == 60 &&
+      var.snapshot_retain_count == 7 && var.snapshot_time_utc == "09:00" && var.ecr_keep_images == 5 && var.log_retention_days == 7 &&
+      !var.allow_destructive_teardown && var.log_groups == toset(["airflow", "jobs", "openmetadata", "mlflow", "polaris", "postgres", "redis"])
+    )
+    error_message = "The committed defaults must equal the live platform settings."
+  }
+
+  assert {
+    condition = toset(keys(aws_ecr_repository.image)) == toset([
+      "airflow", "analytics", "drift", "egress_proxy", "feature_store", "grafana", "mlflow", "model_api", "node_exporter",
+      "openmetadata_ingestion", "openmetadata_search", "openmetadata_server", "polaris", "polaris_admin", "postgres", "postgres_exporter",
+      "prometheus", "pushgateway", "quality", "redis", "redis_exporter", "spark", "statsd_exporter", "streamlit", "training",
+    ])
+    error_message = "The default repositories must be the 25 live ones."
+  }
+
+  assert {
+    condition     = toset(keys(aws_cloudwatch_log_group.platform)) == toset(["airflow", "jobs", "openmetadata", "mlflow", "monitoring", "polaris", "postgres", "redis"])
+    error_message = "The default log groups must be the 8 live ones."
+  }
+}
+
 run "image_repositories" {
   command = plan
 
   assert {
     condition = (
-      toset(keys(aws_ecr_repository.image)) == toset([
-        "airflow", "analytics", "egress_proxy", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
-      ]) &&
+      toset(keys(aws_ecr_repository.image)) == toset(keys(jsondecode(file("${path.module}/../services/images.json")).images)) &&
       alltrue([
         for name, repository in aws_ecr_repository.image :
         repository.name == "example_project_${name}_dev" && repository.image_tag_mutability == "IMMUTABLE" &&
         one(repository.image_scanning_configuration).scan_on_push && !repository.force_delete
       ])
     )
-    error_message = "Each image gets an immutable, scanned repository that teardown cannot delete with images unless allowed."
+    error_message = "Each image of images.json gets an immutable, scanned repository that teardown cannot delete with images unless allowed."
   }
 
   assert {
@@ -140,69 +167,54 @@ run "image_repositories" {
   }
 }
 
-# The flag adds only the monitoring repositories and log group, so a false flag leaves the stack as it was.
-run "monitoring_flag_adds_its_foundation" {
+# A false flag leaves out only the repositories and log group of that part, so the stack as it was before the part existed is still one input away.
+run "monitoring_flag_off_leaves_out_its_foundation" {
   command = plan
 
   variables {
-    monitoring_enabled = true
+    monitoring_enabled = false
   }
 
   assert {
     condition = (
-      length(setintersection(toset(["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"]), toset(keys(aws_ecr_repository.image)))) == 7 &&
-      contains(keys(output.log_group_names), "monitoring") &&
-      length(aws_ecr_repository.image) == 16 && length(aws_cloudwatch_log_group.platform) == 7
+      length(setintersection(toset(["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"]), toset(keys(aws_ecr_repository.image)))) == 0 &&
+      !contains(keys(output.log_group_names), "monitoring") &&
+      length(aws_ecr_repository.image) == 18 && length(aws_cloudwatch_log_group.platform) == 7
     )
-    error_message = "The monitoring flag adds seven repositories (Prometheus, Grafana, the StatsD exporter, the Pushgateway and the Redis, Postgres and node exporters) and one log group, and nothing else."
+    error_message = "The monitoring flag controls seven repositories (Prometheus, Grafana, the StatsD exporter, the Pushgateway and the Redis, Postgres and node exporters) and one log group, and nothing else."
   }
 }
 
-# The flag adds only the model API and page repositories, so a false flag leaves the stack as it was.
-run "serving_flag_adds_its_repositories" {
+run "serving_flag_off_leaves_out_its_repositories" {
   command = plan
 
   variables {
-    serving_enabled = true
+    serving_enabled = false
   }
 
   assert {
     condition = (
-      length(setintersection(toset(["model_api", "streamlit"]), toset(keys(aws_ecr_repository.image)))) == 2 &&
-      length(aws_ecr_repository.image) == 11 && length(aws_cloudwatch_log_group.platform) == 6
+      length(setintersection(toset(["model_api", "streamlit"]), toset(keys(aws_ecr_repository.image)))) == 0 &&
+      length(aws_ecr_repository.image) == 23 && length(aws_cloudwatch_log_group.platform) == 8
     )
-    error_message = "The serving flag adds two repositories and nothing else."
+    error_message = "The serving flag controls two repositories and nothing else."
   }
 }
 
-run "serving_repositories_are_off_by_default" {
-  command = plan
-
-  assert {
-    condition     = !contains(keys(aws_ecr_repository.image), "model_api") && !contains(keys(aws_ecr_repository.image), "streamlit")
-    error_message = "Without the flag the platform stack has no model API or page repository."
-  }
-}
-
-# The owner steps of the training, drift and catalog setups add repositories and the MLflow log group to the committed lists through the reviewed platform file.
-run "reviewed_additions_create_their_repositories_and_log_group" {
+run "both_flags_off_keep_the_base_images" {
   command = plan
 
   variables {
-    ecr_repositories = [
-      "airflow", "analytics", "egress_proxy", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark",
-      "drift", "feature_store", "mlflow", "training", "openmetadata_database", "openmetadata_ingestion", "openmetadata_search", "openmetadata_server",
-    ]
-    log_groups = ["airflow", "jobs", "openmetadata", "polaris", "postgres", "redis", "mlflow"]
+    monitoring_enabled = false
+    serving_enabled    = false
   }
 
   assert {
     condition = (
-      length(aws_ecr_repository.image) == 17 &&
-      alltrue([for name in ["drift", "feature_store", "mlflow", "training", "openmetadata_server", "openmetadata_ingestion", "openmetadata_search", "openmetadata_database"] : contains(keys(aws_ecr_repository.image), name)]) &&
-      contains(keys(output.log_group_names), "mlflow") && contains(keys(output.log_group_names), "jobs")
+      length(aws_ecr_repository.image) == 16 && length(aws_cloudwatch_log_group.platform) == 7 &&
+      alltrue([for name in ["airflow", "analytics", "drift", "egress_proxy", "feature_store", "mlflow", "openmetadata_ingestion", "openmetadata_search", "openmetadata_server", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark", "training"] : contains(keys(aws_ecr_repository.image), name)])
     )
-    error_message = "The reviewed additions create exactly their repositories and the MLflow log group beside the committed ones."
+    error_message = "With both flags off the 16 base images and the 7 base log groups remain."
   }
 }
 
@@ -267,7 +279,7 @@ run "logs_and_alert_topic" {
 
   assert {
     condition = (
-      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "openmetadata", "jobs"]) &&
+      toset(keys(output.log_group_names)) == toset(["postgres", "redis", "polaris", "airflow", "openmetadata", "jobs", "mlflow", "monitoring"]) &&
       output.log_group_names["polaris"] == "example_project_polaris_dev" &&
       alltrue([for group in aws_cloudwatch_log_group.platform : group.retention_in_days == 7])
     )

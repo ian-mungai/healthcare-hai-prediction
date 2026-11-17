@@ -82,7 +82,7 @@ if [[ "$prometheus_retention" == true ]]; then
   [[ "$stack" == storage ]] || { printf 'The Prometheus history retention rules belong to the storage stack: use it without --iam, --platform, --services, --jobs or --alerts.\n' >&2; exit 2; }
 fi
 if [[ -n "$preparation_inputs" || -n "$preparation_sha256" ]]; then
-  [[ "$stack" == jobs || "$stack" == services || "$stack" == platform ]] || { printf 'Preparation inputs are allowed only with --jobs, --services or --platform.\n' >&2; exit 2; }
+  [[ "$stack" == jobs || "$stack" == services ]] || { printf 'Preparation inputs are allowed only with --jobs or --services.\n' >&2; exit 2; }
 fi
 if [[ ( -n "$preparation_inputs" && -z "$preparation_sha256" ) || ( -z "$preparation_inputs" && -n "$preparation_sha256" ) ]]; then
   printf 'Supply both --preparation-inputs and --preparation-sha256.\n' >&2

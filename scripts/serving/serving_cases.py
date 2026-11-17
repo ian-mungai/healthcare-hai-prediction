@@ -1626,7 +1626,11 @@ def case_images(c: Checker) -> None:
         )
     platform = (ROOT / "infra/platform/main.tf").read_text()
     c.check(
-        "the platform stack adds both repositories only behind serving_enabled", "var.serving_enabled" in platform and '"model_api", "streamlit"' in platform
+        "the platform stack keeps both repositories only behind serving_enabled",
+        "var.serving_enabled" in platform
+        and "images.json" in platform
+        and "when model_api_enabled is true" in platform
+        and "when streamlit_enabled is true" in platform,
     )
 
 

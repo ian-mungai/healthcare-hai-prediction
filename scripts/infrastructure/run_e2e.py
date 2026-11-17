@@ -45,7 +45,6 @@ SOURCE_PATHS = (
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
     "data_contracts/infrastructure/services_preparation.schema.json",
-    "data_contracts/infrastructure/platform_preparation.schema.json",
 )
 PREPARATION_PATH = "config/aws/iam_preparation.json"
 # The default inputs in the shape the renderer reads, for cases that need all-off flags; the committed config/aws/iam_preparation.json holds the live flags.
@@ -3680,7 +3679,12 @@ def run_suite(evidence: Evidence) -> None:
             (
                 ["--alerts", "--preparation-inputs", "inputs.json", "--preparation-sha256", "0" * 64, "plan"],
                 {},
-                "Preparation inputs are allowed only with --jobs, --services or --platform.",
+                "Preparation inputs are allowed only with --jobs or --services.",
+            ),
+            (
+                ["--platform", "--preparation-inputs", "inputs.json", "--preparation-sha256", "0" * 64, "plan"],
+                {},
+                "Preparation inputs are allowed only with --jobs or --services.",
             ),
         ]
     )

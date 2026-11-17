@@ -43,7 +43,6 @@ SOURCES = (
     "scripts/infrastructure/render_platform_config.py",
     "data_contracts/infrastructure/jobs_preparation.schema.json",
     "data_contracts/infrastructure/services_preparation.schema.json",
-    "data_contracts/infrastructure/platform_preparation.schema.json",
     "config/aws/iam_preparation.json",
     "config/lakehouse/bronze_tables.json",
 )
@@ -64,31 +63,6 @@ IMAGE = f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project_%s_dev@sha25
 ROLE = f"arn:aws:iam::{ACCOUNT}:role/example_project_%s_dev"
 # The launch role may also start the Run 3 publisher host task (infra/iam/airflow_launch.tf lists publisher among the families).
 LAUNCH_FAMILIES = ["publisher", "serve", "train"]
-# The platform defaults of infra/platform/variables.tf, which a case below compares with the file, and the additions the owner steps make to them.
-PLATFORM_DEFAULT_REPOSITORIES = [
-    "airflow",
-    "analytics",
-    "egress_proxy",
-    "polaris",
-    "polaris_admin",
-    "postgres",
-    "quality",
-    "redis",
-    "spark",
-]
-PLATFORM_DEFAULT_LOG_GROUPS = ["airflow", "jobs", "openmetadata", "polaris", "postgres", "redis"]
-PLATFORM_ADDED_REPOSITORIES = [
-    "drift",
-    "feature_store",
-    "mlflow",
-    "openmetadata_database",
-    "openmetadata_ingestion",
-    "openmetadata_search",
-    "openmetadata_server",
-    "training",
-]
-PLATFORM_REPOSITORIES = sorted([*PLATFORM_DEFAULT_REPOSITORIES, *PLATFORM_ADDED_REPOSITORIES])
-PLATFORM_LOG_GROUPS = sorted([*PLATFORM_DEFAULT_LOG_GROUPS, "mlflow"])
 # The nine job families of the host_jobs default in infra/jobs/host.tf.
 HOST_FAMILIES = ["bronze", "drift", "features", "gold", "metadata", "promote", "serve", "silver", "train"]
 
@@ -202,24 +176,6 @@ ROWS: list[Row] = [
             "a" * 257 + "/",
         ),
     ),
-    *flags("platform", "monitoring_enabled", "serving_enabled"),
-    Row(
-        "platform",
-        "ecr_repositories",
-        PLATFORM_REPOSITORIES,
-        "mlflow",
-        PLATFORM_DEFAULT_REPOSITORIES,
-        (["mlflow"], [*PLATFORM_DEFAULT_REPOSITORIES, "unreviewed_image"], PLATFORM_REPOSITORIES[1:]),
-    ),
-    Row(
-        "platform",
-        "log_groups",
-        PLATFORM_LOG_GROUPS,
-        "mlflow",
-        PLATFORM_DEFAULT_LOG_GROUPS,
-        (["mlflow"], [*PLATFORM_DEFAULT_LOG_GROUPS, "unreviewed_group"], PLATFORM_LOG_GROUPS[1:]),
-    ),
-    Row("platform", "scratch_volume_gb", 120, "120", 60, (0, -1, 1025, 2048, 1.5, 0.5, True, None)),
     *flags(
         "services",
         "model_api_enabled",
@@ -448,6 +404,10 @@ EXEMPT = {
     "host_job_memory_mib": "rendered by render_jobs_config from the job memory of the services stack output host_capacity_binding",
     "host_capacity_binding": "rendered by render_jobs_config from the services stack output host_capacity_binding",
 }
+# The platform stack takes no preparation file: its settings are the committed defaults, so its flags have no row.
+PLATFORM_FLAGS = ("monitoring_enabled", "serving_enabled")
+PLATFORM_LOG_GROUPS = ["airflow", "jobs", "marquez", "mlflow", "polaris", "postgres", "redis"]
+PLATFORM_ENVIRONMENT_KEYS = ["aws_profile", "aws_region", "environment", "expected_account_id", "project_name"]
 TOOL = (
     f"#!{sys.executable}\nimport json, os, sys\n"
     "args = sys.argv[1:]\n"
@@ -475,7 +435,8 @@ def completeness() -> dict[str, bool]:
     declared = {stack: variables_of(directory) for stack, directory in STACKS.items()}
     checks: dict[str, bool] = {}
     for stack, names in declared.items():
-        missing = sorted(name for name, kind in names.items() if kind == "bool" and (stack, name) not in covered and name not in EXEMPT)
+        exempt = {*EXEMPT, *(PLATFORM_FLAGS if stack == "platform" else ())}
+        missing = sorted(name for name, kind in names.items() if kind == "bool" and (stack, name) not in covered and name not in exempt)
         checks[f"every boolean input of {stack} has preparation or committed-default coverage ({missing})"] = not missing
     checks["the owner-set host job cap host_job_cap_mib has preparation coverage"] = ("services", "host_job_cap_mib") in covered
     cap = re.search(r'variable "host_job_cap_mib" \{.*?default\s*=\s*(\d+)', (ROOT / "infra/services/variables.tf").read_text(), re.S)
@@ -487,22 +448,14 @@ def completeness() -> dict[str, bool]:
         and cap_contract["host_job_cap_mib"].get("maximum", 32768) < 32768
     )
     platform = (ROOT / "infra/platform/variables.tf").read_text()
-    for variable, expected in (("ecr_repositories", PLATFORM_DEFAULT_REPOSITORIES), ("log_groups", PLATFORM_DEFAULT_LOG_GROUPS)):
-        block = re.search(rf'variable "{variable}" \{{.*?default\s*=\s*\[(.*?)\]', platform, re.S)
-        found = re.findall(r'"([a-z0-9_]+)"', block.group(1)) if block else []
-        checks[f"the committed {variable} default equals the one the platform contract keeps ({found})"] = found == expected
-    schema = json.loads((ROOT / "data_contracts/infrastructure/platform_preparation.schema.json").read_text())["properties"]["variables"]["properties"]
-    checks["the platform contract allows exactly the listed repositories and log groups"] = (
-        schema.get("ecr_repositories", {}).get("items", {}).get("enum") == PLATFORM_REPOSITORIES
-        and schema.get("log_groups", {}).get("items", {}).get("enum") == PLATFORM_LOG_GROUPS
-    )
-    size = re.search(r'variable "scratch_volume_gb" \{.*?>= (\d+) && var\.scratch_volume_gb <= (\d+)', platform, re.S)
-    contract = schema.get("scratch_volume_gb", {})
-    checks["the scratch size bounds of the platform contract equal the Terraform validation"] = (
-        size is not None
-        and contract.get("type") == "integer"
-        and (contract.get("minimum"), contract.get("maximum")) == (int(size.group(1)), int(size.group(2)))
-    )
+    for flag in PLATFORM_FLAGS:
+        block = re.search(rf'variable "{flag}" \{{.*?default\s*=\s*(\w+)', platform, re.S)
+        checks[f"the committed {flag} default of the platform stack is the live true"] = block is not None and block.group(1) == "true"
+    block = re.search(r'variable "log_groups" \{.*?default\s*=\s*\[(.*?)\]', platform, re.S)
+    found = re.findall(r'"([a-z0-9_]+)"', block.group(1)) if block else []
+    checks[f"the committed log_groups default of the platform stack is the live set ({found})"] = found == PLATFORM_LOG_GROUPS
+    checks["the platform stack declares no repository list: its repositories come from images.json"] = 'variable "ecr_repositories"' not in platform
+    checks["the platform stack has no preparation contract"] = not list((ROOT / "data_contracts/infrastructure").glob("platform_prep*"))
     return checks
 
 
@@ -709,7 +662,7 @@ def plan_cases(workspace: Workspace, row: Row, siblings: list[Row]) -> dict[str,
 
 def digest_cases(workspace: Workspace) -> dict[str, bool]:
     checks: dict[str, bool] = {}
-    for stack, name in (("jobs", "serve_enabled"), ("services", "model_api_enabled"), ("platform", "serving_enabled")):
+    for stack, name in (("jobs", "serve_enabled"), ("services", "model_api_enabled")):
         workspace.clear(stack)
         wrong = workspace.run(stack, {name: True}, digest="0" * 64)
         checks[f"{stack}: a file that differs from its digest is refused and nothing is written"] = wrong.returncode == 2 and workspace.written(stack) is None
@@ -783,7 +736,6 @@ def wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     for stack, name in (
         ("iam", "serve_prepared"),
         ("iam", "airflow_launch_prepared"),
-        ("platform", "serving_enabled"),
         ("services", "model_api_enabled"),
         ("jobs", "serve_enabled"),
     ):
@@ -841,43 +793,46 @@ def launch_wrapper_cases(workspace: Workspace) -> dict[str, bool]:
     return checks
 
 
-def scratch_size_cases(workspace: Workspace) -> dict[str, bool]:
-    """The reviewed scratch volume size through the renderer and the wrapper: its bounds, and a saved plan that must carry exactly the reviewed size."""
+def platform_cases(workspace: Workspace) -> dict[str, bool]:
+    """The platform stack takes only the .env values: a preparation file is refused, and a saved plan must carry the committed defaults."""
     checks: dict[str, bool] = {}
-    stack, name = "platform", "scratch_volume_gb"
-    siblings = [row for row in ROWS if row.stack == stack]
-    off = {row.name: committed_default(row) for row in siblings if isinstance(row.good, bool) or row.default is not None}
-    for size in (1, 60, 120, 1024):
-        workspace.clear(stack)
-        result = workspace.run(stack, {name: size})
-        checks[f"scratch size {size} GiB: the bounded whole number renders exactly"] = (
-            result.returncode == 0 and (workspace.written(stack) or {}).get(name) == size
-        )
+    stack = "platform"
     workspace.clear(stack)
-    result = workspace.wrapper(stack, {name: 120})
-    checks["wrapper platform: a reviewed 120 GiB scratch size is rendered and plan runs"] = (
-        result.returncode == 0 and (workspace.written(stack) or {}).get(name) == 120
+    result = workspace.run(stack, None)
+    checks["platform: a default render writes only the five .env values"] = (
+        result.returncode == 0 and sorted(workspace.written(stack) or {}) == PLATFORM_ENVIRONMENT_KEYS
     )
-    invalid: tuple[Any, ...] = (0, 1025, 1.5, "120")
-    for refused_size in invalid:
-        workspace.clear(stack)
-        result = workspace.wrapper(stack, {name: refused_size})
-        checks[f"wrapper platform: scratch size {refused_size!r} is refused before terraform"] = result.returncode == 2 and workspace.written(stack) is None
-    workspace.clear(stack)
-    workspace.run(stack, {name: 120})
     rendered = dict(workspace.written(stack) or {})
+    for name, value in (("serving_enabled", True), ("monitoring_enabled", False), ("scratch_volume_gb", 120), ("ecr_repositories", ["airflow"])):
+        workspace.clear(stack)
+        refused = workspace.run(stack, {name: value})
+        checks[f"platform: a reviewed {name} file is refused and nothing is written"] = (
+            refused.returncode == 2 and "takes no preparation inputs" in refused.stderr and workspace.written(stack) is None
+        )
+        workspace.calls.unlink(missing_ok=True)
+        refused = workspace.wrapper(stack, {name: value})
+        checks[f"wrapper platform: a reviewed {name} file is refused before terraform"] = (
+            refused.returncode == 2
+            and "Preparation inputs are allowed only with --jobs or --services." in refused.stderr
+            and workspace.written(stack) is None
+            and not workspace.called()
+        )
+    defaults = {"monitoring_enabled": True, "serving_enabled": True, "scratch_volume_gb": 60}
     directory = f"-chdir={workspace.root / STACKS[stack]}"
-    for planned, accepted in ((120, True), (60, False), (100, False), (1024, False)):
-        workspace.plan.write_text(json.dumps(plan_document({**rendered, name: planned}, off)))
-        result = workspace.run(stack, {name: 120}, "--check-plan", str(workspace.plan))
-        checks[f"scratch size plan {planned} against reviewed 120: the renderer {'accepts' if accepted else 'refuses'} it"] = (
+    for override, accepted in (({}, True), ({"serving_enabled": False}, False), ({"scratch_volume_gb": 120}, False)):
+        workspace.clear(stack)
+        workspace.run(stack, None)
+        workspace.plan.write_text(json.dumps(plan_document(rendered, defaults, override)))
+        result = workspace.run(stack, None, "--check-plan", str(workspace.plan))
+        label = f"platform plan {override or 'with the committed defaults'}"
+        checks[f"{label}: the renderer {'accepts' if accepted else 'refuses'} it"] = (
             result.returncode == 0 if accepted else result.returncode == 2 and "Saved plan inputs differ" in result.stderr
         )
         workspace.calls.unlink(missing_ok=True)
-        result = workspace.wrapper(stack, {name: 120}, "apply", str(workspace.plan))
+        result = workspace.wrapper(stack, None, "apply", str(workspace.plan))
         show = [directory, "show", "-json", str(workspace.plan)]
         expected = [show, [directory, "apply", "-input=false", str(workspace.plan)]] if accepted else [show]
-        checks[f"scratch size plan {planned} against reviewed 120: the wrapper {'applies' if accepted else 'stops before apply for'} it"] = (
+        checks[f"{label}: the wrapper {'applies' if accepted else 'stops before apply for'} it"] = (
             result.returncode == (0 if accepted else 2) and workspace.called() == expected
         )
     return checks
@@ -1128,7 +1083,7 @@ def run(output: Path) -> dict[str, dict[str, bool]]:
         results["plans"] = plans
         results["digests"] = digest_cases(workspace)
         results["wrapper"] = wrapper_cases(workspace)
-        results["scratch_size"] = scratch_size_cases(workspace)
+        results["platform"] = platform_cases(workspace)
         results["host_job_cap"] = host_job_cap_cases(workspace)
         results["procedure"] = procedure_cases(workspace)
         results["scratch_root"] = scratch_root_cases(workspace)

@@ -27,12 +27,9 @@ from scripts.process import TimeoutExpired, run_command
 
 PLATFORM_DIRECTORY = REPO_ROOT / "infra" / "platform"
 PREPARATION_SCHEMAS = {
-    "platform": REPO_ROOT / "data_contracts/infrastructure/platform_preparation.schema.json",
     "services": REPO_ROOT / "data_contracts/infrastructure/services_preparation.schema.json",
 }
 TERRAFORM_SECONDS = 120
-# Inputs that Terraform declares as sets: its saved plan lists their elements sorted, so the rendered list is sorted too.
-SET_INPUTS = frozenset({"ecr_repositories", "log_groups"})
 PLATFORM_KEYS = ("aws_profile", "aws_region", "environment", "expected_account_id", "project_name")
 SERVICES_PLATFORM_KEYS = (
     "project_tag",
@@ -154,7 +151,10 @@ def services_values(storage: dict[str, str]) -> dict[str, Any]:
 
 
 def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict[str, Any]:
-    """Read the nonsecret reviewed inputs of the platform or services stack only when their exact bytes match the reviewed digest."""
+    """Read the nonsecret reviewed inputs of the services stack only when their exact bytes match the reviewed digest.
+
+    The platform stack takes none: its settings are its committed defaults.
+    """
     if path is None and sha256 is None:
         return {}
     if stack not in PREPARATION_SCHEMAS:
@@ -171,10 +171,7 @@ def stack_preparation(path: Path | None, sha256: str | None, stack: str) -> dict
     schema = json.loads(PREPARATION_SCHEMAS[stack].read_text(encoding="utf-8"))
     if next(Draft202012Validator(schema).iter_errors(document), None) is not None:
         raise ConfigurationError(f"The preparation contract is invalid for the {stack} root. No Terraform action was run.")
-    values = dict(document["variables"])
-    for name in SET_INPUTS & values.keys():
-        values[name] = sorted(values[name])
-    return values
+    return dict(document["variables"])
 
 
 def services_preparation(path: Path | None, sha256: str | None) -> dict[str, Any]:
@@ -222,7 +219,7 @@ def main() -> None:
     parser.add_argument(
         "--preparation-inputs",
         type=Path,
-        help="a named, ignored file of one-off nonsecret overrides of the platform or services stack, never committed to main",
+        help="a named, ignored file of one-off nonsecret overrides of the services stack, never committed to main",
     )
     parser.add_argument("--preparation-sha256", help="the SHA-256 of the overrides file")
     parser.add_argument("--check-plan", type=Path)

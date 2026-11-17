@@ -9,11 +9,16 @@ provider "aws" {
 }
 
 locals {
-  # The monitoring foundation exists only while its flag is true, so a false flag leaves the stack as it was.
-  # The serving flag adds the model API and page repositories the same way, and nothing else.
-  monitoring_repositories = var.monitoring_enabled ? setunion(var.ecr_repositories, ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"]) : var.ecr_repositories
-  ecr_repositories        = var.serving_enabled ? setunion(local.monitoring_repositories, ["model_api", "streamlit"]) : local.monitoring_repositories
-  log_groups              = var.monitoring_enabled ? setunion(var.log_groups, ["monitoring"]) : var.log_groups
+  # Every image of images.json gets a repository. The images that file says run only while the monitoring switch or the model API or page
+  # switches are true get one only while that switch is true, so a false switch leaves the stack as it was before those parts existed.
+  images            = jsondecode(file("${path.module}/../services/images.json")).images
+  monitoring_images = toset([for name, image in local.images : name if strcontains(image.runs_as, "when monitoring_enabled is true")])
+  serving_images    = toset([for name, image in local.images : name if strcontains(image.runs_as, "when model_api_enabled is true") || strcontains(image.runs_as, "when streamlit_enabled is true")])
+  ecr_repositories = setsubtract(
+    toset(keys(local.images)),
+    setunion(var.monitoring_enabled ? toset([]) : local.monitoring_images, var.serving_enabled ? toset([]) : local.serving_images),
+  )
+  log_groups = var.monitoring_enabled ? setunion(var.log_groups, ["monitoring"]) : var.log_groups
 
   # The Project tag holds the project name as it is, the value the data bucket carries too. Every create of the project
   # profile must send it with exactly this key and value, so the cost budget (in the IAM stack) counts the resource.

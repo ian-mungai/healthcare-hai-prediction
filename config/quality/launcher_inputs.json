@@ -644,7 +644,6 @@
     "data_contracts/great_expectations/suites/silver_row_counts.json",
     "data_contracts/great_expectations/suites/silver_spatial.json",
     "data_contracts/infrastructure/jobs_preparation.schema.json",
-    "data_contracts/infrastructure/platform_preparation.schema.json",
     "data_contracts/infrastructure/services_preparation.schema.json",
     "data_contracts/lakehouse/features_publish.json",
     "data_contracts/lakehouse/gold_contract.json",

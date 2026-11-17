@@ -94,29 +94,18 @@ variable "snapshot_time_utc" {
   }
 }
 
-variable "ecr_repositories" {
-  description = "Image names that get an ECR repository; the repository name is the project, the image and the environment."
-  type        = set(string)
-  default = [
-    "airflow", "analytics", "egress_proxy", "polaris", "polaris_admin", "postgres", "quality", "redis", "spark"
-  ]
-
-  validation {
-    condition     = length(var.ecr_repositories) > 0 && alltrue([for name in var.ecr_repositories : can(regex("^[a-z][a-z0-9_]{1,40}$", name))])
-    error_message = "Image names use lowercase letters, digits and underscores."
-  }
-}
-
 variable "monitoring_enabled" {
-  description = "Add the ECR repositories and the log group of the monitoring stack. False leaves them out."
+  description = "Keep the ECR repositories and the log group of the monitoring stack. False leaves them out. The live stack has them."
   type        = bool
-  default     = false
+  default     = true
+  nullable    = false
 }
 
 variable "serving_enabled" {
-  description = "Add the ECR repositories of the model API and the page. False leaves them out."
+  description = "Keep the ECR repositories of the model API and the page. False leaves them out. The live stack has them."
   type        = bool
-  default     = false
+  default     = true
+  nullable    = false
 }
 
 variable "ecr_keep_images" {
@@ -131,9 +120,9 @@ variable "ecr_keep_images" {
 }
 
 variable "log_groups" {
-  description = "Log group names for the host's services and the run tasks."
+  description = "Log group names for the host's services and the run tasks; the monitoring group is added while monitoring_enabled is true."
   type        = set(string)
-  default     = ["airflow", "jobs", "openmetadata", "polaris", "postgres", "redis"]
+  default     = ["airflow", "jobs", "openmetadata", "mlflow", "polaris", "postgres", "redis"]
 
   validation {
     condition     = length(var.log_groups) > 0 && alltrue([for name in var.log_groups : can(regex("^[a-z][a-z0-9_]{1,40}$", name))])
