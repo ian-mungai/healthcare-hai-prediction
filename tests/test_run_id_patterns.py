@@ -14,6 +14,7 @@ import pytest
 from orchestration import training_contract as contract
 from scripts.acquisition import plan_rebuild, publisher_run, raw_root
 from scripts.lakehouse import gold_publish_record
+from scripts.orchestration import sync_run_id_schemas as sync
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,28 +100,15 @@ def test_the_retry_run_ids_of_the_job_and_the_plan_report_agree() -> None:
         check(plan_rebuild.RUN_ID.fullmatch(run) is None, f"the plan report accepts {run}")
 
 
-def schema_patterns(node: object) -> list[str]:
-    found: list[str] = []
-    if isinstance(node, dict):
-        found += [value for key, value in node.items() if key == "pattern" and isinstance(value, str)]
-        for value in node.values():
-            found += schema_patterns(value)
-    elif isinstance(node, list):
-        for value in node:
-            found += schema_patterns(value)
-    return found
-
-
 def test_every_run_id_pattern_of_a_schema_is_the_contracts() -> None:
-    carried = 0
-    for path in sorted((ROOT / "data_contracts").rglob("*.schema.json")) + [ROOT / "services/lineage/identity_facet.schema.json"]:
-        for pattern in schema_patterns(json.loads(path.read_text())):
-            if "ingestion_test" in pattern or "ingestion_retry" in pattern or contract.RUN_ID in pattern or contract.DRIFT_RUN in pattern:
-                carried += 1
-                check(OLD_FORM not in pattern, f"{path.name}: a pattern still holds the old form")
-            else:
-                check("hai-" not in pattern or contract.RUN_ID in pattern, f"{path.name}: a launch name pattern lacks the run ID form: {pattern}")
-    check(carried >= 30, f"only {carried} run ID patterns were found in the schemas")
+    """Each schema holds the contract's pattern itself, not only a pattern that is free of the old date form. ``tests/test_run_id_forms.py`` sends valid
+    and invalid run IDs through each one."""
+    wrong = sync.differing()
+    check(not wrong, f"{len(wrong)} schema patterns differ from the contract; run scripts.orchestration.sync_run_id_schemas --write: {wrong[:2]}")
+    held = sync.copies()
+    check(len(held) >= 35, f"only {len(held)} run ID patterns were found in the schemas")
+    for path, where, _, pattern, _ in held:
+        check(OLD_FORM not in pattern, f"{path.name}{where}: a pattern still holds the old form")
 
 
 def test_the_schemas_take_the_new_form_and_refuse_the_old_one() -> None:

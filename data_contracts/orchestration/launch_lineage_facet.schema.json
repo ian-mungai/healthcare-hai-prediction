@@ -9,11 +9,11 @@
   "properties": {
     "_producer": {"type": "string", "format": "uri"},
     "_schemaURL": {"type": "string", "format": "uri"},
-    "runId": {"type": "string", "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[1-2])$"},
+    "runId": {"type": "string", "pattern": "^(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3])$"},
     "job": {"type": "string", "pattern": "^[a-z][a-z0-9_]{0,40}$"},
     "attempt": {"type": "integer", "minimum": 1, "maximum": 99},
     "template": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,40}$"},
-    "boundInputRun": {"type": "string", "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[1-2]))$"},
+    "boundInputRun": {"type": "string", "pattern": "^(latest|(?:(?:ingestion|promotion|features|metadata|research|serving|bronze|silver|gold)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:features|research|training|reload|drift)_(?:gradient_boosting|fixed_effects|mixed_effects|elastic_net|spatial|ols)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|(?:canary_deploy|stable_deploy|promote|release|canary|notice)_(?:ssi_hysterectomy|ssi_colon|clabsi|cauti|cdiff|mrsa)_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?|ingestion_retry_[a-f0-9]{8}(?:_(?:[2-9]|[1-9][0-9]))?_[2-3]))$"},
     "snapshotState": {"enum": ["complete", "partial", "missing", "not_applicable", "refused", "unreadable"]},
     "missingOutputs": {
       "type": "array",
