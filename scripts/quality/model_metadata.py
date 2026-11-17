@@ -1689,7 +1689,7 @@ class OutputConflict(ScanError):
 def rows(path: Path) -> Generator[tuple[bool, Any], None, None]:
     if path.is_symlink() or not path.is_file():
         raise ScanError("input must be an existing regular file, not a symlink")
-    if any(part.lower() in {"secrets", "private_original"} for part in path.parts) or path.name in {"registry.json", ".env"}:
+    if any(part.lower() in {"secrets"} for part in path.parts) or path.name in {"registry.json", ".env"}:
         raise ScanError("input path is excluded from this export scanner")
     with path.open(encoding="utf-8-sig", newline="") as handle:
         match path.suffix.lower():

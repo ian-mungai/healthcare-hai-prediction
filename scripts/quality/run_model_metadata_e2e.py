@@ -89,7 +89,7 @@ BRONZE: dict[str, Any] = {
     "classification": {
         "collections": {
             "pub/coll": {"class": "Public", "reason": "A public file."},
-            "own/coll": {"class": "Confidential", "reason": "Names owners.", "exception": "Personal original kept locally"},
+            "own/coll": {"class": "Confidential", "reason": "Names owners.", "exception": "Reviewed exception for the test"},
         },
         "loader_tables": {"stored_copies": {"class": "Public", "reason": "File names and checksums."}},
     },
@@ -136,7 +136,7 @@ BASE = {
         "      - name: raw_owner\n        description: A table with personal names.\n"
         "        columns:\n          - name: state\n          - name: id\n          - name: _object_key\n          - name: _member_sha256\n"
         "        meta:\n          classification: Confidential\n"
-        "          exception: Personal original kept locally\n          confidential_columns: [owner_name]\n"
+        "          exception: Reviewed exception for the test\n          confidential_columns: [owner_name]\n"
         "      - name: stored_copies\n        description: Stored file names.\n        meta:\n          classification: Public\n"
     ),
     "dbt/models/silver/staging/stg_raw_public.sql": "select * from {{ source('bronze', 'raw_public') }}\n",
@@ -1631,13 +1631,13 @@ def make_cases() -> list[Case]:
             "exception_missing_source",
             "[exception]",
             "source bronze.raw_owner is Confidential but has no meta.exception",
-            replacing(SOURCES, "          exception: Personal original kept locally\n", ""),
+            replacing(SOURCES, "          exception: Reviewed exception for the test\n", ""),
         ),
         Case(
             "exception_empty_source",
             "[exception]",
             "source bronze.raw_owner is Confidential but has no meta.exception",
-            replacing(SOURCES, "exception: Personal original kept locally", "exception: ''"),
+            replacing(SOURCES, "exception: Reviewed exception for the test", "exception: ''"),
         ),
         Case(
             "exception_missing_collection",

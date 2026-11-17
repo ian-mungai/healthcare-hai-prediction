@@ -402,18 +402,6 @@ def test_a_plan_loader_that_fails_stops_the_build(monkeypatch: pytest.MonkeyPatc
         stored.build(tmp_path / "out")
 
 
-def test_a_plan_input_under_an_original_folder_stops_the_build(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    stored = Stored(tmp_path / "src")
-    original = stored.base / "data/x/private_original/owners.csv"
-    original.parent.mkdir(parents=True)
-    original.write_bytes(b"names")
-    monkeypatch.chdir(stored.base)
-    monkeypatch.setitem(sys.modules, "scripts.acquisition.fake_plan_contract", fake_loader([Path("data/x/private_original/owners.csv")]))
-    monkeypatch.setattr(harness, "PLANNED", {"file": ("fake_plan_contract", "load_plan", None, "id")})
-    with pytest.raises(CaptureError, match="original"):
-        stored.build(tmp_path / "out")
-
-
 def test_the_mirror_carries_the_reconciliation_that_names_each_archive_members_dataset(tmp_path: Path) -> None:
     stored = Stored(tmp_path / "src")
     relative = str(stored.unit["receipt"])

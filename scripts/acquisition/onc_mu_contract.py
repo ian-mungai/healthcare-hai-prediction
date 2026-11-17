@@ -1,14 +1,13 @@
 """Frozen scope and checks for ONC's meaningful-use attestation file (2011-2017).
 
 All the data is public. Under plan version 2 the file is stored whole under raw/ as published; its receipt records that it names
-individual clinicians, whom bronze pseudonymizes at load. Captures stored under plan version 1 hold hospital rows only, rebuilt from an
-original kept on the Mac; they keep verifying with the version 1 rules below.
+individual clinicians, whom bronze pseudonymizes at load. The version 1 captures (hospital rows only, rebuilt from an original kept on the Mac)
+are retired.
 It is a separate "Medicare meaningful use" series, not the 2023-2024 Promoting Interoperability file.
 Failure modes: data/acquisition_planning/onc_mu_hospital_failure_modes.md.
 """
 
 import csv
-import io
 import re
 from collections import Counter
 from pathlib import Path
@@ -28,7 +27,6 @@ HOSPITAL = "Hospital"
 PROVIDER_TYPES = {"Hospital", "EP"}
 DROPPED = ["Specialty"]
 FILE_NAME = "mu_report.csv"
-V1_ARTIFACTS = {"derived/hospital_attestations.csv", "evidence/download_proof.json", "references/scope.json"}
 PSEUDONYMIZE_AT_LOAD = "Names individual clinicians as published; bronze pseudonymizes the person fields at load."
 REQUIRED_YEARS = ["2011", "2012", "2013", "2014", "2015", "2016"]
 MAX_BYTES = 600 * 1024**2
@@ -107,49 +105,8 @@ def check_raw(path: Path, plan: dict) -> dict:
     }
 
 
-def derive(path: Path, plan: dict) -> tuple[bytes, dict]:
-    """Plan version 1: stream the original; keep hospital rows without Specialty, or stop with a fixed public reason."""
-    encoding = encoding_of(path)
-    header = plan["header"]
-    kept_columns = [c for c in header if c not in DROPPED]
-    kept_index = [header.index(c) for c in kept_columns]
-    index = {c: i for i, c in enumerate(header)}
-    kinds: Counter[str] = Counter()
-    years: Counter[str] = Counter()
-    output = io.StringIO(newline="")
-    writer = csv.writer(output, lineterminator="\n")
-    writer.writerow(kept_columns)
-    rows = 0
-    with path.open(encoding=encoding, newline="") as handle:
-        reader = csv.reader(handle, strict=True)
-        require(next(reader, None) == header, "ONC meaningful-use header differs")
-        for row in reader:
-            rows += 1
-            require(len(row) == len(header), "ONC meaningful-use row shape differs")
-            kind = row[index["Provider_Type"]]
-            require(kind in PROVIDER_TYPES, "ONC meaningful-use provider type differs")
-            kinds[kind] += 1
-            if kind != HOSPITAL:
-                continue
-            require(row[index["Specialty"]] == "", "ONC meaningful-use hospital row carries a specialty")
-            require(row[index["CCN"]] != "", "ONC meaningful-use hospital row has no CCN")
-            years[row[index["Program_Year"]]] += 1
-            writer.writerow([row[i] for i in kept_index])
-    require(all(years[y] > 0 for y in REQUIRED_YEARS), "ONC meaningful-use program years missing")
-    statistics = {
-        "rows_read": rows,
-        "clinician_rows_dropped": kinds["EP"],
-        "hospital_rows_kept": kinds[HOSPITAL],
-        "hospital_rows_by_program_year": dict(sorted(years.items())),
-        "encoding": encoding,
-        "model_eligible": False,
-    }
-    require(rows == kinds["EP"] + kinds[HOSPITAL], "ONC meaningful-use row counts differ")
-    return output.getvalue().encode(), statistics
-
-
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
-    """Check the artifact set, bindings and holds: a version 2 capture holds the file as published, a version 1 capture its hospital rows."""
+    """Check the artifact set, bindings and holds: a capture holds the file as published."""
     from scripts.acquisition.capture import receipt_validator
 
     require(not evidence_only and source["source_id"] == SOURCE_ID, "ONC meaningful-use storage source differs")
@@ -160,9 +117,6 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(lineage["model_eligible"] is False and receipt["snapshot_status"] == "acquired_unvalidated", "ONC meaningful-use modeling hold differs")
     require_code(lineage["code_sha256"])
     paths = {a["storage_path"] for a in receipt["artifacts"]}
-    if paths == V1_ARTIFACTS:
-        verify_version_1(receipt, lineage, root, plan)
-        return
     require(lineage["plan_sha256"] == canonical_hash(plan), "ONC meaningful-use capture plan differs")
     require(paths == {f"raw/{FILE_NAME}", "evidence/download_proof.json", "references/scope.json"}, "ONC meaningful-use artifact set differs")
     require(not (root / "derived").exists(), "ONC meaningful-use snapshot holds a derived copy")
@@ -183,21 +137,3 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
         receipt["schema_profile"]["native_headers"] == plan["header"] and receipt["schema_profile"]["row_count"] == statistics["rows_read"],
         "ONC meaningful-use schema profile differs",
     )
-
-
-def verify_version_1(receipt: dict, lineage: dict, root: Path, plan: dict) -> None:
-    """Plan version 1: rebuild the hospital rows from the original kept on the Mac."""
-    require(not (root / "raw").exists() and not (root / "audit").exists(), "ONC meaningful-use snapshot holds original bytes")
-    proof = read_json(root / "evidence/download_proof.json")
-    collection = root.parents[2]
-    original = (collection / proof["original_path"]).resolve()
-    require(original.is_relative_to((collection / "private_original").resolve()), "ONC meaningful-use original location differs")
-    require(fingerprint(original) == (plan["sha256"], plan["bytes"]) and proof["sha256"] == plan["sha256"], "ONC meaningful-use original hash differs")
-    derived, statistics = derive(original, plan)
-    require((root / "derived/hospital_attestations.csv").read_bytes() == derived, "ONC meaningful-use derived CSV differs")
-    require(proof["statistics"] == statistics and proof["requested_url"] == plan["url"], "ONC meaningful-use download proof differs")
-    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "ONC meaningful-use stored scope differs")
-    acq = receipt["acquisition"]
-    require(acq["requested_url"] == plan["url"] and acq["http_status"] == 200, "ONC meaningful-use route differs")
-    require(receipt["governance"]["contains_pii"] is False, "ONC meaningful-use governance differs")
-    require(receipt["schema_profile"]["row_count"] == statistics["hospital_rows_kept"], "ONC meaningful-use schema profile differs")

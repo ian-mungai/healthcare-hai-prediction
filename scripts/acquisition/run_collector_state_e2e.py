@@ -269,7 +269,7 @@ def exercise(root: Path) -> list[dict]:
     def unsafe() -> None:
         state = prepared("unsafe")
         state.claim()
-        for path in ("../escape.json", "private_original/file.json", "raw/archive.zip", "unknown.json"):
+        for path in ("../escape.json", "raw/archive.zip", "unknown.json"):
             refused(lambda path=path: state.checkpoint([module.StateFile(path, b"{}")]), "permitted")
         refused(lambda: state.checkpoint([module.StateFile("plan.json", b'{"registrationkey":"synthetic"}')]), "metadata")
         before = copy.deepcopy(state.store.versions)

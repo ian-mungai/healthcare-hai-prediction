@@ -198,7 +198,6 @@ def exercise(root: Path) -> list[dict]:
 
         scenario("older_layout_stored_as_published", older_layout)
         check_scenarios(scenario, v1, v2)
-        version_1_scenario(scenario, v2, root, bodies[v2["url"]])
         fetch_scenarios(scenario, plan, v2, root, bodies)
         corrupt_scenarios(scenario, receipt_path, bodies[v2["url"]])
         storage_scenarios(scenario, plan, v1, v2, root, run, client, web)
@@ -261,41 +260,6 @@ def check_scenarios(scenario: Any, v1: dict, v2: dict) -> None:
         require(stats["encoding"] == "cp1252", "Windows-1252 not recorded")
 
     scenario("windows_1252_decoded_and_recorded", windows_1252)
-
-
-def version_1_scenario(scenario: Any, release: dict, root: Path, original: bytes) -> None:
-    """A capture stored under plan version 1 keeps verifying: its derived CSV is rebuilt from the original kept on the Mac."""
-
-    def stored_version_1() -> None:
-        collection = root / "version_1"
-        capture = collection / "batches" / release["id"] / "capture"
-        kept = collection / "private_original" / release["id"] / "run_01" / "attempt_01" / contract.stored_name(release)
-        kept.parent.mkdir(parents=True)
-        kept.write_bytes(original)
-        derived, statistics = contract.derive(original, release)
-        proof = {"requested_url": release["url"], "retrieved_at_utc": "2026-09-29T00:00:00+00:00", "sha256": fingerprint(kept)[0], "bytes": len(original)}
-        proof |= {"original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
-        plan = contract.load_plan()
-        for relative, content in (("derived/organisation_owners.csv", derived), ("evidence/download_proof.json", encoded_json(proof))):
-            write_once(capture / relative, content)
-        write_once(capture / "references/scope.json", encoded_json(plan))
-        receipt = {
-            "snapshot_status": "acquired_unvalidated",
-            "artifacts": [{"storage_path": name} for name in ("derived/organisation_owners.csv", "evidence/download_proof.json", "references/scope.json")],
-            "acquisition": {"requested_url": release["url"], "http_status": 200, "retrieved_at_utc": proof["retrieved_at_utc"]},
-            "schema_profile": {"native_headers": contract.kept_columns(release["layout"]), "row_count": statistics["organisation_rows_kept"]},
-            "governance": {"contains_pii": False, "license_or_terms_url": contract.TERMS_URL},
-            "measurement_periods": [{"start_date": release["period_start"], "end_date": release["period_end"]}],
-        }
-        lineage = {"release_id": release["id"], "plan_sha256": canonical_hash(plan), "expected_sha256": proof["sha256"], "model_eligible": False}
-        lineage |= {"code_sha256": contract.collector_code_hashes(), "registry_sha256": plan["registry_sha256"]}
-        from scripts.acquisition.capture import receipt_validator
-
-        lineage["schema_sha256"] = canonical_hash(receipt_validator().schema)
-        source = {"source_id": contract.SOURCE_ID}
-        contract.verify_capture(receipt, source, lineage, capture, False)
-
-    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, release: dict, root: Path, bodies: dict[str, bytes]) -> None:

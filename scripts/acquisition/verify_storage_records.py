@@ -33,7 +33,7 @@ from scripts.infrastructure.render_project_config import REPO_ROOT, load_configu
 
 RETIREMENTS = ("data/privacy_review/*/retired_objects*.json", "data/lakehouse_planning/dedup_*/retired_objects*.json")
 REPLACEMENTS = "data/privacy_review/*/replacements*.json"
-SKIPPED_FOLDERS = {"private_original", "storage_checks", "redacted_copies"}
+SKIPPED_FOLDERS = {"storage_checks", "redacted_copies"}
 NON_STORAGE_ROOTS = {
     "e2e": "Synthetic test inputs and deliberately malformed fixtures, not live acquisition evidence.",
     "conformance": "Repository policy audit evidence, not live acquisition evidence.",

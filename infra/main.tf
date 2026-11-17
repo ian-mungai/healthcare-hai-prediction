@@ -23,7 +23,7 @@ resource "aws_s3_bucket" "data" {
   force_destroy = false
 
   # Classification belongs to the data, so it is set here rather than in default_tags. Public because the bucket holds the
-  # collected public research sources and their approved derivatives (decision 158). Access stays private and the personal originals stay owner-only.
+  # collected public research sources and their approved derivatives (decision 158). Access stays private.
   tags = {
     DataClassification = "Public"
   }

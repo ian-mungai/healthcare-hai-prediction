@@ -104,8 +104,6 @@ def copy_plan_inputs(modes: Iterable[str], base: Path, mirror: Path) -> dict[str
     for path in sorted({path.resolve() for path in OPENED if path.is_file()}):
         if path.is_relative_to(data):
             relative = path.relative_to(base.resolve())
-            if "private_original" in relative.parts:
-                raise CaptureError("A locked plan reads an original, so the mirror cannot carry it.")
             target = mirror / relative
             if not target.is_file():
                 copy_once(path, target)

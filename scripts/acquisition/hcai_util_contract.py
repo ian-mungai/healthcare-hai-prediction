@@ -2,15 +2,12 @@
 
 All the data is public. Under plan version 2 each workbook is stored whole under raw/ as published; its receipt records that it names
 administrators and report preparers, whose cells bronze pseudonymizes at load (keyed, in place: the sheets have no pseudonym column).
-Captures stored under plan version 1 hold one abstracted CSV per
-sheet, rebuilt from an original kept on the Mac; they keep verifying with the version 1 rules below.
+The version 1 captures (one abstracted CSV per sheet, rebuilt from an original kept on the Mac) are retired.
 Failure modes: data/acquisition_planning/hcai_util_2018_2025_failure_modes.md.
 """
 
-import csv
 import io
 import re
-import unicodedata
 import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
@@ -30,19 +27,10 @@ TERMS_URL = "https://data.chhs.ca.gov/pages/terms"
 PSEUDONYMIZE_AT_LOAD = "Names administrators and report preparers as published; bronze pseudonymizes the person cells at load."
 # The restriction wording of the version 2 plan from before bronze pseudonymized the person cells: a capture bound to that plan carries it.
 LEGACY_REDACT_AT_LOAD = "Names administrators and report preparers as published; bronze redacts the person cells at load ([REDACTED])."
-# Plan version 1 only: the redaction of the stored abstracted captures, kept so those captures keep verifying.
-REPLACEMENT = "[REDACTED]"
-REDACT = ["FAC_STR_ADDR", "FAC_PHONE", "FAC_ADMIN_NAME", "FAC_PAR_CORP_BUS_ADDR", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
-NAME_SOURCES = ["FAC_ADMIN_NAME", "REPT_PREP_NAME", "REV_REPT_PREP_NAME"]
-NOT_PERSONAL = ["FAC_NAME", "FAC_PAR_CORP_NAME", "EMSA_TRAUMA_DESIGNATION", "EMSA_TRAUMA_DESIGNATION_PEDIATRIC"]
-PERSONAL_PATTERN = re.compile(r"NAME|PHONE|FAX|MAIL|ADDR|PREP|CONTACT|TITLE|SIGN")
 INDIVIDUAL_OWNER = "Investor - Individual"
-OWNER_REDACT = ["FAC_PAR_CORP_NAME", "FAC_PAR_CORP_CITY", "FAC_PAR_CORP_ZIP"]
 DATA_SHEETS = ["Page 1-6", "NonResp 1-6"]
 LABEL_ROWS = 4  # Rows 2-5: database label, Page, Column and Line.
 MIN_HOSPITALS = 400
-EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
-PHONE = re.compile(r"(?<!\d)(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4}(?!\d)")
 MAX_BYTES = 64 * 1024**2
 MAX_MEMBERS = 100
 
@@ -232,33 +220,6 @@ def read_workbook(raw: bytes) -> dict[str, list[list[str]]]:
     return book
 
 
-def normalized(value: str) -> str:
-    """Case-, width- and punctuation-insensitive words for transient name matching."""
-    return " ".join(re.sub(r"[^\w]+", " ", unicodedata.normalize("NFKC", value)).split()).casefold()
-
-
-def contains_name(text: str, names: set[tuple[str, ...]], longest: int) -> bool:
-    """True when the text contains any collected name as consecutive whole words."""
-    words = tuple(normalized(text).split())
-    return any(words[i : i + n] in names for n in range(2, longest + 1) for i in range(len(words) - n + 1))
-
-
-def name_forms(value: str) -> set[tuple[str, ...]]:
-    """A person's full name and first-plus-last name as word tuples; single words are not matched."""
-    words = tuple(normalized(value).split())
-    if len(words) < 2 or not any(c.isalpha() for c in words[0]) or not any(c.isalpha() for c in words[-1]):
-        return set()
-    return {words, (words[0], words[-1])}
-
-
-def check_columns(header: list[str]) -> None:
-    """Every personal-looking column is either redacted or reviewed as not personal."""
-    for column in header:
-        if PERSONAL_PATTERN.search(column.upper()):
-            require(column in REDACT or column in NOT_PERSONAL, "HCAI unreviewed personal-looking column")
-    require(all(c in header for c in [*REDACT, *OWNER_REDACT, "LICEE_TOC", "FAC_NO"]), "HCAI redaction column missing")
-
-
 def check_raw(raw: bytes, entry: dict) -> dict:
     """Check that a workbook is the published shape and count its hospitals; the bytes are stored unchanged."""
     book = read_workbook(raw)
@@ -274,76 +235,6 @@ def check_raw(raw: bytes, entry: dict) -> dict:
         hospital_counts[sheet] = sum(row[index["FAC_NO"]].strip() != "" for row in rows[LABEL_ROWS + 1 :])
     require(hospital_counts["Page 1-6"] >= entry["min_hospitals"], "HCAI data sheet has too few hospitals")
     return {"hospitals": hospital_counts, "preliminary": entry["preliminary"], "model_eligible": False}
-
-
-def derive(raw: bytes, entry: dict) -> tuple[dict[str, bytes], dict]:
-    """Plan version 1: one abstracted CSV per sheet, or a fixed public reason to stop the year."""
-    book = read_workbook(raw)
-    require(list(book) == entry["sheets"], "HCAI workbook sheets differ")
-    names: set[tuple[str, ...]] = set()
-    redacted = owner_rows = copied = contacts = 0
-    hospital_counts: dict[str, int] = {}
-    for sheet in DATA_SHEETS:
-        rows = book[sheet]
-        header = rows[0][: len(entry["header"])]
-        require(header == entry["header"], "HCAI data header differs")
-        check_columns(header)
-        index = {c: i for i, c in enumerate(header)}
-        for number, row in enumerate(rows):
-            require(all(v == "" for v in row[len(header) :]) or 1 <= number <= LABEL_ROWS, "HCAI cell beyond the header")
-            if number <= LABEL_ROWS:
-                continue
-            owned = [row[index["FAC_PAR_CORP_NAME"]]] if row[index["LICEE_TOC"]] == INDIVIDUAL_OWNER else []
-            for value in [row[index[c]] for c in NAME_SOURCES] + owned:
-                names.update(name_forms(value))
-    longest = max((len(n) for n in names), default=0)
-    files: dict[str, bytes] = {}
-    for sheet, rows in book.items():
-        data = sheet in DATA_SHEETS
-        index = {c: i for i, c in enumerate(rows[0][: len(entry["header"])])} if data else {}
-        hospitals = 0
-        out = []
-        for number, source_row in enumerate(rows):
-            row = list(source_row)
-            if data and number > LABEL_ROWS:
-                hospitals += row[index["FAC_NO"]].strip() != ""
-                owner = row[index["LICEE_TOC"]] == INDIVIDUAL_OWNER
-                owner_rows += owner
-                for column in REDACT + (OWNER_REDACT if owner else []):
-                    if row[index[column]].strip():
-                        row[index[column]] = REPLACEMENT
-                        redacted += 1
-            for i, value in enumerate(row):
-                if value and value != REPLACEMENT and names and contains_name(value, names, longest):
-                    row[i] = REPLACEMENT
-                    copied += 1
-                elif EMAIL.search(value) or PHONE.search(value):
-                    # Contact details typed into other fields (for example an equipment description) are removed too.
-                    row[i] = REPLACEMENT
-                    contacts += 1
-            out.append(row)
-        if data:
-            hospital_counts[sheet] = hospitals
-        buffer = io.StringIO(newline="")
-        csv.writer(buffer, lineterminator="\n").writerows(out)
-        files[f"sheets/{slug(sheet)}.csv"] = buffer.getvalue().encode()
-    require(hospital_counts["Page 1-6"] >= entry["min_hospitals"], "HCAI data sheet has too few hospitals")
-    statistics = {
-        "redacted_cells": redacted,
-        "individual_owner_rows": owner_rows,
-        "copied_name_cells": copied,
-        "contact_detail_cells": contacts,
-        "hospitals": hospital_counts,
-        "preliminary": entry["preliminary"],
-        "model_eligible": False,
-    }
-    return files, statistics
-
-
-def roles(sheets: list[str]) -> dict[str, str]:
-    """Receipt role of each derived sheet file."""
-    kinds = {"Tips": "methodology", "Crosswalk": "layout"}
-    return {f"sheets/{slug(s)}.csv": kinds.get(s, "data") for s in sheets}
 
 
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
@@ -364,14 +255,11 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(len(matches) == 1, "HCAI utilization capture year not in its plan")
     entry = matches[0]
     paths = {a["storage_path"] for a in receipt["artifacts"]}
-    if paths == {*roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"}:
-        verify_version_1(receipt, lineage, root, entry)
-    else:
+    if paths == {f"raw/{stored_name(entry)}", "evidence/download_proof.json", "references/scope.json"}:
         # A capture bound to an archived predecessor plan is read as that plan: its year and its restriction wording are the predecessor's.
         captured_plan = predecessor_plan(plan, lineage["plan_sha256"]) or plan
         require(entry in captured_plan["years"], "HCAI utilization capture year not in its plan")
         restriction = LEGACY_REDACT_AT_LOAD if "bronze redacts the person cells" in captured_plan["scope"] else PSEUDONYMIZE_AT_LOAD
-        require(paths == {f"raw/{stored_name(entry)}", "evidence/download_proof.json", "references/scope.json"}, "HCAI utilization artifact set differs")
         require(not (root / "sheets").exists(), "HCAI utilization snapshot holds a derived copy")
         raw = (root / "raw" / stored_name(entry)).read_bytes()
         proof = read_json(root / "evidence/download_proof.json")
@@ -391,29 +279,8 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
             and governance["license_or_terms_url"] == TERMS_URL,
             "HCAI utilization governance differs",
         )
+    else:
+        require(False, "HCAI utilization artifact set differs")
     period = receipt["measurement_periods"]
     year = entry["year"]
     require(len(period) == 1 and (period[0]["start_date"], period[0]["end_date"]) == (f"{year}-01-01", f"{year}-12-31"), "HCAI utilization period differs")
-
-
-def verify_version_1(receipt: dict, lineage: dict, root: Path, entry: dict) -> None:
-    """Plan version 1: rebuild every abstracted sheet from the original kept on the Mac."""
-    require(not (root / "raw").exists() and not (root / "audit").exists(), "HCAI utilization snapshot holds original bytes")
-    proof = read_json(root / "evidence/download_proof.json")
-    collection = root.parents[2]
-    original = (collection / proof["original_path"]).resolve()
-    require(original.is_relative_to((collection / "private_original").resolve()), "HCAI utilization original location differs")
-    raw = original.read_bytes()
-    require(
-        digest(raw) == entry["sha256"] == lineage["expected_sha256"] == proof["sha256"] and len(raw) == entry["bytes"], "HCAI utilization original hash differs"
-    )
-    files, statistics = derive(raw, entry)
-    for name, body in files.items():
-        require((root / name).read_bytes() == body, "HCAI utilization derived sheet differs")
-    require(proof["statistics"] == statistics and proof["requested_url"] == entry["url"], "HCAI utilization download proof differs")
-    require(canonical_hash(read_json(root / "references/scope.json")) == lineage["plan_sha256"], "HCAI utilization stored scope differs")
-    acq = receipt["acquisition"]
-    require(acq["requested_url"] == entry["url"] and acq["http_status"] == 200, "HCAI utilization route differs")
-    require(
-        receipt["governance"]["contains_pii"] is False and receipt["governance"]["license_or_terms_url"] == TERMS_URL, "HCAI utilization governance differs"
-    )

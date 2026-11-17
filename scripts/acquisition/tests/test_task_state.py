@@ -372,7 +372,7 @@ def test_an_unusable_prior_state_reference_is_refused(tmp_path: Path, change: di
         publisher_run.restore_state(cloud, tmp_path / "state", environment(tmp_path, json.dumps(named)))
 
 
-@pytest.mark.parametrize("name", ["files/fresh.csv", "private/diagnostics/u.json", "collectors/cms_owners_org/private_original/o.csv"])
+@pytest.mark.parametrize("name", ["files/fresh.csv", "private/diagnostics/u.json", "collectors/cms_owners_org/o.csv"])
 def test_a_state_holding_anything_but_records_is_refused_even_with_the_right_digest(tmp_path: Path, name: str) -> None:
     cloud = Ledger()
     named = prior(cloud, state_archive({"run.json": b"{}", name: b"x"}))

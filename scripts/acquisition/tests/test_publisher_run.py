@@ -104,8 +104,8 @@ def fill_state(root: Path, names: list[str]) -> None:
     (root / "outcomes/unit.json").write_text('{"outcome": "exact_match"}')
     (root / "collectors/bls_api_v2/requests").mkdir(parents=True)
     (root / "collectors/bls_api_v2/requests/000001.json").write_text('{"batch_id": "b"}')
-    (root / "collectors/cms_owners_org/private_original/r").mkdir(parents=True)
-    (root / "collectors/cms_owners_org/private_original/r/owners.csv").write_text(names[0])
+    (root / "collectors/cms_owners_org/files").mkdir(parents=True)
+    (root / "collectors/cms_owners_org/files/owners.csv").write_text(names[0])
     (root / "files/unit").mkdir(parents=True)
     (root / "files/unit/fresh.csv").write_text(names[0])
     (root / "private/diagnostics").mkdir(parents=True)
@@ -226,8 +226,8 @@ def test_the_stage_is_deterministic_and_the_request_binds_the_archive_and_queue(
     )
 
 
-@pytest.mark.parametrize("planted", ["mirror/stored/private_original/r/owners.csv", ".env", "mirror/.env", "mirror/secrets.tfvars.json"])
-def test_the_stage_refuses_an_original_or_a_settings_file(tmp_path: Path, planted: str) -> None:
+@pytest.mark.parametrize("planted", [".env", "mirror/.env", "mirror/secrets.tfvars.json"])
+def test_the_stage_refuses_a_settings_file(tmp_path: Path, planted: str) -> None:
     files = stage_files(tmp_path)
     (files["mirror_output"] / planted).parent.mkdir(parents=True, exist_ok=True)
     (files["mirror_output"] / planted).write_text("x")

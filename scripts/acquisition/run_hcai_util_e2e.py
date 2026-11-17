@@ -287,7 +287,6 @@ def exercise(root: Path) -> list[dict]:
         scenario("replay_without_network", lambda: execute(plan, last, run, False, True, client, OUTPUTS, Offline({}), LIMITS))
         check_scenarios(scenario, last)
         predecessor_scenarios(scenario, root, plan, plan_path, last, web)
-        version_1_scenario(scenario, plan, last, root, bodies[last["url"]])
         fetch_scenarios(scenario, plan, first, root, bodies)
         corrupt_scenarios(scenario, receipt_path, bodies[last["url"]])
         storage_scenarios(scenario, plan, first, last, root, run, client, web)
@@ -443,39 +442,6 @@ def check_scenarios(scenario: Any, entry: dict) -> None:
     ]
     for name, plan_entry, raw, error in cases:
         scenario(name, lambda plan_entry=plan_entry, raw=raw: contract.check_raw(raw, plan_entry), error)
-
-
-def version_1_scenario(scenario: Any, plan: dict, entry: dict, root: Path, original: bytes) -> None:
-    """A capture stored under plan version 1 keeps verifying: its abstracted sheets are rebuilt from the original kept on the Mac."""
-
-    def stored_version_1() -> None:
-        from scripts.acquisition.capture import receipt_validator
-
-        collection = root / "version_1"
-        capture = collection / "batches" / entry["id"] / "capture"
-        kept = collection / "private_original" / str(entry["year"]) / "run_01" / "attempt_01" / contract.stored_name(entry)
-        kept.parent.mkdir(parents=True)
-        kept.write_bytes(original)
-        files, statistics = contract.derive(original, entry)
-        for name, content in files.items():
-            write_once(capture / name, content)
-        proof = {"requested_url": entry["url"], "sha256": entry["sha256"], "original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
-        write_once(capture / "evidence/download_proof.json", encoded_json(proof))
-        write_once(capture / "references/scope.json", encoded_json(plan))
-        year = entry["year"]
-        receipt = {
-            "snapshot_status": "acquired_unvalidated",
-            "artifacts": [{"storage_path": name} for name in [*contract.roles(entry["sheets"]), "evidence/download_proof.json", "references/scope.json"]],
-            "acquisition": {"requested_url": entry["url"], "http_status": 200},
-            "governance": {"contains_pii": False, "license_or_terms_url": contract.TERMS_URL},
-            "measurement_periods": [{"start_date": f"{year}-01-01", "end_date": f"{year}-12-31"}],
-        }
-        lineage = {"year_id": entry["id"], "plan_sha256": canonical_hash(plan), "expected_sha256": entry["sha256"], "model_eligible": False}
-        lineage |= {"registry_sha256": plan["registry_sha256"], "access_release_sha256": plan["access_release"]["sha256"]}
-        lineage |= {"code_sha256": contract.collector_code_hashes(), "schema_sha256": canonical_hash(receipt_validator().schema)}
-        contract.verify_capture(receipt, {"source_id": contract.SOURCE_ID}, lineage, capture, False)
-
-    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, entry: dict, root: Path, bodies: dict[str, bytes]) -> None:

@@ -77,7 +77,7 @@ def relative_path(value: str) -> str:
         and path.as_posix() == value
         and not path.is_absolute()
         and ".." not in path.parts
-        and all(part not in {"private_original", "raw", "secrets", ".aws"} and not part.startswith(".") for part in path.parts)
+        and all(part not in {"raw", "secrets", ".aws"} and not part.startswith(".") for part in path.parts)
         and path.suffix == ".json",
         "State path is not permitted",
     )

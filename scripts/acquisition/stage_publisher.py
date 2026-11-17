@@ -35,7 +35,7 @@ class StageError(ValueError):
 def refused(relative: str) -> bool:
     parts = PurePosixPath(relative).parts
     name = parts[-1]
-    return "private_original" in parts or name == ".env" or name.startswith(".env.") or name.endswith(".tfvars.json") or name.startswith("terraform.tfstate")
+    return name == ".env" or name.startswith(".env.") or name.endswith(".tfvars.json") or name.startswith("terraform.tfstate")
 
 
 def holds_config(relative: str) -> bool:

@@ -164,7 +164,6 @@ def exercise(root: Path) -> list[dict]:
         scenario("repeat_two_no_effects", repeat)
         scenario("replay_without_network", lambda: execute(plan, run, False, True, client, OUTPUTS, Offline(b""), LIMITS))
         check_scenarios(scenario, plan, root)
-        version_1_scenario(scenario, plan, root, data)
         fetch_scenarios(scenario, plan, root, data)
         corrupt_scenarios(scenario, receipt_path, data)
         storage_scenarios(scenario, plan, root, run, client, web)
@@ -213,36 +212,6 @@ def check_scenarios(scenario: Any, plan: dict, root: Path) -> None:
         require(contract.check_raw(path, plan)["encoding"] == "utf-8-sig", "UTF-8 not detected")
 
     scenario("utf8_with_bom_read_and_recorded", utf8)
-
-
-def version_1_scenario(scenario: Any, plan: dict, root: Path, data: bytes) -> None:
-    """A capture stored under plan version 1 keeps verifying: its derived CSV is rebuilt from the original kept on the Mac."""
-
-    def stored_version_1() -> None:
-        from scripts.acquisition.capture import receipt_validator
-
-        collection = root / "version_1"
-        capture = collection / "batches" / plan["id"] / "capture"
-        kept = collection / "private_original" / "run_01" / "attempt_01" / contract.FILE_NAME
-        kept.parent.mkdir(parents=True)
-        kept.write_bytes(data)
-        derived, statistics = contract.derive(kept, plan)
-        proof = {"requested_url": plan["url"], "sha256": plan["sha256"], "original_path": kept.relative_to(collection).as_posix(), "statistics": statistics}
-        write_once(capture / "derived/hospital_attestations.csv", derived)
-        write_once(capture / "evidence/download_proof.json", encoded_json(proof))
-        write_once(capture / "references/scope.json", encoded_json(plan))
-        receipt = {
-            "snapshot_status": "acquired_unvalidated",
-            "artifacts": [{"storage_path": name} for name in sorted(contract.V1_ARTIFACTS)],
-            "acquisition": {"requested_url": plan["url"], "http_status": 200},
-            "schema_profile": {"row_count": statistics["hospital_rows_kept"]},
-            "governance": {"contains_pii": False},
-        }
-        lineage = {"file_id": plan["id"], "plan_sha256": canonical_hash(plan), "model_eligible": False, "registry_sha256": plan["registry_sha256"]}
-        lineage |= {"code_sha256": contract.collector_code_hashes(), "schema_sha256": canonical_hash(receipt_validator().schema)}
-        contract.verify_capture(receipt, {"source_id": contract.SOURCE_ID}, lineage, capture, False)
-
-    scenario("stored_version_1_capture_still_verifies", stored_version_1)
 
 
 def fetch_scenarios(scenario: Any, plan: dict, root: Path, data: bytes) -> None:
