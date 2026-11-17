@@ -8,21 +8,10 @@ Predicts hospital healthcare-associated infection rates from public CMS, Census,
 
 Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS CLI v2, Node.js 22 or later and Docker Desktop.
 
-1. Create the environment, install the pinned tools and the hash-locked host dependencies and install the hooks:
+1. Create the environment and install the pinned tools, the hash-locked host dependencies, the hooks and the push gate. The script also copies `.env.example` to `.env`. It checks the prerequisites first and names any that is missing. A rerun on an installed checkout changes nothing and never overwrites `.env`:
 
    ```sh
-   python3.12 -m venv .venv
-   .venv/bin/python scripts/quality/install_tools.py
-   .venv/bin/python -m scripts.quality.lock_env export host --output "$TMPDIR/host_lock"
-   .venv/bin/python -m pip install --no-cache-dir --require-hashes --only-binary=:all: -r "$TMPDIR/host_lock/requirements.txt"
-   .venv/bin/python -m pip check
-   .venv/bin/python -m scripts.quality.install_markdownlint
-   .venv/bin/python -m scripts.quality.install_sqlfluff
-   .venv/bin/python -m scripts.quality.install_dvc
-   .venv/bin/python -m scripts.quality.install_lint_tools
-   .venv/bin/python -m scripts.lakehouse.dbt_package_archive fetch
-   PRE_COMMIT_HOME="$PWD/.tools/pre_commit_cache" .venv/bin/python -m pre_commit install
-   cp .env.example .env
+   bash scripts/install.sh
    ```
 
 2. Fill every value in `.env`. Git ignores the file. `.env.example` lists the settings:
@@ -41,62 +30,46 @@ Prerequisites: macOS on Apple silicon, Python 3.12, Git, Terraform 1.16.1, AWS C
 
 ## Usage
 
-Run the full local checks without AWS credentials. Each run writes its report under `data/e2e/`.
+Run the full local checks without AWS credentials. The script sets its own environment. Each run writes its report under `data/e2e/`.
 
 ```sh
-env PYTHON_BIN="$PWD/.venv/bin/python" TF_PLUGIN_CACHE_DIR="$PWD/infra/.terraform/providers" /bin/bash scripts/run_ci.sh
+bash scripts/run_ci.sh
 ```
 
 Run one end-to-end (E2E) check on its own. A runner that takes an output directory needs a new one:
 
 ```sh
-.venv/bin/python -m scripts.quality.run_checks_e2e
+bash scripts/run_checks_e2e.sh
 ```
-
-Install the push gate once with `.venv/bin/python -m scripts.quality.pre_push install-shim`.
 
 ## Web interfaces
 
-Six services have a web interface. You open each one from your Mac through its own Session Manager document, which fixes the host port and takes only the local port as a parameter. No other port of the host is reachable from the Mac. Every other service is internal. Session Manager refuses every other document, except the older `<PROJECT_NAME>_catalog_forward_<ENVIRONMENT>` document of the on-demand catalog task, which forwards only port 8585 and exists only while that task is prepared. Terraform declares the services in `infra/services/` and the documents in `infra/iam/`. `tests/test_readme_web_interfaces.py` fails when this section differs from that code or from the project policy.
+Only the listed web interfaces can be opened from your Mac, each through its own Session Manager document. Every other port of the host is internal.
 
-An optional service runs only while its Terraform switch is on. Every switch defaults to off. Its document exists only while the service is prepared. Airflow always runs, so it has no switch.
-
-| Service | Container | Port | Web interface | Health path | Terraform switch |
-| --- | --- | --- | --- | --- | --- |
-| `airflow_apiserver` | `airflow_apiserver` | 8080 | Airflow web interface and API | `/api/v2/version` | None |
-| `openmetadata` | `openmetadata_server` | 8585 | OpenMetadata catalog and API under `/api` | None. | `openmetadata_persistent_enabled` |
-| `mlflow` | `mlflow` | 5100 | MLflow tracking server | `/health`. The container check also accepts the answer 401. | `mlflow_enabled` |
-| `streamlit` | `streamlit` | 8501 | Streamlit page | `/_stcore/health` | `streamlit_enabled` |
-| `monitoring` | `grafana` | 3001 | Grafana dashboards | `/api/health` | `monitoring_enabled` |
-| `monitoring` | `prometheus` | 9090 | Prometheus query page | `/-/healthy` | `monitoring_enabled` |
-
-### Open a web interface from your Mac
-
-Replace `<HOST_INSTANCE_ID>` with the instance ID of the host (the instance tagged `Name` `<PROJECT_NAME>_host_<ENVIRONMENT>`). Replace `<AWS_PROFILE>`, `<AWS_REGION>`, `<PROJECT_NAME>` and `<ENVIRONMENT>` with the values of the same names in `.env`.
-
-1. Start the host:
+1. List the web interfaces with the port and health path of each:
 
    ```sh
-   .venv/bin/python -m scripts.infrastructure.host_session start
+   bash scripts/open_ui.sh --list
    ```
 
-2. Run the command of the interface you need and keep it running. The local port is the one the browser uses. Pick another number when a local service already holds it:
+2. Start the host:
 
    ```sh
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_airflow_forward_<ENVIRONMENT> --parameters localPortNumber=8080 --profile <AWS_PROFILE> --region <AWS_REGION>
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_openmetadata_forward_<ENVIRONMENT> --parameters localPortNumber=8585 --profile <AWS_PROFILE> --region <AWS_REGION>
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_mlflow_forward_<ENVIRONMENT> --parameters localPortNumber=5100 --profile <AWS_PROFILE> --region <AWS_REGION>
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_streamlit_forward_<ENVIRONMENT> --parameters localPortNumber=8501 --profile <AWS_PROFILE> --region <AWS_REGION>
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_grafana_forward_<ENVIRONMENT> --parameters localPortNumber=3001 --profile <AWS_PROFILE> --region <AWS_REGION>
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_prometheus_forward_<ENVIRONMENT> --parameters localPortNumber=9090 --profile <AWS_PROFILE> --region <AWS_REGION>
+   bash scripts/host.sh start
    ```
 
-3. Open `http://127.0.0.1:<LOCAL_PORT>` in a browser. A health path answers at `http://127.0.0.1:<LOCAL_PORT><PATH>`.
+3. Open one web interface by the name in the list and keep the command running. The command reads `.env`, finds the one running host and prints the browser address:
+
+   ```sh
+   bash scripts/open_ui.sh airflow
+   ```
+
+4. Press Ctrl+C in that window to close the session. When a local service already holds the port, add `--local-port` and another port number to the command and use that port in the browser.
 
 ## Worktrees
 
-Create each worktree under `.worktrees/` of the main checkout, then run this from the main checkout (or any worktree that has a `.venv`) to make or check every Git-ignored input of the new one: the `.venv` and `.tools` links, the dbt package folders, the `.terraform` folder of each stack, `.env`, `infra/deployment.auto.tfvars.json` and the generated requirement and pin files, such as `services/orchestration/constraints-3.12.txt`. It copies from the main checkout, never overwrites a file that differs, copies no Terraform state file and changes nothing on a second run. It refuses a destination that a tracked path of the Git index touches (also under another case or Unicode spelling on a case-insensitive volume) and any link or dangling link in a destination path. It writes each file to a staging name, verifies its bytes and publishes it without replacing anything, so a stopped run leaves no partial file. An empty `.env` left by an older run is reported and not overwritten. It calls Terraform for `infra/jobs` only after it has checked that the stack's cache and lock file hold no link (but the one that init makes to the copied providers) and no file with another name. It takes an existing cache as complete only when `terraform modules -json` succeeds, which Terraform does only when every module that the configuration declares is installed from its declared source. Otherwise it runs init again. It runs once at a time. It prints what it did and exits 1 with the missing item named.
+Create each worktree under `.worktrees/` of the main checkout, then run this from the main checkout (or any worktree that has a `.venv`) with the folder of the new worktree to make or check every Git-ignored input of the new one: the `.venv` and `.tools` links, the dbt package folders, the `.terraform` folder of each stack, `.env`, `infra/deployment.auto.tfvars.json` and the generated requirement and pin files, such as `services/orchestration/constraints-3.12.txt`. It copies from the main checkout, never overwrites a file that differs, copies no Terraform state file and changes nothing on a second run. It refuses a destination that a tracked path of the Git index touches (also under another case or Unicode spelling on a case-insensitive volume) and any link or dangling link in a destination path. It writes each file to a staging name, verifies its bytes and publishes it without replacing anything, so a stopped run leaves no partial file. An empty `.env` left by an older run is reported and not overwritten. It calls Terraform for `infra/jobs` only after it has checked that the stack's cache and lock file hold no link (but the one that init makes to the copied providers) and no file with another name. It takes an existing cache as complete only when `terraform modules -json` succeeds, which Terraform does only when every module that the configuration declares is installed from its declared source. Otherwise it runs init again. It runs once at a time. It prints what it did and exits 1 with the missing item named.
 
 ```sh
-.venv/bin/python -m scripts.quality.worktree_setup .worktrees/<name>
+bash scripts/worktree_setup.sh .worktrees/example
 ```

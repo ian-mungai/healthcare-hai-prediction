@@ -40,6 +40,10 @@ bash -n scripts/run_ci.sh scripts/infrastructure/*.sh scripts/ci/groups/*.sh
 # shellcheck source=/dev/null
 source "$repo_root/scripts/quality/timing.sh"
 python_bin="${PYTHON_BIN:-$repo_root/.venv/bin/python}"
+# A local run keeps the Terraform providers in the checkout, so `bash scripts/run_ci.sh` needs no environment variable. A caller's value and hosted CI (which sets its own cache) are kept.
+if [[ -z "${TF_PLUGIN_CACHE_DIR:-}" && -z "${GITHUB_ACTIONS:-}" ]]; then
+  export TF_PLUGIN_CACHE_DIR="$repo_root/infra/.terraform/providers"
+fi
 part="${CI_PART:-all}"
 case "$part" in
   all | core | core_static | core_sql_terraform | core_terraform_proofs | core_configuration | core_configuration_host | core_ci_tooling | core_ci_tooling_runtime | core_code_rules | core_orchestration_engine | core_orchestration_offline | launcher | reuse_gate | bronze | silver | gold | features | feature_sources | feature_columns | feature_store | gates) ;;
