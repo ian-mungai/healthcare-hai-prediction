@@ -784,13 +784,20 @@ jobs:
             echo 'run=false' >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download every feature shard report
+      # Re-run failed jobs starts only the shards that failed, so the reports of one run sit in the artifacts of every attempt. Each artifact keeps its own folder
+      # (the same shard can have a report in two attempts) and the next step keeps the newest report of each shard.
+      - name: Download every feature shard report of every attempt
         if: ${{ steps.selection.outputs.run == 'true' }}
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: feature_*_shard_*_${{ github.run_id }}_${{ github.run_attempt }}
-          path: data/e2e/quality/feature_shards
-          merge-multiple: true
+          pattern: feature_*_shard_*_${{ github.run_id }}_*
+          path: data/e2e/quality/feature_downloads
+
+      - name: Keep the newest report of each shard
+        if: ${{ steps.selection.outputs.run == 'true' }}
+        env:
+          RUN_ID: ${{ github.run_id }}
+        run: .venv/bin/python -m scripts.lakehouse.feature_shards gather --downloads data/e2e/quality/feature_downloads --run-id "$RUN_ID" --directory data/e2e/quality/feature_shards
 
       - name: Combine reports and require complete disjoint case coverage
         if: ${{ steps.selection.outputs.run == 'true' }}

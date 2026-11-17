@@ -2476,6 +2476,119 @@ def feature_combination_cases(scratch: Path) -> list[dict[str, Any]]:
     return results
 
 
+def feature_gather_cases(scratch: Path) -> list[dict[str, Any]]:
+    """Use synthetic shard artifacts of several attempts of one run to exercise the real gather step and combiner as the combined evidence job runs them."""
+    run_id = "424242"
+    results: list[dict[str, Any]] = []
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+    download = re.search(r"- name: Download every feature shard report of every attempt\n(?:.*\n){1,8}?\s+pattern: (feature_.+)", workflow)
+    results.append(
+        {
+            "case": "feature_combine_job_downloads_every_attempt_into_its_own_folder",
+            "passed": download is not None
+            and download.group(1).strip() == "feature_*_shard_*_${{ github.run_id }}_*"
+            and "merge-multiple" not in workflow.split("- name: Download every feature shard report of every attempt")[1].split("- name:")[0],
+            "pattern": download.group(1) if download else None,
+        }
+    )
+    results.append(
+        {
+            "case": "feature_combine_job_gathers_before_it_combines",
+            "passed": 0 <= workflow.find("scripts.lakehouse.feature_shards gather") < workflow.find("scripts.lakehouse.feature_shards combine --suite sources"),
+        }
+    )
+    for suite, count in FEATURE_COUNTS.items():
+        results.extend(feature_gather_suite_cases(scratch, run_id, suite, count))
+    return results
+
+
+def feature_gather_suite_cases(scratch: Path, run_id: str, suite: str, count: int) -> list[dict[str, Any]]:
+    """Gather and combine synthetic shard artifacts of several attempts of one run for one suite."""
+    results: list[dict[str, Any]] = []
+    plan = run_command(str(PYTHON), ["-m", "scripts.lakehouse.feature_shards", "plan", "--suite", suite, "--count", str(count)], cwd=ROOT, timeout=60)
+    manifest = json.loads(plan.stdout)
+
+    def report(index: int, status: str = "pass") -> dict[str, Any]:
+        names = manifest["shards"][f"{index}/{count}"]
+        return {
+            "suite": suite,
+            "shard": f"{index}/{count}",
+            "case_inventory": manifest["case_inventory"],
+            "selected_cases": names,
+            "source_hashes": manifest["source_hashes"],
+            "problems": [] if status == "pass" else ["a case failed"],
+            "status": status,
+            "cases": [{"case": name, "ok": status == "pass"} for name in names],
+        }
+
+    def artifact(downloads: Path, index: int, attempt: int, content: dict[str, Any], run: str = run_id) -> None:
+        target = downloads / f"feature_{suite}_shard_{index}_{run}_{attempt}" / suite / f"shard_{index}" / "report.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(content))
+
+    def gather_and_combine(label: str, plant: Callable[[Path], None]) -> tuple[int, dict[str, Any], str]:
+        downloads = scratch / f"feature_gather_{suite}_{label}" / "downloads"
+        evidence = scratch / f"feature_gather_{suite}_{label}" / "feature_shards"
+        for index in range(1, count + 1):
+            artifact(downloads, index, 1, report(index))
+        plant(downloads)
+        gathered = run_command(
+            str(PYTHON),
+            ["-m", "scripts.lakehouse.feature_shards", "gather", "--downloads", str(downloads), "--run-id", run_id, "--directory", str(evidence)],
+            cwd=ROOT,
+            timeout=60,
+        )
+        combined = run_command(
+            str(PYTHON),
+            ["-m", "scripts.lakehouse.feature_shards", "combine", "--suite", suite, "--count", str(count), "--directory", str(evidence / suite)],
+            cwd=ROOT,
+            timeout=60,
+        )
+        record = (
+            json.loads((evidence / suite / "combined.json").read_text())
+            if (evidence / suite / "combined.json").exists()
+            else {"status": "none", "problems": []}
+        )
+        return gathered.returncode + combined.returncode, record, gathered.stderr[-300:]
+
+    def failed_first_then_passed(downloads: Path) -> None:
+        artifact(downloads, 2, 1, report(2, "fail"))
+        artifact(downloads, 2, 2, report(2))
+
+    def passed_first_then_failed(downloads: Path) -> None:
+        artifact(downloads, 2, 2, report(2, "fail"))
+
+    def shard_never_uploaded(downloads: Path) -> None:
+        shutil.rmtree(downloads / f"feature_{suite}_shard_3_{run_id}_1")
+
+    def another_run_stands_in(downloads: Path) -> None:
+        shutil.rmtree(downloads / f"feature_{suite}_shard_3_{run_id}_1")
+        artifact(downloads, 3, 1, report(3), run="999")
+
+    def newest_attempt_uploaded_nothing(downloads: Path) -> None:
+        artifact(downloads, 2, 1, report(2, "fail"))
+        (downloads / f"feature_{suite}_shard_2_{run_id}_2").mkdir()
+
+    cases = (
+        ("rerun_shard_that_failed_then_passed_combines", failed_first_then_passed, True, ""),
+        ("newest_report_of_a_shard_wins_over_an_earlier_pass", passed_first_then_failed, False, "shard 2/"),
+        ("shard_without_any_report_names_the_cause", shard_never_uploaded, False, "no attempt of run 424242 uploaded a report for shard 3:"),
+        ("report_of_another_run_never_stands_in", another_run_stands_in, False, "no attempt of run 424242 uploaded a report for shard 3:"),
+        ("newest_attempt_without_a_report_falls_back_to_the_earlier_failure", newest_attempt_uploaded_nothing, False, "did not pass"),
+    )
+    for label, plant, expect_pass, intended in cases:
+        code, record, error = gather_and_combine(label, plant)
+        problems = record["problems"]
+        passed = (
+            (code == 0 and record["status"] == "pass")
+            if expect_pass
+            else (code != 0 and record["status"] == "fail" and any(intended in item for item in problems))
+        )
+        results.append({"case": f"feature_{suite}_gather_{label}", "passed": passed, "exit": code, "problems": problems[:3], "error": error})
+
+    return results
+
+
 HOOK_DEADLINE_PROGRAM = """
 import json
 import sys
@@ -3649,6 +3762,7 @@ def parallel_ci_cases(scratch: Path) -> list[dict[str, Any]]:
     return [
         *results,
         *feature_combination_cases(scratch),
+        *feature_gather_cases(scratch),
         *hook_partition_cases(scratch),
         *hook_shard_cases(scratch),
         *hook_delegation_cases(scratch),

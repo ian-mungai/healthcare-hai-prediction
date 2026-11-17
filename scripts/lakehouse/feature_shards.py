@@ -1,4 +1,4 @@
-"""Plan and combine complete feature E2E shards without running feature builds."""
+"""Plan, gather and combine complete feature E2E shards without running feature builds."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+import shutil
 import sys
 import time
 from collections import Counter
@@ -17,6 +18,9 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[2]
 SUITES = ("sources", "columns")
+# The artifact of one shard job: feature_<suite>_shard_<index>_<run id>_<attempt>. Its files start at the suite folder (sources/shard_3/report.json).
+SHARD_ARTIFACT = re.compile(r"feature_(sources|columns)_shard_(\d+)_(\d+)_(\d+)")
+GATHERED = "gathered.json"
 
 
 @contextmanager
@@ -138,6 +142,51 @@ def finish(output: Path, suite: str, shard: str, inventory: list[str], selected:
     return report
 
 
+def gather(downloads: Path, run_id: str, directory: Path) -> dict[str, Any]:
+    """Copy the newest attempt's report of each shard of one run from the per-artifact downloads to where ``combine`` reads it.
+
+    Re-run failed jobs starts only the shards that failed, so a run's shard reports sit in the artifacts of several attempts. A shard of another run
+    never counts, and an attempt that uploaded no report leaves the earlier attempt's report of that shard in place.
+    """
+    newest: dict[tuple[str, int], tuple[int, Path]] = {}
+    seen: list[str] = []
+    for folder in sorted(downloads.iterdir()) if downloads.is_dir() else []:
+        found = SHARD_ARTIFACT.fullmatch(folder.name)
+        if found is None or found.group(3) != run_id:
+            continue
+        seen.append(folder.name)
+        suite, index, attempt = found.group(1), int(found.group(2)), int(found.group(4))
+        report = folder / suite / f"shard_{index}" / "report.json"
+        if report.is_file() and attempt > newest.get((suite, index), (0, report))[0]:
+            newest[(suite, index)] = (attempt, report)
+    reports: dict[str, dict[str, int]] = {}
+    for (suite, index), (attempt, report) in sorted(newest.items()):
+        target = directory / suite / f"shard_{index}" / "report.json"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(report, target)
+        reports.setdefault(suite, {})[str(index)] = attempt
+    record = {"run_id": run_id, "artifacts": seen, "newest_attempt_of_each_report": reports}
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / GATHERED).write_text(json.dumps(record, indent=2) + "\n")
+    return record
+
+
+def missing_cause(directory: Path, suite: str, index: int, error: Exception) -> str:
+    """Why a shard's report is absent or unreadable, from the record that ``gather`` leaves beside the suite folders."""
+    try:
+        gathered = json.loads((directory.parent / GATHERED).read_text())
+    except (OSError, json.JSONDecodeError):
+        return f"{error}. The shard run did not write its report here (it ended before it wrote one, or it ran elsewhere)"
+    attempt = gathered.get("newest_attempt_of_each_report", {}).get(suite, {}).get(str(index))
+    if attempt is None:
+        names = ", ".join(gathered.get("artifacts", [])) or "none"
+        return (
+            f"no attempt of run {gathered.get('run_id')} uploaded a report for shard {index}: its job did not start, was cancelled or "
+            f"ended before it wrote one. Open that job's log. Shard artifacts found for the run: {names}"
+        )
+    return f"the report of attempt {attempt} cannot be read: {error}"
+
+
 def combine(suite: str, count: int, directory: Path) -> dict[str, Any]:
     """Require a successful report from every shard with the current candidate and exactly the expected cases."""
     inventory = names_of(suite)
@@ -152,7 +201,7 @@ def combine(suite: str, count: int, directory: Path) -> dict[str, Any]:
         try:
             report = json.loads(path.read_text())
         except (OSError, json.JSONDecodeError) as error:
-            problems.append(f"missing or invalid shard {shard}: {error}")
+            problems.append(f"missing or invalid shard {shard}: {missing_cause(directory, suite, index, error)}")
             continue
         expected = select(inventory, shard, suite=suite)
         if not isinstance(report, dict):
@@ -191,11 +240,20 @@ def combine(suite: str, count: int, directory: Path) -> dict[str, Any]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("plan", "combine"))
-    parser.add_argument("--suite", choices=SUITES, required=True)
-    parser.add_argument("--count", type=int, required=True)
+    parser.add_argument("command", choices=("plan", "combine", "gather"))
+    parser.add_argument("--suite", choices=SUITES)
+    parser.add_argument("--count", type=int)
     parser.add_argument("--directory", type=Path)
+    parser.add_argument("--downloads", type=Path, help="gather: the folder with one subfolder per downloaded shard artifact")
+    parser.add_argument("--run-id", help="gather: the workflow run whose shard artifacts count")
     args = parser.parse_args()
+    if args.command == "gather":
+        if args.downloads is None or args.run_id is None or args.directory is None:
+            parser.error("gather requires --downloads, --run-id and --directory")
+        sys.stdout.write(json.dumps(gather(args.downloads, args.run_id, args.directory), indent=2) + "\n")
+        return 0
+    if args.suite is None or args.count is None:
+        parser.error(f"{args.command} requires --suite and --count")
     try:
         if args.count < 1 or args.count > len(names_of(args.suite)):
             raise ValueError("shard count must be between 1 and the number of cases")
