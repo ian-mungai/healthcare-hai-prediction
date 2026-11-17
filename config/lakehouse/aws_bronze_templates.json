@@ -45,11 +45,14 @@
     "scripts/lakehouse/dictionary.py",
     "scripts/lakehouse/ecs_engine.py",
     "scripts/lakehouse/file_readers.py",
+    "scripts/lakehouse/memory_budget.py",
     "scripts/lakehouse/namespace_binding.py",
     "scripts/lakehouse/person_fields.py",
     "scripts/lakehouse/session.py",
     "scripts/lakehouse/smoke.py",
+    "scripts/lakehouse/task_capacity.py",
     "scripts/lakehouse/unit_records.py",
+    "scripts/process.py",
     "scripts/pseudonym_core.py",
     "scripts/sdk_logs.py"
   ]

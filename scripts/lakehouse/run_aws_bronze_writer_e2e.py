@@ -39,9 +39,11 @@ DEFECTS = (
     ("namespace_override_allowed", "if binding.namespaces != expected_namespaces:", "if False:"),
 )
 
+STORAGE_DEFECT_COUNT = 6
 STAGE_DEFECTS = (
     "scripts/acquisition/single_copy.py",
     "scripts/lakehouse/__init__.py",
+    "scripts/process.py",
     "config/lakehouse/retired_objects.json",
 )
 
@@ -217,7 +219,7 @@ def main() -> int:
             and len(report["cases"]) == len(bronze_writer_cases.CASES)
             and all(row["status"] == "passed" for row in report["cases"])
             and all(row["status"] == "caught" for row in report["defects"])
-            and (not args.plant_defects or len(report["defects"]) == len(DEFECTS) + 3 + len(STAGE_DEFECTS))
+            and (not args.plant_defects or len(report["defects"]) == len(DEFECTS) + STORAGE_DEFECT_COUNT + len(STAGE_DEFECTS))
         )
     except (ImportError, OSError, ValueError, RuntimeError, TimeoutError) as error:
         report.update(passed=False, cause=str(error))
