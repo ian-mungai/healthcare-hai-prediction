@@ -1,0 +1,34 @@
+{
+  "allowed": [
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Seconds since the last failure, by job and phase",
+      "reason": "Empty until a host job fails or is interrupted; a healthy chain run has no failure."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Seconds since the last heartbeat of running jobs",
+      "reason": "Empty while no host job runs, which is the state once the chain run has finished."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Memory of running jobs",
+      "reason": "Empty while no host job runs."
+    },
+    {
+      "dashboard": "hai_jobs.json",
+      "panel": "Scratch peak of running jobs so far",
+      "reason": "Empty while no host job runs."
+    },
+    {
+      "dashboard": "hai_drift.json",
+      "panel": "HAI types with no Production baseline",
+      "reason": "Empty while every HAI type has a Production model."
+    },
+    {
+      "dashboard": "hai_feature_store.json",
+      "panel": "Result of the latest release, by feature set",
+      "reason": "Empty until a held online load is released; a chain without a held load never releases."
+    }
+  ]
+}

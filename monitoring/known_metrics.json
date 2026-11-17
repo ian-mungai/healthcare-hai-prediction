@@ -14,5 +14,52 @@
       "hai_api_requests_total": {"type": "counter", "labels": ["route", "method", "status"]},
       "hai_api_request_duration_seconds": {"type": "histogram", "labels": ["route"]}
     }
+  },
+  "pushgateway": {
+    "emitted_by": "the host jobs themselves, pushed at start, by heartbeat and at exit (scripts/metrics_push.py) to the Pushgateway and scraped as the pushgateway job with honor_labels, so job, phase and outcome are the grouping keys the job pushed. The list must equal the CATALOG of that module.",
+    "metrics": {
+      "hai_job_start_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_heartbeat_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_memory_current_bytes": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_memory_peak_bytes": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_scratch_peak_bytes": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_finish_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_duration_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_exit_code": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_peak_memory_bytes": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_job_peak_scratch_bytes": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_drift_status": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "status"]},
+      "hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_drift_features_drifted": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_drift_triggered": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_drift_current_rows": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_drift_unmonitored": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
+      "hai_feature_set_publish_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set"]},
+      "hai_feature_set_online_mode": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "mode"]},
+      "hai_feature_reload_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "result"]},
+      "hai_feature_release_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "feature_set", "result"]},
+      "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
+    }
+  },
+  "pushgateway_itself": {
+    "emitted_by": "the Pushgateway itself, scraped as the pushgateway job",
+    "metrics": ["push_time_seconds", "push_failure_time_seconds"]
+  },
+  "host_state_exporter": {
+    "emitted_by": "the host state exporter (monitoring/host_state_exporter.py), scraped as the host_state_exporter job on 127.0.0.1:9103. The list must equal the CATALOG of that module.",
+    "metrics": {
+      "hai_host_instances": {"type": "gauge", "labels": []},
+      "hai_host_memory_registered_mib": {"type": "gauge", "labels": []},
+      "hai_host_memory_remaining_mib": {"type": "gauge", "labels": []},
+      "hai_host_cpu_registered_units": {"type": "gauge", "labels": []},
+      "hai_host_cpu_remaining_units": {"type": "gauge", "labels": []},
+      "hai_host_running_tasks": {"type": "gauge", "labels": []},
+      "hai_host_job_cap_mib": {"type": "gauge", "labels": []},
+      "hai_openmetadata_healthy": {"type": "gauge", "labels": []},
+      "hai_openmetadata_check_healthy": {"type": "gauge", "labels": ["check"]},
+      "host_state_exporter_source_up": {"type": "gauge", "labels": ["source"]},
+      "host_state_exporter_source_errors_total": {"type": "counter", "labels": ["source"]},
+      "host_state_exporter_source_last_success_timestamp_seconds": {"type": "gauge", "labels": ["source"]}
+    }
   }
 }

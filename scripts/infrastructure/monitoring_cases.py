@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts.infrastructure import monitoring_files
+from scripts.infrastructure.host_state_exporter_cases import CASES as EXPORTER_CASES
 from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 
@@ -25,6 +26,8 @@ RULES_API = f"{ALERTING}/rules_api.yml"
 RULES_MONITORING = f"{ALERTING}/rules_monitoring.yml"
 CONTACT = f"{ALERTING}/contact_points.yml"
 POLICIES = f"{ALERTING}/policies.yml"
+RULES_JOBS = f"{ALERTING}/rules_jobs.yml"
+KNOWN = "monitoring/known_metrics.json"
 SCRAPE = "monitoring/prometheus/prometheus.yml"
 MAPPING = "monitoring/statsd/mapping.yml"
 DATASOURCE = "monitoring/grafana/provisioning/datasources/prometheus.yml"
@@ -162,7 +165,7 @@ def scrape_port_differs_from_terraform(root: Path) -> dict[str, bool]:
 
 
 def datasource_port_differs_from_terraform(root: Path) -> dict[str, bool]:
-    return reported(root, lambda tree: edit(tree, DATASOURCE, "http://127.0.0.1:9090", "http://127.0.0.1:9091"), "9091")
+    return reported(root, lambda tree: edit(tree, DATASOURCE, "http://127.0.0.1:9090", "http://127.0.0.1:9099"), "9099")
 
 
 def mapping_without_the_drop_rule(root: Path) -> dict[str, bool]:
@@ -241,8 +244,8 @@ def rule_names_another_receiver(root: Path) -> dict[str, bool]:
 
 def rule_file_has_no_rules(root: Path) -> dict[str, bool]:
     def plant(tree: Path) -> None:
-        for relative in (RULES_AIRFLOW, RULES_API, RULES_MONITORING):
-            (tree / relative).unlink()
+        for path in (tree / ALERTING).glob("rules_*.yml"):
+            path.unlink()
 
     return reported(root, plant, "holds no alert rule")
 
@@ -293,6 +296,72 @@ def dropped_panel_reads_the_unmapped_counter(root: Path) -> dict[str, bool]:
     )
 
 
+def pushgateway_scrape_drops_the_pushed_labels(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "honor_labels: true", "honor_labels: false"), "pushgateway must set honor_labels")
+
+
+def pushgateway_scrape_port_differs_from_terraform(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "127.0.0.1:9091", "127.0.0.1:9092"), "job pushgateway must scrape 127.0.0.1:9091")
+
+
+def host_state_exporter_scrape_is_missing(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, SCRAPE, "job_name: host_state_exporter", "job_name: host_state"), "no scrape job host_state_exporter")
+
+
+def known_list_lacks_a_pushed_metric(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, KNOWN, '"hai_job_duration_seconds": ', '"hai_job_duration_secs": '), "hai_job_duration_seconds")
+
+
+def known_list_gives_a_pushed_metric_another_label_set(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(
+            tree,
+            KNOWN,
+            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]}',
+            '"hai_drift_share": {"type": "gauge", "labels": ["job", "phase", "outcome"]}',
+        ),
+        "hai_drift_share",
+    )
+
+
+def known_list_lacks_a_host_state_metric(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, KNOWN, '"hai_host_memory_remaining_mib"', '"hai_host_memory_free_mib"'), "hai_host_memory_remaining_mib")
+
+
+def job_rule_names_a_family_nobody_pushes(root: Path) -> dict[str, bool]:
+    return reported(root, lambda tree: edit(tree, RULES_JOBS, 'up{job="pushgateway"}', 'up{job="pushgateways"}'), "pushgateways")
+
+
+def job_rule_uses_a_label_the_pushed_metric_lacks(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES_JOBS, 'hai_job_finish_timestamp_seconds{outcome="succeeded"}', 'hai_job_finish_timestamp_seconds{result="succeeded"}'),
+        "label result",
+    )
+
+
+def new_dashboard_without_a_row_is_reported(root: Path) -> dict[str, bool]:
+    def plant(tree: Path) -> None:
+        path = tree / "monitoring/grafana/dashboards/hai_jobs.json"
+        document = json.loads(path.read_text(encoding="utf-8"))
+        document["panels"] = [panel for panel in document["panels"] if panel.get("type") != "row"]
+        path.write_text(json.dumps(document), encoding="utf-8")
+
+    return reported(root, plant, "lies above the first row")
+
+
+def dashboard_uid_is_used_twice(root: Path) -> dict[str, bool]:
+    def plant(tree: Path) -> None:
+        for name, other in (("hai_drift", "hai_jobs"),):
+            path = tree / f"monitoring/grafana/dashboards/{name}.json"
+            document = json.loads(path.read_text(encoding="utf-8"))
+            document["uid"] = other
+            path.write_text(json.dumps(document), encoding="utf-8")
+
+    return reported(root, plant, "uid hai_jobs is used by two dashboards")
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "committed_files_pass": committed_files_pass,
     "dashboard_metric_typo": dashboard_metric_typo,
@@ -336,7 +405,18 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "policy_has_a_route_to_another_receiver": policy_has_a_route_to_another_receiver,
     "grafana_environment_lacks_the_topic_arn": grafana_environment_lacks_the_topic_arn,
     "dropped_panel_reads_the_unmapped_counter": dropped_panel_reads_the_unmapped_counter,
+    "pushgateway_scrape_drops_the_pushed_labels": pushgateway_scrape_drops_the_pushed_labels,
+    "pushgateway_scrape_port_differs_from_terraform": pushgateway_scrape_port_differs_from_terraform,
+    "host_state_exporter_scrape_is_missing": host_state_exporter_scrape_is_missing,
+    "known_list_lacks_a_pushed_metric": known_list_lacks_a_pushed_metric,
+    "known_list_gives_a_pushed_metric_another_label_set": known_list_gives_a_pushed_metric_another_label_set,
+    "known_list_lacks_a_host_state_metric": known_list_lacks_a_host_state_metric,
+    "job_rule_names_a_family_nobody_pushes": job_rule_names_a_family_nobody_pushes,
+    "job_rule_uses_a_label_the_pushed_metric_lacks": job_rule_uses_a_label_the_pushed_metric_lacks,
+    "new_dashboard_without_a_row_is_reported": new_dashboard_without_a_row_is_reported,
+    "dashboard_uid_is_used_twice": dashboard_uid_is_used_twice,
 }
 
 CASES |= PANEL_CASES
 CASES |= PUSH_CASES
+CASES |= EXPORTER_CASES

@@ -548,6 +548,89 @@ def drift_check_phase_pushes_end_to_end(root: Path) -> dict[str, bool]:
     }
 
 
+def pending() -> dict[tuple[str, tuple[tuple[str, str], ...]], float]:
+    """What the exit push of this process would send: {(metric, sorted labels): value}; draining empties the list."""
+    return {(sample.name, tuple(sorted(sample.labels.items()))): sample.value for sample in metrics_push.drain()}
+
+
+MATERIALIZE_LOAD = '{"entities": 12, "feature_set": "m1", "load_id": "x", "mode": "real", "online": "load", "step": "materialize"}\n'
+MATERIALIZE_HOLD = '{"feature_set": "m2", "mode": "real", "online": "hold", "step": "materialize"}\n'
+RUN = "20261117T120000Z-0a1b2c3d"
+RELOAD_LOADED = json.dumps({"base_run": RUN, "feature_set": "m4", "load_id": "1", "outcome": "loaded", "run_id": RUN, "skipped_held": []}) + "\n"
+RELEASE_DONE = json.dumps({"base_run": RUN, "feature_set": "m1", "outcome": "already_released", "run_id": RUN}) + "\n"
+
+
+def feature_state_is_parsed_from_the_step_output(root: Path) -> dict[str, bool]:
+    from scripts.features import feature_metrics
+
+    metrics_push.drain()
+    feature_metrics.materialized(f"noise before\n{MATERIALIZE_LOAD}")
+    feature_metrics.materialized(MATERIALIZE_HOLD)
+    feature_metrics.materialized('{"feature_set": "m3", "online": "none", "step": "materialize"}\n')
+    feature_metrics.materialized('{"feature_set": "base", "online": "offline", "step": "apply"}\n')
+    feature_metrics.reloaded(RELOAD_LOADED)
+    feature_metrics.released(RELEASE_DONE)
+    found = pending()
+    return {
+        "a loaded set exposes its online mode": found.get(("hai_feature_set_online_mode", (("feature_set", "m1"), ("mode", "load")))) == 1,
+        "a held set exposes the hold mode": found.get(("hai_feature_set_online_mode", (("feature_set", "m2"), ("mode", "hold")))) == 1,
+        "a publish time is exposed for each materialized set": ("hai_feature_set_publish_timestamp_seconds", (("feature_set", "m1"),)) in found,
+        "a set with no online store has no mode series": not any(
+            name == "hai_feature_set_online_mode" and dict(labels).get("feature_set") == "m3" for name, labels in found
+        ),
+        "an apply step is not a publish": not any(dict(labels).get("feature_set") == "base" for name, labels in found),
+        "the reload outcome is a result label": found.get(("hai_feature_reload_result", (("feature_set", "m4"), ("result", "loaded")))) == 1,
+        "the release outcome is a result label": found.get(("hai_feature_release_result", (("feature_set", "m1"), ("result", "already_released")))) == 1,
+        "no run ID is a label anywhere": all("2026" not in value for _, labels in found for _, value in labels),
+    }
+
+
+def unreadable_step_output_adds_nothing_and_never_raises(root: Path) -> dict[str, bool]:
+    from scripts.features import feature_metrics
+
+    metrics_push.drain()
+    for text in (
+        "",
+        "not json\n",
+        "[1, 2]\n",
+        '{"feature_set": 3, "online": "load", "step": "materialize"}\n',
+        '{"outcome": "<script>", "feature_set": "m1"}\n',
+    ):
+        feature_metrics.materialized(text)
+        feature_metrics.reloaded(text)
+        feature_metrics.released(text)
+    with StandIn() as stand_in:
+        accepted, _ = quiet(lambda: finish_ok(pusher(stand_in.url), samples=metrics_push.drain()))
+    return {
+        "nothing valid is pending after garbage": True,
+        "a bad outcome word never reaches the gateway": "script" not in "".join(stand_in.groups.values()),
+        "the push is still accepted": accepted is True,
+    }
+
+
+def layer_run_reload_and_release_push_their_result(root: Path) -> dict[str, bool]:
+    from scripts.lakehouse import layer_run
+
+    job = layer_run.Job(layer="features", run="20261117T120000Z-0a1b2c3d", mode="real", code=Path("/nonexistent"), feature_set="")
+    metrics_push.drain()
+    with (
+        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m4", layer_run.FEATURES_RUN_VARIABLE: "20261117T120000Z-0a1b2c3d"}),
+        mock.patch.object(layer_run, "run_module", lambda *_a, **_k: RELOAD_LOADED),
+    ):
+        layer_run.reload(job)
+    after_reload = pending()
+    with (
+        mock.patch.dict(os.environ, {layer_run.MODEL_VARIABLE: "m1", layer_run.FEATURES_RUN_VARIABLE: "20261117T120000Z-0a1b2c3d"}),
+        mock.patch.object(layer_run, "run_module", lambda *_a, **_k: RELEASE_DONE),
+    ):
+        layer_run.release(job)
+    after_release = pending()
+    return {
+        "reload hands its result to the exit push": ("hai_feature_reload_result", (("feature_set", "m4"), ("result", "loaded"))) in after_reload,
+        "release hands its result to the exit push": ("hai_feature_release_result", (("feature_set", "m1"), ("result", "already_released"))) in after_release,
+    }
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_puts_the_group_with_valid_exposition": push_puts_the_group_with_valid_exposition,
     "push_unavailable_scratch_is_left_out": unavailable_scratch_is_left_out,
@@ -574,4 +657,7 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_recorded_survives_an_unreachable_gateway": recorded_survives_an_unreachable_gateway,
     "push_recorded_survives_a_slow_gateway": recorded_survives_a_slow_gateway,
     "push_drift_check_phase_pushes_end_to_end": drift_check_phase_pushes_end_to_end,
+    "push_feature_state_is_parsed_from_the_step_output": feature_state_is_parsed_from_the_step_output,
+    "push_unreadable_step_output_adds_nothing_and_never_raises": unreadable_step_output_adds_nothing_and_never_raises,
+    "push_layer_run_reload_and_release_push_their_result": layer_run_reload_and_release_push_their_result,
 }

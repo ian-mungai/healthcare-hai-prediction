@@ -96,12 +96,15 @@ def run(root: Path, stand_in: StandIn, **options: Any) -> list[str]:
     return monitoring_panels.check(root, stand_in.url, **options)
 
 
-def committed_dashboards_pass_when_every_query_answers(root: Path) -> dict[str, bool]:
+def committed_dashboards_pass_except_the_allowed_empty_ones(root: Path) -> dict[str, bool]:
     """Every committed panel target is queried, and the tracked allowance file is valid when the server answers every expression."""
-    with StandIn() as stand_in:
+    allowed = {(entry["dashboard"], entry["panel"]) for entry in json.loads((root / monitoring_panels.ALLOWED).read_text(encoding="utf-8"))["allowed"]}
+    found = monitoring_panels.panels(root)
+    empty = {target.expression: "empty" for target in found if (target.dashboard, target.title) in allowed}
+    with StandIn(empty) as stand_in:
         problems = monitoring_panels.check(root, stand_in.url)
-        found = monitoring_panels.panels(root)
     return {
+        "every allowed panel names a real panel of a committed dashboard": allowed <= {(target.dashboard, target.title) for target in found},
         "the committed dashboards have no problem": problems == [],
         "every committed target was queried": len(stand_in.queries) >= len(found) > 0,
     }
@@ -227,7 +230,7 @@ def command_exit_codes(root: Path) -> dict[str, bool]:
 
 
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
-    "panel_committed_dashboards_pass_when_every_query_answers": committed_dashboards_pass_when_every_query_answers,
+    "panel_committed_dashboards_pass_except_the_allowed_empty_ones": committed_dashboards_pass_except_the_allowed_empty_ones,
     "panel_every_panel_has_data": every_panel_has_data,
     "panel_empty_result_is_reported": empty_result_is_reported,
     "panel_nan_result_is_reported": nan_result_is_reported,

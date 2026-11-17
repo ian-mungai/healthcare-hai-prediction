@@ -20,3 +20,15 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["127.0.0.1:8000"]
+
+  # Host jobs push their own metrics to the Pushgateway at start, by heartbeat and at exit (scripts/metrics_push.py). honor_labels keeps the job, phase and
+  # outcome labels as the job pushed them; without it Prometheus renames them to exported_job and the dashboards and rules would read nothing.
+  - job_name: pushgateway
+    honor_labels: true
+    static_configs:
+      - targets: ["127.0.0.1:9091"]
+
+  # Live ECS capacity of the host and the live OpenMetadata health (monitoring/host_state_exporter.py).
+  - job_name: host_state_exporter
+    static_configs:
+      - targets: ["127.0.0.1:9103"]

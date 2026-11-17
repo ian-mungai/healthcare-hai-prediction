@@ -41,11 +41,20 @@ STATES = ("OK", "Alerting", "NoData", "Error")
 DATASOURCE = f"{MONITORING}/grafana/provisioning/datasources/prometheus.yml"
 PROVIDER = f"{MONITORING}/grafana/provisioning/dashboards/dashboards.yml"
 DASHBOARDS = f"{MONITORING}/grafana/dashboards"
-REQUIRED_JOBS = ("prometheus", "statsd_exporter", "hai_api")
-EXPECTED_TARGETS = {"prometheus": ["127.0.0.1:9090"], "statsd_exporter": ["127.0.0.1:9102"], "hai_api": ["127.0.0.1:8000"]}
+REQUIRED_JOBS = ("prometheus", "statsd_exporter", "hai_api", "pushgateway", "host_state_exporter")
+EXPECTED_TARGETS = {
+    "prometheus": ["127.0.0.1:9090"],
+    "statsd_exporter": ["127.0.0.1:9102"],
+    "hai_api": ["127.0.0.1:8000"],
+    "pushgateway": ["127.0.0.1:9091"],
+    "host_state_exporter": ["127.0.0.1:9103"],
+}
+TERRAFORM_JOBS = ("prometheus", "statsd_exporter", "pushgateway", "host_state_exporter")
+OVERVIEW = "hai_overview"
+PUSH_GROUPING = ("job", "phase", "outcome")
 SCHEDULER_ALERT = "AirflowSchedulerSilent"
 SCHEDULER_ABSENT = "absent(airflow_scheduler_heartbeat_total)"
-REQUIRED_ROWS = {"DAG": 3, "Jobs": 2, "API": 3}
+REQUIRED_ROWS = {"DAG": 3, "Jobs": 2, "API": 3}  # the rows of the overview dashboard only
 SEVERITIES = ("critical", "warning")
 METRIC_NAME = re.compile(r"^[a-zA-Z_:][a-zA-Z0-9_:]*$")
 DURATION = re.compile(r"^[0-9]+[smh]$")
@@ -203,22 +212,51 @@ def mapping_metrics(document: Any, problems: list[str]) -> dict[str, set[str] | 
 
 
 def known_metrics(document: Any, problems: list[str]) -> dict[str, set[str] | None]:
-    """The metrics of the known list and the API contract. A value of None means any label is accepted (a metric of Prometheus or the exporter itself)."""
+    """The metrics of the known list: a source that lists names has any label set (None), one that lists specs has typed metrics with labels."""
     metrics: dict[str, set[str] | None] = {}
     if not isinstance(document, dict):
         problems.append(f"{KNOWN} must be an object")
         return metrics
-    for source in ("prometheus", "statsd_exporter"):
-        for name in document.get(source, {}).get("metrics", []):
-            metrics[name] = None
-    for name, spec in document.get("hai_api", {}).get("metrics", {}).items():
-        labels = set(spec.get("labels", []))
-        if spec.get("type") == "histogram":
-            for suffix in HISTOGRAM_SUFFIXES:
-                metrics[f"{name}{suffix}"] = labels | ({"le"} if suffix == "_bucket" else set())
-        else:
-            metrics[name] = labels
+    for entry in document.values():
+        listed = entry.get("metrics") if isinstance(entry, dict) else None
+        if isinstance(listed, list):
+            for name in listed:
+                metrics[name] = None
+        elif isinstance(listed, dict):
+            for name, spec in listed.items():
+                labels = set(spec.get("labels", []))
+                if spec.get("type") == "histogram":
+                    for suffix in HISTOGRAM_SUFFIXES:
+                        metrics[f"{name}{suffix}"] = labels | ({"le"} if suffix == "_bucket" else set())
+                else:
+                    metrics[name] = labels
     return metrics
+
+
+def catalog_problems(document: Any) -> list[str]:
+    """Problems where the known list and the code that emits the metrics disagree: the push catalog of the jobs and the catalog of the host state exporter."""
+    from monitoring import host_state_exporter
+    from scripts import metrics_push
+
+    problems: list[str] = []
+    if not isinstance(document, dict):
+        return problems
+    wanted = {
+        "pushgateway": {name: set(PUSH_GROUPING) | set(labels) for name, (_, labels) in metrics_push.CATALOG.items()},
+        "host_state_exporter": {name: set(labels) for name, (_, labels, _) in host_state_exporter.CATALOG.items()},
+    }
+    sources = {"pushgateway": "scripts/metrics_push.py", "host_state_exporter": "monitoring/host_state_exporter.py"}
+    for source, expected in wanted.items():
+        listed = document.get(source, {}).get("metrics") if isinstance(document.get(source), dict) else None
+        found = {name: set(spec.get("labels", [])) for name, spec in listed.items()} if isinstance(listed, dict) else {}
+        for name in sorted(set(expected) - set(found)):
+            problems.append(f"{KNOWN}: {source} lacks {name}, which {sources[source]} emits")
+        for name in sorted(set(found) - set(expected)):
+            problems.append(f"{KNOWN}: {source} lists {name}, which {sources[source]} does not emit")
+        for name in sorted(set(expected) & set(found)):
+            if expected[name] != found[name]:
+                problems.append(f"{KNOWN}: {source} gives {name} the labels {sorted(found[name])}, but {sources[source]} emits {sorted(expected[name])}")
+    return problems
 
 
 def expression_problems(where: str, expression: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
@@ -230,7 +268,7 @@ def expression_problems(where: str, expression: str, metrics: dict[str, set[str]
             if label == "job":
                 value = re.search(r'"([^"]*)"', in_job)
                 if value and value.group(1) not in jobs:
-                    problems.append(f"{where}: the job {value.group(1)} is not a scrape job")
+                    problems.append(f"{where}: the job {value.group(1)} is not a scrape job or a pushed job family")
                 continue
             allowed = metrics.get(name, set())
             if allowed is not None and label not in allowed and name in metrics:
@@ -410,7 +448,7 @@ def dashboard_problems(relative: str, dashboard: Any, datasource_uid: str, metri
                 problems.append(f"{relative}: panel {title} has no expression")
             else:
                 problems.extend(expression_problems(f"{relative}: panel {title}", expression, metrics, jobs))
-    for row, minimum in REQUIRED_ROWS.items():
+    for row, minimum in REQUIRED_ROWS.items() if dashboard.get("uid") == OVERVIEW else []:
         if row not in per_row:
             problems.append(f"{relative} has no row {row}")
         elif per_row[row] < minimum:
@@ -440,7 +478,7 @@ def terraform_problems(root: Path, scrape: Any, datasource: Any, provider: Any) 
         elif not (root / folders.get("code_monitoring_prometheus", "monitoring/prometheus") / str(entry)[len(prometheus_path) + 1 :]).is_file():
             problems.append(f"{SCRAPE}: the rule file {entry} does not exist in {folders.get('code_monitoring_prometheus')}")
     for job in (scrape or {}).get("scrape_configs", []):
-        if job.get("job_name") in ("prometheus", "statsd_exporter"):
+        if job.get("job_name") in TERRAFORM_JOBS:
             for config in job.get("static_configs", []):
                 for target in config.get("targets", []):
                     port = int(str(target).rsplit(":", maxsplit=1)[1])
@@ -468,15 +506,21 @@ def check(root: Path = ROOT) -> list[str]:
     datasource = read_yaml(root, DATASOURCE, problems)
     provider = read_yaml(root, PROVIDER, problems)
     metrics = {**known_metrics(known, problems), **(mapping_metrics(mapping, problems) if mapping is not None else {})}
-    jobs = {str(job.get("job_name")) for job in (scrape or {}).get("scrape_configs", [])}
+    problems.extend(catalog_problems(known))
+    from scripts import metrics_push
+
+    jobs = {str(job.get("job_name")) for job in (scrape or {}).get("scrape_configs", [])} | set(metrics_push.JOB_PHASES)
+    scraped = {str(job.get("job_name")) for job in (scrape or {}).get("scrape_configs", [])}
     for required in REQUIRED_JOBS:
-        if scrape is not None and required not in jobs:
+        if scrape is not None and required not in scraped:
             problems.append(f"{SCRAPE} has no scrape job {required}")
     for job in (scrape or {}).get("scrape_configs", []):
         expected = EXPECTED_TARGETS.get(str(job.get("job_name")))
         targets = [str(target) for config in job.get("static_configs", []) for target in config.get("targets", [])]
         if expected is not None and targets != expected:
             problems.append(f"{SCRAPE}: job {job['job_name']} must scrape {', '.join(expected)}, not {targets}")
+        if job.get("job_name") == "pushgateway" and job.get("honor_labels") is not True:
+            problems.append(f"{SCRAPE}: the job pushgateway must set honor_labels: true, or the pushed job, phase and outcome labels are renamed")
     datasources = (datasource or {}).get("datasources", [])
     uids = [str(source.get("uid")) for source in datasources]
     if datasource is not None and len(uids) != 1:
@@ -495,11 +539,16 @@ def check(root: Path = ROOT) -> list[str]:
     files = sorted(folder.glob("*.json")) if folder.is_dir() else []
     if not files:
         problems.append(f"{DASHBOARDS} holds no dashboard")
+    seen_uids: dict[str, str] = {}
     for path in files:
         relative = path.relative_to(root).as_posix()
         dashboard = read_json(root, relative, problems)
         if dashboard is not None and uids:
             problems.extend(dashboard_problems(relative, dashboard, uids[0], metrics, jobs))
+        uid = str(dashboard.get("uid")) if isinstance(dashboard, dict) else ""
+        if uid and uid in seen_uids:
+            problems.append(f"{relative}: uid {uid} is used by two dashboards ({seen_uids[uid]} and {relative})")
+        seen_uids.setdefault(uid, relative)
     problems.extend(terraform_problems(root, scrape, datasource, provider))
     return problems
 

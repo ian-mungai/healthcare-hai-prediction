@@ -81,7 +81,7 @@ from typing import Any
 from orchestration.pipeline_protocol import PipelineError, digest_file, read_record, seal_copy
 from orchestration.training_contract import CODE_RUN
 from scripts import resource_peaks
-from scripts.features import feature_sets
+from scripts.features import feature_metrics, feature_sets
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import code_archive, duckdb_bounds, pins, provenance, task_capacity, version_listing
 from scripts.lakehouse.gold_publish_record import RUN_ID, SHA256, PublishError, accept_consumer
@@ -218,8 +218,8 @@ def kill_descendants() -> None:
             os.kill(pid, signal.SIGKILL)
 
 
-def run_module(job: Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> None:
-    """Run ``python -m module`` in the code folder; a nonzero exit or a step limit names the module.
+def run_module(job: Job, module: str, arguments: Sequence[str | Path], environment: dict[str, str] | None = None) -> str:
+    """Run ``python -m module`` in the code folder and return its standard output; a nonzero exit or a step limit names the module.
 
     The limit is enforced here and not by the process runner, because the runner kills only the module: its children would then belong to no process the
     driver can find. A timer stops the whole tree at the limit, while the module still links it. The runner's own limit is a later backstop.
@@ -262,6 +262,7 @@ def run_module(job: Job, module: str, arguments: Sequence[str | Path], environme
         )
     if done.returncode:
         raise StepError(f"{module} exited {done.returncode}")
+    return done.stdout
 
 
 def capacity_profile(layer: str, phase: str) -> str:
@@ -929,7 +930,7 @@ def feast(job: Job, bucket: str, client: Any) -> None:
     record is the evidence of the publication the run committed (the lineage of a model set reads its commit time), so it is put once and never replaced."""
     accepted_publish(job)
     for step in ("apply", "materialize"):
-        run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode, *job.set_flags])
+        feature_metrics.materialized(run_module(job, "scripts.features.feast_job", [step, "--run", job.run, "--mode", job.mode, *job.set_flags]))
     for name in [*FEAST_RECORDS, *([HOLD_RECORD] if (job.folder / HOLD_RECORD).is_file() else [])]:
         key = f"{UPLOAD_PREFIX}/{job.layer}/{job.run}/{name}"
         if name == APPLY_RECORD:
@@ -945,7 +946,7 @@ def reload(job: Job) -> None:
     model = os.environ.get(MODEL_VARIABLE, "")
     if not model:
         raise StepError(f"{MODEL_VARIABLE} is not set: a reload names the model set whose online store it loads")
-    run_module(job, "scripts.features.online_reload", ["--model", model, "--run", job.run, "--mode", job.mode])
+    feature_metrics.reloaded(run_module(job, "scripts.features.online_reload", ["--model", model, "--run", job.run, "--mode", job.mode]))
 
 
 def release(job: Job) -> None:
@@ -956,7 +957,7 @@ def release(job: Job) -> None:
         raise StepError(f"{MODEL_VARIABLE} is not set: a release names the model set whose held online load it releases")
     if not RUN_ID.fullmatch(run):
         raise StepError(f"{FEATURES_RUN_VARIABLE} {run!r} is not a features run ID: a release names the run it releases")
-    run_module(job, "scripts.features.online_release", ["--model", model, "--features-run", run, "--mode", job.mode])
+    feature_metrics.released(run_module(job, "scripts.features.online_release", ["--model", model, "--features-run", run, "--mode", job.mode]))
 
 
 def apply_identity(record: Mapping[str, Any]) -> dict[str, Any]:

@@ -1,0 +1,154 @@
+# Host job alerts, from the metrics the jobs push themselves (scripts/metrics_push.py). A job is failing when its newest failed or interrupted finish is later than its newest succeeded finish, so a later success clears the alert without any delete.
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_jobs
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: job_failed
+        title: JobFailed
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) > bool on (job, phase) (max by (job, phase) (hai_job_finish_timestamp_seconds{outcome="succeeded"}) or on (job, phase) max by (job, phase) (hai_job_finish_timestamp_seconds{outcome=~"failed|interrupted"}) * 0)'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A host job phase failed or was interrupted, and no later run of it has succeeded.
+
+      - uid: job_vanished
+        title: JobVanished
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(time() - hai_job_heartbeat_timestamp_seconds{outcome="running"} > bool 180) * on (job, phase) (hai_job_start_timestamp_seconds{outcome="running"} > bool on (job, phase) (max by (job, phase) (hai_job_finish_timestamp_seconds) or on (job, phase) hai_job_start_timestamp_seconds{outcome="running"} * 0))'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A host job phase stopped sending heartbeats for 3 minutes without an exit push, so it was killed or lost. Its last heartbeat shows its memory.
+
+      - uid: job_peak_memory_near_cap
+        title: JobPeakMemoryNearCap
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(max by (job, phase) (hai_job_peak_memory_bytes or hai_job_memory_peak_bytes) / scalar(hai_host_job_cap_mib * 1048576)) > bool 0.9'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: A host job phase used more than 90 percent of the host job cap at its peak.
+
+      - uid: pushgateway_down
+        title: PushgatewayDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'up{job="pushgateway"} == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Prometheus cannot scrape the Pushgateway, so the jobs' own metrics are lost.

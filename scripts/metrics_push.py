@@ -74,6 +74,7 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_feature_set_publish_timestamp_seconds": ("Unix time of the latest publish of a feature set.", ("feature_set",)),
     "hai_feature_set_online_mode": ("1 for the online load mode of the latest feature set publish.", ("feature_set", "mode")),
     "hai_feature_reload_result": ("1 for the result of the latest online store reload of a feature set.", ("feature_set", "result")),
+    "hai_feature_release_result": ("1 for the result of the latest release of a held online load of a feature set.", ("feature_set", "result")),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
 PENDING: list[Sample] = []

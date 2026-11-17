@@ -1,0 +1,120 @@
+# Host alerts, from the live ECS capacity read by the host state exporter.
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_host
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: host_state_exporter_down
+        title: HostStateExporterDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 300, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'up{job="host_state_exporter"} == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Prometheus cannot scrape the host state exporter, so the host capacity and the OpenMetadata health are not visible.
+
+      - uid: host_state_source_down
+        title: HostStateSourceDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'host_state_exporter_source_up == bool 0'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The host state exporter cannot read one of its sources (the ECS capacity or the OpenMetadata health check).
+
+      - uid: host_job_room_low
+        title: HostJobRoomLow
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(hai_host_memory_remaining_mib < bool hai_host_job_cap_mib) * on () ((count(hai_job_heartbeat_timestamp_seconds{outcome="running"} > (time() - 180)) or vector(0)) == bool 0)'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: With no host job running, ECS has less memory left than the host job cap, so no job can be placed.
