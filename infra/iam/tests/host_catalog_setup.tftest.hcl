@@ -80,7 +80,7 @@ run "the_catalog_setup_role_reaches_exactly_the_fourteen_pairs_and_nothing_of_th
 
   assert {
     condition = (
-      length(jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement) == 9
+      length(jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement) == 10
       && length([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement if statement.Sid == "SetUpAwsPolarisPairs"]) == 1
       && length(one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Resource if statement.Sid == "SetUpAwsPolarisPairs"])) == 14
       && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Action if statement.Sid == "SetUpAwsPolarisPairs"]) == ["ssm:GetParameter", "ssm:PutParameter"]
@@ -127,11 +127,14 @@ run "the_catalog_setup_role_writes_only_its_own_records_and_the_apply_lock" {
 
   assert {
     condition = (
-      one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.StringNotEquals["s3:if-none-match"] if statement.Sid == "DenyApprovalAndLockCreateWithoutCondition"]) == "*"
-      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Effect if statement.Sid == "DenyApprovalDelete"]) == "Deny"
+      one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.StringNotEquals["s3:if-none-match"] if statement.Sid == "DenyApprovalCreateWithoutCondition"]) == "*"
+      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.Null["s3:if-none-match"] if statement.Sid == "DenyLockWriteWithoutCondition"]) == "true"
+      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.Null["s3:if-match"] if statement.Sid == "DenyLockWriteWithoutCondition"]) == "true"
+      && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Effect if statement.Sid == "DenyApprovalAndLockDelete"]) == "Deny"
+      && length(one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Resource if statement.Sid == "DenyApprovalAndLockDelete"])) == 2
       && one([for statement in jsondecode(aws_iam_role_policy.host_catalog_setup_task[0].policy).Statement : statement.Condition.StringEqualsIgnoreCase["ssm:Overwrite"] if statement.Sid == "DenyHoldOverwrite"]) == "true"
     )
-    error_message = "An approval or lock write without the create-only header, an approval delete and an overwrite of the apply lock are denied."
+    error_message = "An approval write without the create-only header, a lock write with no condition header, an approval or lock delete and an overwrite of the apply lock are denied."
   }
 
   assert {

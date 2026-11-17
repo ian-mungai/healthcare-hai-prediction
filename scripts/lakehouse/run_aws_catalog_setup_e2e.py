@@ -1194,8 +1194,8 @@ def case_lock_before_changes(_: Path) -> dict[str, bool]:
 
 
 def case_lease_takeover(_: Path) -> dict[str, bool]:
-    """P11: a lease is created once, refuses a second holder until its own expiry, is replaced only after that expiry, and is deleted only at the
-    version its holder created."""
+    """P11: a lease is created once, refuses a second holder until its own expiry, is replaced only after that expiry and only at the version that was read,
+    and is released only at the version its holder created; nothing is ever deleted."""
     from scripts.lakehouse.catalog_setup_state import CatalogState, StateError
 
     clock = [1000.0]
@@ -1210,16 +1210,25 @@ def case_lease_takeover(_: Path) -> dict[str, bool]:
                 checks["a live lease refuses a second holder"] = False
         except StateError as error:
             checks["a live lease refuses a second holder"] = error.code == "credentials" and "lease ends" in str(error)
-    checks["the lease is deleted at its own version"] = key not in s3.objects and any(call[0] == "delete" and call[2].get("IfMatch") for call in s3.calls)
+    released = json.loads(s3.objects[key][0])
+    checks["the lease is released at its own version"] = released["expires_at"] == 0 and any(call[0] == "put" and call[2].get("IfMatch") for call in s3.calls)
+    checks["no lease record is ever deleted"] = not any(call[0] == "delete" and call[1] == key for call in s3.calls)
     stack = contextlib.ExitStack()
     stack.enter_context(state.lease("r", wait=1.0, hold=10.0))
     clock[0] += 11.0
     with state.lease("r", wait=1.0, hold=10.0):
         taken = json.loads(s3.objects[key][0])
         stack.close()
+        after = json.loads(s3.objects[key][0])
         checks["an expired lease is replaced by a second holder"] = taken["expires_at"] > clock[0]
-        checks["the first holder never deletes the second holder's lease"] = key in s3.objects
-    checks["the second holder deletes its own lease"] = key not in s3.objects
+        checks["the first holder never releases the second holder's lease"] = after == taken
+    checks["the second holder releases its own lease"] = json.loads(s3.objects[key][0])["expires_at"] == 0
+    first, second = state.read(key), state.read(key)
+    clock[0] += 100.0
+    if first is not None and second is not None:
+        won = state.replace(key, {"expires_at": clock[0] + 10}, first[1])
+        lost = state.replace(key, {"expires_at": clock[0] + 10}, second[1])
+        checks["of two takers of the same version only one wins"] = won is not None and lost is None
     return checks
 
 
@@ -1387,10 +1396,9 @@ def expired_read(self: CatalogState, key: str) -> Any:
     return None if found is None else ({**found[0], "expires_at": 0}, found[1])
 
 
-def unversioned_delete(self: CatalogState, key: str, version: str) -> bool:
-    """A delete that ignores the version it is given."""
-    self.client.delete_object(Bucket=self.bucket, Key=key)
-    return True
+def unversioned_replace(self: CatalogState, key: str, document: dict[str, Any], version: str) -> str:
+    """A replace that ignores the version it is given."""
+    return str(self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(document).encode())["ETag"])
 
 
 # Each planted defect and the case that must fail when it is in place.
@@ -1446,7 +1454,7 @@ MUTATIONS: dict[str, tuple[str, Callable[[], contextlib.AbstractContextManager[A
         lambda: mock.patch.object(LaunchGuard, "no_live_writer_try", lambda *a, **k: contextlib.nullcontext()),
     ),
     "a live lease is taken over": ("lease_takeover", lambda: mock.patch.object(CatalogState, "read", expired_read)),
-    "a lease is deleted without its version": ("lease_takeover", lambda: mock.patch.object(CatalogState, "delete_version", unversioned_delete)),
+    "a lease is replaced without its version": ("lease_takeover", lambda: mock.patch.object(CatalogState, "replace", unversioned_replace)),
     "the hold is released without its token": (
         "launch_hold",
         lambda: mock.patch.object(LaunchGuard, "release", lambda self, token: self.ssm.delete_parameter(Name=self.spec.lock_parameter)),

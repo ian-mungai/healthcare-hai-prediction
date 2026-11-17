@@ -4,10 +4,10 @@ The setup runs as a one-off task on the host, so it has no checkout folder to ke
 
 - The namespace approvals are write-once objects ``<prefix>/approvals/<identity>.json``, created with ``IfNoneMatch="*"``. A second approval for the same
   identity never replaces the first.
-- The lock of one principal (P11) is the lease object ``<prefix>/locks/<role>.json``. It is created with ``IfNoneMatch="*"``, deleted only with
-  ``IfMatch`` on the version this run created, and replaced only after its own expiry. Its expiry is the step's absolute deadline plus the longest a pair write
-  past that deadline is awaited, so a lease that has expired belongs to a run that can no longer change anything. A crashed task leaves its lease; the next
-  run waits for it, at most to the end of its own wait bound, then refuses with the expiry time.
+- The lock of one principal (P11) is the lease object ``<prefix>/locks/<role>.json``. It is created with ``IfNoneMatch="*"``, replaced only with
+  ``IfMatch`` on the version that was read (after its own expiry) and released by writing its expiry as zero at the version this run holds. Its expiry is
+  the step's absolute deadline plus the longest a pair write past that deadline is awaited, so a lease that has expired belongs to a run that can no longer
+  change anything. A crashed task leaves its lease; the next run waits for it, at most to the end of its own wait bound, then refuses with the expiry time.
 - The mark of an unconfirmed pair write is the object ``<prefix>/pending/<role>.json``, which holds the time until which the write may still commit.
 - The launch hold (P5) is the services apply lock parameter, which every host launch honours: the setup creates it without overwrite with its own token,
   proves that no job task of the project has a task without a confirmed end, and deletes it only with its own token. A services apply that holds the
@@ -95,15 +95,20 @@ class CatalogState:
             raise StateError("state", f"writing {key} failed ({error_code(error)})") from None
         return str(reply.get("ETag", ""))
 
-    def delete_version(self, key: str, version: str) -> bool:
-        """Delete the record only at this version: False when it is gone or another run replaced it."""
+    def replace(self, key: str, document: dict[str, Any], version: str) -> str | None:
+        """Replace the record only while it is still at this version: the new version, or None when another run replaced it since."""
         try:
-            self.client.delete_object(Bucket=self.bucket, Key=key, IfMatch=version)
+            reply = self.client.put_object(Bucket=self.bucket, Key=key, Body=json.dumps(document, sort_keys=True).encode(), IfMatch=version)
         except (ClientError, BotoCoreError) as error:
             if error_code(error) in (*REFUSED_CODES, *MISSING_CODES):
-                return False
-            raise StateError("state", f"deleting {key} failed ({error_code(error)})") from None
-        return True
+                return None
+            raise StateError("state", f"writing {key} failed ({error_code(error)})") from None
+        return str(reply.get("ETag", ""))
+
+    def forget(self, key: str) -> None:
+        """Delete a record only this run writes (a pending mark); a failed delete leaves a mark that expires by its own time."""
+        with contextlib.suppress(ClientError, BotoCoreError):
+            self.client.delete_object(Bucket=self.bucket, Key=key)
 
     def approval(self, identity: str) -> dict[str, Any] | None:
         found = self.read(self.key("approvals", identity))
@@ -119,20 +124,26 @@ class CatalogState:
 
     @contextlib.contextmanager
     def lease(self, role: str, *, wait: float, hold: float) -> Iterator[None]:
-        """Hold the principal's lock for at most ``hold`` seconds, waiting at most ``wait`` seconds for it (P11)."""
+        """Hold the principal's lock for at most ``hold`` seconds, waiting at most ``wait`` seconds for it (P11).
+
+        The lease is one object that only conditional writes change: it is created while absent, and an expired or released lease is replaced at the
+        exact version that was read, so of two runs that read the same expired lease one wins. Release writes the expiry as zero at the version this run
+        holds; it is never deleted, because a delete has no version condition on a general-purpose bucket.
+        """
         key, end = self.key("locks", role), self.clock() + wait
         takeovers = 0
         while True:
             expires = self.clock() + hold
-            version = self.create(key, {"token": secrets.token_hex(16), "expires_at": expires, "expires_utc": utc(expires)})
+            mine = {"token": secrets.token_hex(16), "expires_at": expires, "expires_utc": utc(expires)}
+            version = self.create(key, mine)
             if version is not None:
                 break
             found = self.read(key)
             if found is not None and found[0].get("expires_at", float("inf")) <= self.clock() and takeovers < MAX_TAKEOVERS:
-                # An expired lease belongs to a run that can no longer change anything. The delete is at its exact version, so a lease another run
-                # created since is never deleted; at most MAX_TAKEOVERS tries bound the loop.
                 takeovers += 1
-                self.delete_version(key, found[1])
+                version = self.replace(key, mine, found[1])
+                if version is not None:
+                    break
                 continue
             if self.clock() >= end:
                 until = f"; its lease ends {found[0].get('expires_utc', 'at an unknown time')}" if found is not None else ""
@@ -141,9 +152,9 @@ class CatalogState:
         try:
             yield
         finally:
-            # A lease that cannot be deleted expires by itself; the result of the step is not hidden by it.
+            # A lease that cannot be released expires by itself; the result of the step is not hidden by it.
             with contextlib.suppress(StateError):
-                self.delete_version(key, version)
+                self.replace(key, {"token": mine["token"], "expires_at": 0, "released": True}, version)
 
     def refuse_pending_write(self, role: str) -> None:
         """Stop while an earlier pair write of the principal may still commit: its mark stays until the write ends or its time has passed."""
@@ -159,7 +170,7 @@ class CatalogState:
             raise StateError("credentials", f"the pending-write mark of principal {role} names no time; no pair change is safe until it is resolved")
         if until > self.clock():
             raise StateError("credentials", f"an earlier pair write of principal {role} may still commit until {utc(until)}; rerun after that")
-        self.delete_version(key, found[1])
+        self.forget(key)
 
     def pending(self, role: str) -> PendingMark:
         return PendingMark(self, role)

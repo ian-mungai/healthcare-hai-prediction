@@ -34,17 +34,24 @@
       "Condition": { "StringLike": { "s3:prefix": ["${RECORD_SCOPE}*"] } }
     },
     {
-      "Sid": "DenyApprovalAndLockCreateWithoutCondition",
+      "Sid": "DenyApprovalCreateWithoutCondition",
       "Effect": "Deny",
       "Action": "s3:PutObject",
-      "Resource": ["${RECORDS_ARN}/approvals/*", "${RECORDS_ARN}/locks/*"],
+      "Resource": "${RECORDS_ARN}/approvals/*",
       "Condition": { "StringNotEquals": { "s3:if-none-match": "*" } }
     },
     {
-      "Sid": "DenyApprovalDelete",
+      "Sid": "DenyLockWriteWithoutCondition",
+      "Effect": "Deny",
+      "Action": "s3:PutObject",
+      "Resource": "${RECORDS_ARN}/locks/*",
+      "Condition": { "Null": { "s3:if-none-match": "true", "s3:if-match": "true" } }
+    },
+    {
+      "Sid": "DenyApprovalAndLockDelete",
       "Effect": "Deny",
       "Action": "s3:DeleteObject",
-      "Resource": "${RECORDS_ARN}/approvals/*"
+      "Resource": ["${RECORDS_ARN}/approvals/*", "${RECORDS_ARN}/locks/*"]
     },
     {
       "Sid": "ListProjectTasks",
