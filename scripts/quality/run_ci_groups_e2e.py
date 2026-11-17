@@ -1637,13 +1637,7 @@ def selection_cases(work: Path) -> list[dict[str, Any]]:
             ["--scope", "paths", "--path", "docs/.markdownlint.json", "--path", "docs/guides/.markdownlint-cli2.yaml", "--part", "core+layers"],
             [],
         ),
-        # The two runners that the terraform_checks group starts, and the configuration one of them reads, select that group.
-        selection_case(
-            work,
-            "services_move_runner_selects_terraform_checks",
-            ["--scope", "paths", "--path", "scripts/infrastructure/run_services_move_e2e.py", "--part", "core+layers"],
-            ["python_lint", *LAYERS, "repository_code_checks", "configuration_checks", "terraform_checks"],
-        ),
+        # The serving runners that the terraform_checks group starts, and the configuration one of them reads, select that group.
         selection_case(
             work,
             "serving_release_runner_selects_terraform_checks",

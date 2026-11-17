@@ -2179,7 +2179,7 @@ run "serving_services_are_their_own_resource" {
 
   assert {
     condition     = toset(keys(aws_ecs_service.serving)) == toset(["model_api", "streamlit"]) && !contains(keys(aws_ecs_service.service), "model_api") && !contains(keys(aws_ecs_service.service), "streamlit")
-    error_message = "The model API and the dashboard are services of the serving resource and are no longer in the shared one, so the moved blocks carry them over."
+    error_message = "The model API and the dashboard are services of the serving resource only, not of the shared one."
   }
 
   assert {

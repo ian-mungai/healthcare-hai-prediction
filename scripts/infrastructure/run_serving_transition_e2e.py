@@ -1,4 +1,4 @@
-"""Prove that the first owner apply after the move leaves the model API and the dashboard on a revision the release check accepts (owner decision D18).
+"""Prove that the first owner apply that gives the serving services their own execution role leaves them on an accepted revision (owner decision D18).
 
 The two serving services ignore ``task_definition``, so an owner apply cannot roll back a release by GitHub. A service that exists before this change runs a
 revision that names the shared task execution role and, for the model API, the shared Redis password. GitHub renders its next revision from the running one, and
@@ -6,14 +6,15 @@ the release check refuses that password, so the first release would fail before 
 the service watches the execution role of its task definition (``replace_triggered_by``), which changes from the shared role to the serving execution role in
 that apply only.
 
-The run plans the services stack with the real AWS provider and no AWS call (as ``run_services_move_e2e`` does). Nothing is applied and no credential is read.
+The run plans the services stack with the real AWS provider and no AWS call: the provider takes fake keys and skips every check, and
+``-refresh=false`` keeps it off the network. Nothing is applied and no credential is read.
 
-1. First apply: a state that holds the services at their old addresses with a base revision (:99, shared role and shared Redis password). The plan must replace
+1. First apply: a state that holds the services with a base revision (:99, shared role and shared Redis password). The plan must replace
    both services because of the trigger, keep the old task definition revision registered, and start the new services on the revision of the stack (serving
    execution role, the Redis user of the model API).
 2. The release step of ``.github/workflows/deploy_model_api.yml`` runs as written, with a stand-in for the AWS command. On the base revision the model API step
    stops at the release check and registers nothing (the control). On the revision that the plan gives the new service the step registers the next revision.
-3. Later apply: a state with the services at the new addresses on a revision that GitHub registered (:100) and a task definition that the stack changes (a new
+3. Later apply: a state with the services on a revision that GitHub registered (:100) and a task definition that the stack changes (a new
    image digest). The task definition is replaced, and the services must stay as they are.
 
 Then each planted defect (no trigger, a trigger on the whole task definition or on an attribute that never changes, no ignore_changes, the shared execution
@@ -35,11 +36,10 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import run_services_move_e2e as stack
 from scripts.infrastructure import run_serving_release_real_e2e as release
 from scripts.process import run_command
 
-REPO_ROOT = stack.REPO_ROOT
+REPO_ROOT = release.REPO_ROOT
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "deploy_model_api.yml"
 STEP_NAME = "Register the next revision from the running one and check it"
 BASE_REVISION = 99
@@ -131,13 +131,13 @@ def encode(containers: list[dict[str, Any]]) -> str:
 
 
 def revision_arn(key: str, revision: int) -> str:
-    return f"arn:aws:ecs:{release.REGION}:{stack.ACCOUNT}:task-definition/example_project_dev_{key}:{revision}"
+    return f"arn:aws:ecs:{release.REGION}:{release.ACCOUNT}:task-definition/example_project_dev_{key}:{revision}"
 
 
 def task_definition_state(plan: dict[str, Any], key: str, revision: int, role: str, containers: list[dict[str, Any]]) -> dict[str, Any]:
     """A task definition instance of the state: the known values of the planned one, a revision, a role and the containers given."""
     change = task_definition_changes(plan)[key]["change"]
-    attributes = {name: value for name, value in change["after"].items() if stack.fully_known(change["after_unknown"].get(name))}
+    attributes = {name: value for name, value in change["after"].items() if release.fully_known(change["after_unknown"].get(name))}
     arn = revision_arn(key, revision)
     attributes.update(
         arn=arn,
@@ -151,13 +151,42 @@ def task_definition_state(plan: dict[str, Any], key: str, revision: int, role: s
     return {"index_key": key, "schema_version": 1, "attributes": attributes, "sensitive_attributes": []}
 
 
+def serving_state(first_plan: dict[str, Any]) -> dict[str, Any]:
+    """A state with the serving services as the first plan would create them, running the base revision that GitHub registered."""
+    instances = []
+    for change in first_plan["resource_changes"]:
+        if change["type"] == "aws_ecs_service" and change.get("index") in release.SERVICES:
+            key = change["index"]
+            known = {name: value for name, value in change["change"]["after"].items() if release.fully_known(change["change"]["after_unknown"].get(name))}
+            known["id"] = f"arn:aws:ecs:{release.REGION}:{release.ACCOUNT}:service/example-project-dev/example_project_dev_{key}"
+            known["triggers"] = {}
+            known["task_definition"] = revision_arn(key, BASE_REVISION)
+            instances.append({"index_key": key, "schema_version": 0, "attributes": known, "sensitive_attributes": []})
+    return {
+        "version": 4,
+        "terraform_version": "1.16.1",
+        "serial": 1,
+        "lineage": "00000000-0000-0000-0000-000000000000",
+        "outputs": {},
+        "resources": [
+            {
+                "mode": "managed",
+                "type": "aws_ecs_service",
+                "name": "serving",
+                "provider": 'provider["registry.terraform.io/hashicorp/aws"]',
+                "instances": instances,
+            }
+        ],
+    }
+
+
 def state_of(plan: dict[str, Any], *, later: bool) -> dict[str, Any]:
-    """The state before the first apply (``later`` false: old addresses, base revisions) or after it (new addresses, a revision that GitHub registered)."""
-    state = stack.old_state(plan)
+    """The state before the first apply (``later`` false: base revisions) or after it (a revision that GitHub registered)."""
+    state = serving_state(plan)
     service_resource = state["resources"][0]
     shared = shared_redis_secret(plan)
     definitions = []
-    for key in stack.SERVING:
+    for key in release.SERVICES:
         after = task_definition_changes(plan)[key]["change"]["after"]
         if later:
             containers = json.loads(encode(containers_of(after)).replace(release_digest(plan, key), CHANGED_DIGEST))
@@ -167,8 +196,6 @@ def state_of(plan: dict[str, Any], *, later: bool) -> dict[str, Any]:
     for instance in service_resource["instances"]:
         key = instance["index_key"]
         instance["attributes"]["task_definition"] = revision_arn(key, LATER_REVISION if later else BASE_REVISION)
-    if later:
-        service_resource["name"] = "serving"
     state["resources"].append(
         {"mode": "managed", "type": "aws_ecs_task_definition", "name": "service", "provider": service_resource["provider"], "instances": definitions}
     )
@@ -182,25 +209,23 @@ def release_digest(plan: dict[str, Any], key: str) -> str:
 
 
 def service_changes(plan: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    return {change["index"]: change for change in plan["resource_changes"] if change["type"] == "aws_ecs_service" and change.get("index") in stack.SERVING}
+    return {change["index"]: change for change in plan["resource_changes"] if change["type"] == "aws_ecs_service" and change.get("index") in release.SERVICES}
 
 
 def first_apply_problems(plan: dict[str, Any] | None, text: str) -> list[str]:
-    """What is wrong with the plan of the first apply. Empty means each service is replaced once and starts on the revision of the stack."""
+    """What is wrong with the plan of the first apply. Empty means each service is replaced once and starts on the revision of the release."""
     if plan is None:
         return [f"the plan failed: {text.strip().splitlines()[-1][:160] if text.strip() else 'no output'}"]
     found = []
-    for key, change in service_changes(plan).items():
+    for change in service_changes(plan).values():
         if change["change"]["actions"] != ["delete", "create"] or change.get("action_reason") != "replace_by_triggers":
             found.append(
                 f"{change['address']} is planned as {'+'.join(change['change']['actions'])} ({change.get('action_reason')}), not replaced by the trigger"
             )
-        if change.get("previous_address") != f'aws_ecs_service.service["{key}"]':
-            found.append(f"{change['address']} does not come from the old address ({change.get('previous_address')})")
         if not change["change"]["after_unknown"].get("task_definition"):
             found.append(f"{change['address']} does not start on the task definition of the stack")
     for key, change in task_definition_changes(plan).items():
-        if key in stack.SERVING:
+        if key in release.SERVICES:
             if change["change"]["actions"] != ["delete", "create"]:
                 found.append(f"{change['address']} is planned as {'+'.join(change['change']['actions'])}, not as a new revision")
             if not change["change"]["after"].get("skip_destroy"):
@@ -219,10 +244,8 @@ def later_apply_problems(plan: dict[str, Any] | None, text: str) -> list[str]:
     for change in service_changes(plan).values():
         if change["change"]["actions"] != ["no-op"]:
             found.append(f"{change['address']} is planned as {'+'.join(change['change']['actions'])}, so an owner apply would roll the release back")
-        if change.get("previous_address"):
-            found.append(f"{change['address']} still moves from {change['previous_address']}")
     for key, change in task_definition_changes(plan).items():
-        if key in stack.SERVING and change["change"]["actions"] == ["no-op"]:
+        if key in release.SERVICES and change["change"]["actions"] == ["no-op"]:
             found.append(f"{change['address']} did not change, so this case proves nothing about the trigger")
     return found
 
@@ -246,7 +269,7 @@ def run_step(service: str, running: dict[str, Any], revision: int) -> dict[str, 
     (fixture / "definitions").mkdir(parents=True)
     (fixture / "tmp").mkdir()
     arn = revision_arn(service, revision)
-    release.write(FIXTURE / "account", stack.ACCOUNT)
+    release.write(FIXTURE / "account", release.ACCOUNT)
     release.write(FIXTURE / "running_arn", arn)
     release.write(FIXTURE / "registered_arn", revision_arn(service, revision + 1))
     release.write(FIXTURE / "definitions" / (arn.replace("/", "_").replace(":", "_") + ".json"), json.dumps(running))
@@ -266,14 +289,14 @@ def run_step(service: str, running: dict[str, Any], revision: int) -> dict[str, 
 def chain_problems(plan: dict[str, Any] | None) -> list[str]:
     """Run the release step on what each service runs after the first apply. Empty means the base revision is refused and the service runs one the step accepts.
 
-    A service that the plan leaves alone keeps its base revision. A service that the plan replaces or updates starts on the task definition of the stack.
+    A service that the plan leaves alone keeps its base revision. A service that the plan replaces or updates starts on the task definition of the release.
     """
     if plan is None:
         return ["no plan to take the new revision from"]
     found = []
     shared = shared_redis_secret(plan)
     changes = service_changes(plan)
-    for key in stack.SERVING:
+    for key in release.SERVICES:
         new = release.planted_definition(plan, key)
         base = copy.deepcopy(new)
         base["containerDefinitions"] = as_base(new["containerDefinitions"], shared)
@@ -329,7 +352,7 @@ DEFECTS: list[tuple[str, str, Callable[[str], str]]] = [
 
 def checks(directory: Path, output: Path, label: str) -> dict[str, list[str]]:
     """Plan the stack in ``directory`` against the state before and after the first apply and run the three kinds of check."""
-    first, first_text = stack.plan_json(directory, None)
+    first, first_text = release.plan_json(directory, None)
     if first is None:
         return {"plan": [f"the plan without a state failed: {first_text.strip().splitlines()[-1][:160]}"]}
     result: dict[str, list[str]] = {}
@@ -338,7 +361,7 @@ def checks(directory: Path, output: Path, label: str) -> dict[str, list[str]]:
         state.write_text(json.dumps(state_of(first, later=later), indent=2) + "\n", encoding="utf-8")
         work = output / f"{label}_work.tfstate"
         shutil.copyfile(state, work)
-        plan, text = stack.plan_json(directory, work)
+        plan, text = release.plan_json(directory, work)
         (output / f"{label}_{name}_plan.txt").write_text(text, encoding="utf-8")
         result[name] = first_apply_problems(plan, text) if not later else later_apply_problems(plan, text)
         if not later:
@@ -346,12 +369,12 @@ def checks(directory: Path, output: Path, label: str) -> dict[str, list[str]]:
     return result
 
 
-def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK) -> dict[str, Any]:
+def run(output: Path, plugin_directory: Path | None, source: Path = release.STACK) -> dict[str, Any]:
     """Prove the transition on the stack as it is, then plant each defect in a copy and require one check to fail."""
     output = output.absolute()
     output.mkdir(parents=True, exist_ok=False)
     base = output / "stack"
-    stack.prepare(source, base, plugin_directory)
+    release.prepare(source, base, plugin_directory)
     release.write_variables(base)
     report: dict[str, Any] = {"checks": {}, "defects": []}
     try:
@@ -380,8 +403,10 @@ def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output-directory", type=Path, required=True, help="A new folder for the plans and the report; it must not exist.")
-    parser.add_argument("--plugin-directory", type=Path, default=stack.PROVIDERS if stack.PROVIDERS.is_dir() else None, help="A folder with the AWS provider.")
-    parser.add_argument("--stack-directory", type=Path, default=stack.STACK, help="The services stack to plan; defaults to infra/services.")
+    parser.add_argument(
+        "--plugin-directory", type=Path, default=release.PROVIDERS if release.PROVIDERS.is_dir() else None, help="A folder with the AWS provider."
+    )
+    parser.add_argument("--stack-directory", type=Path, default=release.STACK, help="The services stack to plan; defaults to infra/services.")
     arguments = parser.parse_args()
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())

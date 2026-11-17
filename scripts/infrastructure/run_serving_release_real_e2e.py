@@ -1,7 +1,7 @@
 """Run the serving release check on the task definitions that the services stack really plans (owner decision D18).
 
 A hand-written fixture can agree with the check while the stack disagrees with both. So this plans the services stack with the real AWS provider and no AWS
-call (as ``run_services_move_e2e`` does), takes the planned model API and dashboard task definitions as the stack renders them, and feeds them to
+call (fake keys, every check skipped), takes the planned model API and dashboard task definitions as the stack renders them, and feeds them to
 ``.github/scripts/serving_release.sh``:
 
 1. The definition of each service passes the check, and so does the revision that ``render`` builds from it with a new image digest.
@@ -16,21 +16,120 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
-from scripts.infrastructure import run_services_move_e2e as stack
 from scripts.process import run_command
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "example_project"
 ENVIRONMENT = "dev"
-ACCOUNT = stack.ACCOUNT
+ACCOUNT = "111" * 4
 REGION = "us-west-2"
 SERVICES = ("model_api", "streamlit")
+STACK = REPO_ROOT / "infra" / "services"
+PROVIDERS = REPO_ROOT / "infra" / ".terraform" / "providers"
+TIMEOUT_SECONDS = 900.0
+OFFLINE_PROVIDER = """provider "aws" {
+  profile                     = null
+  allowed_account_ids         = null
+  region                      = "us-west-2"
+  access_key                  = "synthetic"
+  secret_key                  = "synthetic"
+  skip_credentials_validation = true
+  skip_metadata_api_check     = true
+  skip_requesting_account_id  = true
+  skip_region_validation      = true
+}
+"""
+IMAGES = ("postgres", "redis", "polaris", "polaris_admin", "airflow", "marquez", "marquez_web", "mlflow", "model_api", "streamlit")
+
+
+def variables() -> dict[str, Any]:
+    """The inputs of a plan with the model API and the dashboard on, with synthetic names."""
+    role = f"arn:aws:iam::{ACCOUNT}:role/example"
+    return {
+        "aws_profile": "example_project_dev",
+        "environment": "dev",
+        "project_name": "example_project",
+        "project_tag": "example_project",
+        "aws_region": "us-west-2",
+        "expected_account_id": ACCOUNT,
+        "cluster_name": "example-project-dev",
+        "ec2_capacity_provider_name": "example-project-dev-host",
+        "execution_role_arn": f"{role}-execution",
+        "serving_execution_role_arn": f"{role}-serving-execution",
+        "polaris_task_role_arn": f"{role}-polaris",
+        "control_plane_task_role_arn": f"{role}-control",
+        "model_api_task_role_arn": f"{role}-model-api",
+        "streamlit_task_role_arn": f"{role}-streamlit",
+        "data_mount_path": "/mnt/example-data",
+        "marquez_enabled": False,
+        "mlflow_enabled": False,
+        "monitoring_enabled": False,
+        "openmetadata_persistent_enabled": False,
+        "airflow_lineage_http_enabled": False,
+        "host_memory_mib": 32768,
+        "model_api_enabled": True,
+        "streamlit_enabled": True,
+        "model_api_manifest_uri": "s3://example-data/serving/deployments",
+        "model_api_registry_uri": "s3://example-data/lakehouse/feast/registry.pb",
+        "model_api_mlflow_uri": "http://127.0.0.1:5100",
+        "log_group_names": {name: f"/example/{name}" for name in ("postgres", "redis", "polaris", "airflow", "marquez", "mlflow")},
+        "ecr_repository_urls": {name: f"{ACCOUNT}.dkr.ecr.us-west-2.amazonaws.com/example_project/{name}" for name in IMAGES},
+        "image_digests": {name: "sha256:" + digit * 64 for name, digit in zip(IMAGES, "abcdef0123", strict=True)},
+    }
+
+
+def terraform(arguments: list[str], cwd: Path, extra_environment: Mapping[str, str] | None = None) -> tuple[int, str]:
+    """Run terraform in ``cwd`` with no AWS profile or credential of the caller, and return its exit code and combined text."""
+    # Only what terraform needs: the caller's PATH (CI puts the pinned terraform there) and the provider cache. No AWS profile, key or token passes.
+    kept = {name: os.environ[name] for name in ("PATH", "HOME", "TMPDIR", "TF_PLUGIN_CACHE_DIR") if name in os.environ}
+    environment = {**kept, "TF_IN_AUTOMATION": "1", "TF_INPUT": "0", **(extra_environment or {})}
+    result = run_command("terraform", arguments, cwd=cwd, env=environment, timeout=TIMEOUT_SECONDS)
+    return result.returncode, result.stdout + result.stderr
+
+
+def prepare(source: Path, destination: Path, plugin_directory: Path | None) -> None:
+    """Copy the stack without its tests or local state, add the offline provider and variables, and initialize it."""
+    shutil.copytree(source, destination, ignore=shutil.ignore_patterns(".terraform", "tests", "*.tfstate*", "*.tfplan", "ci.tfvars.json"))
+    (destination / "provider_override.tf").write_text(OFFLINE_PROVIDER, encoding="utf-8")
+    (destination / "inputs.auto.tfvars.json").write_text(json.dumps(variables(), indent=2) + "\n", encoding="utf-8")
+    arguments = ["init", "-backend=false", "-input=false", "-no-color"]
+    if plugin_directory is not None:
+        arguments.append(f"-plugin-dir={plugin_directory}")
+    elif (destination / ".terraform.lock.hcl").is_file():
+        arguments.append("-lockfile=readonly")
+    code, text = terraform(arguments, destination)
+    if code != 0:
+        raise RuntimeError(f"terraform init failed:\n{text[-1500:]}")
+
+
+def plan_json(stack: Path, state: Path | None) -> tuple[dict[str, Any] | None, str]:
+    """Plan without a refresh and return the plan as JSON, or None with the text when the plan fails."""
+    arguments = ["plan", "-refresh=false", "-input=false", "-no-color", "-out=plan.bin"]
+    if state is not None:
+        arguments.append(f"-state={state}")
+    code, text = terraform(arguments, stack)
+    if code != 0:
+        return None, text
+    code, shown = terraform(["show", "-json", "plan.bin"], stack)
+    if code != 0:
+        return None, shown
+    return json.loads(shown), text
+
+
+def fully_known(unknown: Any) -> bool:
+    """Whether a value of ``after_unknown`` marks nothing unknown, however deep: a nested block with only known values has a dict or list of false flags."""
+    if isinstance(unknown, dict):
+        return all(fully_known(value) for value in unknown.values())
+    if isinstance(unknown, list):
+        return all(fully_known(value) for value in unknown)
+    return not unknown
 
 
 def role(name: str) -> str:
@@ -39,7 +138,7 @@ def role(name: str) -> str:
 
 def release_variables() -> dict[str, Any]:
     """The stack inputs with the names the release check expects: the serving roles, the serving execution role and one repository per image."""
-    values = stack.variables()
+    values = variables()
     values["execution_role_arn"] = role("task_execution")
     values["serving_execution_role_arn"] = role("serving_execution")
     values["model_api_task_role_arn"] = role("model_api_task")
@@ -127,7 +226,7 @@ def render_and_check(definition: dict[str, Any]) -> tuple[int, str]:
 
 def plan_definitions(directory: Path) -> dict[str, dict[str, Any]] | str:
     """The planned definitions of the two services, or the plan error text."""
-    plan, text = stack.plan_json(directory, None)
+    plan, text = plan_json(directory, None)
     if plan is None:
         return text
     return {service: planted_definition(plan, service) for service in SERVICES}
@@ -183,12 +282,12 @@ DEFECTS: list[tuple[str, str, str, str, Callable[[dict[str, Any]], None] | None]
 ]
 
 
-def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK) -> dict[str, Any]:
+def run(output: Path, plugin_directory: Path | None, source: Path = STACK) -> dict[str, Any]:
     """Check the real definitions, then plant each defect in a copy of the stack and require the check to refuse the result."""
     output = output.absolute()
     output.mkdir(parents=True, exist_ok=False)
     base = output / "stack"
-    stack.prepare(source, base, plugin_directory)
+    prepare(source, base, plugin_directory)
     write_variables(base)
     planned = plan_definitions(base)
     report: dict[str, Any] = {"cases": [], "defects": []}
@@ -227,8 +326,8 @@ def run(output: Path, plugin_directory: Path | None, source: Path = stack.STACK)
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--output-directory", type=Path, required=True, help="A new folder for the plans and the report; it must not exist.")
-    parser.add_argument("--plugin-directory", type=Path, default=stack.PROVIDERS if stack.PROVIDERS.is_dir() else None, help="A folder with the AWS provider.")
-    parser.add_argument("--stack-directory", type=Path, default=stack.STACK, help="The services stack to plan; defaults to infra/services.")
+    parser.add_argument("--plugin-directory", type=Path, default=PROVIDERS if PROVIDERS.is_dir() else None, help="A folder with the AWS provider.")
+    parser.add_argument("--stack-directory", type=Path, default=STACK, help="The services stack to plan; defaults to infra/services.")
     arguments = parser.parse_args()
     output = arguments.output_directory.expanduser().absolute()
     report = run(output, arguments.plugin_directory, arguments.stack_directory.expanduser().absolute())
