@@ -234,6 +234,80 @@ def retired_ecs() -> dict[str, bool]:
     return results
 
 
+def record_targets() -> dict[str, bool]:
+    """The snapshot, input snapshot and dbt lineage records carry the producing request, so each refuses the ecs target there too.
+
+    For each record the target omitted, auto and docker are accepted and ecs is refused, by the standalone schema, by its copy in the ledger line and by the
+    reader that rechecks a persisted record. The refusal must name ecs, and the accepted twin of the same record passes the same reader, so an unrelated
+    error cannot pass a case.
+    """
+    from orchestration import dbt_lineage
+    from orchestration.snapshots import SnapshotError, validate_input_record, validate_snapshot_record
+
+    dataset = {"namespace": "file", "name": "{run_dir}/silver.parquet"}
+    pinned = [{**dataset, "snapshot": {"kind": "file_sha256", "id": "a" * 64}}]
+    files = {"manifest.json": "b" * 64, "run_results.json": "c" * 64}
+    lineage = {"version": 1, "inputs": [dataset], "outputs": [dataset]}
+
+    def request(target: str | None) -> dict[str, Any]:
+        base = load("submission_requests.json")["accepted"][0]
+        return {key: value for key, value in base.items() if key != "target"} | ({} if target is None else {"target": target})
+
+    def snapshot(invocation: dict[str, Any]) -> dict[str, Any]:
+        return {"version": 1, "invocation": invocation, "outputs": pinned}
+
+    def inputs(invocation: dict[str, Any]) -> dict[str, Any]:
+        return {"version": 1, "invocation": invocation, "inputs": pinned}
+
+    def dbt(invocation: dict[str, Any]) -> dict[str, Any]:
+        model = {"model": "silver_model", "status": "success", "inputs": [dataset], "outputs": [dataset]}
+        return {"version": 1, "invocation": invocation, "attempt_id": "at-1", "invocation_id": "dbt-1", "files": files, "models": [model]}
+
+    def read_snapshot(record: dict[str, Any]) -> None:
+        validate_snapshot_record(record, record["invocation"], [dataset], succeeded=True)
+
+    def read_inputs(record: dict[str, Any]) -> None:
+        validate_input_record(record, record["invocation"], [dataset], succeeded=True, pinned=pinned)
+
+    def read_dbt(record: dict[str, Any]) -> None:
+        captured = {"files": files, "invocation_id": "dbt-1", "attempt_id": "at-1"}
+        dbt_lineage.validate_record(record, record["invocation"], "at-1", lineage, {"silver_model": dataset}, captured)
+
+    finished = load("ledger_states.json")["finished"][-1]
+    identity = {key: request(None)[key] for key in ("request_version", "dag_id", "task_id", "dag_run_id")}
+    kinds: dict[str, tuple[str, str, Callable[[dict[str, Any]], dict[str, Any]], Callable[[dict[str, Any]], None], tuple[type[Exception], ...]]] = {
+        "snapshot record": ("snapshot_record", "snapshot_record.schema.json", snapshot, read_snapshot, (SnapshotError,)),
+        "input snapshot record": ("input_snapshot_record", "input_snapshot_record.schema.json", inputs, read_inputs, (SnapshotError,)),
+        "dbt lineage record": ("dbt_lineage", "dbt_lineage_record.schema.json", dbt, read_dbt, (dbt_lineage.DbtLineageError,)),
+    }
+    ledger_check = validator("ledger_line.schema.json")
+    results: dict[str, bool] = {}
+    for kind, (field, schema, build, read, refusals) in kinds.items():
+        standalone = validator(schema)
+        for target in (None, "auto", "docker", "ecs"):
+            record = build(request(target))
+            line = {**finished, **identity, "lineage": lineage, field: record}
+            label = f"{kind} with target {target or 'omitted'}"
+            outcomes = {
+                "schema": [error.message for error in standalone.iter_errors(record)],
+                "ledger copy": [error.message for error in ledger_check.iter_errors(line)],
+            }
+            try:
+                read(record)
+                refused = ""
+            except refusals as refusal:
+                refused = str(refusal) or type(refusal).__name__
+            if target == "ecs":
+                for name, errors in outcomes.items():
+                    results[f"{name} refuses {label}"] = bool(errors) and all("ecs" in message and "is not one of" in message for message in errors)
+                results[f"reader refuses {label}"] = "violates its closed" in refused
+            else:
+                for name, errors in outcomes.items():
+                    results[f"{name} accepts {label}"] = not errors
+                results[f"reader accepts {label}"] = refused == ""
+    return results
+
+
 def requests() -> dict[str, bool]:
     """Accepted requests validate; each caller override is refused for its intended reason."""
     check = validator("submission_request.schema.json")
@@ -316,6 +390,7 @@ def main() -> int:
         "launch specifications": templates,
         "ledger": ledger,
         "retired ecs target and Fargate providers": retired_ecs,
+        "retired ecs target in the record schemas": record_targets,
         "submission requests": requests,
         "fake submissions": fake,
     }
