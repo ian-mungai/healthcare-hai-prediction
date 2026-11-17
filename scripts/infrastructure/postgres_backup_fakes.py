@@ -144,6 +144,7 @@ class StandInS3:
         self.metadata: dict[str, dict[str, str]] = {}
         self.puts: list[dict[str, Any]] = []
         self.gets: list[str] = []
+        self.heads = 0
         self.fail_put_after: int | None = None
         self.fail_get = False
         self.fail_list = False
@@ -165,6 +166,7 @@ class StandInS3:
         return {}
 
     def head_object(self, **arguments: Any) -> dict[str, Any]:
+        self.heads += 1
         key = arguments["Key"]
         if key not in self.objects:
             raise self.error("404", "HeadObject")

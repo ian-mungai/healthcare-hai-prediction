@@ -157,14 +157,19 @@ def case_upload_never_replaces_an_existing_key() -> dict[str, bool]:
     client = StandInS3()
     other = fake_dump(9)
     client.objects[f"pg_backups/mlflow/{RUN_A}.dump"] = other
-    client.metadata[f"pg_backups/mlflow/{RUN_A}.dump"] = {"sha256": hashlib.sha256(other).hexdigest()}
     code, client, backups = upload_case(lambda b: ready_folder(b, RUN_A, {"airflow": 3, "mlflow": 2, "polaris": 5}), client=client)
     return {
         "the exit code is 1": code == 1,
         "the existing object is unchanged": client.objects[f"pg_backups/mlflow/{RUN_A}.dump"] == other,
         "no marker is written": marker_of(client, RUN_A) is None,
-        "the reason says the key holds other content": "other content" in status_of(backups).get("reason", ""),
+        "the reason says the set did not write the key": "did not write it" in status_of(backups).get("reason", ""),
+        "the set is set aside": (backups / f"{RUN_A}.refused").is_dir(),
     }
+
+
+def case_upload_needs_no_read_permission() -> dict[str, bool]:
+    code, client, _ = upload_case(lambda b: ready_folder(b, RUN_A, {"airflow": 3, "polaris": 5}))
+    return {"the upload never reads or lists": code == 0 and not client.gets and client.heads == 0}
 
 
 def case_upload_stops_at_its_deadline() -> dict[str, bool]:

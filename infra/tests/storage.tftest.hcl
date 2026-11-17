@@ -106,9 +106,9 @@ run "lifecycle_cleanup_rules" {
   assert {
     condition = (
       aws_s3_bucket_lifecycle_configuration.data.bucket == aws_s3_bucket.data.id &&
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_postgres_backups"])
     )
     error_message = "A default plan must hold exactly five enabled rules on the existing data bucket: incomplete-upload cleanup, replaced lakehouse versions, replaced DVC versions and the two ingestion_test/ rules. The Athena results rule and the MLflow rule stay out until their flags are set."
   }
@@ -268,11 +268,11 @@ run "mlflow_retention_rule_only_with_its_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_replaced_mlflow_versions"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_postgres_backups", "expire_replaced_mlflow_versions"])
     )
-    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the five default rules."
+    error_message = "With mlflow_retention_enabled the plan must add exactly the MLflow rule to the six default rules."
   }
 
   assert {
@@ -339,11 +339,11 @@ run "athena_results_rule_only_with_its_flag" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
       alltrue([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.status == "Enabled"]) &&
-      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_athena_results"])
+      toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset(["abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_postgres_backups", "expire_athena_results"])
     )
-    error_message = "With athena_retention_enabled the plan must add exactly the Athena results rule to the five default rules."
+    error_message = "With athena_retention_enabled the plan must add exactly the Athena results rule to the six default rules."
   }
 
   assert {
@@ -387,8 +387,8 @@ run "both_retention_flags_add_both_rules" {
   }
 
   assert {
-    condition     = length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7
-    error_message = "Both flags add their rule beside the five default rules and nothing else."
+    condition     = length(aws_s3_bucket_lifecycle_configuration.data.rule) == 8
+    error_message = "Both flags add their rule beside the six default rules and nothing else."
   }
 }
 
@@ -496,7 +496,7 @@ run "state_prefix_is_off_by_default" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 5 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 6 &&
       length(jsondecode(aws_s3_bucket_policy.tls.policy).Statement) == 1
     )
     error_message = "With the flag off the lifecycle rules and the bucket policy must stay as they are."
@@ -513,7 +513,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
 
   assert {
     condition = (
-      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 7 &&
+      length(aws_s3_bucket_lifecycle_configuration.data.rule) == 8 &&
       alltrue([
         for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
         one(rule.filter).prefix == "terraform_state/" &&
@@ -531,7 +531,7 @@ run "state_prefix_rule_expires_replaced_versions_only" {
       for rule in aws_s3_bucket_lifecycle_configuration.data.rule :
       (length(rule.expiration) == 0 || one(rule.expiration).expired_object_delete_marker == true) &&
       (length(rule.noncurrent_version_expiration) == 0 || one(rule.filter).prefix != "")
-      if !contains(["expire_replaced_state_versions", "expire_saved_plans", "expire_ingestion_test_objects"], rule.id)
+      if !contains(["expire_replaced_state_versions", "expire_saved_plans", "expire_ingestion_test_objects", "expire_postgres_backups"], rule.id)
     ])
     error_message = "No other rule may expire a current object, and no other rule may expire versions of the whole bucket."
   }
@@ -918,7 +918,7 @@ run "saved_plans_expire_after_seven_days_and_replaced_versions_after_one" {
   assert {
     condition = (
       toset([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule.id]) == toset([
-        "abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_replaced_state_versions", "expire_saved_plans"
+        "abort_incomplete_uploads", "expire_replaced_lakehouse_versions", "expire_replaced_dvc_versions", "expire_ingestion_test_objects", "clear_ingestion_test_delete_markers", "expire_postgres_backups", "expire_replaced_state_versions", "expire_saved_plans"
       ])
     )
     error_message = "The saved plans rule is added to the existing rules and replaces none."
@@ -948,5 +948,20 @@ run "saved_plans_rule_is_off_without_the_state_flag" {
   assert {
     condition     = length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_saved_plans"]) == 0
     error_message = "With the flag off the lifecycle configuration stays as it was."
+  }
+}
+
+run "postgres_backups_expire_after_thirty_days_under_their_prefix_only" {
+  command = plan
+
+  assert {
+    condition = (
+      length([for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_postgres_backups"]) == 1
+      && [for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_postgres_backups"][0].filter[0].prefix == "pg_backups/"
+      && [for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_postgres_backups"][0].expiration[0].days == 30
+      && [for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_postgres_backups"][0].noncurrent_version_expiration[0].noncurrent_days == 1
+      && [for rule in aws_s3_bucket_lifecycle_configuration.data.rule : rule if rule.id == "expire_postgres_backups"][0].status == "Enabled"
+    )
+    error_message = "Postgres dumps and markers under pg_backups/ expire after 30 days and their replaced versions after 1 day; no other prefix is covered by the rule."
   }
 }

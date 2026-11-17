@@ -1,10 +1,10 @@
 locals {
   # The scratch root is 0711 (traverse, no listing) because the Airflow fit probe reads each family folder through its read-only mount of the root.
   host_prepare_script = <<-EOT
-    mkdir -p /host/postgres /host/airflow/logs /host/repo${local.om_on ? " /host/opensearch" : ""}
-    chown 999:999 /host/postgres${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
+    mkdir -p /host/postgres /host/airflow/logs /host/repo${local.om_on ? " /host/opensearch" : ""}${local.pg_backup_on ? " /host/postgres_backup" : ""}${local.pg_restore_on ? " /host/postgres_restore" : ""}
+    chown 999:999 /host/postgres${local.pg_backup_on ? " /host/postgres_backup" : ""}${local.pg_restore_on ? " /host/postgres_restore" : ""}${local.om_on ? "\n    chown 1000:1000 /host/opensearch\n    chmod 0700 /host/opensearch" : ""}
     chown 50000:0 /host/airflow/logs
-    chmod 0700 /host/postgres
+    chmod 0700 /host/postgres${local.pg_backup_on ? " /host/postgres_backup" : ""}${local.pg_restore_on ? " /host/postgres_restore" : ""}
     chmod 0750 /host/airflow/logs
     mkdir -p ${join(" ", local.host_scratch_directories)}
     chown 10001:10001 ${join(" ", local.host_scratch_directories)}
@@ -110,6 +110,7 @@ locals {
     local.code_fetch_on ? { code_fetch = local.code_fetch_task } : {},
     local.prometheus_history_on ? { prometheus_restore = local.prometheus_restore_task } : {},
     local.catalog_setup_on ? { catalog_setup = local.catalog_setup_task } : {},
+    local.mlflow_user_on ? { mlflow_user = local.mlflow_user_task } : {},
   )
 }
 

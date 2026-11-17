@@ -208,6 +208,26 @@ resource "aws_s3_bucket_lifecycle_configuration" "data" {
     }
   }
 
+  # The Postgres backup service writes each dump and each completion marker once under pg_backups/ (restore after a teardown, owner A, Nov 17 2026). No role holds a delete
+  # action, so the bucket removes them: current objects expire 30 days after they are written and replaced versions 1 day after. S3 lets a rule carry either days or the
+  # delete-marker cleanup, so the markers of expired dumps stay, as for Athena results. The prefix is exact: no other key matches it.
+  rule {
+    id     = "expire_postgres_backups"
+    status = "Enabled"
+
+    filter {
+      prefix = "pg_backups/"
+    }
+
+    expiration {
+      days = 30
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+
   # DVC stores each training matrix once, as an object named by its content hash under dvc/, and a push never replaces an
   # object with different content. Only replaced or deleted versions are old, so they expire after 30 days. Current DVC objects never expire.
   rule {

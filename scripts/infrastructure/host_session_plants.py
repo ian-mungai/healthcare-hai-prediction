@@ -181,8 +181,8 @@ PLANTS: dict[str, tuple[str, str]] = {
     "any describe-services failure counts as an absent service": ('any(item.get("reason") != MISSING for item in described.get("failures", []))', "False"),
     "prints the task ARN": ('self.step(key, f"exit codes {exits}")', 'self.step(key, f"exit codes {exits} {task}")'),
     "reloads the online store before the services are stable": (
-        "            self.deploy_services()\n            self.reload_online_store(identity)",
-        "            self.reload_online_store(identity)\n            self.deploy_services()",
+        "            self.deploy_services()\n            self.mlflow_user()\n            self.reload_online_store(identity)",
+        "            self.reload_online_store(identity)\n            self.mlflow_user()\n            self.deploy_services()",
     ),
     "never reloads the online store": ("            self.reload_online_store(identity)\n", ""),
     "reloads only the first online set": ("for model in online_sets():", "for model in online_sets()[:1]:"),
@@ -240,7 +240,15 @@ PLANTS: dict[str, tuple[str, str]] = {
         'found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)',
         'found = ("20260101T000000Z-00000000", "0" * 64)',
     ),
-    "invents the identity of a host with no record": ("raise HostSessionError(missing) from None", 'return "20260101T000000Z-00000000", "0" * 64'),
+    "invents the identity of a host with no record": ("raise CodeMissing(missing) from None", 'return "20260101T000000Z-00000000", "0" * 64'),
+    "never runs the mlflow user task": (
+        "            self.mlflow_user()\n            self.reload_online_store(identity)",
+        "            self.reload_online_store(identity)",
+    ),
+    "never writes the code record": ("        self.write_code_record(identity)\n        return identity", "        return identity"),
+    "never reads the stored code record": ("            recorded = self.read_code_record()\n", "            recorded = None\n"),
+    "never checks the postgres setup": ("        self.postgres_setup()\n        return self.services_stable()", "        return self.services_stable()"),
+    "ignores the exit code of a setup container": ("if ended.get(container) not in (0, None):", "if False:"),
 }
 
 

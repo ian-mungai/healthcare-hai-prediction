@@ -68,6 +68,8 @@ HOST_PREPARE = "host_prepare"
 POLARIS_BOOTSTRAP = "polaris_bootstrap"
 OPENMETADATA_SERVICE = "openmetadata"
 OPENMETADATA_BOOTSTRAP = "openmetadata_bootstrap"
+MLFLOW_USER = "mlflow_user"
+MLFLOW_USER_SECONDS = 300
 CODE_FETCH = "code_fetch"
 CATALOG_SETUP = "catalog_setup"
 CATALOG_STEPS = ("catalog", "check", "inspect", "principal")
@@ -93,6 +95,7 @@ CODE_IDENTIFY_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_iden
 CODE_IDENTITY = re.compile(rf"code_identify: identity run ({CODE_RUN}) code ([a-f0-9]{{64}})")
 CODE_IDENTITY_SECONDS = 180
 CODE_LOG_CONTAINER = "code_fetch"  # the container name is also the awslogs stream prefix of the code task
+POSTGRES_COMPONENT = "postgres"  # the log group component of the postgres task (infra/services/main.tf container_component)
 LOG_COMPONENT = "airflow"  # the log group component of the code one-shot (infra/services/main.tf container_component)
 ONLINE_RELOAD = "online_reload"
 ONLINE_RELOAD_SECONDS = 2400  # the features task: code fetch, then the load of one set (feast_job.JOB_SECONDS is 1800)
@@ -105,6 +108,10 @@ RELOAD_CONTAINER = (
 )
 RELOAD_VARIABLE = "RELEASE_MODEL"
 POLARIS_PORT = 8181
+CODE_RECORD = re.compile(r"([0-9]{8}T[0-9]{6}Z-[a-f0-9]{8}) ([a-f0-9]{64})")
+SETUP_CONTAINERS = ("postgres_restore_fetch", "postgres_databases")  # the setup containers of the postgres task, in the order they run
+SETUP_REASON_WORDS = ("refused", "failed")
+SETUP_REASON_LIMIT = 240
 # The reviewed installer. Every code task carries its text as the container command, so the registered task definition, which may still hold an older
 # installer, never decides how the code is installed, verified or restored.
 CODE_FETCH_SCRIPT = REPO_ROOT / "infra" / "services" / "scripts" / "code_fetch.py"
@@ -127,6 +134,10 @@ RUN_TASK_CODE = re.compile(r"[A-Z][A-Z0-9_]*(:[A-Z0-9_]+)?")
 
 class HostSessionError(Exception):
     """A step failed; the message names the step and the cause, never an ARN or an account ID."""
+
+
+class CodeMissing(HostSessionError):
+    """A start without ``--code-run`` found no verified checkout or no code run record on the host (a fresh or lost data volume)."""
 
 
 class TaskExitError(HostSessionError):
@@ -254,6 +265,9 @@ class ReloadTask:
 class Names:
     """The names a session needs, read from Terraform outputs; ``services`` has the first service first.
 
+    ``code_record`` is the Parameter Store name of the code run record kept outside the data volume and ``postgres_log_group`` the log group of the postgres
+    task; an empty value switches the record or the log read off.
+
     ``reload``, ``host_address`` and ``log_group`` are what ``start`` needs for the online store reload: the features task of the jobs stack, the host's private
     address (the Polaris endpoint the task is given) and the log group of the code one-shot (where its identity line is read). They are empty when the outputs
     are missing or the command does not read them (only ``start`` does), and ``start`` refuses by name when one is empty. ``jobs_log_group`` is the jobs log
@@ -271,6 +285,8 @@ class Names:
     host_address: str = ""
     log_group: str = ""
     jobs_log_group: str = ""
+    code_record: str = ""
+    postgres_log_group: str = ""
 
 
 def tolerant_runner(*args: Any, **kwargs: Any) -> CompletedProcess[str]:
@@ -355,7 +371,7 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
             for key in (
                 HOST_PREPARE,
                 POLARIS_BOOTSTRAP,
-                *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP) if optional in one_shot),
+                *(optional for optional in (OPENMETADATA_BOOTSTRAP, CODE_FETCH, CATALOG_SETUP, MLFLOW_USER) if optional in one_shot),
             )
         },
         state_serial=services_state_serial(SERVICES_DIRECTORY),
@@ -363,6 +379,8 @@ def load_names(settings: dict[str, str], remaining: Callable[[], float] | None =
         host_address=address if isinstance(address, str) else "",
         log_group=groups.get(LOG_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(LOG_COMPONENT), str) else "",
         jobs_log_group=jobs_log_group(settings) if reload else "",
+        code_record=f"/{settings['project_name']}/code_run_record" if settings.get("project_name") else "",
+        postgres_log_group=groups.get(POSTGRES_COMPONENT, "") if isinstance(groups, dict) and isinstance(groups.get(POSTGRES_COMPONENT), str) else "",
     )
 
 
@@ -643,7 +661,7 @@ class Session:
             count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE or key in PROMETHEUS_SERVICES else []
             self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, *count, "--force-new-deployment"])
         self.step("services_deployment_forced", ", ".join(self.names.services.values()))
-        self.wait("services stable", self.services_stable, SERVICES_STABLE_SECONDS, POLL_SECONDS)
+        self.wait("services stable", self.stable_and_set_up, SERVICES_STABLE_SECONDS, POLL_SECONDS)
         self.step("services_stable", ", ".join(f"{item['serviceName']}={item['runningCount']}" for item in self.service_states()))
 
     def restart_service(self, key: str, seconds: int = SERVICE_RESTART_SECONDS) -> None:
@@ -691,6 +709,24 @@ class Session:
             self.step(
                 "openmetadata_bootstrap_failed", f"{error}; the host stays on and the data chain is not affected; run start or refresh again to repeat it"
             )
+
+    def mlflow_user(self) -> None:
+        """Make sure the model API's MLflow user exists with its stored login and may read the served models, once the services are stable.
+
+        The task (``infra/services/scripts/mlflow_user.py``) creates or checks the user from its Parameter Store login. A failure is reported and never
+        stops the session: the data chain does not depend on it, and the model API loads no model until it passes.
+        """
+        if MLFLOW_USER not in self.names.one_shot:
+            return
+        try:
+            self.one_shot(MLFLOW_USER, MLFLOW_USER_SECONDS)
+        except HostSessionError as error:
+            self.step(
+                "mlflow_user_failed",
+                f"{error}; the host stays on and the model API cannot load models until it passes; run start or refresh again to repeat it",
+            )
+            return
+        self.step("mlflow_user_ready")
 
     def service_stopped(self, name: str) -> bool:
         """True when ECS shows no running and no pending task for the named service."""
@@ -839,7 +875,7 @@ class Session:
                 self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(code, "verify"))
                 self.step("code_verified", code[0])
         except TaskExitError as error:
-            raise HostSessionError(f"{error}; {self.restore_code(code)}") from None
+            raise (HostSessionError if code is not None else CodeMissing)(f"{error}; {self.restore_code(code)}") from None
         except HostSessionError as error:
             raise HostSessionError(f"{error}; the code task did not run to its end, so what repo shows is not known; no service was deployed") from None
         return code if code is not None else self.read_identity()
@@ -911,7 +947,7 @@ class Session:
         try:
             task = self.one_shot(CODE_FETCH, CODE_FETCH_SECONDS, self.code_overrides(None, "identify"))
         except TaskExitError:
-            raise HostSessionError(missing) from None
+            raise CodeMissing(missing) from None
         except HostSessionError as error:
             raise HostSessionError(f"{error}; the identity task did not run to its end, so the code run is not known; no service was deployed") from None
         found = self.wait("code identity log", lambda: self.identity_line(task), CODE_IDENTITY_SECONDS, TASK_POLL_SECONDS)
@@ -958,6 +994,87 @@ class Session:
             return f"the check of repo after the failure did not run ({error}), so what repo shows is not known; no service was deployed"
         self.step("code_restored", "repo shows a verified checkout")
         return "repo shows a verified checkout, not the requested code; no service was deployed"
+
+    def read_code_record(self) -> tuple[str, str] | None:
+        """The code run record kept outside the data volume (Parameter Store, ``<run ID> <digest>``), or None when there is none or the session names none.
+        An unreadable or malformed record raises, so a fresh volume never installs an archive nobody named."""
+        if not self.names.code_record:
+            return None
+        try:
+            found = self.call("ssm", "get-parameter", ["--name", self.names.code_record])
+        except HostSessionError as error:
+            if "ParameterNotFound" in str(error):
+                return None
+            raise HostSessionError(f"the code run record cannot be read ({error})") from None
+        match = CODE_RECORD.fullmatch(str(found.get("Parameter", {}).get("Value", "")))
+        if match is None:
+            raise HostSessionError("the code run record parameter holds an unexpected form; give --code-run and --code-sha256 once")
+        return match.group(1), match.group(2)
+
+    def write_code_record(self, identity: tuple[str, str]) -> None:
+        """Keep the run ID and digest of the code that repo shows outside the data volume. A failed write is reported and never fails the session."""
+        if not self.names.code_record:
+            return
+        arguments = ["--name", self.names.code_record, "--type", "String", "--overwrite", "--value", f"{identity[0]} {identity[1]}"]
+        try:
+            self.call("ssm", "put-parameter", arguments)
+        except HostSessionError as error:
+            self.step("code_record_not_written", f"{error}; a fresh data volume then needs --code-run and --code-sha256")
+            return
+        self.step("code_record_written", identity[0])
+
+    def place_recorded_code(self, code: tuple[str, str] | None) -> tuple[str, str]:
+        """``place_code``, then the record outside the volume. Without ``code`` and with no checkout or no record on the host, the stored record names the
+        archive to install; the checkout on the host always wins when it has a record."""
+        try:
+            identity = self.place_code(code)
+        except CodeMissing:
+            recorded = self.read_code_record()
+            if recorded is None:
+                raise
+            self.step("code_record_used", recorded[0])
+            identity = self.place_code(recorded)
+        self.write_code_record(identity)
+        return identity
+
+    def setup_reason(self, task: str, container: str) -> str:
+        """The refusal line of a setup container from its log, cut to a short text; the exit code alone when the log cannot be read."""
+        if not self.names.postgres_log_group:
+            return "the log group of the postgres task is not known"
+        stream = f"{container}/{container}/{task.rsplit('/', 1)[-1]}"
+        try:
+            events = self.call("logs", "get-log-events", ["--log-group-name", self.names.postgres_log_group, "--log-stream-name", stream, "--start-from-head"])
+        except HostSessionError:
+            return "its log could not be read"
+        lines = [str(event.get("message", "")).strip() for event in events.get("events", [])]
+        found = [line for line in lines if any(word in line for word in SETUP_REASON_WORDS)]
+        return (found[-1] if found else "its log names no reason")[:SETUP_REASON_LIMIT]
+
+    def postgres_setup(self) -> None:
+        """Raise when a setup container of the postgres task (the backup fetch, the roles and databases with their restore) ended with a failure. The
+        databases a failed setup did not finish are never made visible, so no service can start on half-restored data; start then stops the host. A stack
+        whose postgres task has no such container is not checked."""
+        name = self.names.services.get(FIRST_SERVICE)
+        if name is None:
+            return
+        listed = self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--service-name", name, "--desired-status", "RUNNING"]).get("taskArns", [])
+        if not listed:
+            return
+        described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *listed[:DESCRIBE_TASKS_LIMIT]])
+        for task in described.get("tasks", []):
+            ended = {item.get("name"): item.get("exitCode") for item in task.get("containers", []) if item.get("lastStatus") == "STOPPED"}
+            for container in SETUP_CONTAINERS:
+                if ended.get(container) not in (0, None):
+                    reason = self.setup_reason(str(task.get("taskArn", "")), container)
+                    raise HostSessionError(
+                        f"postgres setup failed: container {container} exited with code {ended[container]}: {reason}; "
+                        "no database was made visible, so no service can start on half-restored data"
+                    )
+
+    def stable_and_set_up(self) -> bool:
+        """True when the postgres setup has not failed and every service is settled."""
+        self.postgres_setup()
+        return self.services_stable()
 
     def reload_overrides(self, model: str, code: tuple[str, str]) -> dict[str, Any]:
         """The RunTask overrides of one reload launch: every container of the features task gets the variables the jobs stack leaves empty for it. The launch
@@ -1076,9 +1193,10 @@ class Session:
         try:
             self.host_on()
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
-            identity = self.place_code(code)
+            identity = self.place_recorded_code(code)
             self.restore_prometheus()
             self.deploy_services()
+            self.mlflow_user()
             self.reload_online_store(identity)
             self.openmetadata_bootstrap()
             succeeded = True
@@ -1129,8 +1247,9 @@ class Session:
         self.step("refresh_checked", "one registered instance, no job task running, every named service present")
         try:
             self.one_shot(HOST_PREPARE, HOST_PREPARE_SECONDS)
-            self.place_code(code)
+            self.place_recorded_code(code)
             self.deploy_services()
+            self.mlflow_user()
             self.openmetadata_bootstrap()
         except HostSessionError as error:
             self.step("refresh_failed", f"the host stays on and is not stopped; read the failure above and run refresh again ({error})")

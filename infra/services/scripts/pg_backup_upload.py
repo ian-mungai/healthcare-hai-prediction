@@ -1,12 +1,13 @@
 """Upload step of the Postgres backup service: send each finished dump set to S3 once, then write the completion marker last.
 
 It is the command of the ``postgres_backup_upload`` container (training image, ``python -I -c``). The dump step (``pg_backup_dump.sh``) leaves
-``<run>.ready`` folders in BACKUP_DIR, each with one ``<database>.dump`` and a ``manifest.tsv`` of ``database<TAB>tables<TAB>bytes``. This step checks every
-dump again (the custom-format header, the size in the manifest and at least one table), uploads it to ``pg_backups/<database>/<run>.dump`` with
-``IfNoneMatch="*"`` so a key is created once and never replaced, and only then writes ``pg_backups/complete/<run>.json`` the same way. A restore reads only
-sets that have a marker, so a set that stopped half way is never used. A key that already exists is accepted only when it holds the same bytes (its
-``sha256`` metadata), which makes a rerun after an interruption safe. A set that fails three times is set aside as ``<run>.failed``; a dump that is empty
-or truncated is set aside at once as ``<run>.refused`` and nothing of it is uploaded. Every set has a deadline and every S3 call has timeouts.
+``<run>.ready`` folders in BACKUP_DIR, each with one ``<database>.dump`` and a ``manifest.tsv`` of ``database<TAB>tables<TAB>bytes``. This step checks
+every dump again (the custom-format header, the size in the manifest and at least one table), uploads it to ``pg_backups/<database>/<run>.dump`` with
+``IfNoneMatch="*"`` so a key is created once and never replaced, and only then writes ``pg_backups/complete/<run>.json`` the same way. A restore reads
+only sets that have a marker, so a set that stopped half way is never used. The role may not read, so a key that already exists is accepted only when
+the set's own ``uploaded.tsv`` records that an earlier try wrote it with the same hash, which makes a rerun after an interruption safe.
+A set that fails three times is set aside as ``<run>.failed``. A dump that is empty or truncated is set aside at once as ``<run>.refused`` and
+nothing of it is uploaded. Every set has a deadline and every S3 call has timeouts.
 """
 
 from __future__ import annotations
@@ -87,24 +88,28 @@ def check_dump(folder: Path, name: str, tables: int, size: int) -> None:
         raise Refused(f"database {name}: the dump is larger than {MAX_BYTES} bytes")
 
 
-def put_once(client: Any, bucket: str, key: str, path: Path, digest: str) -> None:
-    """Create ``key`` from ``path`` unless it exists; an existing key must hold the same bytes."""
+def put_once(client: Any, bucket: str, key: str, path: Path, digest: str, record: Path) -> None:
+    """Create ``key`` from ``path`` once. The role may write and may not read, so a key that exists is accepted only when this folder's own record
+    (``uploaded.tsv``, written after a confirmed put) says an earlier try of this same set wrote the same hash; otherwise the set is refused."""
     from botocore.exceptions import ClientError
 
+    line = f"{key}\t{digest}"
+    done = record.read_text(encoding="utf-8").splitlines() if record.exists() else []
     try:
         with path.open("rb") as body:
             client.put_object(Bucket=bucket, Key=key, Body=body, IfNoneMatch="*", ChecksumAlgorithm="SHA256", Metadata={"sha256": digest})
     except ClientError as error:
-        if error.response.get("Error", {}).get("Code") not in EXISTS:
-            raise Failed(f"upload of {key} failed ({error.response.get('Error', {}).get('Code', 'error')})") from None
+        code = error.response.get("Error", {}).get("Code", "error")
+        if code not in EXISTS:
+            raise Failed(f"upload of {key} failed ({code})") from None
+        if line not in done:
+            raise Refused(f"the key {key} already exists and this set did not write it") from None
+        return
     except OSError as error:
         raise Failed(f"upload of {key} failed ({type(error).__name__})") from None
-    try:
-        head = client.head_object(Bucket=bucket, Key=key)
-    except (ClientError, OSError) as error:
-        raise Failed(f"read-back of {key} failed ({type(error).__name__})") from None
-    if head.get("Metadata", {}).get("sha256") != digest or head.get("ContentLength") != path.stat().st_size:
-        raise Refused(f"the key {key} already holds other content")
+    if line not in done:
+        with record.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
 
 
 def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float]) -> str:
@@ -120,7 +125,7 @@ def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float
             raise Failed(f"the deadline of {RUN_SECONDS} seconds passed before database {name}")
         key = f"{PREFIX}/{name}/{run}.dump"
         digest = sha256_of(folder / f"{name}.dump")
-        put_once(client, bucket, key, folder / f"{name}.dump", digest)
+        put_once(client, bucket, key, folder / f"{name}.dump", digest, folder / "uploaded.tsv")
         entries[name] = {"key": key, "bytes": size, "sha256": digest, "tables": tables}
     if clock() > deadline:
         raise Failed(f"the deadline of {RUN_SECONDS} seconds passed before the marker")
@@ -129,7 +134,7 @@ def upload_set(folder: Path, bucket: str, client: Any, clock: Callable[[], float
         json.dumps({"schema": 1, "run": run, "uploaded_utc": datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ"), "databases": entries}, sort_keys=True),
         encoding="utf-8",
     )
-    put_once(client, bucket, f"{PREFIX}/complete/{run}.json", marker, sha256_of(marker))
+    put_once(client, bucket, f"{PREFIX}/complete/{run}.json", marker, sha256_of(marker), folder / "uploaded.tsv")
     return run
 
 

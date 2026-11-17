@@ -24,6 +24,7 @@ from scripts.infrastructure import (
     host_session_group_signal,
     host_session_prometheus_cases,
     host_session_refresh_cases,
+    host_session_restore_cases,
     host_session_stop_cases,
 )
 from scripts.infrastructure.deployed_revisions_cases import CASES as DEPLOYED_REVISION_CASES
@@ -1520,6 +1521,7 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
 
 
 CASES.update(host_session_code_cases.CASES)
+CASES.update(host_session_restore_cases.CASES)
 CASES.update(host_session_refresh_cases.CASES)
 CASES.update(host_session_stop_cases.CASES)
 CASES.update(host_session_entry_cases.CASES)

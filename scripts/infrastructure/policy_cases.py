@@ -1196,6 +1196,9 @@ def job_project_cases() -> Iterator[Case]:
         "prometheus_restore_task",
         "evidently_ui_task",
         "host_catalog_setup_task",
+        "postgres_backup_task",
+        "postgres_restore_task",
+        "mlflow_user_task",
     ):
         yield Case(
             f"training pass: {name} to ECS tasks",
@@ -1281,6 +1284,10 @@ def job_project_cases() -> Iterator[Case]:
         "host_catalog_setup_task_extra",
         "host_catalog_setup",
         "catalog_setup_task",
+        "postgres_backup_task_extra",
+        "postgres_restore_task_extra",
+        "mlflow_user_task_extra",
+        "postgres_backup",
     ):
         yield Case(
             f"training pass: refuse {name}",
@@ -3100,6 +3107,15 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             role("host_catalog_setup_task*") if item == role("host_catalog_setup_task") else item for item in as_list(statement["Resource"])
         ]
 
+    def training_pass_without_restore_roles(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        gone = {role("postgres_backup_task"), role("postgres_restore_task"), role("mlflow_user_task")}
+        statement["Resource"] = [item for item in as_list(statement["Resource"]) if item not in gone]
+
+    def training_pass_restore_role_widened(documents: dict[str, dict[str, Any]]) -> None:
+        statement = by_sid(documents, "iam", "PassTrainingRoles")
+        statement["Resource"] = [role("postgres_restore_task*") if item == role("postgres_restore_task") else item for item in as_list(statement["Resource"])]
+
     def training_pass_without_service_condition(documents: dict[str, dict[str, Any]]) -> None:
         del by_sid(documents, "iam", "PassTrainingRoles")["Condition"]
 
@@ -3280,6 +3296,8 @@ def planted_defects() -> dict[str, tuple[str, Mutation]]:
             "training PassRole lacks the code one-shot task role": ("training pass: host_code_fetch_task to ECS tasks", training_pass_without_code_fetch_role),
             "training PassRole lacks the Evidently UI task role": ("training pass: evidently_ui_task to ECS tasks", training_pass_without_evidently_ui_role),
             "Evidently UI PassRole resource widened": ("training pass: refuse evidently_ui_task_extra", training_pass_evidently_ui_role_widened),
+            "training PassRole lacks the restore task roles": ("training pass: postgres_restore_task to ECS tasks", training_pass_without_restore_roles),
+            "restore PassRole resource widened": ("training pass: refuse postgres_restore_task_extra", training_pass_restore_role_widened),
             "code one-shot PassRole resource widened": (
                 "training pass: refuse host_code_fetch_task_extra",
                 training_pass_code_fetch_role_widened,

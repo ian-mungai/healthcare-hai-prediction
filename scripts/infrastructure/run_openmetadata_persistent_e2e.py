@@ -100,6 +100,12 @@ class FakeServer:
         self.refuse_settings = False
         self.settings_writes = 0
         self.password_refusal: tuple[int, str] | None = None
+        # The catalogued tables and the documents of the table search index: None makes the index answer 404 as OpenSearch does for an index it does not have.
+        self.tables = 0
+        self.index_docs: int | None = 0
+        self.refuse_trigger = False
+        self.unreadable_count = False
+        self.triggers: list[dict[str, Any]] = []
 
 
 @contextlib.contextmanager
@@ -143,6 +149,12 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     return self.reply(401)
                 if self.path == "/api/v1/system/settings/openLineageSettings":
                     return self.reply(200, {"config_type": "openLineageSettings", "config_value": dict(state.openlineage)})
+                if self.path.startswith("/api/v1/tables?"):
+                    return self.reply(500) if state.unreadable_count else self.reply(200, {"data": [], "paging": {"total": state.tables}})
+                if self.path.startswith("/api/v1/search/query?"):
+                    if state.index_docs is None:
+                        return self.reply(404)
+                    return self.reply(200, {"hits": {"total": {"value": state.index_docs, "relation": "eq"}, "hits": []}})
                 if self.path.startswith("/api/v1/roles/name/"):
                     name = self.path.rsplit("/", 1)[1]
                     return self.reply(404) if name == state.missing_role else self.reply(200, {"id": str(uuid.uuid5(uuid.NAMESPACE_DNS, name)), "name": name})
@@ -178,6 +190,16 @@ def open_metadata() -> Iterator[tuple[FakeServer, str]]:
                     if request["email"] == ADMIN_EMAIL and secret == state.admin:
                         return self.reply(200, {"accessToken": "admin-session"})
                     return self.reply(401)
+                if self.path == "/api/v1/apps/trigger/SearchIndexingApplication":
+                    if not self.authorized():
+                        return self.reply(401)
+                    request = self.body()
+                    if state.refuse_trigger:
+                        return self.reply(403)
+                    require(request.get("recreateIndex") is True, "the reindex must recreate the index")
+                    state.triggers.append(request)
+                    state.index_docs = state.tables
+                    return self.reply(200)
             self.reply(404)
 
         def do_PUT(self) -> None:
@@ -441,6 +463,55 @@ def openlineage_settings_already_off_are_left_alone() -> None:
         require(code == 0 and state.settings_writes == 0, f"settings that are already right must not be written: {state.settings_writes} {err}")
 
 
+def reindex_starts_when_tables_exist_and_the_index_is_empty() -> None:
+    with open_metadata() as (state, base):
+        state.tables = 12
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 0, f"a restored catalog with an empty index failed: {err}")
+        require(len(state.triggers) == 1 and state.index_docs == 12, f"one reindex must run: {state.triggers}")
+        require("search reindex started" in out, f"the output must say the reindex started: {out}")
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 0 and len(state.triggers) == 1 and "search index current" in out, f"a rerun must not index again: {len(state.triggers)} {out}")
+        assert_no_values(out, err)
+
+
+def reindex_treats_a_missing_index_as_empty() -> None:
+    with open_metadata() as (state, base):
+        state.tables, state.index_docs = 3, None
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 0 and len(state.triggers) == 1, f"a missing index must be rebuilt: {code} {err} {state.triggers}")
+
+
+def reindex_is_not_started_without_tables() -> None:
+    with open_metadata() as (state, base):
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 0 and state.triggers == [] and "nothing to index" in out, f"an empty catalog needs no reindex: {out} {err}")
+
+
+def reindex_is_not_started_when_the_index_has_documents() -> None:
+    with open_metadata() as (state, base):
+        state.tables, state.index_docs = 12, 12
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 0 and state.triggers == [], f"a filled index is left alone: {err} {state.triggers}")
+
+
+def reindex_refusal_fails_visibly_after_the_tokens_are_issued() -> None:
+    with open_metadata() as (state, base):
+        state.tables, state.refuse_trigger = 5, True
+        store = FakeParameterStore()
+        code, out, err = run(environment(base), store)
+        require(code == 1 and "search reindex" in err, f"a refused reindex must fail and say so: {code} {err}")
+        require(set(store.values) == set(PARAMETERS.values()), "the bot tokens are still issued when only the reindex is refused")
+        assert_no_values(out, err)
+
+
+def unreadable_table_count_fails_visibly() -> None:
+    with open_metadata() as (state, base):
+        state.unreadable_count = True
+        code, out, err = run(environment(base), FakeParameterStore())
+        require(code == 1 and "search reindex" in err and state.triggers == [], f"an unreadable count must fail without a reindex: {code} {err}")
+
+
 def refused_password_change_shows_status_and_server_message() -> None:
     with open_metadata() as (state, base):
         state.password_refusal = (
@@ -671,6 +742,12 @@ CASES: dict[str, Callable[[], None]] = {
     "stored_password_outside_the_server_policy_is_refused_first": stored_password_outside_the_server_policy_is_refused_first,
     "openlineage_settings_refusal_fails_visibly": openlineage_settings_refusal_fails_visibly,
     "openlineage_settings_already_off_are_left_alone": openlineage_settings_already_off_are_left_alone,
+    "reindex_starts_when_tables_exist_and_the_index_is_empty": reindex_starts_when_tables_exist_and_the_index_is_empty,
+    "reindex_treats_a_missing_index_as_empty": reindex_treats_a_missing_index_as_empty,
+    "reindex_is_not_started_without_tables": reindex_is_not_started_without_tables,
+    "reindex_is_not_started_when_the_index_has_documents": reindex_is_not_started_when_the_index_has_documents,
+    "reindex_refusal_fails_visibly_after_the_tokens_are_issued": reindex_refusal_fails_visibly_after_the_tokens_are_issued,
+    "unreadable_table_count_fails_visibly": unreadable_table_count_fails_visibly,
     "rerun_changes_nothing": rerun_changes_nothing,
     "stale_parameter_is_repaired": stale_parameter_is_repaired,
     "server_that_never_starts_fails_in_time": server_that_never_starts_fails_in_time,

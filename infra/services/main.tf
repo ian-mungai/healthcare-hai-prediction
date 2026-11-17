@@ -22,29 +22,29 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.evidently_ui_enabled ? ["drift", "training"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.evidently_ui_enabled ? ["drift", "training"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], (local.code_fetch_on || local.pg_backup_on || local.pg_restore_on) ? ["training"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
 
   # The monitoring containers are added only while monitoring_enabled is true, so the default plan needs no monitoring log group.
   container_component = merge({
-    "postgres"                              = "postgres"
-    "postgres_databases"                    = "postgres"
-    "redis"                                 = "redis"
-    "polaris"                               = "polaris"
-    "airflow_migrate"                       = "airflow"
-    "airflow_apiserver"                     = "airflow"
-    "airflow_scheduler"                     = "airflow"
-    "airflow_dag_processor"                 = "airflow"
-    "airflow_triggerer"                     = "airflow"
-    "model_api"                             = "airflow"
-    "streamlit"                             = "airflow"
-    "evidently_ui"                          = "airflow"
-    "evidently_ui_restore"                  = "airflow"
-    "host_prepare"                          = "airflow"
-    "polaris_bootstrap"                     = "polaris"
-    }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, local.catalog_setup_on ? { "catalog_setup" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
+    "postgres"                                                                                                                                                                                                = "postgres"
+    "postgres_databases"                                                                                                                                                                                      = "postgres"
+    "redis"                                                                                                                                                                                                   = "redis"
+    "polaris"                                                                                                                                                                                                 = "polaris"
+    "airflow_migrate"                                                                                                                                                                                         = "airflow"
+    "airflow_apiserver"                                                                                                                                                                                       = "airflow"
+    "airflow_scheduler"                                                                                                                                                                                       = "airflow"
+    "airflow_dag_processor"                                                                                                                                                                                   = "airflow"
+    "airflow_triggerer"                                                                                                                                                                                       = "airflow"
+    "model_api"                                                                                                                                                                                               = "airflow"
+    "streamlit"                                                                                                                                                                                               = "airflow"
+    "evidently_ui"                                                                                                                                                                                            = "airflow"
+    "evidently_ui_restore"                                                                                                                                                                                    = "airflow"
+    "host_prepare"                                                                                                                                                                                            = "airflow"
+    "polaris_bootstrap"                                                                                                                                                                                       = "polaris"
+    }, { for name in ["postgres_restore_fetch", "postgres_backup_dump", "postgres_backup_upload"] : name => "postgres" if local.pg_backup_on || local.pg_restore_on }, local.mlflow_user_on ? { "mlflow_user" = "mlflow" } : {}, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, local.catalog_setup_on ? { "catalog_setup" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
     for name in ["monitoring_prepare", "prometheus", "grafana", "statsd_exporter", "pushgateway", "host_state_exporter", "redis_exporter", "postgres_exporter", "node_exporter"] : name => "monitoring" if var.monitoring_enabled
     }, {
     for name in ["prometheus_history", "prometheus_restore"] : name => "monitoring" if local.prometheus_history_on
@@ -102,9 +102,9 @@ locals {
   services = merge(
     {
       postgres = {
-        task_role_arn = var.control_plane_task_role_arn
+        task_role_arn = local.pg_restore_on ? var.postgres_restore_task_role_arn : var.control_plane_task_role_arn
         containers    = local.postgres_containers
-        volumes       = { postgres_data = "${var.data_mount_path}/postgres" }
+        volumes       = merge({ postgres_data = "${var.data_mount_path}/postgres" }, local.pg_restore_on ? { postgres_restore = local.pg_restore_path } : {})
       }
       redis = {
         task_role_arn = var.control_plane_task_role_arn
@@ -182,6 +182,15 @@ locals {
           volumes       = { evidently_workspace = local.evidently_ui_workspace, code_repo = local.code_path }
         }
       } : key => service if var.evidently_ui_enabled
+    },
+    {
+      for key, service in {
+        postgres_backup = {
+          task_role_arn = var.postgres_backup_task_role_arn
+          containers    = local.postgres_backup_containers
+          volumes       = { postgres_backup = local.pg_backup_path }
+        }
+      } : key => service if local.pg_backup_on
     },
     {
       for key, service in {

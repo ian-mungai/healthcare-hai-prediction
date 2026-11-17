@@ -84,6 +84,9 @@
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_prometheus_restore_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_evidently_ui_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_host_catalog_setup_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_postgres_backup_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_postgres_restore_task_${ENVIRONMENT}",
+        "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_mlflow_user_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_serve_task_${ENVIRONMENT}",
         "arn:aws:iam::${AWS_ACCOUNT_ID}:role/${PROJECT_NAME}_job_drift_task_${ENVIRONMENT}"
       ],

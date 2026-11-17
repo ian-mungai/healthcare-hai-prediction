@@ -236,6 +236,33 @@
           "type": "integer",
           "minimum": 1024,
           "maximum": 32767
+        },
+        "postgres_backup_enabled": {
+          "type": "boolean"
+        },
+        "postgres_restore_enabled": {
+          "type": "boolean"
+        },
+        "postgres_backup_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:postgres_backup_task)_(dev|prod)$"
+        },
+        "postgres_restore_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:postgres_restore_task)_(dev|prod)$"
+        },
+        "postgres_backup_bucket_name": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$"
+        },
+        "postgres_backup_interval_seconds": {
+          "type": "integer",
+          "minimum": 900,
+          "maximum": 86400
+        },
+        "mlflow_user_task_role_arn": {
+          "type": "string",
+          "pattern": "^arn:aws:iam::[0-9]{12}:role/[a-z][a-z0-9_]+_(?:mlflow_user_task)_(dev|prod)$"
         }
       }
     }

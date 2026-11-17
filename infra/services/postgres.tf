@@ -46,9 +46,11 @@ locals {
     SQL
   EOT
 
-  postgres_databases_script = "${local.postgres_databases_main}${var.mlflow_enabled ? local.postgres_databases_mlflow : ""}${local.om_on ? local.postgres_databases_openmetadata : ""}${var.monitoring_enabled ? local.postgres_databases_monitoring : ""}${local.postgres_databases_end}"
+  # While restore is off this is the script of every earlier revision. While it is on, scripts/pg_databases.sh creates the roles and each database and restores an empty one
+  # from the dump that postgres_restore_fetch wrote.
+  postgres_databases_script = local.pg_restore_on ? file("${path.module}/scripts/pg_databases.sh") : "${local.postgres_databases_main}${var.mlflow_enabled ? local.postgres_databases_mlflow : ""}${local.om_on ? local.postgres_databases_openmetadata : ""}${var.monitoring_enabled ? local.postgres_databases_monitoring : ""}${local.postgres_databases_end}"
 
-  postgres_containers = [
+  postgres_containers = concat([
     merge(local.container_defaults, {
       name              = "postgres"
       image             = local.image["postgres"]
@@ -89,22 +91,28 @@ locals {
       image             = local.image["postgres"]
       user              = "999:999"
       essential         = false
-      memory            = 128
+      memory            = local.pg_restore_on ? 512 : 128
       memoryReservation = 64
       entryPoint        = ["sh", "-ec"]
       command           = [local.postgres_databases_script]
-      environment = [
+      environment = concat([
         { name = "PGCONNECT_TIMEOUT", value = "30" },
         { name = "PGDATABASE", value = "polaris" },
         { name = "PGHOST", value = "127.0.0.1" },
         { name = "PGUSER", value = "polaris" },
-      ]
+        ], local.pg_restore_on ? [
+        { name = "PG_DATABASES", value = join(" ", local.postgres_database_pairs) },
+        { name = "PG_ROLES", value = join(" ", local.postgres_role_pairs) },
+        { name = "RESET_SCHEMAS", value = "polaris_schema" },
+        { name = "RESTORE_DIR", value = "/restore" },
+        { name = "RESTORE_SECONDS", value = "1200" },
+      ] : [])
       secrets = concat([
         { name = "AIRFLOW_DB_PASSWORD", valueFrom = local.secret_arn["airflow_db_password"] },
         { name = "PGPASSWORD", valueFrom = local.secret_arn["postgres_password"] },
       ], var.mlflow_enabled ? [{ name = "MLFLOW_DB_PASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] }] : [], local.om_on ? [{ name = "OPENMETADATA_DB_PASSWORD", valueFrom = local.secret_arn["openmetadata_db_password"] }] : [], var.monitoring_enabled ? [{ name = "POSTGRES_EXPORTER_PASSWORD", valueFrom = local.secret_arn["postgres_exporter_password"] }] : [])
-      dependsOn        = [{ containerName = "postgres", condition = "HEALTHY" }]
+      dependsOn        = concat([{ containerName = "postgres", condition = "HEALTHY" }], local.pg_restore_on ? [{ containerName = "postgres_restore_fetch", condition = "SUCCESS" }] : [])
       logConfiguration = local.log_configuration["postgres_databases"]
-    }),
-  ]
+    }, local.pg_restore_on ? { mountPoints = [{ sourceVolume = "postgres_restore", containerPath = "/restore", readOnly = false }] } : {}),
+  ], local.pg_restore_on ? [local.postgres_restore_fetch_container] : [])
 }

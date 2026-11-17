@@ -52,6 +52,7 @@ OPTIONAL_PREPARATION_FLAGS = (
     "host_catalog_setup_prepared",
     "prometheus_history_prepared",
     "publisher_secret_arns_enabled",
+    "restore_after_teardown_prepared",
 )
 # Flags that are no stack inputs: each one builds an input that holds a .env value (the account, the region, the project name), so the committed file
 # holds the flag and never the value. derive_environment_inputs replaces them with the inputs they build.

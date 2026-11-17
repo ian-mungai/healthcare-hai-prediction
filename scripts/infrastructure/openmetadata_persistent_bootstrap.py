@@ -9,6 +9,9 @@ writes each bot's token straight to that caller's SecureString parameter, and tu
 OpenMetadata 2.0.7 keeps those settings in its database (``openLineageSettings``, seeded on first start with ``autoCreateEntities`` true by
 SettingsCache), not in a configuration file, so the bootstrap reads ``GET /v1/system/settings/openLineageSettings`` and writes
 ``PUT /v1/system/settings`` only when the value is not already false; the other OpenLineage settings keep the server's values.
+After a restore of the database the search index can be empty while the catalog holds tables, so the bootstrap also starts one search reindex
+(``POST /v1/apps/trigger/SearchIndexingApplication`` with ``recreateIndex`` true) when the table count is above 0 and the table search index has no
+document or does not exist. A filled index and an empty catalog start nothing, so a rerun changes nothing.
 A rerun changes nothing when everything is current. A token that differs from its parameter is written again.
 It also retires the bots that earlier releases created for callers that no longer exist (``RETIRED_CALLERS``): it revokes the token and deletes the bot and
 its user. It touches a bot only when its name is exactly ``<caller>-bot`` and its user is the bot user this script creates (same name, ``<name>@example.org``,
@@ -182,6 +185,32 @@ def lineage_settings(api: str, session: str) -> str:
     return "changed"
 
 
+def search_reindex(api: str, session: str) -> str:
+    """Start one search reindex when the catalog has tables and the table search index is empty. Return ``reindex started``, ``index current`` or
+    ``nothing to index``. The reindex runs on the server after the call returns, so the answer does not wait for it.
+    Raises RuntimeError when a count or the start is refused."""
+    status, listed = base.call("GET", f"{api}/v1/tables?limit=1", session=session)
+    paging = listed.get("paging") if status == 200 and isinstance(listed, dict) else None
+    tables = paging.get("total") if isinstance(paging, dict) else None
+    if not isinstance(tables, int):
+        raise RuntimeError("the table count could not be read")
+    if tables == 0:
+        return "nothing to index"
+    status, found = base.call("GET", f"{api}/v1/search/query?q=*&index=table_search_index&from=0&size=0", session=session)
+    if status == 404:
+        documents = 0
+    else:
+        total = (((found.get("hits") or {}).get("total") or {}).get("value")) if status == 200 and isinstance(found, dict) else None
+        if not isinstance(total, int):
+            raise RuntimeError("the search index could not be read")
+        documents = total
+    if documents > 0:
+        return "index current"
+    if base.call("POST", f"{api}/v1/apps/trigger/SearchIndexingApplication", {"recreateIndex": True, "entities": ["all"]}, session)[0] != 200:
+        raise RuntimeError("the reindex was refused")
+    return "reindex started"
+
+
 def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--deadline-seconds", type=int, default=900)
@@ -251,6 +280,10 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, ssm: Any = None)
         sys.stdout.write(f"openmetadata_persistent_bootstrap: OpenLineage settings {lineage_settings(api, session)}\n")
     except RuntimeError as error:
         failed.append(f"OpenLineage settings ({error})")
+    try:
+        sys.stdout.write(f"openmetadata_persistent_bootstrap: search {search_reindex(api, session)}\n")
+    except RuntimeError as error:
+        failed.append(f"search reindex ({error})")
     if failed:
         return fail(f"failed for: {'; '.join(failed)}")
     sys.stdout.write("openmetadata_persistent_bootstrap: ready\n")
