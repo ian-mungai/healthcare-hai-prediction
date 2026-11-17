@@ -726,17 +726,22 @@ def opensearch_resolves_no_name_and_connects_once_within_the_deadline(root: Path
 
 
 def an_opensearch_answer_over_the_cap_is_an_error(root: Path) -> dict[str, bool]:
-    def read(pad: int) -> bool:
-        with OpenMetadataStandIn(body={"status": "green", "pad": "x" * pad}) as peer:
-            try:
-                exporter.opensearch_samples(peer.url, 5.0)
-                return False
-            except exporter.SourceError:
-                return True
+    """A valid JSON answer padded with whitespace stays valid JSON when it is cut, so only the cap check can refuse it, never the JSON parser."""
 
+    def read(pad: int) -> tuple[str, float | None]:
+        raw = b'{"status":"green"}' + b" " * pad
+        with OpenMetadataStandIn(raw=raw) as peer:
+            try:
+                answer = values(exporter.opensearch_samples(peer.url, 5.0))
+            except exporter.SourceError as error:
+                return str(error), None
+            return "", answer.get(("hai_opensearch_cluster_status", ()))
+
+    over, over_value = read(2 * 1024 * 1024)
+    under, under_value = read(512 * 1024)
     return {
-        "an answer above 1 MiB is refused": read(2 * 1024 * 1024),
-        "an answer below the cap is read": not read(512 * 1024),
+        "an answer above 1 MiB is refused with the cap message and no status": over == "the answer is not a bounded HTTP answer" and over_value is None,
+        "an answer below the cap is read as green": under == "" and under_value == 0.0,
     }
 
 
