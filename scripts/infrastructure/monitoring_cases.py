@@ -13,6 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from scripts.infrastructure import monitoring_files
+from scripts.infrastructure.metrics_push_cases import CASES as PUSH_CASES
 from scripts.infrastructure.monitoring_panel_cases import CASES as PANEL_CASES
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -218,3 +219,4 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
 }
 
 CASES |= PANEL_CASES
+CASES |= PUSH_CASES

@@ -24,12 +24,16 @@ import resource
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any, NoReturn
 
+from scripts import metrics_push
+
 CGROUP_V2_PEAK = Path("/sys/fs/cgroup/memory.peak")
 CGROUP_V1_PEAK = Path("/sys/fs/cgroup/memory/memory.max_usage_in_bytes")
+CGROUP_V2_CURRENT = Path("/sys/fs/cgroup/memory.current")
 SCRATCH = (Path("/workspace"), Path(tempfile.gettempdir()))
 INTERVAL_SECONDS = 5.0
 WALK_LIMIT = 500_000
@@ -115,7 +119,7 @@ def _exit_code(value: object) -> int:
     return value if isinstance(value, int) else 1
 
 
-def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int) -> None:
+def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int, after: Callable[[dict[str, Any]], None] | None = None) -> None:
     """Write the one record; any failure here, an interrupt included, ends the record and never the job's result."""
     try:
         if sampler is not None:
@@ -137,6 +141,8 @@ def _emit(sampler: _Sampler | None, unavailable: str, exit_code: int) -> None:
         }
         sys.stderr.write("event=resource_peaks " + json.dumps(record, sort_keys=True) + "\n")
         sys.stderr.flush()
+        if after is not None:
+            after(record)
     except BaseException as error:
         # The recorder's own failure, an interrupt during the join or a closed stderr, loses only the record; the job's result still passes on.
         # After an interrupt the record is abandoned with no further write: stderr may be a full pipe whose reader stopped, and a write would block.
@@ -163,12 +169,74 @@ def _start(folders: tuple[Path, ...], interval: float) -> tuple[_Sampler | None,
     return sampler, "", False
 
 
+def _current_memory() -> int | None:
+    try:
+        return int(CGROUP_V2_CURRENT.read_text(encoding="ascii").strip())
+    except (OSError, ValueError):
+        return None
+
+
+def _readings(sampler: _Sampler | None) -> dict[str, float | None]:
+    """What a heartbeat reports: the container's memory now and at its peak and the scratch peak so far."""
+    peak = peak_memory()[0]
+    return {"memory_current": _current_memory(), "memory_peak": peak, "scratch_peak": None if sampler is None else sampler.peak}
+
+
+def _pusher() -> metrics_push.Pusher | None:
+    """The metrics pusher of this process, or None without an address; any failure to build it is written and the job runs on."""
+    try:
+        return metrics_push.Pusher.create(os.environ, sys.argv)
+    except Exception as error:
+        metrics_push.line("metrics_push_skipped", reason=f"{type(error).__name__}: {error}")
+        return None
+
+
+def _exit_push(
+    pusher: metrics_push.Pusher | None, heartbeat: metrics_push.Heartbeat | None, started: float, interrupted: bool
+) -> Callable[[dict[str, Any]], None] | None:
+    """The call that ends the pushes after the record is written: stop the heartbeat, then push the outcome. It never raises."""
+    if pusher is None:
+        return None
+
+    def push(record: dict[str, Any]) -> None:
+        try:
+            if heartbeat is not None:
+                heartbeat.stopped.set()
+            outcome = "interrupted" if interrupted else ("succeeded" if record["exit_code"] == 0 else "failed")
+            pusher.finish(
+                outcome,
+                exit_code=record["exit_code"],
+                duration=time.monotonic() - started,
+                peak_memory=record["peak_memory_bytes"],
+                peak_scratch=record["peak_scratch_bytes"],
+                samples=metrics_push.drain(),
+            )
+        except Exception as error:
+            metrics_push.line("metrics_push_failed", step="put", reason=f"{type(error).__name__}: {error}")
+
+    return push
+
+
 def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH, interval: float = INTERVAL_SECONDS) -> NoReturn:
-    """Run a job entry point, log its resource peaks once and exit with the job's own code or exception."""
+    """Run a job entry point, log its resource peaks once, push its metrics when an address is set and exit with the job's own code or exception."""
     sampler, unavailable, abandoned = _start(scratch, interval)
+    pusher = _pusher()
+    heartbeat = None
+    if pusher is not None and not abandoned:
+        heartbeat = metrics_push.Heartbeat(pusher, lambda: _readings(sampler))
+        try:
+            heartbeat.start()
+        except Exception as error:
+            heartbeat = None
+            metrics_push.line("metrics_push_failed", step="put", reason=f"{type(error).__name__}: {error}")
+    started = time.monotonic()
+    interrupted = False
     code = 1
     try:
         code = _exit_code(main())
+    except KeyboardInterrupt:
+        interrupted = True
+        raise
     except SystemExit as stop:
         code = _exit_code(stop.code)
         raise
@@ -177,5 +245,5 @@ def recorded(main: Callable[[], object], *, scratch: tuple[Path, ...] = SCRATCH,
             if sampler is not None:
                 sampler.stopped.set()
         else:
-            _emit(sampler, unavailable, code)
+            _emit(sampler, unavailable, code, _exit_push(pusher, heartbeat, started, interrupted))
     raise SystemExit(code)

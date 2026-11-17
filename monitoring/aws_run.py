@@ -35,7 +35,7 @@ from typing import Any
 from monitoring import baseline, current_window, drift_check, drift_config, drift_gate
 from monitoring.drift_check import HAI_TYPES, CheckError, deadline
 from orchestration.training_contract import MODELS, RUN_ID
-from scripts import resource_peaks
+from scripts import metrics_push, resource_peaks
 from scripts.infrastructure import startup_check
 from scripts.lakehouse import task_capacity
 from scripts.training import dvc_baseline, run_tracking
@@ -147,6 +147,17 @@ def current_phase(root: Path, reader: Any, work: Path, run: str, *, features_run
     return done
 
 
+def push_record(record: dict[str, Any]) -> None:
+    """Hand the result of one type's check to the exit push of this job: its status, drift share, drifted count, trigger and current rows."""
+    hai_type = record["hai_type"]
+    metrics_push.add("hai_drift_status", 1, hai_type=hai_type, status=record["status"])
+    if record["drift_share"] is not None:
+        metrics_push.add("hai_drift_share", record["drift_share"], hai_type=hai_type)
+    metrics_push.add("hai_drift_features_drifted", record["drifted_count"], hai_type=hai_type)
+    metrics_push.add("hai_drift_triggered", 1 if record["triggered"] else 0, hai_type=hai_type)
+    metrics_push.add("hai_drift_current_rows", record["current"]["rows"], hai_type=hai_type)
+
+
 def check_phase(work: Path, run: str, *, config: Path = drift_config.CONFIG) -> dict[str, Any]:
     """Run the drift check for every monitored type and write its record under ``records/``."""
     folder = run_folder(work, run)
@@ -155,7 +166,7 @@ def check_phase(work: Path, run: str, *, config: Path = drift_config.CONFIG) -> 
         base = folder / hai_type
         if not (base / "current_manifest.json").is_file():
             raise CheckError("current_missing", f"the current window of {hai_type} has not been read in {base}")
-        drift_check.run(
+        written = drift_check.run(
             Namespace(
                 reference_matrix=base / "reference.parquet",
                 reference_manifest=base / "reference_manifest.json",
@@ -167,6 +178,7 @@ def check_phase(work: Path, run: str, *, config: Path = drift_config.CONFIG) -> 
                 config=config,
             )
         )
+        push_record(json.loads(Path(written).read_bytes()))
     return {"phase": "check", "run_id": run, "types": types}
 
 
