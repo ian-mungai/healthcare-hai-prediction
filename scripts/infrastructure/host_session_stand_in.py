@@ -121,6 +121,13 @@ class StandInHost:
     genuine page with empty pages and a new token for ever, each request taking ``PAGE_SECONDS`` of virtual time. A request that is not made against
     a stopped task answers one empty page, and a log request fails with ``ResourceNotFoundException`` for a stream or a group that has no such task.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
+
+    ``service_tasks_for`` (names of services, empty by default) gives each named service one task record: it runs while the service runs, ``list-tasks`` with
+    ``--service-name`` answers it, scaling the service to zero first leaves it STOPPING (the containers still close their files, ``runningCount`` already 0)
+    until it stops, and a forced deployment stops it. The faults ``auto_schedule`` (a named service with a desired count starts on its own once the
+    instance is registered, as ECS schedules it) and ``slow_container_stop:<n>`` (the task stays STOPPING n seconds after ``runningCount`` reached 0) act on
+    those services only.
+    Every ``prometheus_restore`` launch records what those services looked like in ``restore_snapshots``.
     """
 
     def __init__(
@@ -151,6 +158,8 @@ class StandInHost:
             for name in [*SERVICES.values(), *([OPENMETADATA_SERVICE] if openmetadata else [])]
         }
         self.log: list[dict[str, Any]] = []
+        self.service_tasks_for: set[str] = set()
+        self.restore_snapshots: list[dict[str, dict[str, Any]]] = []
         self.tokens: dict[str, str] = {}
         self.lost_replies = next((int(fault.split(":")[1]) if ":" in fault else 1 for fault in self.faults if fault.startswith("lose_run_task_reply")), 0)
         self.latency = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("slow_calls:")), 0)
@@ -203,6 +212,9 @@ class StandInHost:
         for name, service in self.services.items():
             if service["stop_at"] is not None and self.now >= service["stop_at"] and "never_stop_openmetadata" not in self.faults:
                 service.update(running=0, stop_at=None)
+            unscheduled = service["running"] == 0 and service["forced_at"] is None and service["state"] == "IN_PROGRESS"
+            if name in self.service_tasks_for and "auto_schedule" in self.faults and self.instance_active() and service["desired"] > 0 and unscheduled:
+                service.update(running=1, state="COMPLETED")
             forced = service["forced_at"]
             if service["desired"] == 0:
                 continue
@@ -212,6 +224,15 @@ class StandInHost:
                     service["running"], service["state"] = 1, "COMPLETED"
                 elif not self.prepared:
                     service["state"] = "FAILED"
+        for name in self.service_tasks_for:
+            self.settle_service_task(name)
+
+    def settle_service_task(self, name: str) -> None:
+        """Keep one task record per service in step with ``running``: a running service has a RUNNING task, a stopped service none that is RUNNING."""
+        service = self.services[name]
+        live = [task for task in self.tasks.values() if task.get("group") == f"service:{name}" and task["status"] == "RUNNING"]
+        if service["running"] == 1 and not live and service["desired"] > 0:
+            self.add_task(name, f"service:{name}")
 
     def instance_active(self) -> bool:
         """True when the container instance is registered."""
@@ -301,10 +322,12 @@ class StandInHost:
         if "stale_list_tasks" in self.faults:
             return {"taskArns": []}
         desired = options.get("--desired-status", ["RUNNING"])[0]
+        service_name = options.get("--service-name", [None])[0]
         arns = [
             arn
             for arn, task in self.tasks.items()
             if (family is None or task["family"] == family)
+            and (service_name not in self.service_tasks_for or task.get("group") == f"service:{service_name}")
             and task.get("desired", "RUNNING") == desired
             and (desired == "STOPPED" or task["status"] != "STOPPED")
         ]
@@ -346,6 +369,8 @@ class StandInHost:
         if "run_task_failure" in self.faults or not self.instance_active():
             return {"tasks": [], "failures": [{"reason": f"RESOURCE:MEMORY {LEAK}" if "leaky_reasons" in self.faults else "RESOURCE:MEMORY"}]}
         key = next(name for name, value in self.families.items() if value == family)
+        if key == "prometheus_restore":
+            self.restore_snapshots.append(self.service_snapshot())
         if key == "polaris_bootstrap":
             self.bootstrap_runs += 1
         code = next(
@@ -510,14 +535,35 @@ class StandInHost:
             )
         return {"tasks": found, "failures": failures}
 
+    def service_snapshot(self) -> dict[str, dict[str, Any]]:
+        """What each service with task records shows now: its desired and running counts and the status of each of its tasks."""
+        return {
+            name: {
+                "desired": self.services[name]["desired"],
+                "running": self.services[name]["running"],
+                "tasks": [task["status"] for task in self.tasks.values() if task.get("group") == f"service:{name}"],
+            }
+            for name in sorted(self.service_tasks_for)
+        }
+
     def ecs_update_service(self, options: dict[str, list[str]]) -> dict[str, Any]:
-        service = self.services[options["--service"][0]]
+        name = options["--service"][0]
+        if name not in self.services:
+            raise StandInError("ServiceNotFoundException")
+        service = self.services[name]
         count = options.get("--desired-count")
         if count is not None and int(count[0]) == 0:
             service.update(desired=0, forced_at=None, state="COMPLETED", stop_at=self.now + STOP_TASK_SECONDS)
+            slow = next((int(fault.split(":")[1]) for fault in self.faults if fault.startswith("slow_container_stop:")), 0)
+            for task in self.tasks.values():
+                if task.get("group") == f"service:{name}" and task["status"] == "RUNNING":
+                    task.update(status="STOPPING", desired="STOPPED", stops_at=self.now + STOP_TASK_SECONDS + slow)
             return {}
         if count is not None:
             service["desired"] = int(count[0])
+        for task in self.tasks.values():
+            if task.get("group") == f"service:{name}" and task["status"] != "STOPPED":
+                task.update(status="STOPPED", desired="STOPPED")
         service.update(forced_at=self.now, state="IN_PROGRESS", running=0, stop_at=None)
         return {}
 

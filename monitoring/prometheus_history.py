@@ -13,9 +13,12 @@ file, including ``meta.json``) and ``meta.json`` last, so a block whose ``meta.j
 The shipper role holds only a create-only put and list.
 
 The restore role holds only get and list. For each block with a ``meta.json`` that is not already a folder of the data folder it downloads every file into the
-scratch folder (on the same volume), checks size and SHA-256 against the manifest, then the ``meta.json`` identity and the magic bytes of the index, chunk and
-tombstone files, skips a block whose time range overlaps a block already there, and moves the folder into place with one rename. An existing block is never
-replaced. A block that lacks a manifest file in S3 (the lifecycle cut it) is skipped and reported; a block that fails a check stops the restore with its name.
+scratch folder (on the same volume), checks size and SHA-256 against the manifest, then the ``meta.json`` identity and the whole header (magic number, supported
+version and length) of the index, chunk and tombstone files, and moves the folder into place with one rename. An existing block is never replaced and a block
+whose time range overlaps one there is skipped. A compacted block whose compaction record names archived blocks as its parents or sources and covers their
+ranges is placed instead of them, so no range is lost. A block that lacks any object in S3 (the lifecycle cut it, also between the listing and the read) is
+skipped and reported; a block that fails a check, a malformed manifest and an access failure stop the restore with the block's name. The restore runs while
+Prometheus is stopped (scripts/infrastructure/host_session.py holds its service at zero first).
 """
 
 from __future__ import annotations
@@ -40,7 +43,13 @@ PREFIX = "prometheus/blocks/"
 INDEX_MAGIC = 0xBAAAD700
 CHUNKS_MAGIC = 0x85BD40DD
 TOMBSTONES_MAGIC = 0x0130BA30
-INDEX_FORMATS = (2, 3)
+INDEX_FORMATS = (1, 2, 3)
+TOMBSTONES_FORMATS = (1,)
+CHUNKS_FORMATS = (1,)
+INDEX_HEADER = 5
+TOMBSTONES_HEADER = 5
+CHUNKS_HEADER = 8
+GONE = ("NoSuchKey", "404", "NotFound")
 ULID = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 FILE = re.compile(r"^(meta\.json|index|tombstones|manifest\.json|chunks/[0-9]{6,})$")
 REQUIRED = ("meta.json", "index", "tombstones")
@@ -67,12 +76,39 @@ class RestoreReport:
     restored: list[str] = field(default_factory=list)
     present: list[str] = field(default_factory=list)
     overlapping: list[str] = field(default_factory=list)
+    superseded: list[str] = field(default_factory=list)
     incomplete: list[str] = field(default_factory=list)
     unfinished: list[str] = field(default_factory=list)
 
 
 class Vanished(Exception):
     """A block folder or file that Prometheus deleted during the pass."""
+
+
+class Gone(Exception):
+    """An object of S3 that the listing showed and that is not there any more (a lifecycle expiry between the listing and the read)."""
+
+
+@dataclass(frozen=True)
+class Candidate:
+    """A block of S3 that is complete as listed: its manifest, its time range and the blocks its compaction record says it replaced."""
+
+    name: str
+    group: dict[str, int]
+    manifest: dict[str, dict[str, Any]]
+    low: int
+    high: int
+    level: int
+    covered: frozenset[str]
+
+
+@dataclass(frozen=True)
+class Held:
+    """A time range that a block of the data folder (or one restored in this run) holds, and the blocks it stands for."""
+
+    low: int
+    high: int
+    covered: frozenset[str]
 
 
 def file_digest(path: Path) -> tuple[int, str]:
@@ -207,12 +243,19 @@ def sha_check(name: str, file: str, size: int, digest: str, expected: dict[str, 
         raise HistoryError(f"{name}/{file}: sha256 differs from the manifest")
 
 
+def open_object(client: Any, bucket: str, name: str, file: str) -> Any:
+    """The body of one object. An object that is not there raises ``Gone``; any other failure (access, network) raises ``HistoryError``."""
+    try:
+        return client.get_object(Bucket=bucket, Key=f"{PREFIX}{name}/{file}")["Body"]
+    except Exception as problem:
+        if getattr(problem, "response", {}).get("Error", {}).get("Code") in GONE:
+            raise Gone(f"{name}/{file}") from problem
+        raise HistoryError(f"{name}/{file}: download failed: {problem}") from problem
+
+
 def download(client: Any, bucket: str, name: str, file: str, expected: dict[str, Any], target: Path) -> None:
     """Fetch one object into ``target`` and check its size and SHA-256 against the manifest."""
-    try:
-        body = client.get_object(Bucket=bucket, Key=f"{PREFIX}{name}/{file}")["Body"]
-    except Exception as problem:
-        raise HistoryError(f"{name}/{file}: download failed: {problem}") from problem
+    body = open_object(client, bucket, name, file)
     digest, size = hashlib.sha256(), 0
     target.parent.mkdir(parents=True, exist_ok=True)
     with target.open("wb") as handle:
@@ -224,9 +267,10 @@ def download(client: Any, bucket: str, name: str, file: str, expected: dict[str,
 
 
 def read_manifest(client: Any, bucket: str, name: str, sizes: dict[str, int]) -> dict[str, dict[str, Any]]:
+    """The manifest of a block. It is not there any more: ``Gone``. It cannot be read or is malformed: ``HistoryError``."""
+    body = open_object(client, bucket, name, "manifest.json")
     try:
-        raw = client.get_object(Bucket=bucket, Key=f"{PREFIX}{name}/manifest.json")["Body"].read(READ_SIZE)
-        manifest = json.loads(raw)
+        manifest = json.loads(body.read(READ_SIZE))
     except Exception as problem:
         raise HistoryError(f"{name}: the manifest cannot be read: {problem}") from problem
     files = manifest.get("files") if isinstance(manifest, dict) else None
@@ -247,25 +291,33 @@ def header(path: Path, size: int) -> bytes:
         return handle.read(size)
 
 
-def verify_block(name: str, folder: Path, files: dict[str, dict[str, Any]]) -> tuple[int, int]:
-    """Check the identity and the file headers of a downloaded block; answer its time range."""
-    meta = read_meta(folder)
+def check_header(name: str, label: str, path: Path, magic: int, versions: tuple[int, ...], length: int) -> None:
+    """The whole header of a file: at least ``length`` bytes, the magic number and a version that the pinned Prometheus reads."""
+    head = header(path, length)
+    if len(head) < length or int.from_bytes(head[:4], "big") != magic or head[4] not in versions:
+        raise HistoryError(f"{name}: the {label} header is not a complete Prometheus header of a supported version")
+
+
+def check_meta(name: str, meta: dict[str, Any] | None) -> tuple[int, int]:
+    """The identity and the time range of a block from its meta.json."""
     if meta is None or meta.get("ulid") != name or meta.get("version") != 1:
         raise HistoryError(f"{name}: meta.json names another ulid or version")
     low, high = meta.get("minTime"), meta.get("maxTime")
     if not isinstance(low, int) or not isinstance(high, int) or low >= high:
         raise HistoryError(f"{name}: meta.json has no valid time range")
-    index = header(folder / "index", 5)
-    if len(index) < 5 or int.from_bytes(index[:4], "big") != INDEX_MAGIC or index[4] not in INDEX_FORMATS:
-        raise HistoryError(f"{name}: the index header is not a Prometheus index")
-    if int.from_bytes(header(folder / "tombstones", 4), "big") != TOMBSTONES_MAGIC:
-        raise HistoryError(f"{name}: the tombstones header is not a Prometheus tombstones file")
+    return low, high
+
+
+def verify_block(name: str, folder: Path, files: dict[str, dict[str, Any]]) -> tuple[int, int]:
+    """Check the identity and the file headers of a downloaded block; answer its time range."""
+    meta = read_meta(folder)
+    low, high = check_meta(name, meta)
+    check_header(name, "index", folder / "index", INDEX_MAGIC, INDEX_FORMATS, INDEX_HEADER)
+    check_header(name, "tombstones", folder / "tombstones", TOMBSTONES_MAGIC, TOMBSTONES_FORMATS, TOMBSTONES_HEADER)
     chunks = [file for file in files if file.startswith("chunks/")]
     for file in chunks:
-        head = header(folder / file, 5)
-        if len(head) < 5 or int.from_bytes(head[:4], "big") != CHUNKS_MAGIC or head[4] != 1:
-            raise HistoryError(f"{name}: the chunk file {file} header is not a Prometheus chunk segment")
-    if meta.get("stats", {}).get("numChunks", 0) > 0 and not chunks:
+        check_header(name, f"chunk file {file}", folder / file, CHUNKS_MAGIC, CHUNKS_FORMATS, CHUNKS_HEADER)
+    if (meta or {}).get("stats", {}).get("numChunks", 0) > 0 and not chunks:
         raise HistoryError(f"{name}: meta.json counts chunks but the manifest lists no chunk file")
     return low, high
 
@@ -276,13 +328,27 @@ def hand_over(folder: Path, owner: tuple[int, int]) -> None:
         path.chmod(0o750 if path.is_dir() else 0o640)
 
 
-def local_ranges(data: Path) -> list[tuple[int, int]]:
-    ranges = []
+def covered_by(name: str, meta: dict[str, Any]) -> frozenset[str]:
+    """The block and every block its compaction record names as a source or a parent."""
+    compaction = meta.get("compaction")
+    compaction = compaction if isinstance(compaction, dict) else {}
+    parents = [item.get("ulid") for item in compaction.get("parents", []) if isinstance(item, dict)]
+    return frozenset(item for item in [name, *compaction.get("sources", []), *parents] if isinstance(item, str))
+
+
+def level_of(meta: dict[str, Any]) -> int:
+    compaction = meta.get("compaction")
+    level = compaction.get("level") if isinstance(compaction, dict) else None
+    return level if isinstance(level, int) else 1
+
+
+def local_ranges(data: Path) -> list[Held]:
+    held = []
     for block in sorted(data.iterdir()):
         meta = read_meta(block) if ULID.fullmatch(block.name) and block.is_dir() else None
         if meta is not None and isinstance(meta.get("minTime"), int) and isinstance(meta.get("maxTime"), int):
-            ranges.append((meta["minTime"], meta["maxTime"]))
-    return ranges
+            held.append(Held(meta["minTime"], meta["maxTime"], covered_by(block.name, meta)))
+    return held
 
 
 def groups_of(keys: dict[str, int]) -> dict[str, dict[str, int]]:
@@ -301,40 +367,65 @@ def same_volume(first: Path, second: Path) -> None:
         raise HistoryError(f"{first} and {second} are not on one volume, so a block cannot move into place by one rename")
 
 
-def restore_block(
-    client: Any, bucket: str, name: str, group: dict[str, int], data: Path, partial: Path, ranges: list[tuple[int, int]], owner: tuple[int, int] | None
-) -> str:
-    """Restore one block; answer ``restored``, ``overlapping`` or ``incomplete``."""
-    manifest = read_manifest(client, bucket, name, {f"{PREFIX}{name}/{file}": size for file, size in group.items()})
-    if any(file not in group for file in manifest):
-        return "incomplete"
-    for file, expected in manifest.items():
-        if group[file] != expected["size"]:
-            raise HistoryError(f"{name}/{file}: size {group[file]} in S3 differs from the manifest's {expected['size']}")
+def candidate(client: Any, bucket: str, name: str, group: dict[str, int]) -> Candidate | None:
+    """Read the manifest and the meta.json of a block of S3. ``None``: the block is incomplete (an object is missing or expired) and is skipped."""
+    if "manifest.json" not in group:
+        return None
+    try:
+        manifest = read_manifest(client, bucket, name, {f"{PREFIX}{name}/{file}": size for file, size in group.items()})
+        if any(file not in group for file in manifest):
+            return None
+        for file, expected in manifest.items():
+            if group[file] != expected["size"]:
+                raise HistoryError(f"{name}/{file}: size {group[file]} in S3 differs from the manifest's {expected['size']}")
+        digest, size, raw = hashlib.sha256(), 0, b""
+        body = open_object(client, bucket, name, "meta.json")
+        while chunk := body.read(READ_SIZE):
+            raw, size = raw + chunk, size + len(chunk)
+            digest.update(chunk)
+        sha_check(name, "meta.json", size, digest.hexdigest(), manifest["meta.json"])
+    except Gone:
+        return None
+    try:
+        meta = json.loads(raw)
+    except ValueError:
+        raise HistoryError(f"{name}: meta.json is not JSON") from None
+    low, high = check_meta(name, meta if isinstance(meta, dict) else None)
+    return Candidate(name, group, manifest, low, high, level_of(meta), covered_by(name, meta))
+
+
+def place(client: Any, bucket: str, found: Candidate, data: Path, partial: Path, owner: tuple[int, int] | None) -> bool:
+    """Download, verify and move one block into place. ``False``: an object expired during the download and the block is incomplete."""
     shutil.rmtree(partial, ignore_errors=True)
-    download(client, bucket, name, "meta.json", manifest["meta.json"], partial / "meta.json")
-    meta = read_meta(partial) or {}
-    low, high = meta.get("minTime"), meta.get("maxTime")
-    if isinstance(low, int) and isinstance(high, int) and any(low < end and start < high for start, end in ranges):
-        return "overlapping"
-    for file, expected in manifest.items():
-        if file != "meta.json":
-            download(client, bucket, name, file, expected, partial / file)
-    low, high = verify_block(name, partial, manifest)
-    if any(low < end and start < high for start, end in ranges):
-        return "overlapping"
+    try:
+        for file, expected in found.manifest.items():
+            download(client, bucket, found.name, file, expected, partial / file)
+    except Gone:
+        return False
+    verify_block(found.name, partial, found.manifest)
     if owner is not None:
         hand_over(partial, owner)
     try:
-        os.rename(partial, data / name)
+        os.rename(partial, data / found.name)
     except OSError as problem:
-        raise HistoryError(f"{name}: the block could not move into place: {problem}") from problem
-    ranges.append((low, high))
-    return "restored"
+        raise HistoryError(f"{found.name}: the block could not move into place: {problem}") from problem
+    return True
+
+
+def covering(held: list[Held], found: Candidate) -> tuple[bool, bool]:
+    """Whether ``found`` overlaps a range in ``held`` and whether one of those ranges is a block that replaced it and covers its whole range."""
+    overlapped = [item for item in held if found.low < item.high and item.low < found.high]
+    return bool(overlapped), any(found.name in item.covered and item.low <= found.low and item.high >= found.high for item in overlapped)
 
 
 def restore(client: Any, bucket: str, data: Path, scratch: Path, owner: tuple[int, int] | None = None, until: float | None = None) -> RestoreReport:
-    """Bring every verified block of S3 back into ``data`` that is not there yet."""
+    """Bring the verified blocks of S3 back into ``data`` that it lacks, and no block over one that is there.
+
+    A compacted block that replaced archived blocks (its compaction record names them as parents or sources) and covers their ranges is placed instead of them,
+    so no range is lost; a block that overlaps one of the data folder is skipped, never replaced. Blocks are tried from the highest compaction level and the
+    widest range down, which puts a replacement before its parents, and what a replacement stands for includes what the blocks it replaced stood for.
+    A block that lacks an object in S3 (the lifecycle cut it) is skipped and reported.
+    """
     data.mkdir(parents=True, exist_ok=True)
     scratch.mkdir(parents=True, exist_ok=True)
     same_volume(data, scratch)
@@ -342,20 +433,39 @@ def restore(client: Any, bucket: str, data: Path, scratch: Path, owner: tuple[in
         os.chown(data, *owner)
         data.chmod(0o750)
     groups = groups_of(listing(client, bucket))
-    report, ranges = RestoreReport(), local_ranges(data)
+    report, held = RestoreReport(), local_ranges(data)
+    found: list[Candidate] = []
     for name, group in sorted(groups.items()):
-        check_deadline(until, f"restoring {name}")
-        partial = scratch / f"{name}{PARTIAL_SUFFIX}"
+        check_deadline(until, f"reading {name}")
         if "meta.json" not in group:
             report.unfinished.append(name)
         elif (data / name).exists():
             report.present.append(name)
+        elif (block := candidate(client, bucket, name, group)) is None:
+            report.incomplete.append(name)
         else:
+            found.append(block)
+    known = {block.name: block for block in found}
+    for block in sorted(found, key=lambda item: (-item.level, item.low - item.high, item.name)):
+        check_deadline(until, f"restoring {block.name}")
+        overlapped, replaced = covering(held, block)
+        if replaced:
+            report.superseded.append(block.name)
+        elif overlapped:
+            report.overlapping.append(block.name)
+        else:
+            partial = scratch / f"{block.name}{PARTIAL_SUFFIX}"
             try:
-                outcome = restore_block(client, bucket, name, group, data, partial, ranges, owner)
+                placed = place(client, bucket, block, data, partial, owner)
             finally:
                 shutil.rmtree(partial, ignore_errors=True)
-            getattr(report, outcome).append(name)
+            if placed:
+                held.append(Held(block.low, block.high, block.covered.union(*(known[name].covered for name in block.covered if name in known))))
+                report.restored.append(block.name)
+            else:
+                report.incomplete.append(block.name)
+    for names in (report.restored, report.present, report.overlapping, report.superseded, report.incomplete, report.unfinished):
+        names.sort()
     return report
 
 

@@ -72,6 +72,9 @@ CODE_FETCH = "code_fetch"
 CODE_FETCH_SECONDS = 1200
 PROMETHEUS_RESTORE = "prometheus_restore"
 PROMETHEUS_RESTORE_SECONDS = 1800
+# The services that open the Prometheus data folder (infra/services/prometheus_history.tf): the restore runs only while both are stopped.
+PROMETHEUS_SERVICES = ("monitoring", "prometheus_history")
+PROMETHEUS_HOLD_SECONDS = 300
 CODE_RUN_ID = re.compile(CODE_RUN)
 CODE_SHA256 = re.compile(r"[a-f0-9]{64}")
 CODE_ENVIRONMENT = ("CODE_RUN_ID", "CODE_SHA256", "CODE_MODE")
@@ -619,8 +622,8 @@ class Session:
     def deploy_services(self) -> None:
         """Force a new deployment of every project service, postgres first, then wait until all are stable."""
         for key, name in self.names.services.items():
-            # The catalog service is scaled to zero by stop, so its deployment also sets the count back to one.
-            count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE else []
+            # The catalog service is scaled to zero by stop and the Prometheus services by the restore hold, so their deployment sets the count back to one.
+            count = ["--desired-count", "1"] if key == OPENMETADATA_SERVICE or key in PROMETHEUS_SERVICES else []
             self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, *count, "--force-new-deployment"])
         self.step("services_deployment_forced", ", ".join(self.names.services.values()))
         self.wait("services stable", self.services_stable, SERVICES_STABLE_SECONDS, POLL_SECONDS)
@@ -824,13 +827,60 @@ class Session:
             raise HostSessionError(f"{error}; the code task did not run to its end, so what repo shows is not known; no service was deployed") from None
         return code if code is not None else self.read_identity()
 
+    def tasks_stopped(self, name: str) -> bool:
+        """True when every task ECS lists for the service, wanted RUNNING or STOPPED, has reached the status STOPPED.
+
+        ``runningCount`` is 0 as soon as a task leaves RUNNING, while its containers still close their files in STOPPING, so the count alone does not show that
+        Prometheus has let go of its data folder. A task that DescribeTasks cannot show raises: the state is then in doubt.
+        """
+        arns: list[str] = []
+        for status in ("RUNNING", "STOPPED"):
+            arns += self.call("ecs", "list-tasks", ["--cluster", self.names.cluster, "--service-name", name, "--desired-status", status]).get("taskArns", [])
+        for index in range(0, len(arns), DESCRIBE_TASKS_LIMIT):
+            described = self.call("ecs", "describe-tasks", ["--cluster", self.names.cluster, "--tasks", *arns[index : index + DESCRIBE_TASKS_LIMIT]])
+            if described.get("failures"):
+                raise HostSessionError("describe-tasks reported failures")
+            if any(task.get("lastStatus") != "STOPPED" for task in described.get("tasks", [])):
+                return False
+        return True
+
+    def hold_prometheus_services(self) -> list[str]:
+        """Scale the services that open the Prometheus data folder to zero and wait until ECS shows no running or pending task and every task STOPPED.
+
+        The services keep desired count one in the stack, and ECS starts them as soon as the instance registers, so on a cold host and on a repeated start they
+        can already run. ``deploy_services`` sets the count back to one after the restore. A service that the state does not name, that ECS does not have or
+        that does not stop within ``PROMETHEUS_HOLD_SECONDS`` raises, and the restore does not run.
+        """
+        missing = [key for key in PROMETHEUS_SERVICES if key not in self.names.services]
+        if missing:
+            raise HostSessionError(
+                f"the stack plans a prometheus_restore one-shot but the services state has no {', '.join(missing)} service, "
+                "so the data folder cannot be held; no restore ran"
+            )
+        held = [self.names.services[key] for key in PROMETHEUS_SERVICES]
+        for name in held:
+            self.call("ecs", "update-service", ["--cluster", self.names.cluster, "--service", name, "--desired-count", "0"])
+        self.step("prometheus_services_scaled_down", ", ".join(held))
+        self.wait(
+            "Prometheus services stop",
+            lambda: all(self.service_stopped(name) and self.tasks_stopped(name) for name in held),
+            PROMETHEUS_HOLD_SECONDS,
+            POLL_SECONDS,
+        )
+        self.step("prometheus_services_stopped", ", ".join(held))
+        return held
+
     def restore_prometheus(self) -> None:
-        """Run the Prometheus history restore one-shot (monitoring/prometheus_history.py restore): the blocks of S3 that the data volume lacks are downloaded,
-        verified and placed before any service starts, so Prometheus opens them as its own. A stack with no such one-shot (the history roles are not applied)
-        starts as before and says so; a restore that fails stops the start."""
+        """Run the Prometheus history restore one-shot (monitoring/prometheus_history.py restore) while Prometheus and its shipper are stopped.
+
+        The blocks of S3 that the data volume lacks are downloaded, verified and placed, so Prometheus opens them as its own at the deployment that follows. The
+        two services are held at zero first and verified stopped, on a cold host and on a repeated start alike (``hold_prometheus_services``). A stack with no
+        such one-shot (the history roles are not applied) starts as before and says so; a restore that fails stops the start.
+        """
         if PROMETHEUS_RESTORE not in self.names.one_shot:
             self.step("prometheus_restore_skipped", "the services stack plans no prometheus_restore one-shot, so no metric history returns")
             return
+        self.hold_prometheus_services()
         self.one_shot(PROMETHEUS_RESTORE, PROMETHEUS_RESTORE_SECONDS)
         self.step("prometheus_restored", "the metric history of S3 is on the data volume before Prometheus starts")
 

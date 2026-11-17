@@ -40,8 +40,8 @@ locals {
     }),
   ]
 
-  # The restore one-shot (host_session start runs it after the code checkout and before every service). It has the read-only role and downloads, verifies and places
-  # the blocks the data folder lacks, then hands them to the Prometheus user. The data volume holds both /host/prometheus and the scratch folder, so each block moves by one rename.
+  # The restore one-shot (host_session start runs it after the code checkout, while the monitoring service and the shipper are held at zero and verified stopped).
+  # It has the read-only role and downloads, verifies and places the blocks the data folder lacks, then hands them to the Prometheus user. The data volume holds both /host/prometheus and the scratch folder, so each block moves by one rename.
   prometheus_restore_task = {
     network_mode  = "host"
     task_role_arn = var.prometheus_restore_task_role_arn

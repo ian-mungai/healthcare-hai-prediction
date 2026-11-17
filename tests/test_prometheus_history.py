@@ -43,6 +43,8 @@ class Pages:
         self.role, self.objects, self.page_size = role, {} if objects is None else objects, page_size
         self.puts: list[str] = []
         self.fail_after: int | None = None
+        self.vanish: set[str] = set()
+        self.denied: set[str] = set()
 
     def allow(self, action: str) -> None:
         if action not in {"shipper": {"put_object", "list_objects_v2"}, "restore": {"get_object", "list_objects_v2"}}[self.role]:
@@ -63,7 +65,9 @@ class Pages:
 
     def get_object(self, **call: Any) -> dict[str, Any]:
         self.allow("get_object")
-        if call["Key"] not in self.objects:
+        if call["Key"] in self.denied:
+            raise error("AccessDenied", "GetObject")
+        if call["Key"] not in self.objects or call["Key"] in self.vanish:
             raise error("NoSuchKey", "GetObject")
         return {"Body": io.BytesIO(self.objects[call["Key"]])}
 
@@ -77,7 +81,9 @@ class Pages:
         return {**found, "NextContinuationToken": str(start + self.page_size)} if more else found
 
 
-def write_block(data: Path, name: str, minute: int, hours: int = 2, chunks: int = 2, body: bytes = b"samples") -> Path:
+def write_block(
+    data: Path, name: str, minute: int, hours: int = 2, chunks: int = 2, body: bytes = b"samples", compaction: dict[str, Any] | None = None
+) -> Path:
     """A block folder with the real file names and magic bytes. ``minute`` is the start of the block in hours since a fixed origin."""
     block = data / name
     (block / "chunks").mkdir(parents=True)
@@ -90,7 +96,7 @@ def write_block(data: Path, name: str, minute: int, hours: int = 2, chunks: int 
         "minTime": minute * HOUR,
         "maxTime": (minute + hours) * HOUR,
         "stats": {"numSamples": 9, "numSeries": 1, "numChunks": chunks},
-        "compaction": {"level": 1, "sources": [name]},
+        "compaction": compaction or {"level": 1, "sources": [name]},
         "version": 1,
     }
     (block / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -348,3 +354,180 @@ def test_restore_refuses_a_scratch_folder_on_another_volume(source: Path, tmp_pa
     monkeypatch.setattr(os, "stat", stat)
     with pytest.raises(history.HistoryError, match="volume"):
         restore(Pages("restore", store.objects), tmp_path)
+
+
+def parent(name: str, minute: int, hours: int = 2) -> dict[str, Any]:
+    return {"ulid": name, "minTime": minute * HOUR, "maxTime": (minute + hours) * HOUR}
+
+
+def replacement(data: Path, name: str, minute: int, hours: int, parents: list[tuple[str, int, int]], level: int = 2) -> Path:
+    """A compacted block that replaced ``parents`` (ulid, start hour, hours): the compaction record lists its parents and every level 1 source."""
+    sources = sorted({name_ for name_, _, _ in parents})
+    compaction = {"level": level, "sources": sources, "parents": [parent(*item) for item in parents]}
+    return write_block(data, name, minute, hours, compaction=compaction)
+
+
+def ranges(data: Path) -> list[tuple[int, int]]:
+    metas = [json.loads((block / "meta.json").read_text(encoding="utf-8")) for block in sorted(data.iterdir()) if (block / "meta.json").is_file()]
+    return sorted((meta["minTime"] // HOUR, meta["maxTime"] // HOUR) for meta in metas)
+
+
+def test_a_manifest_that_expired_skips_that_block_and_restores_the_rest(source: Path, tmp_path: Path) -> None:
+    store = Pages("shipper")
+    ship(store, source)
+    del store.objects[f"prometheus/blocks/{ulid(1)}/manifest.json"]
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(
+        report.incomplete == [ulid(1)] and report.restored == [ulid(2)],
+        f"a block without its manifest is reported incomplete and the intact block returns: {report}",
+    )
+
+
+@pytest.mark.parametrize("name", ["manifest.json", "meta.json", "index", "tombstones", "chunks/000001"])
+def test_an_object_that_vanishes_between_the_listing_and_the_download_makes_the_block_incomplete(source: Path, tmp_path: Path, name: str) -> None:
+    store = Pages("shipper")
+    ship(store, source)
+    reader = Pages("restore", store.objects)
+    reader.vanish.add(f"prometheus/blocks/{ulid(1)}/{name}")
+    report = restore(reader, tmp_path)
+    check(
+        report.incomplete == [ulid(1)] and report.restored == [ulid(2)],
+        f"{name} vanished after the listing, so the block is incomplete and the other returns: {report}",
+    )
+    check(not any((tmp_path / "volume" / "prometheus").glob(f"{ulid(1)}*")), "nothing of the cut block is placed")
+
+
+@pytest.mark.parametrize("name", ["manifest.json", "meta.json", "index"])
+def test_an_access_failure_is_not_an_expired_object_and_stops_the_restore(source: Path, tmp_path: Path, name: str) -> None:
+    store = Pages("shipper")
+    ship(store, source)
+    reader = Pages("restore", store.objects)
+    reader.denied.add(f"prometheus/blocks/{ulid(1)}/{name}")
+    with pytest.raises(history.HistoryError, match="download failed|manifest cannot be read"):
+        restore(reader, tmp_path)
+
+
+def test_a_malformed_manifest_stops_the_restore(source: Path, tmp_path: Path) -> None:
+    store = Pages("shipper")
+    ship(store, source)
+    store.objects[f"prometheus/blocks/{ulid(1)}/manifest.json"] = b"{not json"
+    with pytest.raises(history.HistoryError, match="manifest"):
+        restore(Pages("restore", store.objects), tmp_path)
+
+
+HEADERS = {
+    "index": (struct.pack(">IB", history.INDEX_MAGIC, 2), "index header"),
+    "tombstones": (struct.pack(">IB", history.TOMBSTONES_MAGIC, 1), "tombstones header"),
+    "chunks/000001": (struct.pack(">IB3x", history.CHUNKS_MAGIC, 1), "chunk"),
+}
+
+
+def damaged(good: bytes, how: str) -> bytes:
+    if how == "magic":
+        return b"\xff" + good[1:]
+    if how == "version":
+        return good[:4] + b"\xff" + good[5:]
+    return good[:-1]
+
+
+@pytest.mark.parametrize("how", ["magic", "version", "truncated"])
+@pytest.mark.parametrize("file", sorted(HEADERS))
+def test_every_checked_file_header_must_be_complete_and_of_a_supported_version(tmp_path: Path, file: str, how: str) -> None:
+    good, message = HEADERS[file]
+    data = tmp_path / "source"
+    data.mkdir()
+    block = write_block(data, ulid(1), 0)
+    (block / file).write_bytes(damaged(good, how) + (b"" if how == "truncated" else b"payload"))
+    store = Pages("shipper")
+    ship(store, data)
+    with pytest.raises(history.HistoryError, match=message):
+        restore(Pages("restore", store.objects), tmp_path, tmp_path / "volume" / "prometheus")
+    check(not any((tmp_path / "volume" / "prometheus").glob(f"{ulid(1)}*")), "a block with a damaged header is not placed")
+
+
+@pytest.mark.parametrize("version", [2, 3])
+def test_both_index_versions_that_prometheus_writes_are_accepted(tmp_path: Path, version: int) -> None:
+    data = tmp_path / "source"
+    data.mkdir()
+    block = write_block(data, ulid(1), 0)
+    (block / "index").write_bytes(struct.pack(">IB", history.INDEX_MAGIC, version) + b"payload")
+    store = Pages("shipper")
+    ship(store, data)
+    check(restore(Pages("restore", store.objects), tmp_path).restored == [ulid(1)], f"index version {version} restores")
+
+
+def archive_with_replacement(tmp_path: Path) -> tuple[Pages, Path]:
+    """The reviewer's probe: the parents [0h,2h) and [2h,4h) ship, then their replacement [0h,6h) with a third source [4h,6h) that never shipped."""
+    data = tmp_path / "source"
+    data.mkdir()
+    write_block(data, ulid(1), 0)
+    write_block(data, ulid(2), 2)
+    store = Pages("shipper")
+    ship(store, data)
+    third = ulid(3)
+    replacement(data, ulid(5), 0, 6, [(ulid(1), 0, 2), (ulid(2), 2, 2), (third, 4, 2)])
+    ship(store, data)
+    return store, data
+
+
+def test_a_replacement_that_covers_its_archived_parents_is_restored_instead_of_them(tmp_path: Path) -> None:
+    store, _ = archive_with_replacement(tmp_path)
+    report = restore(Pages("restore", store.objects), tmp_path)
+    data = tmp_path / "volume" / "prometheus"
+    check(
+        report.restored == [ulid(5)] and report.superseded == [ulid(1), ulid(2)],
+        f"the replacement returns and its two archived parents are superseded: {report}",
+    )
+    check(ranges(data) == [(0, 6)], f"the restored range is [0h,6h) with no gap: {ranges(data)}")
+
+
+def test_a_chain_of_replacements_restores_only_the_widest(tmp_path: Path) -> None:
+    store, data = archive_with_replacement(tmp_path)
+    replacement(data, ulid(9), 0, 12, [(ulid(5), 0, 6), (ulid(6), 6, 6)], level=3)
+    ship(store, data)
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(report.restored == [ulid(9)] and report.superseded == [ulid(1), ulid(2), ulid(5)], f"only the widest block returns: {report}")
+    check(ranges(tmp_path / "volume" / "prometheus") == [(0, 12)], "the range is [0h,12h)")
+
+
+def test_an_existing_local_parent_is_never_replaced_by_its_archived_replacement(tmp_path: Path) -> None:
+    store, data = archive_with_replacement(tmp_path)
+    local = tmp_path / "volume" / "prometheus"
+    write_block(local, ulid(1), 0, body=b"local")
+    kept = tree(local / ulid(1))
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(
+        report.restored == [ulid(2)] and report.present == [ulid(1)] and report.overlapping == [ulid(5)],
+        f"the local block stays and the replacement is skipped: {report}",
+    )
+    check(tree(local / ulid(1)) == kept and ranges(local) == [(0, 2), (2, 4)], "the local block is unchanged and the other parent fills the rest")
+
+
+def test_a_replacement_that_lost_its_objects_falls_back_to_its_parents(tmp_path: Path) -> None:
+    store, _ = archive_with_replacement(tmp_path)
+    del store.objects[f"prometheus/blocks/{ulid(5)}/chunks/000002"]
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(report.incomplete == [ulid(5)] and report.restored == [ulid(1), ulid(2)], f"the cut replacement is skipped and the parents return: {report}")
+
+
+def test_a_replacement_that_fails_verification_stops_the_restore_before_any_parent_is_placed(tmp_path: Path) -> None:
+    store, _ = archive_with_replacement(tmp_path)
+    key = next(key for key in store.objects if key.endswith("/index") and ulid(5) in key)
+    store.objects[key] = b"\0" * len(store.objects[key])
+    with pytest.raises(history.HistoryError, match="sha256"):
+        restore(Pages("restore", store.objects), tmp_path)
+    check(not any((tmp_path / "volume" / "prometheus").iterdir()), "no parent is placed behind a replacement that failed")
+
+
+def test_a_block_that_names_another_as_its_parent_without_covering_it_does_not_supersede_it(tmp_path: Path) -> None:
+    data = tmp_path / "source"
+    data.mkdir()
+    write_block(data, ulid(1), 0)
+    replacement(data, ulid(5), 1, 2, [(ulid(1), 0, 2)])
+    store = Pages("shipper")
+    ship(store, data)
+    report = restore(Pages("restore", store.objects), tmp_path)
+    check(
+        report.superseded == [] and sorted(report.overlapping + report.restored) == [ulid(1), ulid(5)] and len(report.restored) == 1,
+        f"a block that does not cover its parent supersedes nothing: {report}",
+    )
