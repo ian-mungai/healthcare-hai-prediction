@@ -32,13 +32,14 @@ from botocore.exceptions import BotoCoreError, ClientError
 
 from scripts.infrastructure.openmetadata_mlmodel_edges import (
     DEADLINE_SECONDS,
+    ELEVATED_LEVELS,
     GRANT_KINDS,
     READ_LEVELS,
     READER,
-    WRITE_LEVELS,
     Client,
     StepFailed,
     reader_problem,
+    server_problem,
 )
 from scripts.infrastructure.openmetadata_raw_files import Http, http_request
 
@@ -46,7 +47,7 @@ READER_PARAMETER = "/healthcare_hai_prediction/mlflow_metadata_reader_password"
 ADMIN_PARAMETER = "/healthcare_hai_prediction/mlflow_admin_password"
 LOOPBACK_REGISTRY = re.compile(r"http://(?:127\.0\.0\.1|localhost):[0-9]{2,5}")
 ADMIN_USER = "admin"
-SYNTHETIC_ROLE = "__user_"  # the role MLflow makes for one user's own grants: the only role this step may change
+SYNTHETIC_ROLE = re.compile(r"__user_[0-9]+__")  # the role MLflow makes for one user's own grants, a reserved name: the only role this step may change
 
 
 def basic(user: str, secret: str) -> dict[str, str]:
@@ -93,30 +94,35 @@ def reader_permissions(client: Client, registry: str, reader: Mapping[str, str])
 
 
 def downgrade(client: Client, registry: str, admin: Mapping[str, str], permissions: Mapping[str, Any]) -> list[str]:
-    """Take administrator rights and every EDIT or MANAGE grant away from the reader. A write grant that comes from a role other than the user's own cannot be
-    revoked here, so it stops the step with the role named."""
+    """Take administrator rights and every grant above READ away from the reader, on every kind of resource and on the workspace.
+
+    The grants are read from the roles of the user, with their IDs, and removed by ID through the role API, which is the one path that accepts the
+    ``workspace`` type (the per-user revoke call refuses it with 400). Only the user's own role is changed. A grant above READ in a shared role stops the step
+    with the role named and the exact administrator calls."""
     changed: list[str] = []
     if permissions.get("is_admin") is True:
         status, _ = client.call("PATCH", f"{registry}/api/2.0/mlflow/users/update-admin", admin, {"username": READER, "is_admin": False})
         if status != 200:
             raise StepFailed(f"the registry answered HTTP {status} when the administrator rights of {READER} were removed")
         changed.append("administrator rights removed")
-    for item in permissions.get("permissions") or []:
-        if not isinstance(item, dict) or item.get("permission") not in WRITE_LEVELS:
-            continue
-        label = f"{item.get('permission')} on {item.get('resource_type')} {item.get('resource_pattern')}"
-        role = str(item.get("role_name", ""))
-        if not role.startswith(SYNTHETIC_ROLE):
-            raise StepFailed(f"the grant {label} of {READER} comes from the role {role}, which this step does not change: remove it there")
-        status, _ = client.call(
-            "POST",
-            f"{registry}/api/3.0/mlflow/users/permissions/revoke",
-            admin,
-            {"username": READER, "resource_type": item["resource_type"], "resource_id": item["resource_pattern"]},
-        )
-        if status != 200:
-            raise StepFailed(f"the registry answered HTTP {status} when the grant {label} of {READER} was revoked")
-        changed.append(f"{label} revoked")
+    status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
+    if status != 200 or not isinstance(listing, dict):
+        raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
+    for role in listing.get("roles") or []:
+        for item in role.get("permissions") or []:
+            if item.get("permission") not in ELEVATED_LEVELS:
+                continue
+            label = f"{item['permission']} on {item['resource_type']} {item['resource_pattern']}"
+            if not SYNTHETIC_ROLE.fullmatch(str(role.get("name", ""))):
+                raise StepFailed(
+                    f"the grant {label} of {READER} comes from the role {role.get('name')}, which this step does not change. As the administrator, remove it: "
+                    f'DELETE /api/3.0/mlflow/roles/permissions/remove {{"role_permission_id": {item["id"]}}} '
+                    f'or take the role away with DELETE /api/3.0/mlflow/roles/unassign {{"username": "{READER}", "role_id": {role["id"]}}}, then rerun'
+                )
+            status, _ = client.call("DELETE", f"{registry}/api/3.0/mlflow/roles/permissions/remove", admin, {"role_permission_id": item["id"]})
+            if status != 200:
+                raise StepFailed(f"the registry answered HTTP {status} when the grant {label} of {READER} was removed")
+            changed.append(f"{label} removed")
     return changed
 
 
@@ -159,7 +165,7 @@ def ensure_reader(client: Client, registry: str, admin: Mapping[str, str], store
             if status != 200:
                 raise StepFailed(f"the registry answered HTTP {status} when READ on every {kind} was granted")
             changed.append(f"READ on every {kind}")
-    problem = reader_problem(reader_permissions(client, registry, reader))
+    problem = reader_problem(reader_permissions(client, registry, reader)) or server_problem(client, registry, reader)
     if problem:
         raise StepFailed(f"the login of {READER} is not read-only after the setup: {problem}")
     return changed

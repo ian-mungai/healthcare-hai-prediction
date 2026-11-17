@@ -59,8 +59,12 @@ GRANT_KINDS = (
     "experiment",
     "logged_model",
 )  # what the connector reads: the model list, the run of a version and the logged model's signature
-READ_LEVELS = frozenset({"READ", "USE"})  # the levels that read and cannot write
-WRITE_LEVELS = frozenset({"EDIT", "MANAGE"})
+READ_LEVELS = frozenset({"READ"})  # the only level the reader may hold, on any resource
+# USE on the workspace is the right to create, USE on a resource the right to use it, EDIT and MANAGE the right to write.
+ELEVATED_LEVELS = frozenset({"USE", "EDIT", "MANAGE"})
+# The kinds whose effective permission is read through the registry, which adds the server's default_permission: the three the connector reads, then others.
+EFFECTIVE_KINDS = (*GRANT_KINDS, "prompt", "scorer", "gateway_secret", "run", "trace")
+QUIET_LEVELS = frozenset({"NO_PERMISSIONS", "READ", "DENY"})
 DEADLINE_SECONDS = 600.0
 EDGE_NOTE = "table of the model set that the newest version of the registered model is trained on"
 TRACKING_LOGIN = ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
@@ -137,24 +141,24 @@ class Client:
             raise StepFailed(str(error)) from None
 
 
-def write_privileges(permissions: Mapping[str, Any]) -> list[str]:
-    """Every grant of EDIT or MANAGE of the login, on any kind of resource and any name, worded as ``EDIT on registered_model *``."""
+def elevated_grants(permissions: Mapping[str, Any]) -> list[str]:
+    """Every grant of the login above READ, on any kind of resource and any name (the workspace included), worded as ``EDIT on registered_model *``."""
     return [
         f"{item.get('permission')} on {item.get('resource_type')} {item.get('resource_pattern')}"
         for item in permissions.get("permissions") or []
-        if isinstance(item, dict) and item.get("permission") in WRITE_LEVELS
+        if isinstance(item, dict) and item.get("permission") in ELEVATED_LEVELS
     ]
 
 
 def reader_problem(permissions: Any) -> str | None:
-    """Why the login is not the read-only reader, or None when it is: no administrator, no write privilege, READ on every kind the connector reads (``*``)."""
+    """Why the login is not the read-only reader, or None when it is: no administrator, nothing above READ anywhere, READ on every kind the connector reads."""
     if not isinstance(permissions, dict):
         return "its permissions cannot be read"
     if permissions.get("is_admin") is True:
         return "it is an administrator"
-    writing = write_privileges(permissions)
-    if writing:
-        return "it holds write privilege: " + ", ".join(writing)
+    elevated = elevated_grants(permissions)
+    if elevated:
+        return "it holds more than READ: " + ", ".join(elevated)
     granted = {
         item.get("resource_type")
         for item in permissions.get("permissions") or []
@@ -162,6 +166,31 @@ def reader_problem(permissions: Any) -> str | None:
     }
     missing = [kind for kind in GRANT_KINDS if kind not in granted]
     return f"it lacks READ on every {', '.join(missing)} (resource_pattern *)" if missing else None
+
+
+def server_problem(client: Client, registry: str, headers: Mapping[str, str]) -> str | None:
+    """Why the registry itself does not keep the login read-only, or None. Grants are not the whole story: the server's ``default_permission`` floors every
+    grant, and with workspaces off (the default of MLflow 3.17.2) every login may create experiments and registered models, which no grant can refuse."""
+    for kind in EFFECTIVE_KINDS:
+        query = urllib.parse.urlencode({"username": READER, "resource_type": kind, "resource_id": "*"})
+        status, answer = client.call("GET", f"{registry}/api/3.0/mlflow/users/permissions/get?{query}", headers)
+        if status != 200 or not isinstance(answer, dict):
+            raise StepFailed(f"the registry answered HTTP {status} when the effective permission of {READER} on {kind} was read")
+        level = str(answer.get("permission"))
+        if level not in QUIET_LEVELS:
+            return (
+                f"its effective permission on {kind} is {level}: the registry's default_permission (or a grant) gives more than READ. "
+                "Set default_permission = NO_PERMISSIONS in the registry's auth file (services/mlflow/start_server.py writes it) and restart the server"
+            )
+    status, _ = client.call("GET", f"{registry}/api/3.0/mlflow/workspaces", headers)
+    if status == 503:
+        return (
+            "the registry runs without workspaces, so any login can create experiments and registered models whatever its grants (MLflow 3.17.2). "
+            "Start the MLflow server with MLFLOW_ENABLE_WORKSPACES=true (the environment of the mlflow task in infra/services/mlflow.tf) and rerun"
+        )
+    if status != 200:
+        raise StepFailed(f"the registry answered HTTP {status} when its workspace support was read")
+    return None
 
 
 def existing_models(client: Client, registry: str, headers: Mapping[str, str]) -> dict[str, str]:
@@ -173,8 +202,11 @@ def existing_models(client: Client, registry: str, headers: Mapping[str, str]) -
     if problem:
         raise StepFailed(
             f"the registry login is not the read-only {READER} ({problem}). A login without READ on everything sees an empty registry, which would read as "
-            "no model yet, and the metadata job takes no write privilege to the registry"
+            "no model yet, and the metadata job takes no right to change the registry"
         )
+    problem = server_problem(client, registry, headers)
+    if problem:
+        raise StepFailed(f"the registry does not keep {READER} read-only: {problem}")
     found = {}
     unresolved = []
     for name in registered_models():

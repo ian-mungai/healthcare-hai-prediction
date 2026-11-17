@@ -26,6 +26,8 @@ SERVICE = "mlflow_registry"
 PROBE_400 = "Invalid value for field 'mlFeatures.featureSources.dataType' on MlModel. Allowed values are: array, boolean, date, integer, number, object"
 LOGIN_KEY = "MLFLOW_TRACKING_PASSWORD"
 WRONG_LOGIN = "Synthetic-Wrong-1!"
+PRIORITY = {"DENY": -1, "NO_PERMISSIONS": 0, "READ": 1, "USE": 2, "EDIT": 3, "MANAGE": 4}
+DISABLED = "Endpoint: /api/3.0/mlflow/workspaces disabled because the server is running without workspaces support."
 
 
 def base() -> Any:
@@ -61,15 +63,19 @@ class World:
         ingested: tuple[str, ...] | None = None,
         grants: str = "reader",
         others: tuple[str, ...] = (),
+        default_permission: str = "NO_PERMISSIONS",
+        workspaces: bool = True,
     ) -> None:
         # Each registered model with its versions in order (version 1 first), each version as its tags. A plain name list gives one version of set m2.
         self.versions: dict[str, list[dict[str, str]]] = dict(models) if isinstance(models, Mapping) else {name: [set_tags("m2")] for name in models}
         self.mlflow_models = set(self.versions)
         self.others = set(others)  # registered models outside the model contract
+        self.default_permission = default_permission  # the server's default_permission, which floors every positive grant
+        self.workspaces = workspaces  # false: the workspace list answers 503, and any login can create experiments and registered models
         self.page_size = 200  # versions and models per page of the registry's search answers
         self.indirect_edges: set[tuple[str, str]] = set()  # edges between other entities, which a deeper lineage read shows beside the model's own
         # reader: wildcard READ on models, experiments and logged models; none: no grant at all; model_only: one model name only; use: USE on all three;
-        # edit, manage_named and admin: an elevated login (write privilege on every model, MANAGE on one experiment, an administrator)
+        # edit, manage_named, admin, workspace_use: an elevated login (EDIT on every model, MANAGE on one experiment, an administrator, USE on the workspace)
         self.grants = grants
         self.mlmodels = {f"{SERVICE}.{name}": f"model-{index}" for index, name in enumerate(sorted(self.mlflow_models if ingested is None else ingested))}
         self.tables: dict[str, str] = {}
@@ -168,11 +174,20 @@ class World:
                 "model_only": [item("registered_model", pattern="synthetic")],
                 "no_experiment": wildcard[:1] + wildcard[2:],
                 "use": [item(kind, "USE") for kind in kinds],
+                "workspace_use": [*wildcard, item("workspace", "USE")],
                 "edit": [item("registered_model", "EDIT"), *wildcard[1:]],
                 "manage_named": [*wildcard, item("experiment", "MANAGE", "1")],
                 "admin": [],
             }[self.grants]
             return 200, {"is_admin": self.grants == "admin", "permissions": grants}
+        if method == "GET" and path == "/api/3.0/mlflow/users/permissions/get":
+            kind = query["resource_type"][0]
+            granted = {"registered_model", "experiment", "logged_model"} if self.grants in ("reader", "use", "edit", "manage_named", "workspace_use") else set()
+            floor = self.default_permission
+            level = "READ" if kind in granted and PRIORITY[floor] <= PRIORITY["READ"] else floor
+            return 200, {"allowed": PRIORITY[level] >= PRIORITY["USE"], "permission": level}
+        if method == "GET" and path == "/api/3.0/mlflow/workspaces":
+            return (200, {}) if self.workspaces else (503, DISABLED)
         if method == "GET" and path == "/api/2.0/mlflow/registered-models/search":
             names = sorted(self.mlflow_models | self.others)
             start = int(query.get("page_token", ["0"])[0])
@@ -441,17 +456,48 @@ def a_reader_without_the_wildcard_grants_or_with_write_privilege_fails_visibly()
         require(code == 1 and "metadata_reader" in err and "READ" in err, (grants, code, err))
         require(not world.edge_set and not any(call[0] == "PUT" for call in world.calls), "no edge may be drawn on an unreadable registry")
         secrets_absent(out, err)
-    for grants, named in (("edit", "EDIT"), ("manage_named", "MANAGE"), ("admin", "administrator")):
+    for grants, named in (
+        ("edit", "EDIT"),
+        ("manage_named", "MANAGE"),
+        ("admin", "administrator"),
+        ("use", "USE on registered_model *"),
+        ("workspace_use", "USE on workspace *"),
+    ):
         elevated = World(models=("hai_model_HAI_1",), grants=grants)
         elevated.catalog_all_tables()
         code, out, err = run(elevated)
         require(code == 1 and "metadata_reader" in err and named in err, (grants, code, err))
         require(len(elevated.calls) == 1 and not elevated.edge_set, f"an elevated login stops the run before any other call: {elevated.calls}")
         secrets_absent(out, err)
-    use = World(models=("hai_model_HAI_1",), grants="use")
-    use.catalog_all_tables()
-    code, out, err = run(use)
-    require(code == 0 and len(use.edge_set) == 1, f"USE reads without writing: {(code, err)}")
+
+
+def a_default_permission_above_read_or_a_registry_without_workspaces_is_refused() -> None:
+    """The server's ``default_permission`` floors every grant, so a default above READ makes the reader more than a reader. With workspaces off any login can
+    create experiments and registered models (MLflow 3.17.2 ``_can_create_in_workspace``), which no grant can prevent."""
+    require = base().require
+    for default in ("USE", "EDIT", "MANAGE"):
+        world = World(models=("hai_model_HAI_1",), default_permission=default)
+        world.catalog_all_tables()
+        code, out, err = run(world)
+        require(code == 1 and "default_permission" in err and default in err and "metadata_reader" in err, (default, code, err))
+        require(
+            not world.edge_set and not any(call[0] in ("PUT", "DELETE") or "registered-models" in call[1] for call in world.calls),
+            f"{default}: nothing is read or drawn",
+        )
+        secrets_absent(out, err)
+    for default in ("NO_PERMISSIONS", "READ"):
+        world = World(models=("hai_model_HAI_1",), default_permission=default)
+        world.catalog_all_tables()
+        code, out, err = run(world)
+        require(code == 0 and len(world.edge_set) == 1, f"a default of {default} gives no more than READ: {(code, err)}")
+    open_registry = World(models=("hai_model_HAI_1",), workspaces=False)
+    open_registry.catalog_all_tables()
+    code, out, err = run(open_registry)
+    require(
+        code == 1 and "MLFLOW_ENABLE_WORKSPACES" in err and "create" in err,
+        f"a registry that lets any login create is refused with the exact step: {(code, err)}",
+    )
+    require(not open_registry.edge_set and not any(call[0] == "PUT" for call in open_registry.calls), "nothing is drawn")
 
 
 def a_missing_login_or_a_server_refusal_fails_without_edges() -> None:
@@ -621,9 +667,11 @@ class FakeParameters:
 
 
 class Registry:
-    """The user and permission calls of MLflow's basic-auth app that the setup makes, shaped on MLflow 3.17.2 (checked live in the probe).
+    """The user, role and permission calls of MLflow's basic-auth app that the setup makes, shaped on MLflow 3.17.2 (checked live, see the probe evidence).
 
-    A grant is ``(resource type, pattern)`` to ``(level, role name)``. A grant row that exists is refused on a second grant, as MLflow does."""
+    A grant is ``(resource type, pattern)`` to ``(level, role name)``. A grant row that exists is refused on a second grant, as MLflow does. The per-user grant
+    and revoke calls refuse the ``workspace`` type with 400 and the role call removes any row, as the real server does. ``default_permission`` floors every
+    positive grant and is the effective level of a type with none; ``workspaces`` false answers the workspace list with 503."""
 
     def __init__(
         self,
@@ -631,19 +679,36 @@ class Registry:
         grants: tuple[str, ...] = (),
         extra: Mapping[tuple[str, str], tuple[str, str]] | None = None,
         administrator: bool = False,
+        default_permission: str = "NO_PERMISSIONS",
+        workspaces: bool = True,
     ) -> None:
         self.reader_login = reader_login
         self.rows: dict[tuple[str, str], tuple[str, str]] = {(kind, "*"): ("READ", "__user_2__") for kind in grants}
         self.rows.update(extra or {})
+        self.row_ids: dict[tuple[str, str], int] = {}
         self.administrator = administrator
+        self.default_permission = default_permission
+        self.workspaces = workspaces
         self.calls: list[tuple[str, str]] = []
         self.fail_grant = False
-        self.fail_revoke = False
-        self.ignore_revoke = False  # answers 200 and keeps the grant
+        self.fail_remove = False
+        self.ignore_remove = False  # answers 200 and keeps the grant
 
     @property
     def granted(self) -> set[str]:
         return {kind for (kind, pattern), (level, _) in self.rows.items() if pattern == "*" and level == "READ"}
+
+    def identifier(self, key: tuple[str, str]) -> int:
+        return self.row_ids.setdefault(key, 3 + len(self.row_ids))
+
+    def role_id(self, role: str) -> int:
+        return 2 if role == "__user_2__" else 10 + sorted({name for _, name in self.rows.values()} - {"__user_2__"}).index(role)
+
+    def effective(self, kind: str) -> str:
+        granted = [level for (row_kind, pattern), (level, _) in self.rows.items() if row_kind == kind and pattern == "*"]
+        best = max(granted, key=PRIORITY.__getitem__, default=None)
+        floor = self.default_permission
+        return best if best is not None and PRIORITY[best] >= PRIORITY[floor] else floor
 
     def __call__(self, method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> tuple[int, Any]:
         parts = urllib.parse.urlsplit(url)
@@ -661,6 +726,17 @@ class Registry:
                 for (kind, pattern), (level, role) in sorted(self.rows.items())
             ]
             return 200, {"is_admin": as_admin or self.administrator, "permissions": [] if as_admin else items}
+        if method == "GET" and path == "/api/3.0/mlflow/users/permissions/get":
+            kind = urllib.parse.parse_qs(parts.query)["resource_type"][0]
+            if kind == "workspace":
+                return 400, {
+                    "error_code": "INVALID_PARAMETER_VALUE",
+                    "message": "resource_type 'workspace' is not supported by the per-user permission convenience APIs.",
+                }
+            level = self.effective(kind)
+            return 200, {"allowed": PRIORITY[level] >= PRIORITY["USE"], "permission": level}
+        if method == "GET" and path == "/api/3.0/mlflow/workspaces":
+            return (200, {}) if self.workspaces else (503, DISABLED)
         if not as_admin:
             return 403, None
         if method == "GET" and path == "/api/2.0/mlflow/users/get":
@@ -670,6 +746,27 @@ class Registry:
                 if found
                 else (404, {"error_code": "RESOURCE_DOES_NOT_EXIST", "message": "no user"})
             )
+        if method == "GET" and path == "/api/3.0/mlflow/users/roles/list":
+            roles: dict[str, list[dict[str, Any]]] = {}
+            for (kind, pattern), (level, role) in sorted(self.rows.items()):
+                roles.setdefault(role, []).append(
+                    {
+                        "id": self.identifier((kind, pattern)),
+                        "permission": level,
+                        "resource_pattern": pattern,
+                        "resource_type": kind,
+                        "role_id": self.role_id(role),
+                    }
+                )
+            return 200, {"roles": [{"id": self.role_id(role), "name": role, "permissions": rows, "workspace": "default"} for role, rows in roles.items()]}
+        if method == "DELETE" and path == "/api/3.0/mlflow/roles/permissions/remove":
+            if self.fail_remove:
+                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
+            if not self.ignore_remove:
+                for key in list(self.rows):
+                    if self.identifier(key) == document["role_permission_id"]:
+                        del self.rows[key]
+            return 200, {}
         if method == "POST" and path == "/api/2.0/mlflow/users/create":
             self.reader_login = document["password"]
             return 200, {"user": {"username": document["username"]}}
@@ -679,11 +776,16 @@ class Registry:
         if method == "PATCH" and path == "/api/2.0/mlflow/users/update-admin":
             self.administrator = bool(document["is_admin"])
             return 200, {}
+        if (
+            method == "POST"
+            and path in ("/api/3.0/mlflow/users/permissions/revoke", "/api/3.0/mlflow/users/permissions/grant")
+            and document["resource_type"] == "workspace"
+        ):
+            return 400, {
+                "error_code": "INVALID_PARAMETER_VALUE",
+                "message": "resource_type 'workspace' is not supported by the per-user permission convenience APIs.",
+            }
         if method == "POST" and path == "/api/3.0/mlflow/users/permissions/revoke":
-            if self.fail_revoke:
-                return 500, {"error_code": "INTERNAL_ERROR", "message": "boom"}
-            if self.ignore_revoke:
-                return 200, {}
             self.rows.pop((document["resource_type"], document["resource_id"]), None)
             return 200, {}
         if method == "POST" and path == "/api/3.0/mlflow/users/permissions/grant":
@@ -807,40 +909,62 @@ def the_setup_talks_only_to_a_loopback_registry() -> None:
 
 def the_setup_downgrades_an_elevated_reader_or_fails_naming_why() -> None:
     require = base().require
+    every = ("registered_model", "experiment", "logged_model")
     for label, kwargs, said in (
-        ("edit on every model", {"extra": {("registered_model", "*"): ("EDIT", "__user_2__")}}, "EDIT on registered_model *"),
         (
-            "manage on one experiment",
-            {"extra": {("experiment", "1"): ("MANAGE", "__user_2__")}, "grants": ("registered_model", "experiment", "logged_model")},
-            "MANAGE on experiment 1",
+            "edit on every model",
+            {"extra": {("registered_model", "*"): ("EDIT", "__user_2__")}, "grants": ("experiment", "logged_model")},
+            "EDIT on registered_model *",
         ),
-        ("administrator", {"administrator": True, "grants": ("registered_model", "experiment", "logged_model")}, "administrator rights removed"),
+        (
+            "use on every model",
+            {"extra": {("registered_model", "*"): ("USE", "__user_2__")}, "grants": ("experiment", "logged_model")},
+            "USE on registered_model *",
+        ),
+        ("manage on one experiment", {"extra": {("experiment", "1"): ("MANAGE", "__user_2__")}, "grants": every}, "MANAGE on experiment 1"),
+        ("manage on the workspace", {"extra": {("workspace", "*"): ("MANAGE", "__user_2__")}, "grants": every}, "MANAGE on workspace *"),
+        ("use on the workspace", {"extra": {("workspace", "*"): ("USE", "__user_2__")}, "grants": every}, "USE on workspace *"),
+        ("administrator", {"administrator": True, "grants": every}, "administrator rights removed"),
     ):
         registry, ssm = Registry(reader_login="Synthetic-Stored-1!", **kwargs), FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
         code, out, err = run_setup(registry, ssm)
         require(code == 0 and said in out, (label, code, out, err))
-        levels = {level for level, _ in registry.rows.values()}
         require(
-            levels == {"READ"} and not registry.administrator and registry.granted == {"registered_model", "experiment", "logged_model"},
+            {level for level, _ in registry.rows.values()} == {"READ"} and not registry.administrator and registry.granted == set(every),
             (label, registry.rows, registry.administrator),
+        )
+        require(
+            not any(call[1].endswith("/permissions/revoke") for call in registry.calls),
+            f"{label}: grants are removed through the role API, which accepts every type",
         )
         again = len(writes(registry))
         code, out, err = run_setup(registry, ssm)
         require(code == 0 and "unchanged" in out and len(writes(registry)) == again, f"{label}: a rerun changes nothing: {(code, out)}")
         values_absent(ssm, out, err)
-    shared = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("registered_model", "*"): ("EDIT", "team_editors")})
+    shared = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("workspace", "*"): ("USE", "team_editors")})
     code, out, err = run_setup(shared, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
-    require(code == 1 and "team_editors" in err and "EDIT" in err, f"a write grant from a shared role cannot be revoked here: {(code, err)}")
-    silent = Registry(
-        reader_login="Synthetic-Stored-1!", grants=("registered_model", "experiment", "logged_model"), extra={("experiment", "1"): ("MANAGE", "__user_2__")}
-    )
-    silent.ignore_revoke = True
+    require(code == 1 and "team_editors" in err and "USE on workspace *" in err, f"a grant from a shared role cannot be removed here: {(code, err)}")
+    require("roles/unassign" in err and "roles/permissions/remove" in err, f"the owner is told the exact administrator step: {err}")
+    silent = Registry(reader_login="Synthetic-Stored-1!", grants=every, extra={("experiment", "1"): ("MANAGE", "__user_2__")})
+    silent.ignore_remove = True
     code, out, err = run_setup(silent, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
-    require(code == 1 and "not read-only after the setup" in err, f"a revoke that changed nothing is caught by the final check: {(code, err)}")
+    require(code == 1 and "not read-only after the setup" in err, f"a removal that changed nothing is caught by the final check: {(code, err)}")
     refused = Registry(reader_login="Synthetic-Stored-1!", grants=("experiment", "logged_model"), extra={("registered_model", "*"): ("MANAGE", "__user_2__")})
-    refused.fail_revoke = True
+    refused.fail_remove = True
     code, out, err = run_setup(refused, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
     require(code == 1 and "500" in err and refused.rows[("registered_model", "*")][0] == "MANAGE", (code, err))
+
+
+def the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create() -> None:
+    require = base().require
+    for default in ("USE", "EDIT"):
+        registry = Registry(reader_login="Synthetic-Stored-1!", grants=("registered_model", "experiment", "logged_model"), default_permission=default)
+        code, out, err = run_setup(registry, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+        require(code == 1 and "default_permission" in err and default in err, (default, code, err))
+        require("default_permission = NO_PERMISSIONS" in err, f"the owner is told the setting to change: {err}")
+    open_registry = Registry(reader_login="Synthetic-Stored-1!", grants=("registered_model", "experiment", "logged_model"), workspaces=False)
+    code, out, err = run_setup(open_registry, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    require(code == 1 and "MLFLOW_ENABLE_WORKSPACES" in err and "create" in err, (code, err))
 
 
 CASES = [
@@ -854,6 +978,7 @@ CASES = [
     the_edge_request_is_the_probed_one_and_never_a_patch,
     a_rerun_and_a_second_ingest_keep_the_same_edges,
     a_reader_without_the_wildcard_grants_or_with_write_privilege_fails_visibly,
+    a_default_permission_above_read_or_a_registry_without_workspaces_is_refused,
     a_missing_login_or_a_server_refusal_fails_without_edges,
     a_registered_model_that_the_catalog_lacks_stops_the_run,
     no_registered_model_yet_is_reported_and_draws_nothing,
@@ -870,4 +995,5 @@ CASES = [
     an_unreadable_admin_login_or_a_refused_grant_stops_with_a_cause,
     the_setup_talks_only_to_a_loopback_registry,
     the_setup_downgrades_an_elevated_reader_or_fails_naming_why,
+    the_setup_refuses_a_default_permission_above_read_and_a_registry_that_lets_any_login_create,
 ]
