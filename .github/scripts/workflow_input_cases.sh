@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Cases for the Terraform workflows' inputs. The repository is public, and the runner prints the environment of every step in its header
-# before the shell starts, so a raw repository variable would show its value there. A secret shows as ***. Run from the repository root.
+# before the shell starts, so a raw repository variable would show its value there. A secret shows as ***. The last section checks the hosted cache keys and paths of
+# ci.yml, which no local run can try. Run from the repository root.
 set -euo pipefail
 
 failures=0
@@ -145,5 +146,86 @@ check "that job is the one that runs the core part, with terraform_checks" that_
 check "the terraform_checks group no longer skips the Redis cases on a hosted runner" group_has_no_skip
 check "the group runs the Redis cases in every environment" group_runs_the_cases_in_every_environment
 check "the group installs nothing itself, so local CI keeps using the machine's server" local_ci_uses_the_installed_server
+
+# --- the hosted caches: keys and paths -----------------------------------------------------------------------------------------------------------------
+# The hosted caches (the pip and npm caches of the setup steps, the dbt package archive and the Terraform providers) cannot be tried on this machine, and a bad key
+# fails quietly: a hashFiles over a file that does not exist hashes nothing, so the key never changes and an old entry is restored for ever. These cases read the
+# workflow for what a local run can prove: every key input is a tracked file, no cache has a constant key, the provider key follows every lock file and the cache
+# paths are the folders the jobs read. A hosted run proves the rest (see "first hosted run" in the issue register): the first run on main saves each entry, the next
+# run restores it (a hit), and a changed lock file misses.
+tracked() { git ls-files --error-unmatch -- "$1" > /dev/null 2>&1; }
+key_inputs() { grep -oE "hashFiles\([^)]*\)" "$1" | grep -oE "'[^']+'" | tr -d "'" | sort -u; }
+dependency_paths() { grep -E '^ +cache-dependency-path:' "$1" | sed -E 's/^ +cache-dependency-path: *//' | sort -u; }
+every_key_input_is_tracked() {
+  local file count=0
+  while IFS= read -r file; do
+    count=$((count + 1))
+    tracked "$file" || return 1
+  done < <(key_inputs "$1"; dependency_paths "$1")
+  [[ $count -ge 4 ]]
+}
+# The key line of each actions/cache step: the first key after the step's uses line.
+cache_keys() { awk '/uses: actions\/cache@/ {on = 1; next} on && /^ +key:/ {print; on = 0}' "$1"; }
+no_cache_has_a_constant_key() {
+  local keys
+  keys="$(cache_keys "$1")"
+  [[ -n "$keys" && "$(grep -c 'hashFiles(' <<< "$keys")" -eq "$(grep -c '' <<< "$keys")" ]]
+}
+lock_files() { if [[ -n "${CACHE_LOCK_FILES:-}" ]]; then tr ' ' '\n' <<< "$CACHE_LOCK_FILES"; else git ls-files '*.terraform.lock.hcl'; fi; }
+# The provider key names some lock files. Another stack's lock file may stand outside the key only when it is byte for byte equal to one the key names, since the
+# stacks then need the same providers.
+provider_key_follows_every_lock_file() {
+  local key named file same
+  key="$(cache_keys "$1" | grep 'terraform-providers')"
+  named="$(grep -oE "'[^']+'" <<< "$key" | tr -d "'" | grep 'terraform.lock.hcl' || true)"
+  [[ -n "$named" ]] || return 1
+  while IFS= read -r file; do
+    grep -qxF "$file" <<< "$named" && continue
+    same=0
+    while IFS= read -r other; do
+      cmp -s "$file" "$other" && same=1
+    done <<< "$named"
+    [[ $same -eq 1 ]] || return 1
+  done < <(lock_files)
+}
+# The cache restores a folder, so the job must read that folder: the Terraform cache path is the TF_PLUGIN_CACHE_DIR the setup step exports, and the dbt cache path is
+# where scripts/lakehouse/dbt_package_archive.py reads and writes its archives.
+terraform_cache_path_is_the_one_exported() {
+  local cached exported
+  cached="$(grep -A5 'name: Restore the Terraform provider cache' "$1" | grep -oE 'path: .*' | sed -E 's/^path: //')"
+  cached="${cached/#\~/\$HOME}"
+  exported="$(grep -oE 'TF_PLUGIN_CACHE_DIR=[^ "]+' "$1" | head -1 | sed -E 's/^TF_PLUGIN_CACHE_DIR=//')"
+  [[ -n "$cached" && "$cached" == "$exported" ]]
+}
+dbt_cache_path_is_the_archive_folder() {
+  local cached
+  cached="$(grep -A5 'name: Restore the dbt package archive' "$1" | grep -oE 'path: .*' | sed -E 's/^path: //')"
+  [[ -n "$cached" ]] && grep -qF "Path(\"$cached\")" scripts/lakehouse/dbt_package_archive.py
+}
+
+check "every key input and cache dependency path of the workflow is a tracked file" every_key_input_is_tracked "$workflow"
+check "no hosted cache has a constant key" no_cache_has_a_constant_key "$workflow"
+check "the Terraform provider key follows every lock file" provider_key_follows_every_lock_file "$workflow"
+check "the Terraform cache path is the folder the setup step exports" terraform_cache_path_is_the_one_exported "$workflow"
+check "the dbt cache path is the folder of the package archive" dbt_cache_path_is_the_archive_folder "$workflow"
+
+# Each defect is planted in a copy of the workflow, and the case that should see it must fail.
+planted_dir="$(mktemp -d)"
+plant() { sed -E "$1" "$workflow" > "$planted_dir/ci.yml"; }
+refuses() { ! "$@" "$planted_dir/ci.yml"; }
+plant "s#'dbt/package-lock.yml'#'dbt/package-lock.yaml'#"
+check "a key input that is not a tracked file is refused" refuses every_key_input_is_tracked
+plant "s#key: dbt-archive-.*#key: dbt-archive-v1#"
+check "a constant cache key is refused" refuses no_cache_has_a_constant_key
+plant "s#TF_PLUGIN_CACHE_DIR=\\\$HOME/.terraform.d/plugin-cache#TF_PLUGIN_CACHE_DIR=\\\$HOME/.terraform.d/other#"
+check "a Terraform cache path that the setup step does not export is refused" refuses terraform_cache_path_is_the_one_exported
+plant "s#path: data/analytics/dbt/package_archive#path: data/analytics/dbt/archive#"
+check "a dbt cache path that is not the archive folder is refused" refuses dbt_cache_path_is_the_archive_folder
+printf 'one\n' > "$planted_dir/a.lock.hcl"
+printf 'two\n' > "$planted_dir/b.lock.hcl"
+plant "s#hashFiles\\('infra/.terraform.lock.hcl', 'infra/iam/.terraform.lock.hcl'\\)#hashFiles('infra/.terraform.lock.hcl')#"
+different_lock_outside_the_key() { CACHE_LOCK_FILES="infra/.terraform.lock.hcl $planted_dir/b.lock.hcl" provider_key_follows_every_lock_file "$1"; }
+check "a lock file that differs from the ones the provider key names is refused" refuses different_lock_outside_the_key
+rm -rf "$planted_dir"
 
 [[ $failures -eq 0 ]]
