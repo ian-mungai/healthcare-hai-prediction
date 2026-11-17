@@ -75,7 +75,47 @@ def the_old_expressions_are_found_by_the_check(root: Path) -> dict[str, bool]:
     }
 
 
+NEWEST = {
+    "hai_spark_tasks_failed": "hai_spark_poll_timestamp_seconds",
+    "hai_spark_tasks_completed": "hai_spark_poll_timestamp_seconds",
+    "hai_spark_jobs_completed": "hai_spark_poll_timestamp_seconds",
+    "hai_spark_jobs_failed": "hai_spark_poll_timestamp_seconds",
+    "hai_dbt_tests": "hai_job_finish_timestamp_seconds",
+    "hai_dbt_models": "hai_job_finish_timestamp_seconds",
+    "hai_quality_checks_failed": "hai_job_finish_timestamp_seconds",
+    "hai_quality_checks_run": "hai_job_finish_timestamp_seconds",
+    "hai_quality_checks_warned": "hai_job_finish_timestamp_seconds",
+}
+
+
+def reads_every_run(expr: str) -> bool:
+    """True when the expression reads a result of a finished run (not the running group) without selecting the newest run by its timestamp."""
+    for metric, stamp in NEWEST.items():
+        if re.search(rf"\b{metric}\b", expr) and 'outcome="running"' not in expr and not re.search(rf"max by \([^)]*\) \({stamp}", expr):
+            return True
+    return False
+
+
+def failure_and_latest_run_expressions_read_only_the_newest_run(root: Path) -> dict[str, bool]:
+    """A failed run's group stays in the Pushgateway until a later run of the same job replaces it, and the groups of the outcomes are separate, so a
+    failure followed by a success leaves the old failure in place (review round 2, finding 8). Each rule and panel that reads these results keeps only the
+    group with the newest poll or finish time of its job, phase and instance."""
+    found = expressions(root)
+    broken = [where for where, expr in found if reads_every_run(expr)]
+    reads = [where for where, expr in found if any(metric in expr for metric in NEWEST)]
+    return {
+        "the rules and panels that read these results were found": len(reads) >= 12,
+        "every one of them selects the newest run": broken == [],
+        "an expression with no selection is found by the check": reads_every_run('max(hai_spark_tasks_failed{outcome!="running"})'),
+        "an expression with the selection is not": not reads_every_run(
+            "x and on (job) (hai_spark_poll_timestamp_seconds == on (job) group_left () max by (job) (hai_spark_poll_timestamp_seconds)) or "
+            "hai_spark_tasks_failed"
+        ),
+    }
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
+    "jobs_failure_and_latest_run_expressions_read_only_the_newest_run": failure_and_latest_run_expressions_read_only_the_newest_run,
     "jobs_every_job_and_phase_grouping_keeps_the_model_set": every_job_and_phase_grouping_keeps_the_model_set,
     "jobs_the_old_expressions_are_found_by_the_check": the_old_expressions_are_found_by_the_check,
 }

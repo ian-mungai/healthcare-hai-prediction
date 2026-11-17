@@ -56,7 +56,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, status) (hai_dbt_models)",
+          "expr": "max by (job, status) (hai_dbt_models and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds)))",
           "legendFormat": "{{job}} {{status}}"
         }
       ],
@@ -89,7 +89,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, status) (hai_dbt_tests)",
+          "expr": "max by (job, status) (hai_dbt_tests and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds)))",
           "legendFormat": "{{job}} {{status}}"
         }
       ],
@@ -135,7 +135,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, kind) (hai_quality_checks_run)",
+          "expr": "max by (job, kind) (hai_quality_checks_run and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds)))",
           "legendFormat": "{{job}} {{kind}}"
         }
       ],
@@ -168,7 +168,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, kind) (hai_quality_checks_failed)",
+          "expr": "max by (job, kind) (hai_quality_checks_failed and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds)))",
           "legendFormat": "{{job}} {{kind}}"
         }
       ],
@@ -201,7 +201,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max by (job, kind) (hai_quality_checks_warned)",
+          "expr": "max by (job, kind) (hai_quality_checks_warned and on (job, phase, model_set, job_type, outcome) (hai_job_finish_timestamp_seconds == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_job_finish_timestamp_seconds)))",
           "legendFormat": "{{job}} {{kind}}"
         }
       ],

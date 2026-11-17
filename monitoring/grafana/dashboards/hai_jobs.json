@@ -425,7 +425,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max(hai_spark_tasks_completed{outcome!=\"running\"})",
+          "expr": "max(hai_spark_tasks_completed{outcome!=\"running\"} and on (job, phase, model_set, job_type, outcome) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"} == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"})))",
           "legendFormat": "completed"
         },
         {
@@ -434,7 +434,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max(hai_spark_tasks_failed{outcome!=\"running\"})",
+          "expr": "max(hai_spark_tasks_failed{outcome!=\"running\"} and on (job, phase, model_set, job_type, outcome) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"} == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"})))",
           "legendFormat": "failed"
         }
       ],
@@ -467,7 +467,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max(hai_spark_jobs_completed{outcome!=\"running\"})",
+          "expr": "max(hai_spark_jobs_completed{outcome!=\"running\"} and on (job, phase, model_set, job_type, outcome) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"} == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"})))",
           "legendFormat": "completed"
         },
         {
@@ -476,7 +476,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "max(hai_spark_jobs_failed{outcome!=\"running\"})",
+          "expr": "max(hai_spark_jobs_failed{outcome!=\"running\"} and on (job, phase, model_set, job_type, outcome) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"} == on (job, phase, model_set, job_type) group_left () max by (job, phase, model_set, job_type) (hai_spark_poll_timestamp_seconds{outcome!=\"running\"})))",
           "legendFormat": "failed"
         }
       ],
