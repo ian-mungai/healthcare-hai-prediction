@@ -11,10 +11,11 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from markdown_it import MarkdownIt
+
 from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
-FENCE = re.compile(r"^(\s*)(`{3,}|~{3,})\s*([^\s`]*)")
 PLAIN_TEXT = frozenset({"text", "txt", "plain", "plaintext"})
 COMMAND = re.compile(r"^bash (scripts/[\w./-]+\.sh)((?: [\w./=-]+)*)$")
 PLACEHOLDER = re.compile(r"<[A-Za-z_]+>|\$\{?[A-Za-z_]")
@@ -28,26 +29,21 @@ REQUIRED = (
 
 
 def fenced_blocks(readme: str) -> tuple[list[tuple[str, list[str]]], list[str]]:
-    """Every fenced code block as (language, lines), and a message for a fence never closed. A block closes with its own marker, as long or longer."""
+    """Every fenced code block as (language, lines), and a message for a fence never closed.
+
+    The blocks are the ``fence`` tokens of markdown-it (the parser the repository's link check uses), so a fence inside a list item or a blockquote, in any
+    nesting, is found as GitHub finds it.
+    """
+    lines = readme.splitlines()
     blocks: list[tuple[str, list[str]]] = []
     unclosed: list[str] = []
-    opened: tuple[str, str, list[str]] | None = None
-    for number, line in enumerate(readme.splitlines(), start=1):
-        if opened is None:
-            match = FENCE.match(line)
-            if match:
-                opened = (match.group(2), match.group(3).lower(), [])
-                start = number
+    for token in MarkdownIt("commonmark").parse(readme):
+        if token.type != "fence" or token.map is None:
             continue
-        marker, language, body = opened
-        stripped = line.strip()
-        if stripped and set(stripped) == {marker[0]} and len(stripped) >= len(marker):
-            blocks.append((language, body))
-            opened = None
-        else:
-            body.append(line)
-    if opened is not None:
-        unclosed.append(f"the code fence opened at line {start} is never closed")
+        blocks.append((token.info.strip().split(" ")[0].lower(), token.content.splitlines()))
+        last = lines[token.map[1] - 1].lstrip(" >\t") if token.map[1] - 1 > token.map[0] else ""
+        if not re.fullmatch(re.escape(token.markup[0]) + "{" + str(len(token.markup)) + r",}\s*", last):
+            unclosed.append(f"the code fence opened at line {token.map[0] + 1} is never closed")
     return blocks, unclosed
 
 
@@ -112,3 +108,26 @@ def test_every_fence_language_is_checked_and_only_plain_text_is_exempt() -> None
     check(plain == [], f"a plain text fence must not be checked: {plain}")
     good = problems(readme + "\n```bash\nbash scripts/install.sh\n```\n")
     check(good == [], f"a conforming command in a bash fence must pass: {good}")
+
+
+def test_a_fence_inside_a_blockquote_or_a_list_is_checked() -> None:
+    readme = (ROOT / "README.md").read_text()
+    samples = {
+        "a blockquoted bash fence": "> ```bash\n> echo nonconforming\n> ```\n",
+        "a blockquoted fence without a language": "> ```\n> echo nonconforming\n> ```\n",
+        "a blockquoted tilde fence": "> ~~~sh\n> echo nonconforming\n> ~~~\n",
+        "a nested blockquote": "> > ```shell\n> > echo nonconforming\n> > ```\n",
+        "a blockquote without a space after the marker": ">```bash\n>echo nonconforming\n>```\n",
+        "a fence opened on the list item line": "- ```bash\n  echo nonconforming\n  ```\n",
+        "a numbered list fence": "1. Step:\n\n   ```console\n   echo nonconforming\n   ```\n",
+        "a blockquote inside a list": "- item\n\n  > ```zsh\n  > echo nonconforming\n  > ```\n",
+    }
+    for name, sample in samples.items():
+        found = problems(readme + "\n" + sample)
+        check(any("must be one" in message for message in found), f"{name} was not reported: {found}")
+    good = problems(readme + "\n> ```bash\n> bash scripts/install.sh\n> ```\n")
+    check(good == [], f"a conforming command in a blockquoted fence must pass: {good}")
+    plain = problems(readme + "\n> ```text\n> echo only an example of output\n> ```\n")
+    check(plain == [], f"a blockquoted plain text fence must not be checked: {plain}")
+    unclosed = problems(readme + "\n> ```bash\n> bash scripts/install.sh\n")
+    check(any("never closed" in message for message in unclosed), f"an unclosed blockquoted fence was not reported: {unclosed}")

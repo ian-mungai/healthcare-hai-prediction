@@ -6,13 +6,16 @@ records every call, one argument per line, so a case can compare the exact argum
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import signal
 import sys
+import time
 from pathlib import Path
 
-from scripts.infrastructure import web_ui_terraform
+from scripts.infrastructure import open_ui, web_ui_terraform
 from scripts.process import CompletedProcess, run_command
 from tests.support import check
 
@@ -39,23 +42,35 @@ if [ "$1 $2" = "ssm start-session" ]; then
     exit 254
   fi
   if [ -z "$STAND_IN_SESSION_MODE" ]; then exit 0; fi
+  stamp() { perl -MTime::HiRes=time -e 'printf "%.3f\n", time'; }
   echo "$$" > "$STAND_IN_PIDFILE"
-  sleep 60 &
+  echo "start $(stamp)" >> "$STAND_IN_MARK"
+  sleep "${STAND_IN_SLEEP:-60}" &
   sleeper=$!
   case "$STAND_IN_SESSION_MODE" in
-    interrupt | hang) trap 'echo int >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT ;;
-    *) trap 'echo int >> "$STAND_IN_MARK"' INT ;;
+    interrupt | hang) trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' INT ;;
+    *) trap 'echo "int $(stamp)" >> "$STAND_IN_MARK"' INT ;;
   esac
   case "$STAND_IN_SESSION_MODE" in
-    ignore_all) trap 'echo term >> "$STAND_IN_MARK"' TERM ;;
-    *) trap 'echo term >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' TERM ;;
+    ignore_all) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"' TERM ;;
+    *) trap 'echo "term $(stamp)" >> "$STAND_IN_MARK"; kill "$sleeper" 2>/dev/null; exit 0' TERM ;;
   esac
   if [ "$STAND_IN_SESSION_MODE" != hang ]; then kill -INT "$PPID"; fi
+  if [ -n "$STAND_IN_REPEAT_AFTER" ]; then
+    sleep "$STAND_IN_REPEAT_AFTER"
+    kill -INT "$PPID"
+  fi
   while [ "$STAND_IN_SESSION_MODE" = ignore_all ]; do sleep 1; done
   while kill -0 "$sleeper" 2>/dev/null; do wait "$sleeper"; done
   exit 0
 fi
 exit 3
+"""
+
+
+PS_STAND_IN = """#!/bin/bash
+sleep "${STAND_IN_PS_DELAY:-0}"
+exec /bin/ps "$@"
 """
 
 
@@ -72,6 +87,8 @@ class Workspace:
         self.bin.mkdir()
         (self.bin / "aws").write_text(STAND_IN)
         (self.bin / "aws").chmod(0o755)
+        (self.bin / "ps").write_text(PS_STAND_IN)
+        (self.bin / "ps").chmod(0o755)
         self.log = folder / "calls.log"
         self.answer = folder / "instances.json"
         self.answer.write_text(answer)
@@ -309,10 +326,30 @@ def test_a_refused_input_is_never_echoed(tmp_path: Path) -> None:
     check(all(name in refused.stderr for name in web_ui_terraform.forward_documents()), f"a refused name must list every accepted name: {refused.stderr}")
 
 
-def marks(workspace: Workspace) -> list[str]:
-    """The signals the stand-in Session Manager child recorded, in order."""
+def mark_times(workspace: Workspace) -> list[tuple[str, float]]:
+    """What the stand-in Session Manager child recorded, in order: ``start``, then each signal it received, each with its time."""
     path = workspace.folder / "marks.log"
-    return path.read_text().split() if path.exists() else []
+    return [(name, float(stamp)) for name, stamp in (line.split() for line in path.read_text().splitlines())] if path.exists() else []
+
+
+def marks(workspace: Workspace) -> list[str]:
+    """The signals the stand-in Session Manager child received, in order."""
+    return [name for name, _ in mark_times(workspace) if name != "start"]
+
+
+def seconds_between(workspace: Workspace, first: str, second: str) -> float:
+    """The time from the first mark named ``first`` to the first mark named ``second`` after it."""
+    times = mark_times(workspace)
+    begin = next(stamp for name, stamp in times if name == first)
+    return next(stamp for name, stamp in times if name == second and stamp >= begin) - begin
+
+
+def stop_child(workspace: Workspace) -> None:
+    """Make sure no stand-in child is left running, whatever the case did."""
+    path = workspace.folder / "child.pid"
+    if path.exists():
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(int(path.read_text()), signal.SIGKILL)
 
 
 def test_ctrl_c_sends_the_interrupt_to_the_aws_child_and_lets_it_close_the_session(tmp_path: Path) -> None:
@@ -364,3 +401,85 @@ def test_a_bad_time_setting_is_refused_before_any_aws_call(tmp_path: Path) -> No
             check(result.returncode == 2 and name in result.stderr, f"{name}={value} must exit 2 and name the setting: {result.returncode} {result.stderr}")
             check(value not in result.stderr.replace(name, ""), f"{name}={value}: the value must not be echoed: {result.stderr}")
             check(workspace.calls() == [], f"{name}={value}: no AWS call may happen")
+
+
+def test_a_second_ctrl_c_during_child_discovery_still_stops_the_session_cleanly(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        result = workspace.run(
+            "airflow",
+            extra={
+                "STAND_IN_SESSION_MODE": "interrupt",
+                "STAND_IN_REPEAT_AFTER": "0.5",
+                "STAND_IN_PS_DELAY": "1.0",
+                "STAND_IN_SLEEP": "8",
+                "HAI_OPEN_UI_STOP_SECONDS": "20",
+            },
+        )
+        output = result.stdout + result.stderr
+        check("Traceback" not in output and "KeyboardInterrupt" not in output, f"a second Ctrl+C must not escape as an error: {output}")
+        check(result.returncode == 0, f"the session must close cleanly: {result.returncode} {output}")
+        check(marks(workspace) == ["int"], f"the child must still get SIGINT from the stop steps: {marks(workspace)}")
+        pid = int((workspace.folder / "child.pid").read_text())
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            pass
+        else:
+            raise AssertionError(f"the child {pid} must not be left running")
+    finally:
+        stop_child(workspace)
+
+
+def test_the_wait_after_each_signal_is_the_configured_time(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        began = time.monotonic()
+        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_all", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_STOP_SECONDS": "2"})
+        elapsed = time.monotonic() - began
+        check(result.returncode == 1, f"a killed child must end with exit 1: {result.returncode} {result.stderr}")
+        gap = seconds_between(workspace, "int", "term")
+        check(2.0 <= gap <= 3.5, f"SIGTERM must follow SIGINT after the configured 2 s, not {gap:.2f} s")
+        check(elapsed >= 4.0, f"the kill must follow SIGTERM after another 2 s: the whole stop took {elapsed:.2f} s")
+    finally:
+        stop_child(workspace)
+
+
+def test_the_default_wait_is_fifteen_seconds(tmp_path: Path) -> None:
+    check(open_ui.STOP_SECONDS == 15.0 and open_ui.SESSION_SECONDS == 8 * 3600, "the defaults must be a 15 s wait and an 8 hour deadline")
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        result = workspace.run("airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "STAND_IN_SLEEP": "40"})
+        check(result.returncode == 0, f"a child that ends on SIGTERM must end with exit 0: {result.returncode} {result.stderr}")
+        gap = seconds_between(workspace, "int", "term")
+        check(14.8 <= gap <= 18.0, f"with no setting, SIGTERM must follow SIGINT after 15 s, not {gap:.2f} s")
+    finally:
+        stop_child(workspace)
+
+
+def test_a_second_ctrl_c_skips_only_the_wait_it_interrupts(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        result = workspace.run(
+            "airflow", extra={"STAND_IN_SESSION_MODE": "ignore_int", "STAND_IN_REPEAT_AFTER": "0.6", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_STOP_SECONDS": "20"}
+        )
+        check(result.returncode == 0, f"a child that ends on SIGTERM must end with exit 0: {result.returncode} {result.stderr}")
+        check(marks(workspace)[0] == "int", f"the child must get SIGINT first: {marks(workspace)}")
+        check(marks(workspace)[-1] == "term", f"the second Ctrl+C must move on to SIGTERM: {marks(workspace)}")
+        gap = seconds_between(workspace, "int", "term")
+        check(gap < 6.0, f"the second Ctrl+C must skip the 20 s wait, SIGTERM came after {gap:.2f} s")
+    finally:
+        stop_child(workspace)
+
+
+def test_the_session_deadline_is_the_configured_time(tmp_path: Path) -> None:
+    workspace = Workspace(tmp_path, instances(INSTANCE))
+    try:
+        result = workspace.run(
+            "airflow", extra={"STAND_IN_SESSION_MODE": "hang", "STAND_IN_SLEEP": "30", "HAI_OPEN_UI_SESSION_SECONDS": "2", "HAI_OPEN_UI_STOP_SECONDS": "20"}
+        )
+        check(result.returncode == 1 and "deadline" in result.stderr, f"the deadline must end the session: {result.returncode} {result.stderr}")
+        gap = seconds_between(workspace, "start", "int")
+        check(2.0 <= gap <= 4.5, f"SIGINT must come at the configured 2 s deadline, not after {gap:.2f} s")
+    finally:
+        stop_child(workspace)

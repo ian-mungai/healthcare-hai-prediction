@@ -13,11 +13,12 @@ Terraform declares the documents, so a new web interface needs no change here. I
 or an ARN.
 
 Stopping a session: ``aws ssm start-session`` runs the Session Manager plugin as its child and ignores SIGINT itself while the plugin runs (a terminal Ctrl+C
-reaches the whole foreground process group and the plugin handles it). Ctrl+C here, or the deadline, therefore sends SIGINT to the process group of the ``aws``
-child only, which holds ``aws`` and the plugin and nothing else, and waits up to ``HAI_OPEN_UI_STOP_SECONDS`` (15) for the plugin to close the session. Only if
-the group is still alive after that wait does it send SIGTERM, wait again and send SIGKILL last. A second Ctrl+C during a wait skips the rest of that wait. The
-script can show only that the local processes ended and which signal each needed. It cannot prove offline that AWS ended the remote session: after a SIGKILL
-the session may stay open until its idle timeout, and the script says so. ``HAI_OPEN_UI_SESSION_SECONDS`` (28800) sets the deadline.
+reaches the whole foreground process group and the plugin handles it). Ctrl+C here, or the deadline, therefore sends SIGINT to the process group of the
+``aws`` child only, which holds ``aws`` and the plugin and nothing else, and waits up to ``HAI_OPEN_UI_STOP_SECONDS`` (15) for the plugin to close the
+session. Only if the group is still alive after that wait does it send SIGTERM, wait again and send SIGKILL last. While the session runs, the SIGINT handler
+only records each press: a Ctrl+C while the child is searched for cannot raise an error, and a Ctrl+C during a wait skips the rest of that wait. The script
+can show only that the local processes ended and which signal each needed. It cannot prove offline that AWS ended the remote session: after a SIGKILL the
+session may stay open until its idle timeout, and the script says so. ``HAI_OPEN_UI_SESSION_SECONDS`` (28800) sets the deadline.
 """
 
 from __future__ import annotations
@@ -174,18 +175,18 @@ def session_children() -> list[int]:
 
 class AwsSession:
     """``run_command("aws", ...)`` in a worker thread, with events instead of ``Thread.join`` for every wait: in Python 3.12 a Ctrl+C that interrupts
-    ``join`` marks a running thread as stopped, so ``is_alive`` would then be wrong."""
+    ``join`` marks a running thread as stopped, so ``is_alive`` would then be wrong. The thread is a daemon, so a stop that fails never keeps this process
+    alive until the worker's fallback deadline."""
 
     def __init__(self, arguments: list[str], deadline: float) -> None:
-        self.begun = threading.Event()
         self.finished = threading.Event()
+        self.presses: list[float] = []
         self.outcome: dict[str, Any] = {}
         self.arguments = arguments
         self.deadline = deadline
-        self.thread = threading.Thread(target=self.work, name="aws_session")
+        self.thread = threading.Thread(target=self.work, name="aws_session", daemon=True)
 
     def work(self) -> None:
-        self.begun.set()
         try:
             self.outcome["result"] = run_command("aws", self.arguments, env=aws_environment(), timeout=self.deadline)
         except BaseException as error:
@@ -193,34 +194,56 @@ class AwsSession:
         finally:
             self.finished.set()
 
+    def press(self, _number: int, _frame: object) -> None:
+        """The SIGINT handler while the session runs: it only records the press, so no Ctrl+C can raise inside the stop steps."""
+        self.presses.append(time.monotonic())
+
     def running(self) -> bool:
         return not self.finished.is_set()
 
-    def wait(self, seconds: float) -> bool:
-        """Wait up to ``seconds`` for the session to end; a second Ctrl+C ends the wait early. True when it has ended."""
-        with contextlib.suppress(KeyboardInterrupt):
-            self.finished.wait(max(0.0, seconds))
+    def wait(self, seconds: float, skippable: bool = True) -> bool:
+        """Wait up to ``seconds`` for the session to end. A Ctrl+C pressed during the wait ends it early when ``skippable``. True when the session has ended."""
+        seen = len(self.presses)
+        end = time.monotonic() + seconds
+        while time.monotonic() < end:
+            if self.finished.wait(min(0.1, max(0.0, end - time.monotonic()))):
+                break
+            if skippable and len(self.presses) > seen:
+                break
         return self.finished.is_set()
+
+
+def find_child(session: AwsSession) -> list[int]:
+    """The ``aws`` child's pid, searched for up to ``CHILD_SEARCH_SECONDS``. A failed process listing is tried again until the search ends."""
+    end = time.monotonic() + CHILD_SEARCH_SECONDS
+    while session.running() and time.monotonic() < end:
+        try:
+            children = session_children()
+        except OSError:
+            children = []
+        if children:
+            return children
+        session.wait(0.1, skippable=False)
+    return []
 
 
 def stop_session(session: AwsSession, stop_seconds: float) -> str:
     """Stop the ``aws`` child's process group with SIGINT, then SIGTERM, then SIGKILL, waiting ``stop_seconds`` after each. Returns the last signal sent
-    (``none`` when the child ended by itself first, ``survived`` when it is still alive after SIGKILL)."""
-    search_end = time.monotonic() + CHILD_SEARCH_SECONDS
-    children: list[int] = []
-    while session.running() and not children and time.monotonic() < search_end:
-        children = session_children()
-        if not children:
-            session.wait(0.1)
+    (``none`` when the child ended by itself first, ``survived`` when it is still alive after SIGKILL or was never found).
+
+    A Ctrl+C while the child is searched for is only recorded: it cannot skip the SIGINT step, which has not been sent yet. A Ctrl+C during a wait skips the
+    rest of that wait.
+    """
+    children = find_child(session)
     sent = "none"
     for name, number in (("interrupt", signal.SIGINT), ("term", signal.SIGTERM), ("kill", signal.SIGKILL)):
         if not session.running():
             return sent
+        if not children:
+            return "survived"
         for pid in children:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 os.killpg(pid, number)
-            except ProcessLookupError:
-                continue
         sent = name
         if session.wait(stop_seconds):
             return sent
@@ -231,24 +254,26 @@ def run_session(arguments: list[str], session_seconds: float, stop_seconds: floa
     """Run ``aws`` with ``arguments`` until it ends, the user presses Ctrl+C or the deadline passes. Returns why it stopped (``ended``, ``interrupt`` or
     ``deadline``), the last signal sent to stop it (``none`` when it ended by itself) and its result when it ended by itself or after a stop.
 
-    ``run_command`` runs in a worker thread, so this thread, which alone receives Ctrl+C, can stop the child in steps. The worker's own deadline is only a
-    last bound: it is longer than the session deadline plus the three waits, so ``run_command``'s abrupt session stop never comes first.
+    ``run_command`` runs in a worker thread, so this thread, which alone receives Ctrl+C, can stop the child in steps. From the start until the end of the stop
+    the SIGINT handler only records each press, so no Ctrl+C raises an error and every step of the stop completes. The worker's own deadline is only a last
+    bound: it is longer than the session deadline plus the three waits, so ``run_command``'s abrupt session stop never comes first.
     """
     session = AwsSession(arguments, session_seconds + 4 * stop_seconds + 60)
     reason = "ended"
+    previous = signal.signal(signal.SIGINT, session.press)
     try:
         session.thread.start()
         end = time.monotonic() + session_seconds
         while not session.finished.wait(0.2):
+            if session.presses:
+                reason = "interrupt"
+                break
             if time.monotonic() >= end:
                 reason = "deadline"
                 break
-    except KeyboardInterrupt:
-        reason = "interrupt"
-    # A Ctrl+C can arrive while the thread is still starting (the child may already run): give the thread a moment to begin before judging it.
-    if reason == "interrupt":
-        session.begun.wait(2.0)
-    stop = stop_session(session, stop_seconds) if session.running() else "none"
+        stop = stop_session(session, stop_seconds) if session.running() else "none"
+    finally:
+        signal.signal(signal.SIGINT, previous)
     if session.running():
         return reason, stop, None
     if "error" in session.outcome:
