@@ -698,7 +698,7 @@ def unreadable_output_record() -> None:
 
 
 OPENMETADATA_REFUSAL = json.dumps({"code": 400, "message": "Invalid request format"}).encode()
-JAVA_TIME = re.compile(r"(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z")
+JAVA_TIME = re.compile(r"(20\d{2})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{3}))?Z", re.ASCII)
 
 
 def stored_millis(text: str) -> tuple[int, int] | None:
@@ -1119,6 +1119,8 @@ def stand_in_stores_time_as_openmetadata_does() -> None:
         "1582-10-04T00:00:00.000Z",
         "1999-12-31T23:59:59.999Z",
         "2150-01-01T00:00:00.000Z",
+        "2026-11-04T10:00:00.\U0001d7d9\U0001d7da\U0001d7dbZ",
+        "\u0662\u0660\u0662\u0666-11-04T10:00:00Z",
     ):
         require(resolve({**plain, "eventTime": text}, set()) == (400, json.loads(OPENMETADATA_REFUSAL)), f"{text!r} is not refused as OpenMetadata refuses it")
     require(resolve(plain, set())[0] == 400, "an event with no time is refused")
