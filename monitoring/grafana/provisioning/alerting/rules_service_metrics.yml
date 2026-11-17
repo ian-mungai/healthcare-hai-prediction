@@ -204,7 +204,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: '((sum(increase(grafana_alerting_notifications_failed_total{job="grafana"}[15m])) > bool 0) or vector(0)) + ((sum(grafana_alerting_notifications_failed_total{job="grafana"} unless grafana_alerting_notifications_failed_total{job="grafana"} offset 15m) > bool 0) or vector(0))'
+              expr: '((sum(increase(grafana_alerting_notifications_failed_total{job="grafana"}[15m])) > bool 0) or vector(0)) + ((sum(grafana_alerting_notifications_failed_total{job="grafana"} unless grafana_alerting_notifications_failed_total{job="grafana"} offset 15m) > bool 0) or vector(0)) + ((sum((grafana_alerting_notifications_failed_total{job="grafana"} > 0) and on (instance) (time() - process_start_time_seconds{job="grafana"} < 900)) > bool 0) or vector(0))'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -230,7 +230,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure also counts).
+          summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure and a first failure after a restart also count).
 
       - uid: grafana_scheduler_behind
         title: GrafanaSchedulerBehind

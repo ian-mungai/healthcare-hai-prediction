@@ -160,7 +160,7 @@
     }
   },
   "grafana": {
-    "emitted_by": "Grafana 13.2.5 on its HTTP port, scraped as the grafana job. Names and labels read from the v13.2.5 source: pkg/services/ngalert/metrics (scheduler.go, multi_org_alertmanager.go) for the alerting series and pkg/infra/httpclient/httpclientprovider/datasource_metrics_middleware.go for the data source series. The notification counters skip zero values (WithSkipZeroValueMetrics), so a series is absent until its first notification and its first sample is already one: increase and rate cannot see that first step, and the entries say starts_at_first_event.",
+    "emitted_by": "Grafana 13.2.5 on its HTTP port, scraped as the grafana job. Names and labels read from the v13.2.5 source: pkg/services/ngalert/metrics (scheduler.go, multi_org_alertmanager.go) for the alerting series and pkg/infra/httpclient/httpclientprovider/datasource_metrics_middleware.go for the data source series. The notification counters skip zero values (WithSkipZeroValueMetrics), so a series is absent until its first notification and its first sample is already one: increase and rate cannot see that first step, and the entries say starts_at_first_event. process_start_time_seconds comes from the client_golang process collector, which Grafana's /metrics handler serves through prometheus.DefaultGatherer (pkg/infra/metrics/service.go, pkg/api/http_server.go); it is the Unix time of the process start, so it changes at a restart.",
     "metrics": {
       "grafana_alerting_rule_evaluations_total": {"type": "counter", "labels": ["org"]},
       "grafana_alerting_rule_evaluation_failures_total": {"type": "counter", "labels": ["org"]},
@@ -175,6 +175,7 @@
       "grafana_alerting_notification_latency_seconds": {"type": "histogram", "labels": []},
       "grafana_datasource_request_total": {"type": "counter", "labels": ["datasource", "datasource_type", "code", "method", "secure_socks_ds_proxy_enabled"]},
       "grafana_datasource_request_duration_seconds": {"type": "histogram", "labels": ["datasource", "datasource_type", "code", "method", "secure_socks_ds_proxy_enabled"]},
+      "process_start_time_seconds": {"type": "gauge", "labels": []},
       "grafana_datasource_request_in_flight": {"type": "gauge", "labels": ["datasource", "datasource_type", "secure_socks_ds_proxy_enabled"]}
     }
   }

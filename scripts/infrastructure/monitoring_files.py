@@ -9,6 +9,8 @@ Run from the repository root: ``.venv/bin/python -m scripts.infrastructure.monit
 - ``monitoring/grafana/provisioning/**`` and ``monitoring/grafana/dashboards/*.json``: the data source and the dashboards.
 - ``infra/services/monitoring.tf``: the ports and the folders the task mounts.
 - ``infra/services/polaris.tf``: the setting that makes Polaris publish latency buckets.
+- ``monitoring/promtool/``: the promtool rule file and fixtures of the service alert rules. This check ties them to the Grafana rules.
+  Native ``promtool test rules`` runs them.
 
 A metric is real when the mapping produces it, a known list names it or the API contract lists it. The check reads label matchers too, so a label typo fails.
 It does not run PromQL and it does not prove that Airflow sends an event the mapping lists: that needs a running scheduler.
@@ -22,6 +24,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Any
+
+from scripts.infrastructure import promql_subset
 
 yaml = importlib.import_module("yaml")
 
@@ -71,6 +75,20 @@ EXPECTED_TARGETS = {
     "node_exporter": ["127.0.0.1:9100"],
 }
 EXPECTED_PATHS = {"polaris": "/q/metrics", "openmetadata": "/prometheus", "mlflow": "/mlflow_metrics"}
+SERVICE_RULES = f"{ALERTING}/rules_service_metrics.yml"
+PROMTOOL_RULES = f"{MONITORING}/promtool/service_alerts.yml"
+PROMTOOL_TESTS = f"{MONITORING}/promtool/service_alerts_test.yml"
+PROMTOOL_SCENARIOS = (
+    "first_failure",
+    "later_failure",
+    "restart_after_a_gap",
+    "short_restart_same_labels",
+    "restart_without_failure",
+    "offset_hits_stale_marker",
+    "second_integration_first_failure",
+    "all_undefined_heap_maxima",
+    "three_observed_5xx",
+)
 POLARIS_TERRAFORM = "infra/services/polaris.tf"
 POLARIS_BUCKET = "http_server_requests_seconds_bucket"
 POLARIS_SETTING = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS"
@@ -333,13 +351,19 @@ def limiter_spans(text: str) -> list[tuple[int, int]]:
 
 
 def late_counter_problems(where: str, expression: str, late: frozenset[str]) -> list[str]:
-    """Problems with a rule that takes increase or rate of a counter that has no series before its first event: that rule misses the first event."""
+    """Problems with a rule that takes increase or rate of a counter that has no series before its first event: such a rule misses the first event.
+
+    Two things hide it. The series is new, so a sample before it does not exist (compare it with the same series at an offset). A restart can also return
+    the same labels and the same value, so the series is not new (compare it with the process start time).
+    """
     problems: list[str] = []
     for name in sorted(late):
-        uses = re.search(rf"\b(?:increase|rate|irate)\(\s*{name}\b", expression) is not None
-        compares = re.search(rf"\b{name}\s*(?:\{{[^}}]*\}})?\s+offset\b", expression) is not None
-        if uses and not compares:
+        if re.search(rf"\b(?:increase|rate|irate)\(\s*{name}\b", expression) is None:
+            continue
+        if re.search(rf"\b{name}\s*(?:\{{[^}}]*\}})?\s+offset\b", expression) is None:
             problems.append(f"{where}: {name} has no series before its first event, so increase and rate miss that event; also compare it with {name} offset")
+        if "process_start_time_seconds" not in expression:
+            problems.append(f"{where}: {name} keeps its labels and value across a restart, so also compare it with process_start_time_seconds")
     return problems
 
 
@@ -347,6 +371,10 @@ def expression_problems(where: str, expression: str, metrics: dict[str, set[str]
     """Problems with one PromQL expression: a metric that nothing produces, a label it lacks, a job nobody scrapes or an open label outside topk."""
     problems: list[str] = []
     stripped = expression
+    try:
+        promql_subset.validate(expression)
+    except promql_subset.Unsupported as error:
+        problems.append(f"{where}: not a valid PromQL query ({error}): {expression}")
     masked = QUOTED.sub(lambda found: '"' + " " * (len(found.group(0)) - 2) + '"', expression)
     spans = limiter_spans(masked)
     for clause in BY_CLAUSE.finditer(masked):
@@ -615,6 +643,53 @@ def polaris_histogram_problems(root: Path, metrics: dict[str, set[str] | None]) 
     return problems
 
 
+def promtool_problems(root: Path) -> list[str]:
+    """Problems where the promtool fixtures and the Grafana service rules disagree. Native promtool decides what a query does."""
+    problems: list[str] = []
+    grafana = read_yaml(root, SERVICE_RULES, problems)
+    fixtures = read_yaml(root, PROMTOOL_RULES, problems)
+    tests = read_yaml(root, PROMTOOL_TESTS, problems)
+    if grafana is None or fixtures is None or tests is None:
+        return problems
+    wanted: dict[str, tuple[str, str]] = {}
+    for group in grafana.get("groups", []):
+        for rule in group.get("rules", []):
+            expression = next(
+                (str(step["model"]["expr"]) for step in rule.get("data", []) if isinstance(step.get("model"), dict) and step["model"].get("expr")), ""
+            )
+            wanted[str(rule.get("title"))] = (expression, str(rule.get("labels", {}).get("severity")))
+    found: dict[str, tuple[str, str]] = {}
+    for group in fixtures.get("groups", []):
+        for rule in group.get("rules", []):
+            found[str(rule.get("alert"))] = (str(rule.get("expr")), str(rule.get("labels", {}).get("severity")))
+    for title, (expression, severity) in wanted.items():
+        if title not in found:
+            problems.append(f"{PROMTOOL_RULES}: {title} has no promtool rule")
+        elif found[title] != (f"({expression}) > 0", severity):
+            problems.append(f"{PROMTOOL_RULES}: the query or severity of {title} differs from the Grafana rule in {SERVICE_RULES}")
+    for title in sorted(set(found) - set(wanted)):
+        problems.append(f"{PROMTOOL_RULES}: {title} has no Grafana rule in {SERVICE_RULES}")
+    if tests.get("rule_files") != ["service_alerts.yml"]:
+        problems.append(f"{PROMTOOL_TESTS}: rule_files must name service_alerts.yml only")
+    names = {str(test.get("name")) for test in tests.get("tests", [])}
+    for scenario in PROMTOOL_SCENARIOS:
+        if scenario not in names:
+            problems.append(f"{PROMTOOL_TESTS} lacks the scenario {scenario}")
+    fires: dict[str, bool] = {title: False for title in wanted}
+    silent: dict[str, bool] = {title: False for title in wanted}
+    for test in tests.get("tests", []):
+        for evaluation in test.get("alert_rule_test", []):
+            title = str(evaluation.get("alertname"))
+            if title in wanted:
+                (fires if evaluation.get("exp_alerts") else silent)[title] = True
+    for title in wanted:
+        if not fires[title]:
+            problems.append(f"{PROMTOOL_TESTS}: {title} has no promtool evaluation that fires")
+        if not silent[title]:
+            problems.append(f"{PROMTOOL_TESTS}: {title} has no promtool evaluation that stays silent")
+    return problems
+
+
 def check(root: Path = ROOT) -> list[str]:
     """Every problem of the monitoring files under ``root``, as text lines; an empty list means they are valid."""
     problems: list[str] = []
@@ -626,6 +701,7 @@ def check(root: Path = ROOT) -> list[str]:
     metrics = {**known_metrics(known, problems), **(mapping_metrics(mapping, problems) if mapping is not None else {})}
     problems.extend(catalog_problems(known))
     problems.extend(polaris_histogram_problems(root, metrics))
+    problems.extend(promtool_problems(root))
     from scripts import metrics_push
 
     jobs = {str(job.get("job_name")) for job in (scrape or {}).get("scrape_configs", [])} | set(metrics_push.JOB_PHASES)

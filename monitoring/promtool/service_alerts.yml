@@ -1,0 +1,34 @@
+# The service alert queries of ../grafana/provisioning/alerting/rules_service_metrics.yml as Prometheus alerting rules, for promtool.
+# Grafana raises its rule when the query result is above zero, so each query here is wrapped in a comparison with zero: Prometheus raises an alert for every sample.
+# scripts/infrastructure/monitoring_files.py fails when a query here differs from the Grafana rule. There is no for: clause; the fixtures judge the query at one instant.
+groups:
+- name: hai_service_metrics
+  rules:
+  - alert: PolarisServerErrors
+    expr: (sum(increase(http_server_requests_seconds_count{job="polaris",status=~"5.."}[10m])) > bool 3) > 0
+    labels:
+      severity: warning
+  - alert: PolarisHeapHigh
+    expr: (sum(jvm_memory_used_bytes{job="polaris",area="heap"}) / sum(jvm_memory_max_bytes{job="polaris",area="heap"} > 0) > bool 0.9) > 0
+    labels:
+      severity: warning
+  - alert: MlflowServerErrors
+    expr: (sum(increase(mlflow_http_request_total{job="mlflow",status=~"5.."}[10m])) > bool 3) > 0
+    labels:
+      severity: warning
+  - alert: MlflowSlowRequests
+    expr: (histogram_quantile(0.95, sum by (le) (rate(mlflow_http_request_duration_seconds_bucket{job="mlflow"}[10m]))) > bool 5) > 0
+    labels:
+      severity: warning
+  - alert: GrafanaRuleEvaluationFailing
+    expr: (sum(increase(grafana_alerting_rule_evaluation_failures_total{job="grafana"}[10m])) > bool 0) > 0
+    labels:
+      severity: warning
+  - alert: GrafanaNotificationsFailing
+    expr: (((sum(increase(grafana_alerting_notifications_failed_total{job="grafana"}[15m])) > bool 0) or vector(0)) + ((sum(grafana_alerting_notifications_failed_total{job="grafana"} unless grafana_alerting_notifications_failed_total{job="grafana"} offset 15m) > bool 0) or vector(0)) + ((sum((grafana_alerting_notifications_failed_total{job="grafana"} > 0) and on (instance) (time() - process_start_time_seconds{job="grafana"} < 900)) > bool 0) or vector(0))) > 0
+    labels:
+      severity: warning
+  - alert: GrafanaSchedulerBehind
+    expr: (grafana_alerting_scheduler_behind_seconds{job="grafana"} > bool 60) > 0
+    labels:
+      severity: warning

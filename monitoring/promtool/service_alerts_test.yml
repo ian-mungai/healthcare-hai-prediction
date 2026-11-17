@@ -1,0 +1,449 @@
+# promtool fixtures of the service alert rules. Native promtool is the authority for what each query returns; run them as a heavy run:
+#   promtool test rules monitoring/promtool/service_alerts_test.yml
+# in the pinned prom/prometheus image (infra/services/images.json) with this folder mounted read only. Each test feeds input series every 30 seconds and judges the
+# alerts at 60 minutes: an evaluation with exp_alerts must raise exactly that alert, one without must raise none. Missing samples are '_' and stale markers 'stale'.
+rule_files:
+- service_alerts.yml
+evaluation_interval: 30s
+tests:
+- name: six_observed_5xx
+  interval: 30s
+  input_series:
+  - series: http_server_requests_seconds_count{job="polaris",method="GET",uri="/api/catalog/v1/config",outcome="SERVER_ERROR",application="Polaris",status="500"}
+    values: 10+0x110 16+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: three_observed_5xx
+  interval: 30s
+  input_series:
+  - series: http_server_requests_seconds_count{job="polaris",method="GET",uri="/api/catalog/v1/config",outcome="SERVER_ERROR",application="Polaris",status="500"}
+    values: 10+0x110 13+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: two_observed_5xx
+  interval: 30s
+  input_series:
+  - series: http_server_requests_seconds_count{job="polaris",method="GET",uri="/api/catalog/v1/config",outcome="SERVER_ERROR",application="Polaris",status="500"}
+    values: 10+0x110 12+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+- name: rising_4xx_counter
+  interval: 30s
+  input_series:
+  - series: http_server_requests_seconds_count{job="polaris",method="GET",uri="/api/catalog/v1/config",outcome="SERVER_ERROR",application="Polaris",status="404"}
+    values: 10+0x110 110+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+- name: 5xx_of_another_job
+  interval: 30s
+  input_series:
+  - series: http_server_requests_seconds_count{job="other",method="GET",uri="/api/catalog/v1/config",outcome="SERVER_ERROR",application="Polaris",status="500"}
+    values: 10+0x110 40+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+- name: no_5xx_series
+  interval: 30s
+  input_series:
+  - series: up{job="polaris"}
+    values: 1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisServerErrors
+- name: mlflow_six_observed_5xx
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_total{job="mlflow",method="POST",status="500"}
+    values: 10+0x110 16+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowServerErrors
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: mlflow_two_observed_5xx
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_total{job="mlflow",method="POST",status="500"}
+    values: 10+0x110 12+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowServerErrors
+- name: mlflow_rising_4xx_counter
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_total{job="mlflow",method="POST",status="404"}
+    values: 10+0x110 110+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowServerErrors
+- name: mlflow_no_5xx_series
+  interval: 30s
+  input_series:
+  - series: up{job="mlflow"}
+    values: 1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowServerErrors
+- name: heap_at_95_percent
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 950+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 1000+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: heap_at_50_percent
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 500+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 1000+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+- name: heap_mixed_defined_and_undefined_maxima
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 950+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Eden Space"}
+    values: -1+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 1000+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: all_undefined_heap_maxima
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 500+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Eden Space"}
+    values: -1+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: -1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+- name: heap_without_a_maximum_series
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 500+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+- name: high_non_heap_pool_only
+  interval: 30s
+  input_series:
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 100+0x130
+  - series: jvm_memory_max_bytes{job="polaris",application="Polaris",area="heap",id="G1 Old Gen"}
+    values: 1000+0x130
+  - series: jvm_memory_used_bytes{job="polaris",application="Polaris",area="nonheap",id="Metaspace"}
+    values: 950+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: PolarisHeapHigh
+- name: one_fifth_of_requests_above_seven_seconds
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.005"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.01"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.025"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.05"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.075"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.1"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.25"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.5"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.75"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="1.0"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="2.5"}
+    values: 0+0x110 40+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="5.0"}
+    values: 0+0x110 80+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="7.5"}
+    values: 0+0x110 90+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="10.0"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="+Inf"}
+    values: 0+0x110 100+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowSlowRequests
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: every_request_within_a_tenth_of_a_second
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.005"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.01"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.025"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.05"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.075"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.1"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.25"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.5"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.75"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="1.0"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="2.5"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="5.0"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="7.5"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="10.0"}
+    values: 0+0x110 100+0x19
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="+Inf"}
+    values: 0+0x110 100+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowSlowRequests
+- name: no_traffic_in_the_window
+  interval: 30s
+  input_series:
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.005"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.01"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.025"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.05"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.075"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.1"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.25"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.5"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="0.75"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="1.0"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="2.5"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="5.0"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="7.5"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="10.0"}
+    values: 0+0x130
+  - series: mlflow_http_request_duration_seconds_bucket{job="mlflow",method="POST",status="200",mlflow_version="3.17.2",le="+Inf"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowSlowRequests
+- name: no_latency_series
+  interval: 30s
+  input_series:
+  - series: up{job="mlflow"}
+    values: 1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: MlflowSlowRequests
+- name: rule_evaluation_failures_rise
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_rule_evaluation_failures_total{job="grafana",org="1"}
+    values: 0+0x110 2+0x19
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaRuleEvaluationFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: rule_evaluation_failures_flat
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_rule_evaluation_failures_total{job="grafana",org="1"}
+    values: 5+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaRuleEvaluationFailing
+- name: no_rule_evaluation_series
+  interval: 30s
+  input_series:
+  - series: up{job="grafana"}
+    values: 1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaRuleEvaluationFailing
+- name: scheduler_two_minutes_behind
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_scheduler_behind_seconds{job="grafana"}
+    values: 120+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaSchedulerBehind
+    exp_alerts:
+    - exp_labels:
+        job: grafana
+        severity: warning
+- name: scheduler_on_time
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_scheduler_behind_seconds{job="grafana"}
+    values: 5+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaSchedulerBehind
+- name: no_scheduler_series
+  interval: 30s
+  input_series:
+  - series: up{job="grafana"}
+    values: 1+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaSchedulerBehind
+- name: first_failure
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: _x110 1+0x20
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: later_failure
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 3+0x110 4+0x19
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: old_failure_stays_silent
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 1+0x130
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+- name: no_failure_series
+  interval: 30s
+  input_series:
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+- name: second_integration_first_failure
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 2+0x130
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="email"}
+    values: _x110 1+0x20
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: restart_after_a_gap
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 5+0x59 stale _x50 1+0x19
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x59 stale _x49 3300+0x20
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: short_restart_same_labels
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 1+0x108 stale 1+0x20
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x108 stale 3270+0x20
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
+- name: restart_without_failure
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 1+0x108 stale _x21
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x108 stale 3270+0x20
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+- name: offset_hits_stale_marker
+  interval: 30s
+  input_series:
+  - series: grafana_alerting_notifications_failed_total{job="grafana",instance="127.0.0.1:3001",org="1",integration="sns"}
+    values: 1+0x88 stale _x20 1+0x20
+  - series: process_start_time_seconds{job="grafana",instance="127.0.0.1:3001"}
+    values: 0+0x130
+  alert_rule_test:
+  - eval_time: 60m
+    alertname: GrafanaNotificationsFailing
+    exp_alerts:
+    - exp_labels:
+        severity: warning
