@@ -141,16 +141,34 @@ def refuse_roles_other_than_its_own(client: Client, registry: str, admin: Mappin
             )
 
 
+def reader_roles(client: Client, registry: str, admin: Mapping[str, str]) -> list[dict[str, Any]]:
+    """The roles that the reader holds, with their permissions and IDs, read through the administrator."""
+    status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
+    if status != 200 or not isinstance(listing, dict):
+        raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
+    return [role for role in listing.get("roles") or [] if isinstance(role, dict)]
+
+
+def refuse_an_existing_reader_with_other_roles(client: Client, registry: str, admin: Mapping[str, str]) -> None:
+    """Read only: stop before the first write unless an existing reader holds nothing but its own role, held by the reader alone.
+
+    It runs before the stored password is created in Parameter Store and before the reader's password is repaired, so a refusal leaves the password, the
+    parameter and every grant as they were. A reader that does not exist yet has no roles and passes."""
+    status, _ = client.call("GET", f"{registry}/api/2.0/mlflow/users/get?{urllib.parse.urlencode({'username': READER})}", admin)
+    if status == 404:
+        return
+    if status != 200:
+        raise StepFailed(f"the registry answered HTTP {status} while the user {READER} was read (an administrator login is needed)")
+    refuse_roles_other_than_its_own(client, registry, admin, reader_roles(client, registry, admin), reader_identity(client, registry, admin))
+
+
 def downgrade(client: Client, registry: str, admin: Mapping[str, str], permissions: Mapping[str, Any], user_id: int) -> list[str]:
     """Take administrator rights and every grant above READ away from the reader, on every kind of resource and on the workspace.
 
     The roles of the reader are checked first (``refuse_roles_other_than_its_own``), before any change. The grants are read from them with their IDs and
     removed by ID through the role API, which is the one path that accepts the ``workspace`` type (the per-user revoke call refuses it with 400)."""
     changed: list[str] = []
-    status, listing = client.call("GET", f"{registry}/api/3.0/mlflow/users/roles/list?{urllib.parse.urlencode({'username': READER})}", admin)
-    if status != 200 or not isinstance(listing, dict):
-        raise StepFailed(f"the registry answered HTTP {status} when the roles of {READER} were listed")
-    roles = [role for role in listing.get("roles") or [] if isinstance(role, dict)]
+    roles = reader_roles(client, registry, admin)
     refuse_roles_other_than_its_own(client, registry, admin, roles, user_id)
     if permissions.get("is_admin") is True:
         status, _ = client.call("PATCH", f"{registry}/api/2.0/mlflow/users/update-admin", admin, {"username": READER, "is_admin": False})
@@ -231,9 +249,11 @@ def main(argv: list[str], env: Mapping[str, str] | None = None, http: Http = htt
         administrator = read_parameter(ssm, environment.get("ADMIN_PARAMETER", ADMIN_PARAMETER))
         if not administrator:
             raise StepFailed("the administrator password of the registry cannot be read from its parameter")
+        admin = basic(ADMIN_USER, administrator)
+        refuse_an_existing_reader_with_other_roles(client, registry, admin)
         stored, created = stored_reader_login(ssm, environment.get("READER_PARAMETER", READER_PARAMETER))
         changed = ([f"parameter {environment.get('READER_PARAMETER', READER_PARAMETER)} created"] if created else []) + ensure_reader(
-            client, registry, basic(ADMIN_USER, administrator), stored
+            client, registry, admin, stored
         )
     except StepFailed as error:
         sys.stderr.write(f"mlflow_reader_setup: {error}\n")

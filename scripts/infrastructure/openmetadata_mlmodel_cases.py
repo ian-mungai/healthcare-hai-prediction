@@ -991,17 +991,22 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
     every = ("registered_model", "experiment", "logged_model")
     login = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"})
 
-    def refused(label: str, registry: Registry, *said: str, announced: bool = True) -> None:
-        before = dict(registry.rows)
-        code, out, err = run_setup(registry, FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}))
+    def refused(label: str, registry: Registry, *said: str, announced: bool = True, parameters: FakeParameters | None = None) -> None:
+        """The setup stops with exit 1 and has written nothing: no registry mutation of any kind (user, password, administrator flag, grant, role), no
+        Parameter Store put, the reader's password and the parameter as they were."""
+        ssm = FakeParameters(**{READER_PARAMETER: "Synthetic-Stored-1!"}) if parameters is None else parameters
+        before = (dict(registry.rows), registry.reader_login, registry.administrator, dict(ssm.values))
+        code, out, err = run_setup(registry, ssm)
         require(code == 1 and all(text in err for text in said), (label, code, err))
-        require(registry.rows == before, f"{label}: the grant of the other holder is intact")
+        require(registry.rows == before[0], f"{label}: the grant of the other holder is intact")
         require(
-            not any(call[0] in ("DELETE", "PATCH") or call[1].endswith("/permissions/grant") for call in registry.calls),
-            f"{label}: nothing is changed: {registry.calls}",
+            not any(call[0] in ("POST", "PATCH", "DELETE") for call in registry.calls),
+            f"{label}: no write of any kind reached the registry: {[call for call in registry.calls if call[0] != 'GET']}",
         )
+        require(registry.reader_login == before[1] and registry.administrator == before[2], f"{label}: the reader's password and rights are as they were")
+        require(not ssm.puts and ssm.values == before[3], f"{label}: nothing was written to Parameter Store")
         require(not announced or "Nothing was changed" in err, f"{label}: the owner is told nothing was changed: {err}")
-        values_absent(login, out, err)
+        values_absent(ssm, out, err)
 
     # Another user's synthetic role, borrowed by an assignment, with an EDIT grant of that user, while the reader is also an administrator.
     borrowed = Registry(
@@ -1013,6 +1018,14 @@ def the_setup_removes_only_grants_of_the_readers_own_role_and_refuses_any_other_
     )
     refused("borrowed synthetic role", borrowed, "__user_3__", 'DELETE /api/3.0/mlflow/roles/unassign {"username": "metadata_reader", "role_id": 3}')
     require(borrowed.administrator, "the administrator flag is untouched while the setup refuses")
+    # The same borrowed role with the two repairs that used to run first: a password that differs from the stored one, and no stored parameter at all.
+    mismatch = Registry(reader_login="Synthetic-Old-1!", grants=every, extra={("experiment", "7"): ("EDIT", "__user_3__")}, other_users={3: "other_user"})
+    refused("borrowed role and a password mismatch", mismatch, "__user_3__", "roles/unassign")
+    require(mismatch.reader_login == "Synthetic-Old-1!", "the old login still works after the refusal")
+    absent = Registry(reader_login="Synthetic-Old-1!", grants=every, extra={("experiment", "7"): ("EDIT", "__user_3__")}, other_users={3: "other_user"})
+    no_parameter = FakeParameters()
+    refused("borrowed role and no stored parameter", absent, "__user_3__", "roles/unassign", parameters=no_parameter)
+    require(READER_PARAMETER not in no_parameter.values and not no_parameter.puts, "the reader parameter was not created")
     # A shared role, with a read-only grant: any other role of the reader is refused, whatever it grants.
     refused(
         "shared role with READ only",
