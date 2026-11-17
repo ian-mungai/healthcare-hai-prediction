@@ -185,12 +185,6 @@ def fetch(request: AliasRequest, limit: float) -> tuple[urllib.error.HTTPError |
             return error, body_of(error) if error.code in {400, 404} else b""
 
 
-def read_alias(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> str | None:
-    """Return the version number the alias names, or None when MLflow answers that the model or the alias does not exist. Raise AliasReadError otherwise."""
-    found = read_version(uri, model, alias, username, password, timeout)
-    return None if found is None else found[0]
-
-
 def read_version(uri: str, model: str, alias: str, username: str, password: str, timeout: float | None = None) -> tuple[str, dict[str, str]] | None:
     """Return the version number the alias names and the tags of that version from the same answer, or None when the model or the alias does not exist.
 

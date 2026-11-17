@@ -35,7 +35,6 @@ OWNER_POLICY = REPO / "infra" / "iam" / "owner_policies" / "openmetadata_catalog
 DAG_FILE = REPO / "dags" / "metadata_ingest_dag.py"
 ADMIN_VALUE = "Synthetic-Admin-1!"
 BEARER_VALUE = "synthetic.jwt.token"
-CLIENT = ("synthetic-client-id", "synthetic-client-secret")
 MUTANTS: dict[str, Callable[[dict[str, Any]], None]] = {
     "profiler pipeline type": lambda c: c["source"]["sourceConfig"]["config"].update(type="Profiler"),
     "sample data on": lambda c: c["source"]["sourceConfig"]["config"].update(generateSampleData=True),

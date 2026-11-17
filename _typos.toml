@@ -28,7 +28,6 @@ extend-glob = [
   "_facts_hospital__models.yml",
   "run_staging_e2e.py",
   "state_columns.sql",
-  "build_rev3.py",
   "extract_cross_source_keys.py",
 ]
 extend-words = { wht = "wht", othr = "othr", nd = "nd", pn = "pn", alos = "alos", ther = "ther" }
@@ -52,7 +51,6 @@ extend-glob = [
   "repo_checks.py",
   "ipps_file_labels.py",
   "int_occmix_file_rows.sql",
-  "build_successor.py",
 ]
 extend-words = { ane = "ane", propsed = "propsed", delet = "delet", ser = "ser" }
 
