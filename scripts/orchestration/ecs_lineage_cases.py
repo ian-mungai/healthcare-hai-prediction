@@ -698,7 +698,7 @@ def unreadable_output_record() -> None:
 
 
 OPENMETADATA_REFUSAL = json.dumps({"code": 400, "message": "Invalid request format"}).encode()
-JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z")
+JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z")
 
 
 def stored_millis(text: str) -> tuple[int, int] | None:
@@ -706,11 +706,17 @@ def stored_millis(text: str) -> tuple[int, int] | None:
     time with ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")`` (JsonUtils.java, 2.0.7-release, line 121), after padding a bare-second time with
     ``.000000``. That format takes the digits after the point as one whole number of milliseconds, whatever their count: ``.123`` is 123 ms (meant),
     ``.123456`` is 123456 ms (2 min 3.456 s later than meant) and ``.1`` is 1 ms (not the 100 ms meant). Only a ``Z`` zone is read, so a numeric offset is
-    refused. ``meant`` is the instant the text says, cut to whole milliseconds."""
+    refused. ``meant`` is the instant the text says, cut to whole milliseconds.
+    Where Java and this model could differ, the stand-in refuses instead of guessing: a fraction of ten or more digits (Java narrows it to an int and can
+    wrap) and calendar fields out of range (Java's lenient calendar rolls them over) both return None."""
     found = JAVA_TIME.fullmatch(text)
     if found is None:
         return None
     year, month, day, hour, minute, second = (int(part) for part in found.groups()[:6])
+    try:
+        datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
     seconds = calendar.timegm((year, month, day, hour, minute, second)) * 1000
     digits = found.group(7) or ""
     return seconds + (int(digits) if digits else 0), seconds + int(digits.ljust(3, "0")[:3])
@@ -1102,7 +1108,18 @@ def stand_in_stores_time_as_openmetadata_does() -> None:
         status, body = resolve({**plain, "eventTime": text}, set())
         require(stored_millis(text) == (stored, meant), f"{text} is stored as {stored_millis(text)}, not {(stored, meant)}")
         require(status == 400 and f"stored as {stored} ms" in body["message"], f"{text} is not refused as a wrong instant: {status} {body}")
-    for text in ("2026-11-04T10:00:00+00:00", "2026-11-04T10:00:00.123+00:00", "2026-11-04T10:00:00", "2026-11-04", "not a time", ""):
+    for text in (
+        "2026-11-04T10:00:00+00:00",
+        "2026-11-04T10:00:00.123+00:00",
+        "2026-11-04T10:00:00",
+        "2026-11-04",
+        "not a time",
+        "",
+        "2026-11-04T10:00:00.2147483648Z",
+        "2026-13-04T10:00:00Z",
+        "2026-11-31T10:00:00Z",
+        "2026-11-04T24:00:00Z",
+    ):
         require(resolve({**plain, "eventTime": text}, set()) == (400, json.loads(OPENMETADATA_REFUSAL)), f"{text!r} is not refused as OpenMetadata refuses it")
     require(resolve(plain, set())[0] == 400, "an event with no time is refused")
 

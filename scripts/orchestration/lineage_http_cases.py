@@ -59,18 +59,24 @@ TIME_CASES = [
     ("2026-11-16T19:31:22.123456Z", "2026-11-16T19:31:22.123Z", 123),
     ("2026-11-16T19:31:22.123456789Z", "2026-11-16T19:31:22.123Z", 123),
 ]
-JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z")
+JAVA_TIME = re.compile(r"(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,9}))?Z")
 
 
 def stored_millis(text: str) -> int | None:
     """The epoch milliseconds OpenMetadata 2.0.7 stores for an eventTime, or None when it refuses the text. Its mapper reads a time with
     ``SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'")`` (JsonUtils.java, 2.0.7-release, line 121) after padding a bare-second time with ``.000000``. That
     format takes the digits after the point as one whole number of milliseconds, so ``.123`` is 123 ms and ``.123456`` is 123456 ms. Only ``Z`` is read.
-    The same rule is in ``scripts/orchestration/ecs_lineage_cases.py`` (this file runs in the Airflow image, where that module does not import)."""
+    The same rule is in ``scripts/orchestration/ecs_lineage_cases.py`` (this file runs in the Airflow image, where that module does not import).
+    Where Java and this model could differ, the stand-in refuses instead of guessing: a fraction of ten or more digits (Java narrows it to an int and can
+    wrap) and calendar fields out of range (Java's lenient calendar rolls them over) both return None."""
     found = JAVA_TIME.fullmatch(text)
     if found is None:
         return None
     year, month, day, hour, minute, second = (int(part) for part in found.groups()[:6])
+    try:
+        datetime(year, month, day, hour, minute, second)
+    except ValueError:
+        return None
     seconds = calendar.timegm((year, month, day, hour, minute, second))
     return seconds * 1000 + int(found.group(7) or 0)
 
