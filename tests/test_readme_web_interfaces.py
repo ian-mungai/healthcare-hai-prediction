@@ -8,8 +8,10 @@ the Terraform as text and compares:
   the path the container health check calls on that port, or "None" when it calls none.
 - The ports of the rows, of the forward documents and of the commands are the same set, and each command names the document that fixes its port.
 - No document forwards a port of ``infra/services`` that has no row, so a port without a web page cannot be forwarded.
-- Each switch is a declared variable that gates its service in ``main.tf`` and defaults to off.
-- The project policy names exactly the documents of the Terraform and the older catalog document, and not the generic AWS port forward document.
+- Each row names the switch that gates its service in ``main.tf``, and that switch defaults to off. A row listed twice is reported.
+- Each command names its document, the local port, ``--profile <AWS_PROFILE>`` and ``--region <AWS_REGION>``.
+- The project policy allows exactly the documents the README names: the commands and each older document that the README names as an exception. The
+  Terraform defines each older document, and its fixed port has a row in the table.
 
 It does not read a bind address from the Terraform. Ports opened by a process inside a container without a port mapping, except the OpenSearch one, are not
 visible to it.
@@ -30,10 +32,10 @@ POLICIES = ROOT / "infra" / "iam" / "policies"
 SECTION = "## Web interfaces"
 UI_HEADER = ("Service", "Container", "Port", "Web interface", "Health path", "Terraform switch")
 GENERIC_DOCUMENT = "AWS-StartPortForwardingSession"
-# The document of the on-demand catalog task is older than the web page documents and stays in the policy beside them.
-OLDER_DOCUMENTS = {"catalog"}
+CATALOG_FORWARD = ROOT / "infra" / "iam" / "openmetadata.tf"
 COMMAND = re.compile(
-    r"^\s*aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_(\w+)_forward_<ENVIRONMENT> --parameters localPortNumber=(\d+)$",
+    r"^\s*aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_(\w+)_forward_<ENVIRONMENT>"
+    r" --parameters localPortNumber=(\d+) --profile <AWS_PROFILE> --region <AWS_REGION>$",
     re.MULTILINE,
 )
 LOCAL_NUMBER = re.compile(r"^\s*(\w+)\s*=\s*(\d+)\s*$", re.MULTILINE)
@@ -135,6 +137,20 @@ def forward_documents() -> dict[str, int]:
     return documents
 
 
+def older_documents() -> dict[str, int]:
+    """The key and fixed host port of each older forward document that is not in the ``web_ui_forwards`` map: the on-demand catalog task's."""
+    text = CATALOG_FORWARD.read_text()
+    found: dict[str, int] = {}
+    for name, body in re.findall(
+        r'resource "aws_ssm_document" "\w+" \{(?=.*?name\s*=\s*format\(local\.platform_name, "(\w+)_forward"\))(.*?)\n\}\n', text, re.DOTALL
+    ):
+        port = re.search(r'properties = \{.*?portNumber\s*=\s*"(\d+)"', body, re.DOTALL)
+        check(port is not None, f"the older forward document {name} has no fixed port")
+        if port:
+            found[name] = int(port.group(1))
+    return found
+
+
 def policy_documents() -> set[str]:
     """The keys of the forward documents the project policy allows, and the generic document if it names it."""
     text = (POLICIES / "healthcare_hai_prediction_ssmforward_policy.json").read_text()
@@ -161,6 +177,18 @@ def variable_default(name: str, texts: dict[str, str]) -> str | None:
     return None
 
 
+def switch_problems(service: str, switch: str, service_keys: set[str], gates: dict[str, str], texts: dict[str, str]) -> list[str]:
+    """What is wrong with the switch that one table row names for its service."""
+    if service not in service_keys:
+        return [f"{service}: main.tf has no such service"]
+    if service not in gates:
+        return [] if switch == "None" else [f"{service}: it has no gate in main.tf, so its switch must be None"]
+    found = [f"{service}: the table names switch {switch} but main.tf gates it with {gates[service]}"] if switch != gates[service] else []
+    if variable_default(switch, texts) != "false":
+        found.append(f"{service}: the switch {switch} must default to false")
+    return found
+
+
 def problems(readme: str) -> list[str]:
     """Every difference between the README and the code, as messages."""
     section = readme_section(readme)
@@ -170,16 +198,21 @@ def problems(readme: str) -> list[str]:
     listeners, owners = terraform_listeners(texts)
     found: list[str] = []
 
+    service_keys = set(owners.values())
+    gates = switch_gates(texts["main.tf"])
     rows = table(section, UI_HEADER)
     ui_ports: set[int] = set()
-    switches: dict[str, str] = {}
-    for service, container, port_cell, _page, health, switch in rows:
+    seen: set[tuple[str, str, int, str]] = set()
+    for service, container, port_cell, _page, health, switch_cell in rows:
         if not port_cell.isdigit():
             found.append(f"port cell {port_cell!r} of {container} is not a number")
             continue
         key = (service.strip("`"), container.strip("`"), int(port_cell), "tcp")
+        if key in seen:
+            found.append(f"{key}: the row is listed twice")
+        seen.add(key)
         ui_ports.add(key[2])
-        switches[key[0]] = switch.strip("`")
+        found += switch_problems(key[0], switch_cell.strip("`"), service_keys, gates, texts)
         if key not in listeners:
             found.append(f"the web interface table has {key} but the Terraform declares no such port")
             continue
@@ -193,7 +226,13 @@ def problems(readme: str) -> list[str]:
             found.append(f"{key}: the table says no health path but the health check calls {called}")
 
     documents = forward_documents()
-    commands = {key: int(port) for key, port in COMMAND.findall(section)}
+    for line in re.findall(r"^\s*(aws ssm start-session\b.*)$", section, re.MULTILINE):
+        if COMMAND.fullmatch(line) is None:
+            found.append(f"the command {line!r} must end with --profile <AWS_PROFILE> --region <AWS_REGION> after the local port")
+    command_list = COMMAND.findall(section)
+    commands = {key: int(port) for key, port in command_list}
+    if len(command_list) != len(commands):
+        found.append(f"a forward command is listed twice: {sorted(key for key, _ in command_list if [item[0] for item in command_list].count(key) > 1)}")
     if ui_ports != set(documents.values()):
         found.append(f"the table ports {sorted(ui_ports)} differ from the forward document ports {sorted(set(documents.values()))}")
     if commands != documents:
@@ -202,30 +241,31 @@ def problems(readme: str) -> list[str]:
     for document, port in sorted(documents.items()):
         if port in internal:
             found.append(f"the document {document} forwards port {port}, which is a service port without a web page")
+    named = set(re.findall(r"<PROJECT_NAME>_(\w+)_forward_<ENVIRONMENT>", section))
+    older = older_documents()
+    if named - set(documents) != set(older):
+        found.append(f"the README names the older documents {sorted(named - set(documents))} but the Terraform defines {sorted(older)}")
+    for document, port in sorted(older.items()):
+        if port not in ui_ports:
+            found.append(f"the older document {document} forwards port {port}, which has no row in the web interface table")
     allowed = policy_documents()
-    if allowed != set(documents) | OLDER_DOCUMENTS:
-        found.append(f"the project policy allows the documents {sorted(allowed)} but the Terraform defines {sorted(documents)} and {sorted(OLDER_DOCUMENTS)}")
+    if allowed != named:
+        found.append(f"the project policy allows the documents {sorted(allowed)} but the README names {sorted(named)}")
     if GENERIC_DOCUMENT in section:
         found.append(f"the README names the generic document {GENERIC_DOCUMENT}, which the project user may not start")
-
-    service_keys = set(owners.values())
-    gates = switch_gates(texts["main.tf"])
-    for service, switch in switches.items():
-        if service not in service_keys:
-            found.append(f"{service}: main.tf has no such service")
-        elif service in gates:
-            if switch != gates[service]:
-                found.append(f"{service}: the table names switch {switch} but main.tf gates it with {gates[service]}")
-            if variable_default(switch, texts) != "false":
-                found.append(f"{service}: the switch {switch} must default to false")
-        elif switch != "None":
-            found.append(f"{service}: it has no gate in main.tf, so its switch must be None")
     return found
 
 
 def test_the_readme_web_interfaces_match_the_terraform_the_documents_and_the_policy() -> None:
     differences = problems((ROOT / "README.md").read_text())
     check(not differences, "README.md differs from the code:\n" + "\n".join(differences))
+
+
+AIRFLOW_COMMAND = (
+    "aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_airflow_forward_<ENVIRONMENT> --parameters localPortNumber=8080"
+    " --profile <AWS_PROFILE> --region <AWS_REGION>"
+)
+GRAFANA_ROW = "| `monitoring` | `grafana` | 3001 | Grafana dashboards | `/api/health` | `monitoring_enabled` |"
 
 
 def planted(readme: str, old: str, new: str) -> str:
@@ -249,6 +289,35 @@ def test_a_wrong_port_a_missing_row_or_command_and_a_generic_document_are_caught
         ),
         "a command with another local port": (planted(readme, "localPortNumber=9090", "localPortNumber=9091"), "forward commands"),
         "a missing command": (re.sub(r"(?m)^\s*aws ssm start-session .*_prometheus_forward_.*\n", "", readme), "forward commands"),
+        "a command without the profile": (
+            planted(
+                readme,
+                " --profile <AWS_PROFILE>",
+                "",
+            ),
+            "must end with --profile",
+        ),
+        "a command without the region": (planted(readme, " --region <AWS_REGION>", ""), "must end with --profile"),
+        "a wrong switch on the Grafana row only": (
+            planted(readme, "| Grafana dashboards | `/api/health` | `monitoring_enabled` |", "| Grafana dashboards | `/api/health` | `monitoring_wrong` |"),
+            "table names switch",
+        ),
+        "a wrong switch on the Prometheus row only": (
+            planted(readme, "| Prometheus query page | `/-/healthy` | `monitoring_enabled` |", "| Prometheus query page | `/-/healthy` | `monitoring_wrong` |"),
+            "table names switch",
+        ),
+        "a command listed twice": (
+            planted(readme, AIRFLOW_COMMAND, AIRFLOW_COMMAND + "\n   " + AIRFLOW_COMMAND),
+            "listed twice",
+        ),
+        "a row listed twice": (
+            planted(readme, GRAFANA_ROW, GRAFANA_ROW + "\n" + GRAFANA_ROW),
+            "listed twice",
+        ),
+        "the older catalog document missing from the text": (
+            planted(readme, "<PROJECT_NAME>_catalog_forward_<ENVIRONMENT>", "<PROJECT_NAME>_catalogue_forward_<ENVIRONMENT>"),
+            "project policy allows",
+        ),
         "the generic document in the text": (readme + f"\n{GENERIC_DOCUMENT}\n" if SECTION in readme else readme, "generic document"),
     }
     for name, (text, expected) in cases.items():

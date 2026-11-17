@@ -57,7 +57,7 @@ Install the push gate once with `.venv/bin/python -m scripts.quality.pre_push in
 
 ## Web interfaces
 
-Six services have a web interface. You open each one from your Mac through its own Session Manager document, which fixes the host port and takes only the local port as a parameter. No other port of the host is reachable from the Mac. Every other service is internal. Session Manager refuses any document that is not listed here. Terraform declares the services in `infra/services/` and the documents in `infra/iam/`. `tests/test_readme_web_interfaces.py` fails when this section differs from that code or from the project policy.
+Six services have a web interface. You open each one from your Mac through its own Session Manager document, which fixes the host port and takes only the local port as a parameter. No other port of the host is reachable from the Mac. Every other service is internal. Session Manager refuses every other document, except the older `<PROJECT_NAME>_catalog_forward_<ENVIRONMENT>` document of the on-demand catalog task, which forwards only port 8585 and exists only while that task is prepared. Terraform declares the services in `infra/services/` and the documents in `infra/iam/`. `tests/test_readme_web_interfaces.py` fails when this section differs from that code or from the project policy.
 
 An optional service runs only while its Terraform switch is on. Every switch defaults to off. Its document exists only while the service is prepared. Airflow always runs, so it has no switch.
 
@@ -72,7 +72,7 @@ An optional service runs only while its Terraform switch is on. Every switch def
 
 ### Open a web interface from your Mac
 
-Replace `<HOST_INSTANCE_ID>` with the instance ID of the host (the instance tagged `Name` `<PROJECT_NAME>_host_<ENVIRONMENT>`). Use the project profile from `.env`.
+Replace `<HOST_INSTANCE_ID>` with the instance ID of the host (the instance tagged `Name` `<PROJECT_NAME>_host_<ENVIRONMENT>`). Replace `<AWS_PROFILE>`, `<AWS_REGION>`, `<PROJECT_NAME>` and `<ENVIRONMENT>` with the values of the same names in `.env`.
 
 1. Start the host:
 
@@ -83,12 +83,12 @@ Replace `<HOST_INSTANCE_ID>` with the instance ID of the host (the instance tagg
 2. Run the command of the interface you need and keep it running. The local port is the one the browser uses. Pick another number when a local service already holds it:
 
    ```sh
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_airflow_forward_<ENVIRONMENT> --parameters localPortNumber=8080
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_openmetadata_forward_<ENVIRONMENT> --parameters localPortNumber=8585
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_mlflow_forward_<ENVIRONMENT> --parameters localPortNumber=5100
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_streamlit_forward_<ENVIRONMENT> --parameters localPortNumber=8501
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_grafana_forward_<ENVIRONMENT> --parameters localPortNumber=3001
-   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_prometheus_forward_<ENVIRONMENT> --parameters localPortNumber=9090
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_airflow_forward_<ENVIRONMENT> --parameters localPortNumber=8080 --profile <AWS_PROFILE> --region <AWS_REGION>
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_openmetadata_forward_<ENVIRONMENT> --parameters localPortNumber=8585 --profile <AWS_PROFILE> --region <AWS_REGION>
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_mlflow_forward_<ENVIRONMENT> --parameters localPortNumber=5100 --profile <AWS_PROFILE> --region <AWS_REGION>
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_streamlit_forward_<ENVIRONMENT> --parameters localPortNumber=8501 --profile <AWS_PROFILE> --region <AWS_REGION>
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_grafana_forward_<ENVIRONMENT> --parameters localPortNumber=3001 --profile <AWS_PROFILE> --region <AWS_REGION>
+   aws ssm start-session --target <HOST_INSTANCE_ID> --document-name <PROJECT_NAME>_prometheus_forward_<ENVIRONMENT> --parameters localPortNumber=9090 --profile <AWS_PROFILE> --region <AWS_REGION>
    ```
 
 3. Open `http://127.0.0.1:<LOCAL_PORT>` in a browser. A health path answers at `http://127.0.0.1:<LOCAL_PORT><PATH>`.
