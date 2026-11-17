@@ -132,6 +132,16 @@
           "hold_key"
         ]
       },
+      "int_hcai_finance_values": {
+        "merge_key": [
+          "finance_row_key"
+        ]
+      },
+      "int_hcai_util_facility_periods": {
+        "merge_key": [
+          "util_row_key"
+        ]
+      },
       "int_hgi_hospital_releases": {
         "merge_key": [
           "release_key"
@@ -178,6 +188,11 @@
       "int_hud_zip_county_quarters": {
         "merge_key": [
           "hud_row_key"
+        ]
+      },
+      "int_illinois_report_card_values": {
+        "merge_key": [
+          "il_row_key"
         ]
       },
       "int_impact_file_layouts": {
@@ -289,6 +304,11 @@
       "int_silver_build_marker": {
         "merge_key": [
           "dbt_invocation_id"
+        ]
+      },
+      "int_state_source_holds": {
+        "merge_key": [
+          "hold_key"
         ]
       },
       "int_svi_county_values": {
@@ -673,6 +693,24 @@
           "_row_number"
         ]
       },
+      "stg_hcai_finance_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hcai_util_nonresponse_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_hcai_util_pages_csv": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
       "stg_hhs_capacity_csv": {
         "merge_key": [
           "_member_sha256",
@@ -698,6 +736,12 @@
         ]
       },
       "stg_hud_zip_county_sheet_rows": {
+        "merge_key": [
+          "_member_sha256",
+          "_row_number"
+        ]
+      },
+      "stg_illinois_report_card_csv": {
         "merge_key": [
           "_member_sha256",
           "_row_number"

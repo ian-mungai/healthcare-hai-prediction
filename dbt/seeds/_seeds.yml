@@ -1280,3 +1280,64 @@ seeds:
       - name: evidence
         description: Why the year is right.
         data_tests: [not_null]
+
+  - name: state_county_names
+    description: >
+      The counties of California and Illinois with their 5-digit FIPS codes and Census names, for the state sources that publish a county name and no
+      code (HCAI utilization and the Illinois Hospital Report Card). A county code is the state code and the county's three digits; the counties of
+      both states are numbered in name order, odd numbers only. The real build checks each row against the USDA continuum code list
+      (assert_state_county_names_match_rucc).
+    config:
+      column_types:
+        state: varchar
+        county_fips: varchar
+        county_name: varchar
+    columns:
+      - name: state
+        description: The USPS code of the county's state, CA or IL.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [CA, IL]
+      - name: county_fips
+        description: The 5-digit county FIPS code.
+        data_tests: [unique, not_null]
+      - name: county_name
+        description: The Census county name, with the word County.
+        data_tests: [not_null]
+
+  - name: state_facility_ccn_matches
+    description: >
+      The reviewed matches from a state source's own facility number to a CMS Certification Number. The sources carry no CCN and no other source
+      carries their facility numbers, so a match needs the owner's review of name, address and ZIP; the committed file holds the header only until a
+      match is reviewed. A matched facility keeps its published number and gains the CCN with ccn_source reviewed_match. Same rule as
+      hhs_reviewed_ccn_matches.
+    config:
+      column_types:
+        source_id: varchar
+        facility_key: varchar
+        ccn: varchar
+        evidence: varchar
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: state_facility_ccn_matches_unique_facility
+          arguments:
+            combination_of_columns: [source_id, facility_key]
+    columns:
+      - name: source_id
+        description: The registry source, HCAI_UTIL or IL.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [HCAI_UTIL, IL]
+      - name: facility_key
+        description: The facility number as the source publishes it (fac_no for HCAI utilization, entity_id for Illinois).
+        data_tests: [not_null]
+      - name: ccn
+        description: The six-character CMS Certification Number.
+        data_tests: [not_null]
+      - name: evidence
+        description: Why the match is right.
+        data_tests: [not_null]

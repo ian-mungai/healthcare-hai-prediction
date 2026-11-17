@@ -59,6 +59,10 @@ vars:
     hhs_capacity_csv: hhs_capacity
     onc_pi_attestations_csv: onc_pi
     onc_pi_chpl_linkage_csv: onc_pi
+    hcai_finance_csv: state_sources
+    hcai_util_pages_csv: state_sources
+    hcai_util_nonresponse_csv: state_sources
+    illinois_report_card_csv: state_sources
     hud_zip_county: geography
     hud_zip_county_sheet_rows: geography
     county_adjacency: geography

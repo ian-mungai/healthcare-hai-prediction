@@ -1529,3 +1529,239 @@ models:
       - name: pins_json
         description: The text of the run's pins.json; its SHA-256 is bronze_pins_sha256.
         data_tests: [not_null]
+
+  - name: int_hcai_finance_values
+    description: >
+      One row per California HCAI financial-disclosure value: facility (OSHPD number), report period end, page.column.line and stored release.
+      Grain: finance_row_key (file checksum and source row). The published text is kept beside the typed number; a redacted cell is flagged. The stored copy is
+      the privacy-filtered derivative, so no person cell reaches this model. The meaning and unit of a line come from the HCAI data dictionary in bronze.
+      Rows that cannot be keyed are held in int_state_source_holds. Only the newest release of a key has is_latest_release.
+    meta:
+      classification: Public
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: int_hcai_finance_values_unique_latest_grain
+          arguments:
+            combination_of_columns: [facility_id, report_period_end, page_column_line]
+          config:
+            where: is_latest_release
+    columns:
+      - name: finance_row_key
+        description: File checksum and source row number, the model's key.
+        data_tests: [unique, not_null]
+      - name: member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: source_row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: facility_id
+        description: The 9-digit OSHPD facility number as published.
+        data_tests: [not_null]
+      - name: report_period_end
+        description: The report period end (RPE), parsed from MM/DD/YYYY.
+        data_tests: [not_null]
+      - name: page_column_line
+        description: The disclosure page, column and line as published, for example 1.2.3.
+        data_tests: [not_null]
+      - name: page_number
+        description: The page of the line.
+        data_tests: [not_null]
+      - name: column_number
+        description: The column of the line.
+        data_tests: [not_null]
+      - name: line_number
+        description: The line number.
+        data_tests: [not_null]
+      - name: value_published
+        description: The published value text; null when blank.
+      - name: value_number
+        description: The value as a number when it is a plain number once thousands separators are removed; otherwise null.
+      - name: is_redacted
+        description: True when the published value is the redaction mark.
+        data_tests: [not_null]
+      - name: publication_date
+        description: The release date of the file; null when the release label is no date.
+      - name: is_latest_release
+        description: True for the row of the newest release (publication date, then download run) of the facility, period end and line.
+        data_tests: [not_null]
+
+  - name: int_hcai_util_facility_periods
+    description: >
+      One row per California HCAI utilization report of a facility for an operating period, from the page files (responded) and the non-response files
+      (nonresponse). Grain: util_row_key (file checksum and source row); the latest release of a facility, period begin, period end and response status
+      is unique. The numbers are typed from the columns of hcai_util_numeric_columns() with the published text of every value that did not type kept in
+      nulled_values_published. The administrator and report preparer names, the phone, the street address and the parent corporation are never read.
+      County code by county name (state_county_names seed); CCN only from the reviewed matches seed (ccn_source reviewed_match).
+    meta:
+      classification: Public
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: int_hcai_util_facility_periods_unique_latest_grain
+          arguments:
+            combination_of_columns: [fac_no, period_begin_date, period_end_date, response_status]
+          config:
+            where: is_latest_release
+    columns:
+      - name: util_row_key
+        description: File checksum and source row number, the model's key.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table of the row, hcai_util_pages_csv or hcai_util_nonresponse_csv.
+        data_tests: [not_null]
+      - name: response_status
+        description: responded for a page file row, nonresponse for a non-response file row.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [responded, nonresponse]
+      - name: member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: source_row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: fac_no
+        description: The 9-digit HCAI facility number as published.
+        data_tests: [not_null]
+      - name: zip_code
+        description: The 5-digit ZIP code of the facility; null when the published value is no ZIP code.
+      - name: county_name_published
+        description: The county name as published.
+      - name: county_fips
+        description: The 5-digit county code found from the county name in California, or null (method in county_source).
+      - name: county_source
+        description: name_match when exactly one California county has the published name, otherwise not_matched.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [name_match, not_matched]
+      - name: period_begin_date
+        description: The first day of the operating period, parsed from MM/DD/YYYY.
+        data_tests: [not_null]
+      - name: period_end_date
+        description: The last day of the operating period.
+        data_tests: [not_null]
+      - name: report_year
+        description: The calendar year of the period end.
+        data_tests: [not_null]
+      - name: nulled_values_published
+        description: JSON object from column name to the published text of every non-blank value that did not type, '{}' when none.
+        data_tests: [not_null]
+      - name: ccn
+        description: The CMS Certification Number of a reviewed match; null otherwise.
+      - name: ccn_source
+        description: reviewed_match when the CCN comes from the state_facility_ccn_matches seed, otherwise null.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [reviewed_match]
+      - name: publication_date
+        description: The release date of the file; null when the release label is no date.
+      - name: is_latest_release
+        description: True for the row of the newest release (publication date, then download run) of the facility, period and response status.
+        data_tests: [not_null]
+
+  - name: int_illinois_report_card_values
+    description: >
+      One row per Illinois Hospital Report Card value: entity, measure, period and stored release. Grain: il_row_key (file checksum and source row); the
+      latest release of an entity, measure, period start and period end is unique. The value, numerator and denominator keep their published text beside the
+      typed number. County code by county name (state_county_names seed); CCN only from the reviewed matches seed. The measure description, rationale and
+      evidence texts stay in bronze. State context and validation only, never a predictor.
+    meta:
+      classification: Public
+    data_tests:
+      - dbt_utils.unique_combination_of_columns:
+          name: int_illinois_report_card_values_unique_latest_grain
+          arguments:
+            combination_of_columns: [entity_id, measure_id, period_start, period_end]
+          config:
+            where: is_latest_release
+    columns:
+      - name: il_row_key
+        description: File checksum and source row number, the model's key.
+        data_tests: [unique, not_null]
+      - name: member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: source_row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: entity_id
+        description: The report card's hospital number as published.
+        data_tests: [not_null]
+      - name: measure_id
+        description: The report card measure number as published.
+        data_tests: [not_null]
+      - name: period_start
+        description: The first day of the measure period.
+        data_tests: [not_null]
+      - name: period_end
+        description: The last day of the measure period.
+        data_tests: [not_null]
+      - name: default_unit
+        description: The unit the publisher gives the measure (for example per 1,000); the value is not converted.
+      - name: value_published
+        description: The published value text; null when blank.
+      - name: value_number
+        description: The value as a number when it is a plain number once thousands separators are removed; otherwise null.
+      - name: numerator_published
+        description: The published numerator text; null when blank.
+      - name: numerator
+        description: The numerator as a number.
+      - name: denominator_published
+        description: The published denominator text; null when blank.
+      - name: denominator
+        description: The denominator as a number.
+      - name: county_fips
+        description: The 5-digit county code found from the county name in Illinois, or null (method in county_source).
+      - name: county_source
+        description: name_match when exactly one Illinois county has the published name, otherwise not_matched.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [name_match, not_matched]
+      - name: ccn
+        description: The CMS Certification Number of a reviewed match; null otherwise.
+      - name: ccn_source
+        description: reviewed_match when the CCN comes from the state_facility_ccn_matches seed, otherwise null.
+        data_tests:
+          - accepted_values:
+              arguments:
+                values: [reviewed_match]
+      - name: publication_date
+        description: The release date of the file; null when the release label is no date.
+      - name: is_latest_release
+        description: True for the row of the newest release (publication date, then download run) of the entity, measure and period.
+        data_tests: [not_null]
+
+  - name: int_state_source_holds
+    description: >
+      The state-source rows that cannot be keyed, with the reason. Grain: one row per held file row. The typed state-source models leave these rows out.
+    meta:
+      classification: Public
+    columns:
+      - name: hold_key
+        description: Hash of the bronze table, file checksum and source row number.
+        data_tests: [unique, not_null]
+      - name: bronze_table
+        description: The bronze table of the held row.
+        data_tests: [not_null]
+      - name: member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: source_row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+      - name: hold_reason
+        description: Why the row cannot be keyed.
+        data_tests:
+          - not_null
+          - accepted_values:
+              arguments:
+                values: [facility_not_a_facility_number, period_not_a_date, line_not_page_column_line, entity_not_a_number, measure_not_a_number]
+      - name: facility_published
+        description: The facility, entity or OSHPD number as published; null when blank.

@@ -338,6 +338,62 @@ sources:
           - name: _row_number
             description: Row position within the file, from 1.
             data_tests: [not_null]
+      - name: hcai_finance_csv
+        description: California HCAI annual hospital financial disclosure in long form (facility, period end, page, column and line, value), every stored copy. The stored copy is the privacy-filtered derivative.
+        meta:
+          classification: Public
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: hcai_util_pages_csv
+        description: California HCAI annual hospital utilization, one row per facility and operating period (the page files), every stored copy. Bronze redacts the person cells.
+        meta:
+          classification: Public
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: hcai_util_nonresponse_csv
+        description: California HCAI annual hospital utilization of the facilities that did not respond (the non-response files), every stored copy.
+        meta:
+          classification: Public
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
+      - name: illinois_report_card_csv
+        description: Illinois Hospital Report Card measures in long form (entity, measure and period), every stored copy.
+        meta:
+          classification: Public
+        columns:
+          - name: _object_key
+            description: Hash of the S3 key, version ID and member path; identifies one loaded object.
+            data_tests: [not_null]
+          - name: _member_sha256
+            description: SHA-256 of the file the rows come from.
+            data_tests: [not_null]
+          - name: _row_number
+            description: Row position within the file, from 1.
+            data_tests: [not_null]
       - name: onc_pi_attestations_csv
         description: ONC hospital Medicare and Medicaid EHR incentive attestations, program years 2011 to 2017, every stored copy.
         meta:

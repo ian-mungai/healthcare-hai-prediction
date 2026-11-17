@@ -80,7 +80,7 @@ models:
         data_tests:
           - accepted_values:
               arguments:
-                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi, geography, community]
+                values: [hai, cost_reports, ipps, occupational_mix, provider_of_services, care_compare, hospital_ownership, medicare_inpatient, hhs_capacity, onc_pi, state_sources, geography, community]
       - name: object_key
         description: Hash of the S3 key, version ID and member path (bronze `_object_key`).
         data_tests: [not_null]
@@ -1542,6 +1542,74 @@ models:
     description: >
       Bronze `cms_cc_hvbp_tps` with one copy of each stored file, read from its canonical object (failure mode 522); program years in int_vbp_program_years.
       The data columns pass through as published; lakehouse.bronze_dictionary.cms_cc_hvbp_tps documents them.
+    meta:
+      classification: Public
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hcai_finance_csv
+    description: >
+      Bronze `hcai_finance_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
+      The data columns pass through as published.
+    meta:
+      classification: Public
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hcai_util_pages_csv
+    description: >
+      Bronze `hcai_util_pages_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
+      The data columns pass through as published.
+    meta:
+      classification: Public
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_hcai_util_nonresponse_csv
+    description: >
+      Bronze `hcai_util_nonresponse_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
+      The data columns pass through as published.
+    meta:
+      classification: Public
+    columns:
+      - name: _object_key
+        description: The canonical object the row was read from.
+        data_tests: [not_null]
+      - name: _member_sha256
+        description: SHA-256 of the file the row comes from.
+        data_tests: [not_null]
+      - name: _row_number
+        description: Row position within the file, from 1.
+        data_tests: [not_null]
+
+  - name: stg_illinois_report_card_csv
+    description: >
+      Bronze `illinois_report_card_csv` with one copy of each stored file, read from its canonical object (failure mode 461); typed in the state-source intermediate models.
+      The data columns pass through as published.
     meta:
       classification: Public
     columns:
