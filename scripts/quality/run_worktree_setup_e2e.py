@@ -40,22 +40,29 @@ BINARY = bytes(range(256)) * 1200 + b"\0tail"
 GITIGNORE = ".env\n*.tfvars.json\n.terraform/\n/data/\n/.worktrees/\n/services/orchestration/constraints-3.12.txt\n"
 INFO_EXCLUDE = "/.venv\n/.tools\n"
 LOCK = 'provider "registry.terraform.io/hashicorp/aws" {\n  version     = "6.66.0"\n  constraints = "~> 6.0"\n}\n'
-TERRAFORM = """#!/bin/sh
-printf '%s\\n' "$*" >> "$TERRAFORM_LOG"
+TERRAFORM = r"""#!/bin/sh
+printf '%s\n' "$*" >> "$TERRAFORM_LOG"
 [ "$*" = "$TERRAFORM_EXPECTED" ] || { echo "unexpected terraform arguments: $*" >&2; exit 64; }
 [ "$(pwd -P)" = "$TERRAFORM_CWD" ] || { echo "unexpected working folder: $(pwd -P)" >&2; exit 65; }
 [ "$TERRAFORM_FAIL" = before ] && { echo "Error: the provider cannot be installed" >&2; exit 1; }
 cd "${1#-chdir=}" || exit 66
 mkdir -p .terraform/modules .terraform/providers
-flow='{"Key":"flow","Source":"../services/tests/flow","Dir":"../services/tests/flow"}'
-echo '{"Modules":[{"Key":"","Source":"","Dir":"."},'"$flow"']}' > .terraform/modules/modules.json
+modules=$(awk '
+/^module "/ { n = $2; gsub(/"/, "", n) }
+/^ *source *=/ && n != "" { split($0, a, "\""); printf ",{\"Key\":\"%s\",\"Source\":\"%s\",\"Dir\":\"../services/tests/flow\"}", n, a[2]; n = "" }
+' *.tf)
+manifest='{"Modules":[{"Key":"","Source":"","Dir":"."}'"$modules"']}'
+[ -z "$TERRAFORM_MANIFEST" ] || manifest=$TERRAFORM_MANIFEST
+printf '%s\n' "$manifest" > .terraform/modules/modules.json
 [ "$TERRAFORM_FAIL" = after_modules ] && { echo "Error: provider installation failed" >&2; exit 1; }
-version=$(sed -n 's/^ *version *= *"\\(.*\\)"/\\1/p' .terraform.lock.hcl | head -n 1)
+version=$(sed -n 's/^ *version *= *"\(.*\)"/\1/p' .terraform.lock.hcl | head -n 1)
 plugin=${5#-plugin-dir=}
 for platform in "$plugin"/registry.terraform.io/hashicorp/aws/"$version"/*/; do
+  platform=${platform%/}
   target=.terraform/providers/registry.terraform.io/hashicorp/aws/$version/$(basename "$platform")
-  mkdir -p "$target"
-  cp -p "$platform"* "$target"/
+  mkdir -p "$(dirname "$target")"
+  rm -rf "$target"
+  ln -s "$platform" "$target"
 done
 """
 
@@ -100,7 +107,7 @@ class Scene:
         write(self.main / ".gitignore", ignore)
         write(self.main / "README.md", "tracked\n")
         write(self.main / "infra/jobs/.terraform.lock.hcl", LOCK)
-        write(self.main / "infra/jobs/main.tf", "# jobs\n")
+        write(self.main / "infra/jobs/main.tf", 'module "flow" {\n  source = "../services/tests/flow"\n}\n')
         write(self.main / "infra/services/tests/flow/main.tf", "# flow\n")
         git(self.main, "add", ".gitignore", "README.md", "infra")
         git(self.main, "commit", "--quiet", "-m", "chore: start")
@@ -144,7 +151,14 @@ class Scene:
         git(self.worktree, "update-index", "--add", "--replace", "--cacheinfo", f"100644,{digest},{path}")
 
     def run(
-        self, *extra: str, path: Path | None = None, terraform_mode: str = "", around: Any = None, interrupted_ok: bool = False, expected: str | None = None
+        self,
+        *extra: str,
+        path: Path | None = None,
+        terraform_mode: str = "",
+        around: Any = None,
+        interrupted_ok: bool = False,
+        expected: str | None = None,
+        manifest: str = "",
     ) -> tuple[int, str]:
         """Run the command on the worktree (or ``path``); returns its exit code (-1 after a simulated interruption) and everything it printed."""
         worktree = (path or self.worktree).resolve()
@@ -154,6 +168,7 @@ class Scene:
             "TERRAFORM_FAIL": terraform_mode,
             "TERRAFORM_CWD": str(worktree),
             "TERRAFORM_EXPECTED": expected or self.vector(worktree),
+            "TERRAFORM_MANIFEST": manifest,
         }
         printed = io.StringIO()
         generated = mock.patch.object(worktree_setup, "generated_files", lambda root: self.generated)
@@ -522,10 +537,18 @@ def failed_init_is_retried(scene: Scene) -> list[str]:
 def incomplete_provider_reinitialised(scene: Scene) -> list[str]:
     problems: list[str] = []
     scene.run()
-    provider = scene.worktree / JOBS_PROVIDER
-    for label, damage in (("an empty provider file", lambda: provider.write_bytes(b"")), ("a missing provider file", lambda: provider.unlink())):
+    platform = (scene.worktree / JOBS_PROVIDER).parent
+    expect(problems, platform.is_symlink(), "the stand-in did not link the provider folder the way terraform does")
+
+    def empty_copy() -> None:
+        platform.unlink()
+        platform.mkdir()
+        (platform / PROVIDER_FILE).write_bytes(b"")
+
+    for label, damage in (("an empty provider file", empty_copy), ("a missing provider folder", lambda: platform.unlink())):
         damage()
         code, output = scene.run()
+        provider = scene.worktree / JOBS_PROVIDER
         expect(problems, code == 0 and provider.is_file() and provider.stat().st_size > 0, f"{label}: exit {code}: {output}")
     expect(problems, len(scene.terraform_calls()) == 3, f"terraform calls: {scene.terraform_calls()}")
     return problems
@@ -655,7 +678,7 @@ def link_leaving_the_jobs_cache_blocks_the_init(scene: Scene) -> list[str]:
     cache.mkdir(parents=True)
     (cache / "providers").symlink_to(scene.victim)
     code, output = scene.run()
-    expect(problems, code == 1 and "infra/jobs" in output and "providers" in output and "outside the worktree" in output, f"exit {code}: {output}")
+    expect(problems, code == 1 and "infra/jobs" in output and "providers" in output and "link" in output, f"exit {code}: {output}")
     expect(problems, scene.terraform_calls() == [] and files_below(scene.victim) == [], "terraform ran or wrote through the link")
     return problems
 
@@ -691,6 +714,188 @@ def write_error_is_named_and_leaves_nothing_partial(scene: Scene) -> list[str]:
     expect(
         problems, code == 0 and (scene.worktree / ".env").read_bytes() == (scene.main / ".env").read_bytes(), f"the retry did not finish: exit {code}: {output}"
     )
+    return problems
+
+
+def jobs_cache(scene: Scene) -> Path:
+    cache = scene.worktree / "infra/jobs/.terraform"
+    (cache / "modules").mkdir(parents=True)
+    return cache
+
+
+def symlinked_manifest_blocks_the_init(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    cache = jobs_cache(scene)
+    readme = scene.worktree / "README.md"
+    before = readme.read_bytes()
+    (cache / "modules/modules.json").symlink_to(readme)
+    code, output = scene.run()
+    expect(problems, code == 1 and "infra/jobs" in output and "modules.json" in output and "link" in output, f"exit {code}: {output}")
+    expect(problems, readme.read_bytes() == before, "terraform init wrote through the link into a tracked file")
+    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    return problems
+
+
+def linked_modules_folder_blocks_the_init(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    cache = scene.worktree / "infra/jobs/.terraform"
+    cache.mkdir(parents=True)
+    protected = scene.victim / "protected.json"
+    protected.write_text("{}\n")
+    (scene.worktree / "aux").mkdir()
+    (scene.worktree / "aux/modules.json").symlink_to(protected)
+    (cache / "modules").symlink_to(scene.worktree / "aux")
+    code, output = scene.run()
+    expect(problems, code == 1 and "infra/jobs" in output and "modules" in output and "link" in output, f"exit {code}: {output}")
+    expect(problems, protected.read_text() == "{}\n", "terraform init wrote outside the worktree through two links")
+    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    return problems
+
+
+def hard_linked_manifest_blocks_the_init(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    cache = jobs_cache(scene)
+    protected = scene.victim / "protected.json"
+    protected.write_text("{}\n")
+    os.link(protected, cache / "modules/modules.json")
+    code, output = scene.run()
+    expect(problems, code == 1 and "infra/jobs" in output and "modules.json" in output and "hard link" in output, f"exit {code}: {output}")
+    expect(problems, protected.read_text() == "{}\n", "terraform init wrote through the hard link")
+    expect(problems, scene.terraform_calls() == [], "terraform ran")
+    return problems
+
+
+def tracked_lock_file_link_blocks_the_init(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    lock = scene.worktree / "infra/jobs/.terraform.lock.hcl"
+    elsewhere = scene.victim / "lock.hcl"
+    elsewhere.write_text(LOCK)
+    lock.unlink()
+    lock.symlink_to(elsewhere)
+    code, output = scene.run()
+    expect(problems, code == 1 and ".terraform.lock.hcl" in output and "link" in output, f"exit {code}: {output}")
+    expect(problems, scene.terraform_calls() == [] and elsewhere.read_text() == LOCK, "terraform ran or wrote through the lock file link")
+    return problems
+
+
+def native_provider_link_is_accepted_and_others_are_not(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    scene.run()
+    cache = scene.worktree / "infra/jobs/.terraform"
+    platform = (scene.worktree / JOBS_PROVIDER).parent
+    (cache / "modules/modules.json").unlink()
+    code, output = scene.run()
+    expect(
+        problems,
+        code == 0 and platform.is_symlink() and (cache / "modules/modules.json").is_file(),
+        f"a terraform-made provider link blocked the retry: exit {code}: {output}",
+    )
+    expect(problems, len(scene.terraform_calls()) == 2, f"terraform calls: {scene.terraform_calls()}")
+    for label, target in (("a folder of the worktree", scene.worktree / "infra/iam"), ("a folder outside it", scene.victim)):
+        (cache / "modules/modules.json").unlink(missing_ok=True)
+        platform.unlink()
+        platform.symlink_to(target)
+        code, output = scene.run()
+        expect(problems, code == 1 and "link" in output and "infra/jobs" in output, f"a provider link to {label} was accepted: exit {code}: {output}")
+        expect(problems, len(scene.terraform_calls()) == 2 and files_below(scene.victim) == [], f"terraform ran or wrote through a link to {label}")
+    return problems
+
+
+def incomplete_manifest_runs_init_again(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    scene.run()
+    manifest = scene.worktree / "infra/jobs/.terraform/modules/modules.json"
+    wrong = '{"Modules":[{"Key":"","Source":"","Dir":"."},{"Key":"flow","Source":"../elsewhere","Dir":"../services/tests/flow"}]}'
+    for label, text in (
+        ("no module", '{"Modules":[]}'),
+        ("only the root", '{"Modules":[{"Key":"","Source":"","Dir":"."}]}'),
+        ("a module of another source", wrong),
+    ):
+        manifest.write_text(text)
+        before = len(scene.terraform_calls())
+        code, output = scene.run()
+        expect(problems, code == 0 and len(scene.terraform_calls()) == before + 1, f"a manifest with {label} was accepted: exit {code}: {output}")
+        expect(problems, '"flow"' in manifest.read_text(), f"the manifest was not made again after {label}")
+    return problems
+
+
+def changed_configuration_runs_init_again(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    scene.run()
+    with (scene.worktree / "infra/jobs/main.tf").open("a") as handle:
+        handle.write('module "extra" {\n  source = "../services/tests/flow"\n}\n')
+    code, output = scene.run()
+    expect(problems, code == 0 and len(scene.terraform_calls()) == 2, f"a module added to the configuration was not installed: exit {code}: {output}")
+    expect(problems, '"extra"' in (scene.worktree / "infra/jobs/.terraform/modules/modules.json").read_text(), "the manifest lacks the new module")
+    code, output = scene.run()
+    expect(
+        problems, code == 0 and len(scene.terraform_calls()) == 2 and "verified infra/jobs/.terraform" in output, f"a complete cache was not accepted: {output}"
+    )
+    return problems
+
+
+TRICKY = r"""# module "ghost_comment" {
+/* module "ghost_block" {
+   source = "../services/tests/flow"
+} */
+locals {
+  braces = "} module \"ghost_string\" { ${lower("}")}"
+  note   = <<-EOT
+    } module "ghost_heredoc" {
+      source = "../services/tests/flow"
+  EOT
+}
+
+module "flow" {
+  source = "../services/tests/flow"
+}
+
+module "late" {
+  source   = "../services/tests/flow"
+  for_each = { a = 1 }
+  inputs   = { source = "nested" }
+}
+
+module "dynamic" {
+  source = "${var.where}"
+}
+"""
+
+
+def parser_reads_module_calls_only(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    (scene.worktree / "infra/jobs/main.tf").write_text(TRICKY)
+    scene.run()
+    manifest = scene.worktree / "infra/jobs/.terraform/modules/modules.json"
+    keys = sorted(item["Key"] for item in json.loads(manifest.read_text())["Modules"])
+    expect(problems, keys == ["", "dynamic", "flow", "late"], f"the stand-in made keys {keys}")
+    code, output = scene.run()
+    expect(
+        problems,
+        code == 0 and len(scene.terraform_calls()) == 1 and "verified infra/jobs/.terraform" in output,
+        f"text of a comment, a string or a heredoc was read as a module: {output}",
+    )
+    for missing in ("late", "dynamic", "flow"):
+        data = json.loads(manifest.read_text())
+        data["Modules"] = [item for item in data["Modules"] if item["Key"] != missing]
+        manifest.write_text(json.dumps(data))
+        before = len(scene.terraform_calls())
+        code, output = scene.run()
+        expect(problems, code == 0 and len(scene.terraform_calls()) == before + 1, f"the missing module {missing} was not noticed: exit {code}: {output}")
+    return problems
+
+
+def nested_local_module_is_required(scene: Scene) -> list[str]:
+    problems: list[str] = []
+    write(scene.worktree / "infra/services/tests/flow/main.tf", 'module "inner" {\n  source = "./inner"\n}\n')
+    write(scene.worktree / "infra/services/tests/flow/inner/main.tf", "# inner\n")
+    root = '{"Key":"","Source":"","Dir":"."}'
+    flow = '{"Key":"flow","Source":"../services/tests/flow","Dir":"../services/tests/flow"}'
+    inner = '{"Key":"flow.inner","Source":"./inner","Dir":"../services/tests/flow/inner"}'
+    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow}]}}')
+    expect(problems, code == 1 and "flow.inner" in output, f"a missing nested module was not noticed: exit {code}: {output}")
+    code, output = scene.run(manifest=f'{{"Modules":[{root},{flow},{inner}]}}')
+    expect(problems, code == 0 and len(scene.terraform_calls()) == 2, f"the complete manifest was not accepted: exit {code}: {output}")
     return problems
 
 
@@ -745,6 +950,15 @@ CASES: dict[str, tuple[Case, dict[str, Any]]] = {
     "a_tracked_path_below_the_jobs_cache_blocks_the_init": (tracked_path_below_the_jobs_cache_blocks_init, {}),
     "a_link_leaving_the_jobs_cache_blocks_the_init": (link_leaving_the_jobs_cache_blocks_the_init, {}),
     "a_marker_file_of_a_wrong_shape_is_ignored": (marker_file_with_wrong_shapes_is_ignored, {}),
+    "a_symlinked_manifest_in_the_jobs_cache_blocks_the_init": (symlinked_manifest_blocks_the_init, {}),
+    "a_linked_modules_folder_in_the_jobs_cache_blocks_the_init": (linked_modules_folder_blocks_the_init, {}),
+    "a_hard_linked_manifest_in_the_jobs_cache_blocks_the_init": (hard_linked_manifest_blocks_the_init, {}),
+    "a_linked_lock_file_blocks_the_init": (tracked_lock_file_link_blocks_the_init, {}),
+    "a_terraform_made_provider_link_is_accepted_and_other_links_are_not": (native_provider_link_is_accepted_and_others_are_not, {}),
+    "an_empty_or_root_only_or_foreign_manifest_runs_the_init_again": (incomplete_manifest_runs_init_again, {}),
+    "a_module_added_to_the_configuration_runs_the_init_again": (changed_configuration_runs_init_again, {}),
+    "text_in_comments_strings_and_heredocs_is_not_a_module_call": (parser_reads_module_calls_only, {}),
+    "a_nested_local_module_is_required_in_the_manifest": (nested_local_module_is_required, {}),
     "a_write_error_is_named_and_leaves_nothing_partial": (write_error_is_named_and_leaves_nothing_partial, {}),
     "the_terraform_stand_in_checks_the_whole_vector": (terraform_arguments_are_checked, {}),
 }
