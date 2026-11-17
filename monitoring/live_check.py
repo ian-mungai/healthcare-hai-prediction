@@ -114,8 +114,8 @@ def split_plan(arguments: Namespace) -> Plan:
     return Plan(config, config_sha, manifest, newest, reference_newest, reference, current)
 
 
-def inputs_identity(arguments: Namespace, plan: Plan) -> str:
-    """The SHA-256 that binds a run ID to what it was computed from."""
+def inputs_identity(arguments: Namespace, plan: Plan) -> tuple[str, dict[str, str]]:
+    """The SHA-256 that binds a run ID to what it was computed from, and the fields it is made of (kept beside it to name a field that changed)."""
     parts = {
         "model": arguments.model,
         "hai_type": plan.manifest["hai_type"],
@@ -125,7 +125,7 @@ def inputs_identity(arguments: Namespace, plan: Plan) -> str:
         "config_sha256": plan.config_sha,
         "production_version": arguments.production_version or "",
     }
-    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest()
+    return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest(), parts
 
 
 def build(arguments: Namespace, plan: Plan, on_report: Callable[[Any], None]) -> dict[str, Any]:
@@ -167,22 +167,48 @@ def write_html(report: Any, target: Path) -> bytes:
     return body
 
 
-def recorded_outputs(workspace: Path, run_id: str, names: list[str]) -> tuple[str, dict[str, bytes]] | None:
-    """The identity and the files that the first computation of ``run_id`` recorded in the workspace, or None when it recorded none or not all of them."""
+def read_binding(workspace: Path, run_id: str) -> dict[str, Any] | None:
+    """The run's bound identity and its fields from the run-level record ``.live_runs/<run>/identity.json``, or None when the run has none. The record is apart
+    from the cached outputs of any one HAI type, so a missing cache never erases it, and a record that cannot be read is refused, never taken as absent."""
+    path = workspace / LIVE_RUNS / run_id / "identity.json"
+    if not path.exists():
+        return None
+    try:
+        binding = json.loads(path.read_bytes())
+        if not isinstance(binding["inputs_sha256"], str):
+            raise TypeError("the identity is not text")
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        raise CheckError("run_binding_unreadable", f"{path} cannot be read as the run's bound identity: {error}") from None
+    return dict(binding)
+
+
+def write_binding(workspace: Path, run_id: str, identity: str, parts: dict[str, str]) -> None:
+    """Bind ``run_id`` to its inputs, once, before the first output is written."""
+    body = json.dumps({"inputs_sha256": identity, "parts": parts}, sort_keys=True) + "\n"
+    write_bytes(workspace / LIVE_RUNS / run_id / "identity.json", body.encode())
+
+
+def changed_fields(binding: dict[str, Any] | None, parts: dict[str, str]) -> str:
+    """The names of the fields of the identity that differ from the bound ones, or a general name when the binding keeps no fields."""
+    bound = binding.get("parts") if binding else None
+    if not isinstance(bound, dict):
+        return "an input"
+    return ", ".join(sorted(key for key in parts if bound.get(key) != parts[key])) or "an input"
+
+
+def recorded_outputs(workspace: Path, run_id: str, names: list[str]) -> dict[str, bytes] | None:
+    """The files that the first computation of ``run_id`` cached in the workspace, or None when it cached none or not all of them."""
     folder = workspace / LIVE_RUNS / run_id
     try:
-        identity = json.loads((folder / "identity.json").read_bytes())["inputs_sha256"]
-        return str(identity), {name: (folder / name).read_bytes() for name in names}
-    except (OSError, ValueError, KeyError):
+        return {name: (folder / name).read_bytes() for name in names}
+    except OSError:
         return None
 
 
-def record_outputs(workspace: Path, run_id: str, identity: str, files: dict[str, bytes]) -> None:
-    """Keep the first outputs of ``run_id``: the files first and the identity last, so a half record is never taken as a complete one."""
-    folder = workspace / LIVE_RUNS / run_id
+def record_outputs(workspace: Path, run_id: str, files: dict[str, bytes]) -> None:
+    """Cache the first outputs of ``run_id`` of one HAI type, beside its binding."""
     for name, body in files.items():
-        write_bytes(folder / name, body)
-    write_bytes(folder / "identity.json", (json.dumps({"inputs_sha256": identity}, sort_keys=True) + "\n").encode())
+        write_bytes(workspace / LIVE_RUNS / run_id / name, body)
 
 
 @contextlib.contextmanager
@@ -220,39 +246,42 @@ def add_to_workspace(report: Any, workspace: Path, name: str, run_id: str, input
 
 
 def run(arguments: Namespace, *, record_sinks: Sequence[RecordSink] = ()) -> Path:
-    """Run the live check and return the record's path. The inputs are checked and the run is matched with its recorded identity before any file changes."""
+    """Run the live check and return the record's path. The inputs are checked and the run is matched with its bound identity before any file changes."""
     plan = split_plan(arguments)
-    identity = inputs_identity(arguments, plan)
+    identity, parts = inputs_identity(arguments, plan)
     hai_type = plan.manifest["hai_type"]
     name = project_name(arguments.model, hai_type)
     names = [f"drift_{hai_type}.json", f"report_{hai_type}.html", f"snapshot_{hai_type}.json", f"project_{hai_type}.json"]
-    recorded = recorded_outputs(arguments.workspace, arguments.run_id, names)
+    binding = read_binding(arguments.workspace, arguments.run_id)
     snapshot = snapshot_identity(arguments.workspace, name, arguments.run_id)
-    for known in (recorded[0] if recorded else None, snapshot[1]):
+    for known in (binding["inputs_sha256"] if binding else None, snapshot[1]):
         if known not in (None, identity):
             raise CheckError(
                 "run_inputs_changed",
-                f"run {arguments.run_id} was first written from other inputs (model, type, baseline matrix, manifest, feature list, configuration or "
-                "production version). A check of other inputs needs a new run ID",
+                f"run {arguments.run_id} was first written from other inputs: {changed_fields(binding, parts)} differ (a run is bound to its model, HAI type, "
+                "baseline matrix, manifest, feature list, drift configuration and production version). A check of other inputs needs a new run ID",
             )
     target = arguments.out / names[0]
+    recorded = recorded_outputs(arguments.workspace, arguments.run_id, names) if binding else None
     if recorded:
         if not snapshot[0]:
-            place_snapshot(arguments.workspace, recorded[1][names[3]], recorded[1][names[2]])
-        for file, body in recorded[1].items():
+            place_snapshot(arguments.workspace, recorded[names[3]], recorded[names[2]])
+        for file, body in recorded.items():
             write_bytes(arguments.out / file, body)
         return target
     reports: list[Any] = []
     record = build(arguments, plan, reports.append)
     if len(reports) != 1:
         raise RuntimeError(f"the check computed {len(reports)} Evidently reports, expected one")
+    if binding is None:
+        write_binding(arguments.workspace, arguments.run_id, identity, parts)
     drift_check.write_record(arguments.out, record)
     write_html(reports[0], arguments.out / names[1])
     add_to_workspace(reports[0], arguments.workspace, name, arguments.run_id, identity)
     project_file, snapshot_file = export_run_files(arguments.workspace, name, arguments.run_id)
     write_bytes(arguments.out / names[3], project_file)
     write_bytes(arguments.out / names[2], snapshot_file)
-    record_outputs(arguments.workspace, arguments.run_id, identity, {file: (arguments.out / file).read_bytes() for file in names})
+    record_outputs(arguments.workspace, arguments.run_id, {file: (arguments.out / file).read_bytes() for file in names})
     for sink in record_sinks:
         sink(record)
     return target

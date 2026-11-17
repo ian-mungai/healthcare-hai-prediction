@@ -50,6 +50,7 @@ def write_baseline(
     newest: int | None = 2024,
     population: str = "primary",
     features: tuple[str, ...] = FEATURES,
+    hai_type: str = "HAI_1",
 ) -> dict[str, Path]:
     """A baseline matrix of ``years`` with ``per_year`` rows each plus ``current_rows`` rows of 2024, the manifest that names 2024 as its newest year and the
     feature list. A feature in ``shifted`` moves only in the 2024 rows."""
@@ -62,7 +63,7 @@ def write_baseline(
     projection = f"'k' || i::VARCHAR AS spine_key, {year} AS window_year, (hash('label' || i::VARCHAR) % 1000) / 500.0 AS label_value, {', '.join(columns)}"
     matrix = folder / "matrix.parquet"
     duckdb.sql("SELECT range AS i FROM range(?)", params=[reference_rows + current_rows]).project(projection).write_parquet(str(matrix))
-    manifest = {"hai_type": "HAI_1", "population": population} | ({} if newest is None else {"newest_window_year": newest})
+    manifest = {"hai_type": hai_type, "population": population} | ({} if newest is None else {"newest_window_year": newest})
     paths = {"matrix": matrix, "manifest": folder / "manifest.json", "features": folder / "features.json"}
     paths["manifest"].write_text(json.dumps(manifest) + "\n")
     paths["features"].write_text(json.dumps(list(features)) + "\n")
@@ -218,35 +219,69 @@ def recorded(out: Path) -> dict[str, bytes]:
     return {path.name: path.read_bytes() for path in sorted(out.iterdir())} if out.exists() else {}
 
 
+PRODUCTION = "--production-version=run1:3"
+
+
+def identity_file(workspace: Path) -> bytes:
+    return (workspace / ".live_runs" / RUN / "identity.json").read_bytes()
+
+
 def changed_inputs_under_the_same_run_are_refused(folder: Path) -> Problems:
-    """A run ID is bound to the model, the type, the baseline matrix, its manifest, the feature list and the production version at its first write. Any change
-    under the same ID is refused by name before a file or a snapshot changes, and the first results stay."""
+    """A run ID is bound to the model, the HAI type, the baseline matrix, its manifest, the feature list, the drift configuration and the production version at
+    its first write. A change of any one of the seven under the same ID is refused as run_inputs_changed, naming the field, before a file or a snapshot changes;
+    the stored binding is never replaced, so the first inputs still replay after every refusal."""
     evidently = drift_cases.need_evidently()
     first = baseline_in(folder, "first", shifted=FEATURES)
-    code, text, out, workspace = run_live(folder, first, evidently=evidently, extra=("--production-version=run1:3",))
+    code, text, out, workspace = run_live(folder, first, evidently=evidently, extra=(PRODUCTION,))
     if code != 0:
         return [f"exit {code}: {text[:400]}"]
-    before, snapshots = recorded(out), projects_of(workspace)
+    before, snapshots, binding = recorded(out), projects_of(workspace), identity_file(workspace)
     manifest_changed = baseline_in(folder, "manifest", shifted=FEATURES)
     manifest_changed["manifest"].write_text(manifest_changed["manifest"].read_text().replace("}", ', "note": "other"}'))
-    features_changed = baseline_in(folder, "features", shifted=FEATURES, features=FEATURES[:3])
+    configuration = json.loads((ROOT / "config/monitoring/drift.json").read_text()) | {"deadline_seconds": 601}
+    (folder / "drift_other.json").write_text(json.dumps(configuration) + "\n")
     variants = {
-        "another baseline matrix": (baseline_in(folder, "matrix"), {}),
-        "another manifest": (manifest_changed, {}),
-        "another feature list": (features_changed, {}),
-        "another model": (first, {"model": "m1"}),
-        "another production version": (first, {"extra": ("--production-version=run1:4",)}),
+        "baseline matrix": (baseline_in(folder, "matrix"), {}, "matrix_sha256"),
+        "manifest": (manifest_changed, {}, "manifest_sha256"),
+        "feature list": (baseline_in(folder, "features", shifted=FEATURES, features=FEATURES[:3]), {}, "features_sha256"),
+        "model": (first, {"model": "m1"}, "model"),
+        "HAI type": (baseline_in(folder, "type", shifted=FEATURES, hai_type="HAI_2"), {}, "hai_type"),
+        "drift configuration": (first, {"extra": (PRODUCTION, f"--config={folder / 'drift_other.json'}")}, "config_sha256"),
+        "production version": (first, {"extra": ("--production-version=run1:4",)}, "production_version"),
     }
     problems = []
-    for name, (paths, keywords) in variants.items():
-        keywords = {"extra": ("--production-version=run1:3",), **keywords}
+    for name, (paths, keywords, field) in variants.items():
+        keywords = {"extra": (PRODUCTION,), **keywords}
         code, text, other_out, _ = run_live(folder, paths, evidently=evidently, out=folder / f"out_{name.replace(' ', '_')}", **keywords)
-        if code != 2 or "run_inputs_changed" not in text or RUN not in text:
-            problems.append(f"{name}: expected exit 2 naming run_inputs_changed and the run, got {code}: {text[:240]}")
+        if code != 2 or "run_inputs_changed" not in text or RUN not in text or field not in text:
+            problems.append(f"{name}: expected exit 2 naming run_inputs_changed, the run and {field}, got {code}: {text[:240]}")
         if recorded(other_out):
             problems.append(f"{name}: a refused rerun wrote {sorted(recorded(other_out))}")
-    if recorded(out) != before or projects_of(workspace) != snapshots:
-        problems.append("a refused rerun changed the first record, the first report or the workspace")
+        if identity_file(workspace) != binding or projects_of(workspace) != snapshots or recorded(out) != before:
+            problems.append(f"{name}: a refused rerun changed the stored binding, the workspace or the first outputs")
+        code, text, replay_out, _ = run_live(folder, first, out=folder / f"replay_{name.replace(' ', '_')}", extra=(PRODUCTION,))
+        if code != 0 or recorded(replay_out) != before:
+            problems.append(f"{name}: after the refusal the first inputs no longer replay (exit {code}): {text[:200]}")
+    return problems
+
+
+def the_binding_survives_lost_cached_outputs(folder: Path) -> Problems:
+    """The run's binding is its own record: with the cached record, report and snapshot files gone, a rerun with other inputs (a matrix or an HAI type that has
+    no cached files at all) is still refused and the binding is not replaced."""
+    evidently = drift_cases.need_evidently()
+    first = baseline_in(folder, "first", shifted=FEATURES)
+    code, text, _, workspace = run_live(folder, first, evidently=evidently)
+    if code != 0:
+        return [f"exit {code}: {text[:400]}"]
+    binding = identity_file(workspace)
+    for cached in (workspace / ".live_runs" / RUN).iterdir():
+        if cached.name != "identity.json":
+            cached.unlink()
+    problems = []
+    for name, paths in {"matrix": baseline_in(folder, "matrix"), "type": baseline_in(folder, "type", shifted=FEATURES, hai_type="HAI_2")}.items():
+        code, text, out, _ = run_live(folder, paths, evidently=evidently, out=folder / f"out_{name}")
+        if code != 2 or "run_inputs_changed" not in text or recorded(out) or identity_file(workspace) != binding:
+            problems.append(f"{name}: expected a refusal that keeps the binding, got {code}: {text[:240]}")
     return problems
 
 
@@ -1000,6 +1035,7 @@ def cases() -> list[tuple[str, Callable[[Path], Problems]]]:
         ("live_restore_result_loads_in_the_ui_loader", the_ui_loader_lists_the_restored_projects),
         ("live_restore_cli_refuses_a_bad_bucket_name", restore_cli_refuses_a_bad_bucket_name),
         ("live_changed_inputs_under_the_same_run_are_refused", changed_inputs_under_the_same_run_are_refused),
+        ("live_binding_survives_lost_cached_outputs", the_binding_survives_lost_cached_outputs),
         ("live_rerun_reuses_the_recorded_outputs_byte_for_byte", a_rerun_reuses_the_recorded_outputs_byte_for_byte),
         ("live_reused_run_calls_no_sink", a_reused_run_calls_no_sink),
         ("live_refuses_a_manifest_older_than_the_data", a_manifest_older_than_the_data_is_refused),
