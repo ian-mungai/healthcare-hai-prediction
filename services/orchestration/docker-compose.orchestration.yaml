@@ -5,15 +5,14 @@
 # nothing else; health checks are passed to Docker as written (no Compose interpolation, so no $$ escape). A volume names its variable
 # without a message because the launcher splits a volume at its colons; a missing value is still refused.
 #
-# Airflow orchestrates and holds no data credential: no Docker socket, no AWS folder and no lakehouse secret is mounted. Tasks reach
-# work only through the launcher at host.docker.internal with the session token mounted
-# read-only into the scheduler. Images are pinned: PostgreSQL by digest, the Airflow image by the hai- tag that
+# Airflow orchestrates and holds no data credential: no Docker socket, no AWS folder and no lakehouse secret is mounted.
+# Images are pinned: PostgreSQL by digest, the Airflow image by the hai- tag that
 # services/orchestration/Dockerfile builds from the official image's digest. The API listens on this Mac's loopback only.
 name: hai-orchestration
 
 x-airflow: &airflow
   image: hai-airflow:3.4.0-python3.12
-  # The Mac user's UID with group 0, as the official image supports; the session files are written for this UID.
+  # The Mac user's UID with group 0, as the official image supports; the files of the state folder are written for this UID.
   user: "${HAI_ORCH_UID:?set by the launcher}:0"
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor

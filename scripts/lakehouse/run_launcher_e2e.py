@@ -3865,7 +3865,7 @@ def start_ctx(method: str, params: dict[str, Any], identity: str, state: dict[st
 @case("orchestration_stale_limits")
 def orchestration_stale_limits(env: Env) -> dict[str, bool]:
     """The limit worker of an orchestration start that the owner stopped must not settle the next start, which runs its own worker."""
-    with stack_folder(env, "session") as folder:
+    with stack_folder(env) as folder:
         params = {"state": str(folder), "api_port": 18180, "checkout": str(ROOT)}
 
         def begin(instance: launcher.Launcher, state: dict[str, Any], identity: str) -> None:
@@ -3874,6 +3874,35 @@ def orchestration_stale_limits(env: Env) -> dict[str, bool]:
         return stale_limits_checks(
             env, ("orchestration", "orchlimits", {"phase": "down", "services": {}}), begin, "no memory limit for the orchestration services"
         )
+
+
+@case("orchestration_state_needs_no_session")
+def orchestration_state_needs_no_session(env: Env) -> dict[str, bool]:
+    """No orchestration container mounts a session folder, so a state folder without one is a complete state folder for the stack start and the dump."""
+    with stack_folder(env) as folder, compactor(env) as instance:
+        renderer = launcher.Renderer(env.config, launcher.ComposeModel(ROOT / launcher.ORCHESTRATION_COMPOSE), ROOT, ROOT, b"k" * 32)
+        registry_id = env.registry_id()
+        values = {**launcher.Launcher.PLACEHOLDER_ENV, "JOB_MEMORY_LIMIT": str(1024**3)}
+        inp = launcher.RenderInput(
+            "orchestration_dump",
+            "owner",
+            "l1",
+            1,
+            1,
+            "op-1",
+            values,
+            int(time.time()) + 600,
+            ["metadata"],
+            {"state": str(folder)},
+            {"hai.registry_id": registry_id},
+        )
+        accepted_by_start = instance.orchestration_state_folder(ROOT, str(folder)) == str(folder)
+        dump = facts(renderer.render(inp, registry_id))
+        return {
+            "the stack start accepts a state folder without session": accepted_by_start,
+            "the dump renders for a state folder without session": dump["network"] == renderer.orchestration_network_name(registry_id),
+            "no session folder was created for either": not (folder / "session").exists(),
+        }
 
 
 @case("online_store_stale_limits")
@@ -10866,6 +10895,7 @@ ALL_CASES = (
     online_store_stale_confirm,
     mlflow_stale_stop,
     orchestration_stale_limits,
+    orchestration_state_needs_no_session,
     online_store_stale_limits,
     catalog_stale_health,
     orchestration_stale_health,

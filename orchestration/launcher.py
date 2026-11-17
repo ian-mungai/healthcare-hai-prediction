@@ -111,7 +111,6 @@ ORCHESTRATION_MEMORY: dict[str, tuple[str, float, int]] = {
 }
 ORCHESTRATION_SCHEDULER_BASE = 1024**3
 ORCHESTRATION_WORKER_MEMORY = 256 * 1024**2
-ORCHESTRATION_STATE_FOLDERS = ("session",)
 ORCHESTRATION_DUMPS = ("metadata", "xcom")
 ORCHESTRATION_UP_PARAMETERS = ("state", "api_port", "checkout")
 PINNED_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._/-]*(?::[A-Za-z0-9._-]{1,128})?@sha256:[a-f0-9]{64}")
@@ -2945,9 +2944,8 @@ class Renderer:
         if len(inp.args) != 1 or inp.args[0] not in ORCHESTRATION_DUMPS:
             raise LauncherError(f"template orchestration_dump takes one argument: {' or '.join(ORCHESTRATION_DUMPS)}", "args")
         state = self.allowed(str(inp.params["state"]), "state")
-        missing = [folder for folder in ORCHESTRATION_STATE_FOLDERS if not (state / folder).is_dir()]
-        if not state.is_dir() or missing:
-            raise LauncherError(f"state folder {str(state)!r} does not exist or lacks {', '.join(missing)}", "args")
+        if not state.is_dir():
+            raise LauncherError(f"state folder {str(state)!r} does not exist", "args")
         values = {
             "HAI_ORCH_REPO": str(self.checkout),
             "HAI_ORCH_STATE": str(state.resolve()),
@@ -7759,7 +7757,7 @@ class Launcher:
 
     def orchestration_state_folder(self, checkout: Path, text: Any) -> str:
         """The stack's state folder: absolute, inside ``data/orchestration/`` of the checkout or the main checkout (or a test registry's named
-        folder), outside any secrets folder and holding the metadata and session folders the supervisor wrote."""
+        folder), outside any secrets folder."""
         if not isinstance(text, str) or not Path(text).is_absolute():
             raise LauncherError("state must be an absolute folder", "args")
         candidate = Path(text)
@@ -7771,9 +7769,6 @@ class Launcher:
         resolved = candidate.resolve()
         if not resolved.is_dir():
             raise LauncherError(f"state folder {text!r} does not exist", "args")
-        missing = [name for name in ORCHESTRATION_STATE_FOLDERS if not (resolved / name).is_dir()]
-        if missing:
-            raise LauncherError(f"state folder {text!r} lacks {', '.join(missing)}", "args")
         return str(resolved)
 
     def m_orchestration_up(self, ctx: Ctx) -> dict[str, Any]:
