@@ -448,12 +448,14 @@ def recorded_carried_over(client: Any, bucket: str, run: str) -> dict[str, Any]:
     return document
 
 
-def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any) -> dict[str, Any]:
-    """Name the source files that no run of the ingestion run's retry period captured, in the bronze run record and in the owner notice.
+def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic: str, notify: Any, skipped: Sequence[dict[str, str]] = ()) -> dict[str, Any]:
+    """Name the source files that no run of the ingestion run's retry period captured and the tables the stage left out (``skipped``, each with its reason),
+    in the bronze run record and in the owner notice.
 
     Bronze loads the latest capture of every file, so a file still missing after the retry period keeps its earlier capture. The files are the units that
     the ingestion run failed or did not attempt, less those a retry day captured (``ingestion_schedule.carried_over``). A run with no ingestion run
-    record (a hand-staged bronze run) says that, and names no file.
+    record (a hand-staged bronze run) says that, and names no file. A skipped table needs the notice as much as a carried-over file does: the notice is sent
+    when either exists, and the record names the skipped tables whether or not it is sent.
 
     The record ``lakehouse/bronze_runs/<run>/carried_over.json`` is created once and is the claim on the notice: the attempt that creates it sends the notice,
     and any later attempt reads the record, sends nothing and reports it. The outcome of the notice goes to ``carried_over_notice.json``, created once after the
@@ -463,27 +465,24 @@ def record_carried_over(client: Any, bucket: str, run: str, root: str, *, topic:
     original, retries = ingestion_schedule.ingestion_runs_of(run)
     folder = f"{root}ingestion_runs/"
     first = read_run_record(client, bucket, f"{folder}{original}/run.json") if root else None
-    document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries)}
-    message: tuple[str, str] | None = None
+    document: dict[str, Any] = {"schema": 1, "bronze_run": run, "ingestion_run": original, "retry_runs": list(retries), "skipped_tables": list(skipped)}
+    files: list[str] | None = None
     if not root:
-        document |= {
-            "carried_over": None,
-            "note": "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known",
-            "notice": "not sent",
-        }
+        document |= {"carried_over": None, "note": "no capture root is configured (HAI_CAPTURE_ROOT): the files carried over are not known"}
     elif first is None:
-        document |= {"carried_over": None, "note": f"no run record of {original} under {folder}: the files carried over are not known", "notice": "not sent"}
+        document |= {"carried_over": None, "note": f"no run record of {original} under {folder}: the files carried over are not known"}
     else:
         found = [item for item in (read_run_record(client, bucket, f"{folder}{name}/run.json") for name in retries) if item is not None]
         files = ingestion_schedule.carried_over(first, found)
         document |= {"carried_over": files, "retry_records_read": len(found)}
-        if not files:
-            document["notice"] = "not needed: no file carried over"
-        elif not topic:
-            document["notice"] = "not sent: no alerts topic"
-        else:
-            document["notice"] = CLAIMED
-            message = ingestion_schedule.carried_over_notice(run, files)
+    message: tuple[str, str] | None = None
+    if not files and not skipped:
+        document["notice"] = "not needed: no file carried over" if files is not None else "not sent"
+    elif not topic:
+        document["notice"] = "not sent: no alerts topic"
+    else:
+        document["notice"] = CLAIMED
+        message = ingestion_schedule.carried_over_notice(run, files or [], skipped)
     if not put_once(client, bucket, f"lakehouse/bronze_runs/{run}/carried_over.json", json_bytes(document)):
         return recorded_carried_over(client, bucket, run)
     if message is not None:
@@ -510,7 +509,7 @@ def check(job: Job) -> None:
             import boto3
 
             notify = boto3.client("sns")
-        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=topic, notify=notify)
+        done = record_carried_over(storage().client, job.bucket, job.run, os.environ.get("HAI_CAPTURE_ROOT", ""), topic=topic, notify=notify, skipped=skipped)
         files = done["carried_over"]
         sys.stdout.write(f"carried over: {'unknown' if files is None else len(files)} files; notice {done['notice']}\n")
     if job.target == "real":

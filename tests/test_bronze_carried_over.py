@@ -70,8 +70,11 @@ def bucket(failed: list[str], **options: Any) -> Bucket:
     return Bucket({f"raw/ingestion_runs/{ORIGINAL}/run.json": run_record(failed)}, **options)
 
 
-def carried(store: Bucket, topic: str = TOPIC, root: str = "raw/") -> dict[str, Any]:
-    return bronze_run.record_carried_over(store, BUCKET, RUN, root, topic=topic, notify=store)
+EMPTY = [{"table": "empty_data", "reason": "no source object"}]
+
+
+def carried(store: Bucket, topic: str = TOPIC, root: str = "raw/", skipped: list[dict[str, str]] | None = None) -> dict[str, Any]:
+    return bronze_run.record_carried_over(store, BUCKET, RUN, root, topic=topic, notify=store, skipped=skipped or [])
 
 
 def test_a_second_call_for_the_same_run_sends_no_second_notice_and_reports_the_recorded_outcome() -> None:
@@ -140,3 +143,62 @@ def test_the_notice_outcome_is_written_after_the_notice_and_only_once() -> None:
     carried(store)
     check(store.puts == [RECORD_KEY, NOTICE_KEY], f"the writes were {store.puts}")
     check(json.loads(store.objects[NOTICE_KEY])["notice"] == "sent", "the outcome record does not say sent")
+
+
+def test_a_skipped_table_with_no_carried_over_file_is_recorded_and_noticed_once_and_a_repeat_sends_nothing() -> None:
+    store = bucket([])
+    first = carried(store, skipped=EMPTY)
+    check(first["carried_over"] == [] and first["skipped_tables"] == EMPTY and first["notice"] == "sent", f"{first}")
+    check(
+        len(store.published) == 1 and "empty_data" in store.published[0]["Message"] and "no source object" in store.published[0]["Message"],
+        f"{store.published}",
+    )
+    check("empty_data" in store.published[0]["Subject"] or "skipped" in store.published[0]["Subject"], store.published[0]["Subject"])
+    stored = json.loads(store.objects[RECORD_KEY])
+    check(stored["skipped_tables"] == EMPTY, f"the immutable record does not name the skipped table: {stored}")
+    again = carried(store, skipped=EMPTY)
+    check(again == first and len(store.published) == 1, f"a repeat changed the report or sent another notice: {again} {len(store.published)}")
+
+
+def test_the_notice_names_both_the_carried_over_files_and_the_skipped_tables() -> None:
+    store = bucket(["a__1__x"])
+    carried(store, skipped=EMPTY)
+    check(len(store.published) == 1, f"{len(store.published)} notices")
+    message = store.published[0]["Message"]
+    check("a__1__x" in message and "empty_data" in message, message)
+
+
+def test_a_skipped_table_is_noticed_even_when_the_files_carried_over_are_not_known() -> None:
+    store = Bucket({})
+    first = carried(store, skipped=EMPTY)
+    check(first["carried_over"] is None and first["skipped_tables"] == EMPTY and first["notice"] == "sent" and len(store.published) == 1, f"{first}")
+    check("empty_data" in store.published[0]["Message"], "the notice does not name the skipped table")
+
+
+def test_a_skipped_table_with_no_alerts_topic_is_recorded_and_says_no_notice_was_sent() -> None:
+    store = bucket([])
+    first = carried(store, topic="", skipped=EMPTY)
+    check(first["notice"] == "not sent: no alerts topic" and first["skipped_tables"] == EMPTY and not store.published, f"{first}")
+    check(json.loads(store.objects[RECORD_KEY])["skipped_tables"] == EMPTY, "the record does not name the skipped table")
+
+
+def test_an_interrupted_attempt_for_a_skipped_table_is_reported_as_unknown_and_never_sent_again() -> None:
+    store = bucket([])
+    carried(store, skipped=EMPTY)
+    del store.objects[NOTICE_KEY]
+    again = carried(store, skipped=EMPTY)
+    check(again["notice"].startswith("unknown") and len(store.published) == 1, f"{again} {len(store.published)}")
+
+
+def test_a_failed_notice_for_a_skipped_table_is_recorded_once_and_not_tried_again() -> None:
+    store = bucket([], fail_publish=True)
+    first = carried(store, skipped=EMPTY)
+    check(first["notice"] == "failed: OSError", f"{first}")
+    store.fail_publish = False
+    check(carried(store, skipped=EMPTY)["notice"] == "failed: OSError" and not store.published, "a retry sent a notice after a failed one was recorded")
+
+
+def test_no_file_and_no_skipped_table_still_needs_no_notice_and_records_an_empty_list() -> None:
+    store = bucket([])
+    first = carried(store)
+    check(first["notice"] == "not needed: no file carried over" and first["skipped_tables"] == [] and not store.published, f"{first}")

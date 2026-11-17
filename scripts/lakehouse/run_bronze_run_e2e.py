@@ -51,7 +51,8 @@ STAGED: dict[str, bytes] = {}
 
 
 class FakeClient:
-    """The S3 client of the check phase's run record: no ingestion run record exists in these cases, and the written record is kept."""
+    """The S3 client of the check phase's records: no ingestion run record exists in these cases. A write that carries ``IfNoneMatch`` is refused when the key
+    exists, as the bucket does, and a key that was never written answers 403, because the task role cannot list its folders."""
 
     def __init__(self) -> None:
         self.puts: dict[str, bytes] = {}
@@ -60,8 +61,26 @@ class FakeClient:
         return {"Versions": []}
 
     def put_object(self, **arguments: Any) -> dict[str, Any]:
+        if arguments.get("IfNoneMatch") == "*" and arguments["Key"] in self.puts:
+            raise ClientError({"Error": {"Code": "PreconditionFailed", "Message": "exists"}}, "PutObject")
         self.puts[arguments["Key"]] = arguments["Body"]
         return {}
+
+    def get_object(self, **arguments: Any) -> dict[str, Any]:
+        if arguments["Key"] not in self.puts:
+            raise ClientError({"Error": {"Code": "AccessDenied", "Message": "no such key"}}, "GetObject")
+        return {"Body": io.BytesIO(self.puts[arguments["Key"]])}
+
+
+class Publisher:
+    """The notice service: every publish call, kept."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, str]] = []
+
+    def publish(self, **arguments: str) -> dict[str, str]:
+        self.calls.append(arguments)
+        return {"MessageId": f"m{len(self.calls)}"}
 
 
 class FakeStorage:
@@ -311,10 +330,19 @@ def case_the_stage_phase_writes_the_inputs_the_chain_then_runs_on(case: Case) ->
     STAGED[bronze_run.STAGE_REPORT_FILE] = puts[f"{stem}{bronze_run.STAGE_REPORT_FILE}"]
     case.shas = (hashlib.sha256(STAGED[bronze_run.REQUEST_FILE]).hexdigest(), hashlib.sha256(STAGED[bronze_run.INVENTORY_FILE]).hexdigest())
     case.key = (",".join(tables), "real", False)
-    require(case.chain(tables=",".join(tables)) == [0, 0, 0], case.err)
+    topic = "arn:aws:sns:us-west-2:" + "1" * 12 + ":alerts"
+    notices = Publisher()
+    with mock.patch.dict(os.environ, {"ALERTS_TOPIC_ARN": topic}), mock.patch("boto3.client", lambda *_, **__: notices):
+        require(case.chain(tables=",".join(tables)) == [0, 0, 0], case.err)
+        require(case.phase("check", tables=",".join(tables)) == 0, f"a repeated check failed: {case.err}")
     require(len(LOADS) == 1 and LOADS[0][LOADS[0].index("--tables") + 1] == ",".join(tables), LOADS)
     record = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/check.json"])
     require(record["skipped_tables"] == report["skipped_tables"], f"the check record does not name the skipped table: {record['skipped_tables']}")
+    claim = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over.json"])
+    require(claim["skipped_tables"] == report["skipped_tables"], f"the carried-over record does not name the skipped table: {claim}")
+    require(len(notices.calls) == 1 and "empty_data" in notices.calls[0]["Message"], f"the owner notice: {notices.calls}")
+    outcome = json.loads(STORAGE[0].client.puts[f"lakehouse/bronze_runs/{RUN}/carried_over_notice.json"])
+    require(outcome["notice"] == "sent", f"{outcome}")
 
 
 def case_qualification_writes_only_the_twins(case: Case) -> None:

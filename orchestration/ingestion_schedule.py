@@ -192,17 +192,27 @@ def carried_over(original: Mapping[str, Any], retries: Sequence[Mapping[str, Any
 NOTICE_LIST_LIMIT = 1000
 
 
-def carried_over_notice(bronze_run: str, files: Sequence[str]) -> tuple[str, str]:
-    """The subject and the message of the owner notice of a bronze run: every carried-over file by name (a subject holds 100 characters)."""
-    if not files:
+def carried_over_notice(bronze_run: str, files: Sequence[str], skipped: Sequence[Mapping[str, str]] = ()) -> tuple[str, str]:
+    """The subject and the message of the owner notice of a bronze run: every carried-over file by name and every table the stage left out, with its reason
+    (a subject holds 100 characters)."""
+    if not files and not skipped:
         return f"{bronze_run}: no file carried over"[
             :100
         ], f"Bronze run {bronze_run} loaded a capture of every source file from its ingestion run: no file was carried over."
-    shown = "\n".join(f"  {name}" for name in files[:NOTICE_LIST_LIMIT])
-    more = f"\n  and {len(files) - NOTICE_LIST_LIMIT} more (the run record lists them all)" if len(files) > NOTICE_LIST_LIMIT else ""
-    subject = f"{bronze_run}: {len(files)} files carried over"[:100]
-    message = (
-        f"Bronze run {bronze_run} proceeded with the earlier capture of {len(files)} source files that the ingestion run and its retry days did not capture:\n"
-        f"{shown}{more}"
-    )
+    pieces, paragraphs = [], []
+    if files:
+        shown = "\n".join(f"  {name}" for name in files[:NOTICE_LIST_LIMIT])
+        more = f"\n  and {len(files) - NOTICE_LIST_LIMIT} more (the run record lists them all)" if len(files) > NOTICE_LIST_LIMIT else ""
+        pieces.append(f"{len(files)} files carried over")
+        paragraphs.append(
+            f"Bronze run {bronze_run} proceeded with the earlier capture of {len(files)} source files that the ingestion run and its retry days did not "
+            f"capture:\n{shown}{more}"
+        )
+    if skipped:
+        listed = "\n".join(f"  {item['table']} ({item['reason']})" for item in skipped[:NOTICE_LIST_LIMIT])
+        more = f"\n  and {len(skipped) - NOTICE_LIST_LIMIT} more (the run record lists them all)" if len(skipped) > NOTICE_LIST_LIMIT else ""
+        pieces.append(f"{len(skipped)} table{'' if len(skipped) == 1 else 's'} skipped")
+        paragraphs.append(f"Bronze run {bronze_run} left out {len(skipped)} tables, so no table of this run and no record of it covers them:\n{listed}{more}")
+    subject = f"{bronze_run}: {', '.join(pieces)}"[:100]
+    message = "\n\n".join(paragraphs)
     return subject, message
