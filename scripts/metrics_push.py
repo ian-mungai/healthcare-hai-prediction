@@ -7,14 +7,16 @@ deletes the running group. A job killed hard never reaches its exit push: its ru
 - The address is ``PUSHGATEWAY_URL`` (plain http, the host's private address) and the job family is ``HAI_JOB``. Without the address nothing is sent.
 - The grouping keys come from closed sets: ``job`` (``JOB_PHASES``), ``phase`` (the phase word of the command line) and ``outcome`` (``OUTCOMES``). A run ID,
   a hospital or a key is never a label: a sample whose metric or label is not in ``CATALOG`` is dropped and named on standard error.
-- Every request has a hard timeout and the exit push has a total deadline. A failure writes one ``event=metrics_push_failed`` line and returns False.
+- Every request has one absolute deadline, enforced through the connect, the send and every read of the answer (an inactivity timeout alone lets a slow peer
+  that keeps sending bytes hold the job), and the exit push has a total deadline over its requests. A failure writes one ``event=metrics_push_failed`` line
+  and returns False. The address is an IP address, so no name lookup waits.
 """
 
 from __future__ import annotations
 
-import http.client
 import math
 import re
+import socket
 import sys
 import threading
 import time
@@ -26,6 +28,7 @@ URL_VARIABLE = "PUSHGATEWAY_URL"
 JOB_VARIABLE = "HAI_JOB"
 REQUEST_TIMEOUT = 3.0
 TOTAL_TIMEOUT = 5.0
+STATUS_LINE_LIMIT = 8192
 HEARTBEAT_SECONDS = 30.0
 OUTCOMES = ("running", "succeeded", "failed", "interrupted")
 FINAL_OUTCOMES = OUTCOMES[1:]
@@ -222,6 +225,35 @@ def phase_of(job: str, argv: Sequence[str]) -> str | None:
     return first if first in phases else None
 
 
+def exchange(host: str, port: int, request: bytes, deadline: float) -> int:
+    """Send one HTTP request and return the status of the answer, with one absolute monotonic deadline over the connect, the send and every read. Each
+    socket operation gets only the time that is left, so a peer that answers one byte at a time ends at the deadline like a silent one. Only the status line
+    is read."""
+
+    def left() -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("timed out: the request deadline passed")
+        return remaining
+
+    with socket.create_connection((host, port), timeout=left()) as connection:
+        view = memoryview(request)
+        while view:
+            connection.settimeout(left())
+            view = view[connection.send(view) :]
+        seen = b""
+        while b"\r\n" not in seen and len(seen) < STATUS_LINE_LIMIT:
+            connection.settimeout(left())
+            chunk = connection.recv(1024)
+            if not chunk:
+                break
+            seen += chunk
+    parts = seen.split(b"\r\n", 1)[0].split(b" ", 2)
+    if len(parts) < 2 or not parts[0].startswith(b"HTTP/") or not parts[1].isdigit():
+        raise ValueError("the answer has no status line")
+    return int(parts[1])
+
+
 class Pusher:
     """The pushes of one job process."""
 
@@ -277,18 +309,15 @@ class Pusher:
 
         if timeout <= 0:
             return failed("the deadline passed")
-        connection = None
+        payload = body.encode("utf-8") if method == "PUT" else b""
+        head = (
+            f"{method} {self.path(outcome)} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\nContent-Type: text/plain; version=0.0.4\r\n"
+            f"Content-Length: {len(payload)}\r\nConnection: close\r\n\r\n"
+        )
         try:
-            connection = http.client.HTTPConnection(self.host, self.port, timeout=timeout)
-            connection.request(
-                method, self.path(outcome), body=body.encode("utf-8") if method == "PUT" else None, headers={"Content-Type": "text/plain; version=0.0.4"}
-            )
-            status = connection.getresponse().status
+            status = exchange(self.host, self.port, head.encode("ascii") + payload, time.monotonic() + timeout)
         except Exception as error:
             return failed(f"{type(error).__name__}: {error}")
-        finally:
-            if connection is not None:
-                connection.close()
         return failed(f"HTTP {status}") if status >= 300 else True
 
     def clean(self, samples: Sequence[Sample]) -> list[Sample]:
@@ -332,12 +361,19 @@ class Pusher:
         finally:
             self.lock.release()
 
-    def push_samples(self, outcome: str, samples: Sequence[Sample]) -> bool:
-        """Replace one group with the samples, for a process that pushes its own group (the Spark reporter). The first failure is logged, later ones are not."""
+    def budget(self) -> float:
+        """The seconds that the pushes at the end of a process may take in all."""
+        return self.total_timeout if self.total_timeout is not None else TOTAL_TIMEOUT
+
+    def push_samples(self, outcome: str, samples: Sequence[Sample], *, within: float | None = None) -> bool:
+        """Replace one group with the samples, for a process that pushes its own group (the Spark reporter). The first failure is logged, later ones are not.
+        ``within`` shortens the request to the seconds that are left of a total budget."""
         if outcome not in OUTCOMES:
             line("metrics_push_skipped", reason="the outcome is not in the closed set")
             return False
         timeout = self.request_timeout if self.request_timeout is not None else REQUEST_TIMEOUT
+        if within is not None:
+            timeout = min(timeout, within)
         try:
             ok = self.send("PUT", outcome, exposition(self.clean(samples)), timeout, quiet=self.sample_failures > 0)
         except Exception as error:
@@ -346,9 +382,11 @@ class Pusher:
         self.sample_failures = 0 if ok else self.sample_failures + 1
         return ok
 
-    def delete_group(self, outcome: str) -> bool:
-        """Delete one group, best effort."""
+    def delete_group(self, outcome: str, *, within: float | None = None) -> bool:
+        """Delete one group, best effort. ``within`` shortens the request to the seconds that are left of a total budget."""
         timeout = self.request_timeout if self.request_timeout is not None else REQUEST_TIMEOUT
+        if within is not None:
+            timeout = min(timeout, within)
         return outcome in OUTCOMES and self.send("DELETE", outcome, "", timeout, quiet=self.sample_failures > 0)
 
     def start(self, *, memory_current: float | None = None, memory_peak: float | None = None, scratch_peak: float | None = None) -> bool:

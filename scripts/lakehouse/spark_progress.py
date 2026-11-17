@@ -23,6 +23,7 @@ from scripts import metrics_push
 
 JOB = "bronze"
 PHASE = "spark"
+JOIN_SHARE = 0.3
 FINAL_STATUSES = ("SUCCEEDED", "FAILED")
 
 
@@ -106,18 +107,19 @@ class Reporter(threading.Thread):
         if self.finished:
             return
         self.finished = True
+        ends = time.monotonic() + self.pusher.budget()
         try:
             self.stopped.set()
             if self.is_alive():
-                self.join(timeout=10)
+                self.join(timeout=self.pusher.budget() * JOIN_SHARE)
             try:
                 samples = self.progress.poll()
             except Exception:
                 samples = self.last
             if samples:
                 failed = next((sample.value for sample in samples if sample.name == "hai_spark_jobs_failed"), 0)
-                self.pusher.push_samples("failed" if failed else "succeeded", samples)
-                self.pusher.delete_group("running")
+                self.pusher.push_samples("failed" if failed else "succeeded", samples, within=ends - time.monotonic())
+                self.pusher.delete_group("running", within=ends - time.monotonic())
         except Exception as error:
             metrics_push.line("spark_progress_failed", reason=f"{type(error).__name__}: {error}")
 

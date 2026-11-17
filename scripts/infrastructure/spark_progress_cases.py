@@ -14,7 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from scripts import metrics_push
-from scripts.infrastructure.metrics_push_cases import StandIn, quiet
+from scripts.infrastructure.metrics_push_cases import DripGateway, StandIn, quiet
 from scripts.lakehouse import spark_progress
 
 RUNNING = ("bronze", "spark", "running")
@@ -236,6 +236,23 @@ def start_only_for_bronze_with_an_address(root: Path) -> dict[str, bool]:
     }
 
 
+def the_final_push_of_a_session_ends_within_the_budget(root: Path) -> dict[str, bool]:
+    tracker = scenario()
+    with DripGateway() as gateway:
+        reporter = spark_progress.Reporter(
+            metrics_push.Pusher(gateway.url, "bronze", "spark", request_timeout=1.0, total_timeout=1.5), spark_progress.Progress(tracker), interval=0.05
+        )
+        reporter.start()
+        time.sleep(0.3)
+        started = time.monotonic()
+        quiet(reporter.stop)
+        elapsed = time.monotonic() - started
+    return {
+        "stop ends within the total budget of the pusher, plus a margin, although every request is answered one byte at a time": elapsed < 2.3,
+        "the thread has ended": not any(thread.name == "spark_progress" for thread in threading.enumerate()),
+    }
+
+
 def catalog_and_phase_table_know_the_spark_group(root: Path) -> dict[str, bool]:
     return {
         "every metric is in the push catalog with no label": all(name in metrics_push.CATALOG and metrics_push.CATALOG[name][1] == () for name in NAMES),
@@ -254,5 +271,6 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "spark_an_unreachable_gateway_never_fails_the_job": an_unreachable_gateway_never_fails_the_job,
     "spark_a_failing_tracker_is_logged_once_and_the_reporter_goes_on": a_failing_tracker_is_logged_once_and_the_reporter_goes_on,
     "spark_start_only_for_bronze_with_an_address": start_only_for_bronze_with_an_address,
+    "spark_the_final_push_of_a_session_ends_within_the_budget": the_final_push_of_a_session_ends_within_the_budget,
     "spark_catalog_and_phase_table_know_the_spark_group": catalog_and_phase_table_know_the_spark_group,
 }

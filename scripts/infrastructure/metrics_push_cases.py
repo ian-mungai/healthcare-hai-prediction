@@ -14,6 +14,7 @@ import json
 import math
 import os
 import re
+import socket
 import sys
 import tempfile
 import threading
@@ -284,6 +285,92 @@ def total_deadline_covers_both_requests(root: Path) -> dict[str, bool]:
     return {"start and finish together stay near the deadline of one push each": elapsed < 3.0}
 
 
+class DripGateway:
+    """A loopback peer that reads the request and then answers one byte every ``gap`` seconds, so every byte arrives inside the inactivity timeout of a read
+    while the whole answer takes seven seconds (review round 2, finding 4). It stops when the case ends."""
+
+    ANSWER = b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"
+
+    def __init__(self, gap: float = 0.2) -> None:
+        self.gap, self.stopped = gap, threading.Event()
+        self.listener = socket.socket()
+        self.listener.bind(("127.0.0.1", 0))
+        self.listener.listen(8)
+        self.listener.settimeout(0.2)
+        self.thread = threading.Thread(target=self.serve, daemon=True)
+        self.connections: list[socket.socket] = []
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.listener.getsockname()[1]}"
+
+    def serve(self) -> None:
+        while not self.stopped.is_set():
+            try:
+                connection, _ = self.listener.accept()
+            except OSError:
+                continue
+            self.connections.append(connection)
+            threading.Thread(target=self.answer, args=(connection,), daemon=True).start()
+
+    def answer(self, connection: socket.socket) -> None:
+        try:
+            connection.settimeout(2.0)
+            seen = b""
+            while b"\r\n\r\n" not in seen:
+                seen += connection.recv(4096)
+            found = re.search(rb"Content-Length: (\d+)", seen, re.I)
+            length = int(found.group(1)) if found else 0
+            while len(seen.split(b"\r\n\r\n", 1)[1]) < length:
+                seen += connection.recv(4096)
+            for index in range(len(self.ANSWER)):
+                if self.stopped.is_set():
+                    return
+                connection.sendall(self.ANSWER[index : index + 1])
+                time.sleep(self.gap)
+        except (OSError, ValueError, AttributeError):
+            return
+
+    def __enter__(self) -> DripGateway:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.stopped.set()
+        self.listener.close()
+        for connection in self.connections:
+            with contextlib.suppress(OSError):
+                connection.close()
+        self.thread.join(timeout=5)
+
+
+def a_slow_answer_that_never_pauses_still_ends_at_the_deadline(root: Path) -> dict[str, bool]:
+    with DripGateway() as gateway:
+        started = time.monotonic()
+        accepted, text = quiet(lambda: finish_ok(pusher(gateway.url, request_timeout=1.0, total_timeout=1.5)))
+        elapsed = time.monotonic() - started
+    return {
+        "the exit push is not accepted, because its answer did not arrive in time": accepted is False,
+        "it ends within the total timeout, although bytes arrived all the time": elapsed < 2.0,
+        "the reason names the deadline or a timeout": "timed out" in text or "deadline" in text,
+    }
+
+
+def a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete(root: Path) -> dict[str, bool]:
+    results: dict[str, float] = {}
+    with DripGateway() as gateway:
+        target = pusher(gateway.url, request_timeout=0.8, total_timeout=1.5)
+        for name, call in (
+            ("sample push", lambda: target.push_samples("running", [metrics_push.Sample("hai_spark_tasks_failed", 0)])),
+            ("heartbeat", lambda: target.heartbeat(first=True)),
+            ("delete", lambda: target.delete_group("running")),
+        ):
+            started = time.monotonic()
+            quiet(call)
+            results[name] = time.monotonic() - started
+    return {f"a {name} ends within its request timeout": elapsed < 1.3 for name, elapsed in results.items()}
+
+
 def unreachable_is_reported_not_raised(root: Path) -> dict[str, bool]:
     with StandIn() as stand_in:
         url = stand_in.url
@@ -310,7 +397,7 @@ def never_raises_into_the_job(root: Path) -> dict[str, bool]:
         target = pusher(stand_in.url)
         with mock.patch.object(metrics_push, "exposition", boom):
             result, text = quiet(lambda: finish_ok(target))
-        with mock.patch.object(metrics_push.http.client, "HTTPConnection", boom):
+        with mock.patch.object(metrics_push, "exchange", boom):
             second, text_two = quiet(lambda: finish_ok(target))
     return {
         "an error in the exposition returns False": result is False and "RuntimeError" in text,
@@ -800,6 +887,8 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "push_bad_exposition_refusal_is_reported": bad_exposition_refusal_is_reported,
     "push_timeout_is_bounded": timeout_is_bounded,
     "push_total_deadline_covers_both_requests": total_deadline_covers_both_requests,
+    "push_a_slow_answer_that_never_pauses_still_ends_at_the_deadline": a_slow_answer_that_never_pauses_still_ends_at_the_deadline,
+    "push_a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete": a_slow_answer_bounds_a_sample_push_a_heartbeat_and_a_delete,
     "push_unreachable_is_reported_not_raised": unreachable_is_reported_not_raised,
     "push_dropped_connection_is_reported_not_raised": dropped_connection_is_reported_not_raised,
     "push_never_raises_into_the_job": never_raises_into_the_job,
