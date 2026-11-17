@@ -128,10 +128,10 @@ run "drift_role_is_narrow" {
   assert {
     condition = (
       jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Action == ["s3:PutObject"] &&
-      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Resource == "arn:aws:s3:::example-project-ci-bucket/drift/*" &&
+      jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement[0].Resource == ["arn:aws:s3:::example-project-ci-bucket/drift/*", "arn:aws:s3:::example-project-ci-bucket/drift_demo/*"] &&
       length(jsondecode(aws_iam_role_policy.drift_task["drift_records"].policy).Statement) == 1
     )
-    error_message = "The drift task may only create objects under drift/. It cannot read, list or delete them."
+    error_message = "The drift task may only create objects under drift/ (the gate runs) and drift_demo/ (the on-demand live check). It cannot read, list or delete them."
   }
 
   assert {

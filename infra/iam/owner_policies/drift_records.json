@@ -5,7 +5,7 @@
       "Sid": "CreateDriftRecords",
       "Effect": "Allow",
       "Action": ["s3:PutObject"],
-      "Resource": "arn:aws:s3:::${DATA_BUCKET_NAME}/drift/*"
+      "Resource": ["arn:aws:s3:::${DATA_BUCKET_NAME}/drift/*", "arn:aws:s3:::${DATA_BUCKET_NAME}/drift_demo/*"]
     }
   ]
 }

@@ -34,7 +34,7 @@ resource "aws_iam_role" "drift_task" {
   count = var.drift_prepared ? 1 : 0
 
   name                 = format(local.platform_name, "job_drift_task")
-  description          = "Drift job: stage reads, the feature tables, the Feast registry and a read of the DVC remote. It creates objects under drift/ and has no lakehouse write."
+  description          = "Drift job: stage reads, the feature tables, the Feast registry and a read of the DVC remote. It creates objects under drift/ and drift_demo/ and has no lakehouse write."
   max_session_duration = 3600
   assume_role_policy   = local.ecs_tasks_trust
   tags                 = local.project_tags

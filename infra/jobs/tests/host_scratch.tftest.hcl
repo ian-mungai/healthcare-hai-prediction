@@ -137,10 +137,10 @@ run "every_host_init_wipes_the_two_scratch_folders_first" {
     condition = alltrue([
       for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
         toset([for mount in jsondecode(output.host_container_definitions[family])[0].mountPoints : "${mount.sourceVolume}:${mount.containerPath}:${mount.readOnly}"]) ==
-        toset(["workspace:/workspace:false", "tmp:/tmp:false"])
+        toset(concat(["workspace:/workspace:false", "tmp:/tmp:false"], family == "drift" ? ["evidently_workspace:/evidently:false"] : []))
       )
     ])
-    error_message = "The init step mounts the family's two scratch folders and nothing else, so its wipe cannot reach the repository checkout or another family."
+    error_message = "The init step mounts the family's two scratch folders and nothing else (the drift family's init also mounts the Evidently workspace, which it hands to the job user and never wipes), so its wipe cannot reach the repository checkout or another family."
   }
 
   assert {
@@ -239,7 +239,7 @@ run "every_host_job_cleans_its_scratch_after_its_last_phase_succeeds" {
       for family in ["silver", "gold", "features", "bronze", "train", "drift", "promote", "serve", "metadata"] : (
         alltrue([
           for container in jsondecode(output.host_container_definitions[family]) :
-          alltrue([for mount in container.mountPoints : contains(["workspace", "tmp", "repo"], mount.sourceVolume) && (mount.sourceVolume != "repo" || mount.readOnly)])
+          alltrue([for mount in container.mountPoints : contains(["workspace", "tmp", "repo", "evidently_workspace"], mount.sourceVolume) && (mount.sourceVolume != "repo" || mount.readOnly) && (mount.sourceVolume != "evidently_workspace" || family == "drift")])
           if container.name != "guard"
         ]) &&
         alltrue([

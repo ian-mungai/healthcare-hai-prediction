@@ -22,7 +22,7 @@ locals {
   # that requires it. Every service and the one-shot launch arguments therefore use this one value.
   task_tag_source = "TASK_DEFINITION"
 
-  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
+  image_keys = concat(["postgres", "redis", "polaris", "polaris_admin", "airflow"], var.mlflow_enabled ? ["mlflow"] : [], var.model_api_enabled ? ["model_api"] : [], var.streamlit_enabled ? ["streamlit"] : [], var.evidently_ui_enabled ? ["drift"] : [], var.monitoring_enabled ? ["prometheus", "grafana", "statsd_exporter", "pushgateway", "redis_exporter", "postgres_exporter", "node_exporter"] : [], local.om_on ? ["openmetadata_server", "openmetadata_ingestion", "openmetadata_search"] : [], local.code_fetch_on ? ["training"] : [])
   image      = { for key in local.image_keys : key => "${var.ecr_repository_urls[key]}@${var.image_digests[key]}" }
 
   code_path = coalesce(var.dag_code_path, "${var.data_mount_path}/repo")
@@ -40,6 +40,7 @@ locals {
     "airflow_triggerer"                     = "airflow"
     "model_api"                             = "airflow"
     "streamlit"                             = "airflow"
+    "evidently_ui"                          = "airflow"
     "host_prepare"                          = "airflow"
     "polaris_bootstrap"                     = "polaris"
     }, local.code_fetch_on ? { "code_fetch" = "airflow" } : {}, var.mlflow_enabled ? { "mlflow" = "mlflow" } : {}, local.om_on ? { for name in ["opensearch", "openmetadata_migrate", "openmetadata_server", "openmetadata_bootstrap"] : name => "openmetadata" } : {}, {
@@ -171,6 +172,15 @@ locals {
           volumes       = {}
         }
       } : key => service if var.streamlit_enabled
+    },
+    {
+      for key, service in {
+        evidently_ui = {
+          task_role_arn = var.evidently_ui_task_role_arn
+          containers    = local.evidently_ui_containers
+          volumes       = { evidently_workspace = local.evidently_ui_workspace }
+        }
+      } : key => service if var.evidently_ui_enabled
     },
     {
       for key, service in {

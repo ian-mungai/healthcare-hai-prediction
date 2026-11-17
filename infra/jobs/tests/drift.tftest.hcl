@@ -95,22 +95,39 @@ run "drift_init_step_makes_the_volumes_writable_for_the_job_user" {
     condition = (
       jsondecode(output.host_container_definitions["drift"])[0].name == "init" &&
       jsondecode(output.host_container_definitions["drift"])[0].user == "0:0" &&
-      jsondecode(output.host_container_definitions["drift"])[0].command == ["find /workspace /tmp -mindepth 1 -delete && chown 10001:10001 /workspace /tmp"] &&
+      jsondecode(output.host_container_definitions["drift"])[0].command == ["find /workspace /tmp -mindepth 1 -delete && chown 10001:10001 /workspace /tmp /evidently"] &&
       !jsondecode(output.host_container_definitions["drift"])[0].privileged &&
       jsondecode(output.host_container_definitions["drift"])[0].readonlyRootFilesystem &&
       jsondecode(output.host_container_definitions["drift"])[0].linuxParameters.capabilities.add == [] &&
       !contains(jsondecode(output.host_container_definitions["drift"])[0].linuxParameters.capabilities.drop, "CHOWN") &&
       length(jsondecode(output.host_container_definitions["drift"])[0].secrets) == 0
     )
-    error_message = "The init step runs as root with only the capability to change owners, no secret and a read-only root, and hands both volumes to the job user."
+    error_message = "The init step runs as root with only the capability to change owners, no secret and a read-only root, and hands the two job volumes and the Evidently workspace to the job user. It deletes only the two job volumes."
   }
 
   assert {
     condition = (
-      toset(["/workspace", "/tmp"]) == toset([for mount in jsondecode(output.host_container_definitions["drift"])[0].mountPoints : mount.containerPath]) &&
-      alltrue([for container in jsondecode(output.host_container_definitions["drift"]) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == toset(["/workspace", "/tmp"])])
+      toset(["/workspace", "/tmp", "/evidently"]) == toset([for mount in jsondecode(output.host_container_definitions["drift"])[0].mountPoints : mount.containerPath]) &&
+      alltrue([for container in jsondecode(output.host_container_definitions["drift"]) : toset([for mount in container.mountPoints : mount.containerPath if !mount.readOnly]) == (
+        contains(["init", "check"], container.name) ? toset(["/workspace", "/tmp", "/evidently"]) : toset(["/workspace", "/tmp"])
+      )])
     )
-    error_message = "Every writable mount of every container is one of the two volumes that the init step hands to the job user."
+    error_message = "Every writable mount of every container is one of the volumes that the init step hands to the job user, and only the init and check steps mount the Evidently workspace."
+  }
+
+  assert {
+    condition = (
+      aws_ecs_task_definition.host["drift"].volume != null &&
+      toset([for volume in aws_ecs_task_definition.host["drift"].volume : volume.name]) == toset(["workspace", "tmp", "evidently_workspace"]) &&
+      one([for volume in aws_ecs_task_definition.host["drift"].volume : volume.host_path if volume.name == "evidently_workspace"]) == "${var.host_scratch_root}/drift/evidently_workspace" &&
+      alltrue([for container in jsondecode(output.host_container_definitions["drift"]) : alltrue([for mount in container.mountPoints : mount.sourceVolume == "evidently_workspace" ? mount.containerPath == "/evidently" : true])])
+    )
+    error_message = "The Evidently workspace is one host folder under the drift family's scratch root, mounted at /evidently, where the UI service of the services stack reads it."
+  }
+
+  assert {
+    condition     = !strcontains(jsondecode(output.host_container_definitions["drift"])[0].command[0], "-delete /evidently") && !strcontains(jsondecode(output.host_container_definitions["drift"])[5].command[0], "/evidently")
+    error_message = "No wipe reaches the Evidently workspace: the snapshots of earlier runs stay for the UI."
   }
 }
 
@@ -124,12 +141,12 @@ run "drift_commands_and_environment" {
   assert {
     condition = (
       jsondecode(output.host_container_definitions["drift"])[1].command == ["python -I /opt/hai/fetch_code.py"] &&
-      jsondecode(output.host_container_definitions["drift"])[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\" --model \"$FEATURE_SET\""] &&
-      jsondecode(output.host_container_definitions["drift"])[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\" --features-run \"$INPUT_RUN_ID\""] &&
-      jsondecode(output.host_container_definitions["drift"])[4].command == ["cd /workspace/code && python -m monitoring.aws_run check --run \"$RUN_ID\""] &&
-      jsondecode(output.host_container_definitions["drift"])[5].command == ["(cd /workspace/code && python -m monitoring.aws_run publish --run \"$RUN_ID\") && find /workspace /tmp -mindepth 1 -delete"]
+      jsondecode(output.host_container_definitions["drift"])[2].command == ["cd /workspace/code && python -m monitoring.aws_run baseline --run \"$RUN_ID\" --model \"$FEATURE_SET\" --live-type \"$LIVE_HAI_TYPE\""] &&
+      jsondecode(output.host_container_definitions["drift"])[3].command == ["cd /workspace/code && python -m monitoring.aws_run current --run \"$RUN_ID\" --features-run \"$INPUT_RUN_ID\" --live-type \"$LIVE_HAI_TYPE\""] &&
+      jsondecode(output.host_container_definitions["drift"])[4].command == ["cd /workspace/code && python -m monitoring.aws_run check --run \"$RUN_ID\" --live-type \"$LIVE_HAI_TYPE\""] &&
+      jsondecode(output.host_container_definitions["drift"])[5].command == ["(cd /workspace/code && python -m monitoring.aws_run publish --run \"$RUN_ID\" --live-type \"$LIVE_HAI_TYPE\") && find /workspace /tmp -mindepth 1 -delete"]
     )
-    error_message = "The fetch step runs the script baked into the image. The other four run the phases of the fetched code, the baseline phase for the model of the run and the current phase for its model run."
+    error_message = "The fetch step runs the script baked into the image. The other four run the phases of the fetched code, the baseline phase for the model of the run, the current phase for its model run, and each phase for the type of a live check, which an ordinary run leaves empty."
   }
 
   assert {
@@ -146,10 +163,10 @@ run "drift_commands_and_environment" {
   assert {
     condition = (
       toset([for variable in jsondecode(output.host_container_definitions["drift"])[1].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]) &&
-      toset([for variable in jsondecode(output.host_container_definitions["drift"])[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]) &&
-      toset([for variable in jsondecode(output.host_container_definitions["drift"])[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]) &&
-      toset([for variable in jsondecode(output.host_container_definitions["drift"])[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"]) &&
-      toset([for variable in jsondecode(output.host_container_definitions["drift"])[5].environment : variable.name if variable.value == ""]) == toset(["RUN_ID"])
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[2].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET", "LIVE_HAI_TYPE"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[3].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID", "LIVE_HAI_TYPE"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[4].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "LIVE_HAI_TYPE"]) &&
+      toset([for variable in jsondecode(output.host_container_definitions["drift"])[5].environment : variable.name if variable.value == ""]) == toset(["RUN_ID", "LIVE_HAI_TYPE"])
     )
     error_message = "Each container lists exactly the empty variables the run-task override must fill for it."
   }

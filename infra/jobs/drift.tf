@@ -60,15 +60,21 @@ variable "drift_mlflow_password_name" {
 locals {
   drift_run_variables = {
     fetch    = ["RUN_ID", "CODE_RUN_ID", "CODE_SHA256"]
-    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET"]
-    current  = ["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID"]
-    check    = ["RUN_ID"]
-    publish  = ["RUN_ID"]
+    baseline = ["RUN_ID", "MLFLOW_TRACKING_URI", "POLARIS_URI", "FEATURE_SET", "LIVE_HAI_TYPE"]
+    current  = ["RUN_ID", "POLARIS_URI", "INPUT_RUN_ID", "LIVE_HAI_TYPE"]
+    check    = ["RUN_ID", "LIVE_HAI_TYPE"]
+    publish  = ["RUN_ID", "LIVE_HAI_TYPE"]
   }
   # The baseline phase gates the model named in FEATURE_SET and the current phase reads the model run named in INPUT_RUN_ID (the set the drift check covers).
-  drift_phase = "cd /workspace/code && python -m monitoring.aws_run %s --run \"$RUN_ID\"%s"
+  # LIVE_HAI_TYPE is empty for the gate task. drift_live_check_dag fills it, and every phase then runs the on-demand live check of that one type
+  # (monitoring.live_check): the baseline fetches that type only, the current phase reads nothing, the check writes the Evidently UI workspace mounted at
+  # /evidently and the publish phase writes to drift_demo/<run>/, never to drift/<run>/.
+  drift_phase = "cd /workspace/code && python -m monitoring.aws_run %s --run \"$RUN_ID\"%s --live-type \"$LIVE_HAI_TYPE\""
+  # The workspace of the Evidently UI lives in its own host folder of the drift family (host.tf: <scratch root>/drift/evidently_workspace), which no wipe reaches. Only the
+  # init step, which hands it to the job user, and the check step, which writes the snapshots, mount it.
+  drift_workspace_mount = { sourceVolume = "evidently_workspace", containerPath = "/evidently", readOnly = false }
   drift_steps = [
-    { name = "init", image = "training", script = "chown 10001:10001 /workspace /tmp", secrets = [] },
+    { name = "init", image = "training", script = "chown 10001:10001 /workspace /tmp /evidently", secrets = [] },
     { name = "fetch", image = "training", script = "python -I /opt/hai/fetch_code.py", secrets = [] },
     {
       name    = "baseline"
@@ -109,10 +115,10 @@ locals {
         step.name == "baseline" ? [{ name = "MLFLOW_TRACKING_USERNAME", value = "admin" }] : []
       )
       secrets = step.secrets
-      mountPoints = [
+      mountPoints = concat([
         { sourceVolume = "workspace", containerPath = "/workspace", readOnly = false },
         { sourceVolume = "tmp", containerPath = "/tmp", readOnly = false }
-      ]
+      ], contains(["init", "check"], step.name) ? [local.drift_workspace_mount] : [])
       logConfiguration = {
         logDriver = "awslogs"
         options = {

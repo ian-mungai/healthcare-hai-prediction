@@ -199,6 +199,11 @@ variable "image_digests" {
   }
 
   validation {
+    condition     = !var.evidently_ui_enabled || contains(keys(var.image_digests), "drift")
+    error_message = "Supply the image digest of the drift image when evidently_ui_enabled is true: the UI runs it."
+  }
+
+  validation {
     condition     = !var.streamlit_enabled || contains(keys(var.image_digests), "streamlit")
     error_message = "Supply a digest for streamlit, or set streamlit_enabled to false."
   }
