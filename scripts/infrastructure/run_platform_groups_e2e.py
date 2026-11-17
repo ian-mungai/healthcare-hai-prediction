@@ -13,6 +13,7 @@ and skips the rest. Each case runs twice: with the committed defaults and with `
 2. A misspelled, capitalized, padded, empty, missing, null, number, boolean, list or object group of a monitoring, a serving or an always image fails both runs
    with the precondition message that names the image.
 3. The real stack declares no variable that names another image list, reads no file but the image list, and makes repositories only from its keys.
+4. Every Terraform call uses a plugin cache inside the run's scratch folder, so the caller's ``TF_PLUGIN_CACHE_DIR`` is left unchanged.
 
 Run: ``.venv/bin/python -m scripts.infrastructure.run_platform_groups_e2e --output-directory data/e2e/<new folder>``
 """
@@ -21,6 +22,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import sys
@@ -65,7 +67,7 @@ def mutated(image: str, value: Any) -> str:
     return json.dumps(document, indent=2) + "\n"
 
 
-def copy_stack(destination: Path, manifest: str | None, plugin_directory: Path | None) -> Path:
+def copy_stack(destination: Path, manifest: str | None, plugin_directory: Path | None, cache: Path) -> Path:
     """Copy the platform stack beside the image list and the policy file its tests read, with the list replaced when given, and initialize the copy offline."""
     root = destination / "infra"
     shutil.copytree(
@@ -80,18 +82,18 @@ def copy_stack(destination: Path, manifest: str | None, plugin_directory: Path |
         arguments.append(f"-plugin-dir={plugin_directory}")
     elif (root / "platform" / ".terraform.lock.hcl").is_file():
         arguments.append("-lockfile=readonly")
-    code, text = stack.terraform(arguments, root / "platform")
+    code, text = stack.terraform(arguments, root / "platform", {"TF_PLUGIN_CACHE_DIR": str(cache)})
     if code != 0:
         raise RuntimeError(f"terraform init failed:\n{text[-1500:]}")
     return root / "platform"
 
 
-def run_tests(directory: Path, monitoring: bool) -> tuple[int, str]:
+def run_tests(directory: Path, monitoring: bool, cache: Path) -> tuple[int, str]:
     """Run the test file of the copy with the committed defaults, or with the monitoring switch false."""
     arguments = ["test", "-no-color", f"-filter={TEST_FILE}"]
     if not monitoring:
         arguments.append("-var=monitoring_enabled=false")
-    return stack.terraform(arguments, directory)
+    return stack.terraform(arguments, directory, {"TF_PLUGIN_CACHE_DIR": str(cache)})
 
 
 def refusal(code: int, text: str, image: str) -> str | None:
@@ -126,25 +128,38 @@ def declared_inputs() -> dict[str, bool]:
     }
 
 
+def cache_listing(folder: str | None) -> list[str]:
+    """Every path under the caller's plugin cache, or an empty list when none is set or it does not exist."""
+    if not folder or not Path(folder).is_dir():
+        return []
+    return sorted(str(path.relative_to(folder)) for path in Path(folder).rglob("*"))
+
+
 def run(output: Path, plugin_directory: Path | None) -> dict[str, Any]:
     """Run every case in disposable copies and return the report."""
     cases: list[dict[str, Any]] = []
+    caller_cache = os.environ.get("TF_PLUGIN_CACHE_DIR")
+    cache_before = cache_listing(caller_cache)
 
     def record(name: str, problem: str | None) -> None:
         cases.append({"case": name, "passed": problem is None, "problem": problem})
 
     with tempfile.TemporaryDirectory(prefix="platform_groups.") as folder:
         scratch = Path(folder)
-        copy = copy_stack(scratch / "control", None, plugin_directory)
-        code, text = run_tests(copy, True)
+        cache = scratch / "plugin_cache"
+        cache.mkdir()
+        copy = copy_stack(scratch / "control", None, plugin_directory, cache)
+        code, text = run_tests(copy, True, cache)
         record("the unchanged copy passes the test file", None if code == 0 and "Success!" in text else f"exit {code}: {text[-300:]}")
         for index, (label, image, value) in enumerate(BAD_GROUPS):
-            copy = copy_stack(scratch / f"case_{index}", mutated(image, value), plugin_directory)
+            copy = copy_stack(scratch / f"case_{index}", mutated(image, value), plugin_directory, cache)
             for monitoring in (True, False):
-                code, text = run_tests(copy, monitoring)
+                code, text = run_tests(copy, monitoring, cache)
                 record(f"{label} ({image}) with monitoring {'on' if monitoring else 'off'}", refusal(code, text, image))
     for name, ok in declared_inputs().items():
         record(name, None if ok else "the stack's files do not show it")
+    changed = cache_listing(caller_cache) != cache_before
+    record("the run leaves the caller's plugin cache (TF_PLUGIN_CACHE_DIR) unchanged", "the run wrote into the caller's plugin cache" if changed else None)
     report = {"passed": all(case["passed"] for case in cases), "cases": cases}
     output.mkdir(parents=True)
     (output / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
