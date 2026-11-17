@@ -25,6 +25,7 @@ POLARIS_TERRAFORM = "infra/services/polaris.tf"
 HISTOGRAM_SETTING = "POLARIS_METRICS_HTTP_SERVER_REQUESTS_HISTOGRAM_SLOS"
 BUCKET = "http_server_requests_seconds_bucket"
 PINNED = {"polaris": "1.8.0", "mlflow": "3.17.2", "grafana": "13.2.5"}
+NOTIFICATION_COUNTERS = ("grafana_alerting_notifications_total", "grafana_alerting_notifications_failed_total")
 WANTED_RULES = (
     "PolarisServerErrors",
     "PolarisHeapHigh",
@@ -68,7 +69,7 @@ def polaris_panels_cover_the_request(root: Path) -> dict[str, bool]:
         "95th percentile latency": mentions(found, "histogram_quantile(0.95", "sum by (le) (rate(http_server_requests_seconds_bucket{"),
         "95th percentile latency by operation, limited by topk": mentions(found, "topk(10, histogram_quantile(0.95", "sum by (le, method, uri)"),
         "JVM heap used": mentions(found, 'jvm_memory_used_bytes{job="polaris",area="heap"}'),
-        "JVM heap share of the maximum": mentions(found, "jvm_memory_used_bytes", "clamp_min(jvm_memory_max_bytes"),
+        "JVM heap share of the maximum": mentions(found, "jvm_memory_used_bytes", 'sum(jvm_memory_max_bytes{job="polaris",area="heap"} > 0)'),
     }
 
 
@@ -223,6 +224,89 @@ def known_list_loses_a_polaris_metric(root: Path) -> dict[str, bool]:
     )
 
 
+def plant_expression(tree: Path, relative: str, title: str, change: Callable[[str], str]) -> None:
+    """Change the first query of the panel with this title in one dashboard of the scratch tree."""
+    path = tree / relative
+    document = json.loads(path.read_text(encoding="utf-8"))
+    panel = next(panel for panel in document["panels"] if panel.get("title") == title)
+    panel["targets"][0]["expr"] = change(panel["targets"][0]["expr"])
+    path.write_text(json.dumps(document), encoding="utf-8")
+
+
+def polaris_timer_labels_follow_the_pinned_source(root: Path) -> dict[str, bool]:
+    """Quarkus 3.39.3 puts server.port on the active requests gauge only; the request timer has method, uri, outcome, status and application."""
+    listed = json.loads((root / KNOWN).read_text(encoding="utf-8"))["polaris"]["metrics"]
+    timers = [name for name in listed if name.startswith("http_server_requests_seconds_")]
+    return {
+        "the four timer series are listed": len(timers) == 4,
+        "no timer series has a server_port label": all("server_port" not in listed[name]["labels"] for name in timers),
+        "the timer series keep method, uri, outcome, status and application": all(
+            {"method", "uri", "outcome", "status", "application"} <= set(listed[name]["labels"]) for name in timers
+        ),
+        "the active requests gauge keeps the server_port label": "server_port" in listed["http_server_active_requests"]["labels"],
+    }
+
+
+def polaris_timer_selector_asks_for_a_server_port(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(
+            tree,
+            POLARIS,
+            'http_server_requests_seconds_count{job=\\"polaris\\"}',
+            'http_server_requests_seconds_count{job=\\"polaris\\",server_port=\\"8181\\"}',
+        ),
+        "http_server_requests_seconds_count has no label server_port",
+    )
+
+
+def polaris_unbounded_branch_beside_a_topk_is_reported(root: Path) -> dict[str, bool]:
+    def plant(tree: Path) -> None:
+        plant_expression(
+            tree,
+            POLARIS,
+            "Requests per second by operation (top 10)",
+            lambda expression: f'{expression} or sum by (method, uri) (rate(http_server_requests_seconds_count{{job="polaris"}}[$__rate_interval]))',
+        )
+
+    return reported(root, plant, "groups by uri without topk")
+
+
+def heap_rule_reads_a_maximum_that_may_be_undefined(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES, 'jvm_memory_max_bytes{job="polaris",area="heap"} > 0', 'clamp_min(jvm_memory_max_bytes{job="polaris",area="heap"}, 0)'),
+        "jvm_memory_max_bytes is -1 when a pool has no maximum",
+    )
+
+
+def heap_panel_reads_a_maximum_that_may_be_undefined(root: Path) -> dict[str, bool]:
+    return reported(
+        root,
+        lambda tree: edit(
+            tree,
+            POLARIS,
+            'jvm_memory_max_bytes{job=\\"polaris\\",area=\\"heap\\"} > 0',
+            'clamp_min(jvm_memory_max_bytes{job=\\"polaris\\",area=\\"heap\\"}, 0)',
+        ),
+        "jvm_memory_max_bytes is -1 when a pool has no maximum",
+    )
+
+
+def notification_rule_ignores_the_first_failure(root: Path) -> dict[str, bool]:
+    selector = 'grafana_alerting_notifications_failed_total{job="grafana"}'
+    return reported(
+        root,
+        lambda tree: edit(tree, RULES, f" + ((sum({selector} unless {selector} offset 15m) > bool 0) or vector(0))", ""),
+        "has no series before its first event",
+    )
+
+
+def known_list_marks_the_counters_that_start_at_their_first_event(root: Path) -> dict[str, bool]:
+    listed = json.loads((root / KNOWN).read_text(encoding="utf-8"))["grafana"]["metrics"]
+    return {f"{name} is marked as a series that starts at its first event": listed[name].get("starts_at_first_event") is True for name in NOTIFICATION_COUNTERS}
+
+
 CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "service_polaris_panels_cover_the_request": polaris_panels_cover_the_request,
     "service_mlflow_panels_cover_the_request": mlflow_panels_cover_the_request,
@@ -242,4 +326,11 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "service_grafana_panel_reads_an_unscraped_job": grafana_panel_reads_an_unscraped_job,
     "service_alert_rule_reads_a_metric_nobody_exposes": alert_rule_reads_a_metric_nobody_exposes,
     "service_known_list_loses_a_polaris_metric": known_list_loses_a_polaris_metric,
+    "service_polaris_timer_labels_follow_the_pinned_source": polaris_timer_labels_follow_the_pinned_source,
+    "service_polaris_timer_selector_asks_for_a_server_port": polaris_timer_selector_asks_for_a_server_port,
+    "service_polaris_unbounded_branch_beside_a_topk_is_reported": polaris_unbounded_branch_beside_a_topk_is_reported,
+    "service_heap_rule_reads_a_maximum_that_may_be_undefined": heap_rule_reads_a_maximum_that_may_be_undefined,
+    "service_heap_panel_reads_a_maximum_that_may_be_undefined": heap_panel_reads_a_maximum_that_may_be_undefined,
+    "service_notification_rule_ignores_the_first_failure": notification_rule_ignores_the_first_failure,
+    "service_known_list_marks_the_counters_that_start_at_their_first_event": known_list_marks_the_counters_that_start_at_their_first_event,
 }

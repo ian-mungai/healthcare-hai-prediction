@@ -56,7 +56,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: 'sum(jvm_memory_used_bytes{job="polaris",area="heap"}) / sum(clamp_min(jvm_memory_max_bytes{job="polaris",area="heap"}, 0)) > bool 0.9'
+              expr: 'sum(jvm_memory_used_bytes{job="polaris",area="heap"}) / sum(jvm_memory_max_bytes{job="polaris",area="heap"} > 0) > bool 0.9'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -82,7 +82,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: The Polaris Java heap has stayed above 90% of its maximum.
+          summary: The Polaris Java heap has stayed above 90% of its maximum. A heap with no defined maximum raises no alert.
 
       - uid: mlflow_server_errors
         title: MlflowServerErrors
@@ -204,7 +204,7 @@ groups:
             datasourceUid: hai_prometheus
             model:
               refId: A
-              expr: 'sum(increase(grafana_alerting_notifications_failed_total{job="grafana"}[15m])) > bool 0'
+              expr: '((sum(increase(grafana_alerting_notifications_failed_total{job="grafana"}[15m])) > bool 0) or vector(0)) + ((sum(grafana_alerting_notifications_failed_total{job="grafana"} unless grafana_alerting_notifications_failed_total{job="grafana"} offset 15m) > bool 0) or vector(0))'
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -230,7 +230,7 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: Grafana cannot deliver alert notifications to the SNS contact point.
+          summary: Grafana cannot deliver alert notifications to the SNS contact point (a first failure also counts).
 
       - uid: grafana_scheduler_behind
         title: GrafanaSchedulerBehind

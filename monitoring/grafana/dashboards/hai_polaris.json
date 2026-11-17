@@ -469,7 +469,7 @@
       "id": 16,
       "type": "stat",
       "title": "Heap used share of the maximum",
-      "description": "Used heap divided by the largest size the heap may grow to. Pools that report no maximum count as zero.",
+      "description": "Used heap divided by the largest size the heap may grow to. A pool that reports no maximum (-1) is left out, and the panel is empty when no pool reports one.",
       "datasource": {
         "type": "prometheus",
         "uid": "hai_prometheus"
@@ -487,7 +487,7 @@
             "type": "prometheus",
             "uid": "hai_prometheus"
           },
-          "expr": "sum(jvm_memory_used_bytes{job=\"polaris\",area=\"heap\"}) / sum(clamp_min(jvm_memory_max_bytes{job=\"polaris\",area=\"heap\"}, 0))",
+          "expr": "sum(jvm_memory_used_bytes{job=\"polaris\",area=\"heap\"}) / sum(jvm_memory_max_bytes{job=\"polaris\",area=\"heap\"} > 0)",
           "legendFormat": ""
         }
       ],

@@ -172,6 +172,10 @@ PROMQL_WORDS = frozenset(
 SELECTOR = re.compile(r"([a-zA-Z_:][a-zA-Z0-9_:]*)\s*\{([^}]*)\}")
 MATCHER = re.compile(r'([a-zA-Z_][a-zA-Z0-9_]*)\s*(?:=~|!~|!=|=)\s*"(?:[^"\\]|\\.)*"')
 BY_CLAUSE = re.compile(r"\bby\s*\(([^)]*)\)")
+QUOTED = re.compile(r'"(?:[^"\\]|\\.)*"')
+LIMITER = re.compile(r"\b(?:topk|bottomk)\s*\(")
+# A JVM pool without a maximum reports -1, so a query may read the maximum only after it filters to the pools that have one.
+UNGUARDED_MAXIMUM = re.compile(r"jvm_memory_max_bytes\s*\{[^}]*\}(?!\s*>\s*0(?![0-9.]))")
 # Labels whose value count the metric's source does not bound by itself: a query may group by one only inside topk or bottomk, which limits the series drawn.
 OPEN_LABELS = frozenset({"uri", "path", "url", "rule_group", "folder_uid", "realm_id", "principal", "pid"})
 GROUPING = re.compile(r"\b(?:by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
@@ -276,6 +280,17 @@ def known_metrics(document: Any, problems: list[str]) -> dict[str, set[str] | No
     return metrics
 
 
+def late_counters(document: Any) -> frozenset[str]:
+    """The known counters marked ``starts_at_first_event``: their source creates the series at the first event, so no sample shows the step from zero to one."""
+    found: set[str] = set()
+    for entry in document.values() if isinstance(document, dict) else []:
+        listed = entry.get("metrics") if isinstance(entry, dict) else None
+        for name, spec in listed.items() if isinstance(listed, dict) else []:
+            if isinstance(spec, dict) and spec.get("starts_at_first_event") is True:
+                found.add(name)
+    return frozenset(found)
+
+
 def catalog_problems(document: Any) -> list[str]:
     """Problems where the known list and the code that emits the metrics disagree: the push catalog of the jobs and the catalog of the host state exporter."""
     from monitoring import host_state_exporter
@@ -304,15 +319,43 @@ def catalog_problems(document: Any) -> list[str]:
     return problems
 
 
+def limiter_spans(text: str) -> list[tuple[int, int]]:
+    """The character ranges of every topk and bottomk call in an expression whose quoted strings are blanked."""
+    spans: list[tuple[int, int]] = []
+    for call in LIMITER.finditer(text):
+        depth = 0
+        for position in range(call.end() - 1, len(text)):
+            depth += {"(": 1, ")": -1}.get(text[position], 0)
+            if depth == 0:
+                spans.append((call.start(), position))
+                break
+    return spans
+
+
+def late_counter_problems(where: str, expression: str, late: frozenset[str]) -> list[str]:
+    """Problems with a rule that takes increase or rate of a counter that has no series before its first event: that rule misses the first event."""
+    problems: list[str] = []
+    for name in sorted(late):
+        uses = re.search(rf"\b(?:increase|rate|irate)\(\s*{name}\b", expression) is not None
+        compares = re.search(rf"\b{name}\s*(?:\{{[^}}]*\}})?\s+offset\b", expression) is not None
+        if uses and not compares:
+            problems.append(f"{where}: {name} has no series before its first event, so increase and rate miss that event; also compare it with {name} offset")
+    return problems
+
+
 def expression_problems(where: str, expression: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
     """Problems with one PromQL expression: a metric that nothing produces, a label it lacks, a job nobody scrapes or an open label outside topk."""
     problems: list[str] = []
     stripped = expression
-    limited = re.search(r"\b(?:topk|bottomk)\s*\(", expression) is not None
-    for clause in BY_CLAUSE.findall(expression):
-        for label in (part.strip() for part in clause.split(",")):
+    masked = QUOTED.sub(lambda found: '"' + " " * (len(found.group(0)) - 2) + '"', expression)
+    spans = limiter_spans(masked)
+    for clause in BY_CLAUSE.finditer(masked):
+        limited = any(start < clause.start() < end for start, end in spans)
+        for label in (part.strip() for part in clause.group(1).split(",")):
             if label in OPEN_LABELS and not limited:
                 problems.append(f"{where}: groups by {label} without topk, so the number of series has no bound")
+    for unguarded in UNGUARDED_MAXIMUM.finditer(masked):
+        problems.append(f"{where}: jvm_memory_max_bytes is -1 when a pool has no maximum, so read it as {expression[unguarded.start() : unguarded.end()]} > 0")
     for name, body in SELECTOR.findall(expression):
         for label, in_job in ((m.group(1), m.group(0)) for m in MATCHER.finditer(body)):
             if label == "job":
@@ -337,7 +380,9 @@ def expression_problems(where: str, expression: str, metrics: dict[str, set[str]
     return problems
 
 
-def step_problems(where: str, rule: dict[str, Any], datasource_uid: str, metrics: dict[str, set[str] | None], jobs: set[str]) -> list[str]:
+def step_problems(
+    where: str, rule: dict[str, Any], datasource_uid: str, metrics: dict[str, set[str] | None], jobs: set[str], late: frozenset[str] = frozenset()
+) -> list[str]:
     """Problems with the query and expression steps of one Grafana-managed rule: the condition, the data source and every PromQL expression."""
     problems: list[str] = []
     steps = [step for step in rule.get("data", []) if isinstance(step, dict)]
@@ -362,12 +407,15 @@ def step_problems(where: str, rule: dict[str, Any], datasource_uid: str, metrics
             problems.append(f"{where}: step {step.get('refId')} has no expression")
         else:
             problems.extend(expression_problems(where, expression, metrics, jobs))
+            problems.extend(late_counter_problems(where, expression, late))
     if queries == 0:
         problems.append(f"{where}: has no query")
     return problems
 
 
-def alert_problems(root: Path, metrics: dict[str, set[str] | None], jobs: set[str], datasource_uid: str, receivers: set[str]) -> list[str]:
+def alert_problems(
+    root: Path, metrics: dict[str, set[str] | None], jobs: set[str], datasource_uid: str, receivers: set[str], late: frozenset[str] = frozenset()
+) -> list[str]:
     """Problems with the Grafana-managed alert rule files: identity, steps, severity, summary, duration, pause state and routing."""
     problems: list[str] = []
     titles: set[str] = set()
@@ -400,7 +448,7 @@ def alert_problems(root: Path, metrics: dict[str, set[str] | None], jobs: set[st
                 elif uid in uids:
                     problems.append(f"{where}: uid {uid} is used twice")
                 uids.add(uid)
-                problems.extend(step_problems(where, rule, datasource_uid, metrics, jobs))
+                problems.extend(step_problems(where, rule, datasource_uid, metrics, jobs, late))
                 if rule.get("labels", {}).get("severity") not in SEVERITIES:
                     problems.append(f"{where} needs a severity label of {' or '.join(SEVERITIES)}")
                 if not str(rule.get("annotations", {}).get("summary", "")).strip():
@@ -612,7 +660,7 @@ def check(root: Path = ROOT) -> list[str]:
     contact_problems, receivers = contact_point_problems(contact, policies) if contact is not None and policies is not None else ([], set())
     problems.extend(contact_problems)
     if uids:
-        problems.extend(alert_problems(root, metrics, jobs, uids[0], receivers))
+        problems.extend(alert_problems(root, metrics, jobs, uids[0], receivers, late_counters(known)))
     folder = root / DASHBOARDS
     files = sorted(folder.glob("*.json")) if folder.is_dir() else []
     if not files:
