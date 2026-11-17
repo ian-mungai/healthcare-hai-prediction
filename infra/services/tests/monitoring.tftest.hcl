@@ -624,6 +624,7 @@ run "state_and_configuration_mounts" {
       code_monitoring_prometheus           = "/mnt/example-data/repo/monitoring/prometheus"
       code_monitoring_statsd               = "/mnt/example-data/repo/monitoring/statsd"
       grafana_data                         = "/mnt/example-data/grafana"
+      host_data                            = "/mnt/example-data"
       prometheus_data                      = "/mnt/example-data/prometheus"
       pushgateway_data                     = "/mnt/example-data/pushgateway"
     }
@@ -742,7 +743,7 @@ run "the_host_exporter_gets_the_cluster_the_region_and_the_job_cap_and_no_creden
   assert {
     condition = (
       jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].readonlyRootFilesystem
-      && jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].mountPoints == [{ sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true }]
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].mountPoints, { sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true })
       && jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].linuxParameters.capabilities.drop == ["ALL"]
     )
     error_message = "The host exporter has a read-only root file system, a read-only code mount and no capability."
@@ -800,4 +801,27 @@ run "a_missing_pushgateway_digest_is_refused" {
   }
 
   expect_failures = [var.image_digests]
+}
+
+run "the_host_state_exporter_sees_the_data_and_scratch_volumes_read_only_and_knows_the_service_prefix" {
+  command = plan
+
+  assert {
+    condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "ECS_SERVICE_PREFIX", value = "example_project_dev_" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "HOST_DATA_PATH", value = "/host/data" })
+      && contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].environment, { name = "HOST_SCRATCH_PATH", value = "/host/data/job_scratch" })
+    )
+    error_message = "The host state exporter gets the prefix of the ECS service names and the two folders whose volumes it measures."
+  }
+
+  assert {
+    condition     = contains(jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions)[5].mountPoints, { sourceVolume = "host_data", containerPath = "/host/data", readOnly = true })
+    error_message = "The data mount is read-only in the exporter: it reads the size of the volumes below it (the scratch volume is mounted inside it) and writes nothing."
+  }
+
+  assert {
+    condition     = length([for container in jsondecode(aws_ecs_task_definition.service["monitoring"].container_definitions) : container if length([for mount in container.mountPoints : mount if mount.sourceVolume == "host_data"]) > 0]) == 1
+    error_message = "Only the host state exporter mounts the data volume."
+  }
 }

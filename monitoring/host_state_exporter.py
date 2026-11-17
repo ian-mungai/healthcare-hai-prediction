@@ -22,13 +22,16 @@ import contextlib
 import http.client
 import json
 import math
+import os
 import re
+import shutil
 import signal
 import sys
 import threading
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import urlparse
@@ -37,8 +40,23 @@ LISTEN = "127.0.0.1:9103"
 INTERVAL_SECONDS = 120.0
 OM_TIMEOUT_SECONDS = 5.0
 DEFAULT_OM_URL = "http://127.0.0.1:8586/healthcheck"
-SOURCES = ("host", "openmetadata")
+SOURCES = ("host", "services", "probes", "disk", "openmetadata")
 CHECK_NAME = re.compile(r"[a-z][a-z0-9_]{0,40}")
+NAME = re.compile(r"[a-z][a-z0-9_]{0,40}")
+STOP_CODES = ("TaskFailedToStart", "EssentialContainerExited", "UserInitiated", "ServiceSchedulerInitiated", "SpotInterruption", "TerminationNotice")
+LABEL_VALUES: dict[str, Callable[[str], bool]] = {
+    "check": lambda value: CHECK_NAME.fullmatch(value) is not None,
+    "source": lambda value: value in SOURCES,
+    "service": lambda value: NAME.fullmatch(value) is not None,
+    "probe": lambda value: NAME.fullmatch(value) is not None,
+    "stop_code": lambda value: value in (*STOP_CODES, "other"),
+    "volume": lambda value: value in ("data", "scratch"),
+}
+STOPPED_WINDOW = timedelta(hours=1)
+STOPPED_LIMIT = 500
+PROBE_TIMEOUT_SECONDS = 3.0
+PROBE_URL = re.compile(r"http://127\.0\.0\.1:[0-9]{2,5}/[A-Za-z0-9_/.?=&-]*")
+PATH = re.compile(r"/[A-Za-z0-9_./-]*")
 CLUSTER = re.compile(r"[A-Za-z0-9_-]{1,255}")
 REGION = re.compile(r"[a-z]{2}(?:-[a-z]+)+-[0-9]+")
 OM_URL = re.compile(r"http://127\.0\.0\.1:[0-9]{2,5}/healthcheck")
@@ -50,6 +68,19 @@ CATALOG: dict[str, tuple[str, tuple[str, ...], str]] = {
     "hai_host_cpu_remaining_units": ("CPU units that ECS can still place on the active instances.", (), "gauge"),
     "hai_host_running_tasks": ("Tasks of the cluster that ECS reports as running.", (), "gauge"),
     "hai_host_job_cap_mib": ("The host job cap in MiB that the launch preflight reads.", (), "gauge"),
+    "hai_service_tasks_desired": ("Tasks that an ECS service of the cluster should run.", ("service",), "gauge"),
+    "hai_service_tasks_running": ("Tasks that an ECS service of the cluster runs.", ("service",), "gauge"),
+    "hai_service_tasks_pending": ("Tasks that an ECS service of the cluster is starting.", ("service",), "gauge"),
+    "hai_service_tasks_stopped_recent": (
+        "Tasks of a service that ECS still lists as stopped, about the last hour, by stop code.",
+        ("service", "stop_code"),
+        "gauge",
+    ),
+    "hai_service_probe_up": ("1 when the health endpoint of a service answered with an accepted status.", ("probe", "service"), "gauge"),
+    "hai_service_probe_seconds": ("Seconds the health endpoint of a service took to answer.", ("probe", "service"), "gauge"),
+    "hai_host_disk_free_bytes": ("Free bytes of the volume.", ("volume",), "gauge"),
+    "hai_host_disk_total_bytes": ("Size in bytes of the volume.", ("volume",), "gauge"),
+    "hai_host_scratch_separate_volume": ("1 when the job scratch folder is on a volume of its own, 0 when it shares the data volume.", (), "gauge"),
     "hai_openmetadata_healthy": ("1 when every check of the OpenMetadata health check is healthy.", (), "gauge"),
     "hai_openmetadata_check_healthy": ("1 when one named check of the OpenMetadata health check is healthy.", ("check",), "gauge"),
     "host_state_exporter_source_up": ("1 when the latest read of the source succeeded.", ("source",), "gauge"),
@@ -75,6 +106,9 @@ class Settings:
     region: str
     job_cap_mib: int | None
     om_url: str
+    service_prefix: str = ""
+    data_path: str = ""
+    scratch_path: str = ""
 
 
 def settings(environ: Mapping[str, str]) -> Settings:
@@ -90,7 +124,14 @@ def settings(environ: Mapping[str, str]) -> Settings:
     url = environ.get("OM_HEALTH_URL", DEFAULT_OM_URL)
     if not OM_URL.fullmatch(url):
         raise ValueError("OM_HEALTH_URL must be a plain http address on 127.0.0.1 ending in /healthcheck")
-    return Settings(cluster, region, int(cap) if cap else None, url)
+    prefix = environ.get("ECS_SERVICE_PREFIX", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{0,100}", prefix):
+        raise ValueError("ECS_SERVICE_PREFIX may hold letters, digits, dashes and underscores only")
+    paths = {name: environ.get(name, "") for name in ("HOST_DATA_PATH", "HOST_SCRATCH_PATH")}
+    for name, value in paths.items():
+        if value and (not PATH.fullmatch(value) or ".." in value.split("/")):
+            raise ValueError(f"{name} must be an absolute path without a parent step")
+    return Settings(cluster, region, int(cap) if cap else None, url, prefix, paths["HOST_DATA_PATH"], paths["HOST_SCRATCH_PATH"])
 
 
 def ecs_client_config() -> Any:
@@ -169,10 +210,135 @@ def openmetadata_samples(url: str, timeout: float = OM_TIMEOUT_SECONDS) -> list[
     return samples
 
 
+def short_name(name: str, prefix: str) -> str:
+    return name[len(prefix) :] if prefix and name.startswith(prefix) else name
+
+
+def service_samples(ecs: Any, cluster: str, prefix: str, now: datetime | None = None) -> list[Sample]:
+    """The desired, running and pending tasks of each ECS service, and the stopped tasks that ECS still lists (about an hour), by service and stop code."""
+    arns = paged(ecs.list_services, "serviceArns", cluster=cluster)
+    samples: list[Sample] = []
+    for start in range(0, len(arns), 10):
+        reply = ecs.describe_services(cluster=cluster, services=arns[start : start + 10])
+        if reply.get("failures"):
+            raise SourceError("ECS reported a failure describing a service")
+        for item in reply.get("services", []):
+            name = short_name(str(item["serviceName"]), prefix)
+            for metric, field_name in (
+                ("hai_service_tasks_desired", "desiredCount"),
+                ("hai_service_tasks_running", "runningCount"),
+                ("hai_service_tasks_pending", "pendingCount"),
+            ):
+                samples.append(Sample(metric, float(item[field_name]), {"service": name}))
+    stopped = paged(ecs.list_tasks, "taskArns", cluster=cluster, desiredStatus="STOPPED")[:STOPPED_LIMIT]
+    cutoff = (now or datetime.now(UTC)) - STOPPED_WINDOW
+    counts: dict[tuple[str, str], int] = {}
+    for start in range(0, len(stopped), 100):
+        reply = ecs.describe_tasks(cluster=cluster, tasks=stopped[start : start + 100])
+        if reply.get("failures"):
+            raise SourceError("ECS reported a failure describing a stopped task")
+        for task in reply.get("tasks", []):
+            group = str(task.get("group", ""))
+            stopped_at = task.get("stoppedAt")
+            if not group.startswith("service:") or not isinstance(stopped_at, datetime) or stopped_at < cutoff:
+                continue
+            code = str(task.get("stopCode", ""))
+            key = (short_name(group.removeprefix("service:"), prefix), code if code in STOP_CODES else "other")
+            counts[key] = counts.get(key, 0) + 1
+    samples += [
+        Sample("hai_service_tasks_stopped_recent", float(count), {"service": name, "stop_code": code}) for (name, code), count in sorted(counts.items())
+    ]
+    return samples
+
+
+@dataclass(frozen=True)
+class Probe:
+    """One health endpoint on loopback: the ECS service it belongs to, its address and the statuses that count as up."""
+
+    service: str
+    url: str
+    ok: tuple[int, ...] = (200,)
+
+
+PROBES: dict[str, Probe] = {
+    "polaris": Probe("polaris", "http://127.0.0.1:8182/q/health"),
+    "mlflow": Probe("mlflow", "http://127.0.0.1:5100/health", (200, 401)),
+    "airflow_api": Probe("airflow", "http://127.0.0.1:8080/api/v2/version"),
+    "airflow_scheduler": Probe("airflow", "http://127.0.0.1:8974/health"),
+    "model_api": Probe("model_api", "http://127.0.0.1:8000/v1/live"),
+    "streamlit": Probe("streamlit", "http://127.0.0.1:8501/_stcore/health"),
+    "opensearch": Probe("openmetadata", "http://127.0.0.1:9200/_cluster/health"),
+}
+
+
+def probe_samples(probes: Mapping[str, Probe], timeout: float = PROBE_TIMEOUT_SECONDS) -> list[Sample]:
+    """Ask each endpoint once. A wrong status, a refused connection and a slow answer are all down; none of them is an error of the source."""
+    samples: list[Sample] = []
+    for name, probe in probes.items():
+        parsed = urlparse(probe.url)
+        labels = {"probe": name, "service": probe.service}
+        started = time.monotonic()
+        up = False
+        connection = http.client.HTTPConnection(parsed.hostname or "", parsed.port or 80, timeout=timeout)
+        try:
+            connection.request("GET", (parsed.path or "/") + (f"?{parsed.query}" if parsed.query else ""))
+            response = connection.getresponse()
+            response.read()
+            up = response.status in probe.ok
+            samples.append(Sample("hai_service_probe_seconds", time.monotonic() - started, labels))
+        except Exception:
+            up = False
+        finally:
+            connection.close()
+        samples.append(Sample("hai_service_probe_up", 1.0 if up else 0.0, labels))
+    return samples
+
+
+def disk_usage(path: str) -> tuple[int, int, int]:
+    total, used, free = shutil.disk_usage(path)
+    return total, used, free
+
+
+def device_of(path: str) -> int:
+    return os.stat(path).st_dev
+
+
+def disk_samples(paths: Mapping[str, str], usage: Callable[[str], tuple[int, int, int]] = disk_usage, device: Callable[[str], int] = device_of) -> list[Sample]:
+    """Free and total bytes of the data volume and of the job scratch folder, and whether the scratch folder has a volume of its own."""
+    samples: list[Sample] = []
+    try:
+        for volume, path in paths.items():
+            total, _, free = usage(path)
+            samples += [
+                Sample("hai_host_disk_free_bytes", float(free), {"volume": volume}),
+                Sample("hai_host_disk_total_bytes", float(total), {"volume": volume}),
+            ]
+        if "data" in paths and "scratch" in paths:
+            samples.append(Sample("hai_host_scratch_separate_volume", 1.0 if device(paths["data"]) != device(paths["scratch"]) else 0.0))
+    except OSError as error:
+        raise SourceError(type(error).__name__) from None
+    return samples
+
+
+def collectors(configured: Settings, ecs: Any) -> dict[str, Callable[[], list[Sample]]]:
+    """The sources of one exporter: the disk source exists only when both folders are named."""
+    found: dict[str, Callable[[], list[Sample]]] = {
+        "host": lambda: host_samples(ecs, configured.cluster, configured.job_cap_mib),
+        "services": lambda: service_samples(ecs, configured.cluster, configured.service_prefix),
+        "probes": lambda: probe_samples(PROBES),
+        "openmetadata": lambda: openmetadata_samples(configured.om_url),
+    }
+    if configured.data_path and configured.scratch_path:
+        found["disk"] = lambda: disk_samples({"data": configured.data_path, "scratch": configured.scratch_path})
+    return found
+
+
 def problem(sample: Sample) -> bool:
     """True when the sample may not be exposed: not in the catalog, other labels than its set or a value that is not a finite number."""
     entry = CATALOG.get(sample.name)
-    return entry is None or set(sample.labels) != set(entry[1]) or not math.isfinite(sample.value)
+    if entry is None or set(sample.labels) != set(entry[1]) or not math.isfinite(sample.value):
+        return True
+    return any(not LABEL_VALUES[label](str(value)) for label, value in sample.labels.items() if label in LABEL_VALUES)
 
 
 def number(value: float) -> str:
@@ -298,12 +464,7 @@ def main(argv: Sequence[str] | None = None, environ: Mapping[str, str] | None = 
         import boto3
 
         ecs = boto3.client("ecs", region_name=configured.region, config=ecs_client_config())
-        exporter = Exporter(
-            {
-                "host": lambda: host_samples(ecs, configured.cluster, configured.job_cap_mib),
-                "openmetadata": lambda: openmetadata_samples(configured.om_url),
-            }
-        )
+        exporter = Exporter(collectors(configured, ecs))
         running = serve(exporter, host, int(port), interval=arguments.interval)
     except (ValueError, ImportError) as error:
         sys.stderr.write(f"host_state_exporter: {error}\n")

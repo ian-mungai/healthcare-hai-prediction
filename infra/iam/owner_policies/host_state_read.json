@@ -6,7 +6,11 @@
       "Effect": "Allow",
       "Action": "ecs:ListTasks",
       "Resource": "*",
-      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "${CLUSTER_ARN}"
+        }
+      }
     },
     {
       "Sid": "ListClusterContainerInstances",
@@ -19,7 +23,39 @@
       "Effect": "Allow",
       "Action": "ecs:DescribeContainerInstances",
       "Resource": "${CONTAINER_INSTANCE_ARN_PATTERN}",
-      "Condition": { "ArnEquals": { "ecs:cluster": "${CLUSTER_ARN}" } }
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "${CLUSTER_ARN}"
+        }
+      }
+    },
+    {
+      "Sid": "ListClusterServices",
+      "Effect": "Allow",
+      "Action": "ecs:ListServices",
+      "Resource": "${CLUSTER_ARN}"
+    },
+    {
+      "Sid": "DescribeClusterServices",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeServices",
+      "Resource": "${SERVICE_ARN_PATTERN}",
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "${CLUSTER_ARN}"
+        }
+      }
+    },
+    {
+      "Sid": "DescribeClusterTasks",
+      "Effect": "Allow",
+      "Action": "ecs:DescribeTasks",
+      "Resource": "${TASK_ARN_PATTERN}",
+      "Condition": {
+        "ArnEquals": {
+          "ecs:cluster": "${CLUSTER_ARN}"
+        }
+      }
     }
   ]
 }

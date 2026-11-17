@@ -357,9 +357,29 @@ run "the_host_state_exporter_reads_the_cluster_and_nothing_else_when_the_alerts_
           Resource  = "arn:aws:ecs:eu-west-1:111111111111:container-instance/example_project_cluster_dev/*"
           Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
         },
+        {
+          Sid      = "ListClusterServices"
+          Effect   = "Allow"
+          Action   = "ecs:ListServices"
+          Resource = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev"
+        },
+        {
+          Sid       = "DescribeClusterServices"
+          Effect    = "Allow"
+          Action    = "ecs:DescribeServices"
+          Resource  = "arn:aws:ecs:eu-west-1:111111111111:service/example_project_cluster_dev/*"
+          Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
+        },
+        {
+          Sid       = "DescribeClusterTasks"
+          Effect    = "Allow"
+          Action    = "ecs:DescribeTasks"
+          Resource  = "arn:aws:ecs:eu-west-1:111111111111:task/example_project_cluster_dev/*"
+          Condition = { ArnEquals = { "ecs:cluster" = "arn:aws:ecs:eu-west-1:111111111111:cluster/example_project_cluster_dev" } }
+        },
       ]
     )
-    error_message = "The host state exporter lists the tasks and container instances of the one cluster and describes its container instances. It cannot run, stop or change a task."
+    error_message = "The host state exporter lists and describes the tasks, services and container instances of the one cluster. It cannot run, stop or change a task or a service."
   }
 }
 

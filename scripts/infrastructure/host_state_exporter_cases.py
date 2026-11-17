@@ -7,10 +7,12 @@ exporter server on loopback and scrape it over HTTP. No AWS service is contacted
 from __future__ import annotations
 
 import json
+import os
 import re
 import threading
 import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from http.client import HTTPConnection
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -40,9 +42,17 @@ class FakeEcs:
     """The three ECS reads of the exporter. ``fail`` raises on every call; ``pages`` splits the container instance list across pages."""
 
     def __init__(
-        self, instances: list[dict[str, Any]], tasks: int = 7, fail: bool = False, failures: list[dict[str, str]] | None = None, pages: int = 1
+        self,
+        instances: list[dict[str, Any]],
+        tasks: int = 7,
+        fail: bool = False,
+        failures: list[dict[str, str]] | None = None,
+        pages: int = 1,
+        services: list[dict[str, Any]] | None = None,
+        stopped: list[dict[str, Any]] | None = None,
     ) -> None:
         self.instances, self.tasks, self.fail, self.failures, self.pages = instances, tasks, fail, failures or [], pages
+        self.services, self.stopped = services or [], stopped or []
         self.calls: list[str] = []
 
     def list_container_instances(self, **arguments: Any) -> dict[str, Any]:
@@ -68,7 +78,33 @@ class FakeEcs:
         self.calls.append("list_tasks")
         if self.fail:
             raise RuntimeError("AccessDeniedException")
+        if arguments.get("desiredStatus") == "STOPPED":
+            return {"taskArns": [f"arn:aws:ecs:us-west-2:111111111111:task/{CLUSTER}/stopped{index:026x}" for index in range(len(self.stopped))]}
         return {"taskArns": [f"arn:aws:ecs:us-west-2:111111111111:task/{CLUSTER}/{index:032x}" for index in range(self.tasks)]}
+
+    def list_services(self, **arguments: Any) -> dict[str, Any]:
+        self.calls.append("list_services")
+        if self.fail:
+            raise RuntimeError("AccessDeniedException")
+        return {"serviceArns": [f"arn:aws:ecs:us-west-2:111111111111:service/{CLUSTER}/{item['serviceName']}" for item in self.services]}
+
+    def describe_services(self, **arguments: Any) -> dict[str, Any]:
+        self.calls.append("describe_services")
+        if self.fail:
+            raise RuntimeError("AccessDeniedException")
+        if len(arguments["services"]) > 10:
+            raise RuntimeError("InvalidParameterException: more than 10 services")
+        names = {arn.rsplit("/", 1)[1] for arn in arguments["services"]}
+        return {"services": [item for item in self.services if item["serviceName"] in names], "failures": []}
+
+    def describe_tasks(self, **arguments: Any) -> dict[str, Any]:
+        self.calls.append("describe_tasks")
+        if self.fail:
+            raise RuntimeError("AccessDeniedException")
+        if len(arguments["tasks"]) > 100:
+            raise RuntimeError("InvalidParameterException: more than 100 tasks")
+        wanted = [int(arn.rsplit("stopped", 1)[1], 16) for arn in arguments["tasks"]]
+        return {"tasks": [self.stopped[index] for index in wanted], "failures": []}
 
 
 class OpenMetadataStandIn:
@@ -397,10 +433,226 @@ def ecs_client_has_hard_timeouts(root: Path) -> dict[str, bool]:
 def catalog_has_a_help_text_and_closed_labels(root: Path) -> dict[str, bool]:
     return {
         "every metric has a help text": all(text.strip() for text, _, _ in host_state_exporter.CATALOG.values()),
-        "the only label names are source and check": {label for _, labels, _ in host_state_exporter.CATALOG.values() for label in labels}
-        <= {"source", "check"},
+        "the only label names are source, check, service, stop_code, probe and volume": {
+            label for _, labels, _ in host_state_exporter.CATALOG.values() for label in labels
+        }
+        <= {"source", "check", "service", "stop_code", "probe", "volume"},
         "metric names are valid": all(re.fullmatch(r"[a-z][a-z0-9_]*", name) for name in host_state_exporter.CATALOG),
         "counters end in _total": all(name.endswith("_total") == (kind == "counter") for name, (_, _, kind) in host_state_exporter.CATALOG.items()),
+    }
+
+
+def service(name: str, desired: int = 1, running: int = 1, pending: int = 0) -> dict[str, Any]:
+    return {"serviceName": f"example_project_dev_{name}", "desiredCount": desired, "runningCount": running, "pendingCount": pending}
+
+
+def stopped(group: str, code: str = "EssentialContainerExited", minutes_ago: int = 10) -> dict[str, Any]:
+    return {"group": group, "stopCode": code, "stoppedAt": datetime.now(UTC) - timedelta(minutes=minutes_ago)}
+
+
+PREFIX = "example_project_dev_"
+
+
+def services_report_desired_running_and_pending(root: Path) -> dict[str, bool]:
+    ecs = FakeEcs([], services=[service("postgres"), service("airflow", 1, 0, 1), service("model_api", 0, 0, 0), service("other", 1, 1, 0)])
+    found = values(host_state_exporter.service_samples(ecs, CLUSTER, PREFIX))
+    return {
+        "a healthy service has desired and running equal": found[("hai_service_tasks_desired", (("service", "postgres"),))] == 1
+        and found[("hai_service_tasks_running", (("service", "postgres"),))] == 1,
+        "a service that is starting shows pending and no running task": found[("hai_service_tasks_running", (("service", "airflow"),))] == 0
+        and found[("hai_service_tasks_pending", (("service", "airflow"),))] == 1,
+        "a service switched off has desired zero": found[("hai_service_tasks_desired", (("service", "model_api"),))] == 0,
+        "the project prefix is cut from the name": ("hai_service_tasks_desired", (("service", "example_project_dev_postgres"),)) not in found,
+    }
+
+
+def services_are_described_ten_at_a_time(root: Path) -> dict[str, bool]:
+    ecs = FakeEcs([], services=[service(f"svc_{index}") for index in range(25)])
+    found = values(host_state_exporter.service_samples(ecs, CLUSTER, PREFIX))
+    return {
+        "all 25 services are reported": sum(1 for name, _ in found if name == "hai_service_tasks_desired") == 25,
+        "the description is split into batches of ten": ecs.calls.count("describe_services") == 3,
+    }
+
+
+def stopped_tasks_are_counted_per_service_and_stop_code_for_the_last_hour(root: Path) -> dict[str, bool]:
+    ecs = FakeEcs(
+        [],
+        services=[service("airflow_scheduler"), service("mlflow")],
+        stopped=[
+            stopped("service:example_project_dev_airflow_scheduler"),
+            stopped("service:example_project_dev_airflow_scheduler"),
+            stopped("service:example_project_dev_airflow_scheduler", "TaskFailedToStart", 5),
+            stopped("service:example_project_dev_mlflow", "SomethingNew"),
+            stopped("service:example_project_dev_mlflow", "EssentialContainerExited", 120),
+            stopped("family:example_project_dev_job_silver_host", "UserInitiated"),
+        ],
+    )
+    found = values(host_state_exporter.service_samples(ecs, CLUSTER, PREFIX))
+    key = "hai_service_tasks_stopped_recent"
+    return {
+        "two exits of one service are counted together": found[(key, (("service", "airflow_scheduler"), ("stop_code", "EssentialContainerExited")))] == 2,
+        "a failed start has its own series": found[(key, (("service", "airflow_scheduler"), ("stop_code", "TaskFailedToStart")))] == 1,
+        "a stop code ECS may add later becomes other": found[(key, (("service", "mlflow"), ("stop_code", "other")))] == 1,
+        "a stop older than an hour is not counted": (key, (("service", "mlflow"), ("stop_code", "EssentialContainerExited"))) not in found,
+        "a job task is not a service": not any(dict(labels).get("service", "").startswith("job") for name, labels in found if name == key),
+    }
+
+
+def too_many_stopped_tasks_are_read_in_bounded_batches(root: Path) -> dict[str, bool]:
+    ecs = FakeEcs([], services=[service("airflow")], stopped=[stopped("service:example_project_dev_airflow") for _ in range(250)])
+    found = values(host_state_exporter.service_samples(ecs, CLUSTER, PREFIX))
+    return {
+        "every stop is counted when the batches stay within the API limit of 100": found[
+            ("hai_service_tasks_stopped_recent", (("service", "airflow"), ("stop_code", "EssentialContainerExited")))
+        ]
+        == 250,
+        "the tasks are described in three calls": ecs.calls.count("describe_tasks") == 3,
+    }
+
+
+def address(stand_in: OpenMetadataStandIn) -> str:
+    return stand_in.url.replace("/healthcheck", "")
+
+
+class ProbeStandIn(OpenMetadataStandIn):
+    """A loopback answer for any path with one status, for the probes."""
+
+    def __init__(self, status: int = 200, delay: float = 0.0) -> None:
+        super().__init__(status=status, delay=delay, raw=b"ok")
+
+
+def probes_report_up_for_an_accepted_status_and_down_otherwise(root: Path) -> dict[str, bool]:
+    with ProbeStandIn(200) as good, ProbeStandIn(401) as auth, ProbeStandIn(503) as bad:
+        probes = {
+            "polaris": host_state_exporter.Probe("polaris", address(good) + "/q/health", (200,)),
+            "mlflow": host_state_exporter.Probe("mlflow", address(auth) + "/health", (200, 401)),
+            "streamlit": host_state_exporter.Probe("streamlit", address(bad) + "/_stcore/health", (200,)),
+        }
+        found = values(host_state_exporter.probe_samples(probes, 3.0))
+    return {
+        "an accepted status is up": found[("hai_service_probe_up", (("probe", "polaris"), ("service", "polaris")))] == 1,
+        "a login answer is up for the service that has one": found[("hai_service_probe_up", (("probe", "mlflow"), ("service", "mlflow")))] == 1,
+        "a refusing service is down": found[("hai_service_probe_up", (("probe", "streamlit"), ("service", "streamlit")))] == 0,
+        "the answer time is exposed": ("hai_service_probe_seconds", (("probe", "polaris"), ("service", "polaris"))) in found,
+    }
+
+
+def a_probe_that_cannot_connect_or_is_slow_is_down_and_never_raises(root: Path) -> dict[str, bool]:
+    with ProbeStandIn() as closed:
+        url = closed.url.replace("/healthcheck", "")
+    with ProbeStandIn(delay=2.0) as slow:
+        started = time.monotonic()
+        found = values(
+            host_state_exporter.probe_samples(
+                {
+                    "model_api": host_state_exporter.Probe("model_api", url + "/v1/live", (200,)),
+                    "airflow_api": host_state_exporter.Probe("airflow", slow.url.replace("/healthcheck", "") + "/api/v2/version", (200,)),
+                },
+                0.4,
+            )
+        )
+        elapsed = time.monotonic() - started
+    return {
+        "a closed port is down": found[("hai_service_probe_up", (("probe", "model_api"), ("service", "model_api")))] == 0,
+        "a slow answer is down": found[("hai_service_probe_up", (("probe", "airflow_api"), ("service", "airflow")))] == 0,
+        "the wait is bounded by the timeout for each probe": elapsed < 2.5,
+    }
+
+
+def the_default_probes_are_the_health_checks_the_services_already_use(root: Path) -> dict[str, bool]:
+    probes = host_state_exporter.PROBES
+    return {
+        "the probes cover Polaris, MLflow, Airflow, the model API, Streamlit and OpenSearch": {probe.service for probe in probes.values()}
+        >= {"polaris", "mlflow", "airflow", "model_api", "streamlit", "openmetadata"},
+        "every address is plain http on loopback": all(host_state_exporter.PROBE_URL.fullmatch(probe.url) for probe in probes.values()),
+        "the paths match the container health checks": probes["polaris"].url.endswith(":8182/q/health")
+        and probes["mlflow"].url.endswith(":5100/health")
+        and probes["model_api"].url.endswith(":8000/v1/live")
+        and probes["streamlit"].url.endswith(":8501/_stcore/health")
+        and probes["airflow_api"].url.endswith(":8080/api/v2/version")
+        and probes["mlflow"].ok == (200, 401),
+    }
+
+
+def disk_free_is_reported_for_the_data_and_the_scratch_volume(root: Path) -> dict[str, bool]:
+    usage = {"/host/data": (1000, 400, 600), "/host/data/job_scratch": (500, 450, 50)}
+    devices = {"/host/data": 1, "/host/data/job_scratch": 2}
+    found = values(host_state_exporter.disk_samples({"data": "/host/data", "scratch": "/host/data/job_scratch"}, usage.__getitem__, devices.__getitem__))
+    return {
+        "free bytes of the data volume": found[("hai_host_disk_free_bytes", (("volume", "data"),))] == 600,
+        "total bytes of the scratch volume": found[("hai_host_disk_total_bytes", (("volume", "scratch"),))] == 500,
+        "a scratch folder on its own volume is flagged": found[("hai_host_scratch_separate_volume", ())] == 1,
+    }
+
+
+def a_scratch_folder_on_the_data_volume_is_flagged(root: Path) -> dict[str, bool]:
+    found = values(host_state_exporter.disk_samples({"data": "/d", "scratch": "/d/s"}, lambda _path: (10, 5, 5), lambda _path: 7))
+    return {"the same device means the scratch folder shares the data volume": found[("hai_host_scratch_separate_volume", ())] == 0}
+
+
+def a_missing_disk_path_is_a_source_error(root: Path) -> dict[str, bool]:
+    def broken(path: str) -> tuple[int, int, int]:
+        raise FileNotFoundError(path)
+
+    try:
+        host_state_exporter.disk_samples({"data": "/nope", "scratch": "/nope/s"}, broken, lambda _path: 1)
+        raised = False
+    except host_state_exporter.SourceError:
+        raised = True
+    return {"the source fails by name, so the series are dropped and the alert fires": raised}
+
+
+def the_real_disk_reader_reads_a_real_folder(root: Path) -> dict[str, bool]:
+    found = values(host_state_exporter.disk_samples({"data": str(root), "scratch": str(root)}, host_state_exporter.disk_usage, host_state_exporter.device_of))
+    return {
+        "free is a positive number below the total": 0
+        < found[("hai_host_disk_free_bytes", (("volume", "data"),))]
+        <= found[("hai_host_disk_total_bytes", (("volume", "data"),))],
+        "one folder is one volume": found[("hai_host_scratch_separate_volume", ())] == 0,
+        "the real folder has an st_dev": os.stat(root).st_dev == host_state_exporter.device_of(str(root)),
+    }
+
+
+def settings_gain_the_prefix_and_the_two_disk_paths(root: Path) -> dict[str, bool]:
+    base = {"ECS_CLUSTER": CLUSTER, "AWS_REGION": "us-west-2"}
+    configured = host_state_exporter.settings(
+        {**base, "ECS_SERVICE_PREFIX": PREFIX, "HOST_DATA_PATH": "/host/data", "HOST_SCRATCH_PATH": "/host/data/job_scratch"}
+    )
+    default = host_state_exporter.settings(base)
+
+    def refused(extra: dict[str, str]) -> bool:
+        try:
+            host_state_exporter.settings({**base, **extra})
+        except ValueError:
+            return True
+        return False
+
+    return {
+        "the values are read": configured.service_prefix == PREFIX
+        and configured.data_path == "/host/data"
+        and configured.scratch_path == "/host/data/job_scratch",
+        "without them the services, probes and disk sources are still built from defaults": default.service_prefix == "" and default.data_path == "",
+        "a prefix with a bad character is refused": refused({"ECS_SERVICE_PREFIX": "bad prefix!"}),
+        "a relative or climbing path is refused": refused({"HOST_DATA_PATH": "host/data"}) and refused({"HOST_DATA_PATH": "/host/../etc"}),
+    }
+
+
+def the_command_builds_every_source(root: Path) -> dict[str, bool]:
+    configured = host_state_exporter.settings(
+        {
+            "ECS_CLUSTER": CLUSTER,
+            "AWS_REGION": "us-west-2",
+            "ECS_SERVICE_PREFIX": PREFIX,
+            "HOST_DATA_PATH": "/host/data",
+            "HOST_SCRATCH_PATH": "/host/data/job_scratch",
+        }
+    )
+    names = set(host_state_exporter.collectors(configured, FakeEcs([])))
+    without_disk = set(host_state_exporter.collectors(host_state_exporter.settings({"ECS_CLUSTER": CLUSTER, "AWS_REGION": "us-west-2"}), FakeEcs([])))
+    return {
+        "five sources with the disk paths set": names == {"host", "services", "probes", "disk", "openmetadata"},
+        "no disk source without its paths": "disk" not in without_disk,
     }
 
 
@@ -422,4 +674,17 @@ CASES: dict[str, Callable[[Path], dict[str, bool]]] = {
     "exporter_command_reads_its_settings_from_the_environment": command_reads_its_settings_from_the_environment,
     "exporter_ecs_client_has_hard_timeouts": ecs_client_has_hard_timeouts,
     "exporter_catalog_has_a_help_text_and_closed_labels": catalog_has_a_help_text_and_closed_labels,
+    "exporter_services_report_desired_running_and_pending": services_report_desired_running_and_pending,
+    "exporter_services_are_described_ten_at_a_time": services_are_described_ten_at_a_time,
+    "exporter_stopped_tasks_are_counted_per_service_and_stop_code_for_the_last_hour": stopped_tasks_are_counted_per_service_and_stop_code_for_the_last_hour,
+    "exporter_too_many_stopped_tasks_are_read_in_bounded_batches": too_many_stopped_tasks_are_read_in_bounded_batches,
+    "exporter_probes_report_up_for_an_accepted_status_and_down_otherwise": probes_report_up_for_an_accepted_status_and_down_otherwise,
+    "exporter_a_probe_that_cannot_connect_or_is_slow_is_down_and_never_raises": a_probe_that_cannot_connect_or_is_slow_is_down_and_never_raises,
+    "exporter_the_default_probes_are_the_health_checks_the_services_already_use": the_default_probes_are_the_health_checks_the_services_already_use,
+    "exporter_disk_free_is_reported_for_the_data_and_the_scratch_volume": disk_free_is_reported_for_the_data_and_the_scratch_volume,
+    "exporter_a_scratch_folder_on_the_data_volume_is_flagged": a_scratch_folder_on_the_data_volume_is_flagged,
+    "exporter_a_missing_disk_path_is_a_source_error": a_missing_disk_path_is_a_source_error,
+    "exporter_the_real_disk_reader_reads_a_real_folder": the_real_disk_reader_reads_a_real_folder,
+    "exporter_settings_gain_the_prefix_and_the_two_disk_paths": settings_gain_the_prefix_and_the_two_disk_paths,
+    "exporter_the_command_builds_every_source": the_command_builds_every_source,
 }

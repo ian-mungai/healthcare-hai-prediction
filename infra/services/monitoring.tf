@@ -8,6 +8,7 @@ locals {
     code_monitoring_statsd               = "${local.code_path}/monitoring/statsd"
     code_monitoring_package              = "${local.code_path}/monitoring"
     grafana_data                         = "${var.data_mount_path}/grafana"
+    host_data                            = var.data_mount_path
     prometheus_data                      = "${var.data_mount_path}/prometheus"
     pushgateway_data                     = "${var.data_mount_path}/pushgateway"
   }
@@ -200,10 +201,16 @@ locals {
         { name = "ECS_CLUSTER", value = var.cluster_name },
         { name = "AWS_REGION", value = var.aws_region },
         { name = "HAI_LAUNCH_HOST_JOB_CAP_MIB", value = tostring(local.host_job_memory_mib) },
+        { name = "ECS_SERVICE_PREFIX", value = "${local.name_prefix}_" },
+        { name = "HOST_DATA_PATH", value = "/host/data" },
+        { name = "HOST_SCRATCH_PATH", value = "/host/data/${var.host_scratch_folder}" },
         { name = "PYTHONDONTWRITEBYTECODE", value = "1" },
         { name = "HOME", value = "/tmp" },
       ]
-      mountPoints  = [{ sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true }]
+      mountPoints = [
+        { sourceVolume = "code_monitoring_package", containerPath = "/opt/hai/monitoring", readOnly = true },
+        { sourceVolume = "host_data", containerPath = "/host/data", readOnly = true },
+      ]
       portMappings = [{ containerPort = 9103, hostPort = 9103, protocol = "tcp" }]
       linuxParameters = {
         capabilities = { drop = ["ALL"] }

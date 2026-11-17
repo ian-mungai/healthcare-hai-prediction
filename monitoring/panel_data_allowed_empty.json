@@ -34,6 +34,11 @@
       "dashboard": "hai_jobs.json",
       "panel": "Spark tasks and stages running now",
       "reason": "Empty while the bronze load does not run, which is the state once the chain run has finished."
+    },
+    {
+      "dashboard": "hai_services.json",
+      "panel": "Tasks stopped in the last hour, by service and stop code",
+      "reason": "Empty while no service task stopped in the last hour."
     }
   ]
 }

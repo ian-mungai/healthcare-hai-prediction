@@ -1,0 +1,193 @@
+# Service alerts, from the live ECS reads and health probes of the host state exporter (monitoring/host_state_exporter.py).
+# The notification policy (policies.yml) sends every alert to the one contact point (contact_points.yml), so no rule names a receiver.
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: hai_services
+    folder: HAI
+    interval: 1m
+    rules:
+      - uid: service_tasks_missing
+        title: ServiceTasksMissing
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'hai_service_tasks_running < bool hai_service_tasks_desired'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: An ECS service runs fewer tasks than it should.
+
+      - uid: service_health_down
+        title: ServiceHealthDown
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(hai_service_probe_up == bool 0) * on (service) group_left () (hai_service_tasks_desired > bool 0)'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: The health endpoint of a service that should run does not answer.
+
+      - uid: service_tasks_restarting
+        title: ServiceTasksRestarting
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 600, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: 'sum by (service) (hai_service_tasks_stopped_recent{stop_code!="UserInitiated"}) > bool 2'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        labels:
+          severity: warning
+        annotations:
+          summary: More than 2 tasks of a service stopped in the last hour, so it is restarting.
+
+      - uid: scratch_disk_low
+        title: ScratchDiskLow
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(hai_host_disk_free_bytes{volume="scratch"} / hai_host_disk_total_bytes{volume="scratch"}) < bool 0.15'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: The job scratch volume has less than 15 percent free, so the next job may fail for space.
+
+      - uid: data_disk_low
+        title: DataDiskLow
+        condition: C
+        data:
+          - refId: A
+            relativeTimeRange: {from: 900, to: 0}
+            datasourceUid: hai_prometheus
+            model:
+              refId: A
+              expr: '(hai_host_disk_free_bytes{volume="data"} / hai_host_disk_total_bytes{volume="data"}) < bool 0.10'
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              refId: B
+              type: reduce
+              expression: A
+              reducer: last
+              settings: {mode: dropNN}
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              refId: C
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator: {type: gt, params: [0]}
+        noDataState: OK
+        execErrState: Error
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: The data volume has less than 10 percent free.
