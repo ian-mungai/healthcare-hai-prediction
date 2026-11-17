@@ -700,8 +700,9 @@ def start_cases(cases: Any, folder: Path) -> None:
     def started() -> None:
         work = folder / "started"
         work.mkdir(parents=True)
-        code, error, launched, env = start(work, options)
+        code, error, launched, env = start(work, options, MLFLOW_ENABLE_WORKSPACES="true")
         require(code == 0 and len(launched) == 1, f"start failed: {code} {error}")
+        require(env.get("MLFLOW_ENABLE_WORKSPACES") == "true", "the workspace switch of the task environment must reach the server process")
         require(launched[0] == ["server", "--app-name", "basic-auth", *options], f"command: {launched[0]}")
         ini = work / "mlflow_auth.ini"
         require(stat.S_IMODE(ini.stat().st_mode) == 0o600, f"mode of the auth file: {oct(ini.stat().st_mode)}")

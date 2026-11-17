@@ -1583,6 +1583,15 @@ run "mlflow_service_shape" {
 
   assert {
     condition = (
+      contains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment, { name = "MLFLOW_ENABLE_WORKSPACES", value = "true" })
+      && length([for item in jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].environment : item if item.name == "MLFLOW_ENABLE_WORKSPACES"]) == 1
+      && !strcontains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].command[0], "workspaces")
+    )
+    error_message = "MLflow runs with workspaces on, set once in the task environment: with them off MLflow 3.17.2 lets any login create experiments and registered models whatever its grants, so no login could be read-only (the metadata reader, the model API user)."
+  }
+
+  assert {
+    condition = (
       !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "--app-name")
       && !strcontains(aws_ecs_task_definition.service["mlflow"].container_definitions, "NO_PERMISSIONS")
       && strcontains(jsondecode(aws_ecs_task_definition.service["mlflow"].container_definitions)[0].healthCheck.command[3], "401")

@@ -32,6 +32,9 @@ locals {
         { name = "MLFLOW_AUTH_DATABASE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow_auth" },
         { name = "MLFLOW_BACKEND_STORE_URI", value = "postgresql+psycopg2://mlflow@127.0.0.1:5432/mlflow" },
         { name = "MLFLOW_DISABLE_TELEMETRY", value = "true" },
+        # Workspaces on: with them off MLflow 3.17.2 lets every login create experiments and registered models whatever its grants, so no login could be read-only.
+        # The default workspace is created by the server at start and holds the existing resources (checked on a server that ran without workspaces first).
+        { name = "MLFLOW_ENABLE_WORKSPACES", value = "true" },
       ]
       secrets = [
         { name = "PGPASSWORD", valueFrom = local.secret_arn["mlflow_db_password"] },
