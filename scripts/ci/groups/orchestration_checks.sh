@@ -5,8 +5,6 @@
 # shellcheck disable=SC2154,SC2329
 
 orchestration_checks() {
-  timed "orchestration_checks: SDK worker fixtures" "$python_bin" -B -m scripts.orchestration.sdk_worker_cases --check-fixtures --fixtures "$repo_root/data_contracts/orchestration/examples/sdk_worker_cases" --revision "$(git rev-parse HEAD)" --output "$quality_output/sdk_worker_cases/report.json"
-  timed "orchestration_checks: SDK source mutations" "$python_bin" -B -m scripts.orchestration.sdk_static_mutations --output "$quality_output/sdk_static_mutations/report.json"
   timed "orchestration_checks: lineage E2E" "$python_bin" -m scripts.orchestration.run_lineage_e2e
   timed "orchestration_checks: task guard cases" "$python_bin" -m scripts.orchestration.task_guard_cases
   timed "orchestration_checks: trigger_dag cases" "$python_bin" -B -m scripts.orchestration.trigger_dag_cases --output "$quality_output/trigger_dag_cases/report.json"

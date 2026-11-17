@@ -108,7 +108,6 @@ source_modules =
     scripts.quality
     scripts.review
     scripts.process
-    scripts.process_group
     orchestration
     services
 forbidden_modules =

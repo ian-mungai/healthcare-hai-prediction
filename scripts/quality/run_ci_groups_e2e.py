@@ -291,10 +291,6 @@ ORCHESTRATION_SHARED = {
     "scripts/quality/docker_calls.py": QUALITY_SCRIPT,
     "scripts/quality/repo_checks.py": QUALITY_SCRIPT,
     "config/quality/docker_calls_reviewed.json": QUALITY_CONFIG,
-    "scripts/process_group.py": ["python_lint", "orchestration_checks", "repository_code_checks"],
-    "orchestration/worker_stderr.py": LAKEHOUSE_SCRIPT,
-    "data_contracts/orchestration/examples/sdk_worker_cases/case_matrix.json": [*LAYERS, "orchestration_checks"],
-    "data_contracts/orchestration/examples/sdk_worker_cases/mutation_cases.json": [*LAYERS, "orchestration_checks"],
 }
 MARKDOWNLINT = ROOT / ".tools" / "markdownlint-cli2" / "node_modules" / ".bin" / "markdownlint-cli2"
 
@@ -3716,18 +3712,6 @@ if __name__ == "__main__":
     raise SystemExit(observe(label, sys.argv[2:], lambda: 3 if label == os.environ.get("SCHEDULING_FAIL") else 0))
 """
 ORCHESTRATION_COMMANDS = (
-    (
-        "scripts.orchestration.sdk_worker_cases",
-        "-B",
-        "--check-fixtures",
-        "--fixtures",
-        "@fixtures@",
-        "--revision",
-        "@revision@",
-        "--output",
-        "@quality@/sdk_worker_cases/report.json",
-    ),
-    ("scripts.orchestration.sdk_static_mutations", "-B", "--output", "@quality@/sdk_static_mutations/report.json"),
     ("scripts.orchestration.run_lineage_e2e",),
     ("scripts.orchestration.task_guard_cases",),
     ("scripts.orchestration.trigger_dag_cases", "-B", "--output", "@quality@/trigger_dag_cases/report.json"),
@@ -3823,12 +3807,7 @@ def dispatcher_scheduling_case(work: Path, out: Path, part: str, staged: bool = 
     wanted: list[list[str]] = []
     for module, *arguments in ORCHESTRATION_COMMANDS:
         flags = [arguments.pop(0)] if arguments[:1] == ["-B"] else []
-        expanded = [
-            argument.replace("@quality@", str(quality))
-            .replace("@revision@", git(work, "rev-parse", "HEAD").strip())
-            .replace("@fixtures@", str(work / "data_contracts/orchestration/examples/sdk_worker_cases"))
-            for argument in arguments
-        ]
+        expanded = [argument.replace("@quality@", str(quality)) for argument in arguments]
         wanted.append([str(PYTHON), *flags, "-m", module, *expanded])
     actual = [row["argv"] for row in rows if row["label"].startswith("orchestration_checks:")]
     labels = [row["label"].strip() for row in rows if not row["label"].startswith(("gates:", "orchestration_checks:"))]

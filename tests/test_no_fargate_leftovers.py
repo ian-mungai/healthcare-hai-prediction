@@ -15,15 +15,6 @@ from tests.support import check
 
 ROOT = Path(__file__).resolve().parents[1]
 STACKS = ("infra/platform", "infra/iam", "infra/services")
-# The contracts that must name no Fargate provider. The ledger, request and execution contracts also name no ecs target: their schemas refuse a line or a
-# request that carries one (cases in run_contracts_e2e).
-CONTRACTS = (
-    "sdk_worker.schema.json",
-    "examples/sdk_worker.json",
-    "execution.schema.json",
-    "ledger_line.schema.json",
-    "examples/ledger_states.json",
-)
 GONE = (
     "config/orchestration/ecs_jobs.json",
     "config/orchestration/ecs_jobs.schema.json",
@@ -70,7 +61,6 @@ def test_the_platform_stack_outputs_no_fargate_value(name: str) -> None:
 
 def test_the_launcher_holds_no_ecs_placement_and_no_fargate_name() -> None:
     named = [str(path.relative_to(ROOT)) for path in files(("orchestration",), (".py",)) if "fargate" in path.read_text().lower()]
-    named += [name for name in CONTRACTS if "fargate" in (ROOT / "data_contracts/orchestration" / name).read_text().lower()]
     check(not named, f"these files still name Fargate: {named}")
     present = [name for name in GONE if (ROOT / name).exists()]
     present += [

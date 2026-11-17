@@ -119,7 +119,6 @@
       "^data_contracts/lakehouse/",
       "^data_contracts/great_expectations/",
       "^scripts/ci/groups/orchestration_checks\\.sh$",
-      "^scripts/process_group\\.py$",
       "^services/hai/(deadline_run\\.py$|bootstrap/)"
     ],
     "orchestration_engine_e2e": [
@@ -143,7 +142,6 @@
       "^data_contracts/lakehouse/",
       "^data_contracts/great_expectations/",
       "^scripts/ci/groups/orchestration_engine_e2e\\.sh$",
-      "^scripts/process_group\\.py$",
       "^services/hai/(deadline_run\\.py$|bootstrap/)"
     ],
     "repository_code_checks": [
