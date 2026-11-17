@@ -144,4 +144,9 @@ resource "aws_ecs_task_definition" "one_shot" {
       configure_at_launch = false
     }
   }
+
+  lifecycle {
+    # A replacement registers the new revision before it retires the old one, so a registration that ECS refuses keeps the old revision in the state. skip_destroy keeps it in ECS.
+    create_before_destroy = true
+  }
 }

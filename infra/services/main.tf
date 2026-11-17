@@ -235,6 +235,9 @@ resource "aws_ecs_task_definition" "service" {
   }
 
   lifecycle {
+    # A replacement registers the new revision before it retires the old one, so a registration that ECS refuses keeps the old revision in the state. skip_destroy keeps it in ECS.
+    create_before_destroy = true
+
     precondition {
       condition     = local.reserved_memory_mib <= local.memory_budget_mib
       error_message = "The control-plane memory reservations exceed the host memory minus the reserve kept for the operating system and the later services."

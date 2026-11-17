@@ -226,8 +226,10 @@ def first_apply_problems(plan: dict[str, Any] | None, text: str) -> list[str]:
             found.append(f"{change['address']} does not start on the task definition of the stack")
     for key, change in task_definition_changes(plan).items():
         if key in release.SERVICES:
-            if change["change"]["actions"] != ["delete", "create"]:
-                found.append(f"{change['address']} is planned as {'+'.join(change['change']['actions'])}, not as a new revision")
+            if change["change"]["actions"] != ["create", "delete"]:
+                found.append(
+                    f"{change['address']} is planned as {'+'.join(change['change']['actions'])}, not as a new revision registered before the old one is retired"
+                )
             if not change["change"]["after"].get("skip_destroy"):
                 found.append(f"{change['address']} would deregister the old revision")
     for change in plan["resource_changes"]:

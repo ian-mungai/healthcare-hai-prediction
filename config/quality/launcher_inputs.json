@@ -1416,6 +1416,7 @@
     "infra/services/tests/host_code_fetch.tftest.hcl",
     "infra/services/tests/monitoring.tftest.hcl",
     "infra/services/tests/openmetadata.tftest.hcl",
+    "infra/services/tests/replace_order.tftest.hcl",
     "infra/services/tests/services.tftest.hcl",
     "infra/services/variables.tf",
     "infra/services/versions.tf",

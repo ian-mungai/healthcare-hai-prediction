@@ -25,4 +25,7 @@ terraform_proofs() {
   # A jobs apply that replaces a task definition registers the new revision before it retires the old one: the plan of a replacement of all sixteen host and publisher definitions
   # creates first, and the old revision stays registered (skip_destroy), so a registration that ECS refuses keeps the old definition.
   timed "terraform_proofs: jobs replace order proof" "$python_bin" -m scripts.infrastructure.run_jobs_replace_order_e2e --out "$e2e_output/jobs_replace_order"
+  # A services apply that replaces a task definition registers the new revision before it retires the old one: the plan of a replacement of all twelve service and four one-shot definitions
+  # creates first, the old revision stays registered (skip_destroy), and every fixed service updates to the new revision, so a registration that ECS refuses keeps the old definition.
+  timed "terraform_proofs: services replace order proof" "$python_bin" -m scripts.infrastructure.run_services_replace_order_e2e --out "$e2e_output/services_replace_order"
 }
