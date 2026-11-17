@@ -312,11 +312,27 @@ run "bronze_run_records_are_read_by_version_written_create_only_and_noticed_on_o
       toset(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[0].Resource) == toset([
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/check.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
         "arn:aws:s3:::example-data-bucket/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
       ])
     )
-    error_message = "The bronze role must write exactly the run record and the carried-over record of a run and the staged request and inventory of a bronze run, and no other key."
+    error_message = "The bronze role must write exactly the run record, the carried-over record and its notice outcome of a run and the staged request and inventory of a bronze run, and no other key."
+  }
+
+  assert {
+    condition = (
+      jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[0].Condition == { StringEquals = { "s3:if-none-match" = "*" } } &&
+      !strcontains(jsonencode(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1]), "PutObject") &&
+      jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1].Action == ["s3:GetObject"] &&
+      toset(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1].Resource) == toset([
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over.json",
+        "arn:aws:s3:::example-data-bucket/lakehouse/bronze_runs/*/carried_over_notice.json",
+      ]) &&
+      !contains(keys(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement[1]), "Condition") &&
+      length(jsondecode(aws_iam_policy.bronze_writer["run_record_writes"].policy).Statement) == 2
+    )
+    error_message = "Every write of a run record or staged input must carry the condition s3:if-none-match equal to *, so the role can create a record once and never replace it, and the only read is the two carried-over records."
   }
 
   assert {

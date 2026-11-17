@@ -79,10 +79,14 @@ def render(
                 [
                     f"{bucket}/lakehouse/bronze_runs/*/check.json",
                     f"{bucket}/lakehouse/bronze_runs/*/carried_over.json",
+                    f"{bucket}/lakehouse/bronze_runs/*/carried_over_notice.json",
                     f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_request.json",
                     f"{bucket}/lakehouse/run_stage/bronze_*/inputs/bronze_inventory.json",
                 ]
-            )
+            ),
+            "BRONZE_RUN_RECORD_READ_ARNS": json.dumps(
+                [f"{bucket}/lakehouse/bronze_runs/*/carried_over.json", f"{bucket}/lakehouse/bronze_runs/*/carried_over_notice.json"]
+            ),
         },
         defect,
     )
@@ -108,8 +112,10 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     """Check independently listed allowed and forbidden storage requests. The raw root is readable only when its switch is on."""
     failures = []
 
-    def check(action: str, resource: str, allowed: bool, *, prefix: str | None = None) -> None:
+    def check(action: str, resource: str, allowed: bool, *, prefix: str | None = None, once: str | None = None) -> None:
         context = {} if prefix is None else {"s3:prefix": (prefix,)}
+        if once is not None:
+            context["s3:if-none-match"] = (once,)
         if decide(list(documents.values()), Request(action, resource, context)).allowed != allowed:
             failures.append(f"{action} {'allowed' if allowed else 'denied'} at {resource.removeprefix(BUCKET)}")
 
@@ -163,24 +169,33 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
     check("s3:ListBucketVersions", BUCKET, False, prefix="example/not_mapped/")
     check("s3:ListBucket", BUCKET, False, prefix="")
     check("s3:GetBucketLocation", BUCKET, False)
-    for record in ("check.json", "carried_over.json"):
-        check("s3:PutObject", f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34/{record}", True)
-        for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
-            check(action, f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34/{record}", False)
+    # A record or a staged input is created once: the write is allowed only with the header if-none-match "*". A missing header and any other value are
+    # refused, so the role cannot replace what a run wrote. Each denial of another key carries the right header, so the key and not the header refuses it.
+    runs = f"{BUCKET}/lakehouse/bronze_runs/bronze_ab12cd34"
+    stage = f"{BUCKET}/lakehouse/run_stage"
+    written = [f"{runs}/{record}" for record in ("check.json", "carried_over.json", "carried_over_notice.json")]
+    written += [
+        f"{stage}/{run}/inputs/{staged}" for run in ("bronze_ab12cd34", "bronze_ab12cd34_2") for staged in ("bronze_request.json", "bronze_inventory.json")
+    ]
+    for key in written:
+        check("s3:PutObject", key, True, once="*")
+        check("s3:PutObject", key, False)
+        for wrong in ('"9b2cf535f27731c974343645a3985328"', "", "*/*", "etag"):
+            check("s3:PutObject", key, False, once=wrong)
+        for action in ("s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
+            check(action, key, False)
+            check(action, key, False, once="*")
+    for key in written[:3]:
+        check("s3:GetObject", key, key.endswith(("carried_over.json", "carried_over_notice.json")))
+    for key in written[3:]:
+        check("s3:GetObject", key, False)  # the stage read of every job role grants this read; the bronze role's own policies add none
     for other in (
         "lakehouse/bronze_runs/bronze_ab12cd34/other.json",
         "lakehouse/bronze_runs/check.json",
         "lakehouse/bronze_run/bronze_ab12cd34/check.json",
         "bronze_runs/bronze_ab12cd34/check.json",
-    ):
-        check("s3:PutObject", f"{BUCKET}/{other}", False)
-    for staged in ("bronze_request.json", "bronze_inventory.json"):
-        for run in ("bronze_ab12cd34", "bronze_ab12cd34_2"):
-            check("s3:PutObject", f"{BUCKET}/lakehouse/run_stage/{run}/inputs/{staged}", True)
-        for action in ("s3:GetObject", "s3:DeleteObject", "s3:GetObjectVersion", "s3:AbortMultipartUpload"):
-            check(action, f"{BUCKET}/lakehouse/run_stage/bronze_ab12cd34/inputs/{staged}", False)
-        check("s3:PutObject", f"{BUCKET}/lakehouse/run_stage/silver_ab12cd34/inputs/{staged}", False)
-    for other in (
+        "lakehouse/run_stage/silver_ab12cd34/inputs/bronze_request.json",
+        "lakehouse/run_stage/silver_ab12cd34/inputs/bronze_inventory.json",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code.tar.gz",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code.sha256",
         "lakehouse/run_stage/bronze_ab12cd34/inputs/code_run.json",
@@ -189,7 +204,8 @@ def evaluate(documents: dict[str, dict[str, Any]], names: tuple[str, ...], colle
         "lakehouse/run_stage/bronze_ab12cd34/grants/bronze_request.json",
         "run_stage/bronze_ab12cd34/inputs/bronze_request.json",
     ):
-        check("s3:PutObject", f"{BUCKET}/{other}", False)
+        check("s3:PutObject", f"{BUCKET}/{other}", False, once="*")
+        check("s3:GetObject", f"{BUCKET}/{other}", False)
     run_record = f"{BUCKET}/raw/ingestion_runs/ingestion_ab12cd34/run.json"
     check("s3:GetObjectVersion", run_record, raw)
     check("s3:GetObjectVersion", f"{BUCKET}/raw/ingestion_runs/ingestion_retry_ab12cd34_2/run.json", raw)
@@ -294,6 +310,22 @@ def planted_storage_defects(out: Path) -> list[dict[str, Any]]:
                 "${BRONZE_RUN_RECORD_ARNS}",
                 json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*/check.json", f"{BUCKET}/lakehouse/bronze_runs/*/carried_over.json"]),
             ),
+        ),
+        (
+            "record_write_unconditional",
+            ("bronze_writer_run_record_writes", ',\n      "Condition": {"StringEquals": {"s3:if-none-match": "*"}}', ""),
+        ),
+        (
+            "record_write_any_header",
+            ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"StringLike": {"s3:if-none-match": "*"}'),
+        ),
+        (
+            "record_write_only_without_header",
+            ("bronze_writer_run_record_writes", '"StringEquals": {"s3:if-none-match": "*"}', '"Null": {"s3:if-none-match": "true"}'),
+        ),
+        (
+            "record_read_widened",
+            ("bronze_writer_run_record_writes", "${BRONZE_RUN_RECORD_READ_ARNS}", json.dumps([f"{BUCKET}/lakehouse/bronze_runs/*"])),
         ),
         ("run_record_delete_allowed", ("bronze_writer_run_record_writes", '"s3:PutObject"', '"s3:PutObject", "s3:DeleteObject"')),
         ("run_record_read_widened", ("bronze_writer_run_records", "${RUN_RECORD_ARNS}", json.dumps([f"{BUCKET}/raw/ingestion_runs/*"]))),

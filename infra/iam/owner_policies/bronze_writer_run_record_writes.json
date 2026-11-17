@@ -2,10 +2,17 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "WriteTheBronzeRunRecordsOnly",
+      "Sid": "CreateTheBronzeRunRecordsAndStagedInputsOnce",
       "Effect": "Allow",
       "Action": ["s3:PutObject"],
-      "Resource": ${BRONZE_RUN_RECORD_ARNS}
+      "Resource": ${BRONZE_RUN_RECORD_ARNS},
+      "Condition": {"StringEquals": {"s3:if-none-match": "*"}}
+    },
+    {
+      "Sid": "ReadTheCarriedOverRecordsItCreated",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject"],
+      "Resource": ${BRONZE_RUN_RECORD_READ_ARNS}
     }
   ]
 }
