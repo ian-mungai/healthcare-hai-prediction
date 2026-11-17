@@ -17,6 +17,18 @@ variable "airflow_lineage_prepared" {
   }
 }
 
+variable "job_lineage_prepared" {
+  description = "Prepare the lineage bot token grant for the layer jobs: the shared job execution role may inject exactly the lineage bot token parameter (openmetadata_bot_token_names[\"lineage\"]) into the pin and upload containers of the silver, gold and features host jobs, which send their own lineage events (orchestration/job_lineage.py). Off by default. Needs openmetadata_persistent_prepared. The jobs input job_lineage_enabled needs this grant first: a task whose definition names a secret its execution role may not read does not start."
+  type        = bool
+  default     = false
+  nullable    = false
+
+  validation {
+    condition     = !var.job_lineage_prepared || var.openmetadata_persistent_prepared
+    error_message = "job_lineage_prepared needs openmetadata_persistent_prepared, because the lineage bot token parameter belongs to the persistent catalog."
+  }
+}
+
 variable "openmetadata_db_password_name" {
   description = "Parameter Store SecureString name of the password of the OpenMetadata database role. The host execution role may inject exactly this parameter. The owner sets the value outside Terraform."
   type        = string
@@ -166,6 +178,24 @@ resource "aws_iam_role_policy" "job_execution_mlflow_metadata_reader" {
       Effect   = "Allow"
       Action   = "ssm:GetParameters"
       Resource = ["arn:aws:ssm:${var.aws_region}:${var.expected_account_id}:parameter${var.mlflow_metadata_reader_password_name}"]
+    }]
+  })
+}
+
+# The layer jobs get the lineage bot token through the shared job execution role. It is the parameter the scheduler already sends with (task_execution_airflow_lineage),
+# so a job's events and the scheduler's have one sender identity. The ingestion token grant above stays byte equal.
+resource "aws_iam_role_policy" "job_execution_lineage_token" {
+  count = var.job_lineage_prepared ? 1 : 0
+
+  name = "openmetadata_lineage_token"
+  role = aws_iam_role.job["execution"].name
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid      = "InjectLineageBotToken"
+      Effect   = "Allow"
+      Action   = "ssm:GetParameters"
+      Resource = [local.openmetadata_parameter_arn["lineage"]]
     }]
   })
 }

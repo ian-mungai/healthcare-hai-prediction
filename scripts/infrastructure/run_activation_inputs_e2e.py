@@ -134,6 +134,7 @@ ROWS: list[Row] = [
         "iam",
         "airflow_launch_prepared",
         "airflow_lineage_prepared",
+        "job_lineage_prepared",
         "athena_mirror_prepared",
         "drift_prepared",
         "job_endpoints_enabled",

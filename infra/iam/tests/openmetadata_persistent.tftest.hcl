@@ -340,3 +340,87 @@ run "a_third_caller_is_refused" {
 
   expect_failures = [var.openmetadata_bot_token_names]
 }
+
+# The layer jobs (silver, gold, features and the model sets) inject the lineage bot token through the shared job execution role, for the lineage events they send
+# from their pin and upload containers (orchestration/job_lineage.py).
+run "job_lineage_flag_off_adds_no_grant_and_keeps_the_ingestion_grant" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+  }
+
+  assert {
+    condition     = !var.job_lineage_prepared && length(aws_iam_role_policy.job_execution_lineage_token) == 0
+    error_message = "With job_lineage_prepared false the job execution role gains no lineage token grant."
+  }
+
+  assert {
+    condition     = !strcontains(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy, "openmetadata_bot_lineage")
+    error_message = "The ingestion grant holds no lineage token."
+  }
+}
+
+run "job_lineage_flag_on_injects_exactly_the_lineage_token" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+    job_lineage_prepared             = true
+  }
+
+  assert {
+    condition = (
+      aws_iam_role_policy.job_execution_lineage_token[0].name == "openmetadata_lineage_token"
+      && jsondecode(aws_iam_role_policy.job_execution_lineage_token[0].policy) == {
+        Version = "2012-10-17"
+        Statement = [{
+          Sid      = "InjectLineageBotToken"
+          Effect   = "Allow"
+          Action   = "ssm:GetParameters"
+          Resource = ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_lineage"]
+        }]
+      }
+    )
+    error_message = "The job execution role may inject exactly the lineage bot token: one allow statement, ssm:GetParameters, one parameter ARN and no KMS or wildcard."
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.job_execution_openmetadata_ingestion_token[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/openmetadata_bot_ingestion"]
+    error_message = "The ingestion grant of the job execution role stays byte equal when the lineage flag is on."
+  }
+
+  assert {
+    condition     = length(aws_iam_role_policy.task_execution_airflow_lineage) == 0
+    error_message = "The scheduler's lineage grant is its own flag and stays off here."
+  }
+}
+
+run "job_lineage_flag_follows_a_renamed_token_parameter" {
+  command = plan
+
+  variables {
+    openmetadata_persistent_prepared = true
+    job_lineage_prepared             = true
+    openmetadata_bot_token_names = {
+      lineage    = "/example_project/renamed_lineage"
+      ingestion  = "/example_project/openmetadata_bot_ingestion"
+      comparison = "/example_project/openmetadata_bot_comparison"
+    }
+  }
+
+  assert {
+    condition     = jsondecode(aws_iam_role_policy.job_execution_lineage_token[0].policy).Statement[0].Resource == ["arn:aws:ssm:eu-west-1:111111111111:parameter/example_project/renamed_lineage"]
+    error_message = "The grant names the configured lineage parameter."
+  }
+}
+
+run "job_lineage_flag_without_the_persistent_catalog_is_refused" {
+  command = plan
+
+  variables {
+    job_lineage_prepared = true
+  }
+
+  expect_failures = [var.job_lineage_prepared]
+}
