@@ -32,6 +32,8 @@ CODE_FETCH_FAMILY = "stand-in-code-fetch"
 RELOAD_FAMILY = "stand-in-features"
 HELD_RUN = "20261117T010000Z-0000a002"  # a held, not released run that a skipped reload names
 OLDER_RUN = "20261116T010000Z-0000a001"  # the run that a loaded reload names
+BASE_RUN = "20261116T000000Z-0000b001"  # the base run that a loaded reload names
+LOAD_ID = "load-stand-in-1"
 LOG_GROUP = "stand-in-airflow-log-group"
 JOBS_LOG_GROUP = "stand-in-jobs-log-group"
 RELOAD_STREAM = "features/feast"  # the awslogs stream prefix of the features task (the layer) and its container that runs the reload
@@ -104,7 +106,9 @@ class StandInHost:
     ``never_starts:<key>`` makes a task of the key stop without an exit code (``TaskFailedToStart``), ``task_seconds:<key>=<n>`` makes it run n virtual
     seconds, ``no_code_record`` makes the identity task refuse as a host with no run ID record does, ``no_identity_log`` and ``bad_identity_line`` make its
     log empty or malformed. A reload launch prints its result line (``online_reload`` prints one JSON line) in the jobs log group: ``loaded`` for its set,
-    ``reload_skipped:<set>`` makes it print ``skipped`` with a held run and a reason and exit 0, ``reload_no_log`` makes its log empty.
+    ``reload_skipped:<set>`` makes it print ``skipped`` with a held run and a reason and exit 0, ``reload_no_log`` makes its log empty,
+    ``reload_incomplete:<set>`` makes its line lack the fields of its outcome, ``reload_forged_after:<set>`` appends a bare ``loaded`` line and
+    ``reload_second_result:<set>`` appends a second complete ``loaded`` line.
     A log request (``get-log-events``) answers the output of a stopped task and fails with ``ResourceNotFoundException`` for a stream or a group that has no
     such task.
     A run-task call with a client token that an earlier call used answers with that call's task, as ECS does.
@@ -395,20 +399,29 @@ class StandInHost:
         )
         if code == 0 and f"reload_fails:{model}" in self.faults:
             return 1
-        if code == 0 and f"reload_skipped:{model}" in self.faults:
-            reason = f"run {HELD_RUN} is held and not released, and run {OLDER_RUN} is on another schema than set {model} has now; nothing was loaded"
-            self.pending_output = (
-                ""
-                if "reload_no_log" in self.faults
-                else json.dumps({"feature_set": model, "outcome": "skipped", "reason": reason, "skipped_held": [HELD_RUN]}, sort_keys=True)
-            )
-            return 0
         if code == 0:
-            if "reload_no_log" not in self.faults:
-                self.pending_output = json.dumps({"feature_set": model, "outcome": "loaded", "run_id": OLDER_RUN, "skipped_held": []}, sort_keys=True)
+            self.pending_output = "\n".join(json.dumps(line, sort_keys=True) for line in self.reload_lines(model))
+        if code == 0 and f"reload_skipped:{model}" not in self.faults:
             fetch = launch.get("fetch", {})
             self.online[model] = (fetch.get("CODE_RUN_ID", ""), fetch.get("CODE_SHA256", ""))
         return code
+
+    def reload_lines(self, model: str) -> list[dict[str, Any]]:
+        """The result lines that the reload of ``model`` prints: the genuine line (``skipped`` with ``reload_skipped:<set>``, else ``loaded``), none with
+        ``reload_no_log``, the genuine line without its fields with ``reload_incomplete:<set>``, and after it a forged bare ``loaded`` line with
+        ``reload_forged_after:<set>`` or a second complete ``loaded`` line with ``reload_second_result:<set>``."""
+        if "reload_no_log" in self.faults:
+            return []
+        reason = f"run {HELD_RUN} is held and not released, and run {OLDER_RUN} is on another schema than set {model} has now; nothing was loaded"
+        skipped = {"feature_set": model, "outcome": "skipped", "reason": reason, "skipped_held": [HELD_RUN]}
+        loaded = {"feature_set": model, "outcome": "loaded", "run_id": OLDER_RUN, "base_run": BASE_RUN, "load_id": LOAD_ID, "skipped_held": []}
+        genuine = skipped if f"reload_skipped:{model}" in self.faults else loaded
+        lines = [{"feature_set": model, "outcome": genuine["outcome"]} if f"reload_incomplete:{model}" in self.faults else genuine]
+        if f"reload_forged_after:{model}" in self.faults:
+            lines.append({"feature_set": model, "outcome": "loaded"})
+        if f"reload_second_result:{model}" in self.faults:
+            lines.append(loaded)
+        return lines
 
     def logs_get_log_events(self, options: dict[str, list[str]]) -> dict[str, Any]:
         """The log of one task: its output once it stopped. A group other than the stand-in's, or a stream with no such task, is not found."""

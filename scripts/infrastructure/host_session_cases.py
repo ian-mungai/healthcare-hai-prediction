@@ -1052,6 +1052,56 @@ def a_reload_with_no_readable_result_is_reported_and_does_not_stop_start() -> di
     }
 
 
+def step_lines(lines: list[str], name: str) -> list[str]:
+    """The report lines of one step."""
+    return [line for line in lines if line.startswith(f"{name}:")]
+
+
+def a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown() -> dict[str, bool]:
+    """The result of a reload is one complete line: a line appended after the genuine one, a second result and a line without the fields of its outcome are
+    each an unknown outcome, never a reload, and the last line does not win."""
+    faults = {"reload_skipped:m2", "reload_forged_after:m2", "reload_incomplete:m4", "reload_second_result:m1"}
+    host, session, lines = build(faults)
+    message = failure(lambda: session.start(code=(CODE_RUN, CODE_SHA)))
+    unknown = step_lines(lines, "online_store_reload_outcome_unknown")
+    _, bare_session, bare_lines = build({"reload_skipped:m2", "reload_incomplete:m2"})
+    bare_message = failure(lambda: bare_session.start(code=(CODE_RUN, CODE_SHA)))
+    return {
+        "start does not fail": message is None and host.desired == 1,
+        "a bare loaded line after the genuine skipped line leaves m2 unknown": any(
+            line.startswith("online_store_reload_outcome_unknown: m2:") for line in lines
+        ),
+        "a second complete result leaves m1 unknown": any(line.startswith("online_store_reload_outcome_unknown: m1:") for line in lines),
+        "a result without the fields of its outcome leaves m4 unknown": any(line.startswith("online_store_reload_outcome_unknown: m4:") for line in lines),
+        "all three sets are unknown and nothing else": len(unknown) == 3,
+        "no set is reported as reloaded or as skipped": not any(line.startswith(("online_store_reloaded", "online_store_reload_skipped")) for line in lines),
+        "a skipped result without its reason and held runs is unknown, not skipped": bare_message is None
+        and any(line.startswith("online_store_reload_outcome_unknown: m2:") for line in bare_lines)
+        and not step_lines(bare_lines, "online_store_reload_skipped"),
+    }
+
+
+def an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip() -> dict[str, bool]:
+    """The closing report keeps the sets whose outcome is unknown apart from the sets that a result confirmed as skipped: only a confirmed skip says that a
+    set serves no online features."""
+    _, unknown_session, unknown_lines = build({"reload_no_log"})
+    failure(lambda: unknown_session.start(code=(CODE_RUN, CODE_SHA)))
+    _, mixed_session, mixed_lines = build({"reload_skipped:m2", "reload_incomplete:m4"})
+    failure(lambda: mixed_session.start(code=(CODE_RUN, CODE_SHA)))
+    unconfirmed = step_lines(unknown_lines, "online_store_reload_unconfirmed")
+    not_loaded, mixed_unconfirmed = step_lines(mixed_lines, "online_store_not_loaded"), step_lines(mixed_lines, "online_store_reload_unconfirmed")
+    return {
+        "a start where no outcome could be read confirms no skipped set": not step_lines(unknown_lines, "online_store_not_loaded"),
+        "the unknown sets are named in one unconfirmed line": len(unconfirmed) == 1 and all(model in unconfirmed[0] for model in sets_online()),
+        "the unconfirmed line does not claim that the sets serve nothing online": bool(unconfirmed) and "no online predictions" not in unconfirmed[0],
+        "a confirmed skip is named in the not loaded line and only it": len(not_loaded) == 1 and "m2" in not_loaded[0] and "m4" not in not_loaded[0],
+        "the not loaded line says what the skip means": bool(not_loaded) and "no online predictions" in not_loaded[0],
+        "an unknown set is named in the unconfirmed line and only it": len(mixed_unconfirmed) == 1
+        and "m4" in mixed_unconfirmed[0]
+        and "m2" not in mixed_unconfirmed[0],
+    }
+
+
 def start_without_code_reloads_the_recorded_run() -> dict[str, bool]:
     host, session, lines = build(checkout=OLD_SHA, code_run=OTHER_RUN)
     session.start()
@@ -1382,6 +1432,8 @@ CASES: dict[str, Callable[[], dict[str, bool]]] = {
     "a_skipped_reload_does_not_stop_start_and_is_reported": a_skipped_reload_does_not_stop_start_and_is_reported,
     "a_start_with_every_set_loaded_reports_no_unloaded_set": a_start_with_every_set_loaded_reports_no_unloaded_set,
     "a_reload_with_no_readable_result_is_reported_and_does_not_stop_start": a_reload_with_no_readable_result_is_reported_and_does_not_stop_start,
+    "a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown": a_result_that_is_forged_repeated_or_incomplete_is_reported_unknown,
+    "an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip": an_unknown_reload_outcome_is_not_reported_as_a_confirmed_skip,
     "start_without_code_reloads_the_recorded_run": start_without_code_reloads_the_recorded_run,
     "start_with_code_does_not_read_the_record": start_with_code_does_not_read_the_record,
     "start_without_a_code_record_is_refused": start_without_a_code_record_is_refused,

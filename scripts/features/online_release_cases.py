@@ -589,6 +589,63 @@ def case_e34_reload_skips_a_held_newer_run_on_a_changed_schema(c: Checker) -> No
         c.check("the command loaded nothing", store.loads == [f"m2:{older}:{BASE_RUN}"] and store.marker is None)
 
 
+def case_e34_reload_skip_needs_a_genuine_held_run_and_valid_evidence(c: Checker) -> None:
+    """The skip excuses only the schema difference of a genuine, well-formed held newer run: an open promotion lease, a hold without its base run or schema
+    hash, a hold on the older schema and a load, hold or release record whose schema hash is not a SHA-256 each stay refused, and nothing is loaded."""
+    schema, sha = reads.read_schema()
+    mine = importlib.import_module("scripts.features.feature_schema").set_schema_sha256("m2", schema=schema)
+    held_new, older = RELOAD_RUNS[5], RELOAD_RUNS[4]
+    good = {"HAI_2": mine, "HAI_3": mine}
+
+    def unresolved() -> dict[str, str | None]:
+        raise ReadError("the promotion of model-b (HAI_2) is unresolved: lease generation 3 is open")
+
+    with tempfile.TemporaryDirectory(prefix="online_reload_cases_") as raw:
+        counter = [0]
+        store = Reloadable()
+
+        def attempt(
+            hold: dict[str, Any] | None = None, receipt: dict[str, Any] | None = None, release: str | None = None, production: Any = None
+        ) -> dict[str, Any]:
+            """One reload with the held newer run ``hold`` (the genuine one by default), an older run that loaded itself on the old schema or was released on
+            the schema ``release``."""
+            counter[0] += 1
+            holds = feast_sets.FolderHoldStore(Path(raw) / str(counter[0]))
+            holds.write_new(feast_sets.HOLD_NAME, held_new, hold if hold is not None else hold_of("m2", held_new, mine))
+            if release is not None:
+                holds.write_new(feast_sets.HOLD_NAME, older, hold_of("m2", older, release))
+                holds.write_new(feast_sets.RELEASE_NAME, older, release_of("m2", older, release, sha))
+            else:
+                loaded_receipt(holds, schema, sha, "m2", older, **({"set_schema_sha256": OLD_HASH} if receipt is None else receipt))
+            return reload_run("m2", holds, runs=[held_new, older], store=store, production=production or (lambda: dict(good)))
+
+        genuine = attempt()
+        c.check("the genuine held run over an older schema is skipped", genuine["outcome"] == "skipped" and genuine["skipped_held"] == [held_new])
+        other_schema = attempt(production=lambda: {"HAI_2": OLD_HASH, "HAI_3": OLD_HASH})
+        c.check("Production models on the older schema do not stop the skip (that is the hold's reason)", other_schema["outcome"] == "skipped")
+        c.refused("an open promotion lease refuses the skip", lambda: attempt(production=unresolved), "unresolved")
+        c.refused("an open promotion lease refuses the skip of a released older run", lambda: attempt(release=OLD_HASH, production=unresolved), "unresolved")
+        genuine_hold = hold_of("m2", held_new, mine)
+        for field in ("base_run", "set_schema_sha256"):
+            c.refused(f"a hold without {field} does not excuse the schema change", lambda field=field: attempt(hold={**genuine_hold, field: None}), field)
+        c.refused("a hold with an empty base run does not excuse the schema change", lambda: attempt(hold={**genuine_hold, "base_run": ""}), "base_run")
+        c.refused("a hold with a base run that is no run ID does not excuse it", lambda: attempt(hold={**genuine_hold, "base_run": "run-1"}), "base_run")
+        c.refused("a hold on the older schema does not excuse it", lambda: attempt(hold=hold_of("m2", held_new, OLD_HASH)), "set_schema_sha256")
+        c.refused("a hold of another set does not excuse it", lambda: attempt(hold=hold_of("m4", held_new, mine)), "belongs to set m4")
+        c.refused("a hold that names another run does not excuse it", lambda: attempt(hold=hold_of("m2", RELOAD_RUNS[0], mine)), "names run")
+        for bad in ("", "not-a-schema-hash", "A" * 64, "0" * 63):
+            shown = bad or "empty"
+            c.refused(
+                f"an older load record with the schema hash {shown!r} is no schema change",
+                lambda bad=bad: attempt(receipt={"set_schema_sha256": bad}),
+                "set_schema_sha256",
+            )
+            c.refused(
+                f"an older hold and release with the schema hash {shown!r} are no schema change", lambda bad=bad: attempt(release=bad), "set_schema_sha256"
+            )
+        c.check("none of the refusals loaded anything", store.loads == [] and store.marker is None)
+
+
 def case_e34_reload_refuses_what_does_not_fit(c: Checker) -> None:
     """A foreign hold, a record without a load, a changed schema, a Production model on another schema, an open promotion lease and a moved head each stop
     the reload by name, and nothing is loaded."""

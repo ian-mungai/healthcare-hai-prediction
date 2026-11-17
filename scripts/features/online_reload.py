@@ -10,7 +10,8 @@ newest committed run that has load evidence, with the load that a release or a F
 
 A newer run that is held and not released is skipped and named, because its load was never online; the older run with evidence is what the store served. When
 that older run's load is on another schema than the set has now, the reload does not load it either (owner decision B, Nov 17 2026): the set is skipped, naming
-the held run and the reason, until the held run is released. The result is one of
+the held run and the reason, until the held run is released. Only a well-formed hold of the set on its current schema excuses that schema change, the schema
+hashes of the older run's records must be SHA-256 values, and an unresolved promotion still refuses. The result is one of
 
 - ``loaded``: the run's table was loaded online (the store was empty or held another load);
 - ``already_loaded``: the set's marker is ready for this run, schema and publication, so nothing is loaded again (``SetLoader.recover``);
@@ -31,6 +32,7 @@ import contextlib
 import functools
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping, MutableMapping, Sequence
 from typing import Any
@@ -40,6 +42,7 @@ from scripts.features import publication_reads as reads
 from scripts.features.publication_reads import ReadError
 
 LOADED, ALREADY_LOADED, SKIPPED = "loaded", "already_loaded", "skipped"
+SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
 class SchemaChanged(ReadError):
@@ -60,8 +63,11 @@ def committed_runs(catalog: reads.IcebergCatalog, namespace: str, feature_set: s
 
 def fits_but_for_schema(model: str, run: str, mode: str, loaded: Mapping[str, Any], holds: feast_sets.HoldStore) -> bool:
     """True when ``loaded`` is the run's own successful load of the set for this request in every field but the schema hash it carries."""
+    recorded = loaded.get("set_schema_sha256")
+    if not isinstance(recorded, str) or not SHA256.fullmatch(recorded):
+        return False
     try:
-        feast_sets.direct_load_record(model, run, mode, str(loaded.get("set_schema_sha256")), holds)
+        feast_sets.direct_load_record(model, run, mode, recorded, holds)
     except ReadError:
         return False
     return True
@@ -80,6 +86,8 @@ def evidence_of(model: str, run: str, set_hash: str, mode: str, holds: feast_set
         if released is None:
             return None, True
         record = feast_sets.bound_release(released, hold, model, run)
+        if not SHA256.fullmatch(record["set_schema_sha256"]):
+            raise ReadError(f"the release record of run {run} carries a set_schema_sha256 that is not a SHA-256; nothing was loaded")
         if record["set_schema_sha256"] != set_hash:
             raise SchemaChanged(f"the schema of set {model} changed since run {run} was released; nothing was loaded")
         return record, False
@@ -92,6 +100,21 @@ def evidence_of(model: str, run: str, set_hash: str, mode: str, holds: feast_set
         if fits_but_for_schema(model, run, mode, loaded, holds):
             raise SchemaChanged(str(error)) from None
         raise
+
+
+def check_held_run(model: str, run: str, set_hash: str, holds: feast_sets.HoldStore) -> None:
+    """Refuse unless ``run`` has a well-formed hold of this set that is on the set's current schema: only such a hold can excuse a schema change."""
+    hold = holds.read(feast_sets.HOLD_NAME, run)
+    if hold is None:
+        raise ReadError(f"run {run} has no hold record, so it cannot excuse the schema change of set {model}; nothing was loaded")
+    problems = feast_sets.record_problems(hold, {"feature_set": model, "run_id": run, "set_schema_sha256": set_hash}, ("base_run", "set_schema_sha256"))
+    if not problems and not reads.RUN_ID.fullmatch(hold["base_run"]):
+        problems = ["base_run"]
+    if problems:
+        raise ReadError(
+            f"the hold of run {run} is not a well-formed hold of set {model} on its current schema (fields that do not fit: {', '.join(problems)}), "
+            "so it cannot excuse the schema change; nothing was loaded"
+        )
 
 
 def reload_checked(
@@ -107,7 +130,9 @@ def reload_checked(
     """Select the newest run with load evidence and load it online, or report that the set has none.
 
     A newer run that is held and not released and an older run whose load is on another schema than the set has now (``SchemaChanged``) end in ``skipped``
-    with the held runs named: the older rows are never loaded on a wrong schema. The same schema change with no held newer run is refused."""
+    with the held runs named: the older rows are never loaded on a wrong schema. The skip needs the newest held run to be a well-formed hold of the set on its
+    current schema and the promotion state to be resolved (``production`` raises for an open lease); Production models on the older schema do not stop it.
+    The same schema change with no held newer run is refused, and so is a schema hash that is not a SHA-256."""
     document, _ = schema
     set_hash = feature_schema.set_schema_sha256(model, schema=document)
     skipped: list[str] = []
@@ -117,6 +142,8 @@ def reload_checked(
         except SchemaChanged:
             if not skipped:
                 raise
+            check_held_run(model, skipped[0], set_hash, holds)
+            production()
             reason = (
                 f"run {skipped[0]} is held and not released, and run {run}, the newest run that was loaded, is on another schema than set {model} has now; "
                 f"nothing was loaded until run {skipped[0]} is released"

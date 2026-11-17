@@ -167,7 +167,8 @@ def category(reason: object, categories: tuple[tuple[str, str], ...]) -> str:
 
 
 def result_line(message: str, model: str) -> dict[str, Any] | None:
-    """The reload result of ``model`` that a log message holds: a JSON object with the set and one of ``RELOAD_OUTCOMES``, else None."""
+    """The reload result of ``model`` that a log message holds: a JSON object with the set and one of ``RELOAD_OUTCOMES``, else None. The fields of its
+    outcome are checked by ``complete_result``."""
     text = message.strip()
     if not text.startswith("{"):
         return None
@@ -176,6 +177,19 @@ def result_line(message: str, model: str) -> dict[str, Any] | None:
     except ValueError:
         return None
     return document if isinstance(document, dict) and document.get("feature_set") == model and document.get("outcome") in RELOAD_OUTCOMES else None
+
+
+def complete_result(document: dict[str, Any]) -> bool:
+    """True when a result line has the fields of its outcome: ``loaded`` and ``already_loaded`` name the run, the base run (run IDs) and the load ID,
+    ``skipped`` names a reason and the held runs (a list of run IDs, empty when no run is held)."""
+
+    def text(name: str) -> bool:
+        return isinstance(document.get(name), str) and bool(document[name])
+
+    if document["outcome"] == "skipped":
+        held = document.get("skipped_held")
+        return text("reason") and isinstance(held, list) and all(isinstance(run, str) and CODE_RUN_ID.fullmatch(run) for run in held)
+    return text("load_id") and all(text(name) and CODE_RUN_ID.fullmatch(document[name]) for name in ("run_id", "base_run"))
 
 
 def code_environment(overrides: dict[str, Any] | None, container: str) -> dict[str, str]:
@@ -877,14 +891,15 @@ class Session:
         }
 
     def reload_outcome(self, model: str, task: str) -> dict[str, Any] | None:
-        """The result line of a finished reload launch, from the task's log in the jobs log group: the JSON line that ``scripts.features.online_reload`` prints
-        for ``model`` (outcome ``loaded``, ``already_loaded`` or ``skipped``). None when the log has no such line within ``RELOAD_OUTCOME_SECONDS`` or cannot be
-        read: the task exited 0, so its reload finished, and only the report of its outcome is missing."""
+        """The result of a finished reload launch, from the task's log in the jobs log group: the one JSON line that ``scripts.features.online_reload`` prints
+        for ``model`` (outcome ``loaded``, ``already_loaded`` or ``skipped``), with the fields of its outcome (``complete_result``). None when the log has no
+        such line within ``RELOAD_OUTCOME_SECONDS``, has more than one line of a result for the set, has a line without its fields or cannot be read: the task
+        exited 0, so its reload finished, and only the report of its outcome is missing."""
         if not self.names.jobs_log_group:
             return None
         stream = f"{RELOAD_LOG_STREAM}/{task.rsplit('/', 1)[-1]}"
 
-        def line() -> dict[str, Any] | None:
+        def line() -> list[dict[str, Any]] | None:
             try:
                 events = self.call("logs", "get-log-events", ["--log-group-name", self.names.jobs_log_group, "--log-stream-name", stream, "--start-from-head"])
             except HostSessionError as error:
@@ -892,13 +907,13 @@ class Session:
                     return None
                 raise
             found = [result_line(str(event.get("message", "")), model) for event in events.get("events", [])]
-            results = [item for item in found if item is not None]
-            return results[-1] if results else None
+            return [item for item in found if item is not None] or None
 
         try:
-            return self.wait(f"online store reload log of set {model}", line, RELOAD_OUTCOME_SECONDS, TASK_POLL_SECONDS)
+            results = self.wait(f"online store reload log of set {model}", line, RELOAD_OUTCOME_SECONDS, TASK_POLL_SECONDS)
         except HostSessionError:
             return None
+        return results[0] if len(results) == 1 and complete_result(results[0]) else None
 
     def reload_online_store(self, code: tuple[str, str]) -> list[str]:
         """Reload the online store of every online model set: one launch of the features task per set (``online_sets``), one after the other, each a
@@ -906,9 +921,11 @@ class Session:
         it is empty after every start. A launch that is refused, fails or passes its deadline raises, and ``start`` then stops the host unless ``keep_on``.
 
         A launch that ends ``skipped`` (a held newer run on a changed schema, owner decision B, Nov 17 2026) is no failure: it loaded nothing, and the report
-        names the set, the held run and the reason. A launch whose log has no result line is reported as unknown. The answer is the sets that serve no
-        online features after the reload (skipped or unknown), also reported by one last line."""
-        unloaded: list[str] = []
+        names the set, the held run and the reason. A launch whose log has no single complete result line is reported as unknown, never as reloaded. Two
+        closing lines keep the two apart: the sets whose result confirmed a skip serve no online features, and the sets whose outcome is unknown may not. The
+        answer is the sets that are not confirmed loaded (skipped, then unknown)."""
+        skipped: list[str] = []
+        unknown: list[str] = []
         for model in online_sets():
             try:
                 task = self.one_shot(f"{ONLINE_RELOAD}_{model}", ONLINE_RELOAD_SECONDS, self.reload_overrides(model, code))
@@ -916,19 +933,27 @@ class Session:
                 raise HostSessionError(f"online store reload of set {model} failed: {error}") from None
             outcome = self.reload_outcome(model, task)
             if outcome is None:
-                unloaded.append(model)
-                self.step("online_store_reload_outcome_unknown", f"{model}: the launch exited 0 but its log has no result line; check the set's online store")
+                unknown.append(model)
+                self.step(
+                    "online_store_reload_outcome_unknown",
+                    f"{model}: the launch exited 0 but its log has no single complete result line; check the set's online store",
+                )
             elif outcome["outcome"] == "skipped":
-                unloaded.append(model)
-                self.step("online_store_reload_skipped", f"{model}: {outcome.get('reason', 'no reason given')}")
+                skipped.append(model)
+                self.step("online_store_reload_skipped", f"{model}: {outcome['reason']}")
             else:
                 self.step("online_store_reloaded", model)
-        if unloaded:
+        if skipped:
             self.step(
                 "online_store_not_loaded",
-                f"{', '.join(unloaded)}: no online features, so no online predictions from these sets' models, until a reload loads them",
+                f"{', '.join(skipped)}: skipped, so no online features and no online predictions from these sets' models, until a reload loads them",
             )
-        return unloaded
+        if unknown:
+            self.step(
+                "online_store_reload_unconfirmed",
+                f"{', '.join(unknown)}: the outcome of the reload is unknown, so these sets may serve no online features; check their online stores",
+            )
+        return skipped + unknown
 
     def refuse_missing_inputs(self, code: tuple[str, str] | None) -> None:
         """Refuse, before the host turns on, a start that cannot place its code or reload the online store."""

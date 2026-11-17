@@ -2284,6 +2284,7 @@ LOCAL_CASES: dict[str, tuple[Callable[[Checker], None], str]] = {
     "E34_reload_newest_evidence": (online_release_cases.case_e34_reload_picks_the_newest_run_with_load_evidence, "FS6"),
     "E34_reload_no_evidence": (online_release_cases.case_e34_reload_skips_a_set_without_load_evidence, "FS6"),
     "E34_reload_held_changed_schema": (online_release_cases.case_e34_reload_skips_a_held_newer_run_on_a_changed_schema, "FS6"),
+    "E34_reload_held_skip_evidence": (online_release_cases.case_e34_reload_skip_needs_a_genuine_held_run_and_valid_evidence, "FS6"),
     "E34_reload_refusals": (online_release_cases.case_e34_reload_refuses_what_does_not_fit, "FS6"),
     "E34_reload_idempotent": (online_release_cases.case_e34_reload_is_idempotent, "FS6"),
     "E34_reload_command": (online_release_cases.case_e34_reload_command, "FS6"),

@@ -1,14 +1,17 @@
-"""Plant one defect at a time in ``host_session`` and in the group signal test and require the cases to catch each.
+"""Plant one defect at a time in ``host_session``, in the group signal test and in the reload check and require the cases to catch each.
 
 Run: ``.venv/bin/python -m scripts.infrastructure.host_session_plants``. Each plant replaces one piece of a module's source in memory (the file stays
-unchanged) and reruns the cases. A plant is caught when a check fails or a case raises. The run exits 1 when any plant survives or its text is not
+unchanged) and reruns the cases. A plant is caught when a check fails or a case raises. The reload plants load the planted ``online_reload`` in place of the
+module and rerun the E34 reload cases. The run exits 1 when any plant survives or its text is not
 found. The group signal plants load the planted test module in place of ``host_session_group_signal`` and rerun the terminal interrupt case.
 """
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.util
+import io
 import os
 import re
 import sys
@@ -18,6 +21,8 @@ from pathlib import Path
 
 MODULE = "scripts.infrastructure.host_session"
 SOURCE = Path(__file__).with_name("host_session.py")
+RELOAD_MODULE = "scripts.features.online_reload"
+RELOAD_SOURCE = Path(__file__).parents[1] / "features" / "online_reload.py"
 SIGNAL_MODULE = "scripts.infrastructure.host_session_group_signal"
 SIGNAL_SOURCE = Path(__file__).with_name("host_session_group_signal.py")
 ENTRY_SOURCE = "HOST_SESSION_ENTRY_SOURCE"  # host_session_entry_stand_in.SOURCE: the child process loads this file as host_session
@@ -183,14 +188,36 @@ PLANTS: dict[str, tuple[str, str]] = {
     "reloads only the first online set": ("for model in online_sets():", "for model in online_sets()[:1]:"),
     "ignores a failed reload": ('raise HostSessionError(f"online store reload of set {model} failed: {error}") from None', "pass"),
     "stops start for a skipped reload": (
-        "self.step(\"online_store_reload_skipped\", f\"{model}: {outcome.get('reason', 'no reason given')}\")",
+        'self.step("online_store_reload_skipped", f"{model}: {outcome[\'reason\']}")',
         'raise HostSessionError(f"online store reload of set {model} failed: skipped")',
     ),
     "reports a skipped reload as reloaded": ('elif outcome["outcome"] == "skipped":', 'elif outcome["outcome"] == "never":'),
-    "reports no set that serves nothing online": ("        if unloaded:\n", "        if False:\n"),
+    "reports no set that a result confirmed as skipped": ("        if skipped:\n", "        if False:\n"),
+    "reports no set whose outcome is unknown": ("        if unknown:\n", "        if False:\n"),
+    "reports an unknown outcome as a confirmed skip": ("                unknown.append(model)\n", "                skipped.append(model)\n"),
     "reports an unreadable reload result as reloaded": (
-        "            if outcome is None:\n                unloaded.append(model)\n",
-        "            if False:\n                unloaded.append(model)\n",
+        "            if outcome is None:\n                unknown.append(model)\n",
+        "            if False:\n                unknown.append(model)\n",
+    ),
+    "takes the last result line": (
+        "return results[0] if len(results) == 1 and complete_result(results[0]) else None",
+        "return results[-1] if complete_result(results[-1]) else None",
+    ),
+    "takes the first of several result lines": (
+        "return results[0] if len(results) == 1 and complete_result(results[0]) else None",
+        "return results[0] if complete_result(results[0]) else None",
+    ),
+    "takes a result line without the fields of its outcome": (
+        "return results[0] if len(results) == 1 and complete_result(results[0]) else None",
+        "return results[0] if len(results) == 1 else None",
+    ),
+    "takes a skipped result without its reason and held runs": (
+        'return text("reason") and isinstance(held, list) and all(isinstance(run, str) and CODE_RUN_ID.fullmatch(run) for run in held)',
+        "return True",
+    ),
+    "takes a loaded result without its run, base run and load ID": (
+        'return text("load_id") and all(text(name) and CODE_RUN_ID.fullmatch(document[name]) for name in ("run_id", "base_run"))',
+        "return True",
     ),
     "launches the reload without its phase": ('"LAYER_PHASE": RELOAD_PHASE,', '"LAYER_PHASE": "",'),
     "takes a running features task for the reload": (
@@ -203,6 +230,49 @@ PLANTS: dict[str, tuple[str, str]] = {
     ),
     "invents the identity of a host with no record": ("raise HostSessionError(missing) from None", 'return "20260101T000000Z-00000000", "0" * 64'),
 }
+
+
+# Each plant of the reload module weakens one check that lets a skip happen (the reload cases E34 must catch it).
+RELOAD_PLANTS: dict[str, tuple[str, str]] = {
+    "skips with an unresolved promotion": ("            production()\n", ""),
+    "skips without checking the held run": ("            check_held_run(model, skipped[0], set_hash, holds)\n", ""),
+    "takes a held run whose base run is no run ID": (
+        '    if not problems and not reads.RUN_ID.fullmatch(hold["base_run"]):\n        problems = ["base_run"]\n',
+        "",
+    ),
+    "takes a held run without its base run": ('("base_run", "set_schema_sha256"))', '("set_schema_sha256",))'),
+    "takes a held run on another schema": ('{"feature_set": model, "run_id": run, "set_schema_sha256": set_hash}', '{"feature_set": model, "run_id": run}'),
+    "takes any text as the schema hash of a load record": (
+        "    if not isinstance(recorded, str) or not SHA256.fullmatch(recorded):\n        return False\n",
+        "",
+    ),
+    "takes any text as the schema hash of a release record": ('if not SHA256.fullmatch(record["set_schema_sha256"]):', "if False:"),
+}
+
+
+def reload_caught(source: str) -> bool:
+    """True when the reload cases (E34) detect the planted ``online_reload`` source; the real module is put back afterwards."""
+    package = importlib.import_module("scripts.features")
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "online_reload_planted.py"
+        path.write_text(source, encoding="utf-8")
+        spec = importlib.util.spec_from_file_location(RELOAD_MODULE, path)
+        if spec is None or spec.loader is None:
+            raise ImportError(RELOAD_MODULE)
+        planted = importlib.util.module_from_spec(spec)
+        sys.modules[RELOAD_MODULE] = planted
+        try:
+            spec.loader.exec_module(planted)
+            cases = importlib.import_module("scripts.features.feast_cases")
+            harness = importlib.import_module("scripts.features.feast_harness")
+            selected = [name for name in cases.LOCAL_CASES if name.startswith("E34_")]
+            with contextlib.redirect_stderr(io.StringIO()):
+                report = harness.run_cases(cases.LOCAL_CASES, selected)
+            return bool(report["verdict"] != "pass")
+        finally:
+            sys.modules.pop(RELOAD_MODULE, None)
+            package.__dict__.pop("online_reload", None)
+            importlib.import_module("scripts.features.online_reload")
 
 
 def caught(source: str) -> bool:
@@ -288,7 +358,16 @@ def main() -> int:
         result = signal_plant_caught(planted)
         sys.stdout.write(f"{'CAUGHT' if result else 'SURVIVED'} {name}\n")
         survivors += not result
-    total = len(PLANTS) + len(SIGNAL_PLANTS)
+    reload_original = RELOAD_SOURCE.read_text(encoding="utf-8")
+    for name, (old, new) in RELOAD_PLANTS.items():
+        if old not in reload_original:
+            sys.stdout.write(f"MISSING {name}\n")
+            survivors += 1
+            continue
+        result = reload_caught(reload_original.replace(old, new, 1))
+        sys.stdout.write(f"{'CAUGHT' if result else 'SURVIVED'} {name}\n")
+        survivors += not result
+    total = len(PLANTS) + len(SIGNAL_PLANTS) + len(RELOAD_PLANTS)
     sys.stdout.write(f"{total - survivors} of {total} plants caught\n")
     return 1 if survivors else 0
 
