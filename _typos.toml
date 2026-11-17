@@ -18,7 +18,7 @@ froms = "froms"                                      # the FROM clauses of a que
 unparseable = "unparseable"                          # a file that cannot be parsed
 
 [type.category_codes]
-# Race and category codes the publishers truncate (Wht, Othr), state code ND, and the PN measure suffix.
+# Race and category codes the publishers truncate (Wht, Othr), state code ND, the PN measure suffix ALOS (average length of stay) and THER (therapeutic) in HCAI column names.
 extend-glob = [
   "dim_measure.sql",
   "pos_columns.sql",
@@ -27,10 +27,11 @@ extend-glob = [
   "int_pos_hospital_snapshots.sql",
   "_facts_hospital__models.yml",
   "run_staging_e2e.py",
+  "state_columns.sql",
   "build_rev3.py",
   "extract_cross_source_keys.py",
 ]
-extend-words = { wht = "wht", othr = "othr", nd = "nd", pn = "pn" }
+extend-words = { wht = "wht", othr = "othr", nd = "nd", pn = "pn", alos = "alos", ther = "ther" }
 
 [type.test_samples]
 # Samples that must stay as typed: a fake token, a Latin-1 byte string, a cut-off column name, a fake import and a document spelling.

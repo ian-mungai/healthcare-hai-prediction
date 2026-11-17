@@ -1,4 +1,4 @@
-"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine, Care Compare and geography models.
+"""E2E check of the staging copy, label, twin, sheet, POS, CMI, spine, Care Compare, geography and state-source models.
 
 Run from the repository root with Docker running:
 
@@ -9,7 +9,9 @@ Run from the repository root with Docker running:
 Each fixture case writes a small bronze database, runs ``dbt build`` against it in the analytics image and compares the
 models with expectations computed here, independently of the SQL. Each case runs on its own copy of the dbt project,
 whose label and twin seeds are written by the real generator (``ipps_file_labels``) from the fixture's names and whose
-POS period seed names the fixture's POS files. The failing cases must fail one named dbt test each: a name clash under
+POS period seed names the fixture's POS files. The state sources (California HCAI finance and utilization, Illinois report card) are checked
+for the latest release, the held rows, the county and reviewed CCN matches and the absence of every person, phone and address cell.
+The failing cases must fail one named dbt test each: a name clash under
 one release, copies with different row counts, a stale label hold, an object with two checksums, an unheld label
 conflict, an unlabelled copy, a POS file without a period, a POS value that does not cast, a CCN twice in one POS file,
 an unreviewed CMI family, an unknown CMI layout, a CMI that disagrees with its relative weights, a CMI out of range, a
@@ -33,6 +35,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import secrets
 import shutil
 import sys
@@ -91,6 +94,10 @@ TABLES = (
     "hhs_capacity_csv",
     "onc_pi_attestations_csv",
     "onc_pi_chpl_linkage_csv",
+    "hcai_finance_csv",
+    "hcai_util_pages_csv",
+    "hcai_util_nonresponse_csv",
+    "illinois_report_card_csv",
     "hud_zip_county",
     "hud_zip_county_sheet_rows",
     "county_adjacency",
@@ -701,6 +708,68 @@ ONC_ATTESTATION_COLUMNS = (
     "product_setting",
     "product_certification_edition_yr",
 )
+
+
+def macro_list(macro: str) -> tuple[str, ...]:
+    """Return the quoted names a dbt macro of macros/state_columns.sql returns, so the fixture and the models share one list."""
+    text = (REPO_ROOT / "dbt/macros/state_columns.sql").read_text()
+    body = text.split("{% macro " + macro + "() %}", 1)[1].split("{% endmacro %}", 1)[0]
+    return tuple(re.findall(r"^\s+'([a-z0-9_]+)',$", body, flags=re.MULTILINE))
+
+
+# The bronze columns of the state sources (group E): HCAI financial disclosure (a long table; the first layout has a leading _id column),
+# HCAI utilization (one 354-column layout whose person columns bronze redacts) and the Illinois Hospital Report Card.
+HCAI_FINANCE_COLUMNS = ("u_id", "oshpd_id", "rpe", "pagecolumnline", "values")
+HCAI_UTIL_COLUMNS = (
+    "description",
+    # The descriptor columns the utilization model keeps as text.
+    "fac_no",
+    "fac_name",
+    "fac_city",
+    "fac_zip",
+    "fac_operated_this_yr",
+    "fac_op_per_begin_dt",
+    "fac_op_per_end_dt",
+    "license_no",
+    "license_status",
+    "facility_level",
+    "trauma_ctr",
+    "teach_hosp",
+    "teach_rural",
+    "longitude",
+    "latitude",
+    "census_key",
+    "cens_tract",
+    "county",
+    "lic_cat",
+    "licee_toc",
+    "prin_service_type",
+    "emsa_trauma_designation",
+    "emsa_trauma_designation_pediatric",
+    "lic_ed_lev_begin",
+    "lic_ed_lev_end",
+    *macro_list("hcai_util_withheld_columns"),
+    *macro_list("hcai_util_numeric_columns"),
+)
+IL_COLUMNS = (
+    "entity_id",
+    "name",
+    "city",
+    "county_name",
+    "aha_service_id",
+    "measure_id",
+    "name_friendly",
+    "description_friendly",
+    "rationale_friendly",
+    "evidence",
+    "measure_type",
+    "default_unit",
+    "date_start",
+    "date_end",
+    "value",
+    "numerator",
+    "denominator",
+)
 # The County geography tables' bronze columns.
 HUD_COLUMNS = ("zip", "geoid", "res_ratio", "bus_ratio", "oth_ratio", "tot_ratio", "state", "city")
 ADJACENCY_COLUMNS = ("county_name", "county_geoid", "neighbor_name", "neighbor_geoid", "length")
@@ -1045,6 +1114,10 @@ WIDE_COLUMNS = {
     "hhs_capacity_csv": HHS_COLUMNS,
     "onc_pi_chpl_linkage_csv": ONC_CHPL_COLUMNS,
     "onc_pi_attestations_csv": ONC_ATTESTATION_COLUMNS,
+    "hcai_finance_csv": HCAI_FINANCE_COLUMNS,
+    "hcai_util_pages_csv": HCAI_UTIL_COLUMNS,
+    "hcai_util_nonresponse_csv": HCAI_UTIL_COLUMNS,
+    "illinois_report_card_csv": IL_COLUMNS,
     "hud_zip_county": HUD_COLUMNS,
     "county_adjacency": ADJACENCY_COLUMNS,
     "rucc": RUCC_COLUMNS,
@@ -2108,6 +2181,153 @@ GROUP_B5B = (
             # A version 2 clinician row: the silver model leaves it out (assert_onc_attestations_are_hospitals).
             cc(provider_type="EP", program_type="Medicare/Medicaid", program_year="2014", attestation_year="2014", vendor_name="Fixture Developer C"),
         ),
+    ),
+)
+
+
+# State sources (group E). HCAI financial disclosure: two releases of one facility and period (the later one revises a value and adds a line), a
+# redacted cell, a value in parentheses that stays text, and three rows the model holds (a period that is no date, a facility number that is no
+# 9-digit number, a line that is not page.column.line). HCAI utilization: a facility with a full-year and a part-year report, a missing-value token,
+# a spreadsheet error, a county no list names, a description row that is no facility, and a non-respondent; the person, phone and address cells
+# carry sentinel text that no silver column may keep. Illinois: two releases of one entity, measure and period, a county written De Kalb, a blank
+# value, a missing token and rows the model holds (a blank entity and a measure that is no number).
+SENTINEL_TEXT = ("SENTINEL_ADMIN", "SENTINEL_PREPARER", "SENTINEL_PHONE", "SENTINEL_STREET", "SENTINEL_PARENT")
+
+
+def util_row(**fields: str) -> tuple[tuple[str, str], ...]:
+    """Return one HCAI utilization row: the sentinel person, phone and address cells, then the given bronze columns."""
+    sentinels = {
+        "fac_admin_name": SENTINEL_TEXT[0],
+        "rept_prep_name": SENTINEL_TEXT[1],
+        "rev_rept_prep_name": SENTINEL_TEXT[1],
+        "fac_phone": SENTINEL_TEXT[2],
+        "fac_str_addr": SENTINEL_TEXT[3],
+        "fac_par_corp_name": SENTINEL_TEXT[4],
+    }
+    return tuple({**sentinels, **fields}.items())
+
+
+UTIL_FULL_YEAR = {"fac_op_per_begin_dt": "01/01/2023", "fac_op_per_end_dt": "12/31/2023", "fac_operated_this_yr": "Yes"}
+GROUP_E = (
+    Stored(
+        "hcai_finance_csv",
+        "hf1",
+        "2023-06-30",
+        "finance_2015.csv",
+        sha("state_finance_a"),
+        7,
+        records=(
+            cc(u_id="1", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="0.1.1", values="FIXTURE HEALTH SYSTEM"),
+            cc(u_id="2", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,234,567"),
+            cc(u_id="3", oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.4", values="[REDACTED]"),
+            cc(u_id="4", oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.1", values="-45.5"),
+            cc(u_id="5", oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.2", values="(250)"),
+            cc(u_id="6", oshpd_id="100000002", rpe="13/45/2015", pagecolumnline="2.1.3", values="10"),
+            cc(u_id="7", oshpd_id="10000X003", rpe="06/30/2015", pagecolumnline="3.1.1", values="5"),
+        ),
+    ),
+    Stored(
+        "hcai_finance_csv",
+        "hf2",
+        "2024-06-30",
+        "finance_2015_revised.csv",
+        sha("state_finance_b"),
+        3,
+        records=(
+            cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.3", values="1,300,000"),
+            cc(oshpd_id="100000001", rpe="06/30/2015", pagecolumnline="1.2.6", values="77"),
+            cc(oshpd_id="100000002", rpe="12/31/2015", pagecolumnline="2.1.x", values="7"),
+        ),
+    ),
+    Stored(
+        "hcai_util_pages_csv",
+        "hu1",
+        "2024-12-31",
+        "page_1_6.csv",
+        sha("state_util_pages"),
+        6,
+        records=(
+            util_row(
+                fac_no="106000001",
+                fac_name="FIXTURE GENERAL HOSPITAL",
+                fac_city="Fixtureville",
+                fac_zip="94501-1234",
+                county="ALAMEDA",
+                license_no="LIC-FIXTURE-1",
+                teach_hosp="Yes",
+                longitude="-122.25",
+                latitude="37.75",
+                census_key="06001400100",
+                tot_lic_beds="250",
+                tot_lic_bed_days="91,250",
+                tot_discharges="12,000",
+                tot_alos_cy="4.5",
+                emer_dept_hr_diversion_tot="#DIV/0!",
+                **UTIL_FULL_YEAR,
+            ),
+            util_row(
+                fac_no="106000001",
+                fac_name="FIXTURE GENERAL HOSPITAL",
+                county="ALAMEDA",
+                tot_lic_beds="240",
+                fac_op_per_begin_dt="01/01/2024",
+                fac_op_per_end_dt="06/30/2024",
+                fac_operated_this_yr="Yes",
+            ),
+            util_row(fac_no="106000002", fac_name="SECOND FIXTURE MEDICAL CENTER", county="Los Angeles County", tot_lic_beds="N/A", **UTIL_FULL_YEAR),
+            util_row(fac_no="106000003", fac_name="THIRD FIXTURE HOSPITAL", county="ATLANTIS", tot_lic_beds="12", **UTIL_FULL_YEAR),
+            util_row(description="Description of the field", fac_no="Facility number", fac_op_per_begin_dt="Period begin", fac_op_per_end_dt="Period end"),
+            util_row(fac_no="106000005", fac_name="NO PERIOD HOSPITAL", fac_op_per_begin_dt="not a date", fac_op_per_end_dt="12/31/2023"),
+        ),
+    ),
+    Stored(
+        "hcai_util_nonresponse_csv",
+        "hn1",
+        "2024-12-31",
+        "nonresp_1_6.csv",
+        sha("state_util_nonresponse"),
+        1,
+        records=(util_row(fac_no="106000004", fac_name="SILENT FIXTURE HOSPITAL", county="alameda", **UTIL_FULL_YEAR),),
+    ),
+    Stored(
+        "illinois_report_card_csv",
+        "il1",
+        "2023-12-31",
+        "IL_history_fixture_a.csv",
+        sha("state_il_a"),
+        6,
+        records=(
+            cc(
+                entity_id="1001",
+                name="FIXTURE MEMORIAL",
+                city="Fixtureville",
+                county_name="Cook",
+                aha_service_id="6990001",
+                measure_id="101",
+                name_friendly="Fixture measure",
+                measure_type="Rate",
+                default_unit="per 1,000",
+                date_start="2022-01-01",
+                date_end="2022-12-31",
+                value="1.5",
+                numerator="3",
+                denominator="2,000",
+            ),
+            cc(entity_id="1001", county_name="Cook", measure_id="101", date_start="2021-01-01", date_end="2021-12-31", value="", numerator=""),
+            cc(entity_id="1002", county_name="De Kalb", measure_id="102", date_start="2022-01-01", date_end="2022-12-31", value="N/A"),
+            cc(entity_id="1003", county_name="Atlantis", measure_id="102", date_start="2022-01-01", date_end="2022-12-31", value="7"),
+            cc(entity_id="", county_name="Cook", measure_id="101", date_start="2022-01-01", date_end="2022-12-31", value="1"),
+            cc(entity_id="1001", county_name="Cook", measure_id="abc", date_start="2022-01-01", date_end="2022-12-31", value="1"),
+        ),
+    ),
+    Stored(
+        "illinois_report_card_csv",
+        "il2",
+        "2024-12-31",
+        "IL_history_fixture_b.csv",
+        sha("state_il_b"),
+        1,
+        records=(cc(entity_id="1001", county_name="Cook", measure_id="101", date_start="2022-01-01", date_end="2022-12-31", value="1.6", numerator="4"),),
     ),
 )
 
@@ -3513,6 +3733,7 @@ BASE = (
     *GROUP_B4,
     *GROUP_B5A,
     *GROUP_B5B,
+    *GROUP_E,
     *GROUP_C1,
     *GROUP_C2,
     *GROUP_C3,
@@ -3660,6 +3881,22 @@ FAILING: dict[str, tuple[str, tuple[Stored, ...], frozenset[str]]] = {
     "hhs_week_uncast": (
         "assert_hhs_onc_values_cast",
         tuple(with_record(item, cc(hospital_pk="010009", collection_week="2021-01-17")) if item.key == "hh1" else item for item in BASE),
+        frozenset(),
+    ),
+    # A state-source number that is neither a plain number nor a reviewed missing token.
+    "state_util_value_uncast": (
+        "assert_state_values_cast",
+        tuple(with_record(item, util_row(fac_no="106000009", tot_lic_beds="twelve", **UTIL_FULL_YEAR)) if item.key == "hu1" else item for item in BASE),
+        frozenset(),
+    ),
+    "state_il_value_uncast": (
+        "assert_state_values_cast",
+        tuple(
+            with_record(item, cc(entity_id="1009", county_name="Cook", measure_id="101", date_start="2022-01-01", date_end="2022-12-31", value="high"))
+            if item.key == "il1"
+            else item
+            for item in BASE
+        ),
         frozenset(),
     ),
     # A Promoting Interoperability criterion that is neither Y nor N.
@@ -4099,6 +4336,14 @@ CREATE TABLE bronze.onc_pi_chpl_linkage_csv AS SELECT * REPLACE (_row_number::BI
     FROM read_csv(getvariable('onc_pi_chpl_linkage_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.onc_pi_attestations_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('onc_pi_attestations_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hcai_finance_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hcai_finance_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hcai_util_pages_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hcai_util_pages_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.hcai_util_nonresponse_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('hcai_util_nonresponse_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
+CREATE TABLE bronze.illinois_report_card_csv AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
+    FROM read_csv(getvariable('illinois_report_card_csv_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.hud_zip_county AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
     FROM read_csv(getvariable('hud_zip_county_csv'), header = true, all_varchar = true, delim = ',', quote = '"', escape = '"');
 CREATE TABLE bronze.county_adjacency AS SELECT * REPLACE (_row_number::BIGINT AS _row_number)
@@ -4566,6 +4811,29 @@ ONC_ATTESTATIONS_SQL = (
     "SELECT ccn, coalesce(program_year::VARCHAR, ''), coalesce(attestation_month::VARCHAR, ''), coalesce(attestation_year::VARCHAR, ''), "
     "coalesce(vendor_name, '') FROM int_onc_attestation_rows ORDER BY ALL;"
 )
+HCAI_FINANCE_SQL = (
+    "SELECT facility_id, report_period_end::VARCHAR, page_column_line, page_number::VARCHAR, column_number::VARCHAR, line_number::VARCHAR, "
+    "value_published, coalesce(value_number::VARCHAR, ''), is_redacted::VARCHAR, publication_date::VARCHAR, is_latest_release::VARCHAR "
+    "FROM int_hcai_finance_values ORDER BY ALL;"
+)
+HCAI_UTIL_SQL = (
+    "SELECT fac_no, response_status, period_begin_date::VARCHAR, period_end_date::VARCHAR, report_year::VARCHAR, coalesce(county_fips, ''), "
+    "county_source, coalesce(zip_code, ''), coalesce(tot_lic_beds::VARCHAR, ''), coalesce(tot_lic_bed_days::VARCHAR, ''), "
+    "coalesce(tot_discharges::VARCHAR, ''), coalesce(tot_alos_cy::VARCHAR, ''), nulled_values_published, coalesce(ccn, ''), coalesce(ccn_source, ''), "
+    "is_latest_release::VARCHAR FROM int_hcai_util_facility_periods ORDER BY ALL;"
+)
+ILLINOIS_SQL = (
+    "SELECT entity_id, measure_id, period_start::VARCHAR, period_end::VARCHAR, coalesce(county_fips, ''), county_source, "
+    "coalesce(value_number::VARCHAR, ''), coalesce(value_published, ''), coalesce(numerator::VARCHAR, ''), coalesce(denominator::VARCHAR, ''), "
+    "coalesce(ccn, ''), publication_date::VARCHAR, is_latest_release::VARCHAR FROM int_illinois_report_card_values ORDER BY ALL;"
+)
+STATE_HOLDS_SQL = "SELECT bronze_table, hold_reason, count(*)::VARCHAR FROM int_state_source_holds GROUP BY ALL ORDER BY ALL;"
+STATE_SENTINELS_SQL = (
+    "SELECT (SELECT count(*) FROM (SELECT t::VARCHAR AS line FROM int_hcai_util_facility_periods AS t UNION ALL "
+    "SELECT t::VARCHAR FROM int_hcai_finance_values AS t UNION ALL SELECT t::VARCHAR FROM int_illinois_report_card_values AS t UNION ALL "
+    "SELECT t::VARCHAR FROM int_state_source_holds AS t) WHERE line LIKE '%SENTINEL_%')::VARCHAR, "
+    "(SELECT count(*) FROM stg_hcai_util_pages_csv WHERE fac_admin_name LIKE 'SENTINEL_%')::VARCHAR;"
+)
 PHONE_COLUMNS_SQL = (
     "SELECT count(*)::VARCHAR FROM information_schema.columns WHERE table_name = 'int_onc_chpl_linkage_rows' AND column_name LIKE '%telephone%';"
 )
@@ -5010,6 +5278,10 @@ def generator_objects(objects: Iterable[Stored]) -> list[ipps_file_labels.Stored
     ]
 
 
+# The reviewed state-facility CCN matches of the fixture project; the committed seed holds the header only until the owner reviews a match.
+STATE_CCN_MATCHES = "source_id,facility_key,ccn,evidence\nHCAI_UTIL,106000001,050001,synthetic fixture match\nIL,1001,140001,synthetic fixture match\n"
+
+
 def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: frozenset[str]) -> None:
     """Copy the dbt project into the case and write its label and twin seeds with the real generator functions."""
     project = case_dir / "project"
@@ -5023,6 +5295,7 @@ def fixture_project(case_dir: Path, objects: tuple[Stored, ...], unlabelled: fro
     (project / "seeds/ownership_release_periods.csv").write_text(ownership_periods_csv(objects, unlabelled))
     (project / "seeds/geography_file_periods.csv").write_text(geography_periods_csv(objects, unlabelled))
     (project / "seeds/acs_variable_map.csv").write_text(acs_map_csv(FIXTURE_ACS_MAP))
+    (project / "seeds/state_facility_ccn_matches.csv").write_text(STATE_CCN_MATCHES)
 
 
 def run_fixture(case: str, objects: tuple[Stored, ...], unlabelled: frozenset[str] = frozenset()) -> tuple[int, dict[str, str]]:
@@ -5098,6 +5371,11 @@ def read_models(case: str) -> dict[str, Any]:
         "hhs_sources": [tuple(row) for row in duckdb_csv(database, HHS_SOURCES_SQL)],
         "onc_chpl": [tuple(row) for row in duckdb_csv(database, ONC_CHPL_SQL)],
         "onc_attestations": [tuple(row) for row in duckdb_csv(database, ONC_ATTESTATIONS_SQL)],
+        "hcai_finance": [tuple(row) for row in duckdb_csv(database, HCAI_FINANCE_SQL)],
+        "hcai_util": [tuple(row) for row in duckdb_csv(database, HCAI_UTIL_SQL)],
+        "illinois": [tuple(row) for row in duckdb_csv(database, ILLINOIS_SQL)],
+        "state_holds": [tuple(row) for row in duckdb_csv(database, STATE_HOLDS_SQL)],
+        "state_sentinels": [tuple(row) for row in duckdb_csv(database, STATE_SENTINELS_SQL)],
         "phone_columns": [tuple(row) for row in duckdb_csv(database, PHONE_COLUMNS_SQL)],
         "occmix": [tuple(row) for row in duckdb_csv(database, OCCMIX_SQL)],
         "hud": [tuple(row) for row in duckdb_csv(database, HUD_SQL)],
@@ -6229,6 +6507,74 @@ def fixture_scenarios(workers: int = 1) -> dict[str, bool]:
         ("010005", "", "2024-07-01", "2024-09-30", "2024", "15.04.04.2345.Cern.01.01.1.220202", "Fixture Developer B"),
     ]
     checks["onc_chpl_has_no_telephone"] = base.get("phone_columns") == [("0",)]
+    # State sources: the revised release is the latest, a value in parentheses stays text, the person and phone cells never reach silver, the part-year
+    # report is its own row, a missing token is null and listed, the reviewed match gives a CCN and the unmatched county stays null.
+    checks["hcai_finance_match_expected"] = base.get("hcai_finance") == [
+        ("100000001", "2015-06-30", "0.1.1", "0", "1", "1", "FIXTURE HEALTH SYSTEM", "", "false", "2023-06-30", "true"),
+        ("100000001", "2015-06-30", "1.2.3", "1", "2", "3", "1,234,567", "1234567.0", "false", "2023-06-30", "false"),
+        ("100000001", "2015-06-30", "1.2.3", "1", "2", "3", "1,300,000", "1300000.0", "false", "2024-06-30", "true"),
+        ("100000001", "2015-06-30", "1.2.4", "1", "2", "4", "[REDACTED]", "", "true", "2023-06-30", "true"),
+        ("100000001", "2015-06-30", "1.2.6", "1", "2", "6", "77", "77.0", "false", "2024-06-30", "true"),
+        ("100000002", "2015-12-31", "2.1.1", "2", "1", "1", "-45.5", "-45.5", "false", "2023-06-30", "true"),
+        ("100000002", "2015-12-31", "2.1.2", "2", "1", "2", "(250)", "", "false", "2023-06-30", "true"),
+    ]
+    full_year = ("2023-01-01", "2023-12-31", "2023")
+    checks["hcai_util_match_expected"] = base.get("hcai_util") == [
+        (
+            "106000001",
+            "responded",
+            *full_year,
+            "06001",
+            "name_match",
+            "94501",
+            "250.0",
+            "91250.0",
+            "12000.0",
+            "4.5",
+            '{"emer_dept_hr_diversion_tot":"#DIV/0!"}',
+            "050001",
+            "reviewed_match",
+            "true",
+        ),
+        (
+            "106000001",
+            "responded",
+            "2024-01-01",
+            "2024-06-30",
+            "2024",
+            "06001",
+            "name_match",
+            "",
+            "240.0",
+            "",
+            "",
+            "",
+            "{}",
+            "050001",
+            "reviewed_match",
+            "true",
+        ),
+        ("106000002", "responded", *full_year, "06037", "name_match", "", "", "", "", "", '{"tot_lic_beds":"N/A"}', "", "", "true"),
+        ("106000003", "responded", *full_year, "", "not_matched", "", "12.0", "", "", "", "{}", "", "", "true"),
+        ("106000004", "nonresponse", *full_year, "06001", "name_match", "", "", "", "", "", "{}", "", "", "true"),
+    ]
+    checks["illinois_match_expected"] = base.get("illinois") == [
+        ("1001", "101", "2021-01-01", "2021-12-31", "17031", "name_match", "", "", "", "", "140001", "2023-12-31", "true"),
+        ("1001", "101", "2022-01-01", "2022-12-31", "17031", "name_match", "1.5", "1.5", "3.0", "2000.0", "140001", "2023-12-31", "false"),
+        ("1001", "101", "2022-01-01", "2022-12-31", "17031", "name_match", "1.6", "1.6", "4.0", "", "140001", "2024-12-31", "true"),
+        ("1002", "102", "2022-01-01", "2022-12-31", "17037", "name_match", "", "N/A", "", "", "", "2023-12-31", "true"),
+        ("1003", "102", "2022-01-01", "2022-12-31", "", "not_matched", "7.0", "7", "", "", "", "2023-12-31", "true"),
+    ]
+    checks["state_holds_match_expected"] = base.get("state_holds") == [
+        ("hcai_finance_csv", "facility_not_a_facility_number", "1"),
+        ("hcai_finance_csv", "line_not_page_column_line", "1"),
+        ("hcai_finance_csv", "period_not_a_date", "1"),
+        ("hcai_util_pages_csv", "facility_not_a_facility_number", "1"),
+        ("hcai_util_pages_csv", "period_not_a_date", "1"),
+        ("illinois_report_card_csv", "entity_not_a_number", "1"),
+        ("illinois_report_card_csv", "measure_not_a_number", "1"),
+    ]
+    checks["state_silver_keeps_no_person_cell"] = base.get("state_sentinels") == [("0", "6")]
     checks["onc_attestations_match_expected"] = base.get("onc_attestations") == [("010001", "2014", "7", "2014", "Fixture Developer A")]
     # The wage and the three shares are formulas saved in features/ (silver section 4).
     checks["occmix_matches_expected"] = base.get("occmix") == [
@@ -6868,6 +7214,19 @@ def real_stage(once: bool = False) -> dict[str, Any]:
         "|| min(program_year)::VARCHAR || '-' || max(program_year)::VARCHAR FROM int_onc_attestation_rows;"
     )
     outcome["hhs_onc"] = dict(duckdb_csv(database, hhs_onc_sql))
+    state_sql = (
+        "SELECT 'hcai_finance', count(*)::VARCHAR || ' rows, ' || count(DISTINCT facility_id)::VARCHAR || ' facilities, ' "
+        "|| count(*) FILTER (WHERE is_redacted)::VARCHAR || ' redacted, ' || count(*) FILTER (WHERE is_latest_release)::VARCHAR || ' latest' "
+        "FROM int_hcai_finance_values "
+        "UNION ALL SELECT 'hcai_util', count(*)::VARCHAR || ' rows, ' || count(DISTINCT fac_no)::VARCHAR || ' facilities, ' "
+        "|| count(*) FILTER (WHERE response_status = 'nonresponse')::VARCHAR || ' non-respondents, ' "
+        "|| count(*) FILTER (WHERE county_fips IS NULL)::VARCHAR || ' without a county' FROM int_hcai_util_facility_periods "
+        "UNION ALL SELECT 'illinois', count(*)::VARCHAR || ' rows, ' || count(DISTINCT entity_id)::VARCHAR || ' entities, ' "
+        "|| count(DISTINCT measure_id)::VARCHAR || ' measures, ' || count(*) FILTER (WHERE county_fips IS NULL)::VARCHAR || ' without a county' "
+        "FROM int_illinois_report_card_values "
+        "UNION ALL SELECT 'state_holds', count(*)::VARCHAR FROM int_state_source_holds;"
+    )
+    outcome["state_sources"] = dict(duckdb_csv(database, state_sql))
     outcome["occmix_periods"] = duckdb_csv(
         database,
         "SELECT year(survey_end_date)::VARCHAR, is_deleted::VARCHAR, count(*)::VARCHAR, count(DISTINCT member_sha256)::VARCHAR "
