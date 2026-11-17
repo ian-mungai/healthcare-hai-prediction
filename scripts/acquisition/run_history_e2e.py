@@ -393,6 +393,20 @@ def release_scenarios(scenario: Any, extend: Any, execute: Any) -> None:
 
     scenario("newest_record_makes_hcai_utilization_model_eligible", eligible)
 
+    def coverage_matches_scope_text() -> None:
+        require(set(s3_store.RELEASE_COVERS) == {path.name for path in paths}, "A release record has no reviewed coverage")
+        for path in paths:
+            scope = next(r for r in json.loads(path.read_text())["releases"] if r["source_id"] == "HCAI_UTIL")["scope"].lower()
+            covers = s3_store.RELEASE_COVERS[path.name]
+            for kind, words in (
+                ("abstracted_sheets", "abstracted sheet"),
+                ("reference_documents", "reference documents"),
+                ("whole_workbooks", "whole published workbooks"),
+            ):
+                require((words in scope) == (kind in covers), f"{path.name}: the scope text and the reviewed coverage differ on {kind}")
+
+    scenario("release_coverage_matches_each_record_scope_text", coverage_matches_scope_text)
+
     def mutation_caught(change: Any) -> None:
         released = next(r for r in json.loads(paths[-1].read_text())["releases"] if r["source_id"] == "HCAI_UTIL")
         changed = change(dict(released))

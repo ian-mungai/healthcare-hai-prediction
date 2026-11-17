@@ -329,6 +329,13 @@ ACCESS_RELEASE_PATHS = (
 )
 # New receipts bind the newest record.
 ACCESS_RELEASE_PATH = ACCESS_RELEASE_PATHS[-1]
+# What each record authorizes for a held source, by file name: a reviewed reading of its scope. The first record allows only abstracted sheet CSVs;
+# reference documents are allowed from the second record on, and the third also allows whole published workbooks.
+RELEASE_COVERS = {
+    "access_releases_20260929.json": frozenset({"abstracted_sheets"}),
+    "access_releases_20261002.json": frozenset({"abstracted_sheets", "reference_documents"}),
+    "access_releases_20261117.json": frozenset({"abstracted_sheets", "reference_documents", "whole_workbooks"}),
+}
 
 
 def access_released(source: dict, lineage: dict) -> bool:
@@ -353,16 +360,23 @@ def released_by_record(source: dict, lineage: dict) -> bool:
     terms acceptance, bound by its SHA-256 in the receipt lineage. The bound record is looked up among the listed
     records and their archived predecessors, so receipts that bind an earlier record keep verifying.
     """
+    recorded = lineage.get("access_release_sha256")
+    return isinstance(recorded, str) and bound_release(source, recorded) is not None
+
+
+def bound_release(source: dict, recorded_sha256: str) -> tuple[Path, dict, dict] | None:
+    """Return the record path, document and release entry that a receipt's bound hash names, or None when no listed or archived record releases the source."""
     for path in ACCESS_RELEASE_PATHS:
         try:
-            body = bound_record(path, lineage["access_release_sha256"])
+            body = bound_record(path, recorded_sha256)
             if body is None:
                 continue
-            records = [r for r in json.loads(body)["releases"] if r["source_id"] == source["source_id"]]
+            document = json.loads(body)
+            releases = [r for r in document["releases"] if r["source_id"] == source["source_id"]]
         except (OSError, KeyError, TypeError, ValueError, RegistryError):
-            return False
-        return len(records) == 1 and records[0].get("released") is True
-    return False
+            return None
+        return (path, document, releases[0]) if len(releases) == 1 and releases[0].get("released") is True else None
+    return None
 
 
 def upload_snapshot(

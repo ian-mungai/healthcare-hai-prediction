@@ -203,10 +203,11 @@ def exercise(root: Path) -> list[dict]:
 
 
 def release_scenarios(scenario: Any, plan: dict, entries: dict, root: Path, downloads: Path) -> None:
-    """A held reference verifies against the access release record its receipt binds, newest or earlier, and only a listed record that releases its source."""
+    """A held reference verifies only against its bound release record: listed or archived, releasing its source, in force at capture and in scope."""
     hcai = entries["hospital_utilization.html"]
     stored: dict[str, Any] = {}
     first, second, newest = (contract.digest(path.read_bytes()) for path in s3_store.ACCESS_RELEASE_PATHS[:3])
+    september, october = "2026-09-30T12:00:00+00:00", "2026-10-03T12:00:00+00:00"
 
     def bound_and_stored() -> None:
         result = execute(plan, hcai, root / "hcai", downloads, True, FakeS3(), OUTPUTS)
@@ -215,10 +216,19 @@ def release_scenarios(scenario: Any, plan: dict, entries: dict, root: Path, down
         stored.update(receipt=receipt, folder=path.parent, lineage=json.loads(receipt["lineage"]["extraction_or_query"]))
         require(result["status"] == "stored" and stored["lineage"]["access_release_sha256"] == newest, "Access release binding missing")
 
-    def verify_bound(recorded: str) -> None:
+    def verify_bound(recorded: str, captured: str | None = None) -> None:
+        """Verify the stored receipt as bound to a record, captured at a time (the receipt and its download proof are rewritten together)."""
         source = next(s for s in load_registry()["sources"] if s["source_id"] == "HCAI_UTIL")
-        lineage = stored["lineage"] | {"access_release_sha256": recorded}
-        contract.verify_capture(stored["receipt"], source, lineage, stored["folder"], False)
+        receipt, folder = stored["receipt"], stored["folder"]
+        if captured is not None:
+            folder = root / f"hcai_captured_{captured[:10]}_{recorded[:6]}"
+            if not folder.exists():
+                shutil.copytree(stored["folder"], folder)
+                proof = read_json(folder / "evidence/download_proof.json") | {"created_at_utc": captured}
+                (folder / "evidence/download_proof.json").write_text(json.dumps(proof))
+            receipt = copy.deepcopy(receipt)
+            receipt["acquisition"]["retrieved_at_utc"] = captured
+        contract.verify_capture(receipt, source, stored["lineage"] | {"access_release_sha256": recorded}, folder, False)
 
     def another_source() -> None:
         record = root / "other_source_release.json"
@@ -227,9 +237,19 @@ def release_scenarios(scenario: Any, plan: dict, entries: dict, root: Path, down
             verify_bound(contract.digest(record.read_bytes()))
 
     scenario("held_reference_stored_with_access_release_binding", bound_and_stored)
-    scenario("receipt_bound_to_the_newest_record_verifies", lambda: verify_bound(newest))
-    scenario("receipt_bound_to_the_second_record_verifies", lambda: verify_bound(second))
-    scenario("receipt_bound_to_the_first_record_verifies", lambda: verify_bound(first))
+    scenario("receipt_valid_under_the_newest_record_verifies", lambda: verify_bound(newest))
+    scenario("receipt_valid_under_its_own_effective_in_scope_record_verifies", lambda: verify_bound(second, october))
+    scenario(
+        "receipt_bound_to_a_record_not_yet_effective_refused",
+        lambda: verify_bound(second, "2026-10-01T12:00:00+00:00"),
+        "release record is later than the capture",
+    )
+    scenario("receipt_bound_to_the_newest_record_before_its_date_refused", lambda: verify_bound(newest, october), "release record is later than the capture")
+    scenario(
+        "receipt_bound_to_a_record_that_does_not_cover_reference_documents_refused",
+        lambda: verify_bound(first, september),
+        "does not cover reference documents",
+    )
     scenario("receipt_bound_to_an_unknown_record_refused", lambda: verify_bound("0" * 64), "release binding differs")
     scenario("receipt_bound_to_a_record_of_another_source_refused", another_source, "release binding differs")
 

@@ -15,7 +15,7 @@
    ],
    "hold": "privacy: administrator, report-preparer and contact details in the published files; bronze redacts these cells at load and silver excludes them",
    "released": true,
-   "scope": "Whole published workbooks and abstracted sheet CSVs as stored; bronze redacts the person cells at load ([REDACTED]); silver never reads the administrator, report-preparer, phone, street address or parent corporation columns; model-eligible and published to silver under the owner decisions of Nov 10 2026 and Nov 17 2026",
+   "scope": "Whole published workbooks and abstracted sheet CSVs as stored; bronze redacts the person cells at load ([REDACTED]); silver never reads the administrator, report-preparer, phone, street address or parent corporation columns; publisher documentation stored unchanged as reference documents, never as data; model-eligible and published to silver under the owner decisions of Nov 10 2026 and Nov 17 2026",
    "source_id": "HCAI_UTIL"
   }
  ]

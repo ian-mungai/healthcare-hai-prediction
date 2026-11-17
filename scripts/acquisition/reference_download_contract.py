@@ -7,6 +7,7 @@ needs a release binding (terms or access release), as in the history route; stor
 """
 
 import re
+from datetime import datetime
 from pathlib import Path
 
 from scripts.acquisition import hud_xlsx_contract as download_metadata
@@ -15,8 +16,8 @@ from scripts.acquisition.code_closure import closure_hashes
 from scripts.acquisition.code_versions import read_code_versions
 from scripts.acquisition.history_routes import lineage_bindings
 from scripts.acquisition.legacy_versions import predecessor_plan
-from scripts.acquisition.s3_store import released_by_record
-from scripts.acquisition.source_registry import REPO_ROOT, canonical_hash, load_registry, read_json, require, require_collection_scope
+from scripts.acquisition.s3_store import RELEASE_COVERS, bound_release
+from scripts.acquisition.source_registry import REPO_ROOT, RegistryError, canonical_hash, load_registry, read_json, require, require_collection_scope
 from scripts.acquisition.transport import CaptureError
 
 PLAN_PATH = REPO_ROOT / "config/acquisition/reference_downloads_plan.json"
@@ -125,6 +126,20 @@ def load_plan(path: Path | None = None) -> dict:
     return plan
 
 
+def require_release(source: dict, recorded: str | None, captured_at: str) -> None:
+    """Refuse a receipt whose bound release record is unknown, names another source, was not in force at the capture or does not cover reference documents."""
+    found = bound_release(source, recorded) if isinstance(recorded, str) else None
+    if found is None:
+        raise RegistryError("Reference release binding differs: no listed or archived record releases the source under that hash")
+    path, document, _release = found
+    effective = datetime.fromisoformat(document["recorded_at_utc"])
+    require(effective <= datetime.fromisoformat(captured_at), "Reference release binding differs: the release record is later than the capture")
+    require(
+        "reference_documents" in RELEASE_COVERS.get(path.name, frozenset()),
+        "Reference release binding differs: the release record does not cover reference documents",
+    )
+
+
 def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evidence_only: bool) -> None:
     """Check the stored file and its proof against the locked plan, the release binding and the preserved holds."""
     from scripts.acquisition.capture import receipt_validator
@@ -141,14 +156,13 @@ def verify_capture(receipt: dict, source: dict, lineage: dict, root: Path, evide
     require(len(matches) == 1 and matches[0]["source_id"] == source["source_id"], "Reference capture file not in its plan")
     entry = matches[0]
     bindings = bindings_for(entry, source)
-    for key, current_hash in bindings.items():
-        # A receipt binds the access release record of its day, which stays listed or archived: it must release the source, not equal the newest hash.
-        recorded = lineage.get(key)
-        require(
-            recorded == current_hash or (key == "access_release_sha256" and released_by_record(source, {key: recorded})), "Reference release binding differs"
-        )
-    require(not {"terms_sha256", "access_release_sha256"} & (set(lineage) - set(bindings)), "Reference release binding differs")
     acq = receipt["acquisition"]
+    for key, current_hash in bindings.items():
+        if key == "access_release_sha256":
+            require_release(source, lineage.get(key), acq["retrieved_at_utc"])
+        else:
+            require(lineage.get(key) == current_hash, "Reference release binding differs")
+    require(not {"terms_sha256", "access_release_sha256"} & (set(lineage) - set(bindings)), "Reference release binding differs")
     require(
         acq["requested_url"] == acq["resolved_url"] == entry["origin_url"]
         and acq["request_method"] == "manual_download"
