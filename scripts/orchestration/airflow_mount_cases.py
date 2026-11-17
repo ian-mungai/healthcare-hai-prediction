@@ -35,6 +35,8 @@ NOT_RUN = frozenset(
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.bronze",
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.gold_publish",
         "scripts/orchestration/ecs_lineage_cases.py scripts.lakehouse.silver_publish",
+        # The event time case imports the project transport over a stand-in of the OpenLineage client; the in-image run never calls it either.
+        "scripts/orchestration/ecs_lineage_cases.py services.lineage.http_transport",
         # The model set evidence case of airflow_mode_cases builds its pins with the writer's own functions; the in-image run never calls it either.
         "scripts/orchestration/airflow_mode_cases.py scripts.features",
         "scripts/orchestration/airflow_mode_cases.py scripts.features.feature_sets",
