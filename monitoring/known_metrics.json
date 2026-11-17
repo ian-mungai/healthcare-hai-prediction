@@ -65,6 +65,15 @@
       "hai_promotion_executed": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "action"]},
       "hai_promotion_version": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type"]},
       "hai_promotion_notice": {"type": "gauge", "labels": ["job", "phase", "outcome", "hai_type", "verdict"]},
+      "hai_publisher_units": {"type": "gauge", "labels": ["job", "phase", "outcome", "state"]},
+      "hai_publisher_files_fetched": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publisher_files_missing": {"type": "gauge", "labels": ["job", "phase", "outcome", "run_kind"]},
+      "hai_publisher_bytes_downloaded": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publisher_http_requests": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publisher_objects_created": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publisher_evidence_problems": {"type": "gauge", "labels": ["job", "phase", "outcome"]},
+      "hai_publisher_source_last_success_timestamp_seconds": {"type": "gauge", "labels": ["job", "phase", "outcome", "data_source"]},
+      "hai_publisher_source_units_unfinished": {"type": "gauge", "labels": ["job", "phase", "outcome", "data_source"]},
       "hai_promotion_result": {"type": "gauge", "labels": ["job", "phase", "outcome", "result"]}
     }
   },

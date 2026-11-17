@@ -59,6 +59,16 @@
       "dashboard": "hai_models.json",
       "panel": "Production version at research, by HAI type",
       "reason": "Empty for a type with no Production model yet."
+    },
+    {
+      "dashboard": "hai_ingestion.json",
+      "panel": "Unfinished units, by data source",
+      "reason": "Empty while no unit of the latest publisher run failed or was refused."
+    },
+    {
+      "dashboard": "hai_ingestion.json",
+      "panel": "Age of the last success, by data source",
+      "reason": "Empty until a publisher run fetches a unit."
     }
   ]
 }

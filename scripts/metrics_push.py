@@ -45,6 +45,7 @@ HAI_TYPE = re.compile(r"HAI_[1-6]")
 WORD = re.compile(r"[a-z][a-z_]{0,23}")
 SET_NAME = re.compile(r"[a-z][a-z0-9_]{0,15}")
 SLOT = re.compile(r"[a-z][a-z0-9_]{0,30}")
+DATA_SOURCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,39}")
 LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "hai_type": lambda value: HAI_TYPE.fullmatch(value) is not None,
     "status": lambda value: value in ("checked", "skipped", "success", "error", "pass", "fail", "warn"),
@@ -55,6 +56,23 @@ LABEL_VALUES: dict[str, Callable[[str], bool]] = {
     "action": lambda value: value in ("promote", "rollback"),
     "decision": lambda value: value in ("promote", "hold"),
     "verdict": lambda value: value in ("promoted", "promoted_not_rolled_out", "held", "rolled_back"),
+    "state": lambda value: (
+        value
+        in (
+            "completed",
+            "unchanged",
+            "changed",
+            "failed",
+            "refused",
+            "skipped_complete",
+            "skipped_recent_stale",
+            "paused_not_attempted",
+            "manual_not_attempted",
+            "keyed_not_attempted",
+        )
+    ),
+    "run_kind": lambda value: value in ("bootstrap", "monthly", "retry"),
+    "data_source": lambda value: DATA_SOURCE.fullmatch(value) is not None,
     "feature_set": lambda value: SET_NAME.fullmatch(value) is not None,
     "mode": lambda value: value in ("load", "hold", "release", "offline"),
     "result": lambda value: WORD.fullmatch(value) is not None,
@@ -110,6 +128,18 @@ CATALOG: dict[str, tuple[str, tuple[str, ...]]] = {
     "hai_promotion_executed": ("1 for the latest promotion or rollback executed for a type, by action.", ("hai_type", "action")),
     "hai_promotion_version": ("The version that the latest executed promotion or rollback made Production.", ("hai_type",)),
     "hai_promotion_notice": ("1 for the verdict of the latest owner notice about a type's challenger.", ("hai_type", "verdict")),
+    "hai_publisher_units": ("Units of the latest publisher run by state.", ("state",)),
+    "hai_publisher_files_fetched": ("Files the latest publisher run fetched (completed, unchanged or changed units).", ()),
+    "hai_publisher_files_missing": ("Files the latest publisher run could not capture (failed, refused or not attempted units), by run kind.", ("run_kind",)),
+    "hai_publisher_bytes_downloaded": ("Bytes the latest publisher run downloaded, which is the bytes it stored.", ()),
+    "hai_publisher_http_requests": ("HTTP requests the latest publisher run made.", ()),
+    "hai_publisher_objects_created": ("Objects the latest publisher run created in the capture root.", ()),
+    "hai_publisher_evidence_problems": ("Problems the evidence check found in the latest publisher run.", ()),
+    "hai_publisher_source_last_success_timestamp_seconds": (
+        "Unix time of the latest publisher run that fetched the data source with no unit failed.",
+        ("data_source",),
+    ),
+    "hai_publisher_source_units_unfinished": ("Units of the data source that failed or were refused in the latest publisher run.", ("data_source",)),
     "hai_promotion_result": ("1 for the result of the latest promotion phase.", ("result",)),
 }
 PENDING: list[Sample] = []

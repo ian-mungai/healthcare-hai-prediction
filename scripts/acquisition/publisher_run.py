@@ -28,7 +28,7 @@ from typing import Any
 from botocore.exceptions import ClientError
 
 from scripts import resource_peaks
-from scripts.acquisition import capture_mode, host_inputs, listing_fetch, listing_readers, plan_rebuild, stored_mirror, task_role
+from scripts.acquisition import capture_mode, host_inputs, listing_fetch, listing_readers, plan_rebuild, publisher_metrics, stored_mirror, task_role
 from scripts.acquisition.collection_layout import run_state_root
 from scripts.acquisition.completion_record import run_record_key as record_key
 from scripts.acquisition.s3_store import StorageError
@@ -366,6 +366,7 @@ def main(
     )
     record = capture_mode.execute(run)
     problems = capture_mode.check_run(storage, record, before)
+    publisher_metrics.run_record(record, env["PUBLISHER_RUN_KIND"], len(problems))
     emit({"counters": record["counters"], "evidence_problems": len(problems)})
     if env["PUBLISHER_RUN_KIND"] == "monthly":
         write_plan_report(run, bundle, links_of or listing_readers.links_reader(workspace_of(env) / "listing"), emit)
